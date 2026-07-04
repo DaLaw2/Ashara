@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ashara_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ashara"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ashara_pgdata:

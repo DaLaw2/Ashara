@@ -1,0 +1,15 @@
+{
+  "name": "ashara",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "knip": "^6.26.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.8"
+  }
+}

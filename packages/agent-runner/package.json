@@ -1,0 +1,17 @@
+{
+  "name": "@ashara/agent-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@ashara/shared": "workspace:*",
+    "@ashara/llm-gateway": "workspace:*",
+    "@ashara/development": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

@@ -1,0 +1,329 @@
+# Ashara Model Catalog
+# Edit this file to add/remove models. No rebuild needed.
+# Pricing last verified: 2026-07-05. FC reliability verified: 2026-07-09.
+#
+# capability levels: Frontier | Strong | Medium | Light
+# format_group: native-fc | code-fence | text-patch
+#   native-fc   — provider's native function calling API (Anthropic, OpenAI, DeepSeek V4, xAI)
+#   code-fence  — model outputs ```lang:path code blocks (Gemini, small locals, flaky FC providers)
+#   text-patch  — model outputs *** Begin Patch blocks (for diff-oriented models)
+#
+# Only providers with matching env vars (API keys) are activated.
+
+# =============================================================================
+# Providers
+# =============================================================================
+
+[providers.anthropic]
+type = "anthropic"
+# env: ANTHROPIC_API_KEY
+
+[providers.openai]
+type = "openai"
+# env: OPENAI_API_KEY
+
+[providers.deepseek]
+type = "openai-compatible"
+# env: DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL (default: https://api.deepseek.com/v1)
+
+[providers.mistral]
+type = "openai-compatible"
+# env: MISTRAL_API_KEY, MISTRAL_BASE_URL (default: https://api.mistral.ai/v1)
+
+[providers.xai]
+type = "openai-compatible"
+# env: XAI_API_KEY, XAI_BASE_URL (default: https://api.x.ai/v1)
+
+[providers.google]
+type = "openai-compatible"
+# env: GOOGLE_API_KEY, GOOGLE_BASE_URL
+
+[providers.local]
+type = "openai-compatible"
+# env: LOCAL_LLM_URL
+
+# =============================================================================
+# Anthropic (Claude)
+# =============================================================================
+
+[models.claude-fable-5]
+provider = "anthropic"
+capability = "Frontier"
+format_group = "native-fc"
+input_cost_per_1m = 10.0
+output_cost_per_1m = 50.0
+max_context_tokens = 1_000_000
+supports_caching = true
+
+[models.claude-opus-4-8]
+provider = "anthropic"
+capability = "Frontier"
+format_group = "native-fc"
+input_cost_per_1m = 5.0
+output_cost_per_1m = 25.0
+max_context_tokens = 1_000_000
+supports_caching = true
+
+[models.claude-sonnet-4-6]
+provider = "anthropic"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 3.0
+output_cost_per_1m = 15.0
+max_context_tokens = 1_000_000
+supports_caching = true
+
+[models.claude-haiku-4-5]
+provider = "anthropic"
+capability = "Medium"
+format_group = "native-fc"
+input_cost_per_1m = 1.0
+output_cost_per_1m = 5.0
+max_context_tokens = 200_000
+supports_caching = true
+
+# =============================================================================
+# OpenAI
+# =============================================================================
+
+[models.gpt-4-1]
+provider = "openai"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 2.0
+output_cost_per_1m = 8.0
+max_context_tokens = 1_000_000
+supports_caching = false
+
+[models.gpt-4-1-mini]
+provider = "openai"
+capability = "Medium"
+format_group = "native-fc"
+input_cost_per_1m = 0.4
+output_cost_per_1m = 1.6
+max_context_tokens = 1_000_000
+supports_caching = false
+
+[models.gpt-4-1-nano]
+provider = "openai"
+capability = "Light"
+format_group = "native-fc"
+input_cost_per_1m = 0.1
+output_cost_per_1m = 0.4
+max_context_tokens = 1_000_000
+supports_caching = false
+
+[models.o3]
+provider = "openai"
+capability = "Frontier"
+format_group = "native-fc"
+input_cost_per_1m = 2.0
+output_cost_per_1m = 8.0
+max_context_tokens = 200_000
+supports_caching = false
+
+[models.o4-mini]
+provider = "openai"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 1.1
+output_cost_per_1m = 4.4
+max_context_tokens = 200_000
+supports_caching = false
+
+# =============================================================================
+# DeepSeek — extremely cheap, OpenAI-compatible
+# =============================================================================
+
+[models.deepseek-v4-flash]
+provider = "deepseek"
+api_model_id = "deepseek-v4-flash"
+capability = "Strong"
+format_group = "native-fc"
+strict_mode = true
+input_cost_per_1m = 0.14
+output_cost_per_1m = 0.28
+max_context_tokens = 1_000_000
+supports_caching = true
+
+[models.deepseek-v4-pro]
+provider = "deepseek"
+api_model_id = "deepseek-v4-pro"
+capability = "Frontier"
+format_group = "native-fc"
+strict_mode = true
+input_cost_per_1m = 0.435
+output_cost_per_1m = 0.87
+max_context_tokens = 1_000_000
+supports_caching = true
+
+# =============================================================================
+# Google Gemini — OpenAI-compatible via AI Studio / Vertex
+# FC unreliable: returns text instead of FC, inconsistent response formats,
+# degrades after 15-20 turns. Use code-fence as primary format.
+# =============================================================================
+
+[models.gemini-2-5-pro]
+provider = "google"
+capability = "Frontier"
+format_group = "code-fence"
+input_cost_per_1m = 1.25
+output_cost_per_1m = 10.0
+max_context_tokens = 1_000_000
+supports_caching = false
+
+[models.gemini-2-5-flash]
+provider = "google"
+capability = "Strong"
+format_group = "code-fence"
+input_cost_per_1m = 0.3
+output_cost_per_1m = 2.5
+max_context_tokens = 1_000_000
+supports_caching = false
+
+# =============================================================================
+# Mistral — OpenAI-compatible
+# =============================================================================
+
+[models.mistral-large-latest]
+provider = "mistral"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 2.0
+output_cost_per_1m = 6.0
+max_context_tokens = 128_000
+supports_caching = false
+
+[models.mistral-small-latest]
+provider = "mistral"
+capability = "Light"
+format_group = "code-fence"
+input_cost_per_1m = 0.1
+output_cost_per_1m = 0.3
+max_context_tokens = 128_000
+supports_caching = false
+
+[models.codestral-latest]
+provider = "mistral"
+capability = "Medium"
+format_group = "native-fc"
+input_cost_per_1m = 0.3
+output_cost_per_1m = 0.9
+max_context_tokens = 32_000
+supports_caching = false
+
+# =============================================================================
+# xAI (Grok) — OpenAI-compatible
+# =============================================================================
+
+[models.grok-3]
+provider = "xai"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 2.0
+output_cost_per_1m = 10.0
+max_context_tokens = 131_000
+supports_caching = false
+
+[models.grok-3-mini]
+provider = "xai"
+capability = "Medium"
+format_group = "native-fc"
+input_cost_per_1m = 0.3
+output_cost_per_1m = 0.5
+max_context_tokens = 131_000
+supports_caching = false
+
+# =============================================================================
+# Local models (llama-server / vLLM / Ollama)
+# Add your loaded models here. Capability is user-assigned.
+# =============================================================================
+
+[models."qwen3.6-27b"]
+provider = "local"
+capability = "Strong"
+format_group = "native-fc"
+input_cost_per_1m = 0
+output_cost_per_1m = 0
+max_context_tokens = 32_768
+supports_caching = false
+
+[models."qwen3.5-4b"]
+provider = "local"
+capability = "Medium"
+format_group = "code-fence"
+input_cost_per_1m = 0
+output_cost_per_1m = 0
+max_context_tokens = 8_192
+supports_caching = false
+
+[models.nemotron3-nano-4b]
+provider = "local"
+capability = "Medium"
+format_group = "code-fence"
+input_cost_per_1m = 0
+output_cost_per_1m = 0
+max_context_tokens = 8_192
+supports_caching = false
+
+[models.gemma-4-e4b]
+provider = "local"
+capability = "Light"
+format_group = "code-fence"
+input_cost_per_1m = 0
+output_cost_per_1m = 0
+max_context_tokens = 8_192
+supports_caching = false
+
+# =============================================================================
+# Routing profiles (routing-profiles story) — static per-site model playbooks.
+#
+# Combo key = the deployment's ENABLED provider names, sorted and joined by
+# "+" (e.g. adding ANTHROPIC_API_KEY on top of DEEPSEEK_API_KEY makes the
+# combo "anthropic+deepseek"). Not a learned/scored mechanism -- DA-09 stays
+# on its own data-gated track; this is a hand-authored template per combo.
+#
+# Site keys reuse the EXACT string each call site already tags its request
+# with (llm-gateway KnownLLMSite) -- the judge sites keep their ladder-native
+# "judge:model" / "judge:frontier" colon form rather than a second spelling.
+# "escalation" is not a call site of its own: the reliability ladder stamps
+# it on any attempt run at an ESCALATED capability tier, regardless of which
+# site the base attempt used, so every escalated retry (decomposition,
+# brainstorm, northstar, spec-derivation, alignment, judge:model) can be sent
+# to one deliberately-chosen reliable model.
+#
+# A site's value is either a bare model id (applied regardless of the
+# requested capability) or a per-capability table `{ <Capability> = "...",
+# default = "..." }` for a site whose requests legitimately vary in
+# capability across calls. agent-runner is the one such site today: it tags
+# every request "agent-runner" but the per-task capability ranges over
+# Light/Strong/Frontier (planning's inferCapability) -- a flat model here
+# would silently downgrade a Frontier-classified task (design/schema/
+# security/auth/perf) to whatever the flat entry names.
+#
+# A combo with no table below, a site absent from its table, or a table entry
+# with no match for the requested capability AND no "default", is not an
+# error -- resolution falls through to the existing capability-level logic
+# (fail-soft, logged by ProviderRegistry).
+# =============================================================================
+
+[routing.profiles."deepseek"]
+# Intentionally empty: a deepseek-only deployment gets pure capability-level
+# routing, byte-identical to pre-routing-profiles behavior.
+
+[routing.profiles."anthropic+deepseek"]
+# Plan C (owner, provider-budget-cap story): DeepSeek is the agent/planning
+# workhorse; Anthropic is reserved for the frontier judge and ladder-escalated
+# retries only, to protect the $20 Anthropic credit (E2E budget <= $1 total).
+# Frontier-classified agent tasks stay on DeepSeek's own Frontier model
+# (v4-pro) rather than downgrading to v4-flash or escaping to Anthropic.
+"agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-flash" }
+"decomposition" = "deepseek-v4-flash"
+"brainstorm" = "deepseek-v4-flash"
+"northstar" = "deepseek-v4-flash"
+"spec-derivation" = "deepseek-v4-flash"
+"alignment" = "deepseek-v4-flash"
+"judge:model" = "deepseek-v4-flash"
+# claude-opus-4-8, NOT claude-fable-5 -- half the price, per Plan C's cost fear.
+"judge:frontier" = "claude-opus-4-8"
+"escalation" = "claude-sonnet-4-6"

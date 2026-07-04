@@ -1,0 +1,38 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreExportsUsedInFile": true,
+  "workspaces": {
+    "packages/*": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/agent-runner": {
+      "entry": ["src/runner.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "packages/development": {
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/memory-indexer": {
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": [
+        "tree-sitter-wasms",
+        "@ashara/shared"
+      ]
+    },
+    "packages/memory": {
+      "ignoreDependencies": [
+        "@ashara/shared"
+      ]
+    },
+    "packages/orchestrator": {
+      "ignoreDependencies": [
+        "@ashara/agent-runner",
+        "@ashara/llm-gateway",
+        "@ashara/memory"
+      ]
+    },
+    "packages/server": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}

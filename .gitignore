@@ -1,0 +1,12 @@
+docs/
+dist/
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.ashara/worktrees/
+.ashara/
+project/
+.claude/
+CLAUDE.md

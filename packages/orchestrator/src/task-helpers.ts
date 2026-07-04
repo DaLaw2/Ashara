@@ -1,0 +1,137 @@
+import { join } from "node:path";
+
+import type { WorkItemId } from "@ashara/shared";
+import type { FailedApproachRepository } from "@ashara/db";
+import type { WorkItem, WorkItemRepository } from "@ashara/planning-domain";
+import { PlanningService } from "@ashara/planning-domain";
+import { assertValidTargetProjectPath } from "@ashara/development";
+
+// Narrow structural view of the vision persistence needed to mint, validate,
+// and persist a target project path. VisionRepository satisfies this; the
+// segregated interface keeps the minting/persist logic unit-testable without a
+// live database (deterministic, no shared getLatest() cross-test races).
+export interface ProjectPathStore {
+  getLatest(): Promise<{ id: string } | null>;
+  getProjectPath(visionId: string): Promise<string | null>;
+  setProjectPath(visionId: string, path: string): Promise<void>;
+}
+
+export async function resolveTargetProjectPath(
+  visionRepo: ProjectPathStore,
+  workdirBase: string,
+): Promise<string | null> {
+  try {
+    const vision = await visionRepo.getLatest();
+    if (!vision) return null;
+
+    const dbPath = await visionRepo.getProjectPath(vision.id);
+    if (dbPath) {
+      // The DB is a trust boundary: a stale/poisoned row (e.g. a path inside
+      // the Ashara repo left over from earlier runs) must be rejected and
+      // fail closed, never reused for destructive git sync/reset.
+      await assertValidTargetProjectPath(dbPath);
+      return dbPath;
+    }
+
+    const base = workdirBase || "ashara-work";
+    const defaultPath = join(base, "projects", vision.id);
+    await assertValidTargetProjectPath(defaultPath);
+    // Persist at minting time (owner ruling: the target path is minted once,
+    // validated, and persisted as the source of truth reused thereafter). This
+    // closes the gap where the path was only stored after the first COMPLETED
+    // task: a workdirBase change across a restart before any completion would
+    // otherwise re-mint a divergent path. no-overwrite semantics preserved.
+    await persistProjectPath(visionRepo, defaultPath);
+    return defaultPath;
+  } catch (e) {
+    console.warn("Failed to resolve target project path:", e);
+    return null;
+  }
+}
+
+async function persistProjectPath(
+  visionRepo: ProjectPathStore,
+  targetProjectPath: string,
+): Promise<void> {
+  try {
+    const vision = await visionRepo.getLatest();
+    if (!vision) return;
+
+    const existing = await visionRepo.getProjectPath(vision.id);
+    if (!existing) {
+      await visionRepo.setProjectPath(vision.id, targetProjectPath);
+      console.log(`Stored target project path for vision ${vision.id}: ${targetProjectPath}`);
+    }
+  } catch (e) {
+    console.warn("Failed to persist target project path:", e);
+  }
+}
+
+/**
+ * Records a failed_approaches row. `learned` defaults to `errorDetail` rather than
+ * the pre-fix hard-coded "" (kl-t1 Q1 secondary defect) — the field is never left
+ * empty, even for the plain thrown-orchestrator-error call site that has no richer
+ * lesson to compose. Callers on the FailureRouter-routed path pass a real lesson
+ * via `composeRoutedLesson` below.
+ */
+export async function recordFailedApproach(
+  failedApproachRepo: FailedApproachRepository,
+  workItemRepo: WorkItemRepository,
+  task: WorkItem,
+  errorDetail: string,
+  learned?: string,
+): Promise<void> {
+  try {
+    const epicId = await findEpicId(workItemRepo, task);
+    const affectedArea = (task.taskSpec as Record<string, unknown> | undefined)?.area as string | undefined
+      ?? task.title.toLowerCase();
+
+    await failedApproachRepo.record(
+      task.id,
+      epicId,
+      task.title,
+      `Task '${task.title}' attempted execution`,
+      errorDetail,
+      learned ?? errorDetail,
+      affectedArea,
+    );
+  } catch (e) {
+    console.warn(`[${task.id}] failed to record failed approach:`, e);
+  }
+}
+
+/**
+ * Deterministic "lesson" text for a FailureRouter-routed failure (kl-t1): every
+ * decision — replan, abandon, or substitute (itself an abandon variant) — means
+ * this dispatch attempt did not succeed, so each is worth a lesson, composed with
+ * zero LLM calls from data already in scope (no distillation — deferred by story
+ * decision). Provenance-bearing: names the task, the action taken, and the
+ * attempt count, so a later brief's "Failed Approaches" section reads as an
+ * imperative lesson rather than a bare error string.
+ */
+export function composeRoutedLesson(
+  title: string,
+  action: "replan" | "abandon" | "substitute",
+  attempts: number,
+  detail: string,
+): string {
+  const verb =
+    action === "abandon" ? "abandoned"
+    : action === "substitute" ? "abandoned as a duplicate of an equivalent completed item"
+    : "replanned for another attempt";
+  return `Task '${title}' was ${verb} after ${attempts} attempt(s): ${detail}`;
+}
+
+export async function findEpicId(
+  workItemRepo: WorkItemRepository,
+  task: WorkItem,
+): Promise<string | null> {
+  let currentId = task.parentId;
+  while (currentId) {
+    const parent = await PlanningService.findWorkItem(workItemRepo, currentId);
+    if (!parent) break;
+    if (parent.level === "Epic") return parent.id;
+    currentId = parent.parentId;
+  }
+  return null;
+}
