@@ -8,6 +8,7 @@ import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { evaluateRunTermination } from "./termination-snapshot.js";
 import { runPostCycleChecks, reconcileCoverageGaps } from "./post-cycle.js";
+import { attemptLivenessRecovery } from "./liveness-handler.js";
 
 export class CoreLoop {
   private readonly deps: CoreLoopDeps;
@@ -111,6 +112,31 @@ export class CoreLoop {
       // termination snapshot is taken below — otherwise a liveness verdict could race
       // items about to appear this cycle.
       await runPostCycleChecks(deps, batch, { tasksProcessed: batch.length, results }, completedCount);
+
+      if (batch.length === 0) {
+        const recovered = await attemptLivenessRecovery(deps);
+        if (recovered > 0) {
+          const retryEligible = await PlanningService.gate(deps.workItemRepo);
+          if (retryEligible.length > 0) {
+            const retryGraph = await DependencyGraph.load(deps.workItemRepo);
+            const retryWeights = retryGraph.computeUnlockWeights();
+            const retryBatch = PlanningService.select(retryEligible, deps.config.maxBatchSize, retryWeights);
+
+            for (const task of retryBatch) {
+              if (this.budget.isExhausted()) break;
+              const capability = extractCapability(task);
+              try {
+                const { result, costInfo } = await processTask(deps, task);
+                this.budget.accumulateCost(costInfo.costUsd, result.status === "completed");
+                await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
+                results.push(result);
+              } catch (e) {
+                results.push(await handleProcessingError(deps, task, e));
+              }
+            }
+          }
+        }
+      }
     }
 
     // QUIESCENT POINT (Option A quiescence, mig7-t1): decomposition, dispatch, and the

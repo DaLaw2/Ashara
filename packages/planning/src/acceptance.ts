@@ -11,6 +11,9 @@ export interface AcceptanceGap {
   readonly kind: "boot-failure" | "unreachable" | "not-mounted" | "server-error" | "missing-feature";
   readonly expected: string;
   readonly observed: string;
+  readonly lesson?: string;
+  readonly suggestedApproach?: string;
+  readonly supersedes?: string;
 }
 
 export interface AcceptanceVerdict {
@@ -24,6 +27,7 @@ export interface WorkItemSummary {
   readonly id: string;
   readonly title: string;
   readonly status: string;
+  readonly failureDetail?: string;
 }
 
 export const VisionGapResultSchema = z.object({
@@ -31,6 +35,9 @@ export const VisionGapResultSchema = z.object({
     title: z.string().min(1),
     description: z.string().min(1),
     visionEvidence: z.string().min(1),
+    lesson: z.string().optional(),
+    suggestedApproach: z.string().optional(),
+    supersedes: z.string().optional(),
   })).default([]),
   reasoning: z.string(),
 });
@@ -50,10 +57,17 @@ export function createGatewayAcceptanceLLM(provider: StructuredLLMProvider): Acc
         .map((i) => `- [${i.status}] ${i.title} (${i.id})`)
         .join("\n");
 
+      const abandonedItems = input.items.filter((i) => i.status === "Abandoned");
+      const abandonedSection = abandonedItems.length > 0
+        ? abandonedItems.map((i) => {
+            const detail = i.failureDetail ? ` (failure: ${i.failureDetail})` : "";
+            return `- ${i.title} (${i.id})${detail}`;
+          }).join("\n")
+        : "(none)";
+
       const prompt = [
         "You are a product acceptance reviewer. Compare the vision text against the completed work items.",
         "Identify features EXPLICITLY stated in the vision that have NOT been addressed by any Completed work item.",
-        "Abandoned items were tried and failed — do NOT re-propose them.",
         "",
         "VISION TEXT:",
         input.visionText,
@@ -61,10 +75,19 @@ export function createGatewayAcceptanceLLM(provider: StructuredLLMProvider): Acc
         "WORK ITEMS:",
         itemsSummary,
         "",
+        "ABANDONED ITEMS (tried and failed):",
+        abandonedSection,
+        "",
         "For each gap, provide:",
         "- title: a short name for the missing feature",
         "- description: what needs to be built",
         "- visionEvidence: the EXACT quoted phrase from the vision text that proves this feature is required",
+        "- lesson: (optional) what was learned from prior failed attempts at this feature",
+        "- suggestedApproach: (optional) a DIFFERENT approach that avoids the prior failure",
+        "- supersedes: (optional) the ID of an abandoned item this gap replaces",
+        "",
+        "When a gap corresponds to an abandoned item, include the abandoned item's ID in 'supersedes'",
+        "and propose a different approach in 'suggestedApproach' that avoids the failure mode.",
         "",
         "Only report genuine gaps. If all vision requirements are covered, return an empty gaps array.",
       ].join("\n");
@@ -146,6 +169,9 @@ export function buildVisionGaps(
       kind: "missing-feature" as const,
       expected: g.description,
       observed: `not addressed (vision: "${g.visionEvidence}")`,
+      lesson: g.lesson,
+      suggestedApproach: g.suggestedApproach,
+      supersedes: g.supersedes,
     }));
 }
 

@@ -9,6 +9,8 @@ export { shouldSplit, splitFailedTask } from "./task-split.js";
 export type { TerminationItemSnapshot, TerminationSnapshot } from "./termination.js";
 export { evaluate } from "./termination.js";
 
+export type { RunSummaryDecision } from "./run-summary.js";
+
 export type { SnapshotAssemblyDeps } from "./termination-snapshot.js";
 export { assembleRunSummaryItems, isRecoverableFailed } from "./termination-snapshot.js";
 

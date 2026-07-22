@@ -1,5 +1,5 @@
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
-import type { TerminationReason, TerminationCounts, StalledCause } from "./termination.js";
+import type { TerminationReason, TerminationCounts, StalledCause, StopReason } from "./termination.js";
 import type { AcceptanceVerdict } from "./acceptance.js";
 
 /**
@@ -107,7 +107,7 @@ export interface CoverageGap {
  * undone (Discipline C: error/outcome reproducibility).
  */
 export interface RunSummary {
-  readonly stopReason: TerminationReason;
+  readonly stopReason: StopReason;
   readonly counts: TerminationCounts;
   readonly shipped: readonly ShippedItem[];
   readonly abandoned: readonly AbandonedItem[];

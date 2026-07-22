@@ -106,4 +106,20 @@ export type {
   VisionGapResult,
 } from "./acceptance.js";
 
+export {
+  createGatewayReplanLLM,
+  ReplanProposalSchema,
+  ReplanResultSchema,
+} from "./replan-from-vision.js";
+export type {
+  ReplanLLM,
+  ReplanInput,
+  ReplanResult,
+  ReplanProposal,
+  AbandonedItemContext,
+} from "./replan-from-vision.js";
+
+export { recoverFromAbandoned } from "./liveness-recovery.js";
+export type { LivenessRecoveryDeps, FailedApproachSource } from "./liveness-recovery.js";
+
 export * from "./lifecycle/index.js";

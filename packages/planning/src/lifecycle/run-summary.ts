@@ -1,5 +1,5 @@
 import type { WorkItemStatus } from "@ashara/shared";
-import type { TerminationReason, TerminationCounts, TerminationStop, StalledCause } from "../termination.js";
+import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
 
@@ -23,22 +23,42 @@ const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>([
   "Archived",
 ]);
 
-export function buildRunSummary(input: RunSummaryInput, decision: TerminationStop): RunSummary {
+export type RunSummaryDecision = TerminationStop | (TerminationPlanExhausted & { readonly stopReason: StopReason; readonly abandonedRoots?: readonly string[] });
+
+function deriveStopReason(decision: TerminationStop | TerminationPlanExhausted, acceptance?: AcceptanceVerdict): StopReason {
+  if (decision.decision === "stop") return decision.reason as StopReason;
+  if (acceptance?.outcome === "accepted") return "accepted";
+  if (acceptance?.outcome === "accepted-with-caveats") return "accepted-with-caveats";
+  return "accepted";
+}
+
+function deriveAbandonedRoots(decision: TerminationStop | TerminationPlanExhausted): readonly string[] {
+  if (decision.decision === "stop") return decision.abandonedRoots;
+  return [];
+}
+
+export function buildRunSummary(input: RunSummaryInput, decision: TerminationStop | TerminationPlanExhausted): RunSummary {
   const byId = new Map(input.items.map((it) => [it.id, it] as const));
   const shipped = buildShipped(input.items);
   const abandoned = buildAbandoned(input.items);
-  const gaps = buildGaps(input.items, decision, byId);
+  const stalledItems = decision.decision === "stop" ? decision.stalled : decision.stalled;
+  const abandonedRoots = deriveAbandonedRoots(decision);
+  const stopReason = deriveStopReason(decision, input.acceptance);
+  const gapDecision: TerminationStop = decision.decision === "stop"
+    ? decision
+    : { decision: "stop", reason: decision.trigger, counts: decision.counts, stalled: stalledItems, abandonedRoots: [...abandonedRoots] };
+  const gaps = buildGaps(input.items, gapDecision, byId);
   const endpointGaps = input.endpointGaps ?? [];
-  const narrative = buildNarrative(decision.reason, decision.counts, shipped, abandoned, gaps, endpointGaps);
+  const narrative = buildNarrative(stopReason, decision.counts, shipped, abandoned, gaps, endpointGaps);
 
   const summary: RunSummary = {
-    stopReason: decision.reason,
+    stopReason,
     counts: decision.counts,
     shipped,
     abandoned,
     gaps,
     endpointGaps,
-    abandonedRoots: decision.abandonedRoots,
+    abandonedRoots: [...abandonedRoots],
     narrative,
   };
   if (input.acceptance !== undefined) {
@@ -209,19 +229,19 @@ function describeStalled(
 }
 
 function buildNarrative(
-  reason: TerminationReason,
+  reason: StopReason,
   counts: TerminationCounts,
   shipped: readonly ShippedItem[],
   abandoned: readonly AbandonedItem[],
   gaps: readonly CoverageGap[],
   endpointGaps: readonly EndpointCoverageGap[],
 ): string {
-  const headline =
-    reason === "completeness"
-      ? "Run stopped because every planned item reached a terminal state."
-      : reason === "economy"
-        ? "Run stopped because the budget was exhausted while dispatchable work remained."
-        : "Run stopped because the plan is frozen — no remaining item can make progress on its own.";
+  const headlineMap: Record<StopReason, string> = {
+    economy: "Run stopped because the budget was exhausted while dispatchable work remained.",
+    accepted: "Run completed — vision acceptance check confirmed all requirements are met.",
+    "accepted-with-caveats": "Run completed with caveats — some gaps remain but the acceptance iteration cap was reached.",
+  };
+  const headline = headlineMap[reason];
 
   const shippedNote = `${shipped.length} item(s) shipped (Completed).`;
   const abandonedNote =

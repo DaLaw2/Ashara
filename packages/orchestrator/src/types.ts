@@ -1,4 +1,4 @@
-import type { RunSummary, TerminationDecision } from "@ashara/planning";
+import type { RunSummary, TerminationDecision, ReplanLLM } from "@ashara/planning";
 import type {
   EventStoreRepository,
   BrainstormLogRepository,
@@ -45,6 +45,8 @@ export interface CoreLoopConfig {
    */
   readonly coverageEnforcing: boolean;
   readonly maxAcceptanceAttempts: number;
+  readonly maxReplanRounds?: number;
+  readonly maxGapAttempts?: number;
 }
 
 export const DEFAULT_CONFIG: CoreLoopConfig = {
@@ -192,4 +194,6 @@ export interface CoreLoopDeps {
   readonly acceptanceLlm?: AcceptanceLLM;
   readonly observeProduct?: (targetPath: string) => Promise<ProductObservation>;
   acceptanceAttempts: number;
+  readonly replanLlm?: ReplanLLM;
+  replanRounds: number;
 }

@@ -147,25 +147,24 @@ export class DependencyGraph {
     dep: string,
     ctx: DependencyContext,
     memo: Map<string, DependencyResolutionResult>,
+    substitutionVisited?: Set<string>,
   ): DepState {
+    const visited = substitutionVisited ?? new Set<string>();
+    if (visited.has(dep)) return { kind: "unsatisfiable", blockedBy: [dep] };
+    visited.add(dep);
+
     const view = ctx.get(dep);
-    // A dependency with no known item cannot be confirmed done, but it is not an
-    // Abandoned block either — treat as pending (not met, not permanently blocked).
     if (!view) return { kind: "pending" };
 
     if (view.status === "Completed") return { kind: "satisfied" };
 
-    // Substitution: an equivalent Completed item (same parent + title) satisfies the
-    // dependency even if this item itself failed/was abandoned (Run-8 duplicate shape).
     if (ctx.findCompletedEquivalent(view.parentId, view.title, dep) !== undefined) {
       return { kind: "satisfied" };
     }
 
     if (view.status === "Abandoned") {
-      // Honor an explicit substitute, fail-closed: only a Completed target counts.
       if (view.substitutedBy !== undefined) {
-        const substitute = ctx.get(view.substitutedBy);
-        if (substitute?.status === "Completed") return { kind: "satisfied" };
+        return this.classifyDependency(view.substitutedBy, ctx, memo, visited);
       }
       return { kind: "unsatisfiable", blockedBy: [dep] };
     }

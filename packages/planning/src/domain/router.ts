@@ -124,7 +124,8 @@ export class LifecycleRouter {
     if (substituteId === undefined) return false;
 
     const substitute = await repo.findById(substituteId as WorkItemId);
-    return substitute?.status === "Completed";
+    if (!substitute) return false;
+    return LifecycleRouter.isSettled(repo, substitute);
   }
 
   private static async allSettled(repo: WorkItemRepository, items: readonly WorkItem[]): Promise<boolean> {

@@ -1,6 +1,6 @@
 import type { DependencyResolution } from "../domain/index.js";
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
-import type { TerminationDecision, TerminationCounts, StalledItem, StalledCause } from "../termination.js";
+import type { TerminationDecision, TerminationCounts, StalledItem, StalledCause, TerminationPlanExhausted } from "../termination.js";
 
 export interface TerminationItemSnapshot {
   readonly id: string;
@@ -35,7 +35,7 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   const counts = tallyCounts(items, parentsWithChildren);
 
   if (counts.total > 0 && counts.nonTerminal === 0 && openCoverageGaps === 0) {
-    return { decision: "stop", reason: "completeness", counts, stalled: [], abandonedRoots: [] };
+    return { decision: "plan_exhausted", trigger: "completeness", counts, stalled: [] };
   }
 
   if (budgetExhausted) {
@@ -43,8 +43,8 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   }
 
   if (counts.total > 0 && counts.nonTerminal > 0 && !hasAdvanceableItem(items, parentsWithChildren)) {
-    const { stalled, abandonedRoots } = classifyStalled(items);
-    return { decision: "stop", reason: "liveness", counts, stalled, abandonedRoots };
+    const { stalled } = classifyStalled(items);
+    return { decision: "plan_exhausted", trigger: "liveness", counts, stalled };
   }
 
   return { decision: "continue", counts };

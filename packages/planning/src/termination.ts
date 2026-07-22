@@ -19,6 +19,8 @@ import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
  */
 export type TerminationReason = "completeness" | "economy" | "liveness";
 
+export type StopReason = "economy" | "accepted" | "accepted-with-caveats";
+
 /**
  * Why a single non-terminal item cannot progress, attributed at the liveness
  * decision point so a RunSummary can explain the stall per item.
@@ -84,7 +86,7 @@ export interface TerminationContinue {
 /** The run should stop, with a separated reason and structured evidence. */
 export interface TerminationStop {
   readonly decision: "stop";
-  readonly reason: TerminationReason;
+  readonly reason: TerminationReason | StopReason;
   readonly counts: TerminationCounts;
   /** Non-terminal items that cannot progress. Populated for `liveness`; empty otherwise. */
   readonly stalled: readonly StalledItem[];
@@ -92,4 +94,11 @@ export interface TerminationStop {
   readonly abandonedRoots: readonly string[];
 }
 
-export type TerminationDecision = TerminationContinue | TerminationStop;
+export interface TerminationPlanExhausted {
+  readonly decision: "plan_exhausted";
+  readonly trigger: "completeness" | "liveness";
+  readonly counts: TerminationCounts;
+  readonly stalled: readonly StalledItem[];
+}
+
+export type TerminationDecision = TerminationContinue | TerminationStop | TerminationPlanExhausted;

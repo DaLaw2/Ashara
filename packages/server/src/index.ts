@@ -42,11 +42,12 @@ import {
   createGatewayDecompositionLLM,
   createGatewaySpecDerivationLLM,
   createGatewayAcceptanceLLM,
+  createGatewayReplanLLM,
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
 } from "@ashara/planning";
-import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, SpecDerivationLLM, AcceptanceLLM } from "@ashara/planning";
+import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, SpecDerivationLLM, AcceptanceLLM, ReplanLLM } from "@ashara/planning";
 import {
   buildDefaultProfile,
   createRetrievalFn,
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
   let decompositionLlm: DecompositionLLM | null = null;
   let specDerivationLlm: SpecDerivationLLM | null = null;
   let acceptanceLlm: AcceptanceLLM | null = null;
+  let replanLlm: ReplanLLM | null = null;
   if (llmGateway) {
     // Route ALL structured planning calls (brainstorm, northstar, decomposition)
     // through the shared reliability ladder (Phase 4 t1, ADR-030 G5): temperature
@@ -250,7 +252,9 @@ async function main(): Promise<void> {
     specDerivationLlm = createGatewaySpecDerivationLLM(specDerivationLadder);
     const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
     acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
-    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, spec-derivation, acceptance)");
+    const replanLadder = withStructuredLadder(llmGateway, { site: "replan", onAttempt: ladderAttemptSink });
+    replanLlm = createGatewayReplanLLM(replanLadder);
+    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, spec-derivation, acceptance, replan)");
   } else {
     brainstormLlm = new StubBrainstormLLM();
     northstarLlm = new StubNorthStarLLM();
@@ -515,6 +519,8 @@ async function main(): Promise<void> {
     acceptanceLlm: acceptanceLlm ?? undefined,
     observeProduct: (targetPath: string) => observeProduct(targetPath),
     acceptanceAttempts: 0,
+    replanLlm: replanLlm ?? undefined,
+    replanRounds: 0,
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);

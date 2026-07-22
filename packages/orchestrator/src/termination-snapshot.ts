@@ -1,4 +1,4 @@
-import type { EndpointCoverageGap, AcceptanceVerdict } from "@ashara/planning";
+import type { EndpointCoverageGap, AcceptanceVerdict, TerminationPlanExhausted } from "@ashara/planning";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectContract } from "@ashara/shared";
 import {
@@ -28,14 +28,53 @@ export async function evaluateRunTermination(
     : 0;
   const decision = evaluate({ items, budgetExhausted, openCoverageGaps });
 
-  if (decision.decision !== "stop" || decision.reason !== "completeness") {
-    const summary = decision.decision === "stop" ? buildRunSummary({ items, endpointGaps }, decision) : null;
+  if (decision.decision === "continue") {
+    return { decision, summary: null };
+  }
+
+  if (decision.decision === "stop") {
+    const summary = buildRunSummary({ items, endpointGaps }, decision);
     return { decision, summary };
   }
 
+  return handlePlanExhausted(deps, decision, items, endpointGaps);
+}
+
+async function handlePlanExhausted(
+  deps: CoreLoopDeps,
+  decision: TerminationPlanExhausted,
+  items: Awaited<ReturnType<typeof assembleRunSummaryItems>>,
+  endpointGaps: EndpointCoverageGap[],
+): Promise<TerminationOutcome> {
   const acceptance = await runAcceptanceCheck(deps, items);
-  const summary = buildRunSummary({ items, endpointGaps, acceptance: acceptance ?? undefined }, decision);
-  return { decision, summary };
+
+  if (acceptance && acceptance.outcome === "rejected") {
+    const maxGapAttempts = deps.config.maxGapAttempts ?? 2;
+    if (deps.acceptanceAttempts < maxGapAttempts) {
+      return { decision: { decision: "continue", counts: decision.counts }, summary: null };
+    }
+  }
+
+  const stopReason = acceptance?.outcome === "accepted"
+    ? "accepted" as const
+    : acceptance?.outcome === "accepted-with-caveats"
+      ? "accepted-with-caveats" as const
+      : "accepted" as const;
+
+  const stopDecision = {
+    decision: "stop" as const,
+    reason: stopReason,
+    counts: decision.counts,
+    stalled: [...decision.stalled],
+    abandonedRoots: [] as string[],
+  };
+
+  const summary = buildRunSummary(
+    { items, endpointGaps, acceptance: acceptance ?? undefined },
+    decision,
+  );
+
+  return { decision: stopDecision, summary };
 }
 
 async function runAcceptanceCheck(

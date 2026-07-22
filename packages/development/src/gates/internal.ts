@@ -61,13 +61,38 @@ const IMPORT_SPEC_PATTERNS: readonly RegExp[] = [
 ];
 
 export async function findEntryPoint(projectRoot: string, contractEntryPoint: string | null): Promise<string | null> {
-  if (contractEntryPoint === null) return null;
-  const candidatePath = join(projectRoot, contractEntryPoint);
-  const isFile = await stat(candidatePath).then(
-    (s) => s.isFile(),
-    () => false,
-  );
-  return isFile ? candidatePath : null;
+  if (contractEntryPoint !== null) {
+    const candidatePath = join(projectRoot, contractEntryPoint);
+    const isFile = await stat(candidatePath).then(
+      (s) => s.isFile(),
+      () => false,
+    );
+    if (isFile) return candidatePath;
+  }
+
+  const pkgJsonPath = join(projectRoot, "package.json");
+  let pkgContent: string;
+  try {
+    pkgContent = await readFile(pkgJsonPath, "utf-8");
+  } catch {
+    return null;
+  }
+  const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
+  const scripts = pkg.scripts as Record<string, unknown> | undefined;
+  if (scripts && typeof scripts.start === "string") {
+    const match = scripts.start.match(/(?:node|npx\s+tsx)\s+(\S+)/);
+    if (match) {
+      const resolved = join(projectRoot, match[1]);
+      const exists = await stat(resolved).then((s) => s.isFile(), () => false);
+      if (exists) return resolved;
+    }
+  }
+  if (typeof pkg.main === "string") {
+    const resolved = join(projectRoot, pkg.main);
+    const exists = await stat(resolved).then((s) => s.isFile(), () => false);
+    if (exists) return resolved;
+  }
+  return null;
 }
 
 export function buildExcludeDirSet(contractExcludePaths: readonly string[] | undefined): ReadonlySet<string> | undefined {
