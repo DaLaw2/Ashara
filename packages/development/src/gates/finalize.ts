@@ -50,7 +50,7 @@ async function abortAndFail(
   extra: Partial<FinalizeResult> = {},
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
-  await abortMerge(targetProjectPath);
+  await abortMerge(targetProjectPath).catch(() => {});
   console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
   return { success: false, gateFailureContext, ...extra };
 }

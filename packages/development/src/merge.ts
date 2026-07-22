@@ -132,6 +132,16 @@ export async function commitMerge(targetPath: string, taskId: string): Promise<v
 }
 
 export async function abortMerge(targetPath: string): Promise<void> {
+  try {
+    await execFileAsync("git", ["checkout", "--", "."], { cwd: targetPath });
+  } catch (e) {
+    console.warn(`[abortMerge] git checkout -- . failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await execFileAsync("git", ["clean", "-fd"], { cwd: targetPath });
+  } catch (e) {
+    console.warn(`[abortMerge] git clean -fd failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
   await execFileAsync("git", ["merge", "--abort"], { cwd: targetPath });
 }
 

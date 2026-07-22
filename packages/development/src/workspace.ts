@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -144,6 +144,16 @@ export async function ensureTargetGitInit(targetProjectPath: string): Promise<vo
   await assertValidTargetProjectPath(targetProjectPath);
   await mkdir(targetProjectPath, { recursive: true });
   await ensureGitInitialized(targetProjectPath);
+
+  const gitignorePath = join(targetProjectPath, ".gitignore");
+  const gitignoreExists = await access(gitignorePath).then(
+    () => true,
+    () => false,
+  );
+  if (!gitignoreExists) {
+    await writeFile(gitignorePath, "node_modules/\n", "utf-8");
+  }
+
   if (!(await hasGitCommits(targetProjectPath))) {
     await execFileAsync("git", ["commit", "--allow-empty", "-m", "init"], {
       cwd: targetProjectPath,
