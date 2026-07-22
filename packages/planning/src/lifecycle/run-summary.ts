@@ -1,6 +1,7 @@
 import type { WorkItemStatus } from "@ashara/shared";
 import type { TerminationReason, TerminationCounts, TerminationStop, StalledCause } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
+import type { AcceptanceVerdict } from "../acceptance.js";
 
 import type { TerminationItemSnapshot } from "./termination.js";
 import type { EventSink } from "./ports.js";
@@ -13,6 +14,7 @@ export interface RunSummaryItem extends TerminationItemSnapshot {
 export interface RunSummaryInput {
   readonly items: readonly RunSummaryItem[];
   readonly endpointGaps?: readonly EndpointCoverageGap[];
+  readonly acceptance?: AcceptanceVerdict;
 }
 
 const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>([
@@ -29,7 +31,7 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
   const endpointGaps = input.endpointGaps ?? [];
   const narrative = buildNarrative(decision.reason, decision.counts, shipped, abandoned, gaps, endpointGaps);
 
-  return {
+  const summary: RunSummary = {
     stopReason: decision.reason,
     counts: decision.counts,
     shipped,
@@ -39,6 +41,10 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     abandonedRoots: decision.abandonedRoots,
     narrative,
   };
+  if (input.acceptance !== undefined) {
+    return { ...summary, acceptance: input.acceptance };
+  }
+  return summary;
 }
 
 export function emitRunSummary(logger: EventSink, summary: RunSummary): RunSummary {

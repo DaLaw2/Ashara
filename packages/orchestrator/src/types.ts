@@ -10,8 +10,10 @@ import type {
 import type { WorkItemRepository, ContractRepository } from "@ashara/planning";
 import type { BrainstormEngine, NorthStarChecker, DecompositionEngine } from "@ashara/planning";
 import type { ProposalEmbedder, SpecDerivationLLM } from "@ashara/planning";
+import type { AcceptanceLLM } from "@ashara/planning";
 import type { Router, FailureRouter } from "@ashara/planning";
 import type { DevelopmentService } from "@ashara/development";
+import type { ProductObservation } from "@ashara/shared";
 
 import type { ContractRegistryLookup } from "@ashara/planning";
 import type { EventLogger } from "./event-logger.js";
@@ -42,6 +44,7 @@ export interface CoreLoopConfig {
    * rollback: gaps are logged and reported in the run summary but never block.
    */
   readonly coverageEnforcing: boolean;
+  readonly maxAcceptanceAttempts: number;
 }
 
 export const DEFAULT_CONFIG: CoreLoopConfig = {
@@ -64,6 +67,7 @@ export const DEFAULT_CONFIG: CoreLoopConfig = {
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
   coverageEnforcing: true,
+  maxAcceptanceAttempts: 2,
 };
 
 export interface CycleResult {
@@ -185,4 +189,7 @@ export interface CoreLoopDeps {
    * Optional — absent, reconciliation is skipped (no contract to reconcile).
    */
   readonly contractRepo?: ContractRepository;
+  readonly acceptanceLlm?: AcceptanceLLM;
+  readonly observeProduct?: (targetPath: string) => Promise<ProductObservation>;
+  acceptanceAttempts: number;
 }

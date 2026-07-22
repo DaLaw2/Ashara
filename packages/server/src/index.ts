@@ -41,15 +41,17 @@ import {
   createGatewayNorthStarLLM,
   createGatewayDecompositionLLM,
   createGatewaySpecDerivationLLM,
+  createGatewayAcceptanceLLM,
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
 } from "@ashara/planning";
-import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, SpecDerivationLLM } from "@ashara/planning";
+import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, SpecDerivationLLM, AcceptanceLLM } from "@ashara/planning";
 import {
   buildDefaultProfile,
   createRetrievalFn,
   DevelopmentService,
+  observeProduct,
 } from "@ashara/development";
 import type {
   SessionStore,
@@ -218,6 +220,7 @@ async function main(): Promise<void> {
   let northstarLlm: NorthStarLLM;
   let decompositionLlm: DecompositionLLM | null = null;
   let specDerivationLlm: SpecDerivationLLM | null = null;
+  let acceptanceLlm: AcceptanceLLM | null = null;
   if (llmGateway) {
     // Route ALL structured planning calls (brainstorm, northstar, decomposition)
     // through the shared reliability ladder (Phase 4 t1, ADR-030 G5): temperature
@@ -245,7 +248,9 @@ async function main(): Promise<void> {
     // INDEPENDENT vision read that recovers endpoints the plan omitted.
     const specDerivationLadder = withStructuredLadder(llmGateway, { site: "spec-derivation", onAttempt: ladderAttemptSink });
     specDerivationLlm = createGatewaySpecDerivationLLM(specDerivationLadder);
-    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, spec-derivation)");
+    const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
+    acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
+    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, spec-derivation, acceptance)");
   } else {
     brainstormLlm = new StubBrainstormLLM();
     northstarLlm = new StubNorthStarLLM();
@@ -507,6 +512,9 @@ async function main(): Promise<void> {
     // work-item half is re-adapted to the domain shape the same way the
     // top-level workItemRepo is (adaptWorkItemRepo).
     withPlanningTransaction: planningTransaction,
+    acceptanceLlm: acceptanceLlm ?? undefined,
+    observeProduct: (targetPath: string) => observeProduct(targetPath),
+    acceptanceAttempts: 0,
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);

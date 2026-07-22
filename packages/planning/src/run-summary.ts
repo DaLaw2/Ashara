@@ -1,5 +1,6 @@
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 import type { TerminationReason, TerminationCounts, StalledCause } from "./termination.js";
+import type { AcceptanceVerdict } from "./acceptance.js";
 
 /**
  * The migration Phase 7 run-completion report (ADR-029). Every field here is a
@@ -119,6 +120,8 @@ export interface RunSummary {
   readonly endpointGaps: readonly EndpointCoverageGap[];
   /** Distinct Abandoned root ids the liveness stop attributed stalls to; empty otherwise. */
   readonly abandonedRoots: readonly string[];
+  /** Product-level acceptance verdict (ADR-040). Populated when the acceptance loop ran. */
+  readonly acceptance?: AcceptanceVerdict;
   /** One self-sufficient paragraph: why the run stopped and what remains undone. */
   readonly narrative: string;
 }

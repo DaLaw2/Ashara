@@ -90,4 +90,20 @@ export type {
 export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
 export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult, CreateBulkPlanDeps } from "./bulk-plan.js";
 
+export {
+  buildDeterministicGaps,
+  buildVisionGaps,
+  buildAcceptanceVerdict,
+  createGatewayAcceptanceLLM,
+  VisionGapResultSchema,
+} from "./acceptance.js";
+export type {
+  AcceptanceOutcome,
+  AcceptanceGap,
+  AcceptanceVerdict,
+  AcceptanceLLM,
+  WorkItemSummary,
+  VisionGapResult,
+} from "./acceptance.js";
+
 export * from "./lifecycle/index.js";
