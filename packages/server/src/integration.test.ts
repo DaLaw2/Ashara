@@ -16,7 +16,7 @@ import {
   CostRepository,
   withPlanningTransaction,
 } from "@ashara/db";
-import { CodebaseIndexer, initParser } from "@ashara/memory-indexer";
+import { CodebaseIndexer, initParser } from "@ashara/memory";
 import { createBulkPlanWithContract } from "@ashara/planning";
 
 import { bearerAuth } from "./middleware.js";

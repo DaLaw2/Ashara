@@ -1,13 +1,13 @@
 import type { ContractDelta, ContractInput, ProjectId, WorkItemId, ProjectKnowledge } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository, ContractRepository } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository, ContractRepository } from "./domain/index.js";
 import {
   PlanningService,
   createPendingWorkItem,
   extractSubstitutedBy,
   ContractAlreadyExists,
   ContractConflict,
-} from "@ashara/planning-domain";
+} from "./domain/index.js";
 import type { DecompositionInput, ExistingWorkItemSummary } from "./decomposition-types.js";
 import { UnresolvableDependencyError } from "./decomposition-types.js";
 import type { DecompositionEngine } from "./decomposition.js";

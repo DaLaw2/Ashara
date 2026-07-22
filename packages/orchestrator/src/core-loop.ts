@@ -1,5 +1,5 @@
-import type { WorkItem } from "@ashara/planning-domain";
-import { PlanningService, DependencyGraph } from "@ashara/planning-domain";
+import type { WorkItem } from "@ashara/planning";
+import { PlanningService, DependencyGraph } from "@ashara/planning";
 import { decomposeLeafStories } from "@ashara/planning";
 import { detectTechStack, readManifestContext } from "@ashara/development";
 

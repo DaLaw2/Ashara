@@ -1,4 +1,4 @@
-import type { WorkItemLevel, WorkItemStatus } from "./enums.js";
+import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 
 /**
  * Why a run stopped (migration Phase 7, ADR-029). The three dimensions are kept

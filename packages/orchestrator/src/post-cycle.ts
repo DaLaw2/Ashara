@@ -1,5 +1,5 @@
-import type { WorkItem } from "@ashara/planning-domain";
-import { PlanningService } from "@ashara/planning-domain";
+import type { WorkItem } from "@ashara/planning";
+import { PlanningService } from "@ashara/planning";
 import type { BrainstormOrchestrationDeps, RouteInput } from "@ashara/planning";
 import {
   checkNorthStarAlignment,

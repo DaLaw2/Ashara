@@ -1,3 +1,7 @@
+export * from "./domain/index.js";
+export * from "./termination.js";
+export * from "./run-summary.js";
+
 export { BrainstormEngine, StubBrainstormLLM } from "./brainstorm.js";
 
 export type {
@@ -79,10 +83,11 @@ export {
   isBlockingCoverageGap,
 } from "./coverage-reconciliation.js";
 export type {
-  CoverageHold,
   CoverageRollupGuardDeps,
   CoverageReconciliationDeps,
 } from "./coverage-reconciliation.js";
 
 export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
 export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult, CreateBulkPlanDeps } from "./bulk-plan.js";
+
+export * from "./lifecycle/index.js";

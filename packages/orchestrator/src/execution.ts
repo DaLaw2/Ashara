@@ -1,13 +1,13 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository, CoverageHold } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository, CoverageHold } from "@ashara/planning";
 import {
   PlanningService,
   canTransitionTo,
   failWorkItem,
   takeEvents,
   startWorkItem,
-} from "@ashara/planning-domain";
+} from "@ashara/planning";
 import type { DevelopmentService, TaskDescriptor } from "@ashara/development";
 import type { RawFailureContext } from "@ashara/planning";
 import { createCoverageRollupGuard } from "@ashara/planning";
@@ -15,8 +15,7 @@ import { createCoverageRollupGuard } from "@ashara/planning";
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
-import { recoverFailedItem } from "./failure-recovery.js";
-import { shouldSplit, splitFailedTask } from "./task-split.js";
+import { recoverFailedItem, shouldSplit, splitFailedTask } from "@ashara/planning";
 
 export interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -40,7 +39,7 @@ export async function executeTask(
   attempt: number;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
-  // @ashara/planning-domain) so storeKnowledge/storeFailureKnowledge scope
+  // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
   // knowledge_entries by the true Epic, not the Story task.parentId points at
   // (kl-t2/Q5 — the epic_id mis-write that made recentFindings effectively
   // globally scoped across projects).
@@ -225,7 +224,7 @@ export async function processTask(
       // Split-on-failure: agent hit turn limit while making progress (files
       // changed) — structurally "too big," not a specific bug.
       if (shouldSplit(finishReason, filesChanged, current)) {
-        await splitFailedTask({ workItemRepo: deps.workItemRepo, eventStore: deps.eventStore }, current, failure);
+        await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore }, current, failure);
         await recordFailedApproach(
           deps.failedApproachRepo,
           deps.workItemRepo,
@@ -237,7 +236,7 @@ export async function processTask(
         const action = await recoverFailedItem(
           {
             workItemRepo: deps.workItemRepo,
-            eventStore: deps.eventStore,
+            eventPublisher: deps.eventStore,
             failureRouter: deps.failureRouter,
             contractLookup: deps.contractLookup,
           },
@@ -315,7 +314,7 @@ export async function handleProcessingError(
       await recoverFailedItem(
         {
           workItemRepo: deps.workItemRepo,
-          eventStore: deps.eventStore,
+          eventPublisher: deps.eventStore,
           failureRouter: deps.failureRouter,
           contractLookup: deps.contractLookup,
         },

@@ -27,7 +27,8 @@ import {
   EventLogger,
   reconcileOnStartup,
 } from "@ashara/orchestrator";
-import type { CoreLoopDeps, ContractRegistryLookup } from "@ashara/orchestrator";
+import type { CoreLoopDeps } from "@ashara/orchestrator";
+import type { ContractRegistryLookup } from "@ashara/planning";
 import {
   BrainstormEngine,
   StubBrainstormLLM,
@@ -67,12 +68,12 @@ import { BudgetLedger, loadGatewayConfig, LLMGateway, NoLLMProvidersConfigured, 
 import type { LadderAttemptEvent, LLMCallRecord } from "@ashara/llm-gateway";
 import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
-import { CodebaseIndexer, initParser } from "@ashara/memory-indexer";
+import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
 import { parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema } from "@ashara/shared";
-import type { WorkItemRepository } from "@ashara/planning-domain";
+import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
-import { PlanningService, ContractVersionConflict } from "@ashara/planning-domain";
+import { PlanningService, ContractVersionConflict } from "@ashara/planning";
 
 import { loadServerConfig } from "./config.js";
 import { bearerAuth } from "./middleware.js";

@@ -1,11 +1,11 @@
 import { WorkItemRepository as DbWorkItemRepository } from "@ashara/db";
 import type { WorkItemId } from "@ashara/shared";
 import { parseWorkItemLevel, parseWorkItemStatus } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 
 /**
  * Bridges the db persistence repository (Drizzle row shape, nullable columns) to
- * the planning-domain WorkItemRepository port (domain WorkItem shape, optional
+ * the planning domain WorkItemRepository port (domain WorkItem shape, optional
  * fields). Extracted from the composition root so both the server wiring and the
  * bulk-plan facade wiring in tests share ONE adapter (mig9-t5) rather than
  * duplicating the row↔domain mapping.

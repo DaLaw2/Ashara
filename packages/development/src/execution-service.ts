@@ -81,7 +81,7 @@ export interface TaskDescriptor {
   /**
    * The task's true Epic ancestor id, walked up by the orchestrator (which owns
    * the WorkItem hierarchy) before constructing this descriptor — @ashara/development
-   * has no dependency on @ashara/planning-domain to walk it itself (kl-t2/Q5). `null`
+   * has no dependency on @ashara/planning to walk it itself (kl-t2/Q5). `null`
    * means the walk ran and found no Epic ancestor; `undefined` (callers that don't
    * set it, e.g. unit tests) falls back to `parentId` at the write site below.
    */

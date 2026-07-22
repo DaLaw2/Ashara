@@ -15,7 +15,6 @@
     "@ashara/llm-gateway": "workspace:*",
     "@ashara/memory": "workspace:*",
     "@ashara/planning": "workspace:*",
-    "@ashara/planning-domain": "workspace:*",
     "@ashara/shared": "workspace:*",
     "pg": "^8.22.0"
   },

@@ -3,17 +3,17 @@ import type {
   ProjectContract,
   ContractDelta,
   Endpoint,
-  EndpointCoverageGap,
   WorkItemId,
   WorkItemStatus,
 } from "@ashara/shared";
+import type { EndpointCoverageGap } from "./run-summary.js";
 import { parseProjectId } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository, ContractRepository } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository, ContractRepository, CoverageHold } from "./domain/index.js";
 import {
   PlanningService,
   createPendingWorkItem,
   COVERAGE_TASK_ORIGIN,
-} from "@ashara/planning-domain";
+} from "./domain/index.js";
 
 import {
   deriveEndpointFeatureKey,
@@ -288,8 +288,7 @@ export function computeCoverageGaps(
   return gaps;
 }
 
-/** Predicate the domain rollup consults before settling a parent (see below). */
-export type CoverageHold = (parent: WorkItem) => Promise<boolean>;
+export type { CoverageHold } from "./domain/index.js";
 
 export interface CoverageRollupGuardDeps {
   readonly workItemRepo: WorkItemRepository;

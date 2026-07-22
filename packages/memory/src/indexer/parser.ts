@@ -15,7 +15,7 @@ let tsLang: Language | null = null;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WASM_DIR = resolve(
     __dirname,
-    "../node_modules/tree-sitter-wasms/out",
+    "../../node_modules/tree-sitter-wasms/out",
 );
 
 export async function initParser(): Promise<void> {

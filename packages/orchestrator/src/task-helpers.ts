@@ -2,8 +2,8 @@ import { join } from "node:path";
 
 import type { WorkItemId } from "@ashara/shared";
 import type { FailedApproachRepository } from "@ashara/db";
-import type { WorkItem, WorkItemRepository } from "@ashara/planning-domain";
-import { PlanningService } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository } from "@ashara/planning";
+import { PlanningService } from "@ashara/planning";
 import { assertValidTargetProjectPath } from "@ashara/development";
 
 // Narrow structural view of the vision persistence needed to mint, validate,

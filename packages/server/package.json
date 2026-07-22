@@ -14,10 +14,8 @@
     "@ashara/development": "workspace:*",
     "@ashara/llm-gateway": "workspace:*",
     "@ashara/memory": "workspace:*",
-    "@ashara/memory-indexer": "workspace:*",
     "@ashara/orchestrator": "workspace:*",
     "@ashara/planning": "workspace:*",
-    "@ashara/planning-domain": "workspace:*",
     "@ashara/shared": "workspace:*",
     "hono": "^4.12.29",
     "pg": "^8.22.0"

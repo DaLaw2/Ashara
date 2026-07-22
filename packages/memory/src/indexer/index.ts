@@ -1,5 +1,3 @@
-// Barrel export for @ashara/memory-indexer
-
 export type {
     ParseResult,
     RefKind,

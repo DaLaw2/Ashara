@@ -1,5 +1,5 @@
-import type { WorkItem, WorkItemRepository } from "@ashara/planning-domain";
-import { PlanningService } from "@ashara/planning-domain";
+import type { WorkItem, WorkItemRepository } from "./domain/index.js";
+import { PlanningService } from "./domain/index.js";
 import type { NorthStarCheckInput, AlignmentResult } from "./northstar.js";
 import type { NorthStarChecker } from "./northstar.js";
 

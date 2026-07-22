@@ -1,43 +1,17 @@
-import type {
-  WorkItemStatus,
-  TerminationReason,
-  TerminationCounts,
-  TerminationStop,
-  StalledCause,
-  RunSummary,
-  ShippedItem,
-  AbandonedItem,
-  AbandonKind,
-  CoverageGap,
-  EndpointCoverageGap,
-} from "@ashara/shared";
+import type { WorkItemStatus } from "@ashara/shared";
+import type { TerminationReason, TerminationCounts, TerminationStop, StalledCause } from "../termination.js";
+import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 
 import type { TerminationItemSnapshot } from "./termination.js";
-import type { EventLogger } from "./event-logger.js";
+import type { EventSink } from "./ports.js";
 
-/**
- * One item's status/dependency/identity view for the run summary. A superset of
- * TerminationItemSnapshot (mig7-t1): adds the two fields evaluate() does not
- * need but the summary does — `title` (for a readable report) and
- * `blockedReason` (to explain WHY an Abandoned item stopped, per
- * packages/orchestrator/src/failure-recovery.ts's applyAbandon/applyReplan
- * payload shapes). Because it is a superset, the wiring task (mig7-t3) can
- * assemble ONE array of these and pass it to both `evaluate()` (structurally a
- * valid `TerminationSnapshot.items`) and `buildRunSummary()` below.
- */
 export interface RunSummaryItem extends TerminationItemSnapshot {
   readonly title: string;
-  /** WorkItem.blockedReason as persisted — untouched, so nothing here is lossy. */
   readonly blockedReason?: Record<string, unknown>;
 }
 
 export interface RunSummaryInput {
   readonly items: readonly RunSummaryItem[];
-  /**
-   * Open contract coverage gaps at the stop point (mig9-t2). Passed straight
-   * through to the summary so an uncovered declared endpoint is always reported,
-   * including when observe-only mode let the run settle over it. Defaults to none.
-   */
   readonly endpointGaps?: readonly EndpointCoverageGap[];
 }
 
@@ -47,15 +21,6 @@ const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>([
   "Archived",
 ]);
 
-/**
- * Deterministic, pure derivation of the run-termination report (migration
- * Phase 7 / ADR-029) from a snapshot plus the TerminationDecision already
- * computed over it (mig7-t1's `evaluate()`, called by the wiring task on the
- * SAME `items` array). No LLM, no I/O — the same inputs always yield the same
- * summary. Only called once a run has actually stopped (`decision.decision ===
- * "stop"`); a summary presupposes a stop reason, so the caller passes the
- * narrowed `TerminationStop` rather than the full decision union.
- */
 export function buildRunSummary(input: RunSummaryInput, decision: TerminationStop): RunSummary {
   const byId = new Map(input.items.map((it) => [it.id, it] as const));
   const shipped = buildShipped(input.items);
@@ -76,15 +41,7 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
   };
 }
 
-/**
- * Logs the run summary through the pipeline event logger as a `run_terminated`
- * event (matching the `cycle_complete` run-level convention in core-loop.ts —
- * no per-task `attempt`/`taskId` fields, since this is a whole-run event) and
- * returns the same summary object so the caller (runner/CLI) can print it.
- * Exposed as a standalone helper so the wiring task (mig7-t3) can call it from
- * core-loop/runner without duplicating the event shape.
- */
-export function emitRunSummary(logger: EventLogger, summary: RunSummary): RunSummary {
+export function emitRunSummary(logger: EventSink, summary: RunSummary): RunSummary {
   logger.emit({
     event: "run_terminated",
     reason: summary.stopReason,
@@ -117,12 +74,6 @@ function classifyAbandon(item: RunSummaryItem): AbandonedItem {
   const raw = item.blockedReason ?? {};
   const source = readString(raw, "source");
 
-  // A caller-supplied API abandon (packages/server/src/routes.ts's PATCH
-  // /work-items/:id/status) is never a FailureRouter exhausted/substitute
-  // decision, even when its free-text payload happens to include a "reason"
-  // key that would otherwise duck-type as exhausted-abandon below. Preferring
-  // the explicit tag fixes that mislabel; untagged legacy rows (and rows
-  // tagged "failure_router") fall through to the duck-typing unchanged.
   if (source === "api") {
     return {
       id: item.id,
@@ -216,8 +167,6 @@ function buildGaps(
     }));
   }
 
-  // economy: every non-terminal item at the moment the budget stopped the run
-  // is a coverage gap, regardless of whether it was dispatchable this cycle.
   return items
     .filter((it) => !TERMINAL_STATUSES.has(it.status))
     .map((it) => ({
@@ -314,7 +263,6 @@ function readNumber(record: Record<string, unknown>, key: string): number | unde
   return typeof value === "number" ? value : undefined;
 }
 
-/** Reads `record[key].detail` when `record[key]` is a RawFailureContext-shaped object. */
 function readFailureDetail(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   if (!isRecord(value)) return undefined;

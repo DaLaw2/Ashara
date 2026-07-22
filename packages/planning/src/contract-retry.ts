@@ -1,13 +1,13 @@
 import type { ContractDelta, ProjectContract, ProjectId } from "@ashara/shared";
-import type { ContractRepository } from "@ashara/planning-domain";
-import { PlanningService, ContractVersionConflict } from "@ashara/planning-domain";
+import type { ContractRepository } from "./domain/index.js";
+import { PlanningService, ContractVersionConflict } from "./domain/index.js";
 
 const MAX_CONTRACT_RETRY_ATTEMPTS = 3;
 
 /**
  * Retries `amendContract` when a concurrent writer already took the target
  * version (ContractVersionConflict is the documented RETRYABLE signal on the
- * port, planning-domain/src/service.ts) — each retry re-reads the (now newer)
+ * port, planning/src/domain/service.ts) — each retry re-reads the (now newer)
  * latest version internally. Bounded: after MAX_CONTRACT_RETRY_ATTEMPTS the
  * conflict propagates (Discipline A — fail closed, never loop forever). Shared
  * by story-decomposer.ts and coverage-reconciliation.ts, the two ProjectContract

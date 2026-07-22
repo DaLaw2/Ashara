@@ -26,11 +26,11 @@ import {
   abandonWorkItem,
   takeEvents,
   InvalidStatusTransition,
-} from "@ashara/planning-domain";
+} from "@ashara/planning";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
 import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
-import { CodebaseIndexer, Bm25Index } from "@ashara/memory-indexer";
+import { CodebaseIndexer, Bm25Index } from "@ashara/memory";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables

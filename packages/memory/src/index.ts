@@ -22,3 +22,19 @@ export type {
     Reranker,
 } from "./retrieval.js";
 export { retrieve } from "./retrieval.js";
+
+// Indexer (was @ashara/memory-indexer)
+export { initParser, parseFile } from "./indexer/index.js";
+export { SymbolGraph } from "./indexer/index.js";
+export { Bm25Index, tokenize } from "./indexer/index.js";
+export { CodebaseIndexer } from "./indexer/index.js";
+export { symbolIdKey } from "./indexer/index.js";
+export type {
+    ParseResult,
+    RefKind,
+    SymbolDef,
+    SymbolId,
+    SymbolKind,
+    SymbolRef,
+    SearchResult,
+} from "./indexer/index.js";

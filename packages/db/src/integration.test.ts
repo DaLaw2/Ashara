@@ -26,7 +26,7 @@ import {
 // One insert -> read round trip per repository, against real Postgres
 // (DB-specific mechanics -- SQL types, jsonb, defaults, FK wiring -- that a
 // mocked Database can't verify). Business-rule and state-machine coverage
-// lives in unit tests closer to the domain (e.g. planning-domain).
+// lives in unit tests closer to the domain (e.g. planning/domain).
 // ---------------------------------------------------------------------------
 
 let db: Database;

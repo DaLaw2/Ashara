@@ -1,6 +1,6 @@
 import type { WorkItemId, WorkItemLevel } from "@ashara/shared";
-import type { WorkItemRepository } from "@ashara/planning-domain";
-import { PlanningService, createPendingWorkItem } from "@ashara/planning-domain";
+import type { WorkItemRepository } from "./domain/index.js";
+import { PlanningService, createPendingWorkItem } from "./domain/index.js";
 import type { BrainstormEngine } from "./brainstorm.js";
 import type { BrainstormTrigger, BrainstormOutput } from "./brainstorm-types.js";
 import { dedupeProposals, type ProposalEmbedder } from "./proposal-dedup.js";

@@ -1,4 +1,4 @@
-import type { WorkItemLevel, WorkItemStatus } from "./enums.js";
+import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 import type { TerminationReason, TerminationCounts, StalledCause } from "./termination.js";
 
 /**

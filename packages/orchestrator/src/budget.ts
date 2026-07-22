@@ -1,5 +1,5 @@
 import type { CostRepository } from "@ashara/db";
-import type { WorkItem } from "@ashara/planning-domain";
+import type { WorkItem } from "@ashara/planning";
 import type { CoreLoopConfig, TaskCostInfo } from "./types.js";
 import { CostEstimator } from "./cost-estimator.js";
 

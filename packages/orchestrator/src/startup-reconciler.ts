@@ -1,10 +1,9 @@
 import type { DomainEvent } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
-import type { WorkItem, WorkItemRepository } from "@ashara/planning-domain";
-import { requeueWorkItem, takeEvents } from "@ashara/planning-domain";
-import type { FailureRouter, RawFailureContext } from "@ashara/planning";
-
-import { recoverFailedItem, type FailureRecoveryDeps } from "./failure-recovery.js";
+import type { WorkItem, WorkItemRepository } from "@ashara/planning";
+import { requeueWorkItem, takeEvents } from "@ashara/planning";
+import type { FailureRouter, RawFailureContext, FailureRecoveryDeps } from "@ashara/planning";
+import { recoverFailedItem } from "@ashara/planning";
 
 export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -12,67 +11,15 @@ export interface StartupReconcilerDeps {
   readonly failureRouter: FailureRouter;
 }
 
-/** Structured tally of what a single reconcile pass changed (logged for observability). */
 export interface ReconcileSummary {
-  /** InProgress crash-orphans reset to Pending. */
   readonly orphansRequeued: number;
-  /** InProgress orphans whose reset threw (left InProgress for the next reconcile). */
   readonly orphansErrored: number;
-  /** Parked Failed items the FailureRouter replanned back to Pending. */
   readonly failedReplanned: number;
-  /** Parked Failed items the FailureRouter terminated (bound exhausted). */
   readonly failedAbandoned: number;
-  /** Parked Failed items terminated in favour of a completed equivalent twin. */
   readonly failedSubstituted: number;
-  /** Parked Failed items whose recovery threw (left Failed for the next reconcile). */
   readonly failedErrored: number;
 }
 
-/**
- * The single source of truth for "does a recovery path STILL exist for this Failed
- * item?" — shared by the startup reconciler (which acts on it) and the termination
- * seam (TerminationItemSnapshot.recoverable, mig7-t3, which reads it). Mirrors
- * FailureRouter's replan condition exactly: an item is recoverable iff it is Failed
- * and its prior attempts are still under the replan bound, so the reconciler will
- * replan it rather than abandon it. Pure — no I/O — so the two callers can never
- * drift apart in what "recoverable" means.
- *
- * The substitute path (a completed twin exists) is deliberately NOT counted here: it
- * requires sibling plan-state the pure predicate does not carry, and it TERMINATES
- * the duplicate rather than keeping it alive, so for liveness purposes it is not a
- * "still-advanceable" signal.
- */
-export function isRecoverableFailed(
-  item: Pick<WorkItem, "status">,
-  priorAttempts: number,
-  replanBound: number,
-): boolean {
-  return item.status === "Failed" && priorAttempts < replanBound;
-}
-
-/**
- * Startup reconciliation (Discipline B: stateful resources reconcile on boot and
- * survive restart). A prior process may have crashed mid-dispatch — this project's
- * history IS the serve+spawn crash — leaving items in two stranding traps that no
- * running cycle can clear on its own:
- *
- *   1. InProgress crash-orphans. A fresh process owns no in-flight agent, so every
- *      InProgress item is reset to Pending (the gate selects Pending only). There is
- *      no race: at boot, BEFORE the runner starts cycling, nothing is genuinely
- *      in-flight, so a fresh process rightfully owns nothing.
- *   2. Parked Failed items. handleTaskError commits Failed but a crash before the
- *      synchronous in-cycle recovery leaves the item Failed with no route out. Each
- *      is routed through the SAME FailureRouter policy as in-cycle recovery
- *      (recoverFailedItem — replan / abandon / substitute), never a forked policy.
- *
- * Must run BEFORE the runner's first cycle so the gate sees the recovered Pending
- * work. Fail-closed per item: a single item's failure is logged and skipped (it stays
- * in its stranding state for the next boot) rather than aborting the whole reconcile.
- *
- * IDEMPOTENT: after one pass no item is InProgress (all requeued to Pending) and no
- * item is Failed (each replanned to Pending or terminated to Abandoned). A second
- * pass finds zero InProgress and zero Failed, so it changes nothing.
- */
 export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
   let orphansRequeued = 0;
   let orphansErrored = 0;
@@ -97,7 +44,7 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
 
   const recoveryDeps: FailureRecoveryDeps = {
     workItemRepo: deps.workItemRepo,
-    eventStore: deps.eventStore,
+    eventPublisher: deps.eventStore,
     failureRouter: deps.failureRouter,
   };
 
@@ -140,11 +87,6 @@ async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Pro
   await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
 }
 
-/**
- * Rebuilds a RawFailureContext for a parked Failed item from its persisted
- * blockedReason so the FailureRouter can carry the original failure forward into a
- * replan (Discipline C — the context is not invented, it rides the record).
- */
 function reconstructFailure(item: WorkItem): RawFailureContext {
   const raw = item.blockedReason ?? {};
   const reason = raw["reason"];
@@ -158,9 +100,6 @@ async function publishBestEffort(
   events: DomainEvent[],
   itemId: string,
 ): Promise<void> {
-  // The status transition is already committed; a publish failure is logged and
-  // swallowed (the event store is an audit log, not the source of truth) so a broken
-  // sink never aborts reconciliation.
   for (const event of events) {
     try {
       await eventStore.publish(event, "Internal");

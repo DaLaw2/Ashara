@@ -3,7 +3,7 @@ import pg from "pg";
 import { listenForEvents } from "@ashara/db";
 
 import type { CycleResult } from "./types.js";
-import { emitRunSummary } from "./run-summary.js";
+import { emitRunSummary } from "@ashara/planning";
 import type { EventLogger } from "./event-logger.js";
 
 /** The one method the runner drives — CoreLoop satisfies it; tests supply a double. */

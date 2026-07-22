@@ -9,7 +9,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/memory-indexer": "workspace:*",
-    "@ashara/shared": "workspace:*"
+    "@ashara/shared": "workspace:*",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.0"
   }
 }

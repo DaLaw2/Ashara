@@ -1,4 +1,4 @@
-import type { RunSummary, TerminationDecision } from "@ashara/shared";
+import type { RunSummary, TerminationDecision } from "@ashara/planning";
 import type {
   EventStoreRepository,
   BrainstormLogRepository,
@@ -7,13 +7,13 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { WorkItemRepository, ContractRepository } from "@ashara/planning-domain";
+import type { WorkItemRepository, ContractRepository } from "@ashara/planning";
 import type { BrainstormEngine, NorthStarChecker, DecompositionEngine } from "@ashara/planning";
 import type { ProposalEmbedder, SpecDerivationLLM } from "@ashara/planning";
 import type { Router, FailureRouter } from "@ashara/planning";
 import type { DevelopmentService } from "@ashara/development";
 
-import type { ContractRegistryLookup } from "./failure-recovery.js";
+import type { ContractRegistryLookup } from "@ashara/planning";
 import type { EventLogger } from "./event-logger.js";
 
 export interface CoreLoopConfig {

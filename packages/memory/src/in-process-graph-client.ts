@@ -1,9 +1,9 @@
 /**
- * In-process GraphClient factory: wraps a `CodebaseIndexer` (from
- * `@ashara/memory-indexer`) as a `GraphClient` without any HTTP round-trip.
+ * In-process GraphClient factory: wraps a `CodebaseIndexer`
+ * as a `GraphClient` without any HTTP round-trip.
  */
 
-import { CodebaseIndexer, Bm25Index } from "@ashara/memory-indexer";
+import { CodebaseIndexer, Bm25Index } from "./indexer/index.js";
 
 import type { GraphClient, GraphTraversalResult, KeywordResult } from "./graph-client.js";
 
