@@ -27,7 +27,7 @@ export const ALLOWED_CHECK_COMMANDS = [
   /^bun\s+(test|run\s+\w+)(\s+-[\w-]+)*$/,
   /^bunx\s+tsc(\s+--[\w-]+)*$/,
   /^npm\s+(test|run\s+\w+)(\s+--[\w-]+)*$/,
-  /^npx\s+\w+(\s+--[\w-]+)*$/,
+  /^npx\s+(--no-install\s+)?\w+(\s+--[\w-]+)*$/,
   /^go\s+(test|build|vet)(\s+-[\w-]+)*(\s+\.\/\.\.\.)?$/,
   /^python\s+-m\s+(pytest|unittest)(\s+-[\w-]+)*$/,
   /^make\s+\w+$/,
@@ -43,7 +43,7 @@ const SHELL_METACHARACTERS = /[;&|`$(){}[\]<>!\\]/;
 //   GET /:code returns 3xx  (range match)
 // ---------------------------------------------------------------------------
 
-const HTTP_CHECK_PATTERN = /^(GET|POST|PUT|DELETE|PATCH|HEAD) (\/\S+) returns (\d{3}|\dxx)$/;
+const HTTP_CHECK_PATTERN = /^(GET|POST|PUT|DELETE|PATCH|HEAD) (\/\S+) returns (\d{3}|\dxx)(?: with (json-array|json-object|json|non-empty))?$/;
 
 export function isHttpCheck(cmd: string): boolean {
   return HTTP_CHECK_PATTERN.test(cmd);
@@ -119,12 +119,15 @@ export class AppBootError extends Error {
   }
 }
 
+type BodyShape = "json-array" | "json-object" | "json" | "non-empty";
+
 interface ParsedHttpCheck {
   readonly method: string;
   readonly path: string;
   readonly raw: string;
   readonly matchesStatus: (actual: number) => boolean;
   readonly statusLabel: string;
+  readonly bodyShape: BodyShape | null;
 }
 
 function resolveTestPath(path: string): string {
@@ -134,8 +137,9 @@ function resolveTestPath(path: string): string {
 function parseHttpCheck(cmd: string): ParsedHttpCheck | null {
   const match = HTTP_CHECK_PATTERN.exec(cmd);
   if (!match) return null;
-  const [, method, rawPath, statusStr] = match;
+  const [, method, rawPath, statusStr, shapeStr] = match;
   const path = resolveTestPath(rawPath);
+  const bodyShape = (shapeStr as BodyShape | undefined) ?? null;
 
   if (statusStr.endsWith("xx")) {
     const rangeDigit = parseInt(statusStr[0], 10);
@@ -145,6 +149,7 @@ function parseHttpCheck(cmd: string): ParsedHttpCheck | null {
       raw: cmd,
       matchesStatus: (actual) => Math.floor(actual / 100) === rangeDigit,
       statusLabel: statusStr,
+      bodyShape,
     };
   }
 
@@ -155,6 +160,7 @@ function parseHttpCheck(cmd: string): ParsedHttpCheck | null {
     raw: cmd,
     matchesStatus: (actual) => actual === expected,
     statusLabel: statusStr,
+    bodyShape,
   };
 }
 
@@ -186,7 +192,7 @@ async function probeHttp(
   port: number,
   method: string,
   path: string,
-): Promise<{ status: number | null; detail: string }> {
+): Promise<{ status: number | null; body: string; detail: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_PROBE_TIMEOUT_MS);
   try {
@@ -196,9 +202,10 @@ async function probeHttp(
       signal: controller.signal,
       ...(hasBody ? { body: "{}", headers: { "content-type": "application/json" } } : {}),
     });
-    return { status: response.status, detail: `HTTP ${response.status}` };
+    const body = await response.text();
+    return { status: response.status, body, detail: `HTTP ${response.status}` };
   } catch (e) {
-    return { status: null, detail: String(e).slice(0, 200) };
+    return { status: null, body: "", detail: String(e).slice(0, 200) };
   } finally {
     clearTimeout(timeout);
   }
@@ -315,6 +322,44 @@ async function bootApp(workDir: string): Promise<AppHandle> {
   return { port: detectedPort, kill: killProc };
 }
 
+export function validateBodyShape(body: string, shape: BodyShape): { valid: boolean; actual: string } {
+  switch (shape) {
+    case "non-empty":
+      return { valid: body.length > 0, actual: body.length > 0 ? "non-empty" : "empty" };
+    case "json": {
+      try {
+        JSON.parse(body);
+        return { valid: true, actual: "valid JSON" };
+      } catch {
+        return { valid: false, actual: "invalid JSON" };
+      }
+    }
+    case "json-array": {
+      try {
+        const parsed: unknown = JSON.parse(body);
+        if (Array.isArray(parsed)) return { valid: true, actual: "json-array" };
+        if (parsed === null) return { valid: false, actual: "null" };
+        return { valid: false, actual: typeof parsed === "object" ? "object" : typeof parsed };
+      } catch {
+        return { valid: false, actual: "invalid JSON" };
+      }
+    }
+    case "json-object": {
+      try {
+        const parsed: unknown = JSON.parse(body);
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return { valid: true, actual: "json-object" };
+        }
+        if (parsed === null) return { valid: false, actual: "null" };
+        if (Array.isArray(parsed)) return { valid: false, actual: "array" };
+        return { valid: false, actual: typeof parsed };
+      } catch {
+        return { valid: false, actual: "invalid JSON" };
+      }
+    }
+  }
+}
+
 async function executeHttpChecks(
   workDir: string,
   checks: string[],
@@ -346,14 +391,33 @@ async function executeHttpChecks(
           passed: false,
           output: `no response: ${probe.detail}`,
         });
-      } else {
-        const passed = check.matchesStatus(probe.status);
+        continue;
+      }
+
+      const statusPassed = check.matchesStatus(probe.status);
+      if (!statusPassed) {
         results.push({
           name: check.raw,
-          passed,
-          output: passed
-            ? `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel})`
-            : `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel})`,
+          passed: false,
+          output: `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel})`,
+        });
+        continue;
+      }
+
+      if (check.bodyShape !== null) {
+        const shapeResult = validateBodyShape(probe.body, check.bodyShape);
+        results.push({
+          name: check.raw,
+          passed: shapeResult.valid,
+          output: shapeResult.valid
+            ? `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel}), body: ${check.bodyShape}`
+            : `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel}), expected ${check.bodyShape}, got ${shapeResult.actual}`,
+        });
+      } else {
+        results.push({
+          name: check.raw,
+          passed: true,
+          output: `${check.method} ${check.path} -> ${probe.status} (expected ${check.statusLabel})`,
         });
       }
     }
