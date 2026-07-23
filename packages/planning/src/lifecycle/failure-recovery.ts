@@ -3,6 +3,7 @@ import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
 import type { EventPublisher, ModulePathFilter } from "./ports.js";
+import { deriveRetryChecks, deriveRetryDeliverables } from "./derive-retry-checks.js";
 
 export interface ContractRegistryLookup {
   loadForItem(item: { id: string; parentId?: string }): Promise<ProjectContract | null>;
@@ -186,6 +187,18 @@ async function applyReplan(
 ): Promise<void> {
   const previousStatus = item.status;
   replanWorkItem(item);
+
+  const spec = item.taskSpec ?? {};
+  const existingChecks = Array.isArray(spec.checks) ? (spec.checks as string[]) : [];
+  const existingDeliverables = Array.isArray(spec.deliverables) ? (spec.deliverables as string[]) : [];
+
+  const mergedChecks = deriveRetryChecks(failure, existingChecks);
+  const mergedDeliverables = deriveRetryDeliverables(failure, existingDeliverables);
+
+  if (mergedChecks.length !== existingChecks.length || mergedDeliverables.length !== existingDeliverables.length) {
+    item.taskSpec = { ...spec, checks: mergedChecks, deliverables: mergedDeliverables };
+  }
+
   item.blockedReason = {
     replanContext: { attempt, detail: failure.detail, raw: failure.raw },
   };

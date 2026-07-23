@@ -60,6 +60,7 @@ export async function executeTask(
     // by why the prior attempt failed instead of repeating it identically.
     blockedReason: task.blockedReason,
     epicId,
+    dispatchCount: task.dispatchCount,
   };
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);

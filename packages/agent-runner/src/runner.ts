@@ -283,9 +283,7 @@ function selectAdapter(formatGroup?: string, capability?: CapabilityLevel): Form
  * Validates the raw brief.json read from disk into an AgentBrief, via the shared
  * schema both sides of the seam parse (ADR-013 / ADR-033 §5). Fail-closed: a
  * malformed brief throws a typed InvalidAgentBriefError and the task is blocked,
- * never run against a defaulted brief. This restores the advisory fields
- * (knowledgeContext / codeContext / contextMap) the old hand-rolled validator
- * silently dropped (finding-g).
+ * never run against a defaulted brief.
  */
 export function validateBrief(raw: unknown): AgentBrief {
     return parseAgentBrief(raw, "agent-runner:brief.json");
@@ -304,6 +302,10 @@ export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
         lines.push(``, `# Prior Attempt Failure`, brief.priorAttemptFailure);
     }
 
+    if (brief.knowledgeContext && brief.knowledgeContext.trim().length > 0) {
+        lines.push(``, `# Prior Knowledge & Lessons`, brief.knowledgeContext);
+    }
+
     if (brief.contractSlice) {
         lines.push(``, brief.contractSlice);
     }
@@ -315,9 +317,7 @@ export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
         }
     }
 
-    // Advisory tier LAST — restored knowledge/retrieval/context delivery
-    // (finding-g), appended after the binding directives above.
-    for (const section of formatAdvisorySections(brief)) {
+    for (const section of formatSupplementarySections(brief)) {
         lines.push(``, section);
     }
 
@@ -458,6 +458,10 @@ export function buildDynamicSystemPrompt(brief: AgentBrief): string {
         sections.push(`## Prior Attempt Failure\n${brief.priorAttemptFailure}`);
     }
 
+    if (brief.knowledgeContext && brief.knowledgeContext.trim().length > 0) {
+        sections.push(`## Prior Knowledge & Lessons\n${brief.knowledgeContext}`);
+    }
+
     if (brief.contractSlice) {
         sections.push(brief.contractSlice);
     }
@@ -478,35 +482,27 @@ export function buildDynamicSystemPrompt(brief: AgentBrief): string {
         );
     }
 
-    // Advisory tier LAST — after every binding section — so restored knowledge/
-    // retrieval/context prose never displaces the contract slice or constraints.
-    sections.push(...formatAdvisorySections(brief));
+    sections.push(...formatSupplementarySections(brief));
 
     return sections.join("\n\n");
 }
 
 /**
- * Advisory prompt sections (ADR-033 §5): prior lessons, retrieved code, and the
- * project context map — the restored delivery of the fields the seam used to
- * drop (finding-g). Rendered AFTER the binding sections (goal / contract slice /
- * deliverables / constraints) so advisory context never displaces them. Labels
- * speak of tasks / lessons / context with no web/HTTP assumptions, so they read
- * the same for a Rust CLI target as for an HTTP service. Each section is emitted
- * only when its field is present and non-empty.
+ * Supplementary prompt sections (ADR-033 §5): retrieved code and the project
+ * context map. knowledgeContext is promoted to the binding tier (rendered
+ * alongside priorAttemptFailure, before task instructions) so prior lessons
+ * carry the same weight as failure context. Code context and the project
+ * context map remain here — useful reference, but not directives. Each section
+ * is emitted only when its field is present and non-empty.
  */
-function formatAdvisorySections(brief: AgentBrief): string[] {
+function formatSupplementarySections(brief: AgentBrief): string[] {
     const sections: string[] = [];
-    const advisoryNote =
-        "(Advisory context — consider it; the binding requirements above take precedence.)";
 
-    if (brief.knowledgeContext && brief.knowledgeContext.trim().length > 0) {
-        sections.push(`## Advisory: Prior Knowledge & Lessons\n${advisoryNote}\n\n${brief.knowledgeContext}`);
-    }
     if (brief.codeContext && brief.codeContext.trim().length > 0) {
-        sections.push(`## Advisory: Retrieved Code Context\n${advisoryNote}\n\n${brief.codeContext}`);
+        sections.push(`## Retrieved Code Context\n${brief.codeContext}`);
     }
     if (brief.contextMap && brief.contextMap.trim().length > 0) {
-        sections.push(`## Advisory: Project Context Map\n${advisoryNote}\n\n${brief.contextMap}`);
+        sections.push(`## Project Context Map\n${brief.contextMap}`);
     }
     return sections;
 }

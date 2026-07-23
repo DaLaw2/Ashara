@@ -15,14 +15,14 @@ import { z } from "zod";
  *
  * Field tiers:
  *  - BINDING — `taskId`, `goal`, `context`, `tools`, `constraints`,
- *    `deliverables`, `contractSlice`, `priorAttemptFailure`: the task
- *    instruction and the requirements the agent must satisfy. Rendered FIRST in
- *    every prompt path.
- *  - ADVISORY — `knowledgeContext`, `codeContext`, `contextMap`: prior lessons,
- *    retrieved code, and the project context map. Context the agent should
- *    consider, never a gate. Restored here after the drop; every prompt path
- *    renders them AFTER the binding sections so advisory prose can never
- *    displace the contract slice.
+ *    `deliverables`, `contractSlice`, `priorAttemptFailure`,
+ *    `knowledgeContext`: the task instruction, requirements the agent must
+ *    satisfy, and prior lessons. `knowledgeContext` is rendered alongside
+ *    `priorAttemptFailure` (before task context) so failure lessons carry
+ *    the same weight as explicit failure context.
+ *  - SUPPLEMENTARY — `codeContext`, `contextMap`: retrieved code and the
+ *    project context map. Useful reference rendered after the binding
+ *    sections.
  *
  * `task_spec` — INCLUDED, consciously. It is not rendered into the system
  * prompt, but the agent-runner reads it back off `brief.json` to seed inline
@@ -44,9 +44,9 @@ export const AgentBriefSchema = z
     tools: z.array(z.string()).default([]),
     constraints: z.array(z.string()).default([]),
     deliverables: z.array(z.string()).default([]),
-    // Advisory tier — restored (finding-g). Optional: a basic/fallback brief
-    // omits them; the full brief carries them (possibly empty strings).
+    // Binding tier — prior lessons rendered alongside priorAttemptFailure.
     knowledgeContext: z.string().optional(),
+    // Supplementary tier — reference context rendered after binding sections.
     codeContext: z.string().optional(),
     contextMap: z.string().optional(),
     // Opaque passthrough — consumed by inline verify, never the prompt.

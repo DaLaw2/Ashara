@@ -316,6 +316,11 @@ async function main(): Promise<void> {
       // still derives from asharaSourceDir; it is resolved absolute so it
       // doesn't need cwd to be asharaSourceDir to be found.
       const { cwd, runnerScript } = buildAgentSpawnLocation(config.coreLoop.asharaSourceDir, opts.workDir);
+
+      const capability = (opts.dispatchCount ?? 0) >= 2 ? "Frontier" : "Strong";
+      if (capability === "Frontier") {
+        console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
+      }
       console.log(`[${opts.taskId}] launching agent-runner subprocess`);
 
       const proc = spawn("npx", ["tsx", runnerScript], {
@@ -327,7 +332,7 @@ async function main(): Promise<void> {
           ASHARA_WORKING_DIR: opts.workDir,
           ASHARA_SERVER_URL: config.coreLoop.selfUrl,
           ASHARA_API_TOKEN: config.coreLoop.apiToken,
-          AGENT_CAPABILITY: "Strong",
+          AGENT_CAPABILITY: capability,
         },
         stdio: ["ignore", "pipe", "pipe"],
         // Own a process group (finding e): the runner is an npx -> tsx -> node

@@ -2,8 +2,8 @@ import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope } from "@ashara/shared";
-import { createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
+import { createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { RetrievalResult } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
@@ -47,6 +47,7 @@ export interface AgentSpawnOptions {
   readonly briefPath: string;
   readonly outputPath: string;
   readonly taskId: string;
+  readonly dispatchCount?: number;
 }
 
 export interface ConventionsExtractor {
@@ -86,6 +87,7 @@ export interface TaskDescriptor {
    * set it, e.g. unit tests) falls back to `parentId` at the write site below.
    */
   readonly epicId?: string | null;
+  readonly dispatchCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,7 +512,7 @@ export class DevelopmentService {
     let output: Record<string, unknown>;
 
     if (config.useRealAgent) {
-      output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id });
+      output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount });
     } else {
       output = stubAgentOutput();
       await writeFile(outputPath, JSON.stringify(output, null, 2));
@@ -898,21 +900,140 @@ function extractReplanContext(
   return candidate;
 }
 
+type GateKind = "smoke" | "integration" | "entry-point" | "merge" | "agent" | "verify" | "unknown";
+
+function detectGateKind(envelope: ErrorEnvelope): GateKind {
+  const layers = flattenChain(envelope.chain);
+  for (const layer of layers) {
+    switch (layer.operation) {
+      case "smokeTest": return "smoke";
+      case "integrationGate": return "integration";
+      case "entryPointRewriteCheck": return "entry-point";
+      case "tentativeMerge": return "merge";
+      case "agentExecution": return "agent";
+      case "postMergeVerify":
+      case "verify": return "verify";
+    }
+  }
+  return "unknown";
+}
+
+function innermostLayer(layer: ErrorLayer): ErrorLayer {
+  let current = layer;
+  while (current.cause) {
+    current = current.cause;
+  }
+  return current;
+}
+
+function extractFilePathsFromChain(envelope: ErrorEnvelope): readonly string[] {
+  const paths: string[] = [];
+  const filePattern = /[\w@./-]+\/[\w./-]+\.(?:tsx?|jsx?|mjs|cjs|json|css|html)/g;
+  for (const layer of flattenChain(envelope.chain)) {
+    const msgMatches = layer.message.match(filePattern);
+    if (msgMatches) paths.push(...msgMatches);
+    if (layer.context) {
+      for (const value of Object.values(layer.context)) {
+        if (typeof value === "string") {
+          const ctxMatches = value.match(filePattern);
+          if (ctxMatches) paths.push(...ctxMatches);
+        }
+      }
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function collectDiagnosticText(envelope: ErrorEnvelope): string {
+  const parts: string[] = [envelope.summary];
+  for (const layer of flattenChain(envelope.chain)) {
+    parts.push(layer.message);
+  }
+  if (envelope.gateResults?.smoke) {
+    parts.push(JSON.stringify(envelope.gateResults.smoke));
+  }
+  if (envelope.gateResults?.integration) {
+    parts.push(JSON.stringify(envelope.gateResults.integration));
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+function derivePrescriptiveInstruction(envelope: ErrorEnvelope): string {
+  const gateKind = detectGateKind(envelope);
+  const text = collectDiagnosticText(envelope);
+  const filePaths = extractFilePathsFromChain(envelope);
+  const fileRef = filePaths.length > 0
+    ? ` The affected file(s): ${filePaths.join(", ")}.`
+    : "";
+
+  if (/error ts\d{4}/.test(text) || /tsc.*(fail|error)/.test(text) || text.includes("typescript compilation")) {
+    return `TypeScript compilation fails. Fix the type errors listed below before any other work.${fileRef}`;
+  }
+
+  switch (gateKind) {
+    case "smoke":
+      if (text.includes("404")) {
+        return `The route is not mounted at runtime. Ensure the route handler is registered in the entry point file. Check that catch-all routes (e.g., /:param) are registered AFTER all specific routes.${fileRef}`;
+      }
+      if (text.includes("crash") || text.includes("econnrefused") || text.includes("exit code")) {
+        return `The application crashes on boot. Check the error output for the crash location and fix the issue before any other work.${fileRef}`;
+      }
+      return `The smoke test failed. Review the smoke test output, identify the failing endpoint, and ensure the application responds correctly.${fileRef}`;
+
+    case "integration":
+      if (text.includes("not imported") || text.includes("cannot find module")) {
+        return `The route file exists but is not imported from the entry point. Add an import/require statement in the entry point.${fileRef}`;
+      }
+      return `The integration gate failed. Ensure all modules compile correctly and all imports resolve.${fileRef}`;
+
+    case "entry-point":
+      return `The entry point file was rewritten, breaking existing routes. Modify the entry point additively — do not replace its contents.${fileRef}`;
+
+    case "merge":
+      return `The changes conflict with code merged since your last attempt. Resolve the merge conflicts in the listed files, keeping both sets of changes intact.${fileRef}`;
+
+    case "agent":
+      if (text.includes("no file changes")) {
+        return "The agent completed but made no file changes. Ensure you actually write the implementation to disk, not just plan it.";
+      }
+      return "The agent execution failed. Review the failure summary and take a fundamentally different approach.";
+
+    case "verify":
+      return `Verification failed. The changes do not pass the required checks. Fix the failing checks listed below before proceeding.${fileRef}`;
+
+    default:
+      return `Review the failure details below and address the root cause before proceeding.${fileRef}`;
+  }
+}
+
 function formatPriorAttemptFailure(ctx: ReplanContext): string {
   const envelopeParsed = errorEnvelopeSchema.safeParse(ctx.raw);
   if (envelopeParsed.success) {
-    const lines = [
-      `# Prior attempt failed — read this before doing anything else`,
+    const envelope = envelopeParsed.data;
+    const diagnostic = innermostLayer(envelope.chain).message;
+    const prescriptive = derivePrescriptiveInstruction(envelope);
+
+    const lines: string[] = [
+      `# CRITICAL: Previous attempt FAILED — read this FIRST`,
       ``,
-      `Attempt: ${ctx.attempt} of this task already failed. Do NOT repeat the same approach; diagnose the failure below, then take a different one.`,
+      `Your previous attempt (attempt ${ctx.attempt}) failed. You MUST address this before doing anything else.`,
       ``,
-      renderChainForBrief(envelopeParsed.data),
+      `## What failed`,
+      diagnostic,
+      ``,
+      `## What you MUST do differently`,
+      prescriptive,
+      ``,
+      `## Do NOT repeat`,
+      `YOU MUST fix: ${diagnostic}. Previous attempt failed because ${ctx.detail}.`,
+      ``,
+      renderChainForBrief(envelope),
     ];
-    if (envelopeParsed.data.gateResults?.smoke) {
-      lines.push(`\n## Smoke Test Output\n${JSON.stringify(envelopeParsed.data.gateResults.smoke, null, 2)}`);
+    if (envelope.gateResults?.smoke) {
+      lines.push(`\n## Smoke Test Output\n${JSON.stringify(envelope.gateResults.smoke, null, 2)}`);
     }
-    if (envelopeParsed.data.gateResults?.integration) {
-      lines.push(`\n## Integration Gate Output\n${JSON.stringify(envelopeParsed.data.gateResults.integration, null, 2)}`);
+    if (envelope.gateResults?.integration) {
+      lines.push(`\n## Integration Gate Output\n${JSON.stringify(envelope.gateResults.integration, null, 2)}`);
     }
     return lines.join("\n");
   }
@@ -925,14 +1046,20 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
   }
 
   return [
-    `# Prior attempt failed — read this before doing anything else`,
+    `# CRITICAL: Previous attempt FAILED — read this FIRST`,
     ``,
-    `Attempt: ${ctx.attempt} of this task already failed. Do NOT repeat the same approach; diagnose the failure below, then take a different one.`,
+    `Your previous attempt (attempt ${ctx.attempt}) failed. You MUST address this before doing anything else.`,
     ``,
-    `## What failed (fix this first)`,
+    `## What failed`,
     `Detail: ${ctx.detail}`,
     ``,
-    `## Previous attempt's raw failure payload (trailing context)`,
+    `## What you MUST do differently`,
+    `Review the failure details below and address the root cause before proceeding.`,
+    ``,
+    `## Do NOT repeat`,
+    `Do NOT repeat the same approach that produced this failure.`,
+    ``,
+    `## Previous attempt's raw failure payload`,
     "```",
     rawText,
     "```",
