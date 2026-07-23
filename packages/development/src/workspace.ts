@@ -32,6 +32,7 @@ export async function createWorkdir(
   targetProjectPath: string,
   taskBranch: string,
 ): Promise<WorkdirInfo> {
+  await ensureTargetGitInit(targetProjectPath);
   await mkdir(base, { recursive: true });
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
