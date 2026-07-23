@@ -57,9 +57,12 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     await execFileAsync("git", ["merge", "--no-commit", "--no-ff", branch], { cwd: targetPath });
     return { status: "clean" };
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    const stderr = (e as { stderr?: string }).stderr ?? "";
+    console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
     const files = await getConflictingFiles(targetPath);
     if (files.length > 0) return { status: "conflict", files };
-    return { status: "error", message: String(e).slice(0, 500) };
+    return { status: "error", message: `${errMsg.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}` };
   }
 }
 

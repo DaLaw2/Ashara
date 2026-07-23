@@ -201,7 +201,8 @@ export async function ensureTargetGitInit(targetProjectPath: string): Promise<vo
   }
 
   if (!(await hasGitCommits(targetProjectPath))) {
-    await execFileAsync("git", ["commit", "--allow-empty", "-m", "init"], {
+    await execFileAsync("git", ["add", "-A"], { cwd: targetProjectPath });
+    await execFileAsync("git", ["commit", "-m", "init"], {
       cwd: targetProjectPath,
     });
   }
