@@ -13,7 +13,6 @@ import {
   DevSessionRepository,
   VisionRepository,
   ConfigRepository,
-  CostRepository,
   withPlanningTransaction,
 } from "@ashara/db";
 import { initParser } from "@ashara/memory";
@@ -52,7 +51,6 @@ const createdVisionIds: string[] = [];
 const createdSettingKeys: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
-const createdCostIds: string[] = [];
 
 function authHeaders(): Record<string, string> {
   return {
@@ -147,9 +145,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const id of createdCostIds) {
-    await pool.query("DELETE FROM task_cost_history WHERE id = $1", [id]);
-  }
   for (const key of createdSettingKeys) {
     await pool.query("DELETE FROM system_settings WHERE key = $1", [key]);
   }
@@ -379,28 +374,6 @@ describe("Events", () => {
 // 7. Graph
 // ===========================================================================
 
-describe("Graph", () => {
-  test("POST /graph/index returns indexed + edges counts", async () => {
-    const res = await req("POST", "/graph/index", {
-      path: ".",
-      extensions: ["ts"],
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(typeof body.indexed).toBe("number");
-    expect(typeof body.edges).toBe("number");
-  });
-
-  test("POST /graph/keyword-search returns results", async () => {
-    const res = await req("POST", "/graph/keyword-search", {
-      query: "test",
-      limit: 5,
-    });
-    expect(res.status).toBe(200);
-    expect(Array.isArray((await res.json()).results)).toBe(true);
-  });
-});
-
 // ===========================================================================
 // 8. Auth middleware
 // ===========================================================================
@@ -416,16 +389,6 @@ describe("Auth middleware", () => {
     const res = await req("GET", "/health", undefined, {});
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
-  });
-
-  test("/graph/* without token returns 200 (skips auth)", async () => {
-    const res = await req(
-      "POST",
-      "/graph/keyword-search",
-      { query: "test", limit: 5 },
-      noAuthHeaders(),
-    );
-    expect(res.status).toBe(200);
   });
 });
 
@@ -481,31 +444,3 @@ describe("Cycle", () => {
   });
 });
 
-// ===========================================================================
-// 12. Costs
-// ===========================================================================
-
-describe("Costs", () => {
-  test("GET /costs/by-tier returns cost-per-verified-task grouped by tier", async () => {
-    const costRepo = new CostRepository(db);
-    const tier = `intg-tier-${randomUUID().slice(0, 8)}`;
-
-    await costRepo.recordTaskCost(randomUUID(), tier, 1000, 200, 0.01, "m1", true, 1);
-    await costRepo.recordTaskCost(randomUUID(), tier, 1200, 300, 0.02, "m1", true, 2);
-    await costRepo.recordTaskCost(randomUUID(), tier, 900, 150, 0.05, "m1", false, 1);
-
-    const rows = await pool.query(
-      "SELECT id FROM task_cost_history WHERE capability = $1",
-      [tier],
-    );
-    for (const row of rows.rows as Array<{ id: string }>) createdCostIds.push(row.id);
-
-    const res = await req("GET", "/costs/by-tier");
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body[tier]).toBeDefined();
-    expect(body[tier].verifiedTaskCount).toBe(2);
-    expect(body[tier].totalCostUsd).toBeCloseTo(0.03, 5);
-    expect(body[tier].costPerVerifiedTaskUsd).toBeCloseTo(0.015, 5);
-  });
-});

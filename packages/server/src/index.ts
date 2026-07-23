@@ -65,13 +65,22 @@ import type {
   CompletionDeliverables,
 } from "@ashara/development";
 import { buildSanitizedEnv, extractProjectConventions } from "@ashara/agent-runner";
-import { BudgetLedger, loadGatewayConfig, LLMGateway, NoLLMProvidersConfigured, withStructuredLadder } from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, LLMCallRecord } from "@ashara/llm-gateway";
+import {
+  BudgetLedger,
+  buildGatewayConfig,
+  loadRoutingProfilesFromToml,
+  resolveModelsConfigPath,
+  parseFormatGroup,
+  LLMGateway,
+  NoLLMProvidersConfigured,
+  withStructuredLadder,
+} from "@ashara/llm-gateway";
+import type { LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
 import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
-import { parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema } from "@ashara/shared";
+import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
@@ -171,14 +180,33 @@ async function main(): Promise<void> {
   const budgetLedger = new BudgetLedger();
   let llmGateway: LLMGateway | null;
   try {
-    const gwConfig = loadGatewayConfig();
+    // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
+    // Load from DB, convert to the llm-gateway ModelConfig shape, and build the
+    // gateway config. Routing profiles remain deployment-specific TOML config.
+    const dbModelRows = await configRepo.listModelConfigs();
+    const models: Record<string, ModelConfig> = {};
+    for (const row of dbModelRows) {
+      models[row.modelId] = {
+        id: row.modelId,
+        apiModelId: row.apiModelId ?? row.modelId,
+        provider: row.providerName,
+        capabilityLevel: parseCapabilityLevel(row.capability),
+        formatGroup: parseFormatGroup(row.formatGroup),
+        strictMode: row.strictMode,
+        inputCostPer1M: row.inputCostPer1m,
+        outputCostPer1M: row.outputCostPer1m,
+        maxContextTokens: row.maxContextTokens,
+        supportsCaching: row.supportsCaching,
+      };
+    }
+    const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
+    const gwConfig = buildGatewayConfig(models, routingProfiles);
     gwConfig.budget = {
       maxCostTotal: config.coreLoop.budgetLimitUsd,
       maxCostPerProvider: gwConfig.budget?.maxCostPerProvider,
     };
     const wired = await wireLlmGateway(
       gwConfig,
-      (models) => configRepo.seedModelsFromToml(models),
       budgetLedger,
       llmLogSink,
     );
@@ -186,7 +214,7 @@ async function main(): Promise<void> {
 
     if (wired.mode === "real") {
       console.log("LLM gateway initialized");
-      console.log(`Model catalog seeded: ${wired.seededModelCount} models`);
+      console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
     } else {
       console.warn(
         "STUB MODE ACTIVE (ASHARA_TEST_STUB_LLM=1): no real LLM provider is configured. " +

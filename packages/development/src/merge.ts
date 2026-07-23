@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, copyFile, rm } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 
 import type { ExecutionEventSink, TaskDescriptor } from "./execution-service.js";
@@ -51,23 +51,34 @@ export async function captureMainHead(targetPath: string): Promise<string | null
   }
 }
 
-async function generatePatch(workDir: string, seedCommit: string): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "git", ["diff", "--binary", seedCommit, "HEAD"],
-    { cwd: workDir, maxBuffer: 50 * 1024 * 1024 },
+async function syncChangedFiles(
+  workDir: string,
+  targetPath: string,
+  seedCommit: string,
+): Promise<void> {
+  const { stdout: diffOut } = await execFileAsync(
+    "git", ["diff", "--name-status", seedCommit, "HEAD"],
+    { cwd: workDir },
   );
-  return stdout;
-}
+  if (diffOut.trim().length === 0) return;
 
-async function applyPatch(targetPath: string, patch: string): Promise<void> {
-  if (patch.length === 0) return;
-  const proc = execFile("git", ["apply", "--binary", "--index"], { cwd: targetPath, maxBuffer: 50 * 1024 * 1024 });
-  proc.stdin?.write(patch);
-  proc.stdin?.end();
-  await new Promise<void>((resolve, reject) => {
-    proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`git apply failed with exit code ${code}`)));
-    proc.on("error", reject);
-  });
+  for (const line of diffOut.trim().split("\n")) {
+    const match = line.match(/^([ACDMRT])\t(.+)$/);
+    if (!match) continue;
+    const [, status, filePath] = match;
+
+    if (status === "D") {
+      const target = join(targetPath, filePath);
+      await rm(target, { force: true }).catch(() => {});
+    } else {
+      const src = join(workDir, filePath);
+      const dest = join(targetPath, filePath);
+      await mkdir(dirname(dest), { recursive: true });
+      await copyFile(src, dest);
+    }
+  }
+
+  await execFileAsync("git", ["add", "-A"], { cwd: targetPath });
 }
 
 export async function syncToTaskBranch(
@@ -80,7 +91,7 @@ export async function syncToTaskBranch(
 ): Promise<SyncResult> {
   const branch = taskBranchName(taskId);
   try {
-    await execFileAsync("git", ["checkout", branch], { cwd: targetProjectPath });
+    await execFileAsync("git", ["checkout", "-B", branch, "main"], { cwd: targetProjectPath });
 
     try {
       await commitAllChanges(workDir, `ashara: pre-sync commit for task ${taskId}`);
@@ -89,8 +100,7 @@ export async function syncToTaskBranch(
     }
 
     if (await hasGitCommits(workDir)) {
-      const patch = await generatePatch(workDir, seedCommit);
-      await applyPatch(targetProjectPath, patch);
+      await syncChangedFiles(workDir, targetProjectPath, seedCommit);
     }
 
     const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {

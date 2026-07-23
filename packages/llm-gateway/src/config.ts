@@ -5,18 +5,27 @@ import {
   loadBudgetEnv,
   parseCapabilityLevel,
 } from "@ashara/shared";
-import { loadModelsWithFallback, resolveModelsConfigPath } from "./pricing.js";
+import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
-import type { FormatGroup, GatewayConfig, ModelConfig, ModelPreferences, ProviderConfig } from "./types.js";
+import type { FormatGroup, GatewayConfig, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
 
-export function loadGatewayConfig(): GatewayConfig {
-  const allModels = loadModelsWithFallback();
+/**
+ * Build a {@link GatewayConfig} from an already-loaded model catalog and
+ * routing profiles. Pure function: reads env vars for API keys and budget
+ * but performs no file I/O for model data.
+ *
+ * The server passes models loaded from the DB (seeded by migration 002).
+ * Routing profiles are deployment-specific config that still lives in TOML.
+ */
+export function buildGatewayConfig(
+  allModels: Record<string, ModelConfig>,
+  routingProfiles: RoutingProfiles,
+): GatewayConfig {
   const keys = loadProviderKeys();
   const urls = loadProviderBaseUrls();
   const budget = loadBudgetEnv();
-  const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
 
-  const modelsByProvider: Record<string, typeof allModels> = {};
+  const modelsByProvider: Record<string, Record<string, ModelConfig>> = {};
   for (const [id, model] of Object.entries(allModels)) {
     if (!modelsByProvider[model.provider]) {
       modelsByProvider[model.provider] = {};
@@ -89,8 +98,24 @@ export function loadGatewayConfig(): GatewayConfig {
   };
 }
 
+/**
+ * Legacy convenience wrapper: builds a {@link GatewayConfig} from env-var
+ * API keys and TOML routing profiles, with an EMPTY model catalog.
+ *
+ * After migration 002 the authoritative model catalog lives in the database.
+ * This function is retained as a backward-compatible fallback for call sites
+ * that cannot reach the DB (agent-runner TOML fallback, CLI standalone).
+ * With no models, the resulting config will have zero providers, causing
+ * {@link buildGateway} to signal `NoLLMProvidersConfigured` -- which is the
+ * correct behavior when the server (and its DB) is unreachable.
+ */
+export function loadGatewayConfig(): GatewayConfig {
+  const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
+  return buildGatewayConfig({}, routingProfiles);
+}
+
 // ---------------------------------------------------------------------------
-// API-based config loading — used by agent-runner subprocesses
+// API-based config loading -- used by agent-runner subprocesses
 // ---------------------------------------------------------------------------
 
 interface ApiModelEntry {
@@ -115,7 +140,7 @@ interface ApiProviderEntry {
 
 const FORMAT_GROUP_VALUES = new Set<FormatGroup>(["native-fc", "code-fence", "text-patch"]);
 
-function parseFormatGroup(raw: string): FormatGroup | undefined {
+export function parseFormatGroup(raw: string): FormatGroup | undefined {
   return FORMAT_GROUP_VALUES.has(raw as FormatGroup) ? (raw as FormatGroup) : undefined;
 }
 
@@ -185,11 +210,8 @@ export async function loadGatewayConfigFromApi(
   const preferences = buildPreferencesFromSettings(settings);
   // Routing profiles are static template config, not runtime/DB state, so
   // this API-config path reads the SAME local models.toml the file path does
-  // (via ASHARA_MODELS_CONFIG / the repo-relative default — resolveModelsConfigPath
+  // (via ASHARA_MODELS_CONFIG / the repo-relative default -- resolveModelsConfigPath
   // is worktree-CWD-safe) rather than requiring a dedicated server endpoint.
-  // Closes the routing half of the documented Gap-1 asymmetry: preferences
-  // only ever reached this path before, leaving the file path's consumers
-  // (CLI/brainstorm/northstar) unrouted.
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
 
   return {

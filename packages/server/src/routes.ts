@@ -512,7 +512,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       return {
         name: row.name,
         providerType: row.providerType,
-        hasApiKey: apiKey !== null,
+        apiKey,
         baseUrl,
       };
     });

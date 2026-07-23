@@ -2,12 +2,10 @@ export { LLMGateway } from "./gateway.js";
 export { convertMessage } from "./message-conversion.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export { ProviderRegistry } from "./provider-registry.js";
-export { loadGatewayConfig, loadGatewayConfigFromApi } from "./config.js";
+export { buildGatewayConfig, loadGatewayConfig, loadGatewayConfigFromApi, parseFormatGroup } from "./config.js";
 export {
   calculateCost,
   CAPABILITY_RANK,
-  loadModelsFromToml,
-  loadModelsWithFallback,
   resolveModelsConfigPath,
 } from "./pricing.js";
 export { loadRoutingProfilesFromToml, computeProviderCombo } from "./routing-profiles.js";
