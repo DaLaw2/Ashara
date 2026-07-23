@@ -10,11 +10,16 @@ const execFileAsync = promisify(execFile);
 // Pure utility functions (no BC dependencies)
 // ---------------------------------------------------------------------------
 
+export interface WorkdirInfo {
+  readonly workDir: string;
+  readonly seedCommit: string;
+}
+
 export async function createWorkdir(
   base: string,
   targetProjectPath: string | null,
   seedBranch?: string,
-): Promise<string> {
+): Promise<WorkdirInfo> {
   await mkdir(base, { recursive: true });
   const workDir = await mkdtemp(join(base, "task-"));
 
@@ -38,7 +43,10 @@ export async function createWorkdir(
     }
   }
 
-  return workDir;
+  const { stdout: seedRev } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workDir });
+  const seedCommit = seedRev.trim();
+
+  return { workDir, seedCommit };
 }
 
 export async function getChangedFiles(workDir: string): Promise<string[]> {

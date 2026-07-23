@@ -6,3 +6,4 @@ export * from "./types.js";
 export * from "./contract.js";
 export * from "./agent-brief.js";
 export * from "./observation.js";
+export * from "./error-envelope.js";

@@ -1,3 +1,5 @@
+import type { ErrorLayer } from "@ashara/shared";
+import { wrapError } from "@ashara/shared";
 import type { ExecutionEventSink, SessionStore, TaskDescriptor } from "../execution-service.js";
 import {
   abortMerge,
@@ -9,6 +11,7 @@ import {
   taskBranchName,
   tentativeMerge,
 } from "../merge.js";
+import { runVerifyCore } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
 import { runIntegrationGate } from "./reachability.js";
@@ -20,6 +23,7 @@ export interface FinalizeResult {
   readonly integrationGate?: GateResult;
   readonly smokeTest?: GateResult;
   readonly gateFailureContext?: string;
+  readonly errorLayer?: ErrorLayer;
 }
 
 export interface FinalizeContractInfo {
@@ -48,20 +52,37 @@ async function abortAndFail(
   failedLogMessage: string,
   gateFailureContext: string,
   extra: Partial<FinalizeResult> = {},
+  errorLayerInfo?: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
-  await abortMerge(targetProjectPath).catch(() => {});
+
+  let abortError: ErrorLayer | undefined;
+  try {
+    await abortMerge(targetProjectPath);
+  } catch (e) {
+    abortError = wrapError("development", "abortMerge", e, { taskId });
+  }
   console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
-  return { success: false, gateFailureContext, ...extra };
+
+  const errorLayer = errorLayerInfo
+    ? wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, {
+        ...errorLayerInfo.gateContext,
+        ...(abortError ? { abortError } : {}),
+      })
+    : undefined;
+
+  return { success: false, gateFailureContext, errorLayer, ...extra };
 }
 
 export async function finalizeSuccess(
   deps: FinalizeDeps,
   workDir: string,
+  seedCommit: string,
   sessionId: string,
   task: TaskDescriptor,
   targetProjectPath: string | null,
   attempt: number,
+  taskChecks: readonly string[],
   contractInfo: FinalizeContractInfo = { entryPointPath: null, language: null },
 ): Promise<FinalizeResult> {
   try {
@@ -83,13 +104,16 @@ export async function finalizeSuccess(
       targetProjectPath,
       task.id,
       attempt,
+      seedCommit,
     );
 
     if (!syncResult.success) {
       console.log(`[${task.id}] sync to task branch FAILED — skipping tentative merge`);
+      const syncError = syncResult.error ?? "unknown error";
       return {
         success: false,
-        gateFailureContext: `Sync to task branch failed: ${syncResult.error ?? "unknown error"}`,
+        gateFailureContext: `Sync to task branch failed: ${syncError}`,
+        errorLayer: wrapError("development", "syncToTaskBranch", syncError, { taskId: task.id, attempt }),
       };
     }
 
@@ -99,9 +123,15 @@ export async function finalizeSuccess(
     if (mergeResult.status === "conflict") {
       await abortMerge(targetProjectPath);
       console.log(`[${task.id}] tentative merge CONFLICT — aborted, branch preserved for retry`);
+      const mergeContext = buildMergeAgentBrief(task, mergeResult.files);
       return {
         success: false,
-        gateFailureContext: buildMergeAgentBrief(task, mergeResult.files),
+        gateFailureContext: mergeContext,
+        errorLayer: wrapError("development", "tentativeMerge", "merge conflict", {
+          taskId: task.id,
+          attempt,
+          conflictFiles: mergeResult.files,
+        }),
       };
     }
 
@@ -111,7 +141,42 @@ export async function finalizeSuccess(
       return {
         success: false,
         gateFailureContext: `Tentative merge failed: ${mergeResult.message}`,
+        errorLayer: wrapError("development", "tentativeMerge", mergeResult.message, {
+          taskId: task.id,
+          attempt,
+        }),
       };
+    }
+
+    const postMergeVerify = await runVerifyCore(
+      {
+        workDir: targetProjectPath,
+        gitRoot: targetProjectPath,
+        checks: [...taskChecks],
+      },
+      {
+        log: (event) => deps.eventSink?.emit({
+          ...event,
+          event: "post_merge_verify",
+          taskId: task.id,
+          attempt,
+        }),
+      },
+    );
+
+    if (!postMergeVerify.passed) {
+      return abortAndFail(
+        task.id,
+        targetProjectPath,
+        "post-merge verification FAILED — aborting tentative merge",
+        `Post-merge verify failed (same checks, target environment):\n${postMergeVerify.tiers.deterministic.details}`,
+        {},
+        {
+          operation: "postMergeVerify",
+          gateOutput: postMergeVerify.tiers.deterministic.details,
+          gateContext: { taskId: task.id, attempt, checks: [...taskChecks] },
+        },
+      );
     }
 
     const entryPointCheck = await checkEntryPointRewrite(targetProjectPath, preMergeHead, contractInfo.entryPointPath);
@@ -128,7 +193,13 @@ export async function finalizeSuccess(
         task.id,
         targetProjectPath,
         "entry-point-rewrite check FAILED — aborting tentative merge",
-        `Entry-point rewrite check failed:\n${entryPointCheck.output.slice(0, 2000)}`,
+        `Entry-point rewrite check failed:\n${entryPointCheck.output}`,
+        {},
+        {
+          operation: "entryPointRewriteCheck",
+          gateOutput: entryPointCheck.output,
+          gateContext: { taskId: task.id, attempt },
+        },
       );
     }
 
@@ -154,8 +225,13 @@ export async function finalizeSuccess(
         task.id,
         targetProjectPath,
         "integration gate FAILED — aborting tentative merge",
-        `Integration gate failed:\n${integrationGate.output.slice(0, 2000)}`,
+        `Integration gate failed:\n${integrationGate.output}`,
         { integrationGate },
+        {
+          operation: "integrationGate",
+          gateOutput: integrationGate.output,
+          gateContext: { taskId: task.id, attempt, passed: integrationGate.passed },
+        },
       );
     }
 
@@ -182,8 +258,13 @@ export async function finalizeSuccess(
           task.id,
           targetProjectPath,
           "smoke test FAILED — aborting tentative merge",
-          `Smoke test failed:\n${smokeTest.output.slice(0, 2000)}`,
+          `Smoke test failed:\n${smokeTest.output}`,
           { integrationGate, smokeTest },
+          {
+            operation: "smokeTest",
+            gateOutput: smokeTest.output,
+            gateContext: { taskId: task.id, attempt, passed: smokeTest.passed },
+          },
         );
       } else {
         console.log(`[${task.id}] smoke test passed`);

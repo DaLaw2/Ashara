@@ -52,6 +52,7 @@ export type {
 export { observeProduct } from "./gates/observe.js";
 export type { ObserveDeps } from "./gates/observe.js";
 export { DevelopmentService } from "./execution-service.js";
+export type { WorkdirInfo } from "./workspace.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
 export type { MergeResult } from "./merge.js";
 export {
@@ -80,3 +81,6 @@ export type {
   GateResult,
   DevelopmentServiceDeps,
 } from "./execution-service.js";
+
+export type { AttributionResult, WorkItemLookup, GitLogRunner } from "./gates/attribution.js";
+export { extractImplicatedFiles, attributeFilesToTasks } from "./gates/attribution.js";

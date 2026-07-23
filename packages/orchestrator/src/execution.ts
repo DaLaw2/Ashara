@@ -10,12 +10,16 @@ import {
 } from "@ashara/planning";
 import type { DevelopmentService, TaskDescriptor } from "@ashara/development";
 import type { RawFailureContext } from "@ashara/planning";
+import { wrapError } from "@ashara/shared";
+import type { ErrorEnvelope } from "@ashara/shared";
 import { createCoverageRollupGuard } from "@ashara/planning";
 
+import { extractImplicatedFiles, attributeFilesToTasks } from "@ashara/development";
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 import { recoverFailedItem, shouldSplit, splitFailedTask } from "@ashara/planning";
+import { createBugFixTask } from "./bug-fix.js";
 
 export interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -37,6 +41,7 @@ export async function executeTask(
   result: TaskResult;
   output: Record<string, unknown>;
   attempt: number;
+  errorEnvelope?: ErrorEnvelope;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -75,6 +80,7 @@ export async function executeTask(
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
       attempt: execResult.attempt,
+      errorEnvelope: execResult.errorEnvelope,
     };
   }
 
@@ -82,6 +88,7 @@ export async function executeTask(
     result: failedResult(task.id, execResult.detail),
     output: execResult.output,
     attempt: execResult.attempt,
+    errorEnvelope: execResult.errorEnvelope,
   };
 }
 
@@ -186,7 +193,7 @@ export async function processTask(
   // resulting dispatch_count off the reloaded WorkItem.
   await deps.workItemRepo.incrementDispatchCount(task.id);
 
-  const { result, output, attempt } = await executeTask(
+  const { result, output, attempt, errorEnvelope: execEnvelope } = await executeTask(
     routingDeps,
     deps.developmentService,
     task,
@@ -213,7 +220,19 @@ export async function processTask(
     // (replan) or terminates (abandon/substitute) rather than sitting in Failed
     // and deadlocking its dependents (Run-8 C2, migration Phase 6).
     if (current && current.status === "Failed") {
-      const failure: RawFailureContext = { detail: result.detail, raw: output };
+      if (targetProjectPath) {
+        await handleCompletedPoison(
+          deps,
+          task.id,
+          { detail: result.detail, output },
+          targetProjectPath,
+        );
+      }
+
+      const failure: RawFailureContext = {
+        detail: result.detail,
+        raw: execEnvelope ? { ...execEnvelope } : output,
+      };
       // dispatchCount was already incremented for this attempt at the dispatch
       // seam above and is not mutated by recoverFailedItem, so it is the exact
       // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
@@ -264,6 +283,45 @@ export async function processTask(
   return { result, costInfo };
 }
 
+async function handleCompletedPoison(
+  deps: CoreLoopDeps,
+  currentTaskId: string,
+  execResult: { detail: string; output: Record<string, unknown> },
+  targetProjectPath: string,
+): Promise<void> {
+  const gateOutput = execResult.detail;
+  const files = extractImplicatedFiles(gateOutput);
+  if (files.length === 0) return;
+
+  let attributions;
+  try {
+    attributions = await attributeFilesToTasks(targetProjectPath, files, deps.workItemRepo);
+  } catch (err) {
+    console.warn("[bug-fix] attribution failed, continuing:", err);
+    return;
+  }
+  if (attributions.length === 0) return;
+
+  const externalCulprits = attributions.filter((a) => a.culpritTaskId !== currentTaskId);
+  if (externalCulprits.length === 0) return;
+
+  const gateType = inferGateType(gateOutput);
+  for (const culprit of externalCulprits) {
+    try {
+      await createBugFixTask(deps.workItemRepo, culprit, gateOutput, gateType);
+    } catch (err) {
+      console.warn(`[bug-fix] failed to create task for culprit ${culprit.culpritTaskId}:`, err);
+    }
+  }
+}
+
+function inferGateType(gateOutput: string): string {
+  if (/\(\d+,\d+\): error TS\d+/.test(gateOutput)) return "tsc";
+  if (/unreachable|not reachable|disconnected/.test(gateOutput)) return "reachability";
+  if (/ELIFECYCLE|Cannot find module|ERR_MODULE_NOT_FOUND|crash|exit code/.test(gateOutput)) return "smoke";
+  return "unknown";
+}
+
 export async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void> {
   // Commit the Failed transition first, then publish best-effort. A publish
   // failure must not re-drive the domain fallback onto an already-Failed item
@@ -305,8 +363,16 @@ export async function handleProcessingError(
 ): Promise<TaskResult> {
   console.warn(`[${task.id}] task processing failed with orchestrator error:`, error);
   await handleTaskError(deps, task);
-  const result = failedResult(task.id, String(error));
-  await recordFailedApproach(deps.failedApproachRepo, deps.workItemRepo, task, String(error));
+
+  const chain = wrapError("orchestrator", "processTask", error, { taskId: task.id });
+  const envelope: ErrorEnvelope = {
+    outcome: "failed",
+    summary: chain.message,
+    chain,
+  };
+
+  const result = failedResult(task.id, chain.message);
+  await recordFailedApproach(deps.failedApproachRepo, deps.workItemRepo, task, chain.message);
 
   try {
     const current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
@@ -319,7 +385,7 @@ export async function handleProcessingError(
           contractLookup: deps.contractLookup,
         },
         current,
-        { detail: String(error), raw: { orchestratorError: String(error) } },
+        { detail: chain.message, raw: { ...envelope } },
       );
     }
   } catch (recoveryError) {

@@ -51,12 +51,32 @@ export async function captureMainHead(targetPath: string): Promise<string | null
   }
 }
 
+async function generatePatch(workDir: string, seedCommit: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "git", ["diff", "--binary", seedCommit, "HEAD"],
+    { cwd: workDir, maxBuffer: 50 * 1024 * 1024 },
+  );
+  return stdout;
+}
+
+async function applyPatch(targetPath: string, patch: string): Promise<void> {
+  if (patch.length === 0) return;
+  const proc = execFile("git", ["apply", "--binary", "--index"], { cwd: targetPath, maxBuffer: 50 * 1024 * 1024 });
+  proc.stdin?.write(patch);
+  proc.stdin?.end();
+  await new Promise<void>((resolve, reject) => {
+    proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`git apply failed with exit code ${code}`)));
+    proc.on("error", reject);
+  });
+}
+
 export async function syncToTaskBranch(
   eventSink: ExecutionEventSink | undefined,
   workDir: string,
   targetProjectPath: string,
   taskId: string,
   attempt: number,
+  seedCommit: string,
 ): Promise<SyncResult> {
   const branch = taskBranchName(taskId);
   try {
@@ -69,28 +89,10 @@ export async function syncToTaskBranch(
     }
 
     if (await hasGitCommits(workDir)) {
-      await execFileAsync("sh", [
-        "-c",
-        `git -C "${workDir}" archive HEAD | tar -x -C "${targetProjectPath}"`,
-      ]);
-
-      const [agentFiles, targetFiles] = await Promise.all([
-        execFileAsync("git", ["-C", workDir, "ls-tree", "-r", "--name-only", "HEAD"]).then(
-          ({ stdout }) => new Set(stdout.trim().split("\n").filter(Boolean)),
-        ),
-        execFileAsync("git", ["-C", targetProjectPath, "ls-files"]).then(({ stdout }) =>
-          new Set(stdout.trim().split("\n").filter(Boolean)),
-        ),
-      ]);
-
-      for (const file of targetFiles) {
-        if (!agentFiles.has(file)) {
-          await execFileAsync("git", ["-C", targetProjectPath, "rm", "-f", file]);
-        }
-      }
+      const patch = await generatePatch(workDir, seedCommit);
+      await applyPatch(targetProjectPath, patch);
     }
 
-    await execFileAsync("git", ["add", "-A"], { cwd: targetProjectPath });
     const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
       cwd: targetProjectPath,
     });
