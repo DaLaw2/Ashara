@@ -299,13 +299,16 @@ describe("Work Items Bulk", () => {
 // ===========================================================================
 
 describe("Config", () => {
-  test("GET /config/providers returns camelCase array", async () => {
+  test("GET /config/providers returns camelCase array with hasApiKey (no raw keys)", async () => {
     const res = await req("GET", "/config/providers");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
     expect(body.length).toBeGreaterThanOrEqual(1);
     expect(body[0]).toHaveProperty("providerType");
+    expect(body[0]).toHaveProperty("hasApiKey");
+    expect(typeof body[0].hasApiKey).toBe("boolean");
+    expect(body[0].apiKey).toBeUndefined();
     expect(body[0].provider_type).toBeUndefined();
   });
 

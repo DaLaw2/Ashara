@@ -41,9 +41,15 @@ function buildSanitizedEnv(extraAllowed?: string[]): Record<string, string> {
 
     for (const [key, value] of Object.entries(process.env)) {
         if (value === undefined) continue;
+
+        if (extraSet.has(key)) {
+            result[key] = value;
+            continue;
+        }
+
         if (matchesSecretPattern(key)) continue;
 
-        if (ENV_ALLOWLIST.has(key) || isNpmMetadata(key) || extraSet.has(key)) {
+        if (ENV_ALLOWLIST.has(key) || isNpmMetadata(key)) {
             result[key] = value;
         }
     }

@@ -22,9 +22,10 @@ import {
   buildFileTree,
   cleanupWorkdir,
   createWorkdir,
+  createWorkdirForRetry,
   getChangedFiles,
 } from "./workspace.js";
-import { branchExists, createTaskBranch, taskBranchName } from "./merge.js";
+import { branchExists, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
@@ -48,6 +49,7 @@ export interface AgentSpawnOptions {
   readonly outputPath: string;
   readonly taskId: string;
   readonly dispatchCount?: number;
+  readonly blockedReason?: Record<string, unknown>;
 }
 
 export interface ConventionsExtractor {
@@ -177,49 +179,49 @@ export class DevelopmentService {
     const contract = await this.loadContract(task.id);
     const brief = await this.buildBrief(task, targetProjectPath, contract);
 
-    // Retry (branch already exists from a prior attempt): seed the workdir from
-    // it, preserving that attempt's partial work instead of rebuilding from main.
-    let seedBranch: string | undefined;
+    let workDir: string;
     if (targetProjectPath) {
       const branch = taskBranchName(task.id);
       const isRetry = await branchExists(targetProjectPath, branch);
-      await createTaskBranch(targetProjectPath, task.id);
-      if (isRetry) seedBranch = branch;
+      try {
+        if (isRetry) {
+          ({ workDir } = await createWorkdirForRetry(base, targetProjectPath, branch));
+        } else {
+          ({ workDir } = await createWorkdir(base, targetProjectPath, branch));
+        }
+      } catch (e) {
+        const chain = wrapError("development", "createWorkdir", e, { taskId: task.id });
+        eventSink?.emit({
+          event: "error",
+          location: "DevelopmentService:createWorkdir",
+          taskId: task.id,
+          attempt: 1,
+          error: chain.message,
+        });
+        const envelope: ErrorEnvelope = {
+          outcome: "failed",
+          summary: `workdir creation failed for ${task.id}: ${chain.message}`,
+          chain,
+        };
+        const result: ExecutionResult = {
+          status: "failed",
+          detail: envelope.summary,
+          output: {},
+          sessionId,
+          filesChanged: [],
+          attempt: 1,
+          errorEnvelope: envelope,
+        };
+        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+        return result;
+      }
+    } else {
+      const { mkdtemp } = await import("node:fs/promises");
+      workDir = await mkdtemp(join(base, "task-"));
     }
 
-    let workDir: string;
-    let seedCommit: string;
     try {
-      ({ workDir, seedCommit } = await createWorkdir(base, targetProjectPath, seedBranch));
-    } catch (e) {
-      const chain = wrapError("development", "createWorkdir", e, { taskId: task.id });
-      eventSink?.emit({
-        event: "error",
-        location: "DevelopmentService:createWorkdir",
-        taskId: task.id,
-        attempt: 1,
-        error: chain.message,
-      });
-      const envelope: ErrorEnvelope = {
-        outcome: "failed",
-        summary: `workdir creation failed for ${task.id}: ${chain.message}`,
-        chain,
-      };
-      const result: ExecutionResult = {
-        status: "failed",
-        detail: envelope.summary,
-        output: {},
-        sessionId,
-        filesChanged: [],
-        attempt: 1,
-        errorEnvelope: envelope,
-      };
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
-    }
-
-    try {
-      const result = await this.runExecution(task, brief, targetProjectPath, workDir, seedCommit, sessionId, contract);
+      const result = await this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract);
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
@@ -237,7 +239,7 @@ export class DevelopmentService {
         attempt: 1,
         error: chain.message,
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const envelope: ErrorEnvelope = {
         outcome: "failed",
         summary: `execution error for ${task.id}: ${chain.message}`,
@@ -486,7 +488,6 @@ export class DevelopmentService {
     brief: AgentBrief,
     targetProjectPath: string | null,
     workDir: string,
-    seedCommit: string,
     sessionId: string,
     contract: ProjectContract | null,
   ): Promise<ExecutionResult> {
@@ -512,7 +513,7 @@ export class DevelopmentService {
     let output: Record<string, unknown>;
 
     if (config.useRealAgent) {
-      output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount });
+      output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount, blockedReason: task.blockedReason });
     } else {
       output = stubAgentOutput();
       await writeFile(outputPath, JSON.stringify(output, null, 2));
@@ -532,7 +533,7 @@ export class DevelopmentService {
         turns: turnCount,
         summary,
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
         turnCount,
@@ -566,7 +567,7 @@ export class DevelopmentService {
         turns: turnCount,
         summary,
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
         turnCount,
@@ -589,7 +590,7 @@ export class DevelopmentService {
     }
 
     if (agentStatus === "stub") {
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "stub agent output — skipping verify", { taskId: task.id });
       return {
         status: "failed",
@@ -610,7 +611,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: "agent produced no file changes",
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "agent produced no file changes", {
         taskId: task.id,
         turnCount: typeof output.turn_count === "number" ? output.turn_count : undefined,
@@ -647,7 +648,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: "verification failed",
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "verify", "verification failed", { taskId: task.id });
       return {
         status: "failed",
@@ -661,7 +662,7 @@ export class DevelopmentService {
     }
 
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
-    const finalizeResult = await finalizeSuccess(this.deps, workDir, seedCommit, sessionId, task, targetProjectPath, 1, taskChecks, {
+    const finalizeResult = await finalizeSuccess(this.deps, workDir, sessionId, task, targetProjectPath, 1, taskChecks, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
       language: contract ? nodeLabel(contract.knowledge, "language") ?? null : null,
       excludePaths: contract?.excludePaths,
@@ -685,7 +686,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: envelope.summary,
       });
-      await cleanupWorkdir(workDir);
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       return {
         status: "failed",
         detail: envelope.summary,
@@ -699,6 +700,7 @@ export class DevelopmentService {
       };
     }
 
+    await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output);

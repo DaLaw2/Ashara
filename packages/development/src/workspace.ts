@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -12,41 +12,74 @@ const execFileAsync = promisify(execFile);
 
 export interface WorkdirInfo {
   readonly workDir: string;
-  readonly seedCommit: string;
+  readonly taskBranch: string;
+}
+
+export class WorkspaceError extends Error {
+  constructor(
+    public readonly operation: string,
+    public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskId?: string },
+    cause?: unknown,
+  ) {
+    const causeMsg = cause instanceof Error ? cause.message : String(cause ?? "");
+    super(`workspace ${operation} failed: ${causeMsg}`);
+    this.name = "WorkspaceError";
+  }
 }
 
 export async function createWorkdir(
   base: string,
-  targetProjectPath: string | null,
-  seedBranch?: string,
+  targetProjectPath: string,
+  taskBranch: string,
 ): Promise<WorkdirInfo> {
   await mkdir(base, { recursive: true });
-  const workDir = await mkdtemp(join(base, "task-"));
+  const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
-  await execFileAsync("git", ["init"], { cwd: workDir });
-  await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], { cwd: workDir });
-  await execFileAsync("git", ["config", "user.name", "Ashara Agent"], { cwd: workDir });
-  await execFileAsync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: workDir });
-
-  if (targetProjectPath && (await hasGitCommits(targetProjectPath))) {
-    const ref = seedBranch ?? "HEAD";
-    await execFileAsync("sh", [
-      "-c",
-      `git -C "${targetProjectPath}" archive "${ref}" | tar -x -C "${workDir}"`,
-    ]);
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd: workDir });
-    if (stdout.trim().length > 0) {
-      await execFileAsync("git", ["add", "-A"], { cwd: workDir });
-      await execFileAsync("git", ["commit", "-m", "seed from previous task output"], {
-        cwd: workDir,
-      });
-    }
+  try {
+    await execFileAsync("git", ["worktree", "add", workDir, "-b", taskBranch, "main"], {
+      cwd: targetProjectPath,
+    });
+  } catch (e) {
+    throw new WorkspaceError("createWorktree", { targetPath: targetProjectPath, workDir }, e);
   }
 
-  const { stdout: seedRev } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workDir });
-  const seedCommit = seedRev.trim();
+  await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], { cwd: workDir });
+  await execFileAsync("git", ["config", "user.name", "Ashara Agent"], { cwd: workDir });
 
-  return { workDir, seedCommit };
+  return { workDir, taskBranch };
+}
+
+export async function createWorkdirForRetry(
+  base: string,
+  targetProjectPath: string,
+  taskBranch: string,
+): Promise<WorkdirInfo> {
+  await mkdir(base, { recursive: true });
+  const workDir = join(base, taskBranch.replace(/\//g, "-"));
+
+  try {
+    await execFileAsync("git", ["worktree", "add", workDir, taskBranch], {
+      cwd: targetProjectPath,
+    });
+  } catch (e) {
+    throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir }, e);
+  }
+
+  await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], { cwd: workDir });
+  await execFileAsync("git", ["config", "user.name", "Ashara Agent"], { cwd: workDir });
+
+  return { workDir, taskBranch };
+}
+
+export async function removeWorktree(targetProjectPath: string, workDir: string): Promise<void> {
+  try {
+    await execFileAsync("git", ["worktree", "remove", workDir, "--force"], {
+      cwd: targetProjectPath,
+    });
+  } catch {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    await execFileAsync("git", ["worktree", "prune"], { cwd: targetProjectPath }).catch(() => {});
+  }
 }
 
 export async function getChangedFiles(workDir: string): Promise<string[]> {
@@ -93,8 +126,12 @@ export async function commitAllChanges(workDir: string, message: string): Promis
   await execFileAsync("git", ["commit", "-m", message, "--allow-empty-message"], { cwd: workDir });
 }
 
-export async function cleanupWorkdir(workDir: string): Promise<void> {
-  await rm(workDir, { recursive: true, force: true }).catch(() => {});
+export async function cleanupWorkdir(workDir: string, targetProjectPath?: string): Promise<void> {
+  if (targetProjectPath) {
+    await removeWorktree(targetProjectPath, workDir);
+  } else {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 // bridge: will be replaced by contract.excludePaths when available

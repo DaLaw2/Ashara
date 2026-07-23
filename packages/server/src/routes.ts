@@ -547,13 +547,15 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
 
     const configs = rows.map((row) => {
       const envKey = `${row.name.toUpperCase()}_API_KEY`;
-      const apiKey = process.env[envKey] ?? null;
+      const hasApiKey = row.name === "local"
+        ? (row.baseUrl ?? process.env[`${row.name.toUpperCase()}_BASE_URL`] ?? null) !== null
+        : (process.env[envKey] ?? null) !== null;
       const envBaseUrl = `${row.name.toUpperCase()}_BASE_URL`;
       const baseUrl = row.baseUrl ?? process.env[envBaseUrl] ?? null;
       return {
         name: row.name,
         providerType: row.providerType,
-        apiKey,
+        hasApiKey,
         baseUrl,
       };
     });

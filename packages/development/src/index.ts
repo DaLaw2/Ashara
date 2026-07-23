@@ -58,9 +58,7 @@ export type { MergeResult } from "./merge.js";
 export {
   taskBranchName,
   branchExists,
-  createTaskBranch,
   captureMainHead,
-  syncToTaskBranch,
   tentativeMerge,
   commitMerge,
   abortMerge,

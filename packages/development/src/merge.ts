@@ -1,17 +1,11 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, copyFile, rm } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
-import type { ExecutionEventSink, TaskDescriptor } from "./execution-service.js";
-import { commitAllChanges, ensureTargetGitInit, hasGitCommits } from "./workspace.js";
+import type { TaskDescriptor } from "./execution-service.js";
 
 const execFileAsync = promisify(execFile);
-
-interface SyncResult {
-  readonly success: boolean;
-  readonly error?: string;
-}
 
 export type MergeResult =
   | { readonly status: "clean" }
@@ -33,14 +27,6 @@ export async function branchExists(targetPath: string, branch: string): Promise<
   }
 }
 
-/** Idempotent: creates task/{taskId} from main, or no-ops if it already exists. */
-export async function createTaskBranch(targetPath: string, taskId: string): Promise<void> {
-  await ensureTargetGitInit(targetPath);
-  const branch = taskBranchName(taskId);
-  if (await branchExists(targetPath, branch)) return;
-  await execFileAsync("git", ["branch", branch, "main"], { cwd: targetPath });
-}
-
 /** Captures main's HEAD before a tentative merge, for the gates' pre/post diff. */
 export async function captureMainHead(targetPath: string): Promise<string | null> {
   try {
@@ -48,82 +34,6 @@ export async function captureMainHead(targetPath: string): Promise<string | null
     return stdout.trim() || null;
   } catch {
     return null;
-  }
-}
-
-async function syncChangedFiles(
-  workDir: string,
-  targetPath: string,
-  seedCommit: string,
-): Promise<void> {
-  const { stdout: diffOut } = await execFileAsync(
-    "git", ["diff", "--name-status", seedCommit, "HEAD"],
-    { cwd: workDir },
-  );
-  if (diffOut.trim().length === 0) return;
-
-  for (const line of diffOut.trim().split("\n")) {
-    const match = line.match(/^([ACDMRT])\t(.+)$/);
-    if (!match) continue;
-    const [, status, filePath] = match;
-
-    if (status === "D") {
-      const target = join(targetPath, filePath);
-      await rm(target, { force: true }).catch(() => {});
-    } else {
-      const src = join(workDir, filePath);
-      const dest = join(targetPath, filePath);
-      await mkdir(dirname(dest), { recursive: true });
-      await copyFile(src, dest);
-    }
-  }
-
-  await execFileAsync("git", ["add", "-A"], { cwd: targetPath });
-}
-
-export async function syncToTaskBranch(
-  eventSink: ExecutionEventSink | undefined,
-  workDir: string,
-  targetProjectPath: string,
-  taskId: string,
-  attempt: number,
-  seedCommit: string,
-): Promise<SyncResult> {
-  const branch = taskBranchName(taskId);
-  try {
-    await execFileAsync("git", ["checkout", "-B", branch, "main"], { cwd: targetProjectPath });
-
-    try {
-      await commitAllChanges(workDir, `ashara: pre-sync commit for task ${taskId}`);
-    } catch {
-      // nothing to commit
-    }
-
-    if (await hasGitCommits(workDir)) {
-      await syncChangedFiles(workDir, targetProjectPath, seedCommit);
-    }
-
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
-      cwd: targetProjectPath,
-    });
-    if (stdout.trim().length > 0) {
-      await execFileAsync("git", ["commit", "-m", `task ${taskId} attempt ${attempt}`], {
-        cwd: targetProjectPath,
-      });
-    }
-
-    await execFileAsync("git", ["checkout", "main"], { cwd: targetProjectPath });
-
-    console.log(`[${taskId}] synced results to ${branch} in ${targetProjectPath}`);
-    eventSink?.emit({ event: "sync_success", taskId, attempt, targetProject: targetProjectPath });
-    return { success: true };
-  } catch (e) {
-    const errorMsg = String(e).slice(0, 500);
-    console.warn(`[${taskId}] failed to sync to ${branch}:`, e);
-    // Best-effort: never leave the target stranded off main after a failed sync.
-    await execFileAsync("git", ["checkout", "main"], { cwd: targetProjectPath }).catch(() => {});
-    eventSink?.emit({ event: "sync_failed", taskId, attempt, error: errorMsg });
-    return { success: false, error: errorMsg };
   }
 }
 

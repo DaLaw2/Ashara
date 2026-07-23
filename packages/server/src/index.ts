@@ -44,8 +44,11 @@ import {
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
+  classifyFailure,
+  shouldEscalate,
+  tryParseEnvelope,
 } from "@ashara/planning";
-import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, AcceptanceLLM, ReplanLLM } from "@ashara/planning";
+import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, AcceptanceLLM, ReplanLLM, FailureCategory } from "@ashara/planning";
 import {
   buildDefaultProfile,
   createRetrievalFn,
@@ -80,7 +83,7 @@ import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memor
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
-import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema } from "@ashara/shared";
+import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
@@ -139,15 +142,14 @@ async function main(): Promise<void> {
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
 
-  // Seed providers with API keys from env
   await configRepo.seedProviders([
-    { name: "anthropic", providerType: "anthropic", apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: null },
-    { name: "openai", providerType: "openai", apiKey: process.env.OPENAI_API_KEY, baseUrl: null },
-    { name: "deepseek", providerType: "openai-compatible", apiKey: process.env.DEEPSEEK_API_KEY, baseUrl: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1" },
-    { name: "mistral", providerType: "openai-compatible", apiKey: process.env.MISTRAL_API_KEY, baseUrl: null },
-    { name: "xai", providerType: "openai-compatible", apiKey: process.env.XAI_API_KEY, baseUrl: null },
-    { name: "google", providerType: "openai-compatible", apiKey: process.env.GOOGLE_API_KEY, baseUrl: null },
-    { name: "local", providerType: "openai-compatible", apiKey: null, baseUrl: process.env.LOCAL_LLM_URL ?? null },
+    { name: "anthropic", providerType: "anthropic", baseUrl: null },
+    { name: "openai", providerType: "openai", baseUrl: null },
+    { name: "deepseek", providerType: "openai-compatible", baseUrl: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1" },
+    { name: "mistral", providerType: "openai-compatible", baseUrl: null },
+    { name: "xai", providerType: "openai-compatible", baseUrl: null },
+    { name: "google", providerType: "openai-compatible", baseUrl: null },
+    { name: "local", providerType: "openai-compatible", baseUrl: process.env.LOCAL_LLM_URL ?? null },
   ]);
 
   // Single composition-root call for the LLM gateway (ADR-030). There is no
@@ -317,7 +319,7 @@ async function main(): Promise<void> {
       // doesn't need cwd to be asharaSourceDir to be found.
       const { cwd, runnerScript } = buildAgentSpawnLocation(config.coreLoop.asharaSourceDir, opts.workDir);
 
-      const capability = (opts.dispatchCount ?? 0) >= 1 ? "Frontier" : "Strong";
+      const capability = determineCapability(opts.dispatchCount ?? 0, opts.blockedReason);
       if (capability === "Frontier") {
         console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
       }
@@ -326,7 +328,7 @@ async function main(): Promise<void> {
       const proc = spawn("npx", ["tsx", runnerScript], {
         cwd,
         env: {
-          ...buildSanitizedEnv(),
+          ...buildSanitizedEnv([...providerKeyEnvNames()]),
           ASHARA_BRIEF_PATH: opts.briefPath,
           ASHARA_OUTPUT_PATH: opts.outputPath,
           ASHARA_WORKING_DIR: opts.workDir,
@@ -644,6 +646,31 @@ async function main(): Promise<void> {
   console.log("Server and continuous runner stopped");
 }
 
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPriorEnvelope(blockedReason: Record<string, unknown> | undefined): ReturnType<typeof tryParseEnvelope> {
+  if (!blockedReason) return null;
+  const replanContext = blockedReason.replanContext;
+  if (!isRecord(replanContext)) return null;
+  const raw = replanContext.raw;
+  if (!isRecord(raw)) return null;
+  return tryParseEnvelope(raw);
+}
+
+function determineCapability(dispatchCount: number, blockedReason: Record<string, unknown> | undefined): string {
+  if (dispatchCount === 0) return "Strong";
+
+  const envelope = extractPriorEnvelope(blockedReason);
+  if (!envelope) return "Strong";
+
+  const category = classifyFailure(envelope);
+  if (shouldEscalate(category, dispatchCount >= 2 ? [category] : [])) return "Frontier";
+
+  return "Strong";
+}
 
 process.on("uncaughtException", (err: Error) => {
   console.error("Uncaught exception:", err);

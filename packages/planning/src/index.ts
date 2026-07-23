@@ -110,4 +110,11 @@ export type {
 export { recoverFromAbandoned } from "./liveness-recovery.js";
 export type { LivenessRecoveryDeps, FailedApproachSource } from "./liveness-recovery.js";
 
+export {
+  classifyFailure,
+  shouldEscalate,
+  tryParseEnvelope,
+} from "./failure-classifier.js";
+export type { FailureCategory } from "./failure-classifier.js";
+
 export * from "./lifecycle/index.js";

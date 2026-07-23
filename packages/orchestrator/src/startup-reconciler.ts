@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import type { DomainEvent } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
@@ -8,11 +10,14 @@ import { requeueWorkItem, takeEvents } from "@ashara/planning";
 import type { FailureRouter, RawFailureContext, FailureRecoveryDeps } from "@ashara/planning";
 import { recoverFailedItem } from "@ashara/planning";
 
+const execFileAsync = promisify(execFile);
+
 export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
   readonly workdirBase?: string;
+  readonly targetProjectPath?: string;
 }
 
 export interface ReconcileSummary {
@@ -70,7 +75,9 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
   }
 
   let worktreesCleaned = 0;
-  if (deps.workdirBase) {
+  if (deps.targetProjectPath) {
+    worktreesCleaned = await cleanOrphanedGitWorktrees(deps.targetProjectPath, deps.workItemRepo);
+  } else if (deps.workdirBase) {
     worktreesCleaned = await cleanOrphanedWorktrees(deps.workdirBase, deps.workItemRepo);
   }
 
@@ -156,6 +163,81 @@ async function cleanOrphanedWorktrees(
     }
   } catch (err) {
     console.warn("[startup-reconciler] worktree cleanup skipped:", err);
+  }
+  return cleaned;
+}
+
+interface WorktreeEntry {
+  readonly path: string;
+  readonly branch: string | null;
+}
+
+function parseWorktreeList(output: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = [];
+  let currentPath: string | null = null;
+  let currentBranch: string | null = null;
+
+  for (const line of output.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (currentPath !== null) {
+        entries.push({ path: currentPath, branch: currentBranch });
+      }
+      currentPath = line.slice("worktree ".length);
+      currentBranch = null;
+    } else if (line.startsWith("branch refs/heads/")) {
+      currentBranch = line.slice("branch refs/heads/".length);
+    }
+  }
+  if (currentPath !== null) {
+    entries.push({ path: currentPath, branch: currentBranch });
+  }
+  return entries;
+}
+
+async function cleanOrphanedGitWorktrees(
+  targetProjectPath: string,
+  workItemRepo: WorkItemRepository,
+): Promise<number> {
+  let cleaned = 0;
+  try {
+    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd: targetProjectPath,
+    });
+    const worktrees = parseWorktreeList(stdout);
+
+    const [pending, inProgress, blocked] = await Promise.all([
+      workItemRepo.findByStatus("Pending"),
+      workItemRepo.findByStatus("InProgress"),
+      workItemRepo.findByStatus("Blocked"),
+    ]);
+    const activeIds = new Set<string>(
+      [...pending, ...inProgress, ...blocked].map((item) => String(item.id)),
+    );
+
+    for (const wt of worktrees) {
+      if (!wt.branch?.startsWith("task/")) continue;
+      const taskId = wt.branch.slice("task/".length);
+      if (activeIds.has(taskId)) continue;
+
+      try {
+        await execFileAsync("git", ["worktree", "remove", wt.path, "--force"], {
+          cwd: targetProjectPath,
+        });
+        await execFileAsync("git", ["branch", "-D", wt.branch], {
+          cwd: targetProjectPath,
+        }).catch(() => {});
+        cleaned += 1;
+      } catch (err) {
+        console.warn(
+          `[startup-reconciler] failed to remove orphaned git worktree ${wt.path}:`,
+          err,
+        );
+      }
+    }
+
+    await execFileAsync("git", ["worktree", "prune"], { cwd: targetProjectPath }).catch(() => {});
+  } catch (err) {
+    console.warn("[startup-reconciler] git worktree cleanup skipped:", err);
   }
   return cleaned;
 }

@@ -7,7 +7,6 @@ import {
   captureMainHead,
   commitMerge,
   recoverOrphanedMerge,
-  syncToTaskBranch,
   taskBranchName,
   tentativeMerge,
 } from "../merge.js";
@@ -77,7 +76,6 @@ async function abortAndFail(
 export async function finalizeSuccess(
   deps: FinalizeDeps,
   workDir: string,
-  seedCommit: string,
   sessionId: string,
   task: TaskDescriptor,
   targetProjectPath: string | null,
@@ -97,25 +95,6 @@ export async function finalizeSuccess(
   if (targetProjectPath) {
     await recoverOrphanedMerge(targetProjectPath);
     await ensureTargetGitInit(targetProjectPath);
-
-    const syncResult = await syncToTaskBranch(
-      deps.eventSink,
-      workDir,
-      targetProjectPath,
-      task.id,
-      attempt,
-      seedCommit,
-    );
-
-    if (!syncResult.success) {
-      console.log(`[${task.id}] sync to task branch FAILED — skipping tentative merge`);
-      const syncError = syncResult.error ?? "unknown error";
-      return {
-        success: false,
-        gateFailureContext: `Sync to task branch failed: ${syncError}`,
-        errorLayer: wrapError("development", "syncToTaskBranch", syncError, { taskId: task.id, attempt }),
-      };
-    }
 
     const preMergeHead = await captureMainHead(targetProjectPath);
     const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));

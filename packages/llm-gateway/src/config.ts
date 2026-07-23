@@ -134,7 +134,7 @@ interface ApiModelEntry {
 interface ApiProviderEntry {
   name: string;
   providerType: string;
-  apiKey: string | null;
+  hasApiKey: boolean;
   baseUrl: string | null;
 }
 
@@ -191,16 +191,27 @@ export async function loadGatewayConfigFromApi(
     }
   }
 
+  const keys = loadProviderKeys();
+  const keysByProvider: Record<string, string | undefined> = {
+    anthropic: keys.anthropicApiKey,
+    openai: keys.openaiApiKey,
+    deepseek: keys.deepseekApiKey,
+    mistral: keys.mistralApiKey,
+    xai: keys.xaiApiKey,
+    google: keys.googleApiKey,
+  };
+
   const providers: ProviderConfig[] = [];
   for (const p of apiProviders) {
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
-    const hasCredentials = p.apiKey !== null || (p.name === "local" && p.baseUrl !== null);
+    const envKey = keysByProvider[p.name];
+    const hasCredentials = envKey !== undefined || (p.name === "local" && (keys.localLlmUrl ?? p.baseUrl) !== undefined);
     if (!hasCredentials) continue;
     providers.push({
       name: p.name,
-      apiKey: p.apiKey ?? undefined,
-      baseUrl: p.baseUrl ?? undefined,
+      apiKey: envKey,
+      baseUrl: p.name === "local" ? (keys.localLlmUrl ?? p.baseUrl ?? undefined) : (p.baseUrl ?? undefined),
       models,
       enabled: true,
     });
