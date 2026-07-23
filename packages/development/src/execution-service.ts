@@ -152,10 +152,12 @@ export interface DevelopmentServiceDeps {
    * un-completes a task that passed its gates.
    */
   readonly contractAmender?: ContractAmender;
+  readonly populateIndex?: (targetPath: string) => void;
 }
 
 export class DevelopmentService {
   private readonly deps: DevelopmentServiceDeps;
+  private indexed = false;
 
   constructor(deps: DevelopmentServiceDeps) {
     this.deps = deps;
@@ -702,6 +704,7 @@ export class DevelopmentService {
 
     await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
+    this.tryPopulateIndex(targetProjectPath);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output);
     return {
@@ -810,6 +813,16 @@ export class DevelopmentService {
         `[${task.id}] contract completion amend failed; task stays completed (fail-soft):`,
         e,
       );
+    }
+  }
+
+  private tryPopulateIndex(targetProjectPath: string | null): void {
+    if (this.indexed || !targetProjectPath || !this.deps.populateIndex) return;
+    try {
+      this.deps.populateIndex(targetProjectPath);
+      this.indexed = true;
+    } catch (e) {
+      console.warn("Codebase index population failed:", e);
     }
   }
 

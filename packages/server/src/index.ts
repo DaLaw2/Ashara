@@ -235,8 +235,10 @@ async function main(): Promise<void> {
   }
 
   // Initialize tree-sitter parser and codebase indexer
+  let parserReady = false;
   try {
     await initParser();
+    parserReady = true;
   } catch (e) {
     console.warn("Failed to initialize tree-sitter parser:", e);
   }
@@ -501,6 +503,9 @@ async function main(): Promise<void> {
     eventSink: devEventSink,
     contractSource,
     contractAmender,
+    populateIndex: parserReady
+      ? (targetPath) => indexer.indexDirectory(targetPath, ["ts", "tsx", "js", "jsx", "json"])
+      : undefined,
   });
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the

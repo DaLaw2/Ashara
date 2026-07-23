@@ -18,7 +18,8 @@
  * task. If richer signatures are wanted later they belong behind the port.
  */
 
-import type { ProjectContract, Endpoint, ContractModule, Mount } from "@ashara/shared";
+import type { ProjectContract, ProjectKnowledge, Endpoint, ContractModule, Mount } from "@ashara/shared";
+import { nodesByKind } from "@ashara/shared";
 
 /**
  * Port that yields the current ProjectContract for the project a task belongs to,
@@ -38,6 +39,18 @@ export interface ContractSource {
      * (fail-closed — a not-yet-built endpoint must never be presented as reality).
      */
     loadCompletedTaskIds?(taskIds: readonly string[]): Promise<ReadonlySet<string>>;
+}
+
+const TECH_STACK_KINDS = ["language", "runtime", "framework", "database", "build_tool"] as const;
+
+function formatTechStack(knowledge: ProjectKnowledge): string | undefined {
+    const lines: string[] = [];
+    for (const kind of TECH_STACK_KINDS) {
+        for (const node of nodesByKind(knowledge, kind)) {
+            lines.push(`- ${kind}: ${node.label}`);
+        }
+    }
+    return lines.length > 0 ? ["## Project Tech Stack", ...lines].join("\n") : undefined;
 }
 
 function mountPrefixByRef(mounts: readonly Mount[]): ReadonlyMap<string, string> {
@@ -95,16 +108,23 @@ export function formatContractSlice(
     );
     const mounts = contract.mounts;
 
+    const techStack = formatTechStack(contract.knowledge);
+
     if (
         endpointsToExpose.length === 0 &&
         siblingEndpoints.length === 0 &&
         reuseModules.length === 0 &&
-        mounts.length === 0
+        mounts.length === 0 &&
+        !techStack
     ) {
         return undefined;
     }
 
     const sections: string[] = ["# Project Contract (shared cross-task spec — honor it)"];
+
+    if (techStack) {
+        sections.push(techStack);
+    }
 
     if (endpointsToExpose.length > 0) {
         sections.push(

@@ -61,7 +61,7 @@ export const DEFAULT_CONFIG: CoreLoopConfig = {
   asharaSourceDir: ".",
   selfUrl: "",
   apiToken: "",
-  brainstormCooldownThreshold: 8,
+  brainstormCooldownThreshold: 3,
   maxPendingWorkItems: 15,
   maxBrainstormItems: 3,
   brainstormTimeoutMs: 120_000,
