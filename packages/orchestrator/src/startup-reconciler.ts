@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { DomainEvent } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository } from "@ashara/planning";
@@ -9,6 +12,7 @@ export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
+  readonly workdirBase?: string;
 }
 
 export interface ReconcileSummary {
@@ -18,6 +22,7 @@ export interface ReconcileSummary {
   readonly failedAbandoned: number;
   readonly failedSubstituted: number;
   readonly failedErrored: number;
+  readonly worktreesCleaned: number;
 }
 
 export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
@@ -64,6 +69,11 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     }
   }
 
+  let worktreesCleaned = 0;
+  if (deps.workdirBase) {
+    worktreesCleaned = await cleanOrphanedWorktrees(deps.workdirBase, deps.workItemRepo);
+  }
+
   const summary: ReconcileSummary = {
     orphansRequeued,
     orphansErrored,
@@ -71,11 +81,12 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     failedAbandoned,
     failedSubstituted,
     failedErrored,
+    worktreesCleaned,
   };
   console.log(
     `[startup-reconciler] orphans requeued=${orphansRequeued} errored=${orphansErrored}; ` +
       `parked Failed routed=${parkedFailed.length} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
-      `substitute=${failedSubstituted} errored=${failedErrored})`,
+      `substitute=${failedSubstituted} errored=${failedErrored}); worktrees cleaned=${worktreesCleaned}`,
   );
   return summary;
 }
@@ -110,4 +121,41 @@ async function publishBestEffort(
       );
     }
   }
+}
+
+async function cleanOrphanedWorktrees(
+  workdirBase: string,
+  workItemRepo: WorkItemRepository,
+): Promise<number> {
+  let cleaned = 0;
+  try {
+    const entries = await fs.readdir(workdirBase, { withFileTypes: true });
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    if (dirs.length === 0) return 0;
+
+    const [pending, inProgress, blocked] = await Promise.all([
+      workItemRepo.findByStatus("Pending"),
+      workItemRepo.findByStatus("InProgress"),
+      workItemRepo.findByStatus("Blocked"),
+    ]);
+    const activeIds = new Set<string>(
+      [...pending, ...inProgress, ...blocked].map((item) => String(item.id)),
+    );
+
+    for (const dir of dirs) {
+      if (activeIds.has(dir)) continue;
+      try {
+        await fs.rm(path.join(workdirBase, dir), { recursive: true, force: true });
+        cleaned += 1;
+      } catch (err) {
+        console.warn(
+          `[startup-reconciler] failed to remove orphaned worktree ${dir}:`,
+          err,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn("[startup-reconciler] worktree cleanup skipped:", err);
+  }
+  return cleaned;
 }

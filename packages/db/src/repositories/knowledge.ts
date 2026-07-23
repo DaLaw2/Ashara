@@ -37,47 +37,6 @@ export class KnowledgeRepository {
     });
   }
 
-  async getDecisionsByEpic(epicId: string | null, limit: number) {
-    return this.db
-      .select({
-        id: knowledgeEntries.id,
-        kind: knowledgeEntries.kind,
-        title: knowledgeEntries.title,
-        contentSnippet: sql<string>`LEFT(${knowledgeEntries.content}, 200)`,
-        sourceTaskId: knowledgeEntries.sourceTaskId,
-      })
-      .from(knowledgeEntries)
-      .where(
-        and(
-          epicId ? eq(knowledgeEntries.epicId, epicId) : sql`TRUE`,
-          eq(knowledgeEntries.kind, "decision"),
-          ne(knowledgeEntries.freshness, "archived"),
-        ),
-      )
-      .orderBy(desc(knowledgeEntries.eventTime))
-      .limit(limit);
-  }
-
-  async getFindingsByStory(storyId: string, limit: number) {
-    return this.db
-      .select({
-        id: knowledgeEntries.id,
-        kind: knowledgeEntries.kind,
-        title: knowledgeEntries.title,
-        contentSnippet: sql<string>`LEFT(${knowledgeEntries.content}, 200)`,
-        sourceTaskId: knowledgeEntries.sourceTaskId,
-      })
-      .from(knowledgeEntries)
-      .where(
-        and(
-          sql`${knowledgeEntries.sourceTaskId} IN (SELECT id FROM work_items WHERE parent_id = ${storyId})`,
-          ne(knowledgeEntries.freshness, "archived"),
-        ),
-      )
-      .orderBy(desc(knowledgeEntries.eventTime))
-      .limit(limit);
-  }
-
   /**
    * Task-scoped knowledge injection (kl-t2, investigation Q3/Q5). Replaces the
    * unscoped `recentFindings(limit)` — every one of Run 10's 29 tasks got the

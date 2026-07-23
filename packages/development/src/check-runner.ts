@@ -90,7 +90,6 @@ function truncateOutput(output: string): string {
 
 export interface DeterministicOutcome {
   readonly tier: CoreTierResult;
-  readonly markersFound: string[];
   readonly checksSkipped: Array<{ name: string; reason: string }>;
 }
 
@@ -98,6 +97,7 @@ export async function runDeterministicChecks(
   run: CommandRunner,
   workDir: string,
   customChecks: string[],
+  skippedChecks: Array<{ name: string; reason: string }> = [],
 ): Promise<DeterministicOutcome> {
   const results: CoreCheckResult[] = [];
   let allPassed = true;
@@ -119,7 +119,6 @@ export async function runDeterministicChecks(
         : `${failCount}/${results.length} checks failed`,
       checks: results,
     },
-    markersFound: [],
-    checksSkipped: [],
+    checksSkipped: skippedChecks,
   };
 }

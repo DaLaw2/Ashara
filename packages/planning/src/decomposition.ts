@@ -15,8 +15,6 @@ import type {
 } from "./decomposition-types.js";
 import {
     DEFAULT_DECOMPOSITION_CONFIG,
-    StoryOutputSchema,
-    FeatureOutputSchema,
     TaskOutputSchema,
     UnresolvableDependencyError,
 } from "./decomposition-types.js";
@@ -70,21 +68,6 @@ export class DecompositionEngine {
             return this.emptyResult(input);
         }
         return this.decomposeInternal(input);
-    }
-
-    async decomposeProgressive(
-        input: DecompositionInput,
-        priorResults: PriorEpicResult[],
-    ): Promise<DecompositionResult> {
-        if (!this.llm) {
-            console.warn("[DecompositionEngine] No LLM configured — skipping decomposition");
-            return this.emptyResult(input);
-        }
-        const enrichedInput: DecompositionInput = {
-            ...input,
-            priorEpicResults: [...(input.priorEpicResults ?? []), ...priorResults],
-        };
-        return this.decomposeInternal(enrichedInput);
     }
 
     private get requiredLlm(): DecompositionLLM {
@@ -188,66 +171,15 @@ export class DecompositionEngine {
             dependsOn: [],
         };
 
-        const allStories: WorkItemSpec[] = [];
-        const allFeatures: WorkItemSpec[] = [];
         const allTasks: Array<WorkItemSpec & { taskSpec: TaskSpec }> = [];
         const dependencyEdges: Array<{ from: string; to: string }> = [];
 
-        if (maxDepth <= 2) {
-            const tasks = await this.decomposeEpicIntoTasks(epic, input);
-            for (const task of this.capItems(tasks, maxTotalItems, 1)) {
-                const taskSpec = this.generateTaskSpec(task, input);
-                allTasks.push({ ...task, taskSpec });
-                for (const dep of task.dependsOn) {
-                    dependencyEdges.push({ from: task.id, to: dep });
-                }
-            }
-        } else if (maxDepth === 3) {
-            const stories = await this.decomposeEpicIntoStories(input, epicId);
-            allStories.push(...stories);
-
-            const existingItems: ExistingWorkItemSummary[] = allStories.map((s) => ({
-                id: s.id,
-                title: s.title,
-                level: s.level,
-                status: "Pending",
-            }));
-
-            for (const story of stories) {
-                const tasks = await this.decomposeStoryIntoTasks(story, input, existingItems);
-                for (const task of this.capItems(tasks, maxTotalItems, 1 + allStories.length + allTasks.length)) {
-                    const taskSpec = this.generateTaskSpec(task, input);
-                    allTasks.push({ ...task, taskSpec });
-                    existingItems.push({ id: task.id, title: task.title, level: task.level, status: "Pending" });
-                    for (const dep of task.dependsOn) {
-                        dependencyEdges.push({ from: task.id, to: dep });
-                    }
-                }
-            }
-        } else {
-            const stories = await this.decomposeEpicIntoStories(input, epicId);
-            allStories.push(...stories);
-
-            for (const story of stories) {
-                const features = await this.decomposeStoryIntoFeatures(story, input);
-
-                for (const feature of features) {
-                    allFeatures.push(feature);
-                    const tasks = await this.decomposeFeatureIntoTasks(feature, input);
-
-                    const cappedTasks = this.capItems(
-                        tasks,
-                        maxTotalItems,
-                        1 + allStories.length + allFeatures.length + allTasks.length,
-                    );
-                    for (const task of cappedTasks) {
-                        const taskSpec = this.generateTaskSpec(task, input);
-                        allTasks.push({ ...task, taskSpec });
-                        for (const dep of task.dependsOn) {
-                            dependencyEdges.push({ from: task.id, to: dep });
-                        }
-                    }
-                }
+        const tasks = await this.decomposeEpicIntoTasks(epic, input);
+        for (const task of this.capItems(tasks, maxTotalItems, 1)) {
+            const taskSpec = this.generateTaskSpec(task, input);
+            allTasks.push({ ...task, taskSpec });
+            for (const dep of task.dependsOn) {
+                dependencyEdges.push({ from: task.id, to: dep });
             }
         }
 
@@ -257,8 +189,8 @@ export class DecompositionEngine {
 
         return {
             epic,
-            stories: allStories,
-            features: allFeatures,
+            stories: [],
+            features: [],
             tasks: allTasks,
             dependencyEdges,
         };
@@ -491,92 +423,6 @@ export class DecompositionEngine {
             (value) => this.validateTaskRefs(value.tasks, this.config.maxTasksPerStory, story.id),
         );
         return this.resolveTasks(parsed.tasks, this.config.maxTasksPerStory, story.id);
-    }
-
-    private async decomposeEpicIntoStories(
-        input: DecompositionInput,
-        epicId: string,
-    ): Promise<WorkItemSpec[]> {
-        const priorContext = this.buildPriorContext(input.priorEpicResults);
-        const prompt = this.buildDecomposePrompt(
-            "decompose this epic into stories",
-            input.epicTitle,
-            input.epicDescription,
-            input.knowledge,
-            input.conventions,
-            priorContext,
-            [],
-            input.epicNorthStar,
-            input.manifestContext,
-        );
-
-        const parsed = await this.requiredLlm.generateStructured(prompt, StoryOutputSchema);
-        const stories = parsed.stories;
-
-        return stories.slice(0, this.config.maxStoriesPerEpic).map((s) => ({
-            id: generateId("story"),
-            level: "story" as const,
-            title: s.title,
-            description: s.description,
-            northStar: s.northStar,
-            successCriteria: s.successCriteria,
-            parentId: epicId,
-            dependsOn: [],
-        }));
-    }
-
-    private async decomposeStoryIntoFeatures(
-        story: WorkItemSpec,
-        input: DecompositionInput,
-    ): Promise<WorkItemSpec[]> {
-        const prompt = this.buildDecomposePrompt(
-            "decompose this story into features",
-            story.title,
-            story.description,
-            input.knowledge,
-            input.conventions,
-            undefined,
-            [],
-            undefined,
-            input.manifestContext,
-        );
-
-        const parsed = await this.requiredLlm.generateStructured(prompt, FeatureOutputSchema);
-        const features = parsed.features;
-
-        return features.slice(0, this.config.maxFeaturesPerStory).map((f) => ({
-            id: generateId("feature"),
-            level: "feature" as const,
-            title: f.title,
-            description: f.description,
-            successCriteria: f.successCriteria,
-            parentId: story.id,
-            dependsOn: [],
-        }));
-    }
-
-    private async decomposeFeatureIntoTasks(
-        feature: WorkItemSpec,
-        input: DecompositionInput,
-    ): Promise<WorkItemSpec[]> {
-        const prompt = this.buildDecomposePrompt(
-            "decompose this feature into tasks",
-            feature.title,
-            feature.description,
-            input.knowledge,
-            input.conventions,
-            undefined,
-            [],
-            undefined,
-            input.manifestContext,
-        );
-
-        const parsed = await this.requiredLlm.generateStructured(
-            prompt,
-            TaskOutputSchema,
-            (value) => this.validateTaskRefs(value.tasks, this.config.maxTasksPerFeature, feature.id),
-        );
-        return this.resolveTasks(parsed.tasks, this.config.maxTasksPerFeature, feature.id);
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {

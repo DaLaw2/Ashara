@@ -56,10 +56,6 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
       const rows = await db.findByStatus(status);
       return rows.map(rowToWorkItem);
     },
-    async findByLevelAndStatus(level, status) {
-      const rows = await db.findByLevelAndStatus(level, status);
-      return rows.map(rowToWorkItem);
-    },
     async save(item, expectedPreviousStatus) {
       await db.save(
         {

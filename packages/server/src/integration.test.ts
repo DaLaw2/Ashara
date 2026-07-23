@@ -16,7 +16,7 @@ import {
   CostRepository,
   withPlanningTransaction,
 } from "@ashara/db";
-import { CodebaseIndexer, initParser } from "@ashara/memory";
+import { initParser } from "@ashara/memory";
 import { createBulkPlanWithContract } from "@ashara/planning";
 
 import { bearerAuth } from "./middleware.js";
@@ -100,8 +100,6 @@ beforeAll(async () => {
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
   const configRepo = new ConfigRepository(db);
-  const costRepo = new CostRepository(db);
-  const indexer = new CodebaseIndexer();
   const runner = { wake: () => {} } as any;
 
   const deps: AppDeps = {
@@ -110,9 +108,7 @@ beforeAll(async () => {
     devSessionRepo,
     visionRepo,
     configRepo,
-    costRepo,
     runner,
-    indexer,
     createBulkPlan: makeCreateBulkPlan(db),
   };
 

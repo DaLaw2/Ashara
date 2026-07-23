@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import {
   ContractBodySchema,
@@ -93,15 +93,6 @@ export class ContractRepository implements ContractRepositoryPort {
       .from(projectContracts)
       .where(eq(projectContracts.projectId, projectId))
       .orderBy(desc(projectContracts.version))
-      .limit(1);
-    return row ? this.hydrate(row.projectId, row.version, row.contract) : null;
-  }
-
-  async getByVersion(projectId: ProjectId, version: number): Promise<ProjectContract | null> {
-    const [row] = await this.db
-      .select()
-      .from(projectContracts)
-      .where(and(eq(projectContracts.projectId, projectId), eq(projectContracts.version, version)))
       .limit(1);
     return row ? this.hydrate(row.projectId, row.version, row.contract) : null;
   }

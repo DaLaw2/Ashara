@@ -1,4 +1,4 @@
-import type { EndpointCoverageGap, AcceptanceVerdict, TerminationPlanExhausted } from "@ashara/planning";
+import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, TerminationPlanExhausted } from "@ashara/planning";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectContract } from "@ashara/shared";
 import {
@@ -10,6 +10,7 @@ import {
   buildDeterministicGaps,
   buildVisionGaps,
   buildAcceptanceVerdict,
+  createPendingWorkItem,
 } from "@ashara/planning";
 
 import type { CoreLoopDeps, TerminationOutcome } from "./types.js";
@@ -51,15 +52,16 @@ async function handlePlanExhausted(
   if (acceptance && acceptance.outcome === "rejected") {
     const maxGapAttempts = deps.config.maxGapAttempts ?? 2;
     if (deps.acceptanceAttempts < maxGapAttempts) {
+      await createGapTasks(deps, acceptance.gaps);
       return { decision: { decision: "continue", counts: decision.counts }, summary: null };
     }
   }
 
-  const stopReason = acceptance?.outcome === "accepted"
-    ? "accepted" as const
-    : acceptance?.outcome === "accepted-with-caveats"
-      ? "accepted-with-caveats" as const
-      : "accepted" as const;
+  const stopReason = acceptance === null
+    ? "accepted-with-caveats" as const
+    : acceptance.outcome === "accepted"
+      ? "accepted" as const
+      : "accepted-with-caveats" as const;
 
   const stopDecision = {
     decision: "stop" as const,
@@ -121,6 +123,42 @@ async function runAcceptanceCheck(
   } catch (e) {
     console.warn("Acceptance check failed — skipping (fail-closed to completeness):", e);
     return null;
+  }
+}
+
+async function createGapTasks(
+  deps: CoreLoopDeps,
+  gaps: readonly AcceptanceGap[],
+): Promise<void> {
+  if (gaps.length === 0) return;
+
+  const allItems = await deps.workItemRepo.listAll();
+  const root = allItems.find((i) => i.parentId === undefined);
+  if (!root) return;
+
+  const existingTitles = new Set(
+    allItems
+      .filter((i) => i.status === "Pending" || i.status === "InProgress")
+      .map((i) => i.title.toLowerCase()),
+  );
+
+  for (const gap of gaps) {
+    const title = `[acceptance] ${gap.expected}`;
+    if (existingTitles.has(title.toLowerCase())) continue;
+
+    const taskSpec: Record<string, unknown> = {
+      goal: gap.expected,
+      endState: gap.expected,
+      checks: [],
+      deliverables: [],
+      origin: "acceptance-gap",
+    };
+    if (gap.lesson) taskSpec.lesson = gap.lesson;
+    if (gap.suggestedApproach) taskSpec.suggestedApproach = gap.suggestedApproach;
+    if (gap.supersedes) taskSpec.supersedes = gap.supersedes;
+
+    const item = createPendingWorkItem("Task", title, root.id, gap.observed, taskSpec);
+    await deps.workItemRepo.create(item);
   }
 }
 

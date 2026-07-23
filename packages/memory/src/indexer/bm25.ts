@@ -101,14 +101,6 @@ export class Bm25Index {
         return results;
     }
 
-    documentCount(): number {
-        return this.documents.length;
-    }
-
-    termCount(): number {
-        return this.inverted.size;
-    }
-
     private recomputeAvgDocLen(): void {
         if (this.documents.length === 0) {
             this.avgDocLen = 0;

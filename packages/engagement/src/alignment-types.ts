@@ -67,13 +67,6 @@ export interface AlignmentConfig {
 
 export interface ParsedVision {
   readonly raw: string;
-  readonly signals: VisionSignal[];
-}
-
-export interface VisionSignal {
-  readonly category: DirectionCategory;
-  readonly keyword: string;
-  readonly inference: string;
 }
 
 // ---------------------------------------------------------------------------

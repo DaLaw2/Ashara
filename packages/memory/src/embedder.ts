@@ -39,11 +39,6 @@ class VoyageEmbedder implements Embedder {
         return results;
     }
 
-    async embedSingle(text: string): Promise<number[]> {
-        const results = await this.embed([text]);
-        return results[0];
-    }
-
     private async callApi(texts: string[]): Promise<number[][]> {
         const response = await fetchWithTimeout("https://api.voyageai.com/v1/embeddings", {
             method: "POST",
@@ -94,11 +89,6 @@ class LocalEmbedder implements Embedder {
             results.push(...batchResults);
         }
         return results;
-    }
-
-    async embedSingle(text: string): Promise<number[]> {
-        const results = await this.embed([text]);
-        return results[0];
     }
 
     private async callApi(texts: string[]): Promise<number[][]> {

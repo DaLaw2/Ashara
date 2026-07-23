@@ -47,10 +47,16 @@ export function loadServerConfig(): ServerConfig {
   // per-run number reaches CoreLoopConfig.budgetLimitUsd, with the dedicated
   // ASHARA_BUDGET_LIMIT_USD still winning when both are set. Blank values are
   // treated as unset so an empty override never masks the fallback.
-  const budgetLimitUsd = parseFloatOr(
-    nonEmptyEnv("ASHARA_BUDGET_LIMIT_USD") ?? nonEmptyEnv("ASHARA_BUDGET_TOTAL"),
-    5.0,
-  );
+  const rawBudgetLimit = nonEmptyEnv("ASHARA_BUDGET_LIMIT_USD") ?? nonEmptyEnv("ASHARA_BUDGET_TOTAL");
+  if (rawBudgetLimit !== undefined) {
+    const parsed = parseFloat(rawBudgetLimit);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      console.warn(
+        `ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL="${rawBudgetLimit}" is not a valid positive number — falling back to default`,
+      );
+    }
+  }
+  const budgetLimitUsd = parseFloatOr(rawBudgetLimit, 5.0);
 
   const brainstormCooldownThreshold = parseIntOr(
     process.env["BRAINSTORM_COOLDOWN_THRESHOLD"],

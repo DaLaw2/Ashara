@@ -1,4 +1,4 @@
-import type { ContractDelta, ContractInput, ProjectId, WorkItemId, ProjectKnowledge } from "@ashara/shared";
+import type { ContractDelta, ContractInput, WorkItemId, ProjectKnowledge } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository, ContractRepository } from "./domain/index.js";
 import {
@@ -14,10 +14,8 @@ import type { DecompositionEngine } from "./decomposition.js";
 import {
   deriveContractFragment,
   toContractDelta,
-  deriveEndpointFeatureKey,
 } from "./contract-derivation.js";
 import { amendContractWithRetry } from "./contract-retry.js";
-import { deriveSpecEndpoints, type SpecDerivationLLM, type SpecVisionInput } from "./spec-derivation.js";
 
 export interface StoryDecomposerDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -38,17 +36,6 @@ export interface StoryDecomposerDeps {
   readonly withPlanningTransaction?: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
-  /**
-   * The INDEPENDENT spec-derivation pass (ADR-032 §2, mig9-t1). When wired, the
-   * project's vision text is derived into required endpoints ONCE per project and
-   * folded into the contract before decomposition's own per-story fragments,
-   * closing the Run-9 register-gap (an endpoint no task ever planned). Optional and
-   * gateway-parameterised: absent (stub mode / no gateway) it is skipped exactly
-   * like the shadow contract write — derivation is only REQUIRED where a real
-   * gateway is configured, and its only fail-closed exit is ladder exhaustion,
-   * which BLOCKS the planning step rather than seeding an empty declaration set.
-   */
-  readonly specDerivationLlm?: SpecDerivationLLM | null;
 }
 
 interface PlanningTxRepos {
@@ -110,91 +97,6 @@ async function writeOrAmendContract(
   await amendContractWithRetry(contractRepo, projectId, delta);
 }
 
-/**
- * Runs the INDEPENDENT vision-derived endpoint pass ONCE per project (ADR-032
- * §2, mig9-t1) and folds the result into the ProjectContract via the SAME
- * seed-once-then-amend protocol decomposition uses. The vision text is the
- * project root's OWN intent (title/description/north-star), NOT the task list —
- * so this pass can name an endpoint the plan omitted (the Run-9 register-gap).
- *
- * Idempotency: the guard is the honest `spec-derivation` provenance already in
- * the contract — once any spec-derived endpoint is recorded, the pass is skipped
- * and no LLM call is made. A vision whose derivation collides with every
- * explicit endpoint (or an endpoint-less vision) leaves no such marker and MAY
- * re-derive on a later cycle; that is harmless (the amend dedups by ref) and
- * self-limiting (the pass only attempts while leaf stories still need
- * decomposition — it never fires once the plan is fully expanded).
- *
- * Fail-closed: `deriveSpecEndpoints` raises a typed `SpecDerivationError` on
- * ladder exhaustion. This runs BEFORE the per-story loop's own try/catch, so
- * that error propagates out of `decomposeLeafStories` and BLOCKS the planning
- * step (Discipline A) — it is never downgraded to an empty endpoint set. The
- * LLM call itself is made OUTSIDE any DB transaction; only the short seed/amend
- * write holds one.
- */
-async function deriveProjectContractFromVision(
-  deps: StoryDecomposerDeps,
-  story: WorkItem,
-  knowledge: ProjectKnowledge,
-  specLlm: SpecDerivationLLM,
-): Promise<void> {
-  const rootId = story.parentId ?? story.id;
-  const projectId = parseProjectId(rootId);
-
-  const pre = await runPlanningTransaction(deps, async ({ contractRepo, workItemRepo }) => {
-    if (!contractRepo) return { proceed: false as const };
-    const existing = await contractRepo.getLatest(projectId);
-    if (existing && existing.endpoints.some((e) => e.source === "spec-derivation")) {
-      return { proceed: false as const }; // already derived — idempotent guard
-    }
-    const root = await PlanningService.findWorkItem(workItemRepo, rootId);
-    const vision: SpecVisionInput = root
-      ? { title: root.title, description: root.description ?? "", northStar: root.northStar ?? undefined }
-      : { title: story.title, description: story.description ?? "", northStar: story.northStar ?? undefined };
-    if (`${vision.title} ${vision.description}`.trim().length === 0) {
-      return { proceed: false as const };
-    }
-    // Feature identities decomposition already planned. A spec-derived endpoint
-    // whose FEATURE key matches one of these is the SAME feature under a different
-    // path namespace (Run-11 schism: /api/auth/login re-declaring /api/login), so it
-    // is dropped before it can enter the contract as a duplicate.
-    const existingFeatureKeys = existing
-      ? new Set(existing.endpoints.map((e) => deriveEndpointFeatureKey(e.method, e.path)))
-      : new Set<string>();
-    return { proceed: true as const, hasContract: existing !== null, vision, existingFeatureKeys };
-  });
-  if (!pre.proceed) return;
-
-  const derived = await deriveSpecEndpoints(specLlm, pre.vision);
-  // Collapse the dual-namespace schism by feature identity (criterion 1): keep only
-  // spec-derived endpoints that do NOT restate a feature decomposition already
-  // planned. Decomposition's namespace is canonical (it owns the tasks).
-  const endpoints = derived.filter(
-    (e) => !pre.existingFeatureKeys.has(deriveEndpointFeatureKey(e.method, e.path)),
-  );
-  if (endpoints.length === 0) return; // endpoint-less vision or fully-covered by the plan
-
-  await runPlanningTransaction(deps, async ({ contractRepo }) => {
-    if (!contractRepo) return;
-    if (!pre.hasContract) {
-      const body: ContractInput = {
-        knowledge,
-        endpoints,
-        modules: [],
-        mounts: [],
-      };
-      try {
-        await PlanningService.writeContract(contractRepo, projectId, body);
-        return;
-      } catch (e) {
-        if (!(e instanceof ContractAlreadyExists)) throw e;
-      }
-    }
-    await amendContractWithRetry(contractRepo, projectId, { endpoints });
-  });
-}
-
-
 export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<number> {
   const stories = await PlanningService.findStoriesNeedingDecomposition(deps.workItemRepo);
   if (stories.length === 0) return 0;
@@ -224,23 +126,6 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
         manifestContext,
       );
       projectKnowledge.set(projectKey, knowledge ?? emptyKnowledge);
-    }
-  }
-
-  // INDEPENDENT spec derivation (ADR-032 §2, mig9-t1) runs ONCE per project
-  // BEFORE any story is decomposed, so the vision-derived endpoints seed the
-  // contract first and decomposition's own fragments amend onto them (explicit
-  // task declarations win by ref identity). Placed OUTSIDE the per-story
-  // try/catch below so a ladder-exhaustion SpecDerivationError blocks the whole
-  // planning step (fail-closed) rather than being swallowed per story.
-  if (deps.specDerivationLlm) {
-    const derivedProjects = new Set<string>();
-    for (const story of stories) {
-      const projectKey = story.parentId ?? story.id;
-      if (derivedProjects.has(projectKey)) continue;
-      derivedProjects.add(projectKey);
-      const knowledge = projectKnowledge.get(projectKey) ?? emptyKnowledge;
-      await deriveProjectContractFromVision(deps, story, knowledge, deps.specDerivationLlm);
     }
   }
 

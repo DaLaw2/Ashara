@@ -25,9 +25,6 @@ export {
 export type {
   AgentBrief,
   TaskSpec,
-  TaskContext,
-  DispatchRequest,
-  DispatchResponse,
   CheckResult,
   TierResult,
   VerifyRequest,

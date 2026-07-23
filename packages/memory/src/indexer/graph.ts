@@ -103,26 +103,8 @@ export class SymbolGraph {
         return set ? [...set] : [];
     }
 
-    getDependencies(id: SymbolId): SymbolDef[] {
-        const key = symbolIdKey(id);
-        return this.neighbors(key, "outgoing")
-            .map((k) => this.nodes.get(k))
-            .filter((s): s is SymbolDef => s !== undefined);
-    }
-
-    getDependents(id: SymbolId): SymbolDef[] {
-        const key = symbolIdKey(id);
-        return this.neighbors(key, "incoming")
-            .map((k) => this.nodes.get(k))
-            .filter((s): s is SymbolDef => s !== undefined);
-    }
-
     allSymbols(): SymbolDef[] {
         return [...this.nodes.values()];
-    }
-
-    allKeys(): string[] {
-        return [...this.nodes.keys()];
     }
 
     findSymbolsByName(name: string): string[] {
@@ -139,10 +121,6 @@ export class SymbolGraph {
             count += set.size;
         }
         return count;
-    }
-
-    outDegree(key: string): number {
-        return this.edges.get(key)?.size ?? 0;
     }
 
     clear(): void {

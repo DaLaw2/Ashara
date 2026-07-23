@@ -182,8 +182,11 @@ export async function runVerifyCore(
   }
 
   const executableChecks = input.checks.filter(isAllowedCheck);
+  const skippedChecks = input.checks
+    .filter((c) => !isAllowedCheck(c))
+    .map((c) => ({ name: c, reason: "not in allowlist" }));
 
-  const deterministicOutcome = await runDeterministicChecks(run, input.workDir, executableChecks);
+  const deterministicOutcome = await runDeterministicChecks(run, input.workDir, executableChecks, skippedChecks);
   const deterministic = deterministicOutcome.tier;
 
   log?.({
@@ -191,7 +194,6 @@ export async function runVerifyCore(
     status: deterministic.status,
     details: deterministic.details,
     checks: deterministic.checks ?? [],
-    markersFound: deterministicOutcome.markersFound,
     checksSkipped: deterministicOutcome.checksSkipped,
   });
 

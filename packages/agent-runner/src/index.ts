@@ -25,12 +25,7 @@ export type {
     ToolResult,
     ToolExecutor,
     RegisteredTool,
-    AnthropicTool,
-    OpenAITool,
-    ToolProvider,
 } from "./tools/types.js";
-
-export { toAnthropicTool, toOpenAITool, toProviderTools } from "./tools/types.js";
 
 export { AgentConversation } from "./conversation.js";
 export type {

@@ -90,7 +90,6 @@ export interface DecompositionConfig {
      * classification (see DecompositionEngine.decomposeInternal).
      */
     readonly maxDepth: number;
-    readonly model: string;
 }
 
 export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
@@ -101,25 +100,7 @@ export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
     maxTasksPerStory: 4,
     maxTotalItems: 0,
     maxDepth: 2,
-    model: "default",
 };
-
-export const StoryOutputSchema = z.object({
-    stories: z.array(z.object({
-        title: z.string(),
-        description: z.string(),
-        northStar: z.string().optional(),
-        successCriteria: z.array(z.string()).default([]),
-    })).min(1),
-});
-
-export const FeatureOutputSchema = z.object({
-    features: z.array(z.object({
-        title: z.string(),
-        description: z.string(),
-        successCriteria: z.array(z.string()).default([]),
-    })).min(1),
-});
 
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({

@@ -9,9 +9,9 @@ import type {
 } from "@ashara/db";
 import type { WorkItemRepository, ContractRepository } from "@ashara/planning";
 import type { BrainstormEngine, NorthStarChecker, DecompositionEngine } from "@ashara/planning";
-import type { ProposalEmbedder, SpecDerivationLLM } from "@ashara/planning";
+import type { ProposalEmbedder } from "@ashara/planning";
 import type { AcceptanceLLM } from "@ashara/planning";
-import type { Router, FailureRouter } from "@ashara/planning";
+import type { FailureRouter } from "@ashara/planning";
 import type { DevelopmentService } from "@ashara/development";
 import type { ProductObservation } from "@ashara/shared";
 
@@ -161,7 +161,6 @@ export interface CoreLoopDeps {
   readonly developmentService: DevelopmentService;
   readonly embedder?: ProposalEmbedder | null;
   readonly eventLogger?: EventLogger;
-  readonly router?: Router;
   readonly failureRouter: FailureRouter;
   /**
    * Shares one DB transaction between decomposeLeafStories' work-item creation
@@ -172,12 +171,6 @@ export interface CoreLoopDeps {
   readonly withPlanningTransaction?: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
-  /**
-   * The INDEPENDENT vision-derived endpoint pass (ADR-032 §2, mig9-t1). Wired by
-   * the composition root when a real gateway is present; absent (stub mode) the
-   * derivation is skipped exactly like the shadow contract write.
-   */
-  readonly specDerivationLlm?: SpecDerivationLLM | null;
   /**
    * Resolves a failed item's ProjectContract so the FailureRouter can substitute
    * by the module/endpoint registry, not just by title (mig9-t4). Optional — the

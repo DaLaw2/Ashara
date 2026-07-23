@@ -25,42 +25,11 @@ import type { ProjectId } from "./ids.js";
  */
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
-const MOUNT_KINDS = ["http", "cli", "lib"] as const;
 
-/**
- * How an endpoint entered the contract (honest provenance, ADR-032 §2). An
- * endpoint is either recognized from the decomposition plan (`decomposition` —
- * a task/story's own text named it) or contributed by the INDEPENDENT spec
- * derivation pass that reads the vision directly (`spec-derivation`, mig9-t1),
- * so no single LLM pass is both the author and the auditor of the endpoint set.
- * Optional and never auto-filled on merge: it records who FIRST declared the
- * endpoint, so an idempotent restatement from the other source cannot relabel
- * it (a task-declared endpoint stays attributed to its task).
- */
 const ENDPOINT_SOURCES = ["decomposition", "spec-derivation"] as const;
 
 export const HttpMethodSchema = z.enum(HTTP_METHODS);
-const MountKindSchema = z.enum(MOUNT_KINDS);
 const EndpointSourceSchema = z.enum(ENDPOINT_SOURCES);
-
-/** Facts about the stack, not prose — consumed by briefs and the smoke boot. */
-const TechStackSchema = z
-  .object({
-    language: z.string().min(1),
-    runtime: z.string().min(1),
-    framework: z.string().min(1).optional(),
-    packageManager: z.string().min(1).optional(),
-    testCommand: z.string().min(1).optional(),
-  })
-  .strict();
-
-/** Where the app is entered and how it is mounted (http server / cli / library). */
-const EntryPointSchema = z
-  .object({
-    path: z.string().min(1),
-    mountKind: MountKindSchema,
-  })
-  .strict();
 
 /**
  * A declared HTTP endpoint. `ref` is the stable logical identity (conflict key);

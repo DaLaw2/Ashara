@@ -19,15 +19,13 @@ describe("parseVision", () => {
   const llm = new StubAlignmentLLM();
   const engine = new AlignmentEngine(llm);
 
-  test("always returns empty signals (all inference goes to LLM)", () => {
+  test("returns raw text unchanged", () => {
     const parsed = engine.parseVision("Build a web app for task management");
-    expect(parsed.signals).toHaveLength(0);
     expect(parsed.raw).toBe("Build a web app for task management");
   });
 
-  test("returns empty signals for unrecognized vision", () => {
+  test("returns raw text for unrecognized vision", () => {
     const parsed = engine.parseVision("Make something cool");
-    expect(parsed.signals).toHaveLength(0);
     expect(parsed.raw).toBe("Make something cool");
   });
 });

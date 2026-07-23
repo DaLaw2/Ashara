@@ -6,7 +6,6 @@ export interface WorkItemRepository {
   create(item: WorkItem): Promise<WorkItem>;
   findById(id: WorkItemId): Promise<WorkItem | null>;
   findByStatus(status: WorkItemStatus): Promise<WorkItem[]>;
-  findByLevelAndStatus(level: WorkItemLevel, status: WorkItemStatus): Promise<WorkItem[]>;
   /**
    * Persists a status/metadata change. `expectedPreviousStatus` is the pre-image
    * the caller believes the row currently holds (typically the status the item was

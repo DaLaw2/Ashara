@@ -20,7 +20,6 @@ export {
   PlanningError,
   InvalidStatusTransition,
   WorkItemNotFound,
-  InvalidLevel,
   CycleDetected,
   RepositoryError,
   ContractConflict,

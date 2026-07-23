@@ -95,13 +95,6 @@ describe("Integration Test (stub path)", () => {
         expect(step!.detail).toContain("Backward rejection: verified");
     });
 
-    test("NorthStar and routing produces decisions", () => {
-        const step = result.steps.find((s) => s.step === "NorthStar and Route");
-        expect(step).toBeDefined();
-        expect(step!.passed).toBe(true);
-        expect(step!.detail).toContain("cascade_close");
-    });
-
     test("LLM verification is skipped in stub mode", () => {
         const step = result.steps.find((s) => s.step === "LLM Verification");
         expect(step).toBeDefined();

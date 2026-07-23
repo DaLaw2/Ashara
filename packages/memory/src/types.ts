@@ -9,7 +9,6 @@ export interface EmbedderConfig {
 
 export interface Embedder {
     embed(texts: string[]): Promise<number[][]>;
-    embedSingle(text: string): Promise<number[]>;
 }
 
 export type EmbeddingErrorKind = "ProviderError" | "RateLimitError" | "InvalidInputError";

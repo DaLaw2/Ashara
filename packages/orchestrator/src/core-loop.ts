@@ -53,7 +53,6 @@ export class CoreLoop {
         detectTechStack,
         readManifestContext,
         withPlanningTransaction: deps.withPlanningTransaction,
-        specDerivationLlm: deps.specDerivationLlm,
       });
       if (decomposed > 0) {
         console.log(`Decomposed ${decomposed} leaf stories into tasks`);

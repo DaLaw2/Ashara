@@ -35,19 +35,17 @@ import {
   NorthStarChecker,
   StubNorthStarLLM,
   DecompositionEngine,
-  Router,
   FailureRouter,
   createGatewayBrainstormLLM,
   createGatewayNorthStarLLM,
   createGatewayDecompositionLLM,
-  createGatewaySpecDerivationLLM,
   createGatewayAcceptanceLLM,
   createGatewayReplanLLM,
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
 } from "@ashara/planning";
-import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, SpecDerivationLLM, AcceptanceLLM, ReplanLLM } from "@ashara/planning";
+import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, AcceptanceLLM, ReplanLLM } from "@ashara/planning";
 import {
   buildDefaultProfile,
   createRetrievalFn,
@@ -220,7 +218,6 @@ async function main(): Promise<void> {
   let brainstormLlm: BrainstormLLM;
   let northstarLlm: NorthStarLLM;
   let decompositionLlm: DecompositionLLM | null = null;
-  let specDerivationLlm: SpecDerivationLLM | null = null;
   let acceptanceLlm: AcceptanceLLM | null = null;
   let replanLlm: ReplanLLM | null = null;
   if (llmGateway) {
@@ -244,17 +241,11 @@ async function main(): Promise<void> {
     // the feedback on retry, so a single malformed emission is corrected instead of
     // exploding the run (mig-run10, the Run-10 "task-0017" phantom-ref blocker).
     decompositionLlm = createGatewayDecompositionLLM(llmGateway, ladderAttemptSink);
-    // Spec derivation (ADR-032 §2, mig9-t1) gets its OWN ladder-wrapped provider
-    // with a distinct site so an exhaustion error is attributed to it, not to the
-    // shared "planning" site. It is the auditor half of the endpoint set — an
-    // INDEPENDENT vision read that recovers endpoints the plan omitted.
-    const specDerivationLadder = withStructuredLadder(llmGateway, { site: "spec-derivation", onAttempt: ladderAttemptSink });
-    specDerivationLlm = createGatewaySpecDerivationLLM(specDerivationLadder);
     const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
     acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
     const replanLadder = withStructuredLadder(llmGateway, { site: "replan", onAttempt: ladderAttemptSink });
     replanLlm = createGatewayReplanLLM(replanLadder);
-    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, spec-derivation, acceptance, replan)");
+    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, acceptance, replan)");
   } else {
     brainstormLlm = new StubBrainstormLLM();
     northstarLlm = new StubNorthStarLLM();
@@ -263,9 +254,6 @@ async function main(): Promise<void> {
   const brainstormEngine = new BrainstormEngine(brainstormLlm);
   const northstarChecker = new NorthStarChecker(northstarLlm);
   const decompositionEngine = new DecompositionEngine(decompositionLlm);
-  const planningRouter = new Router(northstarChecker, brainstormEngine);
-  // Bounded replan attempts before the router switches strategy (substitute) or
-  // abandons — see FailureRouter's rule ladder (migration Phase 6, ADR-029).
   const failureRouter = new FailureRouter(2);
 
   const projectProfile = buildDefaultProfile();
@@ -503,12 +491,10 @@ async function main(): Promise<void> {
     brainstormEngine,
     northstarChecker,
     decompositionEngine,
-    specDerivationLlm,
     contractRepo,
     developmentService,
     embedder: proposalEmbedder,
     eventLogger,
-    router: planningRouter,
     failureRouter,
     contractLookup,
     // Shares one DB transaction between decomposition's work-item creation and
@@ -546,9 +532,7 @@ async function main(): Promise<void> {
     devSessionRepo,
     visionRepo,
     configRepo,
-    costRepo,
     runner,
-    indexer,
     // Bulk plan creation writes the derived ProjectContract in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
     createBulkPlan: (items, edges) => createBulkPlanWithContract({ withPlanningTransaction: planningTransaction }, items, edges),
@@ -586,6 +570,7 @@ async function main(): Promise<void> {
       workItemRepo,
       eventStore,
       failureRouter,
+      workdirBase: config.coreLoop.workdirBase,
     });
   } catch (e) {
     console.warn("Startup reconciliation failed; starting runner anyway:", e);

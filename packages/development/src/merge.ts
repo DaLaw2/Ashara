@@ -73,6 +73,21 @@ export async function syncToTaskBranch(
         "-c",
         `git -C "${workDir}" archive HEAD | tar -x -C "${targetProjectPath}"`,
       ]);
+
+      const [agentFiles, targetFiles] = await Promise.all([
+        execFileAsync("git", ["-C", workDir, "ls-tree", "-r", "--name-only", "HEAD"]).then(
+          ({ stdout }) => new Set(stdout.trim().split("\n").filter(Boolean)),
+        ),
+        execFileAsync("git", ["-C", targetProjectPath, "ls-files"]).then(({ stdout }) =>
+          new Set(stdout.trim().split("\n").filter(Boolean)),
+        ),
+      ]);
+
+      for (const file of targetFiles) {
+        if (!agentFiles.has(file)) {
+          await execFileAsync("git", ["-C", targetProjectPath, "rm", "-f", file]);
+        }
+      }
     }
 
     await execFileAsync("git", ["add", "-A"], { cwd: targetProjectPath });

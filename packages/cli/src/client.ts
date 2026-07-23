@@ -37,15 +37,6 @@ export type SessionPhase =
     | "Completed"
     | "Failed";
 
-export interface CreateWorkItemRequest {
-    readonly level: WorkItemLevel;
-    readonly title: string;
-    readonly description?: string;
-    readonly parentId?: string;
-    readonly taskSpec?: unknown;
-    readonly northStar?: string;
-}
-
 /** One node in a bulk hierarchy create. `tempId` is batch-local; `parentId` references another item's `tempId`. */
 export interface BulkWorkItem {
     readonly tempId: string;
@@ -75,10 +66,6 @@ export interface WorkItem {
     readonly blockedReason?: unknown;
     readonly createdAt: string;
     readonly updatedAt: string;
-}
-
-export interface CycleResult {
-    readonly message: string;
 }
 
 export interface SessionBrief {
@@ -132,10 +119,6 @@ const WorkItemSchema = z.object({
     updatedAt: z.string(),
 });
 
-const CycleResultSchema = z.object({
-    message: z.string(),
-});
-
 const BulkCreateResponseSchema = z.object({
     tempIdToId: z.record(z.string(), z.string()),
     created: z.number(),
@@ -180,18 +163,6 @@ export class AsharaClient {
         return { Authorization: `Bearer ${this.apiToken}` };
     }
 
-    async createWorkItem(item: CreateWorkItemRequest): Promise<string> {
-        const response = await this.post("/work-items", item);
-        const created = WorkItemSchema.parse(await this.parseJson(response));
-        return created.id;
-    }
-
-    /**
-     * Creates an entire plan hierarchy (items + dependency edges) in ONE
-     * transactional server call (ADR-029). Returns the tempId -> real-id map so
-     * callers can correlate. Replaces the former sequential, non-atomic flow of
-     * per-item POST /work-items followed by per-edge POST /dependencies.
-     */
     async createWorkItemsBulk(req: BulkCreateRequest): Promise<Record<string, string>> {
         const response = await this.post("/work-items/bulk", req);
         const parsed = BulkCreateResponseSchema.parse(await this.parseJson(response));
@@ -203,16 +174,6 @@ export class AsharaClient {
         return z.array(WorkItemSchema).parse(await this.parseJson(response));
     }
 
-    async getWorkItem(id: string): Promise<WorkItem> {
-        const response = await this.get(`/work-items/${id}`);
-        return WorkItemSchema.parse(await this.parseJson(response));
-    }
-
-    async triggerCycle(): Promise<CycleResult> {
-        const response = await this.post("/cycle", undefined);
-        return CycleResultSchema.parse(await this.parseJson(response));
-    }
-
     async listSessions(): Promise<SessionInfo[]> {
         const response = await this.get("/sessions");
         return z.array(SessionInfoSchema).parse(await this.parseJson(response));
@@ -220,20 +181,6 @@ export class AsharaClient {
 
     async createVision(req: CreateVisionRequest): Promise<void> {
         await this.post("/vision", req);
-    }
-
-    async addDependency(fromId: string, toId: string): Promise<void> {
-        await this.post("/dependencies", { fromId, toId });
-    }
-
-    async health(): Promise<boolean> {
-        try {
-            const response = await this.get("/health");
-            return response.ok;
-        } catch {
-            // expected: health check failure means server is down
-            return false;
-        }
     }
 
     // -- internal helpers --

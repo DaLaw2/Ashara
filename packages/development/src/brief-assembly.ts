@@ -35,12 +35,10 @@ export interface ProjectProfile {
 export interface Brief {
     // Fixed prefix (cacheable)
     readonly systemPrompt: string;
-    readonly toolDefinitions: string[];
     readonly projectProfile: ProjectProfile;
 
     // Dynamic suffix (varies per task)
     readonly contextMap: string;
-    readonly repoMap: string;
     readonly codeContext: string;
     readonly knowledgeContext: string;
     readonly taskSpec: string;
@@ -187,8 +185,6 @@ export function assembleBrief(
     projectProfile: ProjectProfile,
     config: Partial<BriefConfig> = {},
     contextMap: string = "",
-    repoMap: string = "",
-    toolDefinitions: string[] = [],
     knowledgeContext: string = "",
 ): Brief {
     const contextWindowTokens = config.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW;
@@ -198,11 +194,9 @@ export function assembleBrief(
     // 1. Build fixed prefix
     const systemPrompt = formatSystemPrompt();
     const profileText = formatProjectProfile(projectProfile);
-    const toolsText = toolDefinitions.join("\n\n");
 
     const prefixTokens =
         estimateTokens(systemPrompt) +
-        estimateTokens(toolsText) +
         estimateTokens(profileText);
 
     // 2. Calculate remaining budget for dynamic suffix
@@ -212,11 +206,9 @@ export function assembleBrief(
     const formattedTaskSpec = formatTaskSpec(taskSpec);
     const taskSpecTokens = estimateTokens(formattedTaskSpec);
     const contextMapTokens = estimateTokens(contextMap);
-    const repoMapTokens = estimateTokens(repoMap);
     const knowledgeTokens = estimateTokens(knowledgeContext);
 
-    // Task spec, context map, repo map, and knowledge are non-negotiable
-    const fixedDynamicTokens = taskSpecTokens + contextMapTokens + repoMapTokens + knowledgeTokens;
+    const fixedDynamicTokens = taskSpecTokens + contextMapTokens + knowledgeTokens;
     const codeContextBudget = Math.max(0, dynamicBudget - fixedDynamicTokens);
 
     // 4. Prune code context to fit remaining budget
@@ -230,16 +222,14 @@ export function assembleBrief(
     const codeContextTokens = estimateTokens(codeContextText);
 
     // 5. Compute final token counts
-    const suffixTokens = contextMapTokens + repoMapTokens + codeContextTokens + knowledgeTokens + taskSpecTokens;
+    const suffixTokens = contextMapTokens + codeContextTokens + knowledgeTokens + taskSpecTokens;
     const totalTokens = prefixTokens + suffixTokens;
     const utilization = contextWindowTokens > 0 ? totalTokens / contextWindowTokens : 0;
 
     return {
         systemPrompt,
-        toolDefinitions,
         projectProfile,
         contextMap,
-        repoMap,
         codeContext: codeContextText,
         knowledgeContext,
         taskSpec: formattedTaskSpec,
@@ -340,8 +330,6 @@ export async function buildBriefWithRetry(
     retrieveFn: (query: string, mentionedSymbols?: string[]) => Promise<RetrievalResult[]>,
     config: Partial<BriefConfig> = {},
     contextMap: string = "",
-    repoMap: string = "",
-    toolDefinitions: string[] = [],
     knowledgeContext: string = "",
 ): Promise<{ brief: Brief; qualityGate: QualityGateResult }> {
     const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -367,8 +355,6 @@ export async function buildBriefWithRetry(
             projectProfile,
             config,
             contextMap,
-            repoMap,
-            toolDefinitions,
             knowledgeContext,
         );
 

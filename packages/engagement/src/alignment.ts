@@ -209,17 +209,6 @@ export const DEFAULT_DIRECTION_ASSUMPTIONS: Record<DirectionCategory, string> = 
   priorities: "Reliability / production-readiness",
 };
 
-/** Pulls the quoted vision text back out of a prompt built by `buildInferencePrompt`. */
-function extractVisionText(prompt: string): string {
-  const match = prompt.match(/^Vision: (.*)$/m);
-  if (!match) return prompt;
-  try {
-    return JSON.parse(match[1]) as string;
-  } catch {
-    return match[1];
-  }
-}
-
 /**
  * Test/stub double for `AlignmentLLM`. Deliberately conservative: it only
  * infers a couple of categories from a handful of keywords and never flags
@@ -314,7 +303,7 @@ export class AlignmentEngine {
   }
 
   parseVision(description: string): ParsedVision {
-    return { raw: description, signals: [] };
+    return { raw: description };
   }
 
   async inferDirections(parsed: ParsedVision): Promise<DirectionInferenceResult> {

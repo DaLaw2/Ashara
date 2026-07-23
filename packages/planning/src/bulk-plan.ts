@@ -5,8 +5,8 @@ import {
   PlanningService,
   createPendingWorkItem,
   ContractAlreadyExists,
-  ContractVersionConflict,
 } from "./domain/index.js";
+import { amendContractWithRetry } from "./contract-retry.js";
 
 import {
   deriveContractFragment,
@@ -33,8 +33,6 @@ import {
  * contract-write failure (or any DB failure) rolls the whole batch back — no
  * partial hierarchy, no work items without their contract.
  */
-
-const MAX_CONTRACT_RETRY_ATTEMPTS = 3;
 
 export interface BulkPlanItem {
   readonly tempId: string;
@@ -197,20 +195,3 @@ function derivationText(item: WorkItem): string {
   return parts.join(" ");
 }
 
-async function amendContractWithRetry(
-  contractRepo: ContractRepository,
-  projectId: ProjectId,
-  delta: ContractDelta,
-): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_CONTRACT_RETRY_ATTEMPTS; attempt++) {
-    try {
-      await PlanningService.amendContract(contractRepo, projectId, delta);
-      return;
-    } catch (e) {
-      lastError = e;
-      if (!(e instanceof ContractVersionConflict)) throw e;
-    }
-  }
-  throw lastError;
-}

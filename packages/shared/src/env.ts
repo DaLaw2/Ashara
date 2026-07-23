@@ -83,6 +83,15 @@ function parseProviderBudgets(env: NodeJS.ProcessEnv): Record<string, number> {
 }
 
 export function loadBudgetEnv(): BudgetEnv {
+    const rawTotal = process.env["ASHARA_BUDGET_TOTAL"];
+    if (rawTotal !== undefined) {
+        const parsed = parseFloat(rawTotal);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            console.warn(
+                `ASHARA_BUDGET_TOTAL="${rawTotal}" is not a valid positive number — falling back to default`,
+            );
+        }
+    }
     return {
         total: parseFloatOr(process.env["ASHARA_BUDGET_TOTAL"], 50),
         perProvider: parseProviderBudgets(process.env),

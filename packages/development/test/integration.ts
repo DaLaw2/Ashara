@@ -24,7 +24,6 @@ import {
     StubDecompositionLLM,
     NorthStarChecker,
     StubNorthStarLLM,
-    Router,
     resetIdCounter,
 } from "@ashara/planning";
 import type {
@@ -564,8 +563,6 @@ export async function runIntegrationTest(
             projectProfile,
             { contextWindowTokens: 128_000, targetUtilization: 0.7 },
             contextMapText,
-            "",
-            [],
             knowledgeContext,
         );
 
@@ -745,78 +742,7 @@ export async function runIntegrationTest(
         ].join(" | ");
     }));
 
-    // ---- Step 10: NorthStar + Route ----
-    steps.push(await runStep("NorthStar and Route", async () => {
-        const northStarLLM = new StubNorthStarLLM();
-        const brainstormLLM = new StubBrainstormLLM();
-
-        const checker = new NorthStarChecker(northStarLLM);
-        const brainstormEngine = new BrainstormEngine(brainstormLLM);
-        const router = new Router(checker, brainstormEngine);
-
-        // Scenario 1: Aligned work — should get "continue"
-        const alignedDecisions = await router.route(
-            {
-                completedTaskIds: ["task-0005"],
-                storyId: "story-0001",
-                storyTitle: "Core infrastructure setup",
-                storyNorthStar: "Reliable and scalable foundation with API endpoints",
-                storyCriteria: ["Infrastructure is provisioned", "CI/CD pipeline runs"],
-                storyCriteriaMetCount: 1,
-                epicId: "epic-0001",
-                epicTitle: "Task Management API",
-                epicNorthStar: "Users can CRUD tasks via REST API",
-                epicStoriesCompleted: 0,
-                epicStoriesTotal: 2,
-                tasksSinceBrainstorm: 2,
-                hasReadyTasks: true,
-                blockedTaskIds: [],
-            },
-            "Implemented API endpoints for task management with reliable infrastructure",
-        );
-
-        // Check that we got at least one decision
-        if (alignedDecisions.length === 0) {
-            throw new Error("Expected at least one routing decision");
-        }
-
-        // Scenario 2: Story complete — should cascade close
-        const completedDecisions = await router.route(
-            {
-                completedTaskIds: ["task-0005", "task-0006"],
-                storyId: "story-0001",
-                storyTitle: "Core infrastructure setup",
-                storyNorthStar: "Reliable and scalable foundation",
-                storyCriteria: ["Infrastructure is provisioned", "CI/CD pipeline runs"],
-                storyCriteriaMetCount: 2,
-                epicId: "epic-0001",
-                epicTitle: "Task Management API",
-                epicNorthStar: "Users can CRUD tasks via REST API",
-                epicStoriesCompleted: 0,
-                epicStoriesTotal: 2,
-                tasksSinceBrainstorm: 2,
-                hasReadyTasks: true,
-                blockedTaskIds: [],
-            },
-            "Completed reliable infrastructure setup with all criteria met",
-        );
-
-        const cascadeClose = completedDecisions.find((d) => d.action === "cascade_close");
-        if (!cascadeClose) {
-            throw new Error("Expected cascade_close when story criteria are all met");
-        }
-
-        const actionsSummary = alignedDecisions.map((d) => d.action).join(", ");
-        const completedActions = completedDecisions.map((d) => d.action).join(", ");
-
-        return [
-            `Aligned decisions: [${actionsSummary}]`,
-            `Completed decisions: [${completedActions}]`,
-            `NorthStar LLM calls: ${northStarLLM.calls.length}`,
-        ].join(" | ");
-    }));
-
-    // ---- Step 11: Cost Summary ----
+    // ---- Step 10: Cost Summary ----
     steps.push(await runStep("Cost Summary", async () => {
         const passedSteps = steps.filter((s) => s.passed).length;
         const failedSteps = steps.filter((s) => !s.passed).length;

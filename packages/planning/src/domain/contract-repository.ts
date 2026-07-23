@@ -21,8 +21,6 @@ import type { ProjectId, ProjectContract, ContractBody } from "@ashara/shared";
 export interface ContractRepository {
   /** The current (highest-version) contract for the project, or null if none. */
   getLatest(projectId: ProjectId): Promise<ProjectContract | null>;
-  /** A specific historical version, for audit; null if that version does not exist. */
-  getByVersion(projectId: ProjectId, version: number): Promise<ProjectContract | null>;
   /**
    * Persists `body` at exactly `version`, validating it at the write boundary and
    * returning the stored contract. If that version already exists for the project,

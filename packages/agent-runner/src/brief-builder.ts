@@ -21,17 +21,13 @@ export async function enrichBrief(
 ): Promise<AgentBrief> {
     const projectContext = await buildProjectContext(projectDir);
     const projectProfile = await buildAutoProfile(projectDir);
-    const conventions = await extractProjectConventions(projectDir);
 
     const profileText = formatProjectProfile(projectProfile);
 
-    // Append project context to the existing brief context
     const enrichedContext = [
         brief.context,
         "",
         profileText,
-        "",
-        conventions,
         "",
         projectContext,
     ]
@@ -135,24 +131,15 @@ async function collectFiles(
     }
 }
 
-/**
- * Extract observable project conventions from the target project directory.
- *
- * Reads package.json, entry points, file tree, and route exemplars to produce
- * a concise brief section that tells agents what patterns to follow.
- * Returns empty string for greenfield projects (no files yet).
- */
 export async function extractProjectConventions(projectDir: string): Promise<string> {
     const pkgPath = join(projectDir, "package.json");
-    const hasPkg = await fileExistsSafe(pkgPath);
-    if (!hasPkg) {
+    if (!(await fileExistsSafe(pkgPath))) {
         return extractNonJsConventions(projectDir);
     }
 
     const sections: string[] = [];
     sections.push("## Project State (follow these patterns)");
 
-    // 1. Read package.json for dependencies and scripts
     let dependencies: string[] = [];
     let entryFromPkg: string | null = null;
     try {
@@ -181,15 +168,56 @@ export async function extractProjectConventions(projectDir: string): Promise<str
         sections.push(`Dependencies: ${dependencies.slice(0, 20).join(", ")}`);
     }
 
-    // 2. Find entry point
     let entryPoint: string | null = null;
-    if (entryFromPkg && await fileExistsSafe(join(projectDir, entryFromPkg))) {
+    if (entryFromPkg && (await fileExistsSafe(join(projectDir, entryFromPkg)))) {
         entryPoint = entryFromPkg;
     } else {
         entryPoint = await detectEntryPointFromManifest(projectDir);
     }
 
-    // 3. Read entry point first lines
+    await appendConventionsTail(sections, projectDir, entryPoint);
+
+    if (sections.length <= 2) return "";
+
+    return sections.join("\n");
+}
+
+const NON_JS_MANIFESTS = [
+    { path: "Cargo.toml", lines: 40 },
+    { path: "go.mod", lines: 30 },
+    { path: "pyproject.toml", lines: 30 },
+] as const;
+
+async function extractNonJsConventions(projectDir: string): Promise<string> {
+    const sections: string[] = [];
+
+    for (const manifest of NON_JS_MANIFESTS) {
+        const fullPath = join(projectDir, manifest.path);
+        if (await fileExistsSafe(fullPath)) {
+            sections.push("## Project State (follow these patterns)");
+            const raw = await readFirstLines(fullPath, manifest.lines);
+            if (raw.trim()) {
+                sections.push(`${manifest.path}:\n${indent(raw)}`);
+            }
+            break;
+        }
+    }
+
+    if (sections.length === 0) return "";
+
+    const ep = await detectEntryPointFromManifest(projectDir);
+    const entryPoint = ep && (await fileExistsSafe(join(projectDir, ep))) ? ep : null;
+
+    await appendConventionsTail(sections, projectDir, entryPoint);
+
+    return sections.join("\n");
+}
+
+async function appendConventionsTail(
+    sections: string[],
+    projectDir: string,
+    entryPoint: string | null,
+): Promise<void> {
     if (entryPoint) {
         sections.push(`Entry point: ${entryPoint}`);
         const head = await readFirstLines(join(projectDir, entryPoint), 30);
@@ -198,103 +226,23 @@ export async function extractProjectConventions(projectDir: string): Promise<str
         }
     }
 
-    // 4. List src/ tree
     const tree = await listSrcTree(projectDir);
     if (tree.length > 0) {
         sections.push(`File tree:\n  ${tree.join(", ")}`);
     }
 
-    // 5. Find and read one code exemplar
-    for (const exemplarDir of EXEMPLAR_DIR_CANDIDATES) {
-        const fullDir = join(projectDir, exemplarDir);
-        if (!(await dirExistsSafe(fullDir))) continue;
-
-        try {
-            const entries = await readdir(fullDir);
-            const exemplarFile = entries.find(
-                (e) => e.endsWith(".ts") || e.endsWith(".js") || e.endsWith(".rs") || e.endsWith(".go") || e.endsWith(".py"),
-            );
-            if (exemplarFile) {
-                const exemplarPath = `${exemplarDir}/${exemplarFile}`;
-                const head = await readFirstLines(join(fullDir, exemplarFile), 15);
-                if (head.trim()) {
-                    sections.push(`Code pattern (from ${exemplarPath}):\n${indent(head)}`);
-                }
-                break;
-            }
-        } catch {
-            continue;
-        }
-    }
-
-    if (sections.length <= 1) return "";
-
-    sections.push(
-        "\nFollow these existing patterns. Do not introduce alternative libraries or patterns.",
-    );
-
-    return sections.join("\n");
-}
-
-async function extractNonJsConventions(projectDir: string): Promise<string> {
-    const sections: string[] = [];
-
-    // Rust: Cargo.toml
-    const cargoPath = join(projectDir, "Cargo.toml");
-    if (await fileExistsSafe(cargoPath)) {
-        sections.push("## Project State (follow these patterns)");
-        const raw = await readFirstLines(cargoPath, 40);
-        if (raw.trim()) {
-            sections.push(`Cargo.toml:\n${indent(raw)}`);
-        }
-    }
-
-    // Go: go.mod
-    const goModPath = join(projectDir, "go.mod");
-    if (sections.length === 0 && await fileExistsSafe(goModPath)) {
-        sections.push("## Project State (follow these patterns)");
-        const raw = await readFirstLines(goModPath, 30);
-        if (raw.trim()) {
-            sections.push(`go.mod:\n${indent(raw)}`);
-        }
-    }
-
-    // Python: pyproject.toml
-    const pyprojectPath = join(projectDir, "pyproject.toml");
-    if (sections.length === 0 && await fileExistsSafe(pyprojectPath)) {
-        sections.push("## Project State (follow these patterns)");
-        const raw = await readFirstLines(pyprojectPath, 30);
-        if (raw.trim()) {
-            sections.push(`pyproject.toml:\n${indent(raw)}`);
-        }
-    }
-
-    if (sections.length === 0) return "";
-
-    // Find entry point from manifest
-    const ep = await detectEntryPointFromManifest(projectDir);
-    if (ep && await fileExistsSafe(join(projectDir, ep))) {
-        sections.push(`Entry point: ${ep}`);
-        const head = await readFirstLines(join(projectDir, ep), 30);
-        if (head.trim()) {
-            sections.push(`Entry point pattern:\n${indent(head)}`);
-        }
-    }
-
-    // List src/ tree
-    const tree = await listSrcTree(projectDir);
-    if (tree.length > 0) {
-        sections.push(`File tree:\n  ${tree.join(", ")}`);
-    }
-
-    // Find code exemplar
     for (const exemplarDir of EXEMPLAR_DIR_CANDIDATES) {
         const fullDir = join(projectDir, exemplarDir);
         if (!(await dirExistsSafe(fullDir))) continue;
         try {
             const entries = await readdir(fullDir);
             const exemplarFile = entries.find(
-                (e) => e.endsWith(".rs") || e.endsWith(".go") || e.endsWith(".py") || e.endsWith(".ts") || e.endsWith(".js"),
+                (e) =>
+                    e.endsWith(".ts") ||
+                    e.endsWith(".js") ||
+                    e.endsWith(".rs") ||
+                    e.endsWith(".go") ||
+                    e.endsWith(".py"),
             );
             if (exemplarFile) {
                 const exemplarPath = `${exemplarDir}/${exemplarFile}`;
@@ -312,8 +260,6 @@ async function extractNonJsConventions(projectDir: string): Promise<string> {
     sections.push(
         "\nFollow these existing patterns. Do not introduce alternative libraries or patterns.",
     );
-
-    return sections.join("\n");
 }
 
 async function detectEntryPointFromManifest(projectDir: string): Promise<string | null> {

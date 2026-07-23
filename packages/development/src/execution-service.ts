@@ -271,8 +271,6 @@ export class DevelopmentService {
         retrieveFn,
         {},
         contextMap,
-        "",
-        [],
         knowledgeContext,
       );
       // parseAgentBrief validates the on-wire shape at the producing boundary:

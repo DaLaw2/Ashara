@@ -134,7 +134,10 @@ function extractBinary(token: string): string {
     return trimmed;
 }
 
-function splitCompound(command: string): string[] {
+function splitOnDelimiter(
+    command: string,
+    delimiterLength: (ch: string, next: string) => number,
+): string[] {
     const parts: string[] = [];
     let current = "";
     let inSingleQuote = false;
@@ -144,84 +147,36 @@ function splitCompound(command: string): string[] {
         const ch = command[i];
         const next = command[i + 1] ?? "";
 
-        if (ch === "'" && !inDoubleQuote) {
-            inSingleQuote = !inSingleQuote;
-            current += ch;
-            continue;
-        }
-        if (ch === '"' && !inSingleQuote) {
-            inDoubleQuote = !inDoubleQuote;
-            current += ch;
-            continue;
-        }
+        if (ch === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; current += ch; continue; }
+        if (ch === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; current += ch; continue; }
+        if (inSingleQuote || inDoubleQuote) { current += ch; continue; }
 
-        if (inSingleQuote || inDoubleQuote) {
-            current += ch;
-            continue;
-        }
-
-        if (ch === ";" || ch === "\n") {
+        const dLen = delimiterLength(ch, next);
+        if (dLen > 0) {
             parts.push(current);
             current = "";
+            i += dLen - 1;
             continue;
         }
-        if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) {
-            parts.push(current);
-            current = "";
-            i++;
-            continue;
-        }
-
         current += ch;
     }
 
-    if (current.trim().length > 0) {
-        parts.push(current);
-    }
-
+    if (current.trim().length > 0) parts.push(current);
     return parts.map((p) => p.trim()).filter((p) => p.length > 0);
 }
 
+function splitCompound(command: string): string[] {
+    return splitOnDelimiter(command, (ch, next) => {
+        if (ch === ";" || ch === "\n") return 1;
+        if ((ch === "&" && next === "&") || (ch === "|" && next === "|")) return 2;
+        return 0;
+    });
+}
+
 function splitPipe(command: string): string[] {
-    const parts: string[] = [];
-    let current = "";
-    let inSingleQuote = false;
-    let inDoubleQuote = false;
-
-    for (let i = 0; i < command.length; i++) {
-        const ch = command[i];
-        const next = command[i + 1] ?? "";
-
-        if (ch === "'" && !inDoubleQuote) {
-            inSingleQuote = !inSingleQuote;
-            current += ch;
-            continue;
-        }
-        if (ch === '"' && !inSingleQuote) {
-            inDoubleQuote = !inDoubleQuote;
-            current += ch;
-            continue;
-        }
-
-        if (inSingleQuote || inDoubleQuote) {
-            current += ch;
-            continue;
-        }
-
-        if (ch === "|" && next !== "|") {
-            parts.push(current);
-            current = "";
-            continue;
-        }
-
-        current += ch;
-    }
-
-    if (current.trim().length > 0) {
-        parts.push(current);
-    }
-
-    return parts.map((p) => p.trim()).filter((p) => p.length > 0);
+    return splitOnDelimiter(command, (ch, next) =>
+        ch === "|" && next !== "|" ? 1 : 0,
+    );
 }
 
 function extractPathArgs(command: string): string[] {
@@ -273,6 +228,9 @@ export class CommandPolicy {
         const injectionCheck = this.checkInjection(rawCommand);
         if (injectionCheck) return injectionCheck;
 
+        const bgCheck = this.checkBackgrounding(rawCommand);
+        if (bgCheck) return bgCheck;
+
         const subcommands = splitCompound(rawCommand);
 
         if (subcommands.length > 1 && !this.config.allowCompoundCommands) {
@@ -301,6 +259,25 @@ export class CommandPolicy {
         }
 
         return { allowed: true };
+    }
+
+    private checkBackgrounding(command: string): CommandValidationResult | null {
+        let inSingleQuote = false;
+        let inDoubleQuote = false;
+        for (let i = 0; i < command.length; i++) {
+            const ch = command[i];
+            if (ch === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+            if (ch === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
+            if (inSingleQuote || inDoubleQuote) continue;
+            if (ch === "&" && command[i + 1] !== "&") {
+                return {
+                    allowed: false,
+                    reason: "Background execution (&) is not allowed — process would outlive the run",
+                    rule: "backgrounding",
+                };
+            }
+        }
+        return null;
     }
 
     private checkInjection(command: string): CommandValidationResult | null {

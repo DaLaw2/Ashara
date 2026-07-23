@@ -41,13 +41,6 @@ export class WorkItemRepository {
       .where(eq(workItems.status, status));
   }
 
-  async findByLevelAndStatus(level: string, status: string) {
-    return this.db
-      .select()
-      .from(workItems)
-      .where(and(eq(workItems.level, level), eq(workItems.status, status)));
-  }
-
   /**
    * Physical writer for the WorkItem state machine (ADR-029). `expectedPreviousStatus`
    * is the pre-image the caller believes the row holds; callers read it from the domain

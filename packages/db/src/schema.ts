@@ -175,18 +175,6 @@ export const failedApproaches = pgTable("failed_approaches", {
 });
 
 // ---------------------------------------------------------------------------
-// file_changes
-// ---------------------------------------------------------------------------
-
-export const fileChanges = pgTable("file_changes", {
-  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
-  filePath: text("file_path").notNull(),
-  changeType: text("change_type").notNull(),
-  taskId: uuid("task_id").references(() => workItems.id),
-  changedAt: timestamptz("changed_at").notNull().defaultNow(),
-});
-
-// ---------------------------------------------------------------------------
 // provider_configs
 // ---------------------------------------------------------------------------
 

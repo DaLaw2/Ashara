@@ -31,13 +31,6 @@ export class WorkItemNotFound extends PlanningError {
   }
 }
 
-export class InvalidLevel extends PlanningError {
-  constructor(public readonly level: string) {
-    super(`Invalid level: ${level}`, "INVALID_LEVEL");
-    this.name = "InvalidLevel";
-  }
-}
-
 export class CycleDetected extends PlanningError {
   constructor() {
     super("Dependency cycle detected", "CYCLE_DETECTED");

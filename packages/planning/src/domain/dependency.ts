@@ -234,54 +234,6 @@ export class DependencyGraph {
     return weights;
   }
 
-  criticalPath(): WorkItemId[] {
-    const sorted = this.topologicalSort();
-    if (sorted.length === 0) return [];
-
-    const dist = new Map<string, number>();
-    const prev = new Map<string, string | null>();
-
-    for (const node of sorted) {
-      dist.set(node, 0);
-      prev.set(node, null);
-    }
-
-    for (const node of sorted) {
-      const currentDist = dist.get(node)!;
-      const neighbors = this.edges.get(node);
-      if (neighbors) {
-        for (const neighbor of neighbors) {
-          const newDist = currentDist + 1;
-          if (newDist > (dist.get(neighbor) ?? 0)) {
-            dist.set(neighbor, newDist);
-            prev.set(neighbor, node);
-          }
-        }
-      }
-    }
-
-    let endNode = sorted[0]!;
-    let maxDist = 0;
-    for (const [node, d] of dist) {
-      if (d > maxDist) {
-        maxDist = d;
-        endNode = node;
-      }
-    }
-
-    const path: string[] = [endNode];
-    let current = endNode;
-    let predecessor = prev.get(current);
-    while (predecessor != null) {
-      path.push(predecessor);
-      current = predecessor;
-      predecessor = prev.get(current) ?? null;
-    }
-
-    path.reverse();
-    return path as WorkItemId[];
-  }
-
   private topologicalSort(): string[] {
     if (this.hasCycle()) return [];
 

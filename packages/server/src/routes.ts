@@ -6,6 +6,7 @@ import {
   createDomainEvent,
   parseWorkItemStatus,
   parseWorkItemLevel,
+  parseWorkItemId,
 } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -13,7 +14,6 @@ import {
   DevSessionRepository,
   VisionRepository,
   ConfigRepository,
-  CostRepository,
 } from "@ashara/db";
 import {
   createPendingWorkItem,
@@ -30,7 +30,6 @@ import {
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
 import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
-import { CodebaseIndexer, Bm25Index } from "@ashara/memory";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables
@@ -42,9 +41,7 @@ export interface AppDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly configRepo: ConfigRepository;
-  readonly costRepo: CostRepository;
   readonly runner: ContinuousRunner;
-  readonly indexer: CodebaseIndexer;
   /**
    * Creates a whole bulk plan hierarchy AND its derived ProjectContract in one
    * transaction (mig9-t5). The composition root wires the transactional facade
@@ -110,24 +107,6 @@ const AddDependencySchema = z.object({
   fromId: z.string().min(1).optional(),
   to_id: z.string().min(1).optional(),
   toId: z.string().min(1).optional(),
-});
-
-const GraphIndexSchema = z.object({
-  path: z.string().min(1),
-  extensions: z.array(z.string()).optional(),
-});
-
-const GraphTraverseSchema = z.object({
-  symbols: z.array(z.string()).optional(),
-  symbol_names: z.array(z.string()).optional(),
-  depth: z.number().int().optional(),
-  hops: z.number().int().optional(),
-});
-
-const GraphKeywordSearchSchema = z.object({
-  query: z.string().min(1),
-  limit: z.number().int().positive().optional(),
-  top_k: z.number().int().positive().optional(),
 });
 
 const CreateVisionSchema = z.object({
@@ -197,7 +176,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const item = createPendingWorkItem(
       level,
       title,
-      parentId as WorkItemId | undefined,
+      parentId ? parseWorkItemId(parentId) : undefined,
       description,
       taskSpec,
       northStar,
@@ -453,138 +432,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   });
 
   // -----------------------------------------------------------------------
-  // Graph (backed by CodebaseIndexer + BM25)
-  // -----------------------------------------------------------------------
-
-  let bm25Cache: Bm25Index | null = null;
-
-  app.post("/graph/index", async (c) => {
-    const { indexer } = c.get("deps");
-
-    const parsed = GraphIndexSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid graph index request", issues: parsed.error.issues }, 400);
-    }
-    const path = parsed.data.path;
-    const extensions = parsed.data.extensions ?? ["ts", "tsx", "js", "jsx", "rs"];
-
-    indexer.indexDirectory(path, extensions);
-    bm25Cache = Bm25Index.fromGraph(indexer.graph);
-
-    return c.json({
-      indexed: indexer.graph.nodeCount(),
-      edges: indexer.graph.edgeCount(),
-    });
-  });
-
-  app.post("/graph/traverse", async (c) => {
-    const { indexer } = c.get("deps");
-
-    const parsed = GraphTraverseSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid graph traverse request", issues: parsed.error.issues }, 400);
-    }
-    const symbols = parsed.data.symbols ?? parsed.data.symbol_names ?? [];
-    const depth = parsed.data.depth ?? parsed.data.hops ?? 2;
-
-    const graph = indexer.graph;
-    if (graph.nodeCount() === 0) return c.json({ results: [] });
-
-    const visited = new Set<string>();
-    let frontier: string[] = [];
-    const results: Array<{
-      symbolName: string;
-      symbolKind: string;
-      filePath: string;
-      startLine: number;
-      endLine: number;
-      signature?: string;
-      distance: number;
-    }> = [];
-
-    for (const name of symbols) {
-      for (const key of graph.findSymbolsByName(name)) {
-        if (!visited.has(key)) {
-          visited.add(key);
-          frontier.push(key);
-          const sym = graph.getSymbol(key);
-          if (sym) {
-            results.push({
-              symbolName: sym.name,
-              symbolKind: sym.kind,
-              filePath: sym.filePath,
-              startLine: sym.lineRange[0],
-              endLine: sym.lineRange[1],
-              signature: sym.signature,
-              distance: 0,
-            });
-          }
-        }
-      }
-    }
-
-    for (let d = 1; d <= depth; d++) {
-      const next: string[] = [];
-      for (const key of frontier) {
-        for (const nKey of graph.neighbors(key, "outgoing")) {
-          if (!visited.has(nKey)) {
-            visited.add(nKey);
-            next.push(nKey);
-            const sym = graph.getSymbol(nKey);
-            if (sym) {
-              results.push({
-                symbolName: sym.name,
-                symbolKind: sym.kind,
-                filePath: sym.filePath,
-                startLine: sym.lineRange[0],
-                endLine: sym.lineRange[1],
-                signature: sym.signature,
-                distance: d,
-              });
-            }
-          }
-        }
-      }
-      frontier = next;
-    }
-
-    return c.json({ results });
-  });
-
-  app.post("/graph/keyword-search", async (c) => {
-    const { indexer } = c.get("deps");
-
-    const parsed = GraphKeywordSearchSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid keyword search request", issues: parsed.error.issues }, 400);
-    }
-    const query = parsed.data.query;
-    const limit = parsed.data.limit ?? parsed.data.top_k ?? 20;
-
-    const graph = indexer.graph;
-    if (graph.nodeCount() === 0) return c.json({ results: [] });
-
-    if (!bm25Cache) {
-      bm25Cache = Bm25Index.fromGraph(graph);
-    }
-
-    const searchResults = bm25Cache.search(query, limit);
-    const results = searchResults.map((sr) => {
-      const sym = graph.getSymbolById(sr.id);
-      return {
-        symbolName: sr.id.name,
-        symbolKind: sr.id.kind,
-        filePath: sr.id.filePath,
-        startLine: sym?.lineRange[0] ?? 0,
-        endLine: sym?.lineRange[1] ?? 0,
-        score: sr.score,
-      };
-    });
-
-    return c.json({ results });
-  });
-
-  // -----------------------------------------------------------------------
   // Sessions (backed by devSessionRepo)
   // -----------------------------------------------------------------------
 
@@ -630,6 +477,10 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       openQuestions: body.open_questions ?? body.openQuestions ?? [],
       changeReason: body.change_reason ?? body.changeReason ?? null,
     });
+
+    const { runner } = c.get("deps");
+    runner.wake();
+
     return c.json(created, 201);
   });
 
@@ -661,7 +512,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       return {
         name: row.name,
         providerType: row.providerType,
-        apiKey,
+        hasApiKey: apiKey !== null,
         baseUrl,
       };
     });
@@ -690,16 +541,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       await configRepo.updateSetting(key, value);
     }
     return c.body(null, 200);
-  });
-
-  // -----------------------------------------------------------------------
-  // Costs
-  // -----------------------------------------------------------------------
-
-  app.get("/costs/by-tier", async (c) => {
-    const { costRepo } = c.get("deps");
-    const result = await costRepo.loadCostPerVerifiedTask();
-    return c.json(result);
   });
 
   return app;

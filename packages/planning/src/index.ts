@@ -25,10 +25,6 @@ export { deriveEndpointRef, deriveCompletionEndpoint, deriveCompletionModule } f
 export { NorthStarChecker, StubNorthStarLLM } from "./northstar.js";
 export type { AlignmentResult, NorthStarCheckInput, NorthStarLLM } from "./northstar.js";
 
-export { Router } from "./route.js";
-
-export type { RouteDecision, RouteInput } from "./route-types.js";
-
 export {
   FailureRouter,
   FailureRouterError,
@@ -67,14 +63,6 @@ export {
 } from "./gateway-adapters.js";
 export type { StructuredLLMProvider } from "./gateway-adapters.js";
 
-export {
-  createGatewaySpecDerivationLLM,
-  deriveSpecEndpoints,
-  buildSpecDerivationPrompt,
-  SpecDerivationSchema,
-  SpecDerivationError,
-} from "./spec-derivation.js";
-export type { SpecDerivationLLM, SpecDerivation, SpecVisionInput } from "./spec-derivation.js";
 
 export {
   computeCoverageGaps,

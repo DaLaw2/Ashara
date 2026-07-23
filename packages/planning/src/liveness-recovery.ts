@@ -1,5 +1,5 @@
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
-import { createPendingWorkItem } from "./domain/index.js";
+import { createPendingWorkItem, extractSubstitutedBy } from "./domain/index.js";
 import type { ReplanLLM, AbandonedItemContext } from "./replan-from-vision.js";
 
 export interface LivenessRecoveryDeps {
@@ -27,10 +27,6 @@ function findEpicId(item: WorkItem, allItems: readonly WorkItem[]): string | nul
   return current?.id ?? null;
 }
 
-function extractSubstitutedBy(blockedReason: Record<string, unknown> | undefined): string | undefined {
-  const value = blockedReason?.substitutedBy;
-  return typeof value === "string" ? value : undefined;
-}
 
 function readString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
   if (!obj) return undefined;

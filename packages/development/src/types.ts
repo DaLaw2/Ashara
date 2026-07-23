@@ -1,11 +1,4 @@
-import type { SessionId, WorkItemId } from "@ashara/shared";
-
-// AgentBrief is the single validated brief.json contract, owned by the Shared
-// Kernel (ADR-013, restored per the ddd-boundary-audit SEAM-1 finding). Imported
-// for local use (e.g. DispatchResponse below) and re-exported so existing
-// @ashara/development consumers keep their import site while the type itself
-// lives in @ashara/shared with its Zod schema.
-import type { AgentBrief } from "@ashara/shared";
+import type { AgentBrief, SessionId, WorkItemId } from "@ashara/shared";
 export type { AgentBrief };
 
 export interface TaskSpec {
@@ -14,28 +7,6 @@ export interface TaskSpec {
   readonly scope: string;
   readonly deliverables: string[];
   readonly checks: string[];
-}
-
-export interface TaskContext {
-  readonly epic_title: string;
-  readonly story_title: string;
-  readonly feature_title: string;
-}
-
-export interface DispatchRequest {
-  readonly task_id: WorkItemId;
-  readonly task_spec: TaskSpec;
-  readonly context: TaskContext;
-}
-
-export interface DispatchResponse {
-  readonly session_id: SessionId;
-  readonly brief: AgentBrief;
-  readonly token_count: number;
-  readonly quality_gate?: {
-    readonly passed: boolean;
-    readonly failedChecks: string[];
-  };
 }
 
 export interface VerifyRequest {

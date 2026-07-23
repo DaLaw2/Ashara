@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
@@ -68,24 +68,6 @@ function toJson(output: AgentOutput): AgentOutputJson {
         total_tokens: output.totalTokens,
         total_cost: output.totalCost,
         turn_count: output.turnCount,
-    };
-}
-
-function fromJson(json: AgentOutputJson): AgentOutput {
-    return {
-        status: json.status,
-        summary: json.summary,
-        filesChanged: json.files_changed,
-        findings: json.findings,
-        buildLog: json.build_log,
-        testLog: json.test_log,
-        error: json.error,
-        errorDetail: json.error_detail
-            ? { model: json.error_detail.model, turnCount: json.error_detail.turn_count, lastToolCall: json.error_detail.last_tool_call, message: json.error_detail.message }
-            : null,
-        totalTokens: json.total_tokens,
-        totalCost: json.total_cost,
-        turnCount: json.turn_count,
     };
 }
 
@@ -229,12 +211,6 @@ export class OutputCollector {
         await mkdir(dir, { recursive: true });
         const json = toJson(output);
         await writeFile(outputPath, JSON.stringify(json, null, 2) + "\n", "utf-8");
-    }
-
-    static async readOutput(outputPath: string): Promise<AgentOutput> {
-        const raw = await readFile(outputPath, "utf-8");
-        const json = JSON.parse(raw) as AgentOutputJson;
-        return fromJson(json);
     }
 
     // -----------------------------------------------------------------------

@@ -2,7 +2,7 @@
 // Orchestrates tree-sitter parsing, symbol extraction, and graph construction.
 
 import { createHash } from "crypto";
-import { readdirSync, readFileSync, statSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { extname, join } from "path";
 
 import { SymbolGraph } from "./graph.js";
@@ -21,14 +21,6 @@ export class CodebaseIndexer {
 
     get graph(): SymbolGraph {
         return this._graph;
-    }
-
-    fileCount(): number {
-        return this.files.size;
-    }
-
-    isIndexed(filePath: string): boolean {
-        return this.files.has(filePath);
     }
 
     getSymbol(id: SymbolId): SymbolDef | undefined {
@@ -69,43 +61,6 @@ export class CodebaseIndexer {
             this.rebuildGraph();
         }
         return count;
-    }
-
-    reindexChanged(changedPaths: string[]): number {
-        let reindexed = 0;
-        for (const filePath of changedPaths) {
-            let exists = false;
-            try {
-                statSync(filePath);
-                exists = true;
-            } catch {
-                // File does not exist
-            }
-
-            if (exists) {
-                try {
-                    const content = readFileSync(filePath, "utf-8");
-                    try {
-                        if (this.updateFileIndex(filePath, content)) {
-                            reindexed++;
-                        }
-                    } catch {
-                        // Failed to parse
-                    }
-                } catch {
-                    // Failed to read
-                }
-            } else {
-                // File was deleted — remove from index
-                if (this.files.delete(filePath)) {
-                    reindexed++;
-                }
-            }
-        }
-        if (reindexed > 0) {
-            this.rebuildGraph();
-        }
-        return reindexed;
     }
 
     // -----------------------------------------------------------------------

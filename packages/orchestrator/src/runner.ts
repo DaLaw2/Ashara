@@ -1,6 +1,5 @@
-import pg from "pg";
-
 import { listenForEvents } from "@ashara/db";
+import type { PgListener } from "@ashara/db";
 
 import type { CycleResult } from "./types.js";
 import { emitRunSummary } from "@ashara/planning";
@@ -38,7 +37,7 @@ export class ContinuousRunner {
   private readonly config: RunnerConfig;
   private readonly eventLogger: EventLogger | null;
   private abortController: AbortController | null = null;
-  private pgClient: pg.Client | null = null;
+  private pgListener: PgListener | null = null;
   private wakeResolve: (() => void) | null = null;
   // Set by wake() on any NOTIFY, armed to false at the top of each cycle. Guards the
   // wake-on-NOTIFY race: external work committed after the termination snapshot but
@@ -57,17 +56,13 @@ export class ContinuousRunner {
     this.abortController = new AbortController();
     const mergedSignal = signal ?? this.abortController.signal;
 
-    let pgClient: pg.Client | null = null;
+    let pgListener: PgListener | null = null;
     if (this.config.databaseUrl) {
-      try {
-        pgClient = await listenForEvents(this.config.databaseUrl, () => {
-          this.wake();
-        });
-        this.pgClient = pgClient;
-        console.log("PG listener connected");
-      } catch (e) {
-        console.warn("Initial PG listener connection failed, running in polling-only mode:", e);
-      }
+      pgListener = await listenForEvents(this.config.databaseUrl, () => {
+        this.wake();
+      });
+      this.pgListener = pgListener;
+      console.log("PG listener connected");
     }
 
     let consecutiveErrors = 0;
@@ -107,14 +102,10 @@ export class ContinuousRunner {
       }
     }
 
-    if (pgClient) {
-      try {
-        await pgClient.end();
-      } catch {
-        // ignore
-      }
+    if (pgListener) {
+      pgListener.stop();
     }
-    this.pgClient = null;
+    this.pgListener = null;
 
     console.log("Continuous runner stopped");
   }
