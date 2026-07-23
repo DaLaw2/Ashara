@@ -31,12 +31,11 @@ export interface ContractSource {
     loadForTask(taskId: string): Promise<ProjectContract | null>;
     /**
      * Given the `declaredBy` task ids of a contract's endpoints, returns the subset
-     * that have actually completed. Used to gate the "sibling already built" section
-     * of {@link formatContractSlice} — an endpoint is only shown as an existing
-     * convention to follow once the task that owns it has genuinely delivered it,
-     * never merely because decomposition declared it. Optional: when absent, the
-     * sibling-visibility section is omitted rather than shown unconditionally
-     * (fail-closed — a not-yet-built endpoint must never be presented as reality).
+     * that have actually completed. Used to label sibling endpoints in
+     * {@link formatContractSlice} — completed endpoints appear as "already built"
+     * conventions to follow, while non-completed endpoints appear as "planned"
+     * routes to prepare mounts for. Optional: when absent, all non-self endpoints
+     * are shown as "planned" (conservative — nothing is assumed to be built).
      */
     loadCompletedTaskIds?(taskIds: readonly string[]): Promise<ReadonlySet<string>>;
 }
@@ -87,6 +86,9 @@ function formatModuleLines(module: ContractModule): string[] {
  *    COMPLETED sibling task — the cross-task visibility signal (granularity-debate.md
  *    §3.A) that lets an agent see and follow a naming convention a sibling already
  *    established (e.g. `/api/auth/*`) instead of guessing a divergent one.
+ *  - Endpoints planned by other tasks: endpoints declared by a DIFFERENT,
+ *    NON-COMPLETED sibling task — lets wiring/scaffold tasks prepare mounts for
+ *    routes that are planned but not yet delivered.
  *  - Existing modules to reuse: every `reuseOnly` module this task does not itself
  *    provide, with its export shape — the anti-recreate list (Run 9 lever).
  *  - Entry-point wiring to preserve: the full mount manifest, so a task editing the
@@ -100,9 +102,18 @@ export function formatContractSlice(
     const prefixByRef = mountPrefixByRef(contract.mounts);
 
     const endpointsToExpose = contract.endpoints.filter((e) => e.declaredBy === taskId);
-    const siblingEndpoints = contract.endpoints.filter(
-        (e) => e.declaredBy !== undefined && e.declaredBy !== taskId && completedTaskIds?.has(e.declaredBy),
-    );
+
+    const builtEndpoints: Endpoint[] = [];
+    const plannedEndpoints: Endpoint[] = [];
+    for (const e of contract.endpoints) {
+        if (e.declaredBy === undefined || e.declaredBy === taskId) continue;
+        if (completedTaskIds?.has(e.declaredBy)) {
+            builtEndpoints.push(e);
+        } else {
+            plannedEndpoints.push(e);
+        }
+    }
+
     const reuseModules = contract.modules.filter(
         (m) => m.reuseOnly && m.providerWorkItem !== taskId,
     );
@@ -112,7 +123,8 @@ export function formatContractSlice(
 
     if (
         endpointsToExpose.length === 0 &&
-        siblingEndpoints.length === 0 &&
+        builtEndpoints.length === 0 &&
+        plannedEndpoints.length === 0 &&
         reuseModules.length === 0 &&
         mounts.length === 0 &&
         !techStack
@@ -135,11 +147,20 @@ export function formatContractSlice(
         );
     }
 
-    if (siblingEndpoints.length > 0) {
+    if (builtEndpoints.length > 0) {
         sections.push(
             [
                 "## Endpoints already built by other tasks (follow these conventions)",
-                ...siblingEndpoints.map((e) => formatEndpointLine(e, prefixByRef.get(e.ref))),
+                ...builtEndpoints.map((e) => formatEndpointLine(e, prefixByRef.get(e.ref))),
+            ].join("\n"),
+        );
+    }
+
+    if (plannedEndpoints.length > 0) {
+        sections.push(
+            [
+                "## Endpoints planned by other tasks (prepare mounts for these)",
+                ...plannedEndpoints.map((e) => formatEndpointLine(e, prefixByRef.get(e.ref))),
             ].join("\n"),
         );
     }
