@@ -282,7 +282,7 @@ async function main(): Promise<void> {
   const brainstormEngine = new BrainstormEngine(brainstormLlm);
   const northstarChecker = new NorthStarChecker(northstarLlm);
   const decompositionEngine = new DecompositionEngine(decompositionLlm);
-  const failureRouter = new FailureRouter(2);
+  const failureRouter = new FailureRouter(3);
 
   const projectProfile = buildDefaultProfile();
   const retrieveFn = await createRetrievalFn(inProcessGraphClient);
@@ -317,7 +317,7 @@ async function main(): Promise<void> {
       // doesn't need cwd to be asharaSourceDir to be found.
       const { cwd, runnerScript } = buildAgentSpawnLocation(config.coreLoop.asharaSourceDir, opts.workDir);
 
-      const capability = (opts.dispatchCount ?? 0) >= 2 ? "Frontier" : "Strong";
+      const capability = (opts.dispatchCount ?? 0) >= 1 ? "Frontier" : "Strong";
       if (capability === "Frontier") {
         console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
       }

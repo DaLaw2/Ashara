@@ -195,6 +195,8 @@ export async function loadGatewayConfigFromApi(
   for (const p of apiProviders) {
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
+    const hasCredentials = p.apiKey !== null || (p.name === "local" && p.baseUrl !== null);
+    if (!hasCredentials) continue;
     providers.push({
       name: p.name,
       apiKey: p.apiKey ?? undefined,
