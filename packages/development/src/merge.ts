@@ -68,7 +68,8 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
 
 export async function commitMerge(targetPath: string, taskId: string): Promise<void> {
   await execFileAsync("git", ["commit", "-m", `merge: task ${taskId}`], { cwd: targetPath });
-  await execFileAsync("git", ["branch", "-d", taskBranchName(taskId)], { cwd: targetPath });
+  // Branch deletion deferred to cleanupWorkdir — worktree must be removed first
+  // (git refuses to delete a branch that has an active worktree).
 }
 
 export async function abortMerge(targetPath: string): Promise<void> {

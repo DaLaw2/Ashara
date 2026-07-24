@@ -72,7 +72,7 @@ export async function createWorkdirForRetry(
   return { workDir, taskBranch };
 }
 
-export async function removeWorktree(targetProjectPath: string, workDir: string): Promise<void> {
+export async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
   try {
     await execFileAsync("git", ["worktree", "remove", workDir, "--force"], {
       cwd: targetProjectPath,
@@ -80,6 +80,9 @@ export async function removeWorktree(targetProjectPath: string, workDir: string)
   } catch {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
     await execFileAsync("git", ["worktree", "prune"], { cwd: targetProjectPath }).catch(() => {});
+  }
+  if (deleteBranch) {
+    await execFileAsync("git", ["branch", "-d", deleteBranch], { cwd: targetProjectPath }).catch(() => {});
   }
 }
 
@@ -127,9 +130,9 @@ export async function commitAllChanges(workDir: string, message: string): Promis
   await execFileAsync("git", ["commit", "-m", message, "--allow-empty-message"], { cwd: workDir });
 }
 
-export async function cleanupWorkdir(workDir: string, targetProjectPath?: string): Promise<void> {
+export async function cleanupWorkdir(workDir: string, targetProjectPath?: string, taskBranch?: string): Promise<void> {
   if (targetProjectPath) {
-    await removeWorktree(targetProjectPath, workDir);
+    await removeWorktree(targetProjectPath, workDir, taskBranch);
   } else {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }

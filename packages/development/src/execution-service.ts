@@ -701,7 +701,7 @@ export class DevelopmentService {
       };
     }
 
-    await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+    await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
     this.tryPopulateIndex(targetProjectPath);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
