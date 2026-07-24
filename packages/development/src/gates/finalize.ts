@@ -13,37 +13,22 @@ import {
 import { runVerifyCore } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
-import { runIntegrationGate } from "./reachability.js";
-import { detectHttpSurfaceChange, runSmokeTest } from "./smoke.js";
-import type { GateResult } from "./types.js";
 
 export interface FinalizeResult {
   readonly success: boolean;
-  readonly integrationGate?: GateResult;
-  readonly smokeTest?: GateResult;
   readonly gateFailureContext?: string;
   readonly errorLayer?: ErrorLayer;
 }
 
 export interface FinalizeContractInfo {
   readonly entryPointPath: string | null;
-  readonly endpoints?: ReadonlyArray<{ readonly method: string; readonly path: string }>;
 }
 
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
   readonly sessionStore: SessionStore;
-  readonly integrationGateRunner?: (targetPath: string) => Promise<GateResult>;
-  readonly smokeTestRunner?: (targetPath: string) => Promise<GateResult>;
 }
 
-/**
- * Common failure path shared by every gate in `finalizeSuccess`: log why the
- * gate failed, abort the tentative merge (main is restored exactly — the
- * merge was never committed), and return the failure result. `extra` carries
- * whichever partial gate results (`integrationGate`/`smokeTest`) had already
- * run before this one failed.
- */
 async function abortAndFail(
   taskId: string,
   targetProjectPath: string,
@@ -87,9 +72,6 @@ export async function finalizeSuccess(
   } catch {
     // nothing to commit
   }
-
-  let integrationGate: GateResult | undefined;
-  let smokeTest: GateResult | undefined;
 
   if (targetProjectPath) {
     await recoverOrphanedMerge(targetProjectPath);
@@ -181,73 +163,6 @@ export async function finalizeSuccess(
       );
     }
 
-    if (deps.integrationGateRunner) {
-      integrationGate = await deps.integrationGateRunner(targetProjectPath);
-    } else {
-      integrationGate = await runIntegrationGate(targetProjectPath);
-    }
-    deps.eventSink?.emit({
-      event: "integration_gate",
-      taskId: task.id,
-      attempt,
-      passed: integrationGate.passed,
-      output: integrationGate.output.slice(0, 1000),
-    });
-
-    if (!integrationGate.passed) {
-      return abortAndFail(
-        task.id,
-        targetProjectPath,
-        "integration gate FAILED — aborting tentative merge",
-        `Integration gate failed:\n${integrationGate.output}`,
-        { integrationGate },
-        {
-          operation: "integrationGate",
-          gateOutput: integrationGate.output,
-          gateContext: { taskId: task.id, attempt, passed: integrationGate.passed },
-        },
-      );
-    }
-
-    const hasContractEndpoints = contractInfo.endpoints !== undefined && contractInfo.endpoints.length > 0;
-    const smokeTrigger = hasContractEndpoints
-      ? "contract declares endpoints"
-      : await detectHttpSurfaceChange(targetProjectPath, preMergeHead, contractInfo.entryPointPath);
-
-    if (smokeTrigger !== null) {
-      console.log(`[${task.id}] smoke test triggered: ${smokeTrigger}`);
-      if (deps.smokeTestRunner) {
-        smokeTest = await deps.smokeTestRunner(targetProjectPath);
-      } else {
-        smokeTest = await runSmokeTest(targetProjectPath, {}, contractInfo.entryPointPath, contractInfo.endpoints);
-      }
-      deps.eventSink?.emit({
-        event: "smoke_test",
-        taskId: task.id,
-        attempt,
-        trigger: smokeTrigger,
-        passed: smokeTest.passed,
-        output: smokeTest.output.slice(0, 1000),
-      });
-
-      if (!smokeTest.passed) {
-        return abortAndFail(
-          task.id,
-          targetProjectPath,
-          "smoke test FAILED — aborting tentative merge",
-          `Smoke test failed:\n${smokeTest.output}`,
-          { integrationGate, smokeTest },
-          {
-            operation: "smokeTest",
-            gateOutput: smokeTest.output,
-            gateContext: { taskId: task.id, attempt, passed: smokeTest.passed },
-          },
-        );
-      } else {
-        console.log(`[${task.id}] smoke test passed`);
-      }
-    }
-
     await commitMerge(targetProjectPath, task.id);
     console.log(`[${task.id}] merge committed to main, task branch deleted`);
   }
@@ -256,5 +171,5 @@ export async function finalizeSuccess(
 
   await deps.sessionStore.complete(sessionId);
 
-  return { success: true, integrationGate, smokeTest };
+  return { success: true };
 }

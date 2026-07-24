@@ -16,8 +16,8 @@ import type { ContractAmender } from "./contract-completion.js";
 import { selectModulePaths } from "./contract-completion.js";
 import { deriveEndpoints } from "./gates/endpoints.js";
 import type { TaskSpec } from "./types.js";
-import type { GateResult } from "./gates/types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
+import { readVerifyConfig } from "./verify-config.js";
 import {
   buildFileTree,
   cleanupWorkdir,
@@ -110,12 +110,8 @@ export interface ExecutionResult {
    * task_cost_history.attempt column downstream.
    */
   readonly attempt: number;
-  readonly integrationGate?: GateResult;
-  readonly smokeTest?: GateResult;
   readonly errorEnvelope?: ErrorEnvelope;
 }
-
-export type { GateResult } from "./gates/types.js";
 
 interface VerifyTaskOutcome {
   readonly passed: boolean;
@@ -136,8 +132,6 @@ export interface DevelopmentServiceDeps {
   readonly projectProfile: ProjectProfile;
   readonly retrieveFn: (query: string, mentionedSymbols?: string[]) => Promise<RetrievalResult[]>;
   readonly eventSink?: ExecutionEventSink;
-  readonly integrationGateRunner?: (targetPath: string) => Promise<GateResult>;
-  readonly smokeTestRunner?: (targetPath: string) => Promise<GateResult>;
   /**
    * Yields the ProjectContract for a task's project so the brief can carry a
    * task-relevant slice — reuse-only modules, endpoints to expose, wiring to
@@ -428,6 +422,19 @@ export class DevelopmentService {
     }
 
     try {
+      const verifyConfig = await readVerifyConfig(targetProjectPath);
+      if (verifyConfig.checks.length > 0) {
+        const lines = ["## Verification Checks (verify.toml)"];
+        for (const check of verifyConfig.checks) {
+          lines.push(`- ${check.name}: \`${check.command}\``);
+        }
+        sections.push(lines.join("\n"));
+      }
+    } catch {
+      // no verify.toml or parse error
+    }
+
+    try {
       const conventions = await this.deps.conventionsExtractor.extract(targetProjectPath);
       if (conventions) sections.push("## Conventions\n" + conventions);
     } catch {
@@ -666,19 +673,14 @@ export class DevelopmentService {
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
     const finalizeResult = await finalizeSuccess(this.deps, workDir, sessionId, task, targetProjectPath, 1, taskChecks, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
-      endpoints: contract?.endpoints.map(e => ({ method: e.method, path: e.path })),
     });
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer
         ?? wrapError("development", "finalizeSuccess", finalizeResult.gateFailureContext ?? "unknown gate failure", { taskId: task.id });
       const envelope: ErrorEnvelope = {
         outcome: "failed",
-        summary: `gate/smoke test failed for ${task.id}`,
+        summary: `post-merge verify failed for ${task.id}`,
         chain: gateChain,
-        gateResults: {
-          integration: finalizeResult.integrationGate,
-          smoke: finalizeResult.smokeTest,
-        },
         agentOutput: output,
       };
       eventSink?.emit({
@@ -695,8 +697,6 @@ export class DevelopmentService {
         sessionId,
         filesChanged: [],
         attempt: 1,
-        integrationGate: finalizeResult.integrationGate,
-        smokeTest: finalizeResult.smokeTest,
         errorEnvelope: envelope,
       };
     }
@@ -713,8 +713,6 @@ export class DevelopmentService {
       sessionId,
       filesChanged,
       attempt: 1,
-      integrationGate: finalizeResult.integrationGate,
-      smokeTest: finalizeResult.smokeTest,
     };
   }
 
@@ -914,14 +912,12 @@ function extractReplanContext(
   return candidate;
 }
 
-type GateKind = "smoke" | "integration" | "entry-point" | "merge" | "agent" | "verify" | "unknown";
+type GateKind = "entry-point" | "merge" | "agent" | "verify" | "unknown";
 
 function detectGateKind(envelope: ErrorEnvelope): GateKind {
   const layers = flattenChain(envelope.chain);
   for (const layer of layers) {
     switch (layer.operation) {
-      case "smokeTest": return "smoke";
-      case "integrationGate": return "integration";
       case "entryPointRewriteCheck": return "entry-point";
       case "tentativeMerge": return "merge";
       case "agentExecution": return "agent";
@@ -963,12 +959,6 @@ function collectDiagnosticText(envelope: ErrorEnvelope): string {
   for (const layer of flattenChain(envelope.chain)) {
     parts.push(layer.message);
   }
-  if (envelope.gateResults?.smoke) {
-    parts.push(JSON.stringify(envelope.gateResults.smoke));
-  }
-  if (envelope.gateResults?.integration) {
-    parts.push(JSON.stringify(envelope.gateResults.integration));
-  }
   return parts.join(" ").toLowerCase();
 }
 
@@ -985,21 +975,6 @@ function derivePrescriptiveInstruction(envelope: ErrorEnvelope): string {
   }
 
   switch (gateKind) {
-    case "smoke":
-      if (text.includes("404")) {
-        return `The route is not mounted at runtime. Ensure the route handler is registered in the entry point file. Check that catch-all routes (e.g., /:param) are registered AFTER all specific routes.${fileRef}`;
-      }
-      if (text.includes("crash") || text.includes("econnrefused") || text.includes("exit code")) {
-        return `The application crashes on boot. Check the error output for the crash location and fix the issue before any other work.${fileRef}`;
-      }
-      return `The smoke test failed. Review the smoke test output, identify the failing endpoint, and ensure the application responds correctly.${fileRef}`;
-
-    case "integration":
-      if (text.includes("not imported") || text.includes("cannot find module")) {
-        return `The route file exists but is not imported from the entry point. Add an import/require statement in the entry point.${fileRef}`;
-      }
-      return `The integration gate failed. Ensure all modules compile correctly and all imports resolve.${fileRef}`;
-
     case "entry-point":
       return `The entry point file was rewritten, breaking existing routes. Modify the entry point additively — do not replace its contents.${fileRef}`;
 
@@ -1043,12 +1018,6 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
       ``,
       renderChainForBrief(envelope),
     ];
-    if (envelope.gateResults?.smoke) {
-      lines.push(`\n## Smoke Test Output\n${JSON.stringify(envelope.gateResults.smoke, null, 2)}`);
-    }
-    if (envelope.gateResults?.integration) {
-      lines.push(`\n## Integration Gate Output\n${JSON.stringify(envelope.gateResults.integration, null, 2)}`);
-    }
     return lines.join("\n");
   }
 

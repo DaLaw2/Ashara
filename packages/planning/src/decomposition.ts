@@ -228,8 +228,8 @@ export class DecompositionEngine {
             id: scaffoldId,
             level: "task",
             title: `Create project scaffold: manifest, entry point, directory structure`,
-            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack (${input.knowledge ? nodeLabels(input.knowledge, "language").join(", ") || "the project's tech stack" : "the project's tech stack"}). Install dependencies. All other tasks depend on this.`,
-            successCriteria: ["Project installs dependencies and starts with the scaffold in place"],
+            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack (${input.knowledge ? nodeLabels(input.knowledge, "language").join(", ") || "the project's tech stack" : "the project's tech stack"}). Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project (e.g. typecheck = "npx tsc --noEmit", test = "npm test"). All other tasks depend on this.`,
+            successCriteria: ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"],
             parentId: tasks[0].parentId,
             dependsOn: [],
         };

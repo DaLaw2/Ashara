@@ -76,9 +76,11 @@ export type {
   DevelopmentConfig,
   TaskDescriptor,
   ExecutionResult,
-  GateResult,
   DevelopmentServiceDeps,
 } from "./execution-service.js";
+
+export type { VerifyCheck, VerifyConfig } from "./verify-config.js";
+export { readVerifyConfig } from "./verify-config.js";
 
 export type { AttributionResult, WorkItemLookup, GitLogRunner } from "./gates/attribution.js";
 export { extractImplicatedFiles, attributeFilesToTasks } from "./gates/attribution.js";

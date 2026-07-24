@@ -47,15 +47,19 @@
 # retries only, to protect the $20 Anthropic credit (E2E budget <= $1 total).
 # Frontier-classified agent tasks stay on DeepSeek's own Frontier model
 # (v4-pro) rather than downgrading to v4-flash or escaping to Anthropic.
-"agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-flash" }
+# Agent default upgraded to V4 Pro: Flash can't produce compiling TypeScript+Hono
+# code (Runs 30-32: every attempt failed tsc baseline). Pro is 12x Flash but still
+# cheaper than Sonnet ($1.74/$3.48 vs $3/$15). Frontier stays on Pro (no-op).
+"agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
 "decomposition" = "deepseek-v4-flash"
 "brainstorm" = "deepseek-v4-flash"
 "northstar" = "deepseek-v4-flash"
 "spec-derivation" = "deepseek-v4-flash"
 "alignment" = "deepseek-v4-flash"
 "judge:model" = "deepseek-v4-flash"
-# claude-opus-4-8, NOT claude-fable-5 -- half the price, per Plan C's cost fear.
 "judge:frontier" = "claude-opus-4-8"
 "escalation" = "claude-sonnet-4-6"
-"acceptance" = "claude-sonnet-5"
+# Acceptance upgraded to V4 Pro: Sonnet 5 false-accepted with 0 completions (Run 32).
+# Pro should correctly identify "nothing was built" from work item statuses.
+"acceptance" = "deepseek-v4-pro"
 "replan" = "claude-sonnet-4-6"

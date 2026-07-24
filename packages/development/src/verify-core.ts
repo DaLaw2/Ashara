@@ -9,6 +9,7 @@ import {
   runDeterministicChecks,
 } from "./check-runner.js";
 import type { CoreTierResult } from "./check-runner.js";
+import { readVerifyConfig } from "./verify-config.js";
 
 // ---------------------------------------------------------------------------
 // Shared verify check library (Phase 2, mig-phase-2).
@@ -227,8 +228,22 @@ export async function runVerifyCore(
     return toolchainFailure;
   }
 
+  const verifyConfig = await readVerifyConfig(input.workDir);
+  const configChecks = verifyConfig.checks.map((c) => c.command);
+  const hasVerifyToml = configChecks.length > 0;
+
+  if (hasVerifyToml) {
+    log?.({
+      event: "verify_toml_loaded",
+      checks: verifyConfig.checks.map((c) => ({ name: c.name, command: c.command })),
+    });
+  }
+
   const baselines = await detectBaselineChecks(input.workDir);
-  const uniqueBaselines = baselines.filter((b) => !hasExistingCheck(input.checks, b.label));
+  const allExplicitChecks = hasVerifyToml ? configChecks : [];
+  const uniqueBaselines = hasVerifyToml
+    ? baselines.filter((b) => !hasExistingCheck(configChecks, b.label))
+    : baselines.filter((b) => !hasExistingCheck(input.checks, b.label));
 
   if (uniqueBaselines.length > 0) {
     log?.({
@@ -237,9 +252,14 @@ export async function runVerifyCore(
     });
   }
 
+  const taskChecksToAdd = hasVerifyToml
+    ? input.checks.filter((c) => !configChecks.includes(c))
+    : input.checks;
+
   const allChecks = [
+    ...allExplicitChecks,
     ...uniqueBaselines.map((b) => b.command),
-    ...input.checks,
+    ...taskChecksToAdd,
   ];
 
   const executableChecks = allChecks.filter(isAllowedCheck);
