@@ -206,7 +206,7 @@ export async function loadGatewayConfigFromApi(
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
     const envKey = keysByProvider[p.name];
-    const hasCredentials = envKey !== undefined || (p.name === "local" && (keys.localLlmUrl ?? p.baseUrl) !== undefined);
+    const hasCredentials = envKey !== undefined || (p.name === "local" && (keys.localLlmUrl ?? p.baseUrl) != null);
     if (!hasCredentials) continue;
     providers.push({
       name: p.name,
