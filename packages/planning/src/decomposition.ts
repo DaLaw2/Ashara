@@ -228,7 +228,7 @@ export class DecompositionEngine {
             id: scaffoldId,
             level: "task",
             title: `Create project scaffold: manifest, entry point, directory structure`,
-            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack (${input.knowledge ? nodeLabels(input.knowledge, "language").join(", ") || "the project's tech stack" : "the project's tech stack"}). Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project (e.g. typecheck = "npx tsc --noEmit", test = "npm test"). All other tasks depend on this.`,
+            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack (${input.knowledge ? nodeLabels(input.knowledge, "language").join(", ") || "the project's tech stack" : "the project's tech stack"}). Install dependencies if needed. Create a verify.toml at the project root with a [checks] section listing the verification commands appropriate for this project's language and build tools. All other tasks depend on this.`,
             successCriteria: ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"],
             parentId: tasks[0].parentId,
             dependsOn: [],
@@ -583,10 +583,10 @@ export class DecompositionEngine {
 
         const lower = text.toLowerCase();
         if (/\bpage\b|\bview\b|\bcomponent\b/.test(lower)) {
-            return [`public/index.html or src/pages/ component for ${task.title}`];
+            return [`UI source file for ${task.title}`];
         }
         if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            return [`src/commands/ handler for ${task.title}`];
+            return [`CLI command handler for ${task.title}`];
         }
 
         return [task.description || task.title];
@@ -606,10 +606,10 @@ export class DecompositionEngine {
             return "Only modify API route handlers and their direct dependencies";
         }
         if (/\bpage\b|\bview\b|\bcomponent\b|\bui\b/.test(lower)) {
-            return "Only modify files in public/, src/pages/, and src/components/";
+            return "Only modify UI-related source files";
         }
         if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            return "Only modify files in src/commands/ and src/cli/";
+            return "Only modify CLI command source files";
         }
         if (/\bmigration\b|\bschema\b|\bdatabase\b/.test(lower)) {
             return "Only modify database migration and schema files";

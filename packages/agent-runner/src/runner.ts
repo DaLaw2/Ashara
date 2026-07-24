@@ -79,10 +79,8 @@ export class AgentRunner {
 
         // 3. Build project profile for tool prompt context
         let toolPromptCtx: ToolPromptContext | undefined;
-        let detectedTechStack: string[] | undefined;
         try {
             const profile = await buildAutoProfile(this.config.workingDir);
-            detectedTechStack = profile.techStack;
             toolPromptCtx = {
                 language: profile.techStack[0],
                 buildCommand: profile.buildCommand,
@@ -99,7 +97,7 @@ export class AgentRunner {
         // 5. Resolve format group and build system prompt
         const formatGroup = resolveFormatGroup(this.gateway, this.config.capability);
         const toolPrompts = registry.collectPrompts(toolPromptCtx);
-        const staticSystemPrompt = buildStaticSystemPrompt(formatGroup, toolPrompts, detectedTechStack);
+        const staticSystemPrompt = buildStaticSystemPrompt(formatGroup, toolPrompts);
         const dynamicSystemPrompt = buildDynamicSystemPrompt(brief);
 
         // 4. Build gateway-compatible tool definitions, filtered by resolved model capability
@@ -324,7 +322,7 @@ export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
     return lines.join("\n");
 }
 
-export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: string[], techStack?: string[]): string {
+export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: string[]): string {
     const sections: string[] = [];
 
     sections.push(
@@ -356,15 +354,15 @@ export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: stri
                 "code here",
                 "```",
                 "For example:",
-                "```typescript:src/index.ts",
-                `console.log("hello");`,
+                "```python:app.py",
+                `print("hello")`,
                 "```",
                 "Every code block must include the file path after the language tag, separated by a colon.",
             ].join("\n"),
         );
     }
 
-    sections.push(buildDoingTasksSection(techStack));
+    sections.push(buildDoingTasksSection());
 
     sections.push(
         [
@@ -400,43 +398,11 @@ export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: stri
     return sections.join("\n\n");
 }
 
-function buildDoingTasksSection(techStack?: string[]): string {
-    const stack = techStack ?? [];
-    const isRust = stack.some((s) => s.includes("Rust"));
-    const isGo = stack.some((s) => s.includes("Go"));
-    const isPython = stack.some((s) => s.includes("Python"));
-    const isJS = stack.some((s) => s.includes("JavaScript") || s.includes("TypeScript") || s.includes("Node") || s.includes("Bun"));
-
-    let manifestLine: string;
-    let depLine: string;
-    let verifyLine: string;
-
-    if (isRust) {
-        manifestLine = `If the working directory already contains files, READ Cargo.toml and the entry point FIRST.`;
-        depLine = `Prefer dependencies already in Cargo.toml. If the task requires new ones, add them with cargo add and use them.`;
-        verifyLine = `After making changes, verify them by running cargo check, cargo clippy, and cargo test.`;
-    } else if (isGo) {
-        manifestLine = `If the working directory already contains files, READ go.mod and the entry point FIRST.`;
-        depLine = `Prefer dependencies already in go.mod. If the task requires new ones, add them with go get and use them.`;
-        verifyLine = `After making changes, verify them by running go build ./... and go test ./....`;
-    } else if (isPython) {
-        manifestLine = `If the working directory already contains files, READ pyproject.toml (or requirements.txt) and the entry point FIRST.`;
-        depLine = `Prefer dependencies already declared. If the task requires new ones, add them to the project's dependency file.`;
-        verifyLine = `After making changes, verify them by running the project's test and lint commands.`;
-    } else if (isJS) {
-        manifestLine = `If the working directory already contains files, READ package.json and the entry point FIRST.`;
-        depLine = `Prefer dependencies already in package.json. If the task requires new ones, add them with npm install and use them.`;
-        verifyLine = `After making changes, verify them by running build commands (e.g. tsc, npm run build) or test commands (e.g. npm test, vitest).`;
-    } else {
-        manifestLine = `If the working directory already contains files, READ the project manifest (package.json, Cargo.toml, go.mod, pyproject.toml) and the entry point FIRST.`;
-        depLine = `Prefer dependencies already declared. If the task requires new ones, use the project's package manager to add them.`;
-        verifyLine = `After making changes, verify them with the project's build and test commands.`;
-    }
-
+function buildDoingTasksSection(): string {
     return [
         `# Doing tasks`,
-        manifestLine,
-        depLine,
+        `If the working directory already contains files, READ the project manifest and the entry point FIRST.`,
+        `Prefer dependencies already declared. If the task requires new ones, use the project's package manager to add them.`,
         `Follow the patterns you observe in existing code.`,
         `Do NOT create alternative entry points or install conflicting libraries.`,
         `The project entry point is EDIT-ONLY: modify it with targeted edits; never delete-and-recreate it or replace it wholesale.`,
@@ -445,7 +411,7 @@ function buildDoingTasksSection(techStack?: string[]): string {
         `Read existing code before making changes. Understand the current state first.`,
         `Make the smallest correct change. Do not refactor, add features, or improve beyond scope.`,
         `Match the existing code style. Do not invent new patterns.`,
-        verifyLine,
+        `After making changes, verify them with the project's build and test commands.`,
     ].join("\n");
 }
 

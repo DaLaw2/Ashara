@@ -31,20 +31,19 @@ export interface ContractAmender {
     amendOnCompletion(taskId: string, deliverables: CompletionDeliverables): Promise<void>;
 }
 
-const SOURCE_MODULE_PATTERN = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+const NON_SOURCE_PATTERN = /\.(json|toml|yaml|yml|md|txt|lock|css|html|svg|png|jpg|gif|ico|woff2?|map|sum|mod)$/;
 const TEST_FILE_PATTERN = /\.(test|spec)\./;
 
 /**
- * Selects, from a task's changed files, the ones that are reusable source modules:
- * source-language files that are not tests, type declarations, or the shared entry
- * point (the entry point is edit-only wiring, not a module downstream tasks import).
- * When entryPointPath is provided (from the contract), that exact path is excluded.
+ * Selects, from a task's changed files, the ones that are reusable source modules.
+ * Uses an exclude-list (non-source patterns) rather than an include-list of known
+ * language extensions — works for any language without maintenance (ADR-045).
  */
 export function selectModulePaths(changedFiles: readonly string[], entryPointPath: string | null): string[] {
     const entryPoints = entryPointPath !== null ? new Set([entryPointPath]) : new Set<string>();
     const selected = new Set<string>();
     for (const file of changedFiles) {
-        if (!SOURCE_MODULE_PATTERN.test(file)) continue;
+        if (NON_SOURCE_PATTERN.test(file)) continue;
         if (TEST_FILE_PATTERN.test(file)) continue;
         if (file.endsWith(".d.ts")) continue;
         if (entryPoints.has(file)) continue;

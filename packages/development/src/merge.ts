@@ -127,7 +127,7 @@ export function buildMergeAgentBrief(task: TaskDescriptor, conflictFiles: string
     "",
     "## Rules",
     '- Preserve BOTH sides\' changes: "ours" (main, previously completed tasks) and "theirs" (this task\'s branch)',
-    "- Imports, route registrations, and package.json dependencies: keep the union of both sides",
+    "- Import statements, route registrations, and dependency declarations: keep the union of both sides",
     "- Remove ALL conflict markers (<<<<<<<, =======, >>>>>>>)",
     "- Do NOT delete working code from either side",
   ].join("\n");

@@ -96,9 +96,7 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
             dependsOn: [],
         };
         const spec = engine.generateTaskSpec(task, input);
-        expect(spec.scope).toContain("public/");
-        expect(spec.scope).toContain("src/pages/");
-        expect(spec.scope).toContain("src/components/");
+        expect(spec.scope).toContain("UI-related");
     });
 
     test("deriveScope: command/cli triggers CLI scope", () => {
@@ -113,8 +111,7 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
             dependsOn: [],
         };
         const spec = engine.generateTaskSpec(task, input);
-        expect(spec.scope).toContain("src/commands/");
-        expect(spec.scope).toContain("src/cli/");
+        expect(spec.scope).toContain("CLI command");
     });
 
     test("deriveDeliverables: page task gets frontend deliverable", () => {
@@ -129,7 +126,7 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
             dependsOn: [],
         };
         const spec = engine.generateTaskSpec(task, input);
-        expect(spec.deliverables[0]).toContain("public/index.html");
+        expect(spec.deliverables[0]).toContain("UI source file");
     });
 
     test("deriveDeliverables: CLI task gets commands deliverable", () => {
@@ -144,7 +141,7 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
             dependsOn: [],
         };
         const spec = engine.generateTaskSpec(task, input);
-        expect(spec.deliverables[0]).toContain("src/commands/");
+        expect(spec.deliverables[0]).toContain("CLI command handler");
     });
 
     test("deriveChecks: page task gets markup check", () => {

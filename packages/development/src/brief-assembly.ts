@@ -97,7 +97,7 @@ export function formatSystemPrompt(): string {
         "- Only modify files within the specified scope",
         "- Write code that passes all deterministic checks",
         "- Use English for all code, comments, and documentation",
-        "- The project entry point (src/index.ts or equivalent) is EDIT-ONLY: modify it with targeted edits; never delete-and-recreate it or replace it wholesale",
+        "- The project entry point is EDIT-ONLY: modify it with targeted edits; never delete-and-recreate it or replace it wholesale",
         "- Preserve the entry point's existing imports and route mounts unless the task explicitly says to remove them",
         "",
         "# Output Format",
