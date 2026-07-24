@@ -67,6 +67,7 @@ export async function observeProduct(
   targetProjectPath: string,
   deps: ObserveDeps = {},
   contractEntryPoint: string | null = null,
+  contractEndpoints?: ReadonlyArray<{ readonly method: string; readonly path: string }>,
 ): Promise<ProductObservation> {
   const pkgJsonPath = join(targetProjectPath, "package.json");
   const hasPkgJson = await access(pkgJsonPath).then(() => true, () => false);
@@ -175,8 +176,20 @@ export async function observeProduct(
     }
 
     const derivation = await deriveEndpoints(targetProjectPath, contractEntryPoint);
-    const endpointsToProbe = derivation.endpoints.length > 0
-      ? derivation.endpoints
+    const seen = new Set<string>();
+    const merged: Array<{ method: string; path: string }> = [];
+    for (const ep of derivation.endpoints) {
+      const key = `${ep.method} ${ep.path}`;
+      if (!seen.has(key)) { seen.add(key); merged.push(ep); }
+    }
+    if (contractEndpoints) {
+      for (const ep of contractEndpoints) {
+        const key = `${ep.method} ${ep.path}`;
+        if (!seen.has(key)) { seen.add(key); merged.push(ep); }
+      }
+    }
+    const endpointsToProbe = merged.length > 0
+      ? merged
       : [{ method: "GET" as const, path: "/" }];
 
     const probes: EndpointProbe[] = [];

@@ -666,8 +666,7 @@ export class DevelopmentService {
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
     const finalizeResult = await finalizeSuccess(this.deps, workDir, sessionId, task, targetProjectPath, 1, taskChecks, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
-      language: contract ? nodeLabel(contract.knowledge, "language") ?? null : null,
-      excludePaths: contract?.excludePaths,
+      endpoints: contract?.endpoints.map(e => ({ method: e.method, path: e.path })),
     });
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer

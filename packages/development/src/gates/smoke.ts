@@ -95,13 +95,14 @@ export async function runSmokeTest(
   targetProjectPath: string,
   deps: SmokeTestDeps = {},
   contractEntryPoint: string | null = null,
+  contractEndpoints?: ReadonlyArray<{ readonly method: string; readonly path: string }>,
 ): Promise<GateResult> {
   try {
     const observation = await observeProduct(targetProjectPath, {
       prepareToolchain: deps.prepareToolchain,
       toolchainRunner: deps.toolchainRunner,
       toolchainLog: deps.toolchainLog,
-    }, contractEntryPoint);
+    }, contractEntryPoint, contractEndpoints);
 
     if (!observation.booted) {
       return { passed: false, output: `smoke test failed: ${observation.bootOutput}` };

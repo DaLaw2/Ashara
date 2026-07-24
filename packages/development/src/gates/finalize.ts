@@ -27,8 +27,7 @@ export interface FinalizeResult {
 
 export interface FinalizeContractInfo {
   readonly entryPointPath: string | null;
-  readonly language: string | null;
-  readonly excludePaths?: readonly string[];
+  readonly endpoints?: ReadonlyArray<{ readonly method: string; readonly path: string }>;
 }
 
 export interface FinalizeDeps {
@@ -81,7 +80,7 @@ export async function finalizeSuccess(
   targetProjectPath: string | null,
   attempt: number,
   taskChecks: readonly string[],
-  contractInfo: FinalizeContractInfo = { entryPointPath: null, language: null },
+  contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
   try {
     await commitAllChanges(workDir, `ashara: agent output for task ${task.id}`);
@@ -185,11 +184,7 @@ export async function finalizeSuccess(
     if (deps.integrationGateRunner) {
       integrationGate = await deps.integrationGateRunner(targetProjectPath);
     } else {
-      integrationGate = await runIntegrationGate(targetProjectPath, {
-        contractEntryPoint: contractInfo.entryPointPath,
-        contractLanguage: contractInfo.language,
-        contractExcludePaths: contractInfo.excludePaths,
-      });
+      integrationGate = await runIntegrationGate(targetProjectPath);
     }
     deps.eventSink?.emit({
       event: "integration_gate",
@@ -214,14 +209,17 @@ export async function finalizeSuccess(
       );
     }
 
-    const smokeTrigger = await detectHttpSurfaceChange(targetProjectPath, preMergeHead, contractInfo.entryPointPath);
+    const hasContractEndpoints = contractInfo.endpoints !== undefined && contractInfo.endpoints.length > 0;
+    const smokeTrigger = hasContractEndpoints
+      ? "contract declares endpoints"
+      : await detectHttpSurfaceChange(targetProjectPath, preMergeHead, contractInfo.entryPointPath);
 
     if (smokeTrigger !== null) {
       console.log(`[${task.id}] smoke test triggered: ${smokeTrigger}`);
       if (deps.smokeTestRunner) {
         smokeTest = await deps.smokeTestRunner(targetProjectPath);
       } else {
-        smokeTest = await runSmokeTest(targetProjectPath, {}, contractInfo.entryPointPath);
+        smokeTest = await runSmokeTest(targetProjectPath, {}, contractInfo.entryPointPath, contractInfo.endpoints);
       }
       deps.eventSink?.emit({
         event: "smoke_test",
