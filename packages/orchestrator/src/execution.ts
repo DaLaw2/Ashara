@@ -1,24 +1,24 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository, CoverageHold } from "@ashara/planning";
+import { wrapError } from "@ashara/shared";
+import type { ErrorEnvelope } from "@ashara/shared";
+import type { WorkItem, WorkItemRepository, CoverageHold, RawFailureContext } from "./acl/planning-acl.js";
 import {
   PlanningService,
   canTransitionTo,
   failWorkItem,
   takeEvents,
   startWorkItem,
-} from "@ashara/planning";
-import type { DevelopmentService, TaskDescriptor } from "@ashara/development";
-import type { RawFailureContext } from "@ashara/planning";
-import { wrapError } from "@ashara/shared";
-import type { ErrorEnvelope } from "@ashara/shared";
-import { createCoverageRollupGuard } from "@ashara/planning";
-
-import { extractImplicatedFiles, attributeFilesToTasks } from "@ashara/development";
+  createCoverageRollupGuard,
+  recoverFailedItem,
+  shouldSplit,
+  splitFailedTask,
+} from "./acl/planning-acl.js";
+import type { DevelopmentService, TaskDescriptor } from "./acl/development-acl.js";
+import { extractImplicatedFiles, attributeFilesToTasks } from "./acl/development-acl.js";
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
-import { recoverFailedItem, shouldSplit, splitFailedTask } from "@ashara/planning";
 import { createBugFixTask } from "./bug-fix.js";
 
 export interface ExecutionRoutingDeps {

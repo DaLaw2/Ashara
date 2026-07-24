@@ -1,7 +1,7 @@
-import type { WorkItemRepository } from "@ashara/planning";
-import { createPendingWorkItem, PlanningService } from "@ashara/planning";
-import type { AttributionResult } from "@ashara/development";
 import { parseWorkItemId } from "@ashara/shared";
+import type { WorkItemRepository } from "./acl/planning-acl.js";
+import { createPendingWorkItem, PlanningService } from "./acl/planning-acl.js";
+import type { AttributionResult } from "./acl/development-acl.js";
 
 export interface BugFixTaskSpec {
   readonly goal: string;

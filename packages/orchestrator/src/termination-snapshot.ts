@@ -1,6 +1,6 @@
-import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, TerminationPlanExhausted } from "@ashara/planning";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectContract } from "@ashara/shared";
+import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, TerminationPlanExhausted } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
   evaluate,
@@ -11,7 +11,7 @@ import {
   buildVisionGaps,
   buildAcceptanceVerdict,
   createPendingWorkItem,
-} from "@ashara/planning";
+} from "./acl/planning-acl.js";
 
 import type { CoreLoopDeps, TerminationOutcome } from "./types.js";
 

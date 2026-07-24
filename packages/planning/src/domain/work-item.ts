@@ -5,9 +5,9 @@ import {
   type DomainEvent,
   createWorkItemId,
   createDomainEvent,
+  canTransitionTo,
+  InvalidStatusTransition,
 } from "@ashara/shared";
-
-import { InvalidStatusTransition } from "./errors.js";
 
 export interface WorkItem {
   id: WorkItemId;
@@ -67,28 +67,9 @@ export function createTask(
   return createPendingWorkItem("Task", title, parentId, undefined, taskSpec);
 }
 
-/**
- * Single source of truth for the WorkItem state machine. Both the domain
- * mutation methods below and the physical writer (WorkItemRepository.save in
- * @ashara/db) validate against this table, so the invariant holds by
- * enforcement rather than convention (ADR-029).
- */
-export function canTransitionTo(from: WorkItemStatus, to: WorkItemStatus): boolean {
-  return (
-    (from === "Pending" && to === "InProgress") ||
-    (from === "InProgress" && to === "Completed") ||
-    (from === "InProgress" && to === "Blocked") ||
-    (from === "InProgress" && to === "Failed") ||
-    // Crash-orphan reset (Discipline B): a process that dies mid-dispatch leaves
-    // its item InProgress with no agent owning it; a fresh process requeues it so
-    // the gate (Pending-only) can re-dispatch it. See requeueWorkItem.
-    (from === "InProgress" && to === "Pending") ||
-    (from === "Pending" && to === "Blocked") ||
-    (from === "Blocked" && to === "Pending") ||
-    (from === "Failed" && to === "Pending") ||
-    (from === "Failed" && to === "Abandoned")
-  );
-}
+// canTransitionTo is now in @ashara/shared (Published Language, ADR-044).
+// Re-exported here for backward compatibility during the ACL migration.
+export { canTransitionTo } from "@ashara/shared";
 
 export function startWorkItem(item: WorkItem): void {
   if (!canTransitionTo(item.status, "InProgress")) {

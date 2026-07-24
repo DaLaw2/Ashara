@@ -1,7 +1,11 @@
 import { and, eq, isNull, asc, sql } from "drizzle-orm";
 
-import { parseWorkItemStatus } from "@ashara/shared";
-import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "@ashara/planning";
+import {
+  parseWorkItemStatus,
+  canTransitionTo,
+  InvalidStatusTransition,
+  WorkItemNotFound,
+} from "@ashara/shared";
 
 import type { DbHandle } from "../connection.js";
 import { workItems, dependencies } from "../schema.js";

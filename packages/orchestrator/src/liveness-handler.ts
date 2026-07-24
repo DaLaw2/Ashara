@@ -1,4 +1,4 @@
-import { recoverFromAbandoned } from "@ashara/planning";
+import { recoverFromAbandoned } from "./acl/planning-acl.js";
 
 import type { CoreLoopDeps } from "./types.js";
 

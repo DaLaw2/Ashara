@@ -6,9 +6,10 @@ import {
   type ProjectId,
   type ProjectContract,
   type ContractBody,
+  type ContractRepository as ContractRepositoryPort,
+  RepositoryError,
+  ContractVersionConflict,
 } from "@ashara/shared";
-import type { ContractRepository as ContractRepositoryPort } from "@ashara/planning";
-import { RepositoryError, ContractVersionConflict } from "@ashara/planning";
 
 import type { DbHandle } from "../connection.js";
 import { projectContracts } from "../schema.js";

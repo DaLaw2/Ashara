@@ -2,9 +2,9 @@ import { join } from "node:path";
 
 import type { WorkItemId } from "@ashara/shared";
 import type { FailedApproachRepository } from "@ashara/db";
-import type { WorkItem, WorkItemRepository } from "@ashara/planning";
-import { PlanningService } from "@ashara/planning";
-import { assertValidTargetProjectPath } from "@ashara/development";
+import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
+import { PlanningService } from "./acl/planning-acl.js";
+import { assertValidTargetProjectPath } from "./acl/development-acl.js";
 
 // Narrow structural view of the vision persistence needed to mint, validate,
 // and persist a target project path. VisionRepository satisfies this; the

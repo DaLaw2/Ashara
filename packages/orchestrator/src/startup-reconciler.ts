@@ -5,10 +5,8 @@ import { promisify } from "node:util";
 
 import type { DomainEvent } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
-import type { WorkItem, WorkItemRepository } from "@ashara/planning";
-import { requeueWorkItem, takeEvents } from "@ashara/planning";
-import type { FailureRouter, RawFailureContext, FailureRecoveryDeps } from "@ashara/planning";
-import { recoverFailedItem } from "@ashara/planning";
+import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
+import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
 
 const execFileAsync = promisify(execFile);
 

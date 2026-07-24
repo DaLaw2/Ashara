@@ -1,4 +1,3 @@
-import type { RunSummary, TerminationDecision, ReplanLLM } from "@ashara/planning";
 import type {
   EventStoreRepository,
   BrainstormLogRepository,
@@ -7,15 +6,22 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { WorkItemRepository, ContractRepository } from "@ashara/planning";
-import type { BrainstormEngine, NorthStarChecker, DecompositionEngine } from "@ashara/planning";
-import type { ProposalEmbedder } from "@ashara/planning";
-import type { AcceptanceLLM } from "@ashara/planning";
-import type { FailureRouter } from "@ashara/planning";
-import type { DevelopmentService } from "@ashara/development";
 import type { ProductObservation } from "@ashara/shared";
-
-import type { ContractRegistryLookup } from "@ashara/planning";
+import type {
+  RunSummary,
+  TerminationDecision,
+  ReplanLLM,
+  WorkItemRepository,
+  ContractRepository,
+  BrainstormEngine,
+  NorthStarChecker,
+  DecompositionEngine,
+  ProposalEmbedder,
+  AcceptanceLLM,
+  FailureRouter,
+  ContractRegistryLookup,
+} from "./acl/planning-acl.js";
+import type { DevelopmentService } from "./acl/development-acl.js";
 import type { EventLogger } from "./event-logger.js";
 
 export interface CoreLoopConfig {

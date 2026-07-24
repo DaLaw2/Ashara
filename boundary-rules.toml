@@ -1,0 +1,36 @@
+# ADR-044: Import boundary rules
+# Each BC declares which @ashara/* packages it may import from.
+# Composition root (server) is exempt — it wires everything.
+# "shared" is the Published Language / Shared Kernel.
+
+[orchestrator]
+# planning + development allowed ONLY via acl/ (convention-enforced; lint lacks per-dir granularity)
+# db is infrastructure, not a BC boundary
+allow = ["shared", "db", "planning", "development"]
+
+[planning]
+allow = ["shared", "llm-gateway"]
+
+[development]
+allow = ["shared", "llm-gateway", "memory"]
+
+[agent-runner]
+allow = ["shared", "llm-gateway", "development"]
+
+[db]
+allow = ["shared"]
+
+[engagement]
+allow = ["shared", "llm-gateway"]
+
+[memory]
+allow = []
+
+[cli]
+allow = ["shared", "llm-gateway", "engagement", "planning"]
+
+[server]
+allow = ["*"]
+
+[llm-gateway]
+allow = ["shared"]

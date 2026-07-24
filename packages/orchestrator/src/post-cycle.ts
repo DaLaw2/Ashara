@@ -1,12 +1,12 @@
-import type { WorkItem } from "@ashara/planning";
-import type { BrainstormOrchestrationDeps } from "@ashara/planning";
+import type { WorkItem } from "./acl/planning-acl.js";
+import type { BrainstormOrchestrationDeps } from "./acl/planning-acl.js";
 import {
   checkNorthStarAlignment,
   checkBrainstormTriggers,
   executeBrainstorm,
   executeGatedBrainstorm,
   reconcileCoverage,
-} from "@ashara/planning";
+} from "./acl/planning-acl.js";
 
 import type { CycleResult, CoreLoopDeps } from "./types.js";
 

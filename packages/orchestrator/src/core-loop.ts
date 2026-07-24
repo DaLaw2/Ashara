@@ -1,7 +1,6 @@
-import type { WorkItem } from "@ashara/planning";
-import { PlanningService, DependencyGraph } from "@ashara/planning";
-import { decomposeLeafStories } from "@ashara/planning";
-import { detectTechStack, readManifestContext } from "@ashara/development";
+import type { WorkItem } from "./acl/planning-acl.js";
+import { PlanningService, DependencyGraph, decomposeLeafStories } from "./acl/planning-acl.js";
+import { detectTechStack, readManifestContext } from "./acl/development-acl.js";
 
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";

@@ -2,7 +2,7 @@ import { listenForEvents } from "@ashara/db";
 import type { PgListener } from "@ashara/db";
 
 import type { CycleResult } from "./types.js";
-import { emitRunSummary } from "@ashara/planning";
+import { emitRunSummary } from "./acl/planning-acl.js";
 import type { EventLogger } from "./event-logger.js";
 
 /** The one method the runner drives — CoreLoop satisfies it; tests supply a double. */
