@@ -593,7 +593,8 @@ async function assertModuleCoherence(targetPath: string, log?: ToolchainLogFn): 
   if (pkg === null) return;
 
   const requiredType = PACKAGE_TYPE_FOR[ts.system];
-  if (pkg.type === requiredType) {
+  const effectiveType = pkg.type ?? "commonjs";
+  if (effectiveType === requiredType) {
     log?.({
       event: "toolchain_coherence",
       cwd: targetPath,
