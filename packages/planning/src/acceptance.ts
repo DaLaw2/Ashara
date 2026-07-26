@@ -4,7 +4,16 @@ import type { ProductObservation } from "@ashara/shared";
 import type { ProjectContract, Endpoint } from "@ashara/shared";
 import type { StructuredLLMProvider } from "./gateway-adapters.js";
 
-export type AcceptanceOutcome = "accepted" | "rejected" | "accepted-with-caveats";
+/**
+ * `unverified` means the acceptance check never produced a verdict — it threw,
+ * or the inputs it needs were absent. It is deliberately NOT collapsed onto
+ * `accepted-with-caveats`: absence of a verdict is not a passing verdict
+ * (Discipline A).
+ */
+export type AcceptanceOutcome = "accepted" | "rejected" | "accepted-with-caveats" | "unverified";
+
+/** Why an acceptance check could not produce a verdict. */
+export type AcceptanceUnverifiedCause = "no-checker-configured" | "no-vision" | "check-threw";
 
 export interface AcceptanceGap {
   readonly ref: string;
@@ -21,6 +30,8 @@ export interface AcceptanceVerdict {
   readonly gaps: readonly AcceptanceGap[];
   readonly attempt: number;
   readonly maxAttempts: number;
+  /** Set only when `outcome` is "unverified": self-sufficient reason the check could not run. */
+  readonly unverifiedReason?: string;
 }
 
 export interface WorkItemSummary {
@@ -188,4 +199,49 @@ export function buildAcceptanceVerdict(
         : "rejected";
 
   return { outcome, gaps, attempt, maxAttempts };
+}
+
+/**
+ * The verdict for a check that never ran. `detail` accepts the raw thrown value
+ * so the full cause chain survives into the reason — collapsing it to
+ * `String(error)` would drop everything below the outermost error.
+ */
+export function buildUnverifiedVerdict(
+  cause: AcceptanceUnverifiedCause,
+  detail: unknown,
+  attempt: number,
+  maxAttempts: number,
+): AcceptanceVerdict {
+  return {
+    outcome: "unverified",
+    gaps: [],
+    attempt,
+    maxAttempts,
+    unverifiedReason: `${cause}: ${describeCauseChain(detail)}`,
+  };
+}
+
+function describeCauseChain(value: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = value;
+
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    parts.push(`${current.name}: ${current.message}`);
+    current = current.cause;
+  }
+
+  if (parts.length === 0) return describeValue(value);
+  if (current !== undefined && current !== null) parts.push(describeValue(current));
+  return parts.join(" <- caused by ");
+}
+
+function describeValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }

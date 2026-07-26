@@ -19,7 +19,13 @@ import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
  */
 export type TerminationReason = "completeness" | "economy" | "liveness";
 
-export type StopReason = "economy" | "accepted" | "accepted-with-caveats";
+/**
+ * Why a plan-exhausted run settled. `unverified` is the honest outcome when the
+ * acceptance check never produced a verdict: the plan ran out, but nothing
+ * confirms the vision was met. It must stay distinct from both accepting
+ * reasons so a reader can tell "checked and fine" from "never checked".
+ */
+export type StopReason = "economy" | "accepted" | "accepted-with-caveats" | "unverified";
 
 /**
  * Why a single non-terminal item cannot progress, attributed at the liveness

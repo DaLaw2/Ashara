@@ -13,6 +13,7 @@ import type {
     ToolDefinition as GatewayToolDefinition,
 } from "@ashara/llm-gateway";
 import type { CapabilityLevel } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR } from "@ashara/shared";
 
 import type { ToolResult } from "./tools/types.js";
 import type { ToolRegistry } from "./tools/index.js";
@@ -709,7 +710,7 @@ export class AgentConversation {
     }
 
     private async truncateResult(result: ToolResult, maxChars: number, toolCallId: string): Promise<ToolResult> {
-        const overflowDir = join(this.config.workingDir!, ".ashara", "tool-overflow");
+        const overflowDir = join(this.config.workingDir!, ASHARA_CONTROL_DIR, "tool-overflow");
         await mkdir(overflowDir, { recursive: true });
         const overflowPath = join(overflowDir, `${toolCallId}.txt`);
         await writeFile(overflowPath, result.output, "utf-8");

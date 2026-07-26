@@ -27,9 +27,18 @@ export type RunSummaryDecision = TerminationStop | (TerminationPlanExhausted & {
 
 function deriveStopReason(decision: TerminationStop | TerminationPlanExhausted, acceptance?: AcceptanceVerdict): StopReason {
   if (decision.decision === "stop") return decision.reason as StopReason;
-  if (acceptance?.outcome === "accepted") return "accepted";
-  if (acceptance?.outcome === "accepted-with-caveats") return "accepted-with-caveats";
-  return "accepted";
+  // No verdict at all is not a passing verdict — the plan exhausted without
+  // anything confirming the vision was met.
+  if (acceptance === undefined) return "unverified";
+  switch (acceptance.outcome) {
+    case "accepted":
+      return "accepted";
+    case "rejected":
+    case "accepted-with-caveats":
+      return "accepted-with-caveats";
+    case "unverified":
+      return "unverified";
+  }
 }
 
 function deriveAbandonedRoots(decision: TerminationStop | TerminationPlanExhausted): readonly string[] {
@@ -49,7 +58,15 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     : { decision: "stop", reason: decision.trigger, counts: decision.counts, stalled: stalledItems, abandonedRoots: [...abandonedRoots] };
   const gaps = buildGaps(input.items, gapDecision, byId);
   const endpointGaps = input.endpointGaps ?? [];
-  const narrative = buildNarrative(stopReason, decision.counts, shipped, abandoned, gaps, endpointGaps);
+  const narrative = buildNarrative(
+    stopReason,
+    decision.counts,
+    shipped,
+    abandoned,
+    gaps,
+    endpointGaps,
+    input.acceptance?.unverifiedReason,
+  );
 
   const summary: RunSummary = {
     stopReason,
@@ -235,13 +252,19 @@ function buildNarrative(
   abandoned: readonly AbandonedItem[],
   gaps: readonly CoverageGap[],
   endpointGaps: readonly EndpointCoverageGap[],
+  unverifiedReason?: string,
 ): string {
   const headlineMap: Record<StopReason, string> = {
     economy: "Run stopped because the budget was exhausted while dispatchable work remained.",
     accepted: "Run completed — vision acceptance check confirmed all requirements are met.",
     "accepted-with-caveats": "Run completed with caveats — some gaps remain but the acceptance iteration cap was reached.",
+    unverified:
+      "Run stopped UNVERIFIED — the plan was exhausted but the acceptance check never produced a verdict, so nothing confirms the vision was met. Treat the output as unvalidated.",
   };
-  const headline = headlineMap[reason];
+  const headline =
+    unverifiedReason !== undefined && reason === "unverified"
+      ? `${headlineMap[reason]} Cause: ${unverifiedReason}.`
+      : headlineMap[reason];
 
   const shippedNote = `${shipped.length} item(s) shipped (Completed).`;
   const abandonedNote =
