@@ -1,6 +1,6 @@
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectContract } from "@ashara/shared";
-import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, TerminationPlanExhausted } from "./acl/planning-acl.js";
+import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
   evaluate,
@@ -10,6 +10,7 @@ import {
   buildDeterministicGaps,
   buildVisionGaps,
   buildAcceptanceVerdict,
+  buildUnverifiedVerdict,
   createPendingWorkItem,
 } from "./acl/planning-acl.js";
 
@@ -49,7 +50,7 @@ async function handlePlanExhausted(
 ): Promise<TerminationOutcome> {
   const acceptance = await runAcceptanceCheck(deps, items);
 
-  if (acceptance && acceptance.outcome === "rejected") {
+  if (acceptance.outcome === "rejected") {
     const maxGapAttempts = deps.config.maxGapAttempts ?? 2;
     if (deps.acceptanceAttempts < maxGapAttempts) {
       await createGapTasks(deps, acceptance.gaps);
@@ -57,11 +58,7 @@ async function handlePlanExhausted(
     }
   }
 
-  const stopReason = acceptance === null
-    ? "accepted-with-caveats" as const
-    : acceptance.outcome === "accepted"
-      ? "accepted" as const
-      : "accepted-with-caveats" as const;
+  const stopReason: StopReason = deriveStopReason(acceptance);
 
   const stopDecision = {
     decision: "stop" as const,
@@ -71,28 +68,52 @@ async function handlePlanExhausted(
     abandonedRoots: [] as string[],
   };
 
-  const summary = buildRunSummary(
-    { items, endpointGaps, acceptance: acceptance ?? undefined },
-    decision,
-  );
+  const summary = buildRunSummary({ items, endpointGaps, acceptance }, decision);
 
   return { decision: stopDecision, summary };
+}
+
+function deriveStopReason(acceptance: AcceptanceVerdict): StopReason {
+  switch (acceptance.outcome) {
+    case "accepted":
+      return "accepted";
+    case "unverified":
+      return "unverified";
+    case "rejected":
+    case "accepted-with-caveats":
+      return "accepted-with-caveats";
+  }
 }
 
 async function runAcceptanceCheck(
   deps: CoreLoopDeps,
   items: Awaited<ReturnType<typeof assembleRunSummaryItems>>,
-): Promise<AcceptanceVerdict | null> {
-  if (!deps.acceptanceLlm && !deps.observeProduct) return null;
-
+): Promise<AcceptanceVerdict> {
   const maxAttempts = deps.config.maxAcceptanceAttempts;
+
+  if (!deps.acceptanceLlm && !deps.observeProduct) {
+    return buildUnverifiedVerdict(
+      "no-checker-configured",
+      "neither an acceptance LLM nor a product observer is wired into the core loop",
+      deps.acceptanceAttempts,
+      maxAttempts,
+    );
+  }
+
   if (deps.acceptanceAttempts >= maxAttempts) {
     return buildAcceptanceVerdict([], deps.acceptanceAttempts, maxAttempts);
   }
 
   try {
     const vision = await deps.visionRepo.getLatest();
-    if (!vision) return null;
+    if (!vision) {
+      return buildUnverifiedVerdict(
+        "no-vision",
+        "no vision record exists, so there is nothing to check the product against",
+        deps.acceptanceAttempts,
+        maxAttempts,
+      );
+    }
 
     const allGaps = [];
 
@@ -121,8 +142,11 @@ async function runAcceptanceCheck(
     deps.acceptanceAttempts += 1;
     return buildAcceptanceVerdict(allGaps, deps.acceptanceAttempts, maxAttempts);
   } catch (e) {
-    console.warn("Acceptance check failed — skipping (fail-closed to completeness):", e);
-    return null;
+    console.error(
+      `Acceptance check threw at attempt ${deps.acceptanceAttempts + 1}/${maxAttempts} — run will stop as unverified:`,
+      e,
+    );
+    return buildUnverifiedVerdict("check-threw", e, deps.acceptanceAttempts, maxAttempts);
   }
 }
 

@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
-import { createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { RetrievalResult } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
@@ -502,7 +502,7 @@ export class DevelopmentService {
   ): Promise<ExecutionResult> {
     const { config, eventSink, sessionStore, agentInvoker } = this.deps;
 
-    const asharaDir = join(workDir, ".ashara");
+    const asharaDir = join(workDir, ASHARA_CONTROL_DIR);
     await mkdir(asharaDir, { recursive: true });
 
     const briefPath = join(asharaDir, "brief.json");

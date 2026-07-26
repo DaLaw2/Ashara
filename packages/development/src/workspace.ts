@@ -4,6 +4,8 @@ import { access, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promise
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { ASHARA_CONTROL_DIR, isAsharaControlPath } from "@ashara/shared";
+
 const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
@@ -86,12 +88,19 @@ export async function removeWorktree(targetProjectPath: string, workDir: string,
   }
 }
 
+/**
+ * Files the agent changed. Ashara's own control directory is excluded: it is
+ * written before the agent starts, so counting it would let an agent that
+ * produced nothing pass the no-changes gate, and it would be reported as a
+ * task deliverable.
+ */
 export async function getChangedFiles(workDir: string): Promise<string[]> {
   const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd: workDir });
   return stdout
     .split("\n")
     .filter((line) => line.trim().length > 0)
-    .map((line) => line.slice(3).trim());
+    .map((line) => line.slice(3).trim())
+    .filter((path) => !isAsharaControlPath(path));
 }
 
 export async function hasGitCommits(dir: string): Promise<boolean> {
@@ -200,7 +209,7 @@ export async function ensureTargetGitInit(targetProjectPath: string): Promise<vo
     () => false,
   );
   if (!gitignoreExists) {
-    await writeFile(gitignorePath, "node_modules/\n", "utf-8");
+    await writeFile(gitignorePath, `node_modules/\n${ASHARA_CONTROL_DIR}/\n`, "utf-8");
   }
 
   if (!(await hasGitCommits(targetProjectPath))) {

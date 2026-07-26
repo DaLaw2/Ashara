@@ -21,7 +21,7 @@ export type { CoverageHold } from "@ashara/planning";
 
 // Termination & run-summary types
 export type { RunSummary } from "@ashara/planning";
-export type { TerminationDecision, TerminationPlanExhausted } from "@ashara/planning";
+export type { TerminationDecision, TerminationPlanExhausted, StopReason } from "@ashara/planning";
 export type { EndpointCoverageGap } from "@ashara/planning";
 
 // Engine / LLM port types
@@ -78,7 +78,7 @@ export { assembleRunSummaryItems, evaluate } from "@ashara/planning";
 export { buildRunSummary, emitRunSummary } from "@ashara/planning";
 
 // Acceptance
-export { buildDeterministicGaps, buildVisionGaps, buildAcceptanceVerdict } from "@ashara/planning";
+export { buildDeterministicGaps, buildVisionGaps, buildAcceptanceVerdict, buildUnverifiedVerdict } from "@ashara/planning";
 
 // Liveness recovery
 export { recoverFromAbandoned } from "@ashara/planning";

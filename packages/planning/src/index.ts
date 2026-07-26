@@ -82,11 +82,13 @@ export {
   buildDeterministicGaps,
   buildVisionGaps,
   buildAcceptanceVerdict,
+  buildUnverifiedVerdict,
   createGatewayAcceptanceLLM,
   VisionGapResultSchema,
 } from "./acceptance.js";
 export type {
   AcceptanceOutcome,
+  AcceptanceUnverifiedCause,
   AcceptanceGap,
   AcceptanceVerdict,
   AcceptanceLLM,

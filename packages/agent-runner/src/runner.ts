@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared";
-import { loadAgentRunnerEnv, parseCapabilityLevel, parseAgentBrief } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseCapabilityLevel, parseAgentBrief } from "@ashara/shared";
 import {
     LLMGateway,
     loadGatewayConfig,
@@ -148,7 +148,7 @@ export class AgentRunner {
 
         const adapter = selectAdapter(formatGroup, resolvedCapability);
 
-        const conversationLogPath = join(this.config.workingDir, ".ashara", "conversation.jsonl");
+        const conversationLogPath = join(this.config.workingDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
 
         const conversation = new AgentConversation(this.gateway, registry, {
             staticSystemPrompt: isWeakModel ? buildWeakModelSystemPrompt(brief) : staticSystemPrompt,
