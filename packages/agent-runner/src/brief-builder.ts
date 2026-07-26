@@ -12,8 +12,14 @@ import { formatProjectProfile } from "@ashara/development";
 /**
  * Enrich an existing AgentBrief (from brief.json) with project context.
  *
- * Called by the runner to augment the basic brief from Rust with auto-detected
- * project profile, directory listing, and instruction files.
+ * Called by the runner to augment the brief with the auto-detected project
+ * profile, directory listing, and instruction files.
+ *
+ * The profile block is SUPPRESSED when detection found no tech-stack marker
+ * (ADR-046): on an empty tree it would otherwise render an empty "Tech Stack"
+ * section under a second "# Project" heading, contradicting the ProjectFrame the
+ * prompt already states. Two Project sections that disagree are worse than one
+ * that is right — and the empty one always looks like the more concrete evidence.
  */
 export async function enrichBrief(
     brief: AgentBrief,
@@ -22,7 +28,8 @@ export async function enrichBrief(
     const projectContext = await buildProjectContext(projectDir);
     const projectProfile = await buildAutoProfile(projectDir);
 
-    const profileText = formatProjectProfile(projectProfile);
+    const profileText =
+        projectProfile.techStack.length > 0 ? formatProjectProfile(projectProfile) : "";
 
     const enrichedContext = [
         brief.context,

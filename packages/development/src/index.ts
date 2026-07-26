@@ -6,7 +6,7 @@ export type { PrunerConfig, PrunedChunk, PruningResult } from "./pruner.js";
 export { pruneContext, splitAtSyntaxBoundaries, DEFAULT_MIN_RELEVANCE } from "./pruner.js";
 
 export type { RetrieveFn } from "./dispatch-utils.js";
-export { buildAutoProfile, buildDefaultProfile, buildProjectContext, createRetrievalFn, detectTechStack, readManifestContext } from "./dispatch-utils.js";
+export { buildAutoProfile, buildProjectContext, createRetrievalFn, detectTechStack, readManifestContext } from "./dispatch-utils.js";
 
 export type { Message, MaskingConfig, MaskingResult } from "./observation-masking.js";
 export { ObservationMasker } from "./observation-masking.js";
@@ -32,6 +32,8 @@ export type {
 } from "./types.js";
 export type { ContractSource } from "./contract-slice.js";
 export { formatContractSlice } from "./contract-slice.js";
+export type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
+export { resolveProjectFrame } from "./project-frame.js";
 export type { ContractAmender, CompletionDeliverables } from "./contract-completion.js";
 export { selectModulePaths } from "./contract-completion.js";
 export type { VerifyLogOptions } from "./verify.js";

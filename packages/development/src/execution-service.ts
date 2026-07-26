@@ -2,16 +2,18 @@ import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
-import { createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain } from "@ashara/shared";
+import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
+import { createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { RetrievalResult } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
 import { verify } from "./verify.js";
 import type { ProjectProfile } from "./brief-assembly.js";
-import { buildBriefWithRetry } from "./brief-assembly.js";
+import { buildBriefWithRetry, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ContractSource } from "./contract-slice.js";
 import { formatContractSlice } from "./contract-slice.js";
+import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
+import { resolveProjectFrame } from "./project-frame.js";
 import type { ContractAmender } from "./contract-completion.js";
 import { selectModulePaths } from "./contract-completion.js";
 import { deriveEndpoints } from "./gates/endpoints.js";
@@ -129,9 +131,19 @@ export interface DevelopmentServiceDeps {
   readonly agentInvoker: AgentInvoker;
   readonly conventionsExtractor: ConventionsExtractor;
   readonly llmGateway: LLMGateway | null;
-  readonly projectProfile: ProjectProfile;
   readonly retrieveFn: (query: string, mentionedSymbols?: string[]) => Promise<RetrievalResult[]>;
   readonly eventSink?: ExecutionEventSink;
+  /**
+   * Supplies the owner's own vision text for a task's project (ADR-046). Absent ⇒
+   * the frame ladder has no intent and every dispatch blocks — deliberately: a
+   * brief with an invented intent is the failure this port exists to prevent.
+   */
+  readonly intentSource?: ProjectIntentSource;
+  /**
+   * Last-resort stack derivation from the vision prose, used only until the
+   * project has a scaffold or a contract knowledge graph to read instead.
+   */
+  readonly stackDeriver?: StackDeriver;
   /**
    * Yields the ProjectContract for a task's project so the brief can carry a
    * task-relevant slice — reuse-only modules, endpoints to expose, wiring to
@@ -173,7 +185,40 @@ export class DevelopmentService {
     });
 
     const contract = await this.loadContract(task.id);
-    const brief = await this.buildBrief(task, targetProjectPath, contract);
+
+    let brief: AgentBrief;
+    try {
+      brief = await this.buildBrief(task, targetProjectPath, contract);
+    } catch (e) {
+      // A missing ProjectFrame is a PLANNING-INPUT gap, not an agent failure
+      // (ADR-046): nothing about re-dispatching the same task makes the vision
+      // reachable, so routing it as a retryable failure would loop forever.
+      // Blocked parks it for the owner with the full derivation trace intact.
+      if (!(e instanceof ProjectFrameUnresolvable)) throw e;
+      const chain = wrapError("development", "resolveProjectFrame", e, { taskId: task.id });
+      const envelope: ErrorEnvelope = {
+        outcome: "blocked",
+        summary: `project frame unresolvable for ${task.id}: ${chain.message}`,
+        chain,
+      };
+      eventSink?.emit({
+        event: "task_blocked",
+        taskId: task.id,
+        attempt: 1,
+        reason: envelope.summary,
+      });
+      const result: ExecutionResult = {
+        status: "blocked",
+        detail: envelope.summary,
+        output: {},
+        sessionId,
+        filesChanged: [],
+        attempt: 1,
+        errorEnvelope: envelope,
+      };
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
+    }
 
     let workDir: string;
     if (targetProjectPath) {
@@ -260,13 +305,25 @@ export class DevelopmentService {
     targetProjectPath: string | null,
     contract: ProjectContract | null,
   ): Promise<AgentBrief> {
-    const { projectProfile, retrieveFn } = this.deps;
+    const { retrieveFn } = this.deps;
     const taskSpec = task.taskSpec;
 
     const replanContext = extractReplanContext(task.id, task.blockedReason);
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
 
     const contractSlice = contract ? await this.renderContractSlice(contract, task.id) : undefined;
+
+    // OUTSIDE the try/catch below: a ProjectFrameUnresolvable must propagate to
+    // execute() and block the task. Degrading to the basic brief here would ship
+    // the agent a brief with no stated target — precisely the fail-open this
+    // ladder replaces (ADR-046).
+    const projectFrame = await resolveProjectFrame({
+      taskId: task.id,
+      contract,
+      targetProjectPath,
+      intentSource: this.deps.intentSource,
+      stackDeriver: this.deps.stackDeriver,
+    });
 
     const spec: TaskSpec = {
       goal: (typeof taskSpec?.goal === "string" ? taskSpec.goal : task.title),
@@ -283,7 +340,7 @@ export class DevelopmentService {
     try {
       const { brief } = await buildBriefWithRetry(
         spec,
-        projectProfile,
+        accountingProfile(projectFrame),
         retrieveFn,
         {},
         contextMap,
@@ -297,6 +354,7 @@ export class DevelopmentService {
         {
           taskId: task.id,
           goal: spec.goal,
+          projectFrame,
           context: brief.taskSpec,
           tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
           constraints: spec.checks,
@@ -312,7 +370,7 @@ export class DevelopmentService {
       );
     } catch (e) {
       console.warn(`[${task.id}] brief assembly failed, falling back to basic brief:`, e);
-      return buildBasicBrief(task, priorAttemptFailure, contractSlice);
+      return buildBasicBrief(task, projectFrame, priorAttemptFailure, contractSlice);
     }
   }
 
@@ -359,8 +417,15 @@ export class DevelopmentService {
     }
   }
 
+  /**
+   * Renders what can be OBSERVED about the target tree. An empty tree returns an
+   * explicit statement of that emptiness rather than "" (ADR-046): "" renders as
+   * no context section at all, which the agent cannot distinguish from a normal
+   * project whose context happened to be omitted — so it proceeds on its prior.
+   * Saying the directory is empty is what makes the frame the only thing known.
+   */
   private async buildContextMap(targetProjectPath: string | null, contractEntryPointPath?: string, contractExcludePaths?: readonly string[]): Promise<string> {
-    if (!targetProjectPath) return "";
+    if (!targetProjectPath) return EMPTY_WORKDIR_CONTEXT_MAP;
 
     const sections: string[] = ["# Project Context"];
 
@@ -441,7 +506,7 @@ export class DevelopmentService {
       // conventions extraction failed
     }
 
-    return sections.length > 1 ? sections.join("\n\n") : "";
+    return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
   }
 
   private async buildKnowledgeContext(task: TaskDescriptor, spec: TaskSpec): Promise<string> {
@@ -825,8 +890,27 @@ export class DevelopmentService {
 
 }
 
+/**
+ * The ProjectProfile that {@link buildBriefWithRetry} needs for cache-prefix token
+ * accounting. It is NEVER rendered into the brief the agent reads (only its size
+ * counts toward the prefix budget), so it carries the frame's stack labels and no
+ * commands: what to run is the agent's call, declared in verify.toml (ADR-043/045).
+ */
+function accountingProfile(frame: ProjectFrame): ProjectProfile {
+  return {
+    name: "project",
+    techStack: [...frame.stack],
+    buildCommand: "",
+    testCommand: "",
+    lintCommand: "",
+    conventions: [],
+    moduleBoundaries: "",
+  };
+}
+
 function buildBasicBrief(
   task: TaskDescriptor,
+  projectFrame: ProjectFrame,
   priorAttemptFailure?: string,
   contractSlice?: string,
 ): AgentBrief {
@@ -845,6 +929,7 @@ function buildBasicBrief(
     {
       taskId: task.id,
       goal,
+      projectFrame,
       context: `End state: ${endState}`,
       tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
       constraints,
