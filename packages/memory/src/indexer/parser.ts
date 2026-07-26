@@ -1,26 +1,98 @@
 // Tree-sitter based parser — ported from crates/ashara-memory/src/parser.rs
 // Uses web-tree-sitter (WASM) for Bun compatibility.
 
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Language, Node as TSNode, Parser } from "web-tree-sitter";
 
 import type { ParseResult, RefKind, SymbolDef, SymbolId, SymbolKind, SymbolRef } from "./types.js";
 
-let initialized = false;
-let rustLang: Language | null = null;
-let tsLang: Language | null = null;
-
 // Resolved through the package name, not a hardcoded node_modules path: the
 // grammar files must be found wherever the installer placed the package.
 const WASM_DIR = dirname(fileURLToPath(import.meta.resolve("tree-sitter-wasms/out/tree-sitter-rust.wasm")));
 
+/**
+ * A grammar this parser can actually extract symbols from: a loadable WASM
+ * grammar PLUS an extractor that knows its node types. Both halves are required
+ * — tree-sitter-wasms ships far more grammars than there are extractors here,
+ * and a grammar without an extractor produces no symbols, so it is not listed.
+ *
+ * This table is the ONLY place in Ashara that names a file extension. Callers
+ * ask {@link canParse} instead of restating it; see {@link parserCoverage} for
+ * the shortfall that table-driven honesty makes visible.
+ */
+interface GrammarSpec {
+    readonly id: string;
+    readonly wasmFile: string;
+    readonly extensions: readonly string[];
+    readonly extract: (filePath: string, content: string, language: Language) => ParseResult;
+}
+
+const GRAMMARS: readonly GrammarSpec[] = [
+    { id: "rust", wasmFile: "tree-sitter-rust.wasm", extensions: ["rs"], extract: parseRust },
+    { id: "typescript", wasmFile: "tree-sitter-typescript.wasm", extensions: ["ts", "tsx"], extract: parseTypescript },
+];
+
+export interface GrammarUnavailable {
+    readonly id: string;
+    readonly reason: string;
+}
+
+/** What the parser can parse right now, and what it declared but could not load. */
+export interface ParserCoverage {
+    readonly initialized: boolean;
+    readonly extensions: readonly string[];
+    readonly unavailable: readonly GrammarUnavailable[];
+}
+
+/** Thrown when {@link parseFile} is handed a file no loaded grammar covers. */
+export class UnsupportedLanguage extends Error {
+    constructor(
+        readonly filePath: string,
+        readonly extension: string,
+        readonly supportedExtensions: readonly string[],
+    ) {
+        super(
+            `no loaded tree-sitter grammar parses "${extension === "" ? "(no extension)" : `.${extension}`}" ` +
+                `(file: ${filePath}); loaded grammars cover: ${supportedExtensions.map((e) => `.${e}`).join(", ") || "nothing"}`,
+        );
+        this.name = "UnsupportedLanguage";
+    }
+}
+
+/** Thrown when NO declared grammar loaded — indexing anything would be a lie. */
+export class ParserUnavailable extends Error {
+    constructor(readonly unavailable: readonly GrammarUnavailable[]) {
+        super(
+            `tree-sitter parser unusable: none of ${unavailable.length} declared grammars loaded ` +
+                `(${unavailable.map((g) => `${g.id}: ${g.reason}`).join("; ")})`,
+        );
+        this.name = "ParserUnavailable";
+    }
+}
+
+let initialized = false;
+const byExtension = new Map<string, { spec: GrammarSpec; language: Language }>();
+const unavailable: GrammarUnavailable[] = [];
+
 export async function initParser(): Promise<void> {
     if (initialized) return;
     await Parser.init();
-    rustLang = await Language.load(resolve(WASM_DIR, "tree-sitter-rust.wasm"));
-    tsLang = await Language.load(resolve(WASM_DIR, "tree-sitter-typescript.wasm"));
+
+    unavailable.length = 0;
+    for (const spec of GRAMMARS) {
+        try {
+            const language = await Language.load(resolve(WASM_DIR, spec.wasmFile));
+            for (const extension of spec.extensions) byExtension.set(extension, { spec, language });
+        } catch (e) {
+            // Per-grammar, not all-or-nothing: one missing WASM file degrades
+            // coverage, and the degradation is reported rather than pretended away.
+            unavailable.push({ id: spec.id, reason: e instanceof Error ? e.message : String(e) });
+        }
+    }
+
+    if (byExtension.size === 0) throw new ParserUnavailable(unavailable);
     initialized = true;
 }
 
@@ -28,17 +100,34 @@ export async function initParser(): Promise<void> {
 // Public API
 // ---------------------------------------------------------------------------
 
+function extensionOf(filePath: string): string {
+    return extname(filePath).slice(1).toLowerCase();
+}
+
+/**
+ * The parser's own file→grammar decision. Callers derive their file set from
+ * this rather than carrying an extension list of their own — the list a caller
+ * writes down always drifts from the grammars that actually loaded, and the
+ * drift is silent (Run 39: the indexer asked for js/jsx/json, none of which any
+ * loaded grammar parses, and indexed zero files without saying so).
+ */
+export function canParse(filePath: string): boolean {
+    return byExtension.has(extensionOf(filePath));
+}
+
+export function parserCoverage(): ParserCoverage {
+    return {
+        initialized,
+        extensions: [...byExtension.keys()].sort(),
+        unavailable: [...unavailable],
+    };
+}
+
 export function parseFile(filePath: string, content: string): ParseResult {
-    const ext = filePath.split(".").pop();
-    switch (ext) {
-        case "rs":
-            return parseRust(filePath, content);
-        case "ts":
-        case "tsx":
-            return parseTypescript(filePath, content);
-        default:
-            throw new Error(`Unsupported language for file: ${filePath}`);
-    }
+    const extension = extensionOf(filePath);
+    const entry = byExtension.get(extension);
+    if (!entry) throw new UnsupportedLanguage(filePath, extension, [...byExtension.keys()].sort());
+    return entry.spec.extract(filePath, content, entry.language);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,11 +183,9 @@ function makeModuleSymbol(filePath: string, source: string): SymbolDef {
 // Rust parsing
 // ---------------------------------------------------------------------------
 
-function parseRust(filePath: string, content: string): ParseResult {
-    if (!rustLang) throw new Error("Parser not initialized. Call initParser() first.");
-
+function parseRust(filePath: string, content: string, language: Language): ParseResult {
     const parser = new Parser();
-    parser.setLanguage(rustLang);
+    parser.setLanguage(language);
 
     const tree = parser.parse(content);
     if (!tree) throw new Error(`Failed to parse file: ${filePath}`);
@@ -330,11 +417,9 @@ function collectUseNamesRecursive(
 // TypeScript parsing
 // ---------------------------------------------------------------------------
 
-function parseTypescript(filePath: string, content: string): ParseResult {
-    if (!tsLang) throw new Error("Parser not initialized. Call initParser() first.");
-
+function parseTypescript(filePath: string, content: string, language: Language): ParseResult {
     const parser = new Parser();
-    parser.setLanguage(tsLang);
+    parser.setLanguage(language);
 
     const tree = parser.parse(content);
     if (!tree) throw new Error(`Failed to parse file: ${filePath}`);

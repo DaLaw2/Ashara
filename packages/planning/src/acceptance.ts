@@ -115,30 +115,55 @@ export function createGatewayAcceptanceLLM(provider: StructuredLLMProvider): Acc
   };
 }
 
+/**
+ * What this project has to do for the boot check to pass, phrased in terms it
+ * can actually satisfy.
+ *
+ * The expectation becomes the gap task's title verbatim
+ * (`orchestrator/src/termination-snapshot.ts`), so a fixed string is a fixed
+ * demand: Run 39 opened "process boots and responds to HTTP" against a
+ * note-taking CLI, which no amount of work could ever close. HTTP is asserted
+ * only when the contract DECLARES an HTTP surface to serve; otherwise the
+ * expectation is the one every project shares — that starting it does not fail.
+ */
+function bootExpectation(declaredEndpoints: readonly Endpoint[]): string {
+  return declaredEndpoints.length > 0
+    ? `the project starts and serves the ${declaredEndpoints.length} endpoint(s) its contract declares`
+    : "the project starts and runs without failing";
+}
+
 export function buildDeterministicGaps(
   observation: ProductObservation,
   contract: ProjectContract | null,
 ): AcceptanceGap[] {
   const gaps: AcceptanceGap[] = [];
 
+  // The HTTP surface the project itself declared. Empty for a CLI, a library, a
+  // kernel module — and for any project whose contract simply has no endpoints yet.
+  const declaredEndpoints = contract === null ? [] : contract.endpoints.filter((ep) => !ep.outOfScope);
+
   if (!observation.booted) {
     gaps.push({
       ref: "boot",
       kind: "boot-failure",
-      expected: "process boots and responds to HTTP",
-      observed: observation.bootOutput.slice(0, 300),
+      expected: bootExpectation(declaredEndpoints),
+      observed: observation.bootOutput.slice(0, 300) || "the boot attempt produced no output",
     });
     return gaps;
   }
 
-  if (contract === null) return gaps;
+  // Everything below probes HTTP and is therefore scoped, explicitly, to projects
+  // that declare an HTTP surface. A project with none is not "silently fine here":
+  // it is out of this check's reach entirely, and its acceptance rests on the
+  // vision-gap path instead. (Whether producing no gaps should still yield an
+  // `accepted` verdict is the separate fail-open question, untouched here.)
+  if (declaredEndpoints.length === 0) return gaps;
 
   const probeByKey = new Map(
     observation.endpoints.map((p) => [`${p.method} ${p.path}`, p]),
   );
 
-  for (const ep of contract.endpoints) {
-    if (ep.outOfScope) continue;
+  for (const ep of declaredEndpoints) {
     const probe = probeByKey.get(`${ep.method} ${ep.path}`);
     if (probe === undefined) continue;
 

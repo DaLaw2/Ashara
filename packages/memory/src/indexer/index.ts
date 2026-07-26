@@ -9,10 +9,12 @@ export type {
 export { symbolIdKey } from "./types.js";
 
 export { initParser, parseFile } from "./parser.js";
+export type { GrammarUnavailable } from "./parser.js";
 
 export { SymbolGraph } from "./graph.js";
 
 export { Bm25Index, tokenize } from "./bm25.js";
 export type { SearchResult } from "./bm25.js";
 
-export { CodebaseIndexer } from "./indexer.js";
+export { CodebaseIndexer, describeIndexShortfall } from "./indexer.js";
+export type { IndexCoverage, IndexFailure, UnparsableGroup } from "./indexer.js";

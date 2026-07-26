@@ -7,6 +7,7 @@ import {
   captureMainHead,
   commitMerge,
   recoverOrphanedMerge,
+  resetCheckoutToHead,
   taskBranchName,
   tentativeMerge,
 } from "../merge.js";
@@ -76,6 +77,23 @@ export async function finalizeSuccess(
   if (targetProjectPath) {
     await recoverOrphanedMerge(targetProjectPath);
     await ensureTargetGitInit(targetProjectPath);
+
+    // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and
+    // before captureMainHead so the entry-point gate diffs against a clean tree.
+    const reset = await resetCheckoutToHead(targetProjectPath);
+    if (reset.status === "error") {
+      // Fail closed: an unrestorable checkout makes every merge verdict below
+      // untrustworthy, so refuse rather than merge onto unknown residue.
+      console.log(`[${task.id}] target checkout could not be restored — refusing to merge`);
+      return {
+        success: false,
+        gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${reset.message}`,
+        errorLayer: wrapError("development", "resetCheckoutToHead", reset.message, {
+          taskId: task.id,
+          attempt,
+        }),
+      };
+    }
 
     const preMergeHead = await captureMainHead(targetProjectPath);
     const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));

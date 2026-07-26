@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
-import type { RetrievalResult } from "@ashara/memory";
+import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
+import { describeIndexShortfall } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
 import { verify } from "./verify.js";
 import type { ProjectProfile } from "./brief-assembly.js";
@@ -158,12 +159,16 @@ export interface DevelopmentServiceDeps {
    * un-completes a task that passed its gates.
    */
   readonly contractAmender?: ContractAmender;
-  readonly populateIndex?: (targetPath: string) => void;
+  /**
+   * Refreshes the retrieval index over the target checkout and reports what it
+   * could cover. Absent ⇒ retrieval runs against an empty index, which every
+   * brief then says out loud rather than passing off as "nothing relevant".
+   */
+  readonly populateIndex?: (targetPath: string) => IndexCoverage;
 }
 
 export class DevelopmentService {
   private readonly deps: DevelopmentServiceDeps;
-  private indexed = false;
 
   constructor(deps: DevelopmentServiceDeps) {
     this.deps = deps;
@@ -337,8 +342,10 @@ export class DevelopmentService {
     const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
+    this.refreshIndex(task.id, targetProjectPath);
+
     try {
-      const { brief } = await buildBriefWithRetry(
+      const { brief, qualityGate } = await buildBriefWithRetry(
         spec,
         accountingProfile(projectFrame),
         retrieveFn,
@@ -346,6 +353,22 @@ export class DevelopmentService {
         contextMap,
         knowledgeContext,
       );
+      // The gate's verdict used to be discarded, so a brief that failed every
+      // retry shipped indistinguishably from one that passed first try.
+      if (!qualityGate.passed) {
+        console.warn(
+          `[${task.id}] brief quality gate FAILED after retries (${qualityGate.failedChecks.join(", ")}): ` +
+            `relevance=${qualityGate.checks.relevance.detail} | economy=${qualityGate.checks.economy.detail}`,
+        );
+      }
+      this.deps.eventSink?.emit({
+        event: "brief_quality_gate",
+        taskId: task.id,
+        passed: qualityGate.passed,
+        failedChecks: [...qualityGate.failedChecks],
+        relevance: qualityGate.checks.relevance.detail,
+        economy: qualityGate.checks.economy.detail,
+      });
       // parseAgentBrief validates the on-wire shape at the producing boundary:
       // a field this seam is meant to carry (codeContext / knowledgeContext /
       // contextMap — the finding-g drop) is now explicit and validated, and an
@@ -768,7 +791,6 @@ export class DevelopmentService {
 
     await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
-    this.tryPopulateIndex(targetProjectPath);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output);
     return {
@@ -878,13 +900,33 @@ export class DevelopmentService {
     }
   }
 
-  private tryPopulateIndex(targetProjectPath: string | null): void {
-    if (this.indexed || !targetProjectPath || !this.deps.populateIndex) return;
+  /**
+   * Refreshes the retrieval index immediately before the brief that reads it.
+   *
+   * It used to run once per process, only from the task-completed path: a run
+   * whose first task failed never indexed at all, and every later task retrieved
+   * against the snapshot taken after task 1. Indexing here instead is both
+   * fresher and unconditional — `indexDirectory` is content-hashed, so a pass
+   * over an unchanged tree re-reads files but rebuilds nothing.
+   */
+  private refreshIndex(taskId: string, targetProjectPath: string | null): void {
+    if (!targetProjectPath || !this.deps.populateIndex) return;
     try {
-      this.deps.populateIndex(targetProjectPath);
-      this.indexed = true;
+      const coverage = this.deps.populateIndex(targetProjectPath);
+      const shortfall = describeIndexShortfall(coverage, targetProjectPath);
+      if (shortfall !== null) console.warn(`[${taskId}] ${shortfall}`);
+      this.deps.eventSink?.emit({
+        event: "index_coverage",
+        taskId,
+        filesSeen: coverage.filesSeen,
+        filesIndexed: coverage.filesIndexed,
+        parsableExtensions: [...coverage.parsableExtensions],
+        unparsable: coverage.unparsable.slice(0, 5),
+        parseFailures: coverage.failures.length,
+        ...(shortfall !== null ? { shortfall } : {}),
+      });
     } catch (e) {
-      console.warn("Codebase index population failed:", e);
+      console.warn(`[${taskId}] codebase index population failed:`, e);
     }
   }
 

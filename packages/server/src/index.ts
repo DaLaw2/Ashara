@@ -565,9 +565,9 @@ async function main(): Promise<void> {
     stackDeriver,
     contractSource,
     contractAmender,
-    populateIndex: parserReady
-      ? (targetPath) => indexer.indexDirectory(targetPath, ["ts", "tsx", "js", "jsx", "json"])
-      : undefined,
+    // No extension list here: the indexer derives its file set from the grammars
+    // the parser actually loaded, and reports what it could not cover.
+    populateIndex: parserReady ? (targetPath) => indexer.indexDirectory(targetPath) : undefined,
   });
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the

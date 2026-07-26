@@ -82,6 +82,22 @@ export const EMPTY_WORKDIR_CONTEXT_MAP = [
   "what is known is stated in Project Frame above.",
 ].join("\n");
 
+/**
+ * The code-context section when retrieval produced nothing (ADR-046 idiom: state
+ * emptiness rather than imply it). An empty string rendered as no section at all,
+ * which the agent reads as "this task needs no existing code" — indistinguishable
+ * from a project whose language the indexer cannot parse, which is what Run 39's
+ * Go target actually was.
+ */
+export const EMPTY_CODE_CONTEXT = [
+  "# Code Context",
+  "",
+  "This brief carries no retrieved code. That is NOT evidence that no relevant code",
+  "exists: the index covers only files whose language the indexer has a grammar for,",
+  "and it may cover none of this project. Read the tree with list_directory and",
+  "read_file before concluding that a file or symbol is absent.",
+].join("\n");
+
 const DEFAULT_TARGET_UTILIZATION = 0.7;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -166,7 +182,7 @@ export function formatTaskSpec(spec: TaskSpec): string {
 }
 
 export function formatCodeContext(chunks: readonly PrunedChunk[]): string {
-    if (chunks.length === 0) return "";
+    if (chunks.length === 0) return EMPTY_CODE_CONTEXT;
 
     // Group chunks by file path for readability
     const byFile = new Map<string, PrunedChunk[]>();
@@ -258,6 +274,19 @@ export function assembleBrief(
 // Quality gate
 // ---------------------------------------------------------------------------
 
+/**
+ * True when the brief has no observed context of ANY kind — an empty tree, no
+ * retrieved code, no prior knowledge. Both gate checks branch on this, because
+ * "nothing to show" is the correct state for a scaffold task and a defect for
+ * every task after it. `EMPTY_*` sentinels count as absence: they state emptiness
+ * in prose, they are not evidence.
+ */
+function isGreenfield(brief: Brief): boolean {
+    const hasObservedContext = Boolean(brief.contextMap) && brief.contextMap !== EMPTY_WORKDIR_CONTEXT_MAP;
+    const hasCodeContext = Boolean(brief.codeContext) && brief.codeContext !== EMPTY_CODE_CONTEXT;
+    return !hasObservedContext && !hasCodeContext && !brief.knowledgeContext;
+}
+
 export function checkQualityGate(
     brief: Brief,
     retrievalResults: readonly RetrievalResult[],
@@ -265,7 +294,7 @@ export function checkQualityGate(
     const failedChecks: string[] = [];
 
     // 1. Relevance: at least 50% of code chunks have relevance score above the floor
-    const relevance = checkRelevance(retrievalResults);
+    const relevance = checkRelevance(retrievalResults, brief);
     if (!relevance.passed) failedChecks.push("relevance");
 
     // 2. Economy: utilization between 0.4 and 0.9
@@ -279,9 +308,26 @@ export function checkQualityGate(
     };
 }
 
-function checkRelevance(retrievalResults: readonly RetrievalResult[]): QualityCheckResult {
+function checkRelevance(
+    retrievalResults: readonly RetrievalResult[],
+    brief: Brief,
+): QualityCheckResult {
+    // Discipline A, evidence default: an empty result set makes the ratio's
+    // identity element (0/0 treated as "all relevant") the verdict, and the
+    // caller is never told the question went unanswered. It only reads as a pass
+    // where zero is the EXPECTED observation — a project with nothing to retrieve
+    // from yet. Everywhere else it is the signature of an index that covered
+    // nothing, and it fails so buildBriefWithRetry re-asks and the log records it.
     if (retrievalResults.length === 0) {
-        return { passed: true, detail: "No retrieval results to check" };
+        return isGreenfield(brief)
+            ? { passed: true, detail: "Retrieval returned nothing (greenfield project — no code exists to retrieve yet)" }
+            : {
+                  passed: false,
+                  detail:
+                      "Retrieval returned ZERO chunks for a project that already has files — " +
+                      "the index is empty or carries no grammar for this project's language; " +
+                      "the brief ships with no retrieved code context",
+              };
     }
 
     const aboveThreshold = retrievalResults.filter((r) => r.score > DEFAULT_MIN_RELEVANCE).length;
@@ -302,13 +348,7 @@ function checkEconomy(brief: Brief): QualityCheckResult {
     // Greenfield exception: when the target project has no files and there is
     // no prior knowledge, the brief consists only of system prompt + task spec.
     // That will never reach 40% utilization and that is expected for a first task.
-    // An empty tree now states its emptiness (EMPTY_WORKDIR_CONTEXT_MAP) instead
-    // of yielding "", so that statement counts as greenfield too — otherwise
-    // every scaffold task would fail this gate and re-retrieve for nothing.
-    const hasObservedContext = Boolean(brief.contextMap) && brief.contextMap !== EMPTY_WORKDIR_CONTEXT_MAP;
-    const isGreenfield = !hasObservedContext && !brief.codeContext && !brief.knowledgeContext;
-
-    if (isGreenfield) {
+    if (isGreenfield(brief)) {
         return {
             passed: true,
             detail: `Utilization ${(utilization * 100).toFixed(1)}% (greenfield project — economy check skipped)`,

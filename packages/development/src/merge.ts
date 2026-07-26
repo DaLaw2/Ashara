@@ -12,6 +12,10 @@ export type MergeResult =
   | { readonly status: "conflict"; readonly files: string[] }
   | { readonly status: "error"; readonly message: string };
 
+export type CheckoutReset =
+  | { readonly status: "clean" }
+  | { readonly status: "error"; readonly message: string };
+
 export function taskBranchName(taskId: string): string {
   return `task/${taskId}`;
 }
@@ -49,6 +53,39 @@ async function getConflictingFiles(targetPath: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Discards everything in the target's main checkout that HEAD does not contain.
+ *
+ * The main checkout is the merge queue's staging area, never a workspace: every
+ * agent works in a linked worktree and commits there. The only writer here is
+ * post-merge verify, which runs the PROJECT's own build and test commands in
+ * this directory and therefore leaves whatever residue that stack leaves — a
+ * rebuilt binary, a regenerated lockfile, a coverage directory. Anything of that
+ * which is tracked makes git refuse the NEXT merge before it starts ("Your local
+ * changes to the following files would be overwritten by merge"), so a task that
+ * PASSED its own verification is rejected, retried, escalated and abandoned
+ * (Run 39, the compiled `jot` binary). Restoring HEAD first makes the merge a
+ * function of the two commits alone, whatever the project's build produces.
+ *
+ * `clean -fd` without `-x` deliberately keeps ignored paths: Ashara's control
+ * directory and whatever the project ignores are not merge inputs.
+ */
+export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutReset> {
+  for (const args of [["reset", "--hard", "HEAD"], ["clean", "-fd"]]) {
+    try {
+      await execFileAsync("git", args, { cwd: targetPath });
+    } catch (e) {
+      const stderr = e instanceof Error && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        status: "error",
+        message: `git ${args.join(" ")} failed in ${targetPath}: ${message.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}`,
+      };
+    }
+  }
+  return { status: "clean" };
 }
 
 /** `--no-commit` stages the merge without moving main; gates run before commitMerge/abortMerge decides its fate. */

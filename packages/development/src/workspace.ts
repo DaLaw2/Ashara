@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
-import { access, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -196,25 +196,58 @@ export async function buildFileTree(
   return paths.join("\n");
 }
 
+/**
+ * Excludes Ashara's control directory from the target repository without
+ * touching the project's `.gitignore`.
+ *
+ * `.git/info/exclude` is git's per-checkout ignore file: untracked, never
+ * merged, never a conflict, and read from the common git dir so every linked
+ * worktree inherits it. That is the correct home for an ignore that belongs to
+ * this checkout rather than to the project.
+ *
+ * `.gitignore` is the project's own file, and Ashara cannot author it here: the
+ * initial commit happens before any agent runs, so what this project needs
+ * ignored is not yet knowable. Writing a guess does not merely add noise — it
+ * SUPPRESSES the right answer, because the agent that later learns the stack
+ * finds a `.gitignore` already present and leaves it alone. Run 39's Go target
+ * inherited `node_modules/`, never got its compiled binary ignored, and
+ * deadlocked the merge queue. The project's ignores arrive when the project's
+ * stack does: from the agent, in the same commit as the manifest.
+ */
+async function excludeControlDir(targetProjectPath: string): Promise<void> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--git-common-dir"], {
+    cwd: targetProjectPath,
+  });
+  const commonDir = stdout.trim();
+  const excludePath = join(
+    isAbsolute(commonDir) ? commonDir : join(targetProjectPath, commonDir),
+    "info",
+    "exclude",
+  );
+
+  const entry = `${ASHARA_CONTROL_DIR}/`;
+  const existing = await readFile(excludePath, "utf-8").catch(() => "");
+  if (existing.split("\n").some((line) => line.trim() === entry)) return;
+
+  await mkdir(dirname(excludePath), { recursive: true });
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  await writeFile(excludePath, `${existing}${separator}${entry}\n`, "utf-8");
+}
+
 export async function ensureTargetGitInit(targetProjectPath: string): Promise<void> {
   // GIT-SAFETY (path minting): refuse before creating/initialising anything
   // inside the repo or under a git working tree (defense in depth).
   await assertValidTargetProjectPath(targetProjectPath);
   await mkdir(targetProjectPath, { recursive: true });
   await ensureGitInitialized(targetProjectPath);
-
-  const gitignorePath = join(targetProjectPath, ".gitignore");
-  const gitignoreExists = await access(gitignorePath).then(
-    () => true,
-    () => false,
-  );
-  if (!gitignoreExists) {
-    await writeFile(gitignorePath, `node_modules/\n${ASHARA_CONTROL_DIR}/\n`, "utf-8");
-  }
+  await excludeControlDir(targetProjectPath);
 
   if (!(await hasGitCommits(targetProjectPath))) {
     await execFileAsync("git", ["add", "-A"], { cwd: targetProjectPath });
-    await execFileAsync("git", ["commit", "-m", "init"], {
+    // --allow-empty: the root commit exists so `main` and every task branch have
+    // somewhere to point. It carries no scaffold of Ashara's own, so on a fresh
+    // target there is nothing to commit and the plain form would fail.
+    await execFileAsync("git", ["commit", "--allow-empty", "-m", "init"], {
       cwd: targetProjectPath,
     });
   }

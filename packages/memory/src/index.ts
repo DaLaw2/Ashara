@@ -27,7 +27,7 @@ export { retrieve } from "./retrieval.js";
 export { initParser, parseFile } from "./indexer/index.js";
 export { SymbolGraph } from "./indexer/index.js";
 export { Bm25Index, tokenize } from "./indexer/index.js";
-export { CodebaseIndexer } from "./indexer/index.js";
+export { CodebaseIndexer, describeIndexShortfall } from "./indexer/index.js";
 export { symbolIdKey } from "./indexer/index.js";
 export type {
     ParseResult,
@@ -37,4 +37,8 @@ export type {
     SymbolKind,
     SymbolRef,
     SearchResult,
+    GrammarUnavailable,
+    IndexCoverage,
+    IndexFailure,
+    UnparsableGroup,
 } from "./indexer/index.js";
