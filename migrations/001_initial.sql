@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE work_items (
     id UUID PRIMARY KEY,
     level VARCHAR(10) NOT NULL CHECK (level IN ('Epic', 'Story', 'Feature', 'Task')),
-    status VARCHAR(15) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'InProgress', 'Completed', 'Blocked', 'Failed', 'Archived', 'Abandoned')),
+    status VARCHAR(15) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'InProgress', 'Completed', 'Blocked', 'Failed', 'Abandoned')),
     parent_id UUID REFERENCES work_items(id),
     title TEXT NOT NULL,
     description TEXT,
@@ -72,7 +72,7 @@ CREATE TRIGGER domain_events_notify
 CREATE TABLE dev_sessions (
     id UUID PRIMARY KEY,
     task_id UUID NOT NULL REFERENCES work_items(id),
-    phase VARCHAR(20) NOT NULL DEFAULT 'Preparing',
+    phase VARCHAR(20) NOT NULL DEFAULT 'Preparing' CHECK (phase IN ('Preparing', 'Completed', 'Failed')),
     worker_id UUID,
     brief JSONB,
     output JSONB,

@@ -78,7 +78,7 @@ export { assembleRunSummaryItems, evaluate } from "@ashara/planning";
 export { buildRunSummary, emitRunSummary } from "@ashara/planning";
 
 // Acceptance
-export { buildDeterministicGaps, buildVisionGaps, buildAcceptanceVerdict, buildUnverifiedVerdict } from "@ashara/planning";
+export { assessProductObservation, buildVisionGaps, buildAcceptanceVerdict, buildUnverifiedVerdict } from "@ashara/planning";
 
 // Liveness recovery
 export { recoverFromAbandoned } from "@ashara/planning";

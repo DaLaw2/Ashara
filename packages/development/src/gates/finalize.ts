@@ -1,6 +1,6 @@
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
-import type { ExecutionEventSink, SessionStore, TaskDescriptor } from "../execution-service.js";
+import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
 import {
   abortMerge,
   buildMergeAgentBrief,
@@ -27,7 +27,6 @@ export interface FinalizeContractInfo {
 
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
-  readonly sessionStore: SessionStore;
 }
 
 async function abortAndFail(
@@ -61,7 +60,6 @@ async function abortAndFail(
 export async function finalizeSuccess(
   deps: FinalizeDeps,
   workDir: string,
-  sessionId: string,
   task: TaskDescriptor,
   targetProjectPath: string | null,
   attempt: number,
@@ -187,7 +185,8 @@ export async function finalizeSuccess(
 
   console.log(`[${task.id}] task completed — work dir preserved at: ${workDir}`);
 
-  await deps.sessionStore.complete(sessionId);
-
+  // The dev_sessions terminal write lives in DevelopmentService.withSessionLifecycle,
+  // the one seam every outcome passes through. It used to happen here, on the success
+  // path only, which is precisely how six failure returns came to have none.
   return { success: true };
 }

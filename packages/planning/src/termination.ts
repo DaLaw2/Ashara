@@ -6,7 +6,7 @@ import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
  * single "everything is blocked" check.
  *
  *  - `completeness` — every planned work item reached a terminal state
- *    (Completed / Abandoned / Archived). The run did all it set out to do; this
+ *    (Completed / Abandoned). The run did all it set out to do; this
  *    is the clean-finish signal and is distinct from `liveness`.
  *  - `economy`      — the budget policy is exhausted. The run stops even while
  *    dispatchable work remains. Termination only READS the policy verdict
@@ -75,7 +75,6 @@ export interface TerminationCounts {
   readonly blocked: number;
   readonly failed: number;
   readonly abandoned: number;
-  readonly archived: number;
   readonly nonTerminal: number;
   /** Items the gate/planner could act on this cycle (dispatchable tasks + decomposable stories). */
   readonly dispatchable: number;

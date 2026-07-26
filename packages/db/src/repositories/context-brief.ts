@@ -1,4 +1,4 @@
-import { and, eq, ne, asc, desc, sql } from "drizzle-orm";
+import { and, eq, asc, desc, sql } from "drizzle-orm";
 
 import type { Database } from "../connection.js";
 import { workItems } from "../schema.js";
@@ -17,10 +17,7 @@ export class ContextBriefRepository {
       })
       .from(workItems)
       .where(
-        and(
-          ne(workItems.status, "Archived"),
-          sql`(${workItems.status} <> 'Abandoned' OR ${workItems.blockedReason} ->> 'substitutedBy' IS NOT NULL)`,
-        ),
+        sql`(${workItems.status} <> 'Abandoned' OR ${workItems.blockedReason} ->> 'substitutedBy' IS NOT NULL)`,
       )
       .orderBy(asc(workItems.createdAt));
   }

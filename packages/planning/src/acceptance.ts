@@ -5,15 +5,32 @@ import type { ProjectContract, Endpoint } from "@ashara/shared";
 import type { StructuredLLMProvider } from "./gateway-adapters.js";
 
 /**
- * `unverified` means the acceptance check never produced a verdict — it threw,
- * or the inputs it needs were absent. It is deliberately NOT collapsed onto
- * `accepted-with-caveats`: absence of a verdict is not a passing verdict
- * (Discipline A).
+ * `unverified` means the acceptance check did not confirm the vision — it threw,
+ * the inputs it needs were absent, it had no attempt left to spend, or part of it
+ * could not run. It is deliberately NOT collapsed onto `accepted-with-caveats`:
+ * absence of a verdict is not a passing verdict (Discipline A).
  */
 export type AcceptanceOutcome = "accepted" | "rejected" | "accepted-with-caveats" | "unverified";
 
-/** Why an acceptance check could not produce a verdict. */
-export type AcceptanceUnverifiedCause = "no-checker-configured" | "no-vision" | "check-threw";
+/**
+ * Why an acceptance check could not confirm the vision.
+ *
+ *  - `no-checker-configured` — neither tier is wired into the loop.
+ *  - `no-vision`             — nothing states what the product was supposed to be.
+ *  - `check-threw`           — the check ran and raised.
+ *  - `attempts-exhausted`    — the attempt cap was already spent, so THIS termination
+ *    was never checked. Distinct from `check-threw` because nothing failed: the run
+ *    simply had no budget left to look, which is its own epistemic state and must
+ *    never borrow another cause's meaning.
+ *  - `check-incomplete`      — the check ran and found nothing wrong, but part of it
+ *    could not execute, so "found nothing" is ignorance rather than evidence.
+ */
+export type AcceptanceUnverifiedCause =
+  | "no-checker-configured"
+  | "no-vision"
+  | "check-threw"
+  | "attempts-exhausted"
+  | "check-incomplete";
 
 export interface AcceptanceGap {
   readonly ref: string;
@@ -32,6 +49,19 @@ export interface AcceptanceVerdict {
   readonly maxAttempts: number;
   /** Set only when `outcome` is "unverified": self-sufficient reason the check could not run. */
   readonly unverifiedReason?: string;
+}
+
+/**
+ * What the deterministic tier found AND what it could not look at. The second half
+ * is the point: a tier that returns only gaps reports "I checked nothing" and "I
+ * found nothing wrong" with the same value — the empty array — and every caller
+ * reads that as the product being fine. `unchecked` makes the difference
+ * unavoidable, and a non-empty `unchecked` forbids an `accepted` verdict.
+ */
+export interface DeterministicAssessment {
+  readonly gaps: readonly AcceptanceGap[];
+  /** Self-sufficient statements of what could not be checked, and why. */
+  readonly unchecked: readonly string[];
 }
 
 export interface WorkItemSummary {
@@ -132,32 +162,49 @@ function bootExpectation(declaredEndpoints: readonly Endpoint[]): string {
     : "the project starts and runs without failing";
 }
 
-export function buildDeterministicGaps(
+/**
+ * The deterministic tier: read one product observation against the contract and
+ * separate what it PROVES from what it never got to look at.
+ *
+ * Three absences used to return an empty gap list and be read as a clean bill of
+ * health — a missing contract, an endpoint that was declared but never probed, and
+ * an observation that could not be taken at all. All three are now `unchecked`.
+ */
+export function assessProductObservation(
   observation: ProductObservation,
   contract: ProjectContract | null,
-): AcceptanceGap[] {
+): DeterministicAssessment {
   const gaps: AcceptanceGap[] = [];
+  const unchecked: string[] = [];
+
+  // A missing contract means nothing DECLARED what this product must do, so this
+  // tier had no standard to check against — not that the product met one.
+  if (contract === null) {
+    unchecked.push(
+      "no ProjectContract exists for this project, so nothing declares what the product must do and the deterministic tier had no standard to check it against",
+    );
+  }
 
   // The HTTP surface the project itself declared. Empty for a CLI, a library, a
   // kernel module — and for any project whose contract simply has no endpoints yet.
   const declaredEndpoints = contract === null ? [] : contract.endpoints.filter((ep) => !ep.outOfScope);
 
-  if (!observation.booted) {
+  if (observation.kind === "not-observable") {
+    unchecked.push(
+      `the product could not be observed (${observation.cause}): ${observation.detail}`,
+    );
+    return { gaps, unchecked };
+  }
+
+  if (observation.kind === "boot-failed") {
     gaps.push({
       ref: "boot",
       kind: "boot-failure",
       expected: bootExpectation(declaredEndpoints),
-      observed: observation.bootOutput.slice(0, 300) || "the boot attempt produced no output",
+      observed: observation.detail.slice(0, 300),
     });
-    return gaps;
+    return { gaps, unchecked };
   }
-
-  // Everything below probes HTTP and is therefore scoped, explicitly, to projects
-  // that declare an HTTP surface. A project with none is not "silently fine here":
-  // it is out of this check's reach entirely, and its acceptance rests on the
-  // vision-gap path instead. (Whether producing no gaps should still yield an
-  // `accepted` verdict is the separate fail-open question, untouched here.)
-  if (declaredEndpoints.length === 0) return gaps;
 
   const probeByKey = new Map(
     observation.endpoints.map((p) => [`${p.method} ${p.path}`, p]),
@@ -165,7 +212,15 @@ export function buildDeterministicGaps(
 
   for (const ep of declaredEndpoints) {
     const probe = probeByKey.get(`${ep.method} ${ep.path}`);
-    if (probe === undefined) continue;
+    if (probe === undefined) {
+      // ADR-042 deleted static reachability on the argument that a declared endpoint
+      // answering 404 is stronger evidence. That holds only for an endpoint that was
+      // ACTUALLY probed; an unprobed one carries no evidence in either direction.
+      unchecked.push(
+        `declared endpoint ${ep.method} ${ep.path} (ref "${ep.ref}") was never probed by the observation, so its health is unknown`,
+      );
+      continue;
+    }
 
     if (probe.status === null) {
       gaps.push({
@@ -191,7 +246,7 @@ export function buildDeterministicGaps(
     }
   }
 
-  return gaps;
+  return { gaps, unchecked };
 }
 
 export function buildVisionGaps(
@@ -211,38 +266,63 @@ export function buildVisionGaps(
     }));
 }
 
+/**
+ * The verdict for a check that actually RAN. `unchecked` is required, not optional:
+ * a caller cannot reach `accepted` without explicitly asserting, at the call site,
+ * that nothing was left unlooked-at. `accepted` is the only outcome that claims the
+ * vision was confirmed, so it is the only one that demands a complete check.
+ */
 export function buildAcceptanceVerdict(
   gaps: readonly AcceptanceGap[],
+  unchecked: readonly string[],
   attempt: number,
   maxAttempts: number,
 ): AcceptanceVerdict {
-  const outcome: AcceptanceOutcome =
-    gaps.length === 0
-      ? "accepted"
-      : attempt >= maxAttempts
-        ? "accepted-with-caveats"
-        : "rejected";
+  if (gaps.length > 0) {
+    const outcome: AcceptanceOutcome = attempt >= maxAttempts ? "accepted-with-caveats" : "rejected";
+    return { outcome, gaps, attempt, maxAttempts };
+  }
 
-  return { outcome, gaps, attempt, maxAttempts };
+  if (unchecked.length > 0) {
+    return buildUnverifiedVerdict({
+      cause: "check-incomplete",
+      detail: unchecked.join("; "),
+      attempt,
+      maxAttempts,
+      priorGaps: [],
+    });
+  }
+
+  return { outcome: "accepted", gaps, attempt, maxAttempts };
 }
 
-/**
- * The verdict for a check that never ran. `detail` accepts the raw thrown value
- * so the full cause chain survives into the reason — collapsing it to
- * `String(error)` would drop everything below the outermost error.
- */
-export function buildUnverifiedVerdict(
-  cause: AcceptanceUnverifiedCause,
-  detail: unknown,
-  attempt: number,
-  maxAttempts: number,
-): AcceptanceVerdict {
+export interface UnverifiedVerdictInput {
+  readonly cause: AcceptanceUnverifiedCause;
+  /**
+   * The raw cause — a thrown value or a sentence. Accepted as `unknown` so a full
+   * error chain survives into the reason; collapsing it to `String(error)` would
+   * drop everything below the outermost error (Discipline C).
+   */
+  readonly detail: unknown;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  /**
+   * Gaps a PREVIOUS completed check left open, carried forward so a termination
+   * that cannot re-check still reports the last thing known to be wrong instead of
+   * reporting nothing. Never evidence that this check ran — the outcome stays
+   * `unverified` whatever this holds.
+   */
+  readonly priorGaps: readonly AcceptanceGap[];
+}
+
+/** The verdict for a check that did not confirm the vision. */
+export function buildUnverifiedVerdict(input: UnverifiedVerdictInput): AcceptanceVerdict {
   return {
     outcome: "unverified",
-    gaps: [],
-    attempt,
-    maxAttempts,
-    unverifiedReason: `${cause}: ${describeCauseChain(detail)}`,
+    gaps: input.priorGaps,
+    attempt: input.attempt,
+    maxAttempts: input.maxAttempts,
+    unverifiedReason: `${input.cause}: ${describeCauseChain(input.detail)}`,
   };
 }
 

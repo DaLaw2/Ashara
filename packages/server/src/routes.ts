@@ -350,11 +350,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           abandonWorkItem(item, abandonReason);
           break;
         }
-        case "Archived":
-          return c.json(
-            { error: "cannot transition to Archived via this endpoint" },
-            400,
-          );
         default: {
           // Compile-time exhaustiveness: if WorkItemStatus ever grows a new
           // member without a case here, this assignment fails to typecheck.

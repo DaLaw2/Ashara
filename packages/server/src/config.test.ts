@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { BudgetTracker } from "@ashara/orchestrator";
+import type { TaskCostInfo } from "@ashara/orchestrator";
 
 import { loadServerConfig } from "./config.js";
 
@@ -65,14 +66,56 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
 
     const budget = new BudgetTracker(config.coreLoop);
     // Below the cap: economy stop must NOT trip.
-    budget.accumulateCost(0.9293, true);
+    budget.accumulateCost(measured(0.9293), "Strong", true);
     expect(budget.isExhausted()).toBe(false);
     expect(budget.checkpoint()).not.toBe("exhausted");
 
     // The Run-11 over-run shape: crossing $1 must trip the economy stop.
-    budget.accumulateCost(0.1512, true);
+    budget.accumulateCost(measured(0.1512), "Strong", true);
     expect(budget.totalCostUsd).toBeCloseTo(1.0805);
     expect(budget.isExhausted()).toBe(true);
     expect(budget.checkpoint()).toBe("exhausted");
   });
+
+  // An agent that crashed, timed out, or wrote malformed output reports no cost.
+  // Charging that as $0 is what let the budget under-count real spend; the cap
+  // exists to bound a runaway, and a runaway is exactly the shape that loses its
+  // own cost report.
+  test("an unknown cost is charged, not treated as free", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    const budget = new BudgetTracker(loadServerConfig().coreLoop);
+
+    budget.accumulateCost(unknown(), "Strong", false);
+
+    expect(budget.totalCostUsd).toBeGreaterThan(0);
+  });
+
+  test("repeated unknown costs still reach the cap and stop the run", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    const budget = new BudgetTracker(loadServerConfig().coreLoop);
+
+    for (let i = 0; i < 50 && !budget.isExhausted(); i += 1) {
+      budget.accumulateCost(unknown(), "Strong", false);
+    }
+
+    expect(budget.isExhausted()).toBe(true);
+  });
+
+  test("no dispatch means a MEASURED zero — an idle cycle never burns budget", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    const budget = new BudgetTracker(loadServerConfig().coreLoop);
+
+    budget.accumulateCost(measured(0), "Strong", false);
+
+    expect(budget.totalCostUsd).toBe(0);
+    expect(budget.isExhausted()).toBe(false);
+  });
 });
+
+function measured(costUsd: number): TaskCostInfo {
+  return { costUsd, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
+}
+
+function unknown(): TaskCostInfo {
+  return { costUsd: null, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
+}

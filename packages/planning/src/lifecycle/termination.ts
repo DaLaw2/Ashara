@@ -1,5 +1,6 @@
 import type { DependencyResolution } from "../domain/index.js";
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
+import { TERMINAL_STATUSES } from "@ashara/shared";
 import type { TerminationDecision, TerminationCounts, StalledItem, StalledCause, TerminationPlanExhausted } from "../termination.js";
 
 export interface TerminationItemSnapshot {
@@ -17,12 +18,6 @@ export interface TerminationSnapshot {
   readonly budgetExhausted: boolean;
   readonly openCoverageGaps?: number;
 }
-
-const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>([
-  "Completed",
-  "Abandoned",
-  "Archived",
-]);
 
 function isTerminal(status: WorkItemStatus): boolean {
   return TERMINAL_STATUSES.has(status);
@@ -151,7 +146,6 @@ function tallyCounts(
   let blocked = 0;
   let failed = 0;
   let abandoned = 0;
-  let archived = 0;
   let nonTerminal = 0;
   let dispatchable = 0;
   let inFlight = 0;
@@ -176,9 +170,6 @@ function tallyCounts(
       case "Abandoned":
         abandoned += 1;
         break;
-      case "Archived":
-        archived += 1;
-        break;
     }
 
     if (!isTerminal(item.status)) nonTerminal += 1;
@@ -194,7 +185,6 @@ function tallyCounts(
     blocked,
     failed,
     abandoned,
-    archived,
     nonTerminal,
     dispatchable,
     inFlight,

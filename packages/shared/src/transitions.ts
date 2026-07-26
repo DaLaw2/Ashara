@@ -1,4 +1,5 @@
 import type { WorkItemStatus } from "./enums.js";
+import { WORK_ITEM_STATUSES } from "./enums.js";
 
 /**
  * Published Language: the WorkItem state-machine contract.
@@ -7,27 +8,38 @@ import type { WorkItemStatus } from "./enums.js";
  * ADR-044: Anti-Corruption Layer.
  */
 
-export const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set([
-  "Completed",
-  "Abandoned",
-  "Archived",
-]);
+/**
+ * Every status's outbound edges, keyed by `Record<WorkItemStatus, ...>` so the
+ * machine is TOTAL by construction: adding a member to WorkItemStatus without
+ * declaring where it can go fails to typecheck, and a terminal state has to say
+ * `[]` out loud instead of being terminal by omission. `Archived` was removed
+ * because it was terminal by omission in the other direction — declared, never
+ * reachable, and never written by anything.
+ *
+ * `Blocked -> Abandoned` exists because Blocked is the owner-parked state and
+ * its only other exit is `-> Pending`: without a give-up edge, work an owner
+ * parks and then decides against can never leave the machine (HTTP PATCH to
+ * Abandoned threw InvalidStatusTransition).
+ */
+const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
+  Pending: ["InProgress", "Blocked"],
+  InProgress: ["Completed", "Blocked", "Failed", "Pending"],
+  Blocked: ["Pending", "Abandoned"],
+  Failed: ["Pending", "Abandoned"],
+  Completed: [],
+  Abandoned: [],
+};
+
+/** Derived, never hand-listed: a status is terminal exactly when it has no exits. */
+export const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set(
+  WORK_ITEM_STATUSES.filter((status) => OUTBOUND_TRANSITIONS[status].length === 0),
+);
 
 export function canTransitionTo(
   from: WorkItemStatus,
   to: WorkItemStatus,
 ): boolean {
-  return (
-    (from === "Pending" && to === "InProgress") ||
-    (from === "InProgress" && to === "Completed") ||
-    (from === "InProgress" && to === "Blocked") ||
-    (from === "InProgress" && to === "Failed") ||
-    (from === "InProgress" && to === "Pending") ||
-    (from === "Pending" && to === "Blocked") ||
-    (from === "Blocked" && to === "Pending") ||
-    (from === "Failed" && to === "Pending") ||
-    (from === "Failed" && to === "Abandoned")
-  );
+  return OUTBOUND_TRANSITIONS[from].includes(to);
 }
 
 // ---------------------------------------------------------------------------

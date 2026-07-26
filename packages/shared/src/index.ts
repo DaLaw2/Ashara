@@ -9,5 +9,6 @@ export * from "./agent-brief.js";
 export * from "./observation.js";
 export * from "./error-envelope.js";
 export * from "./transitions.js";
+export * from "./run-state.js";
 export * from "./repository-ports.js";
 export * from "./workspace-layout.js";

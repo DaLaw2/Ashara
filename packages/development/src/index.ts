@@ -52,7 +52,7 @@ export type {
 } from "./project-toolchain.js";
 
 export { observeProduct } from "./gates/observe.js";
-export type { ObserveDeps } from "./gates/observe.js";
+export type { ObserveDeps, ObserveRequest, HttpEndpoint } from "./gates/observe.js";
 export { DevelopmentService } from "./execution-service.js";
 export type { WorkdirInfo } from "./workspace.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";

@@ -1,3 +1,5 @@
+import type { RunState } from "@ashara/shared";
+
 import type { WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph, decomposeLeafStories } from "./acl/planning-acl.js";
 import { detectTechStack, readManifestContext } from "./acl/development-acl.js";
@@ -8,10 +10,12 @@ import { processTask, handleProcessingError } from "./execution.js";
 import { evaluateRunTermination } from "./termination-snapshot.js";
 import { runPostCycleChecks, reconcileCoverageGaps } from "./post-cycle.js";
 import { attemptLivenessRecovery } from "./liveness-handler.js";
+import { openRun, persistRun } from "./run-state.js";
 
 export class CoreLoop {
   private readonly deps: CoreLoopDeps;
   private readonly budget: BudgetTracker;
+  private runState: RunState | null = null;
 
   constructor(deps: CoreLoopDeps) {
     this.deps = deps;
@@ -27,6 +31,7 @@ export class CoreLoop {
     }
 
     await this.budget.ensureLoaded(deps.costRepo);
+    await this.ensureRunOpen();
 
     const budgetStatus = this.budget.checkpoint();
     if (budgetStatus === "low") {
@@ -81,8 +86,9 @@ export class CoreLoop {
 
           try {
             const { result, costInfo } = await processTask(deps, task);
-            this.budget.accumulateCost(costInfo.costUsd, result.status === "completed");
+            this.budget.accumulateCost(costInfo, capability, result.status === "completed");
             await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
+            await this.persistRunCounters();
             results.push(result);
           } catch (e) {
             results.push(await handleProcessingError(deps, task, e));
@@ -125,8 +131,9 @@ export class CoreLoop {
               const capability = extractCapability(task);
               try {
                 const { result, costInfo } = await processTask(deps, task);
-                this.budget.accumulateCost(costInfo.costUsd, result.status === "completed");
+                this.budget.accumulateCost(costInfo, capability, result.status === "completed");
                 await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
+                await this.persistRunCounters();
                 results.push(result);
               } catch (e) {
                 results.push(await handleProcessingError(deps, task, e));
@@ -154,6 +161,38 @@ export class CoreLoop {
     // next-cycle re-verification before acting on a liveness stop.
     const termination = await evaluateRunTermination(deps, this.budget.isExhausted());
 
+    // AFTER the termination evaluation: acceptanceAttempts is incremented inside
+    // it, so persisting earlier would lose the very increment that bounds it.
+    await this.persistRunCounters();
+
     return { tasksProcessed: batch.length, results, termination };
+  }
+
+  /**
+   * Adopts the durable run record on the first cycle: budget spend, acceptance
+   * attempts and replan rounds all resume where a killed process left them
+   * (Discipline B). Runs once per process — after that the in-memory counters are
+   * authoritative and are written back by persistRunCounters.
+   *
+   * Throws through on a store failure: a cycle that cannot read the run's spend
+   * cannot enforce the cap, and the runner's consecutive-error backoff is the
+   * right response to that, not a dispatch against an assumed zero.
+   */
+  private async ensureRunOpen(): Promise<void> {
+    if (this.runState !== null) return;
+    const state = await openRun(this.deps.runStateStore);
+    this.runState = state;
+    this.budget.adoptSpend(state.spendUsd);
+    this.deps.acceptanceAttempts = state.acceptanceAttempts;
+    this.deps.replanRounds = state.replanRounds;
+  }
+
+  private async persistRunCounters(): Promise<void> {
+    if (this.runState === null) return;
+    this.runState = await persistRun(this.deps.runStateStore, this.runState, {
+      spendUsd: this.budget.totalCostUsd,
+      acceptanceAttempts: this.deps.acceptanceAttempts,
+      replanRounds: this.deps.replanRounds,
+    });
   }
 }

@@ -1,8 +1,19 @@
 export type WorkItemLevel = "Epic" | "Story" | "Feature" | "Task";
 
-export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Archived" | "Abandoned";
+export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
 export type CapabilityLevel = "Frontier" | "Strong" | "Medium" | "Light";
+
+/**
+ * The phases a dev_sessions row can hold. Only these three are ever written, and
+ * the `dev_sessions.phase` CHECK constraint (migrations/001_initial.sql) refuses
+ * anything else, so a phase the code cannot produce cannot reach the DB either.
+ * `Preparing` is the only non-terminal phase; a session in it after a restart is
+ * a crash orphan, not a live agent.
+ */
+export type SessionPhase = "Preparing" | "Completed" | "Failed";
+
+export const TERMINAL_SESSION_PHASES: readonly SessionPhase[] = ["Completed", "Failed"] as const;
 
 // ---------------------------------------------------------------------------
 // Boundary validation — parse external strings into domain types at system edges
@@ -10,13 +21,12 @@ export type CapabilityLevel = "Frontier" | "Strong" | "Medium" | "Light";
 
 const CAPABILITY_LEVELS: readonly CapabilityLevel[] = ["Frontier", "Strong", "Medium", "Light"] as const;
 const WORK_ITEM_LEVELS: readonly WorkItemLevel[] = ["Epic", "Story", "Feature", "Task"] as const;
-const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
+export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
     "Pending",
     "InProgress",
     "Completed",
     "Blocked",
     "Failed",
-    "Archived",
     "Abandoned",
 ] as const;
 

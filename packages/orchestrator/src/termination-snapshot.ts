@@ -1,13 +1,13 @@
 import { parseProjectId } from "@ashara/shared";
-import type { ProjectContract } from "@ashara/shared";
-import type { EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted } from "./acl/planning-acl.js";
+import type { ProductObservation, ProjectContract, ProjectId } from "@ashara/shared";
+import type { AcceptanceLLM, EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
   evaluate,
   buildRunSummary,
   computeCoverageGaps,
   isBlockingCoverageGap,
-  buildDeterministicGaps,
+  assessProductObservation,
   buildVisionGaps,
   buildAcceptanceVerdict,
   buildUnverifiedVerdict,
@@ -85,69 +85,162 @@ function deriveStopReason(acceptance: AcceptanceVerdict): StopReason {
   }
 }
 
-async function runAcceptanceCheck(
-  deps: CoreLoopDeps,
-  items: Awaited<ReturnType<typeof assembleRunSummaryItems>>,
+/**
+ * The slice of {@link CoreLoopDeps} the acceptance check reads. Declared narrowly so
+ * the check is exercisable against a small double — `CoreLoopDeps` satisfies it
+ * structurally, so there is no second wiring to keep in step.
+ */
+export interface AcceptanceCheckDeps {
+  readonly config: { readonly maxAcceptanceAttempts: number };
+  readonly visionRepo: {
+    getLatest(): Promise<{ readonly visionText: string; readonly projectPath: string | null } | null>;
+  };
+  readonly workItemRepo: {
+    listAll(): Promise<ReadonlyArray<{ readonly id: string; readonly parentId?: string }>>;
+  };
+  readonly contractRepo?: { getLatest(projectId: ProjectId): Promise<ProjectContract | null> };
+  readonly acceptanceLlm?: AcceptanceLLM;
+  readonly observeProduct?: (input: {
+    readonly targetPath: string;
+    readonly contract: ProjectContract | null;
+  }) => Promise<ProductObservation>;
+  acceptanceAttempts: number;
+  lastAcceptanceVerdict?: AcceptanceVerdict;
+}
+
+export interface AcceptanceCheckItem {
+  readonly id: string;
+  readonly title: string;
+  readonly status: string;
+}
+
+/**
+ * Run both acceptance tiers and return a verdict that distinguishes "checked and
+ * fine" from "did not check". Every early return below is an epistemic state, and
+ * none of them may borrow `accepted`'s meaning.
+ */
+export async function runAcceptanceCheck(
+  deps: AcceptanceCheckDeps,
+  items: readonly AcceptanceCheckItem[],
 ): Promise<AcceptanceVerdict> {
   const maxAttempts = deps.config.maxAcceptanceAttempts;
+  // The last completed evaluation's findings. A termination can be superseded by a
+  // NOTIFY and re-entered (runner.ts handleTermination), and on re-entry the cap
+  // below may leave nothing to recompute; carrying these forward is the difference
+  // between reporting the last known gaps and reporting none at all.
+  const priorGaps = deps.lastAcceptanceVerdict?.gaps ?? [];
 
   if (!deps.acceptanceLlm && !deps.observeProduct) {
-    return buildUnverifiedVerdict(
-      "no-checker-configured",
-      "neither an acceptance LLM nor a product observer is wired into the core loop",
-      deps.acceptanceAttempts,
+    return buildUnverifiedVerdict({
+      cause: "no-checker-configured",
+      detail: "neither an acceptance LLM nor a product observer is wired into the core loop",
+      attempt: deps.acceptanceAttempts,
       maxAttempts,
-    );
+      priorGaps,
+    });
   }
 
   if (deps.acceptanceAttempts >= maxAttempts) {
-    return buildAcceptanceVerdict([], deps.acceptanceAttempts, maxAttempts);
+    // Running out of chances to look is not a clean bill of health. This used to
+    // hand an empty gap list to buildAcceptanceVerdict, where `gaps.length === 0`
+    // meant `accepted` — the Run 39 line that told an owner all requirements were
+    // met while listing the ones that were not.
+    return buildUnverifiedVerdict({
+      cause: "attempts-exhausted",
+      detail:
+        `the acceptance check had already run ${deps.acceptanceAttempts} time(s) against a cap of ${maxAttempts}, ` +
+        "so this termination was never checked" +
+        (priorGaps.length > 0
+          ? `. The last completed check left ${priorGaps.length} gap(s) open, carried below`
+          : " and no earlier check left findings to fall back on"),
+      attempt: deps.acceptanceAttempts,
+      maxAttempts,
+      priorGaps,
+    });
   }
 
   try {
     const vision = await deps.visionRepo.getLatest();
     if (!vision) {
-      return buildUnverifiedVerdict(
-        "no-vision",
-        "no vision record exists, so there is nothing to check the product against",
-        deps.acceptanceAttempts,
+      return buildUnverifiedVerdict({
+        cause: "no-vision",
+        detail: "no vision record exists, so there is nothing to check the product against",
+        attempt: deps.acceptanceAttempts,
         maxAttempts,
-      );
-    }
-
-    const allGaps = [];
-
-    if (deps.observeProduct && vision.projectPath) {
-      const observation = await deps.observeProduct(vision.projectPath);
-      let contract: ProjectContract | null = null;
-      if (deps.contractRepo) {
-        const roots = (await deps.workItemRepo.listAll()).filter((i) => i.parentId === undefined);
-        for (const root of roots) {
-          contract = await deps.contractRepo.getLatest(parseProjectId(root.id));
-          if (contract) break;
-        }
-      }
-      allGaps.push(...buildDeterministicGaps(observation, contract));
-    }
-
-    if (deps.acceptanceLlm && vision.visionText) {
-      const summaries = items.map((i) => ({ id: i.id, title: i.title, status: i.status }));
-      const visionGapResult = await deps.acceptanceLlm.checkVisionGaps({
-        visionText: vision.visionText,
-        items: summaries,
+        priorGaps,
       });
-      allGaps.push(...buildVisionGaps(visionGapResult, vision.visionText));
+    }
+
+    const allGaps: AcceptanceGap[] = [];
+    const unchecked: string[] = [];
+
+    // Deterministic tier. Its absence used to leave no trace at all, and the verdict
+    // was then computed from the LLM tier alone as though this tier had passed.
+    if (!deps.observeProduct) {
+      unchecked.push(
+        "no product observer is wired into the core loop, so the deterministic tier never ran and nothing looked at the built product",
+      );
+    } else if (vision.projectPath === null) {
+      unchecked.push(
+        "the vision record carries no projectPath, so the deterministic tier had no product to observe",
+      );
+    } else {
+      // Resolved once and used twice: the observer needs it to know what to probe,
+      // the assessment needs it to know what was promised. Reading it separately
+      // was how the observer ended up judging a product it was never told about.
+      const contract = await latestContract(deps);
+      const observation = await deps.observeProduct({ targetPath: vision.projectPath, contract });
+      const assessment = assessProductObservation(observation, contract);
+      allGaps.push(...assessment.gaps);
+      unchecked.push(...assessment.unchecked);
+    }
+
+    // Vision-gap tier. Same rule as above: an absent tier is recorded, never assumed.
+    if (!deps.acceptanceLlm) {
+      unchecked.push(
+        "no acceptance LLM is wired into the core loop, so the vision was never compared against the work that shipped",
+      );
+    } else if (vision.visionText.length === 0) {
+      unchecked.push(
+        "the vision record carries no vision text, so there was nothing to compare the shipped work against",
+      );
+    } else {
+      const visionText = vision.visionText;
+      const visionGapResult = await deps.acceptanceLlm.checkVisionGaps({
+        visionText,
+        items: items.map((i) => ({ id: i.id, title: i.title, status: i.status })),
+      });
+      allGaps.push(...buildVisionGaps(visionGapResult, visionText));
     }
 
     deps.acceptanceAttempts += 1;
-    return buildAcceptanceVerdict(allGaps, deps.acceptanceAttempts, maxAttempts);
+    const verdict = buildAcceptanceVerdict(allGaps, unchecked, deps.acceptanceAttempts, maxAttempts);
+    deps.lastAcceptanceVerdict = verdict;
+    return verdict;
   } catch (e) {
     console.error(
       `Acceptance check threw at attempt ${deps.acceptanceAttempts + 1}/${maxAttempts} — run will stop as unverified:`,
       e,
     );
-    return buildUnverifiedVerdict("check-threw", e, deps.acceptanceAttempts, maxAttempts);
+    return buildUnverifiedVerdict({
+      cause: "check-threw",
+      detail: e,
+      attempt: deps.acceptanceAttempts,
+      maxAttempts,
+      priorGaps,
+    });
   }
+}
+
+async function latestContract(deps: AcceptanceCheckDeps): Promise<ProjectContract | null> {
+  const contractRepo = deps.contractRepo;
+  if (!contractRepo) return null;
+  const roots = (await deps.workItemRepo.listAll()).filter((i) => i.parentId === undefined);
+  for (const root of roots) {
+    const contract = await contractRepo.getLatest(parseProjectId(root.id));
+    if (contract) return contract;
+  }
+  return null;
 }
 
 async function createGapTasks(

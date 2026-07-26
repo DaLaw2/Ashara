@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 
+import type { SessionPhase } from "@ashara/shared";
 import { loadServerEnv } from "@ashara/shared";
 
 // --- Error types ---
@@ -25,17 +26,7 @@ export class ClientError extends Error {
 // --- Server-side types (match Rust serde output) ---
 
 export type WorkItemLevel = "Epic" | "Story" | "Feature" | "Task";
-export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Archived" | "Abandoned";
-export type SessionPhase =
-    | "Preparing"
-    | "Dispatched"
-    | "Reasoning"
-    | "Building"
-    | "Testing"
-    | "Verifying"
-    | "Saving"
-    | "Completed"
-    | "Failed";
+export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
 /** One node in a bulk hierarchy create. `tempId` is batch-local; `parentId` references another item's `tempId`. */
 export interface BulkWorkItem {
@@ -107,7 +98,7 @@ export interface CreateVisionRequest {
 const WorkItemSchema = z.object({
     id: z.string(),
     level: z.enum(["Epic", "Story", "Feature", "Task"]),
-    status: z.enum(["Pending", "InProgress", "Completed", "Blocked", "Failed", "Archived", "Abandoned"]),
+    status: z.enum(["Pending", "InProgress", "Completed", "Blocked", "Failed", "Abandoned"]),
     parentId: z.string().nullable(),
     title: z.string(),
     description: z.string().nullable(),
@@ -130,17 +121,9 @@ const SessionInfoSchema = z.object({
     brief: z.object({
         goal: z.string(),
     }).passthrough(),
-    phase: z.enum([
-        "Preparing",
-        "Dispatched",
-        "Reasoning",
-        "Building",
-        "Testing",
-        "Verifying",
-        "Saving",
-        "Completed",
-        "Failed",
-    ]),
+    // Exactly the phases anything writes; `SessionInfo.phase: SessionPhase`
+    // below makes a drift from the Published Language a compile error.
+    phase: z.enum(["Preparing", "Completed", "Failed"]),
     createdAt: z.string(),
     updatedAt: z.string(),
 });

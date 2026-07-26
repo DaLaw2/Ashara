@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import type { WorkItemStatus } from "@ashara/shared";
+import { TERMINAL_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 
 import {
   createPendingWorkItem,
@@ -15,15 +15,10 @@ import {
 } from "./work-item.js";
 import { InvalidStatusTransition } from "./errors.js";
 
-const ALL_STATUSES: readonly WorkItemStatus[] = [
-  "Pending",
-  "InProgress",
-  "Completed",
-  "Blocked",
-  "Failed",
-  "Archived",
-  "Abandoned",
-];
+// Read from the Published Language, not re-listed here: a status added to the
+// union is automatically covered by every sweep below instead of silently
+// escaping a stale local copy.
+const ALL_STATUSES = WORK_ITEM_STATUSES;
 
 function seedFailed() {
   const item = createPendingWorkItem("Task", "leaf-task");
@@ -61,6 +56,37 @@ describe("canTransitionTo — Failed recovery transitions", () => {
     expect(canTransitionTo("InProgress", "Blocked")).toBe(true);
     expect(canTransitionTo("Completed", "Pending")).toBe(false);
     expect(canTransitionTo("Pending", "Completed")).toBe(false);
+  });
+});
+
+describe("state-machine totality", () => {
+  test("every non-terminal status has at least one exit", () => {
+    for (const from of ALL_STATUSES) {
+      if (TERMINAL_STATUSES.has(from)) continue;
+      const exits = ALL_STATUSES.filter((to) => canTransitionTo(from, to));
+      expect(exits.length, `${from} has no outbound transition`).toBeGreaterThan(0);
+    }
+  });
+
+  test("every status is either terminal or reachable — no declared-but-unwritable state", () => {
+    for (const status of ALL_STATUSES) {
+      if (status === "Pending") continue; // the creation status; no inbound edge needed
+      const inbound = ALL_STATUSES.filter((from) => canTransitionTo(from, status));
+      expect(inbound.length, `${status} has no inbound transition`).toBeGreaterThan(0);
+    }
+  });
+
+  test("Blocked can be given up on, not only unblocked", () => {
+    expect(canTransitionTo("Blocked", "Pending")).toBe(true);
+    expect(canTransitionTo("Blocked", "Abandoned")).toBe(true);
+  });
+
+  test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {
+    const item = createPendingWorkItem("Task", "parked-task");
+    blockWorkItem(item, { reason: "waiting on owner" });
+    takeEvents(item);
+    abandonWorkItem(item, { reason: "owner dropped it", source: "api" });
+    expect(item.status).toBe("Abandoned");
   });
 });
 

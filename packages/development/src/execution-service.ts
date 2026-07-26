@@ -114,6 +114,23 @@ export interface ExecutionResult {
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
+  /**
+   * Whether the agent subprocess was actually launched for this dispatch. The
+   * budget reads it to tell "no agent ran, therefore $0" apart from "an agent ran
+   * and we cannot tell what it cost" — the second must never be charged as $0
+   * (Discipline A: an evidence default in a number that gates a stop reason).
+   */
+  readonly agentInvoked: boolean;
+}
+
+/**
+ * Mutable across the runExecution call so the outer catch can still report
+ * whether the agent had been launched when the throw happened. A thrown
+ * AgentSpawnError — the runner crashed after burning tokens — is exactly the
+ * case where `agentInvoked` must survive the stack unwind.
+ */
+interface DispatchRecord {
+  agentInvoked: boolean;
 }
 
 interface VerifyTaskOutcome {
@@ -220,6 +237,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
+        agentInvoked: false,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
@@ -257,6 +275,7 @@ export class DevelopmentService {
           filesChanged: [],
           attempt: 1,
           errorEnvelope: envelope,
+          agentInvoked: false,
         };
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
         return result;
@@ -266,8 +285,12 @@ export class DevelopmentService {
       workDir = await mkdtemp(join(base, "task-"));
     }
 
+    const dispatch: DispatchRecord = { agentInvoked: false };
+
     try {
-      const result = await this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract);
+      const result = await withSessionLifecycle(this.deps.sessionStore, sessionId, task.id, brief, () =>
+        this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract, dispatch),
+      );
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
@@ -299,6 +322,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
+        agentInvoked: dispatch.agentInvoked,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
@@ -587,8 +611,9 @@ export class DevelopmentService {
     workDir: string,
     sessionId: string,
     contract: ProjectContract | null,
+    dispatch: DispatchRecord,
   ): Promise<ExecutionResult> {
-    const { config, eventSink, sessionStore, agentInvoker } = this.deps;
+    const { config, eventSink, agentInvoker } = this.deps;
 
     const asharaDir = join(workDir, ASHARA_CONTROL_DIR);
     await mkdir(asharaDir, { recursive: true });
@@ -596,8 +621,6 @@ export class DevelopmentService {
     const briefPath = join(asharaDir, "brief.json");
     const outputPath = join(asharaDir, "output.json");
     await writeFile(briefPath, JSON.stringify(brief, null, 2));
-
-    await sessionStore.insert(sessionId, task.id, brief);
 
     eventSink?.emit({
       event: "agent_launched",
@@ -609,6 +632,7 @@ export class DevelopmentService {
 
     let output: Record<string, unknown>;
 
+    dispatch.agentInvoked = true;
     if (config.useRealAgent) {
       output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount, blockedReason: task.blockedReason });
     } else {
@@ -650,6 +674,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
+        agentInvoked: true,
       };
     }
 
@@ -683,6 +708,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
+        agentInvoked: true,
       };
     }
 
@@ -697,6 +723,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: "stub agent output — skipping verify", chain, agentOutput: output },
+        agentInvoked: true,
       };
     }
 
@@ -721,6 +748,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: "agent produced no file changes", chain, agentOutput: output },
+        agentInvoked: true,
       };
     }
 
@@ -755,11 +783,12 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: "verification failed", chain, agentOutput: output },
+        agentInvoked: true,
       };
     }
 
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
-    const finalizeResult = await finalizeSuccess(this.deps, workDir, sessionId, task, targetProjectPath, 1, taskChecks, {
+    const finalizeResult = await finalizeSuccess(this.deps, workDir, task, targetProjectPath, 1, taskChecks, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
@@ -786,6 +815,7 @@ export class DevelopmentService {
         filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
+        agentInvoked: true,
       };
     }
 
@@ -800,6 +830,7 @@ export class DevelopmentService {
       sessionId,
       filesChanged,
       attempt: 1,
+      agentInvoked: true,
     };
   }
 
@@ -930,6 +961,71 @@ export class DevelopmentService {
     }
   }
 
+}
+
+/**
+ * Opens the dev_sessions row and OWNS its terminal write. Every exit from
+ * `body` — every return, every throw — lands on a `complete` or a `fail`, so a
+ * failure return added to runExecution later cannot leak a `Preparing` row the
+ * way the six existing ones did: E2E Run 39 stranded 6 rows, which
+ * `listActive()` then reported as live agents indefinitely. This is the ONLY
+ * writer of a terminal phase — the success path used to write its own inside
+ * finalizeSuccess, and that split is what made "success transitions, failure
+ * does not" expressible at all.
+ *
+ * The terminal write itself is fail-SOFT: a DB error here must not un-complete a
+ * task that already passed its gates. A row left non-terminal by such an error is
+ * resolved by the startup reconciler, the durable backstop Discipline B requires
+ * — no in-process handler survives a crash.
+ */
+export async function withSessionLifecycle(
+  sessionStore: SessionStore,
+  sessionId: string,
+  taskId: string,
+  brief: AgentBrief,
+  body: () => Promise<ExecutionResult>,
+): Promise<ExecutionResult> {
+  await sessionStore.insert(sessionId, taskId, brief);
+
+  let outcome: ExecutionResult;
+  try {
+    outcome = await body();
+  } catch (e) {
+    await closeSession(taskId, sessionId, () =>
+      sessionStore.fail(sessionId, {
+        passed: false,
+        outcome: "errored",
+        detail: e instanceof Error ? e.message : String(e),
+      }),
+    );
+    throw e;
+  }
+
+  if (outcome.status === "completed") {
+    await closeSession(taskId, sessionId, () => sessionStore.complete(sessionId));
+  } else {
+    await closeSession(taskId, sessionId, () =>
+      sessionStore.fail(sessionId, {
+        passed: false,
+        outcome: outcome.status,
+        detail: outcome.detail,
+        ...(outcome.errorEnvelope !== undefined ? { errorEnvelope: outcome.errorEnvelope } : {}),
+      }),
+    );
+  }
+  return outcome;
+}
+
+async function closeSession(taskId: string, sessionId: string, write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+  } catch (e) {
+    console.warn(
+      `[${taskId}] failed to write the terminal dev_session phase for ${sessionId}; ` +
+        `the row stays non-terminal until startup reconciliation resolves it:`,
+      e,
+    );
+  }
 }
 
 /**
@@ -1184,6 +1280,9 @@ function stubAgentOutput(): Record<string, unknown> {
   return {
     status: "stub",
     summary: "agent execution not yet wired — orchestration flow complete",
+    // A measured zero, not a missing field: no LLM call happened, so the budget
+    // must charge $0 rather than fall back to the unknown-cost estimate.
+    total_cost: 0,
     files_changed: [],
     findings: [],
     build_log: null,

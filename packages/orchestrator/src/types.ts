@@ -6,7 +6,7 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { ProductObservation } from "@ashara/shared";
+import type { ProductObservation, ProjectContract } from "@ashara/shared";
 import type {
   RunSummary,
   TerminationDecision,
@@ -18,11 +18,13 @@ import type {
   DecompositionEngine,
   ProposalEmbedder,
   AcceptanceLLM,
+  AcceptanceVerdict,
   FailureRouter,
   ContractRegistryLookup,
 } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { EventLogger } from "./event-logger.js";
+import type { RunStateStore } from "./run-state.js";
 
 export interface CoreLoopConfig {
   readonly repoPath: string;
@@ -130,7 +132,15 @@ export interface BrainstormTriggerInfo {
 }
 
 export interface TaskCostInfo {
-  readonly costUsd: number;
+  /**
+   * What this dispatch cost, or `null` for "an agent ran and we cannot tell".
+   * The identity element is deliberately unavailable here (Discipline A): a
+   * crashed, timed-out or malformed agent run used to read as `0`, and a `0`
+   * that flows into the cap gating a runaway is not a measurement, it is an
+   * assumption the caller never knew it was making. `null` forces the budget to
+   * decide what an unbounded run costs; see BudgetTracker.accumulateCost.
+   */
+  readonly costUsd: number | null;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly modelId: string | null;
@@ -138,12 +148,25 @@ export interface TaskCostInfo {
   readonly attempt: number;
 }
 
+/** No agent was dispatched, so $0 is MEASURED, not assumed. */
 export function zeroCost(): TaskCostInfo {
   return { costUsd: 0, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
 }
 
-export function costFromOutput(output: Record<string, unknown>, attempt: number): TaskCostInfo {
-  const costUsd = typeof output.total_cost === "number" ? output.total_cost : 0;
+export function costFromOutput(
+  output: Record<string, unknown>,
+  attempt: number,
+  agentInvoked: boolean,
+): TaskCostInfo {
+  const rawCost = output.total_cost;
+  // No total_cost AND the agent was launched => tokens were burned and the
+  // amount is unrecoverable. No total_cost and no launch => genuinely nothing.
+  const costUsd =
+    typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0
+      ? rawCost
+      : agentInvoked
+        ? null
+        : 0;
   const tokens = output.total_tokens as Record<string, unknown> | undefined;
   const inputTokens = typeof tokens?.input === "number" ? tokens.input : 0;
   const outputTokens = typeof tokens?.output === "number" ? tokens.output : 0;
@@ -191,8 +214,34 @@ export interface CoreLoopDeps {
    */
   readonly contractRepo?: ContractRepository;
   readonly acceptanceLlm?: AcceptanceLLM;
-  readonly observeProduct?: (targetPath: string) => Promise<ProductObservation>;
+  /**
+   * The contract is a required part of the request, not an optional extra: it is
+   * what names the endpoints to probe and the entry point to launch. A defaulted
+   * positional made `observeProduct(path)` typecheck while observing nothing, so
+   * the caller must state the contract even when it is `null`.
+   */
+  readonly observeProduct?: (input: {
+    readonly targetPath: string;
+    readonly contract: ProjectContract | null;
+  }) => Promise<ProductObservation>;
+  /**
+   * Per-run cap counters. Mutated in-process by the components that enforce them
+   * (termination-snapshot, liveness-handler) and written through to the durable
+   * run record by CoreLoop after every accrual — a cap that only exists in
+   * process memory is not a cap (Discipline B), which is what let this one and
+   * the budget reset to zero on every restart.
+   */
   acceptanceAttempts: number;
+  /**
+   * The last acceptance evaluation that actually ran this process. Loop-internal
+   * memo written by termination-snapshot, not a wired dependency: a termination can
+   * be superseded by a NOTIFY and re-entered (runner.ts), and the re-entry may find
+   * the attempt cap spent. Run 39 recomputed from scratch there and published
+   * `accepted` over a verdict that had just listed five open gaps.
+   */
+  lastAcceptanceVerdict?: AcceptanceVerdict;
   readonly replanLlm?: ReplanLLM;
   replanRounds: number;
+  /** Durable home of every per-run cap counter above, plus the budget's spend. */
+  readonly runStateStore: RunStateStore;
 }

@@ -79,7 +79,7 @@ export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
 export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult, CreateBulkPlanDeps } from "./bulk-plan.js";
 
 export {
-  buildDeterministicGaps,
+  assessProductObservation,
   buildVisionGaps,
   buildAcceptanceVerdict,
   buildUnverifiedVerdict,
@@ -92,6 +92,8 @@ export type {
   AcceptanceGap,
   AcceptanceVerdict,
   AcceptanceLLM,
+  DeterministicAssessment,
+  UnverifiedVerdictInput,
   WorkItemSummary,
   VisionGapResult,
 } from "./acceptance.js";

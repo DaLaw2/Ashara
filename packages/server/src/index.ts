@@ -20,6 +20,7 @@ import {
   FailedApproachRepository,
   ContextBriefRepository,
   ContractRepository,
+  RunStateRepository,
   withPlanningTransaction,
 } from "@ashara/db";
 import {
@@ -27,6 +28,7 @@ import {
   ContinuousRunner,
   EventLogger,
   reconcileOnStartup,
+  closeRun,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import type { ContractRegistryLookup } from "@ashara/planning";
@@ -85,7 +87,7 @@ import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memor
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
-import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames } from "@ashara/shared";
+import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
@@ -136,6 +138,7 @@ async function main(): Promise<void> {
   const visionRepo = new VisionRepository(db);
   const configRepo = new ConfigRepository(db);
   const costRepo = new CostRepository(db);
+  const runStateRepo = new RunStateRepository(db);
   const knowledgeRepo = new KnowledgeRepository(db);
   const brainstormLogRepo = new BrainstormLogRepository(db);
   const failedApproachRepo = new FailedApproachRepository(db);
@@ -605,10 +608,20 @@ async function main(): Promise<void> {
     // top-level workItemRepo is (adaptWorkItemRepo).
     withPlanningTransaction: planningTransaction,
     acceptanceLlm: acceptanceLlm ?? undefined,
-    observeProduct: (targetPath: string) => observeProduct(targetPath),
+    // The entry point lives in the knowledge graph since ADR-038, not as a
+    // top-level contract field.
+    observeProduct: ({ targetPath, contract }) =>
+      observeProduct({
+        targetProjectPath: targetPath,
+        contractEntryPoint: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
+        contractEndpoints: contract?.endpoints ?? null,
+      }),
+    // Seeded to 0 and immediately overwritten by CoreLoop from the durable run
+    // record on the first cycle (a resumed run keeps its spent attempts).
     acceptanceAttempts: 0,
     replanLlm: replanLlm ?? undefined,
     replanRounds: 0,
+    runStateStore: runStateRepo,
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -672,6 +685,7 @@ async function main(): Promise<void> {
       workItemRepo,
       eventStore,
       failureRouter,
+      devSessionStore: devSessionRepo,
       workdirBase: config.coreLoop.workdirBase,
     });
   } catch (e) {
@@ -710,6 +724,14 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown());
 
   await runnerPromise;
+  // The runner returning WITHOUT a shutdown signal means it stopped on its own
+  // termination verdict: the run is over, so close the durable record and let the
+  // next process start a fresh per-run budget. A SIGTERM/SIGINT exit deliberately
+  // leaves it OPEN — that process was killed mid-run, and a restart must resume
+  // the same cap rather than being handed the whole budget again.
+  if (!shuttingDown) {
+    await closeRun(runStateRepo);
+  }
   console.log("Server and continuous runner stopped");
 }
 

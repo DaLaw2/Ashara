@@ -1,4 +1,4 @@
-import type { WorkItemStatus } from "@ashara/shared";
+import { TERMINAL_STATUSES } from "@ashara/shared";
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
@@ -16,12 +16,6 @@ export interface RunSummaryInput {
   readonly endpointGaps?: readonly EndpointCoverageGap[];
   readonly acceptance?: AcceptanceVerdict;
 }
-
-const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemStatus>([
-  "Completed",
-  "Abandoned",
-  "Archived",
-]);
 
 export type RunSummaryDecision = TerminationStop | (TerminationPlanExhausted & { readonly stopReason: StopReason; readonly abandonedRoots?: readonly string[] });
 
@@ -65,7 +59,7 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     abandoned,
     gaps,
     endpointGaps,
-    input.acceptance?.unverifiedReason,
+    input.acceptance,
   );
 
   const summary: RunSummary = {
@@ -252,15 +246,19 @@ function buildNarrative(
   abandoned: readonly AbandonedItem[],
   gaps: readonly CoverageGap[],
   endpointGaps: readonly EndpointCoverageGap[],
-  unverifiedReason?: string,
+  acceptance?: AcceptanceVerdict,
 ): string {
   const headlineMap: Record<StopReason, string> = {
     economy: "Run stopped because the budget was exhausted while dispatchable work remained.",
     accepted: "Run completed — vision acceptance check confirmed all requirements are met.",
     "accepted-with-caveats": "Run completed with caveats — some gaps remain but the acceptance iteration cap was reached.",
+    // Says "did not confirm" rather than "never produced a verdict": a check can now
+    // be PARTLY complete — one tier ran, the other could not — and claiming nothing
+    // ran would be its own inaccuracy. The Cause clause carries which.
     unverified:
-      "Run stopped UNVERIFIED — the plan was exhausted but the acceptance check never produced a verdict, so nothing confirms the vision was met. Treat the output as unvalidated.",
+      "Run stopped UNVERIFIED — the plan was exhausted but the acceptance check did not confirm the vision was met, so nothing validates this output. Treat it as unvalidated.",
   };
+  const unverifiedReason = acceptance?.unverifiedReason;
   const headline =
     unverifiedReason !== undefined && reason === "unverified"
       ? `${headlineMap[reason]} Cause: ${unverifiedReason}.`
@@ -279,8 +277,17 @@ function buildNarrative(
           .map((g) => `${g.method} ${g.path}`)
           .join(", ")}.`
       : "";
+  // Acceptance findings were previously carried only in the structured summary, so
+  // the one line an owner actually reads could name coverage gaps while staying
+  // silent about the vision requirements the check itself found unmet.
+  const acceptanceNote =
+    acceptance !== undefined && acceptance.gaps.length > 0
+      ? ` Acceptance found ${acceptance.gaps.length} unmet vision requirement(s): ${acceptance.gaps
+          .map((g) => g.expected)
+          .join("; ")}.`
+      : "";
 
-  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote} (total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
+  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote}${acceptanceNote} (total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
 }
 
 function summarizeKinds(abandoned: readonly AbandonedItem[]): string {

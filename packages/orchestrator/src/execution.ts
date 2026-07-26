@@ -42,6 +42,8 @@ export async function executeTask(
   output: Record<string, unknown>;
   attempt: number;
   errorEnvelope?: ErrorEnvelope;
+  /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
+  agentInvoked: boolean;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -71,6 +73,7 @@ export async function executeTask(
       result: completedResult(task.id),
       output: execResult.output,
       attempt: execResult.attempt,
+      agentInvoked: execResult.agentInvoked,
     };
   }
 
@@ -82,6 +85,7 @@ export async function executeTask(
       output: execResult.output,
       attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
+      agentInvoked: execResult.agentInvoked,
     };
   }
 
@@ -90,6 +94,7 @@ export async function executeTask(
     output: execResult.output,
     attempt: execResult.attempt,
     errorEnvelope: execResult.errorEnvelope,
+    agentInvoked: execResult.agentInvoked,
   };
 }
 
@@ -194,13 +199,13 @@ export async function processTask(
   // resulting dispatch_count off the reloaded WorkItem.
   await deps.workItemRepo.incrementDispatchCount(task.id);
 
-  const { result, output, attempt, errorEnvelope: execEnvelope } = await executeTask(
+  const { result, output, attempt, errorEnvelope: execEnvelope, agentInvoked } = await executeTask(
     routingDeps,
     deps.developmentService,
     task,
     targetProjectPath,
   );
-  const costInfo = costFromOutput(output, attempt);
+  const costInfo = costFromOutput(output, attempt, agentInvoked);
 
   // The target project path is now minted, validated, and persisted as the
   // source of truth inside resolveTargetProjectPath (single persist point).

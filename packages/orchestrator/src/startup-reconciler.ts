@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import type { DomainEvent } from "@ashara/shared";
-import type { EventStoreRepository } from "@ashara/db";
+import type { DevSessionRepository, EventStoreRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
 import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
 
@@ -14,6 +14,13 @@ export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
+  /**
+   * REQUIRED, not optional: dev_sessions is a stateful resource with a
+   * non-terminal phase, so leaving it unreconciled is the same leak this pass
+   * exists to close. An optional dependency here would just be the leak with a
+   * question mark on it.
+   */
+  readonly devSessionStore: Pick<DevSessionRepository, "failStale">;
   readonly workdirBase?: string;
   readonly targetProjectPath?: string;
 }
@@ -26,6 +33,7 @@ export interface ReconcileSummary {
   readonly failedSubstituted: number;
   readonly failedErrored: number;
   readonly worktreesCleaned: number;
+  readonly sessionsTerminalized: number;
 }
 
 export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
@@ -72,6 +80,8 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     }
   }
 
+  const sessionsTerminalized = await terminalizeOrphanedSessions(deps);
+
   let worktreesCleaned = 0;
   if (deps.targetProjectPath) {
     worktreesCleaned = await cleanOrphanedGitWorktrees(deps.targetProjectPath, deps.workItemRepo);
@@ -87,13 +97,50 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     failedSubstituted,
     failedErrored,
     worktreesCleaned,
+    sessionsTerminalized,
   };
   console.log(
     `[startup-reconciler] orphans requeued=${orphansRequeued} errored=${orphansErrored}; ` +
       `parked Failed routed=${parkedFailed.length} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
-      `substitute=${failedSubstituted} errored=${failedErrored}); worktrees cleaned=${worktreesCleaned}`,
+      `substitute=${failedSubstituted} errored=${failedErrored}); sessions terminalized=${sessionsTerminalized}; ` +
+      `worktrees cleaned=${worktreesCleaned}`,
   );
   return summary;
+}
+
+/**
+ * Closes every dev_session a crash left in a non-terminal phase. The server is
+ * single-process (ADR-022), so at boot NO session can legitimately be in flight —
+ * this is an exact classification, not a heuristic timeout. Without it a killed
+ * process leaves rows that `listActive()` reports as live agents forever (E2E Run
+ * 39: 6 rows, against 1 real dispatch).
+ *
+ * Fail-soft on its own error: a DB failure here must not block boot, and the next
+ * reconcile pass will retry — the rows are already stranded, so retrying is
+ * strictly better than refusing to start.
+ */
+async function terminalizeOrphanedSessions(deps: StartupReconcilerDeps): Promise<number> {
+  try {
+    const count = await deps.devSessionStore.failStale({
+      passed: false,
+      outcome: "abandoned",
+      detail: "session was still non-terminal at process start; its agent did not survive the previous process",
+      resolvedBy: "startup-reconciler",
+      resolvedAt: new Date().toISOString(),
+    });
+    if (count > 0) {
+      console.warn(
+        `[startup-reconciler] terminalized ${count} crash-orphaned dev_session(s) left non-terminal by a previous process`,
+      );
+    }
+    return count;
+  } catch (error) {
+    console.warn(
+      "[startup-reconciler] dev_session reconciliation failed; leaked sessions stay non-terminal until the next start:",
+      error,
+    );
+    return 0;
+  }
 }
 
 async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<void> {
