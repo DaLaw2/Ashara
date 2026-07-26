@@ -34,6 +34,9 @@ export {
   NoProviderAvailableError,
   SchemaValidationError,
   NoLLMProvidersConfigured,
+  RoutingProfileIncomplete,
+  InvalidRoutingProfiles,
+  TemperatureNotHonored,
 } from "./errors.js";
 export { KNOWN_LLM_SITES } from "./types.js";
 export type {

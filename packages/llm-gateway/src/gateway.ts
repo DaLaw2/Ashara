@@ -1,9 +1,14 @@
 import { generateObject, generateText, streamText, jsonSchema } from "ai";
-import type { ToolSet } from "ai";
+import type { CallWarning, ToolSet } from "ai";
 import { extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import { BudgetLedger } from "./budget-ledger.js";
-import { BudgetExceededError, ProviderError, SchemaValidationError } from "./errors.js";
+import {
+  BudgetExceededError,
+  ProviderError,
+  SchemaValidationError,
+  TemperatureNotHonored,
+} from "./errors.js";
 import { calculateCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
@@ -14,6 +19,7 @@ import type {
   CostBreakdown,
   CostSummary,
   GatewayConfig,
+  KnownLLMSite,
   LLMCallRecord,
   ModelConfig,
   StreamOptions,
@@ -50,7 +56,7 @@ export class LLMGateway {
    */
   private resolveWithBudgetDegrade(
     capability: CapabilityLevel,
-    site: string | undefined,
+    site: KnownLLMSite | undefined,
   ): ResolvedProvider {
     const resolved = this.registry.resolve(capability, [], site);
     try {
@@ -172,10 +178,14 @@ export class LLMGateway {
    * complete/streamComplete/generateStructured: run `execute` against
    * `resolved`; on failure, resolve one fallback provider and retry once,
    * or throw a typed ProviderError if none is available. `shouldRethrow`
-   * lets a caller (generateStructured) opt an error class out of the
-   * fallback retry and propagate it immediately instead.
+   * lets a caller opt an error class out of the fallback retry and propagate
+   * it immediately instead — generateStructured does so for
+   * SchemaValidationError, and all three do for TemperatureNotHonored, whose
+   * whole point is that the next model may drop the parameter just as
+   * silently (the fallback is resolved by capability, which knows nothing
+   * about sampling-parameter support).
    */
-  private async withFallback<TRequest extends { capability: CapabilityLevel; site?: string }, TResult>(
+  private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
     request: TRequest,
     resolved: ResolvedProvider,
     execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>,
@@ -207,7 +217,13 @@ export class LLMGateway {
 
   async complete(request: CompletionRequest): Promise<CompletionResponse> {
     const resolved = this.resolveWithBudgetDegrade(request.capability, request.site);
-    return this.withFallback(request, resolved, (req, r) => this.executeCall(req, r), "request");
+    return this.withFallback(
+      request,
+      resolved,
+      (req, r) => this.executeCall(req, r),
+      "request",
+      isTemperatureViolation,
+    );
   }
 
   private async executeCall(
@@ -232,6 +248,19 @@ export class LLMGateway {
     const usage = extractUsage(result.usage, result.providerMetadata);
 
     const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+
+    // Asserted AFTER recordCost at every call site: the tokens were spent
+    // whether or not the parameter was honored, so failing closed must not
+    // also lose the budget accounting for the call that failed.
+    // `result.warnings` aggregates every step, so the tool loop is covered.
+    assertTemperatureHonored({
+      requestedTemperature: request.temperature,
+      warnings: result.warnings,
+      provider: resolved.providerName,
+      model: resolved.modelConfig.id,
+      site: request.site,
+      operation: "generateText",
+    });
 
     let toolCalls: ToolCall[] | undefined;
     if (result.toolCalls && result.toolCalls.length > 0) {
@@ -268,6 +297,7 @@ export class LLMGateway {
       resolved,
       (req, r) => this.executeStreamCall(req, r, options),
       "stream request",
+      isTemperatureViolation,
     );
   }
 
@@ -299,18 +329,28 @@ export class LLMGateway {
 
     const result = streamText(streamParams);
 
-    const [text, streamToolCalls, sdkUsage, providerMetadata, finishReason, reasoningText] = await Promise.all([
+    const [text, streamToolCalls, sdkUsage, providerMetadata, finishReason, reasoningText, warnings] = await Promise.all([
       result.text,
       result.toolCalls,
       result.usage,
       result.providerMetadata,
       result.finishReason,
       result.reasoningText,
+      result.warnings,
     ]);
 
     const usage = extractUsage(sdkUsage, providerMetadata as Record<string, Record<string, unknown>> | undefined);
 
     const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+
+    assertTemperatureHonored({
+      requestedTemperature: request.temperature,
+      warnings,
+      provider: resolved.providerName,
+      model: resolved.modelConfig.id,
+      site: request.site,
+      operation: "streamText",
+    });
 
     let toolCalls: ToolCall[] | undefined;
     if (streamToolCalls && streamToolCalls.length > 0) {
@@ -342,7 +382,7 @@ export class LLMGateway {
       resolved,
       (req, r) => this.executeStructuredCall(req, r),
       "structured request",
-      (error) => error instanceof SchemaValidationError,
+      (error) => error instanceof SchemaValidationError || isTemperatureViolation(error),
     );
   }
 
@@ -355,6 +395,10 @@ export class LLMGateway {
       try {
         return await this.executeGenerateObject(request, resolved, t0);
       } catch (err) {
+        // The text fallback exists for models whose STRUCTURED-OUTPUT mode is
+        // unusable; it retries the same model, so it cannot recover a dropped
+        // temperature and would only buy a second identical violation.
+        if (err instanceof TemperatureNotHonored) throw err;
         console.warn(`[LLMGateway] generateObject failed, falling back to text extraction:`, err instanceof Error ? err.message : err);
       }
     }
@@ -385,6 +429,15 @@ export class LLMGateway {
 
     const usage = extractUsage(result.usage, result.providerMetadata);
     const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+
+    assertTemperatureHonored({
+      requestedTemperature: request.temperature,
+      warnings: result.warnings,
+      provider: resolved.providerName,
+      model: resolved.modelConfig.id,
+      site: request.site,
+      operation: "generateObject",
+    });
 
     const responseExcerpt = JSON.stringify(result.object).slice(0, 200);
     this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, request.prompt.slice(0, 200), responseExcerpt, usage, cost.totalCost, t0);
@@ -436,6 +489,19 @@ export class LLMGateway {
 
       const usage = extractUsage(result.usage, result.providerMetadata);
       const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+
+      // Throws OUT of the retry loop rather than `continue`-ing: a dropped
+      // temperature is a property of the model, not a transient malformation,
+      // so every remaining attempt would violate determinism identically while
+      // burning the retry budget reserved for recoverable JSON failures.
+      assertTemperatureHonored({
+        requestedTemperature: request.temperature,
+        warnings: result.warnings,
+        provider: resolved.providerName,
+        model: resolved.modelConfig.id,
+        site: request.site,
+        operation: "generateText:structured-fallback",
+      });
 
       const jsonText = extractJson(result.text);
       let parsed: unknown;
@@ -501,6 +567,62 @@ export class LLMGateway {
     };
   }
 }
+
+function isTemperatureViolation(error: unknown): boolean {
+  return error instanceof TemperatureNotHonored;
+}
+
+function isTemperatureUnsupportedWarning(
+  warning: CallWarning,
+): warning is Extract<CallWarning, { type: "unsupported" }> {
+  return warning.type === "unsupported" && warning.feature === "temperature";
+}
+
+export interface TemperatureHonoredCheck {
+  /** `undefined` means the caller never asked for a temperature — nothing to honor. */
+  readonly requestedTemperature: number | undefined;
+  /** Structured provider warnings for the completed call; `undefined` when the SDK reported none. */
+  readonly warnings: readonly CallWarning[] | undefined;
+  readonly provider: string;
+  readonly model: string;
+  readonly site: KnownLLMSite | undefined;
+  readonly operation: string;
+}
+
+/**
+ * Fail-closed determinism gate shared by every SDK entry point (Discipline A).
+ *
+ * Matches on the provider-spec-level warning shape (`type: "unsupported"`,
+ * `feature: "temperature"`) rather than on model or provider names: Anthropic
+ * `rejectsSamplingParameters` models, Anthropic with thinking enabled, OpenAI
+ * reasoning models and OpenAI search-preview models all emit exactly this
+ * warning, and a name list would have to be re-derived every catalog change.
+ *
+ * Any requested temperature counts, not just 0 — "I asked for X and silently
+ * got something else" is the violation regardless of X.
+ */
+export function assertTemperatureHonored(check: TemperatureHonoredCheck): void {
+  if (check.requestedTemperature === undefined) return;
+
+  const violation = check.warnings?.find(isTemperatureUnsupportedWarning);
+  if (!violation) return;
+
+  throw new TemperatureNotHonored({
+    requestedTemperature: check.requestedTemperature,
+    model: check.model,
+    provider: check.provider,
+    site: check.site ?? "unknown",
+    operation: check.operation,
+    details: violation.details,
+    howToFix: TEMPERATURE_HOW_TO_FIX,
+  });
+}
+
+const TEMPERATURE_HOW_TO_FIX =
+  "Route this site to a model that honors sampling parameters (see [routing.profiles] in " +
+  "config/models.toml), or stop requesting a temperature for this call if it does not need " +
+  "determinism. Do not suppress this check — an ignored temperature makes a call the system " +
+  "treats as deterministic silently non-deterministic.";
 
 function extractPromptExcerpt(request: CompletionRequest): string {
   const lastUserMsg = [...request.messages].reverse().find((m) => m.role === "user");

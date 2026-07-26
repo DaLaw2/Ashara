@@ -3,13 +3,14 @@ import type { z, ZodType } from "zod";
 
 import { GatewayError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
+import type { KnownLLMSite } from "./types.js";
 
 /**
  * Routing-profiles site tag stamped on every ladder attempt run at an
  * escalated capability tier (see `KnownLLMSite` in types.ts). Kept as one
  * constant so `withStructuredLadder` cannot drift on the spelling.
  */
-const ESCALATION_SITE = "escalation";
+const ESCALATION_SITE: KnownLLMSite = "escalation";
 
 // ---------------------------------------------------------------------------
 // Structured-output reliability ladder (Phase 4 t1, ADR-030 §"Structured-output
@@ -60,7 +61,7 @@ function excerpt(raw: string): string {
 
 export interface LadderRequest {
   /** Stable identifier for the call site — surfaces in logs and errors. */
-  readonly site: string;
+  readonly site: KnownLLMSite;
   readonly capability: CapabilityLevel;
   readonly prompt: string;
   readonly systemPrompt?: string;
@@ -266,7 +267,7 @@ export interface StructuredProviderRequest<T> {
   readonly maxTokens?: number;
   readonly temperature?: number;
   /** Routing site override for this call (rarely set directly — see `StructuredLadderOptions.site`, which sets it for every call this wrapper makes). */
-  readonly site?: string;
+  readonly site?: KnownLLMSite;
   /**
    * Optional semantic check run on the PARSED value inside each ladder attempt.
    * A `false` verdict is a retryable validation failure (feedback fed back via
@@ -294,7 +295,13 @@ export interface StructuredLadderOptions {
    * drift), not redundant same-model repetition.
    */
   readonly attempts?: number;
-  readonly site?: string;
+  /**
+   * Routing site every call this wrapper makes is tagged with. REQUIRED: a
+   * ladder with no site routes by capability alone, which is a routing hole
+   * by construction — the escalation tier would still be pinned by profile
+   * while the base tier drifted to whatever capability logic picked.
+   */
+  readonly site: KnownLLMSite;
   readonly onAttempt?: (event: LadderAttemptEvent) => void;
   /**
    * Re-ask suffix appended to the prompt on attempts after the first, built from
@@ -316,14 +323,14 @@ export interface StructuredLadderOptions {
  */
 export function withStructuredLadder(
   provider: StructuredProvider,
-  options: StructuredLadderOptions = {},
+  options: StructuredLadderOptions,
 ): StructuredProvider {
   const attempts = options.attempts ?? 1;
   return {
     async generateStructured<T>(request: StructuredProviderRequest<T>): Promise<StructuredProviderResult<T>> {
       const { validate, ...providerRequest } = request;
       // Per-call site (rare) wins over this wrapper's own default.
-      const baseSite = request.site ?? options.site ?? "structured";
+      const baseSite = request.site ?? options.site;
       let lastErrors: readonly string[] = [];
       const result = await runLadderCore<T>(
         {

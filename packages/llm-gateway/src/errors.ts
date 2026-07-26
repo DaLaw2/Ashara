@@ -97,3 +97,143 @@ export class NoLLMProvidersConfigured extends GatewayError {
     this.howToFix = howToFix;
   }
 }
+
+function quoteList(values: readonly string[]): string {
+  return values.map((v) => `"${v}"`).join(", ") || "none";
+}
+
+export interface RoutingProfileIncompleteContext {
+  /** Enabled-provider combo whose profile is short a site, e.g. "anthropic+deepseek". */
+  readonly combo: string;
+  /** `KNOWN_LLM_SITES` entries the profile fails to map. */
+  readonly missingSites: readonly string[];
+  /** Site keys the profile DOES map, so the operator sees the shape they are extending. */
+  readonly mappedSites: readonly string[];
+  /** models.toml path the profile was loaded from. */
+  readonly configPath: string;
+  readonly howToFix: string;
+}
+
+/**
+ * Thrown by `buildGateway` when the deployment's enabled-provider combo has a
+ * NON-EMPTY routing profile that fails to map every `KNOWN_LLM_SITES` entry.
+ *
+ * A non-empty profile is a curated allocation, so a hole in it is always a
+ * bug: the unmapped site falls through to capability logic and silently lands
+ * on whatever model that picks — which may be exactly the provider the
+ * profile was written to reserve. Refuse-to-start makes that a boot failure
+ * instead of a per-call surprise (ADR-030 refuse-to-start precedent).
+ */
+export class RoutingProfileIncomplete extends GatewayError {
+  readonly combo: string;
+  readonly missingSites: readonly string[];
+  readonly mappedSites: readonly string[];
+  readonly configPath: string;
+  readonly howToFix: string;
+
+  constructor(context: RoutingProfileIncompleteContext) {
+    super(
+      `Routing profile "${context.combo}" is incomplete: no model mapped for site(s) ` +
+        `${quoteList(context.missingSites)}. Mapped sites: ${quoteList(context.mappedSites)}. ` +
+        `Config: ${context.configPath}. ${context.howToFix}`,
+    );
+    this.name = "RoutingProfileIncomplete";
+    this.combo = context.combo;
+    this.missingSites = context.missingSites;
+    this.mappedSites = context.mappedSites;
+    this.configPath = context.configPath;
+    this.howToFix = context.howToFix;
+  }
+}
+
+export interface TemperatureNotHonoredContext {
+  /** Temperature the caller explicitly asked for — the promise that was broken. */
+  readonly requestedTemperature: number;
+  /** Catalog model id the request resolved to. */
+  readonly model: string;
+  /** Provider that served the call. */
+  readonly provider: string;
+  /** `KNOWN_LLM_SITES` tag of the call, or "unknown" when the caller sent none. */
+  readonly site: string;
+  /** SDK entry point that produced the warning (generateText/streamText/generateObject/...). */
+  readonly operation: string;
+  /** The provider's own explanation, copied verbatim from the SDK warning. */
+  readonly details: string | undefined;
+  readonly howToFix: string;
+}
+
+/**
+ * Thrown when a call explicitly requested a temperature and the provider
+ * reported — via the AI SDK's structured `warnings` — that it dropped the
+ * parameter and sampled however it liked.
+ *
+ * Discipline A names `temperature: 0` as the mechanism for deterministic
+ * operations (decomposition, classification, acceptance, stack derivation).
+ * Sending the parameter is not the guarantee; the provider HONORING it is.
+ * Anthropic models with `rejectsSamplingParameters` and OpenAI reasoning
+ * models silently ignore it, so without this check the determinism guarantee
+ * evaporates into an SDK log line and a non-deterministic result is accepted
+ * as if it were deterministic — the exact "continue as if success" shape
+ * Discipline A forbids.
+ *
+ * Deliberately NOT a per-model catalog flag: Anthropic also drops temperature
+ * whenever extended thinking is enabled, a per-CALL runtime condition no
+ * static capability table can predict. The warning is the only signal that
+ * reflects what actually happened.
+ */
+export class TemperatureNotHonored extends GatewayError {
+  readonly requestedTemperature: number;
+  readonly model: string;
+  readonly provider: string;
+  readonly site: string;
+  readonly operation: string;
+  readonly details: string | undefined;
+  readonly howToFix: string;
+
+  constructor(context: TemperatureNotHonoredContext) {
+    super(
+      `Temperature not honored: requested temperature=${context.requestedTemperature} for model ` +
+        `"${context.model}" (provider="${context.provider}", site="${context.site}", ` +
+        `operation="${context.operation}"), but the provider reported it unsupported and ignored it ` +
+        `— the result is NOT deterministic. Provider detail: ${context.details ?? "none reported"}. ` +
+        context.howToFix,
+    );
+    this.name = "TemperatureNotHonored";
+    this.requestedTemperature = context.requestedTemperature;
+    this.model = context.model;
+    this.provider = context.provider;
+    this.site = context.site;
+    this.operation = context.operation;
+    this.details = context.details;
+    this.howToFix = context.howToFix;
+  }
+}
+
+/**
+ * Thrown by `loadRoutingProfilesFromToml` when a models.toml that IS present
+ * and IS parseable carries a `[routing.profiles]` block that fails schema
+ * validation — most often a site key that is not a `KNOWN_LLM_SITES` entry
+ * (a typo, or a key left behind after the call site was deleted).
+ *
+ * Deliberately NOT degraded to "no profiles": dropping the whole block on a
+ * one-key typo would send every site to capability routing, the same silent
+ * mis-route the boot completeness check exists to prevent, and the stale key
+ * would disappear without a trace. A missing or unparseable file still
+ * degrades — that is a deployment shape, not an authoring error.
+ */
+export class InvalidRoutingProfiles extends GatewayError {
+  readonly configPath: string;
+  readonly issues: readonly string[];
+  readonly howToFix: string;
+
+  constructor(configPath: string, issues: readonly string[], howToFix: string) {
+    super(
+      `Invalid [routing.profiles] in ${configPath}: ${issues.join("; ") || "schema validation failed"}. ` +
+        howToFix,
+    );
+    this.name = "InvalidRoutingProfiles";
+    this.configPath = configPath;
+    this.issues = issues;
+    this.howToFix = howToFix;
+  }
+}

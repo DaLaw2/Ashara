@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
 
-import type { RoutingProfiles } from "./types.js";
+import { InvalidRoutingProfiles } from "./errors.js";
+import { KNOWN_LLM_SITES } from "./types.js";
+import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Routing profiles (routing-profiles story): static per-site model playbooks
@@ -21,8 +23,13 @@ import type { RoutingProfiles } from "./types.js";
 // site whose requests legitimately vary in capability across calls (e.g.
 // agent-runner — see `RoutingProfileCapabilityTable` in types.ts). `.strict()`
 // on the table shape means an unrecognized key (a typo'd capability name)
-// fails validation loudly via the existing invalid-shape fallback below,
-// rather than being silently stripped.
+// fails validation loudly rather than being silently stripped.
+//
+// Site KEYS are constrained to `KNOWN_LLM_SITES`, catching the reverse of the
+// boot completeness check: a key nothing routes through any more (a deleted
+// call site) or a key nothing ever routed through (a typo). Partial and empty
+// tables still validate — completeness is `buildGateway`'s call, because only
+// it knows which combo the deployment actually runs.
 // ---------------------------------------------------------------------------
 
 const RoutingProfileEntrySchema = z.union([
@@ -38,37 +45,61 @@ const RoutingProfileEntrySchema = z.union([
     .strict(),
 ]);
 
-const RoutingProfilesSchema: z.ZodType<RoutingProfiles> = z.record(
+const RoutingProfilesSchema = z.record(
   z.string(),
   z.record(z.string(), RoutingProfileEntrySchema),
 );
 
-interface TomlRoutingRoot {
-  routing?: { profiles?: unknown };
-}
+const TomlRoutingRootSchema = z.object({
+  routing: z.object({ profiles: z.unknown().optional() }).optional(),
+});
+
+const KNOWN_SITES: ReadonlySet<string> = new Set(KNOWN_LLM_SITES);
 
 /**
- * Parses `[routing.profiles."<combo>"]` tables from a models.toml file. Never
- * throws: a missing file, unparseable TOML, or a `[routing.profiles]` shape
- * that fails validation all degrade to "no profiles" (empty map) with a
- * warning — mirrors `loadModelsWithFallback`'s graceful-degradation
- * convention for this same file. Routing profiles are optional per-site
- * overlays; their absence must never block gateway construction.
+ * Site keys are checked here rather than by the schema's key type: this
+ * package's zod resolves to v3 typings, whose `z.record(z.enum(...))` has no
+ * partial form, and the exhaustive form would reject the legitimately EMPTY
+ * profile (`[routing.profiles."deepseek"]`). Reported as `"<combo>.<site>"`
+ * so the operator can find the line without re-reading the whole table.
+ */
+function collectUnknownSiteKeys(
+  profiles: Record<string, Record<string, RoutingProfileEntry>>,
+): string[] {
+  const unknown: string[] = [];
+  for (const [combo, profile] of Object.entries(profiles)) {
+    for (const site of Object.keys(profile)) {
+      if (!KNOWN_SITES.has(site)) unknown.push(`${combo}."${site}"`);
+    }
+  }
+  return unknown;
+}
+
+const INVALID_PROFILES_HOW_TO_FIX =
+  `Site keys must be one of: ${KNOWN_LLM_SITES.map((s) => `"${s}"`).join(", ")}. ` +
+  "Delete the offending key, or register the site in KNOWN_LLM_SITES " +
+  "(packages/llm-gateway/src/types.ts) if it is a real call site.";
+
+/**
+ * Parses `[routing.profiles."<combo>"]` tables from a models.toml file.
+ *
+ * Degrades to "no profiles" (empty map, warned) when the file is missing or
+ * unparseable, or when it carries no `[routing.profiles]` block at all —
+ * those are deployment shapes, and routing profiles are an optional overlay
+ * whose absence must never block gateway construction (mirrors
+ * `loadModelsWithFallback`'s convention for this same file).
+ *
+ * THROWS {@link InvalidRoutingProfiles} when the block IS present but fails
+ * validation. That is an authoring error, and degrading it to `{}` would be
+ * fail-open twice over: every site would silently drop to capability routing,
+ * and the boot completeness check could not catch it either — an empty map
+ * yields no profile for the combo, which that check must exempt.
  */
 export function loadRoutingProfilesFromToml(configPath: string): RoutingProfiles {
+  let profiles: unknown;
   try {
-    const raw = readFileSync(configPath, "utf-8");
-    const parsed = parse(raw) as TomlRoutingRoot;
-    if (!parsed.routing?.profiles) return {};
-
-    const result = RoutingProfilesSchema.safeParse(parsed.routing.profiles);
-    if (!result.success) {
-      console.warn(
-        `[RoutingProfiles] invalid [routing.profiles] shape in ${configPath}, ignoring: ${result.error.message}`,
-      );
-      return {};
-    }
-    return result.data;
+    const parsed = TomlRoutingRootSchema.parse(parse(readFileSync(configPath, "utf-8")));
+    profiles = parsed.routing?.profiles;
   } catch (err) {
     console.warn(
       `[RoutingProfiles] failed to load routing profiles from ${configPath}, proceeding with none:`,
@@ -76,6 +107,28 @@ export function loadRoutingProfilesFromToml(configPath: string): RoutingProfiles
     );
     return {};
   }
+
+  if (!profiles) return {};
+
+  const result = RoutingProfilesSchema.safeParse(profiles);
+  if (!result.success) {
+    throw new InvalidRoutingProfiles(
+      configPath,
+      result.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`),
+      INVALID_PROFILES_HOW_TO_FIX,
+    );
+  }
+
+  const unknownSiteKeys = collectUnknownSiteKeys(result.data);
+  if (unknownSiteKeys.length > 0) {
+    throw new InvalidRoutingProfiles(
+      configPath,
+      unknownSiteKeys.map((key) => `${key} is not a known LLM site`),
+      INVALID_PROFILES_HOW_TO_FIX,
+    );
+  }
+
+  return result.data;
 }
 
 /**

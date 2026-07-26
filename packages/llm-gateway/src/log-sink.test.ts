@@ -50,12 +50,12 @@ describe("LLMGateway logSink", () => {
     await gateway.complete({
       capability: "Strong",
       messages: [{ role: "user", content: "hello world" }],
-      site: "test-site",
+      site: "agent-runner",
     });
 
     expect(records).toHaveLength(1);
     const r = records[0]!;
-    expect(r.site).toBe("test-site");
+    expect(r.site).toBe("agent-runner");
     expect(r.capability).toBe("Strong");
     expect(r.model).toBe("test-model");
     expect(r.provider).toBe("test-provider");

@@ -5,7 +5,7 @@ import type { LanguageModel } from "ai";
 import { NoProviderAvailableError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
-import type { GatewayConfig, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
+import type { GatewayConfig, KnownLLMSite, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
 
 export interface ResolvedProvider {
   provider: LanguageModel;
@@ -95,7 +95,7 @@ export class ProviderRegistry {
   resolve(
     capability: CapabilityLevel,
     excludeProviders: string[] = [],
-    site?: string,
+    site?: KnownLLMSite,
   ): ResolvedProvider {
     const enabledProviders = this.config.providers.filter(
       (p) => p.enabled && !excludeProviders.includes(p.name),
@@ -150,7 +150,7 @@ export class ProviderRegistry {
   resolveFallback(
     capability: CapabilityLevel,
     failedProvider: string,
-    site?: string,
+    site?: KnownLLMSite,
   ): ResolvedProvider | null {
     try {
       return this.resolve(capability, [failedProvider], site);
@@ -172,6 +172,12 @@ export class ProviderRegistry {
    * simply removed from the deployment). Each miss is logged (Discipline C)
    * — a routing gap should be visible, not silent.
    *
+   * The unmapped-site miss stays fail-soft HERE because it is the intended
+   * behavior of an explicitly empty profile (`[routing.profiles."deepseek"]`),
+   * which is truthy but maps nothing. The case that used to hide a bug — a
+   * site missing from a NON-empty, curated profile — can no longer reach this
+   * point: `buildGateway` refuses to start on it (`RoutingProfileIncomplete`).
+   *
    * Deliberately does NOT enforce "the mapped model must meet or exceed
    * `capability`" — a flat string entry (e.g. escalation -> claude-sonnet-4-6)
    * is an intentional PINNED override that wins regardless of the nominal
@@ -180,7 +186,7 @@ export class ProviderRegistry {
    */
   private resolveFromProfile(
     enabledProviders: ProviderConfig[],
-    site: string,
+    site: KnownLLMSite,
     capability: CapabilityLevel,
   ): ResolvedProvider | null {
     const profile = this.routingProfiles?.[this.enabledCombo];

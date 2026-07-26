@@ -15,8 +15,9 @@ export interface ModelPreferences {
  * for the site would silently downgrade a Frontier-classified task. `default`
  * covers any requested capability without its own entry; a capability with
  * neither its own entry nor `default` falls through to capability logic
- * (fail-soft + warn, same as an unmapped site — see
- * `ProviderRegistry.resolveFromProfile`).
+ * (fail-soft + warn — see `ProviderRegistry.resolveFromProfile`). Only the
+ * SITE dimension is boot-enforced; picking which capabilities a table covers
+ * stays the author's call.
  */
 export type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & {
   default?: string;
@@ -39,12 +40,18 @@ export type RoutingProfileEntry = string | RoutingProfileCapabilityTable;
  *
  * A site is deliberately looked up by the SAME string the reliability ladder
  * already tags its requests/errors with (`LadderRequest.site`,
- * `KnownLLMSite` below) rather than a second, differently-spelled key. A
- * combo with no table here, or a site missing from its table, is not
- * an error: resolution falls through to the existing capability-level logic
- * (fail-soft, logged — see ProviderRegistry.resolve).
+ * `KnownLLMSite` below) rather than a second, differently-spelled key.
+ *
+ * A combo with NO table here falls through to capability-level logic for
+ * every site — that is how an unanticipated provider combination stays
+ * deployable. A combo WITH a non-empty table is a curated allocation and must
+ * map every `KNOWN_LLM_SITES` entry: `buildGateway` refuses to start on a
+ * partial table, because a site missing from a curated allocation escapes to
+ * capability routing and lands on whatever model that logic happens to pick.
+ * An explicitly EMPTY table means "capability routing for every site" and is
+ * exempt.
  */
-export type RoutingProfiles = Record<string, Record<string, RoutingProfileEntry>>;
+export type RoutingProfiles = Record<string, Partial<Record<KnownLLMSite, RoutingProfileEntry>>>;
 
 export interface GatewayConfig {
   providers: ProviderConfig[];
@@ -56,22 +63,32 @@ export interface GatewayConfig {
 }
 
 /**
- * Documented call-site identifiers used for static per-site routing
- * (`GatewayConfig.routingProfiles`). NOT an exhaustive runtime enum —
- * `CompletionRequest.site` / `StructuredRequest.site` accept any string, so a
- * new call site can be tagged without an llm-gateway release; an unlisted
- * value simply never matches a profile entry and falls through to capability
- * routing. "escalation" is not a call site of its own — the reliability
- * ladder stamps it on any attempt run at an ESCALATED capability tier
- * (regardless of which site the base attempt used), so routing profiles can
- * send every escalated retry to one deliberately-chosen reliable model.
+ * The exhaustive registry of call-site identifiers used for static per-site
+ * routing (`GatewayConfig.routingProfiles`). Enforced in both directions:
+ *
+ * - Forward: `CompletionRequest.site` / `StructuredRequest.site` /
+ *   `StructuredLadderOptions.site` are typed `KnownLLMSite`, so tagging a new
+ *   call site is a compile error until it is registered here.
+ * - Reverse: `buildGateway` refuses to start when a non-empty routing profile
+ *   fails to map one of these, and the models.toml schema rejects a profile
+ *   key that is not one of these.
+ *
+ * Adding an entry here is therefore a deliberate two-step act: register the
+ * site, then route it in every non-empty profile.
+ *
+ * "escalation" is not a call site of its own — the reliability ladder stamps
+ * it on any attempt run at an ESCALATED capability tier (regardless of which
+ * site the base attempt used), so routing profiles can send every escalated
+ * retry to one deliberately-chosen reliable model.
  */
 export const KNOWN_LLM_SITES = [
   "agent-runner",
   "decomposition",
   "brainstorm",
   "northstar",
-  "spec-derivation",
+  "acceptance",
+  "replan",
+  "stack-derivation",
   "alignment",
   "escalation",
 ] as const;
@@ -112,8 +129,8 @@ export interface CompletionRequest {
   tools?: ToolDefinition[];
   toolChoice?: ToolChoice;
   cachePrefixLength?: number;
-  /** Call-site tag for static per-site routing (see `KnownLLMSite`). Optional — a site-less request always uses capability logic. */
-  site?: string;
+  /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
+  site?: KnownLLMSite;
 }
 
 export interface Message {
@@ -216,8 +233,8 @@ export interface StructuredRequest<T> {
   systemPrompt?: string;
   temperature?: number;
   maxTokens?: number;
-  /** Call-site tag for static per-site routing (see `KnownLLMSite`). Optional — a site-less request always uses capability logic. */
-  site?: string;
+  /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
+  site?: KnownLLMSite;
 }
 
 export interface StructuredResponse<T> {
