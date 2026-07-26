@@ -157,13 +157,18 @@ export const ContractBodySchema = z
   .strict();
 
 /**
- * An additive amendment. Only the registry collections may be amended — the
- * singleton facts (`techStack`, `entryPoint`) are established once by the initial
- * write and are not re-negotiated by a delta in this phase. Each collection is
- * merged by identity with conflict detection (contract-merge.ts).
+ * An additive amendment. Each registry collection is merged by identity with
+ * conflict detection (contract-merge.ts).
+ *
+ * `knowledge` is amendable (ADR-046) but SEED-ONCE PER KIND: the merge adds node
+ * kinds the base lacks and never overwrites a kind already established. Before
+ * this, knowledge was writable only at version 1, so a project whose seed carried
+ * an empty graph — the normal outcome for any non-HTTP target — was permanently
+ * unable to state what it was, no matter what was learned later.
  */
 export const ContractDeltaSchema = z
   .object({
+    knowledge: ProjectKnowledgeSchema.optional(),
     endpoints: z.array(EndpointSchema).optional(),
     modules: z.array(ModuleSchema).optional(),
     mounts: z.array(MountSchema).optional(),

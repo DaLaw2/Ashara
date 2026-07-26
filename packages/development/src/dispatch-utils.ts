@@ -45,19 +45,6 @@ export async function createRetrievalFn(graphClient: GraphClient): Promise<Retri
     };
 }
 
-/** Build a default project profile when no project-specific detection is available. */
-export function buildDefaultProfile(): ProjectProfile {
-    return {
-        name: "project",
-        techStack: [],
-        buildCommand: "echo 'no build configured'",
-        testCommand: "echo 'no tests configured'",
-        lintCommand: "echo 'no lint configured'",
-        conventions: [],
-        moduleBoundaries: "",
-    };
-}
-
 // ---------------------------------------------------------------------------
 // Project context auto-detection
 // ---------------------------------------------------------------------------

@@ -145,8 +145,14 @@ describe("schema rejects malformed input (fail closed at the boundary)", () => {
     expect(() => ContractBodySchema.parse(bad)).toThrow();
   });
 
-  test("delta rejects the singleton facts (knowledge not amendable)", () => {
-    expect(() => ContractDeltaSchema.parse({ knowledge: fullBody.knowledge })).toThrow();
+  // ADR-046: knowledge became amendable (seed-once PER KIND, merged in
+  // contract-merge.ts) because an empty seed otherwise made the graph
+  // permanently empty. Strictness itself is unchanged — an unknown key still
+  // fails closed.
+  test("delta accepts knowledge and still rejects unknown keys", () => {
+    const delta = ContractDeltaSchema.parse({ knowledge: fullBody.knowledge });
+    expect(delta.knowledge?.nodes).toEqual(fullBody.knowledge.nodes);
+    expect(() => ContractDeltaSchema.parse({ techStack: ["TypeScript"] })).toThrow();
   });
 
   test("delta accepts additive collections only", () => {

@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { z } from "zod";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
@@ -50,7 +51,6 @@ import {
 } from "@ashara/planning";
 import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, AcceptanceLLM, ReplanLLM, FailureCategory } from "@ashara/planning";
 import {
-  buildDefaultProfile,
   createRetrievalFn,
   DevelopmentService,
   observeProduct,
@@ -66,6 +66,8 @@ import type {
   ContractSource,
   ContractAmender,
   CompletionDeliverables,
+  ProjectIntentSource,
+  StackDeriver,
 } from "@ashara/development";
 import { buildSanitizedEnv, extractProjectConventions } from "@ashara/agent-runner";
 import {
@@ -288,7 +290,6 @@ async function main(): Promise<void> {
   const decompositionEngine = new DecompositionEngine(decompositionLlm);
   const failureRouter = new FailureRouter(3);
 
-  const projectProfile = buildDefaultProfile();
   const retrieveFn = await createRetrievalFn(inProcessGraphClient);
 
   const proposalEmbedder = createEmbedderFromEnv();
@@ -429,6 +430,66 @@ async function main(): Promise<void> {
     },
   };
 
+  // Project frame — intent (ADR-046). vision_documents carries no work-item key:
+  // a run plans exactly ONE vision, which every other reader also takes via
+  // getLatest() (orchestrator/task-helpers.ts resolveTargetProjectPath). So the
+  // root-id resolution is the check that this task belongs to a planned project,
+  // and the latest vision is that project's stated intent. VERBATIM visionText,
+  // never the summary: the paraphrase is the step that dropped "Go" in Run 36.
+  // A task whose root cannot be resolved yields null and blocks the dispatch —
+  // handing an agent some other project's intent would be worse than stopping.
+  const intentSource: ProjectIntentSource = {
+    async loadIntent(taskId: string): Promise<string | null> {
+      const rootId = await resolveProjectRootId(taskId);
+      if (!rootId) return null;
+      const vision = await visionRepo.getLatest();
+      return vision?.visionText ?? null;
+    },
+  };
+
+  // Project frame — last-resort stack derivation (ADR-046). Runs only until the
+  // project has a scaffold or a knowledge graph to read instead, so it is once per
+  // project, not once per task. Temperature 0 (Discipline A: deterministic) and
+  // laddered like every other structured planning call, with a validate that
+  // rejects an empty answer so the ladder re-asks instead of returning nothing.
+  let stackDeriver: StackDeriver | undefined;
+  if (llmGateway) {
+    const stackLadder = withStructuredLadder(llmGateway, {
+      site: "stack-derivation",
+      onAttempt: ladderAttemptSink,
+    });
+    const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
+    stackDeriver = {
+      async deriveStack(intent: string): Promise<readonly string[]> {
+        const response = await stackLadder.generateStructured({
+          capability: "Strong",
+          prompt: [
+            `Read this project vision and state the implementation stack it targets.`,
+            ``,
+            `Vision:`,
+            intent,
+            ``,
+            `Return LABELS ONLY — the names of the language, runtime, framework, database and`,
+            `build tool the vision calls for (e.g. "Go", "SQLite", "Cobra"). Never return a`,
+            `command, a file name, a version number, or an explanation.`,
+            `State only what the vision supports. If it names a language, that language is first.`,
+            ``,
+            `IMPORTANT: Respond with ONLY valid JSON, no markdown, no code fences.`,
+            `Use exactly this format: {"stack": ["...", "..."]}`,
+          ].join("\n"),
+          schema: stackSchema,
+          maxTokens: 512,
+          temperature: 0,
+          validate: (value) =>
+            value.stack.length > 0
+              ? { ok: true }
+              : { ok: false, errors: ["The stack array is empty; name at least the implementation language."] },
+        });
+        return response.data.stack;
+      },
+    };
+  }
+
   // FailureRouter substitution (mig9-t4): the contract read that lets recovery find
   // a substitute by the module/endpoint registry, not just by title.
   const contractLookup: ContractRegistryLookup = {
@@ -498,9 +559,10 @@ async function main(): Promise<void> {
     agentInvoker,
     conventionsExtractor,
     llmGateway,
-    projectProfile,
     retrieveFn,
     eventSink: devEventSink,
+    intentSource,
+    stackDeriver,
     contractSource,
     contractAmender,
     populateIndex: parserReady

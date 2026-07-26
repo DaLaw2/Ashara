@@ -68,6 +68,20 @@ export interface QualityGateResult {
 // Defaults
 // ---------------------------------------------------------------------------
 
+/**
+ * The context map for a working directory with no files in it (ADR-046). An
+ * empty string would render as no context section at all — indistinguishable to
+ * the agent from a normal project — so emptiness is stated instead of implied.
+ * The scaffold task always sees this: its tree is empty by construction.
+ */
+export const EMPTY_WORKDIR_CONTEXT_MAP = [
+  "# Project Context",
+  "",
+  "The working directory is empty. No files exist yet; read_file, list_directory and",
+  "search_codebase will return nothing. Nothing about this project can be detected —",
+  "what is known is stated in Project Frame above.",
+].join("\n");
+
 const DEFAULT_TARGET_UTILIZATION = 0.7;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -288,7 +302,11 @@ function checkEconomy(brief: Brief): QualityCheckResult {
     // Greenfield exception: when the target project has no files and there is
     // no prior knowledge, the brief consists only of system prompt + task spec.
     // That will never reach 40% utilization and that is expected for a first task.
-    const isGreenfield = !brief.contextMap && !brief.codeContext && !brief.knowledgeContext;
+    // An empty tree now states its emptiness (EMPTY_WORKDIR_CONTEXT_MAP) instead
+    // of yielding "", so that statement counts as greenfield too — otherwise
+    // every scaffold task would fail this gate and re-retrieve for nothing.
+    const hasObservedContext = Boolean(brief.contextMap) && brief.contextMap !== EMPTY_WORKDIR_CONTEXT_MAP;
+    const isGreenfield = !hasObservedContext && !brief.codeContext && !brief.knowledgeContext;
 
     if (isGreenfield) {
         return {

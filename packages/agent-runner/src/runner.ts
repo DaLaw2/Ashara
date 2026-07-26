@@ -77,12 +77,17 @@ export class AgentRunner {
             brief = baseBrief;
         }
 
-        // 3. Build project profile for tool prompt context
+        // 3. Build project profile for tool prompt context. The LANGUAGE comes from
+        // the brief's frame, never from detection: detection yields marker FILENAMES,
+        // so a Rust project used to be told its language was "Cargo.toml" (ADR-046).
+        // Detection still supplies the commands, which are observed facts about the
+        // tree rather than claims about what the project is.
+        const frameStack: string[] = [...brief.projectFrame.stack];
         let toolPromptCtx: ToolPromptContext | undefined;
         try {
             const profile = await buildAutoProfile(this.config.workingDir);
             toolPromptCtx = {
-                language: profile.techStack[0],
+                language: frameStack[0],
                 buildCommand: profile.buildCommand,
                 testCommand: profile.testCommand,
                 lintCommand: profile.lintCommand,
@@ -97,6 +102,9 @@ export class AgentRunner {
         // 5. Resolve format group and build system prompt
         const formatGroup = resolveFormatGroup(this.gateway, this.config.capability);
         const toolPrompts = registry.collectPrompts(toolPromptCtx);
+        // The frame states the stack as a FACT ahead of the task (ADR-046); the
+        // static prompt stays stack-neutral so it cannot restate it as an
+        // instruction (ADR-045). frameStack feeds tool-prompt context only.
         const staticSystemPrompt = buildStaticSystemPrompt(formatGroup, toolPrompts);
         const dynamicSystemPrompt = buildDynamicSystemPrompt(brief);
 
@@ -287,10 +295,43 @@ export function validateBrief(raw: unknown): AgentBrief {
     return parseAgentBrief(raw, "agent-runner:brief.json");
 }
 
+/**
+ * Renders the ProjectFrame (ADR-046) — the owner's stated target, ahead of the
+ * task, because everything else is conditioned on it. The provenance line is
+ * included deliberately: an `observed-manifest` source is ground truth about the
+ * tree, while a `vision-derivation` source is an inference the agent MAY revise
+ * once real files exist. Stack entries are labels, never commands — which command
+ * to run is the agent's call, declared in verify.toml.
+ */
+function formatProjectFrame(brief: AgentBrief): string {
+    const { intent, stack, source } = brief.projectFrame;
+    const provenance =
+        source === "observed-manifest"
+            ? "observed in the project tree (ground truth — trust it over any assumption)"
+            : source === "contract-knowledge"
+              ? "declared in the project contract (the plan of record for this project)"
+              : "derived from the vision text (an inference — revise it only against files you actually observe)";
+    return [
+        `# Project Frame`,
+        `This is what the project IS. It is the owner's decision, not a suggestion, and it`,
+        `overrides any default you would otherwise assume about language, runtime or layout.`,
+        ``,
+        `## Owner's intent (verbatim)`,
+        intent,
+        ``,
+        `## Target stack`,
+        ...stack.map((label) => `- ${label}`),
+        ``,
+        `Source: ${provenance}.`,
+    ].join("\n");
+}
+
 export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
     const lines = [
         `You are a coding agent. Use write_file to create files. Use read_file to read files.`,
         `Do not explain. Do not describe. Just call tools.`,
+        ``,
+        formatProjectFrame(brief),
         ``,
         `# Task`,
         brief.goal,
@@ -417,6 +458,11 @@ function buildDoingTasksSection(): string {
 
 export function buildDynamicSystemPrompt(brief: AgentBrief): string {
     const sections: string[] = [];
+
+    // FIRST, ahead of the task: every instruction below is conditioned on what the
+    // project is, and an agent that reads the task first has already committed to a
+    // stack by the time it gets here (ADR-046).
+    sections.push(formatProjectFrame(brief));
 
     sections.push(`# Task\n## Goal\n${brief.goal}`);
 

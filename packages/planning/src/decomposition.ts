@@ -53,6 +53,27 @@ export function inferCapability(_task: { title: string; description?: string; le
     return "Strong";
 }
 
+/**
+ * SEMANTIC gate on the derived knowledge graph, run inside the reliability
+ * ladder's attempt so a barren answer is RE-ASKED instead of accepted (ADR-046).
+ * `{"nodes":[],"edges":[]}` parses cleanly against ProjectKnowledgeSchema, so
+ * without this the very first attempt was taken as the project's answer — and a
+ * graph with no language and no runtime says nothing about what to build, which
+ * every downstream reader then fills in from its own prior.
+ */
+function validateKnowledgeGraph(graph: ProjectKnowledge): StructuredValidation {
+    const stated = nodeLabels(graph, "language").length > 0 || nodeLabels(graph, "runtime").length > 0;
+    if (stated) return { ok: true };
+    return {
+        ok: false,
+        errors: [
+            `The knowledge graph names neither a "language" nor a "runtime" node ` +
+                `(${graph.nodes.length} node(s): ${graph.nodes.map((n) => `${n.kind}=${n.label}`).join(", ") || "none"}). ` +
+                `The project's implementation language is stated or implied by the vision — emit it.`,
+        ],
+    };
+}
+
 export class DecompositionEngine {
     private readonly llm: DecompositionLLM | null;
     private readonly config: DecompositionConfig;
@@ -148,7 +169,7 @@ export class DecompositionEngine {
             `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
         ].join("\n");
 
-        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema);
+        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
@@ -228,7 +249,11 @@ export class DecompositionEngine {
             id: scaffoldId,
             level: "task",
             title: `Create project scaffold: manifest, entry point, directory structure`,
-            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack (${input.knowledge ? nodeLabels(input.knowledge, "language").join(", ") || "the project's tech stack" : "the project's tech stack"}). Install dependencies if needed. Create a verify.toml at the project root with a [checks] section listing the verification commands appropriate for this project's language and build tools. All other tasks depend on this.`,
+            // Names NO stack (ADR-046): the ProjectFrame carries the target and is
+            // rendered ahead of the task, so restating it in an LLM-authored
+            // description can only duplicate it — or, when derivation was weak,
+            // contradict it with the model's default (ADR-045's prescriptive drift).
+            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack. Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project. All other tasks depend on this.`,
             successCriteria: ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"],
             parentId: tasks[0].parentId,
             dependsOn: [],

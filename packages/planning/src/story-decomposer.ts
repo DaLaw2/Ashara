@@ -60,10 +60,16 @@ async function runPlanningTransaction<T>(
  * (ADR-028). Runs inside the same transaction as task creation; a ContractConflict
  * (genuine divergent redeclaration) propagates to the caller so the whole story's
  * batch rolls back rather than partially applying (mig-phase-9 criterion: a
- * contradictory batch fails loudly). A no-op fragment (nothing recognized) skips
- * the write entirely so uninteresting stories never seed a contentless contract
- * version. If the pre-check raced a concurrent seed (writeContract sees
- * ContractAlreadyExists), falls back to amending instead of failing the batch.
+ * contradictory batch fails loudly). If the pre-check raced a concurrent seed
+ * (writeContract sees ContractAlreadyExists), falls back to amending instead of
+ * failing the batch.
+ *
+ * The write is gated on WHAT THIS CALL ACTUALLY ADDS — knowledge included — never
+ * on the endpoint/module fragment alone (ADR-046). The old gate returned early
+ * whenever the prose regexes found no HTTP method+path and no module path, which
+ * is the normal case for a CLI, a library or a kernel: those projects never got a
+ * contract at all, and the knowledge graph handed in as a parameter was discarded
+ * on the way past. An uninteresting story that adds nothing still writes nothing.
  */
 async function writeOrAmendContract(
   contractRepo: ContractRepository,
@@ -75,12 +81,12 @@ async function writeOrAmendContract(
     [{ title: story.title, description: story.description ?? "" }],
     createdTasks.map((t) => ({ id: t.id, title: t.title, description: t.description ?? "" })),
   );
-  if (fragment.endpoints.length === 0 && fragment.modules.length === 0) return;
+  const hasFragment = fragment.endpoints.length > 0 || fragment.modules.length > 0;
 
   const projectId = parseProjectId(story.parentId ?? story.id);
-  const delta = toContractDelta(fragment);
   const existing = await contractRepo.getLatest(projectId);
   if (!existing) {
+    if (!hasFragment && knowledge.nodes.length === 0) return;
     const body: ContractInput = {
       knowledge,
       endpoints: fragment.endpoints,
@@ -94,7 +100,15 @@ async function writeOrAmendContract(
       if (!(e instanceof ContractAlreadyExists)) throw e;
     }
   }
-  await amendContractWithRetry(contractRepo, projectId, delta);
+
+  // Knowledge merges by KIND (applyContractDelta): a kind the base already has is
+  // never overwritten, so a delta carrying only kinds already present is a no-op
+  // and must not mint a contract version.
+  const establishedKinds = new Set((existing?.knowledge.nodes ?? []).map((n) => n.kind));
+  const knowledgeAddsKind = knowledge.nodes.some((n) => !establishedKinds.has(n.kind));
+  if (!hasFragment && !knowledgeAddsKind) return;
+
+  await amendContractWithRetry(contractRepo, projectId, { ...toContractDelta(fragment), knowledge });
 }
 
 export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<number> {
@@ -119,12 +133,25 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
         ? await deps.readManifestContext(deps.repoPath)
         : undefined;
 
+      const visionTitle = root?.title ?? story.title;
       const knowledge = await deps.decompositionEngine.deriveKnowledge(
-        root?.title ?? story.title,
+        visionTitle,
         root?.description ?? story.description ?? "",
         root?.northStar ?? story.northStar ?? "",
         manifestContext,
       );
+      if (!knowledge) {
+        // Discipline C: this is the seat of the Run-36/37 stack loss — an empty
+        // graph seeds an empty contract, and an empty contract states nothing
+        // about the target, so every downstream reader falls back to its prior.
+        // The frame ladder (ADR-046) still has the vision-derivation rung, but
+        // that costs an LLM call per project and this line is why it is needed.
+        console.warn(
+          `[${projectKey}] knowledge derivation returned no graph for vision "${visionTitle}" ` +
+            `(story ${story.id}); the contract will carry no stack and the scaffold task falls back ` +
+            `to vision-derived stack resolution`,
+        );
+      }
       projectKnowledge.set(projectKey, knowledge ?? emptyKnowledge);
     }
   }

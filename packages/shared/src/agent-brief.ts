@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { ProjectFrameSchema } from "./project-frame.js";
+
 /**
  * AgentBriefSchema — the single validated contract for `brief.json`, the file
  * the Development BC writes and the agent-runner subprocess reads (SEAM-1;
@@ -14,6 +16,16 @@ import { z } from "zod";
  * `AgentBrief`) or a parse error (`.strict()`), never an invisible drop.
  *
  * Field tiers:
+ *  - FRAME — `projectFrame`: what the project IS (owner intent, verbatim, plus
+ *    the target stack as labels and where that stack was derived from). REQUIRED,
+ *    and rendered ahead of everything else, because it is the one thing the agent
+ *    cannot discover for itself and will otherwise fill in from its training
+ *    prior — whose mode is Node/TypeScript regardless of what the vision said
+ *    (ADR-046). On the scaffold task the working tree is empty BY CONSTRUCTION,
+ *    so there is nothing to detect and no gap for the agent to notice: absence of
+ *    the frame is indistinguishable from confirmation of the prior. Being
+ *    required here is what turns seven silent degradations into one compile error
+ *    plus one parse error, on both sides of the process seam.
  *  - BINDING — `taskId`, `goal`, `context`, `tools`, `constraints`,
  *    `deliverables`, `contractSlice`, `priorAttemptFailure`,
  *    `knowledgeContext`: the task instruction, requirements the agent must
@@ -40,6 +52,8 @@ export const AgentBriefSchema = z
   .object({
     taskId: z.string().min(1),
     goal: z.string().min(1),
+    // Frame tier — required; see the field-tier note above.
+    projectFrame: ProjectFrameSchema,
     context: z.string().min(1),
     tools: z.array(z.string()).default([]),
     constraints: z.array(z.string()).default([]),

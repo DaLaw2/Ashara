@@ -1,4 +1,4 @@
-import type { ContractBody, ContractDelta, Endpoint, ContractModule, Mount } from "@ashara/shared";
+import type { ContractBody, ContractDelta, Endpoint, ContractModule, Mount, ProjectKnowledge } from "@ashara/shared";
 import { normalizePath } from "@ashara/shared";
 
 import { ContractConflict } from "./errors.js";
@@ -6,11 +6,13 @@ import { ContractConflict } from "./errors.js";
 /**
  * Applies an additive contract delta onto a base body (ADR-028, mig-phase-8),
  * merging each registry collection by identity. Pure and total apart from the one
- * fail-closed exit: a divergent redeclaration throws ContractConflict. The
- * singleton facts (techStack, entryPoint) are carried through unchanged — a delta
- * cannot renegotiate them in this phase.
+ * fail-closed exit: a divergent redeclaration throws ContractConflict.
  *
  * Identity & conflict rules:
+ *  - Knowledge merges by node KIND (ADR-046): a kind the base already established
+ *    is authoritative and untouched, a kind the base lacks is added. This keeps
+ *    seed-once semantics for facts already stated while closing the trap where an
+ *    empty seed made the graph permanently empty (`knowledge: base.knowledge`).
  *  - Endpoints key on `ref`. Same ref with a different method or path -> conflict.
  *    Same ref, same method+path -> idempotent; optional provenance fields
  *    (sourceModule, declaredBy) are filled in if the base lacked them.
@@ -26,11 +28,44 @@ import { ContractConflict } from "./errors.js";
  */
 export function applyContractDelta(base: ContractBody, delta: ContractDelta): ContractBody {
   return {
-    knowledge: base.knowledge,
+    knowledge: mergeKnowledge(base.knowledge, delta.knowledge),
     endpoints: mergeEndpoints(base.endpoints, delta.endpoints ?? []),
     modules: mergeModules(base.modules, delta.modules ?? []),
     mounts: mergeMounts(base.mounts, delta.mounts ?? []),
   };
+}
+
+/**
+ * Adds nodes whose KIND is absent from the base, never overwriting a kind the
+ * base already established (nor an id it already uses). Incoming edges ride along
+ * only when both of their endpoints resolve inside the merged node set, so the
+ * graph can never gain a dangling edge from a partially-adopted delta.
+ */
+function mergeKnowledge(
+  base: ProjectKnowledge,
+  incoming: ProjectKnowledge | undefined,
+): ProjectKnowledge {
+  if (!incoming) return base;
+
+  const establishedKinds = new Set(base.nodes.map((n) => n.kind));
+  const takenIds = new Set(base.nodes.map((n) => n.id));
+  const added = incoming.nodes.filter((n) => !establishedKinds.has(n.kind) && !takenIds.has(n.id));
+  if (added.length === 0) return base;
+
+  const nodes = [...base.nodes, ...added];
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const edgeKey = (e: { from: string; to: string; rel: string }): string => `${e.from}|${e.to}|${e.rel}`;
+  const seenEdges = new Set(base.edges.map(edgeKey));
+
+  const edges = [...base.edges];
+  for (const edge of incoming.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) continue;
+    if (seenEdges.has(edgeKey(edge))) continue;
+    seenEdges.add(edgeKey(edge));
+    edges.push({ ...edge });
+  }
+
+  return { nodes, edges };
 }
 
 function mergeEndpoints(base: readonly Endpoint[], incoming: readonly Endpoint[]): Endpoint[] {
