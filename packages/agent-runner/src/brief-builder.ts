@@ -3,11 +3,8 @@ import { join } from "node:path";
 
 import type { AgentBrief } from "@ashara/shared";
 
-import {
-    buildAutoProfile,
-    buildProjectContext,
-} from "@ashara/development";
-import { formatProjectProfile } from "@ashara/development";
+import { createProfileAdapter } from "./acl/development-acl.js";
+import type { ProjectProfilePort } from "./acl/development-acl.js";
 
 /**
  * Enrich an existing AgentBrief (from brief.json) with project context.
@@ -24,12 +21,13 @@ import { formatProjectProfile } from "@ashara/development";
 export async function enrichBrief(
     brief: AgentBrief,
     projectDir: string,
+    profiles: ProjectProfilePort = createProfileAdapter(),
 ): Promise<AgentBrief> {
-    const projectContext = await buildProjectContext(projectDir);
-    const projectProfile = await buildAutoProfile(projectDir);
+    const projectContext = await profiles.buildProjectContext(projectDir);
+    const projectProfile = await profiles.buildAutoProfile(projectDir);
 
     const profileText =
-        projectProfile.techStack.length > 0 ? formatProjectProfile(projectProfile) : "";
+        projectProfile.techStack.length > 0 ? profiles.formatProjectProfile(projectProfile) : "";
 
     const enrichedContext = [
         brief.context,

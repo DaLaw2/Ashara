@@ -2,11 +2,17 @@
 # Each BC declares which @ashara/* packages it may import from.
 # Composition root (server) is exempt — it wires everything.
 # "shared" is the Published Language / Shared Kernel.
+#
+# allow          = [...]        packages this package may import
+# restrict.<pkg> = [glob, ...]  package-relative files that may import <pkg>;
+#                               every other file in the package is a violation.
 
 [orchestrator]
-# planning + development allowed ONLY via acl/ (convention-enforced; lint lacks per-dir granularity)
+# planning + development reachable ONLY through acl/ (enforced by restrict below)
 # db is infrastructure, not a BC boundary
 allow = ["shared", "db", "planning", "development"]
+restrict.planning = ["src/acl/*.ts"]
+restrict.development = ["src/acl/*.ts"]
 
 [planning]
 allow = ["shared", "llm-gateway"]
@@ -15,7 +21,9 @@ allow = ["shared", "llm-gateway"]
 allow = ["shared", "llm-gateway", "memory"]
 
 [agent-runner]
+# development reachable ONLY through the ACL (ADR-044 Phase 6)
 allow = ["shared", "llm-gateway", "development"]
+restrict.development = ["src/acl/development-acl.ts"]
 
 [db]
 allow = ["shared"]

@@ -2,6 +2,10 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
   "workspaces": {
+    ".": {
+      "entry": ["scripts/check-boundaries.ts"],
+      "project": ["scripts/**/*.ts"]
+    },
     "packages/*": {
       "project": ["src/**/*.ts"]
     },
@@ -11,13 +15,6 @@
     },
     "packages/development": {
       "project": ["src/**/*.ts", "test/**/*.ts"]
-    },
-    "packages/memory-indexer": {
-      "project": ["src/**/*.ts"],
-      "ignoreDependencies": [
-        "tree-sitter-wasms",
-        "@ashara/shared"
-      ]
     },
     "packages/memory": {
       "ignoreDependencies": [

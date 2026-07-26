@@ -1,6 +1,12 @@
 import type { Message as GatewayMessage, ContentBlock } from "@ashara/llm-gateway";
-import { ObservationMasker } from "@ashara/development";
-import type { Message as MaskerMessage, MaskingResult as MaskerMaskingResult } from "@ashara/development";
+
+import { createMaskingAdapter } from "./acl/development-acl.js";
+import type {
+    ContextMaskingPort,
+    MaskerMessage,
+    MaskerResult,
+    ObservationMaskerPort,
+} from "./acl/development-acl.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -43,23 +49,26 @@ const MICROCOMPACT_TAIL_CHARS = 500;
 // ---------------------------------------------------------------------------
 
 /**
- * Bridges the ObservationMasker (which uses its own Message type with
- * string content and tokenCount) with the LLM gateway Message type
+ * Bridges the ACL's observation masker (which uses MaskerMessage with string
+ * content and tokenCount) with the LLM gateway Message type
  * (which uses `content: string | ContentBlock[]`).
  *
  * Converts gateway messages to masker format, runs masking, and converts back.
  * System prompt and the initial user message are never masked.
  */
 export class ConversationContextManager {
-    private readonly masker: ObservationMasker;
+    private readonly masker: ObservationMaskerPort;
     private readonly config: ContextManagerConfig;
 
-    constructor(config?: Partial<ContextManagerConfig>) {
+    constructor(
+        config?: Partial<ContextManagerConfig>,
+        masking: ContextMaskingPort = createMaskingAdapter(),
+    ) {
         this.config = {
             contextWindowTokens: config?.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW,
             preserveRecentTools: config?.preserveRecentTools ?? DEFAULT_PRESERVE_RECENT,
         };
-        this.masker = new ObservationMasker({
+        this.masker = masking.createMasker({
             maxContextTokens: this.config.contextWindowTokens,
             preserveRecentTools: this.config.preserveRecentTools,
         });
@@ -138,7 +147,7 @@ export class ConversationContextManager {
         const maskerMessages = messages.map((msg) => this.toMaskerMessage(msg));
 
         // Run masking
-        const result: MaskerMaskingResult = this.masker.mask(maskerMessages);
+        const result: MaskerResult = this.masker.mask(maskerMessages);
 
         // Convert back to gateway messages.
         // We need to pair the masked masker messages with the original gateway

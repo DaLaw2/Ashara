@@ -20,8 +20,8 @@ import { OutputCollector } from "./output.js";
 import type { AgentOutput } from "./output.js";
 import type { FormatAdapter } from "./format-adapter.js";
 import { NativeFCAdapter, CodeFenceAdapter } from "./format-adapter.js";
-import { buildAutoProfile } from "@ashara/development";
-
+import { createProfileAdapter } from "./acl/development-acl.js";
+import type { ProjectProfilePort } from "./acl/development-acl.js";
 import { enrichBrief } from "./brief-builder.js";
 import { runInlineVerify } from "./inline-verify.js";
 import type { InlineVerifyResult } from "./inline-verify.js";
@@ -59,6 +59,7 @@ export class AgentRunner {
     constructor(
         private readonly gateway: Gateway,
         private readonly config: RunnerConfig,
+        private readonly profiles: ProjectProfilePort = createProfileAdapter(),
     ) {}
 
     async run(): Promise<AgentOutput> {
@@ -69,7 +70,7 @@ export class AgentRunner {
         // 2. Enrich brief with project context
         let brief: AgentBrief;
         try {
-            brief = await enrichBrief(baseBrief, this.config.workingDir);
+            brief = await enrichBrief(baseBrief, this.config.workingDir, this.profiles);
             console.log(`[agent-runner] brief enriched with project context from ${this.config.workingDir}`);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -85,7 +86,7 @@ export class AgentRunner {
         const frameStack: string[] = [...brief.projectFrame.stack];
         let toolPromptCtx: ToolPromptContext | undefined;
         try {
-            const profile = await buildAutoProfile(this.config.workingDir);
+            const profile = await this.profiles.buildAutoProfile(this.config.workingDir);
             toolPromptCtx = {
                 language: frameStack[0],
                 buildCommand: profile.buildCommand,

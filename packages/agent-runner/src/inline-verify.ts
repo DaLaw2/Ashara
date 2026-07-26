@@ -1,35 +1,22 @@
-import { runVerifyCore } from "@ashara/development";
+import { createVerifyAdapter } from "./acl/development-acl.js";
+import type { VerifyOutput, VerifyPort } from "./acl/development-acl.js";
 
 // ---------------------------------------------------------------------------
-// Public types (consumed by runner.ts and re-exported from index.ts)
+// Public types (consumed by runner.ts and re-exported from index.ts).
+// The result shapes come from the ACL — agent-runner never restates
+// development's verify contract locally.
 // ---------------------------------------------------------------------------
 
-export interface VerifyCheckResult {
-    readonly name: string;
-    readonly passed: boolean;
-    readonly output: string;
-}
+export type { VerifyCheckResult, VerifyTierResult } from "./acl/development-acl.js";
 
-export interface VerifyTierResult {
-    readonly status: "pass" | "fail" | "skipped" | "error";
-    readonly details: string;
-    readonly checks?: VerifyCheckResult[];
-    readonly issues?: string[];
-}
-
-export interface InlineVerifyResult {
-    readonly passed: boolean;
-    readonly tiers: {
-        readonly deterministic: VerifyTierResult;
-    };
-}
+export type InlineVerifyResult = VerifyOutput;
 
 export interface InlineVerifyTaskSpec {
     readonly checks?: string[];
 }
 
 // ---------------------------------------------------------------------------
-// Thin out-of-process adapter over the shared verify-core library.
+// Thin out-of-process adapter over the ACL's VerifyPort.
 //
 // The agent runs in a subprocess against its own worktree, so working dir and
 // git root are the same path and it supplies no pre-computed diff.
@@ -42,15 +29,11 @@ export interface InlineVerifyTaskSpec {
 export async function runInlineVerify(
     workingDir: string,
     taskSpec?: InlineVerifyTaskSpec,
+    verify: VerifyPort = createVerifyAdapter(),
 ): Promise<InlineVerifyResult> {
-    const result = await runVerifyCore({
+    return verify.runVerify({
         workDir: workingDir,
         gitRoot: workingDir,
         checks: taskSpec?.checks ?? [],
     });
-
-    return {
-        passed: result.passed,
-        tiers: result.tiers,
-    };
 }

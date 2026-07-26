@@ -1,8 +1,8 @@
 // Tree-sitter based parser — ported from crates/ashara-memory/src/parser.rs
 // Uses web-tree-sitter (WASM) for Bun compatibility.
 
-import { dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Language, Node as TSNode, Parser } from "web-tree-sitter";
 
@@ -12,11 +12,9 @@ let initialized = false;
 let rustLang: Language | null = null;
 let tsLang: Language | null = null;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const WASM_DIR = resolve(
-    __dirname,
-    "../../node_modules/tree-sitter-wasms/out",
-);
+// Resolved through the package name, not a hardcoded node_modules path: the
+// grammar files must be found wherever the installer placed the package.
+const WASM_DIR = dirname(fileURLToPath(import.meta.resolve("tree-sitter-wasms/out/tree-sitter-rust.wasm")));
 
 export async function initParser(): Promise<void> {
     if (initialized) return;

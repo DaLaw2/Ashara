@@ -15,10 +15,6 @@
     "@ashara/llm-gateway": "workspace:*",
     "@ashara/memory": "workspace:*",
     "@ashara/planning": "workspace:*",
-    "@ashara/shared": "workspace:*",
-    "pg": "^8.22.0"
-  },
-  "devDependencies": {
-    "@types/pg": "^8.20.0"
+    "@ashara/shared": "workspace:*"
   }
 }

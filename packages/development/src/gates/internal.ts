@@ -9,17 +9,10 @@ import { readdir, readFile, stat } from "node:fs/promises";
 // here rather than being duplicated or owned by a single consumer.
 // ---------------------------------------------------------------------------
 
-// Express/Node.js only — non-Node projects skip route-reachability detection
-// entirely; the contract is the source of truth for endpoints, not source regex.
-export const ROUTE_REGISTRATION_PATTERN =
-  /\b(?:router|app)\.(?:get|post|put|patch|delete)\s*\(|\bexpress\.Router\s*\(/;
-
 export const SOURCE_FILE_PATTERN = /\.(?:ts|tsx|js|mjs|cjs)$/;
 
 // bridge: used when contract.excludePaths is not available
 const BRIDGE_EXCLUDED_DIR_NAMES = new Set(["node_modules", "dist", "build", ".git", "target", "__pycache__", "vendor", "venv", ".venv"]);
-
-const UNIVERSAL_EXCLUDED_DIRS = new Set([".git"]);
 
 /**
  * Recursively collect source files under `dir` (skipping build/dependency
@@ -93,11 +86,6 @@ export async function findEntryPoint(projectRoot: string, contractEntryPoint: st
     if (exists) return resolved;
   }
   return null;
-}
-
-export function buildExcludeDirSet(contractExcludePaths: readonly string[] | undefined): ReadonlySet<string> | undefined {
-  if (!contractExcludePaths || contractExcludePaths.length === 0) return undefined;
-  return new Set([...UNIVERSAL_EXCLUDED_DIRS, ...contractExcludePaths]);
 }
 
 function extractRelativeImportSpecs(content: string): string[] {

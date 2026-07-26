@@ -13,14 +13,14 @@ db-reset:
 migrate:
     podman exec docker_postgres_1 psql -U ashara -d ashara -f /dev/stdin < migrations/001_initial.sql
 
+# Every gate, in order, aborting on the first failure (ADR-048 decision 6).
 check:
     npx tsc --noEmit
+    npx tsx scripts/check-boundaries.ts
+    npx knip
 
 test:
     npx vitest run
-
-lint:
-    npx tsc --noEmit
 
 server:
     npx tsx packages/server/src/index.ts

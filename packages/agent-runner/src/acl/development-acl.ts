@@ -21,6 +21,7 @@ import {
 } from "@ashara/development";
 import type {
     Message as DevMessage,
+    MaskingConfig as DevMaskingConfig,
     MaskingResult as DevMaskingResult,
     ProjectProfile as DevProjectProfile,
 } from "@ashara/development";
@@ -227,12 +228,17 @@ function translateVerifyOutput(devResult: {
 export function createMaskingAdapter(): ContextMaskingPort {
     return {
         createMasker(config: Partial<MaskerConfig>): ObservationMaskerPort {
-            const devMasker = new ObservationMasker({
-                maxContextTokens: config.maxContextTokens,
-                preserveRecentTools: config.preserveRecentTools,
-                maskPlaceholder: config.maskPlaceholder,
-                summarizationThreshold: config.summarizationThreshold,
-            });
+            // An absent key must stay absent: ObservationMasker spreads this over
+            // its defaults, so forwarding an explicit `undefined` erases them.
+            const devConfig: Partial<DevMaskingConfig> = {
+                ...(config.maxContextTokens !== undefined && { maxContextTokens: config.maxContextTokens }),
+                ...(config.preserveRecentTools !== undefined && { preserveRecentTools: config.preserveRecentTools }),
+                ...(config.maskPlaceholder !== undefined && { maskPlaceholder: config.maskPlaceholder }),
+                ...(config.summarizationThreshold !== undefined && {
+                    summarizationThreshold: config.summarizationThreshold,
+                }),
+            };
+            const devMasker = new ObservationMasker(devConfig);
 
             return {
                 mask(messages: readonly MaskerMessage[]): MaskerResult {
