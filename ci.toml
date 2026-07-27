@@ -12,7 +12,10 @@
 
 [tests]
 # Minimum number of passing tests. CI fails if vitest reports fewer.
-# Measured 2026-07-27: 399 passed / 40 files / 0 skipped.
+# Measured 2026-07-28 by `just test`: 412 passed / 42 files / 0 skipped.
+# Update this comment in the same edit that changes the number below. It was left
+# asserting 399/40 through the commit that raised the value to 412 — in a commit whose
+# own message was about floors that do not match reality being caught by nothing.
 min_passed = 412
 
 # Maximum number of skipped tests. CI fails if vitest reports more.
