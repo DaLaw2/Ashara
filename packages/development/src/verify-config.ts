@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parse, TomlError } from "smol-toml";
+import { parse, TomlDate, TomlError } from "smol-toml";
 
 export interface VerifyCheck {
   readonly name: string;
@@ -35,6 +35,20 @@ function isEnoent(err: unknown): boolean {
   );
 }
 
+function parseToml(raw: string, filePath: string) {
+  try {
+    return parse(raw);
+  } catch (err: unknown) {
+    const detail =
+      err instanceof TomlError
+        ? `TOML syntax error at line ${err.line}, column ${err.column}: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    throw new VerifyConfigParseError(filePath, undefined, detail);
+  }
+}
+
 export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig> {
   const filePath = join(projectDir, "verify.toml");
 
@@ -50,18 +64,7 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
     );
   }
 
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = parse(raw);
-  } catch (err: unknown) {
-    const detail =
-      err instanceof TomlError
-        ? `TOML syntax error at line ${err.line}, column ${err.column}: ${err.message}`
-        : err instanceof Error
-          ? err.message
-          : String(err);
-    throw new VerifyConfigParseError(filePath, undefined, detail);
-  }
+  const parsed = parseToml(raw, filePath);
 
   const checksSection = parsed["checks"];
   if (checksSection === undefined) {
@@ -71,7 +74,8 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
   if (
     typeof checksSection !== "object" ||
     checksSection === null ||
-    Array.isArray(checksSection)
+    Array.isArray(checksSection) ||
+    checksSection instanceof TomlDate
   ) {
     throw new VerifyConfigParseError(
       filePath,
@@ -81,8 +85,7 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
   }
 
   const checks: VerifyCheck[] = [];
-  const table = checksSection as Record<string, unknown>;
-  for (const [name, value] of Object.entries(table)) {
+  for (const [name, value] of Object.entries(checksSection)) {
     if (typeof value !== "string") {
       throw new VerifyConfigParseError(
         filePath,
