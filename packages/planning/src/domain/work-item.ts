@@ -177,9 +177,12 @@ export function replanWorkItem(item: WorkItem): void {
 }
 
 /**
- * Terminates a Failed item (FailureRouter's "abandon" decision, ADR-029).
- * Abandoned is terminal: canTransitionTo has no entries with Abandoned as
- * `from`, so no further transition out of it is legal.
+ * Moves an item to the terminal Abandoned status. Which statuses may reach
+ * Abandoned is governed solely by `canTransitionTo` and the transition table
+ * in `@ashara/shared/transitions.ts` — this function delegates to it and
+ * adds no further guard. Callers include the FailureRouter (Failed →
+ * Abandoned, ADR-029), the HTTP PATCH give-up path (Blocked → Abandoned),
+ * and the shutdown reconciler (Pending/InProgress → Abandoned on run end).
  */
 export function abandonWorkItem(item: WorkItem, reason: Record<string, unknown>): void {
   if (!canTransitionTo(item.status, "Abandoned")) {

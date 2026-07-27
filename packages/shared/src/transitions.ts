@@ -20,10 +20,18 @@ import { WORK_ITEM_STATUSES } from "./enums.js";
  * its only other exit is `-> Pending`: without a give-up edge, work an owner
  * parks and then decides against can never leave the machine (HTTP PATCH to
  * Abandoned threw InvalidStatusTransition).
+ *
+ * `Pending -> Abandoned` and `InProgress -> Abandoned` exist so that a run
+ * termination can move EVERY non-terminal item to a terminal status in one hop.
+ * Without them, Pending had no path to any terminal status at all, and
+ * InProgress required two hops (-> Failed -> Abandoned). Runs 39, 40 and 41
+ * each terminated leaving non-terminal items behind because the machine had no
+ * edge to close them on; the manual cleanup that followed is the symptom this
+ * fixes.
  */
 const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
-  Pending: ["InProgress", "Blocked"],
-  InProgress: ["Completed", "Blocked", "Failed", "Pending"],
+  Pending: ["InProgress", "Blocked", "Abandoned"],
+  InProgress: ["Completed", "Blocked", "Failed", "Pending", "Abandoned"],
   Blocked: ["Pending", "Abandoned"],
   Failed: ["Pending", "Abandoned"],
   Completed: [],

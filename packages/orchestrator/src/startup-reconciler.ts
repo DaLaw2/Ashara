@@ -1,13 +1,9 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { DomainEvent } from "@ashara/shared";
 import type { DevSessionRepository, EventStoreRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
 import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
-
-const execFileAsync = promisify(execFile);
 
 export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -20,8 +16,7 @@ export interface StartupReconcilerDeps {
    * question mark on it.
    */
   readonly devSessionStore: Pick<DevSessionRepository, "failStale">;
-  readonly workdirBase?: string;
-  readonly targetProjectPath?: string;
+  readonly workdirBase: string;
 }
 
 export interface ReconcileSummary {
@@ -81,12 +76,7 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
 
   const sessionsTerminalized = await terminalizeOrphanedSessions(deps);
 
-  let worktreesCleaned = 0;
-  if (deps.targetProjectPath) {
-    worktreesCleaned = await cleanOrphanedGitWorktrees(deps.targetProjectPath, deps.workItemRepo);
-  } else if (deps.workdirBase) {
-    worktreesCleaned = await cleanOrphanedWorktrees(deps.workdirBase, deps.workItemRepo);
-  }
+  const worktreesCleaned = await cleanOrphanedWorktrees(deps.workdirBase, deps.workItemRepo);
 
   const summary: ReconcileSummary = {
     orphansRequeued,
@@ -174,6 +164,19 @@ async function publishBestEffort(
   }
 }
 
+/**
+ * Worktree naming convention: `createWorkdir` names every worktree directory
+ * `task-<taskId>` (via `taskBranchName(id).replace(/\//g, "-")`). Only
+ * directories matching this prefix are ours to delete.
+ *
+ * The prior version deleted everything it did NOT recognise — fail-open in the
+ * Discipline A sense: an unrecognised entry (projects/, records/, any future
+ * sibling) got the destructive default. Inverted here: delete only entries the
+ * sweep can positively identify as a task worktree it owns. Everything else is
+ * left alone by construction, not by being remembered on a reserved-name list.
+ */
+const TASK_WORKTREE_PREFIX = "task-";
+
 async function cleanOrphanedWorktrees(
   workdirBase: string,
   workItemRepo: WorkItemRepository,
@@ -184,6 +187,12 @@ async function cleanOrphanedWorktrees(
     const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     if (dirs.length === 0) return 0;
 
+    // Only consider directories matching the task worktree naming convention.
+    const taskDirs = dirs
+      .filter((d) => d.startsWith(TASK_WORKTREE_PREFIX))
+      .map((d) => ({ dirName: d, taskId: d.slice(TASK_WORKTREE_PREFIX.length) }));
+    if (taskDirs.length === 0) return 0;
+
     const [pending, inProgress, blocked] = await Promise.all([
       workItemRepo.findByStatus("Pending"),
       workItemRepo.findByStatus("InProgress"),
@@ -193,95 +202,20 @@ async function cleanOrphanedWorktrees(
       [...pending, ...inProgress, ...blocked].map((item) => String(item.id)),
     );
 
-    for (const dir of dirs) {
-      if (activeIds.has(dir)) continue;
+    for (const { dirName, taskId } of taskDirs) {
+      if (activeIds.has(taskId)) continue;
       try {
-        await fs.rm(path.join(workdirBase, dir), { recursive: true, force: true });
+        await fs.rm(path.join(workdirBase, dirName), { recursive: true, force: true });
         cleaned += 1;
       } catch (err) {
         console.warn(
-          `[startup-reconciler] failed to remove orphaned worktree ${dir}:`,
+          `[startup-reconciler] failed to remove orphaned worktree ${dirName}:`,
           err,
         );
       }
     }
   } catch (err) {
     console.warn("[startup-reconciler] worktree cleanup skipped:", err);
-  }
-  return cleaned;
-}
-
-interface WorktreeEntry {
-  readonly path: string;
-  readonly branch: string | null;
-}
-
-function parseWorktreeList(output: string): WorktreeEntry[] {
-  const entries: WorktreeEntry[] = [];
-  let currentPath: string | null = null;
-  let currentBranch: string | null = null;
-
-  for (const line of output.split("\n")) {
-    if (line.startsWith("worktree ")) {
-      if (currentPath !== null) {
-        entries.push({ path: currentPath, branch: currentBranch });
-      }
-      currentPath = line.slice("worktree ".length);
-      currentBranch = null;
-    } else if (line.startsWith("branch refs/heads/")) {
-      currentBranch = line.slice("branch refs/heads/".length);
-    }
-  }
-  if (currentPath !== null) {
-    entries.push({ path: currentPath, branch: currentBranch });
-  }
-  return entries;
-}
-
-async function cleanOrphanedGitWorktrees(
-  targetProjectPath: string,
-  workItemRepo: WorkItemRepository,
-): Promise<number> {
-  let cleaned = 0;
-  try {
-    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
-      cwd: targetProjectPath,
-    });
-    const worktrees = parseWorktreeList(stdout);
-
-    const [pending, inProgress, blocked] = await Promise.all([
-      workItemRepo.findByStatus("Pending"),
-      workItemRepo.findByStatus("InProgress"),
-      workItemRepo.findByStatus("Blocked"),
-    ]);
-    const activeIds = new Set<string>(
-      [...pending, ...inProgress, ...blocked].map((item) => String(item.id)),
-    );
-
-    for (const wt of worktrees) {
-      if (!wt.branch?.startsWith("task/")) continue;
-      const taskId = wt.branch.slice("task/".length);
-      if (activeIds.has(taskId)) continue;
-
-      try {
-        await execFileAsync("git", ["worktree", "remove", wt.path, "--force"], {
-          cwd: targetProjectPath,
-        });
-        await execFileAsync("git", ["branch", "-D", wt.branch], {
-          cwd: targetProjectPath,
-        }).catch(() => {});
-        cleaned += 1;
-      } catch (err) {
-        console.warn(
-          `[startup-reconciler] failed to remove orphaned git worktree ${wt.path}:`,
-          err,
-        );
-      }
-    }
-
-    await execFileAsync("git", ["worktree", "prune"], { cwd: targetProjectPath }).catch(() => {});
-  } catch (err) {
-    console.warn("[startup-reconciler] git worktree cleanup skipped:", err);
   }
   return cleaned;
 }

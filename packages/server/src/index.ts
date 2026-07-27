@@ -25,6 +25,7 @@ import {
   ContinuousRunner,
   EventLogger,
   reconcileOnStartup,
+  terminalizeOnRunEnd,
   closeRun,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
@@ -170,10 +171,7 @@ async function main(): Promise<void> {
   // single number the orchestrator's BudgetTracker enforces -- so
   // ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL has exactly one parse site
   // (loadServerConfig) instead of two independently-defaulted readers.
-  const pipelineLogPath = join(
-    config.coreLoop.workdirBase || join(process.cwd(), "ashara-work"),
-    "pipeline.jsonl",
-  );
+  const pipelineLogPath = join(config.coreLoop.workdirBase, "pipeline.jsonl");
   const eventLogger = new EventLogger(pipelineLogPath);
   console.log(`Pipeline event log: ${pipelineLogPath}`);
 
@@ -788,6 +786,17 @@ async function main(): Promise<void> {
   // leaves it OPEN — that process was killed mid-run, and a restart must resume
   // the same cap rather than being handed the whole budget again.
   if (!shuttingDown) {
+    // Terminalize Pending and InProgress work items so the next run starts from
+    // a clean board. Without this, Pending items (which have no other cleanup
+    // path) survive into the next run and pollute its summary (the Runs 39/40/41
+    // leak). Blocked (owner-parked) and Failed (startup-reconciler routes them)
+    // are deliberately excluded. SIGTERM leaves items as-is — the startup
+    // reconciler handles crash-orphans on the next boot.
+    try {
+      await terminalizeOnRunEnd({ workItemRepo, eventStore });
+    } catch (e) {
+      console.warn("Shutdown work-item terminalization failed:", e);
+    }
     await closeRun(runStateRepo);
   }
   console.log("Server and continuous runner stopped");

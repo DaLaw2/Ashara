@@ -32,8 +32,7 @@ export async function resolveTargetProjectPath(
       return dbPath;
     }
 
-    const base = workdirBase || "ashara-work";
-    const defaultPath = join(base, "projects", vision.id);
+    const defaultPath = join(workdirBase, "projects", vision.id);
     await assertValidTargetProjectPath(defaultPath);
     // Persist at minting time (owner ruling: the target path is minted once,
     // validated, and persisted as the source of truth reused thereafter). This

@@ -112,6 +112,35 @@ const ERROR_TEMPLATES = {
         `Try a different approach — do not retry the identical failing call.`,
 } as const;
 
+/**
+ * Whether a nudge path can fire — a represented value per ADR-060 part 2,
+ * not a side effect of another variable being forced.
+ *
+ * "available": the nudge fires when its threshold is reached.
+ * "unavailable": structurally disabled for this conversation; `reason`
+ *    carries structured context per Discipline C.
+ */
+type NudgeAvailability =
+    | { readonly kind: "available" }
+    | { readonly kind: "unavailable"; readonly reason: string };
+
+/**
+ * ADR-060 part 2: "Keep the nudge disabled, but make the disablement
+ * explicit rather than incidental." This is a policy default — it answers
+ * a question the owner ruled on, not an environment probe. The mechanism
+ * is retained (deletion "not adopted yet"); part 3's shouldSplit E2E may
+ * settle whether the nudge is deleted or re-enabled. To re-enable: change
+ * the return value to `{ kind: "available" }`.
+ *
+ * A function rather than a literal: TypeScript narrows a `const` (or an
+ * unassigned `let`) to its specific variant and reports the retained
+ * mechanism's branches as TS2367. The function's return type keeps the
+ * full union so the mechanism compiles.
+ */
+function nudgePolicy(): NudgeAvailability {
+    return { kind: "unavailable", reason: "disabled by owner ruling (ADR-060 part 2)" };
+}
+
 export class AgentConversation {
     private readonly gateway: Gateway;
     private readonly toolRegistry: ToolRegistry;
@@ -201,11 +230,11 @@ export class AgentConversation {
         // so the progress check detects both new files AND edits to existing
         // files, rather than only new paths appearing.
         let previousSnapshot: WorkdirSnapshot = EMPTY_SNAPSHOT;
-        // Inside a container, git status fails structurally (the worktree
-        // .git file points to a host-absolute path). Detect the failure once,
-        // log it clearly, and skip all subsequent observations rather than
-        // re-running a failing git command every turn.
-        let workdirObservationAvailable = true;
+        const nudgeAvailability = nudgePolicy();
+        // Observation retry: stops retrying a structurally failing git
+        // command. Separate from nudge policy — observation is gated behind
+        // nudge availability, so currently inert; retained for re-enable.
+        let observationAvailable = true;
 
         for (let turn = 0; turn < this.config.maxTurns; turn++) {
             const maxContextTokens = this.config.contextWindowTokens ?? 128_000;
@@ -390,8 +419,11 @@ export class AgentConversation {
             }
 
             if (!hasToolCalls && !hasFileWrites) {
-                turnsWithoutProgress++;
+                if (nudgeAvailability.kind === "available") {
+                    turnsWithoutProgress++;
+                }
                 const shouldNudge =
+                    nudgeAvailability.kind === "available" &&
                     response.content.length > 0 &&
                     this.config.tools.length > 0 &&
                     turnsWithoutProgress >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
@@ -519,8 +551,8 @@ export class AgentConversation {
             // validly as `write_file` does — the signal is that the directory
             // changed, not which tool changed it.
             let madeProgress = hasFileWrites;
-            if (!madeProgress && this.config.workingDir) {
-                if (workdirObservationAvailable) {
+            if (!madeProgress && this.config.workingDir && nudgeAvailability.kind === "available") {
+                if (observationAvailable) {
                     try {
                         const currentSnapshot = await snapshotWorkdir(this.config.workingDir);
                         if (hasProgressSince(previousSnapshot, currentSnapshot)) {
@@ -528,46 +560,38 @@ export class AgentConversation {
                         }
                         previousSnapshot = currentSnapshot;
                     } catch (e: unknown) {
-                        // Observation failed — typically because git status cannot
-                        // work inside a container (the worktree .git file points to
-                        // a host-absolute path that does not exist here). This is a
-                        // structural property, not a transient glitch, so disable
-                        // observation for the remainder of the conversation.
-                        workdirObservationAvailable = false;
+                        // Observation failed — typically because git status
+                        // cannot work inside a container. Structural, not
+                        // transient: stop retrying.
+                        observationAvailable = false;
                         const msg = e instanceof Error ? e.message : String(e);
                         console.warn(
-                            `[AgentConversation] progress detection is unavailable in this environment ` +
-                                `(first failure on turn ${turn + 1}): ${msg}. ` +
-                                `Workdir observation disabled for remaining turns; nudge will not fire.`,
+                            `[AgentConversation] workdir observation failed on turn ${turn + 1}: ${msg}. ` +
+                                `Observation disabled for remaining turns.`,
                         );
-                        madeProgress = true;
                     }
-                } else {
-                    // Observation was disabled by a prior failure. Assume
-                    // progress to prevent the nudge from firing — the nudge is
-                    // the risky action (injecting messages that may mislead the
-                    // agent), so the closed direction is "don't inject".
-                    madeProgress = true;
                 }
             }
 
-            if (madeProgress) {
-                turnsWithoutProgress = 0;
-            } else {
-                turnsWithoutProgress++;
-            }
+            if (nudgeAvailability.kind === "available") {
+                if (madeProgress) {
+                    turnsWithoutProgress = 0;
+                } else {
+                    turnsWithoutProgress++;
+                }
 
-            if (
-                !madeProgress &&
-                turnsWithoutProgress >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
-                nudgeCount < this.config.maxNudges
-            ) {
-                nudgeCount++;
-                console.warn(
-                    `[AgentConversation] turn ${turn + 1}: ${turnsWithoutProgress} turns without visible progress, ` +
-                        `nudging (${nudgeCount}/${this.config.maxNudges})`,
-                );
-                messages.push({ role: "user", content: ERROR_TEMPLATES.no_visible_progress });
+                if (
+                    !madeProgress &&
+                    turnsWithoutProgress >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
+                    nudgeCount < this.config.maxNudges
+                ) {
+                    nudgeCount++;
+                    console.warn(
+                        `[AgentConversation] turn ${turn + 1}: ${turnsWithoutProgress} turns without visible progress, ` +
+                            `nudging (${nudgeCount}/${this.config.maxNudges})`,
+                    );
+                    messages.push({ role: "user", content: ERROR_TEMPLATES.no_visible_progress });
+                }
             }
 
             const toolTurn: ConversationTurn = {

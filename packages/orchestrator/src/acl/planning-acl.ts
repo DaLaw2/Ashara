@@ -50,6 +50,7 @@ export {
   createPendingWorkItem,
   startWorkItem,
   failWorkItem,
+  abandonWorkItem,
   requeueWorkItem,
   takeEvents,
 } from "@ashara/planning";

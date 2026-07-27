@@ -6,6 +6,16 @@
  */
 export const ASHARA_CONTROL_DIR = ".ashara";
 
+/**
+ * Subdirectory of `workdirBase` where conversation records are persisted
+ * BEFORE worktree cleanup. Organized as `records/<taskId>/conversation.jsonl`.
+ *
+ * The worktree's `.ashara/conversation.jsonl` is the only per-turn record of
+ * what an agent did, and is destroyed together with the worktree. This path
+ * makes it locatable by task id after the worktree is gone.
+ */
+export const CONVERSATION_RECORDS_DIR = "records";
+
 const CONTROL_DIR_PREFIX = `${ASHARA_CONTROL_DIR}/`;
 
 /**

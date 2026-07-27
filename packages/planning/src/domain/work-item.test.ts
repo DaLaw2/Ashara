@@ -46,10 +46,15 @@ describe("canTransitionTo — Failed recovery transitions", () => {
     expect(canTransitionTo("InProgress", "Pending")).toBe(true);
   });
 
-  test("the crash-orphan edge does not loosen any other transition", () => {
-    // Only InProgress->Pending is newly legal; the rest of the InProgress row and
-    // the terminal statuses are unchanged. (Abandoned->Pending is covered by the
-    // "Abandoned is terminal" test above.)
+  test("Pending -> Abandoned is legal (run-end terminalization)", () => {
+    expect(canTransitionTo("Pending", "Abandoned")).toBe(true);
+  });
+
+  test("InProgress -> Abandoned is legal (run-end terminalization)", () => {
+    expect(canTransitionTo("InProgress", "Abandoned")).toBe(true);
+  });
+
+  test("the crash-orphan and terminalization edges do not loosen any other transition", () => {
     expect(canTransitionTo("InProgress", "Completed")).toBe(true);
     expect(canTransitionTo("InProgress", "Failed")).toBe(true);
     expect(canTransitionTo("InProgress", "Blocked")).toBe(true);
@@ -197,10 +202,38 @@ describe("abandonWorkItem", () => {
     expect(events[0]?.payload.work_item_id).toBe(item.id);
   });
 
-  test("throws InvalidStatusTransition when the item is not Failed", () => {
+  test("moves a Pending item directly to Abandoned (run-end terminalization)", () => {
     const item = createPendingWorkItem("Task", "leaf-task");
 
-    expect(() => abandonWorkItem(item, { reason: "unrecoverable" })).toThrow(
+    abandonWorkItem(item, { reason: "run terminated", source: "shutdown-reconciler" });
+    const events = takeEvents(item);
+
+    expect(item.status).toBe("Abandoned");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("work_item.abandoned");
+  });
+
+  test("moves an InProgress item directly to Abandoned (run-end terminalization)", () => {
+    const item = createPendingWorkItem("Task", "leaf-task");
+    startWorkItem(item);
+    takeEvents(item);
+
+    abandonWorkItem(item, { reason: "run terminated", source: "shutdown-reconciler" });
+    const events = takeEvents(item);
+
+    expect(item.status).toBe("Abandoned");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("work_item.abandoned");
+  });
+
+  test("throws InvalidStatusTransition from a terminal status", () => {
+    const item = createPendingWorkItem("Task", "leaf-task");
+    startWorkItem(item);
+    failWorkItem(item, { reason: "failed" });
+    abandonWorkItem(item, { reason: "give up" });
+    takeEvents(item);
+
+    expect(() => abandonWorkItem(item, { reason: "double abandon" })).toThrow(
       InvalidStatusTransition,
     );
   });

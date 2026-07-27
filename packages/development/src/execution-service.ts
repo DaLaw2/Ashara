@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
@@ -27,6 +26,7 @@ import {
   createWorkdir,
   createWorkdirForRetry,
   getChangedFiles,
+  persistConversationRecord,
 } from "./workspace.js";
 import { branchExists, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
@@ -197,7 +197,7 @@ export class DevelopmentService {
   ): Promise<ExecutionResult> {
     const { config, eventSink } = this.deps;
     const sessionId = createSessionId();
-    const base = config.workdirBase || join(tmpdir(), "ashara-work");
+    const base = config.workdirBase;
 
     eventSink?.emit({
       event: "task_started",
@@ -308,6 +308,7 @@ export class DevelopmentService {
         attempt: 1,
         error: chain.message,
       });
+      await persistConversationRecord(workDir, task.id, base, dispatch.agentInvoked ? "agent-ran" : "pre-launch");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const envelope: ErrorEnvelope = {
         outcome: "failed",
@@ -611,6 +612,7 @@ export class DevelopmentService {
     dispatch: DispatchRecord,
   ): Promise<ExecutionResult> {
     const { config, eventSink, agentInvoker } = this.deps;
+    const recordsBase = config.workdirBase;
 
     const asharaDir = join(workDir, ASHARA_CONTROL_DIR);
     await mkdir(asharaDir, { recursive: true });
@@ -661,6 +663,7 @@ export class DevelopmentService {
           `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-failed)`,
         );
       }
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
@@ -706,6 +709,7 @@ export class DevelopmentService {
           `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-blocked)`,
         );
       }
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
@@ -730,6 +734,7 @@ export class DevelopmentService {
     }
 
     if (agentStatus === "stub") {
+      await persistConversationRecord(workDir, task.id, recordsBase, "pre-launch");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "stub agent output — skipping verify", { taskId: task.id });
       return {
@@ -752,6 +757,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: "agent produced no file changes",
       });
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "agent produced no file changes", {
         taskId: task.id,
@@ -796,6 +802,7 @@ export class DevelopmentService {
           `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, verify-failed)`,
         );
       }
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "verify", "verification failed", { taskId: task.id });
       return {
@@ -829,6 +836,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: envelope.summary,
       });
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       return {
         status: "failed",
@@ -842,6 +850,7 @@ export class DevelopmentService {
       };
     }
 
+    await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
     await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });

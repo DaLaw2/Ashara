@@ -57,9 +57,15 @@ export interface CoreLoopConfig {
   readonly maxGapAttempts?: number;
 }
 
-export const DEFAULT_CONFIG: CoreLoopConfig = {
+/**
+ * Defaults for every CoreLoopConfig field EXCEPT `workdirBase`, which has no
+ * safe default — `""` was falsy and let every use-site fallback fire with a
+ * different guess (tmpdir, cwd, bare relative path). The server's
+ * `loadServerConfig()` is the single parse site for the value; making it
+ * absent here forces every spread to supply it.
+ */
+export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   repoPath: ".",
-  workdirBase: "",
   baseBranch: "master",
   maxBatchSize: 2,
   budgetLimitUsd: 5.0,

@@ -2,8 +2,9 @@ import { describe, expect, test, vi, beforeEach } from "vitest";
 import type { CompletionResponse } from "@ashara/llm-gateway";
 import type { ToolResult } from "./tools/types.js";
 
-// Mock workdir-observer so snapshotWorkdir throws (simulating container git failure).
-// Use importOriginal to preserve WorkdirObservationError and other real exports.
+// Mock workdir-observer to spy on observation calls. With the nudge
+// unconditionally disabled (ADR-060 part 2), observation should never
+// run — the mock verifies this.
 const snapshotWorkdirMock = vi.fn();
 vi.mock("./workdir-observer.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("./workdir-observer.js")>();
@@ -18,7 +19,6 @@ vi.mock("./workdir-observer.js", async (importOriginal) => {
 const { AgentConversation } = await import("./conversation.js");
 const { ToolRegistry } = await import("./tools/index.js");
 const { NativeFCAdapter } = await import("./format-adapter.js");
-const { WorkdirObservationError } = await import("./workdir-observer.js");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,109 +69,21 @@ function createMockRegistry(): InstanceType<typeof ToolRegistry> {
 }
 
 // ---------------------------------------------------------------------------
-// Nudge unavailability — logged once, not per turn
+// Nudge policy — ADR-060 part 2
 // ---------------------------------------------------------------------------
 
-describe("AgentConversation — workdir observation unavailability", () => {
+describe("AgentConversation — nudge policy (ADR-060 part 2)", () => {
     beforeEach(() => {
         snapshotWorkdirMock.mockReset();
         vi.restoreAllMocks();
     });
 
-    test("snapshotWorkdir failure is logged once, not repeated on every turn", async () => {
-        // Simulate the container scenario: git status fails because
-        // worktree .git file points to a host-absolute path.
-        snapshotWorkdirMock.mockRejectedValue(
-            new WorkdirObservationError("/workspace", "git status", new Error(
-                "fatal: not a git repository: /tmp/ashara-work/projects/abc/.git/worktrees/task-xyz",
-            )),
-        );
-
+    test("neither nudge path fires — unconditional policy", async () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        let callCount = 0;
-        const gateway = {
-            complete: async (): Promise<CompletionResponse> => {
-                callCount++;
-                // Turns 1-2: tool calls (triggers progress check)
-                // Turn 3: text completion (exits the loop)
-                if (callCount <= 2) {
-                    return toolCallResponse("write_file", `tc-${callCount}`);
-                }
-                return textResponse("task complete");
-            },
-        };
-
-        const registry = createMockRegistry();
-        const conversation = new AgentConversation(gateway, registry, {
-            staticSystemPrompt: "test",
-            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
-            maxTurns: 5,
-            workingDir: "/workspace",
-        });
-
-        const result = await conversation.run("Create a project");
-
-        // The conversation must complete (not crash)
-        expect(result.finishReason).toBe("completed");
-        expect(result.turns.length).toBe(3);
-
-        // snapshotWorkdir was called on turn 1, failed, and never retried
-        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(1);
-
-        // The unavailability warning was logged exactly once
-        const unavailabilityWarnings = warnSpy.mock.calls.filter(
-            (args) => typeof args[0] === "string"
-                && args[0].includes("progress detection is unavailable"),
-        );
-        expect(unavailabilityWarnings).toHaveLength(1);
-        expect(unavailabilityWarnings[0][0]).toContain("turn 1");
-        expect(unavailabilityWarnings[0][0]).toContain("Workdir observation disabled for remaining turns");
-    });
-
-    test("no workdir observation attempted when workingDir is not set", async () => {
-        vi.spyOn(console, "warn").mockImplementation(() => {});
-
-        let callCount = 0;
-        const gateway = {
-            complete: async (): Promise<CompletionResponse> => {
-                callCount++;
-                if (callCount <= 2) {
-                    return toolCallResponse("write_file", `tc-${callCount}`);
-                }
-                return textResponse("done");
-            },
-        };
-
-        const registry = createMockRegistry();
-        const conversation = new AgentConversation(gateway, registry, {
-            staticSystemPrompt: "test",
-            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
-            maxTurns: 5,
-            // workingDir deliberately omitted
-        });
-
-        const result = await conversation.run("Create a project");
-
-        expect(result.finishReason).toBe("completed");
-        // snapshotWorkdir must never be called when there is no workingDir
-        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(0);
-    });
-
-    test("after first failure, madeProgress is true and nudge does not fire", async () => {
-        snapshotWorkdirMock.mockRejectedValue(
-            new WorkdirObservationError("/workspace", "git status", new Error("not a git repo")),
-        );
-
-        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-        // Run enough turns to trigger the nudge threshold (5 turns without
-        // progress), but the observation failure should set madeProgress=true
-        // on every turn, preventing the nudge from ever firing.
+        // 6 tool-call turns (exceeding the threshold of 5) then a text turn.
+        // Both nudge paths are off by policy — this is not contingent on
+        // observation failure or any environment condition.
         let callCount = 0;
         const gateway = {
             complete: async (): Promise<CompletionResponse> => {
@@ -190,6 +102,7 @@ describe("AgentConversation — workdir observation unavailability", () => {
             capability: "Strong" as const,
             adapter: new NativeFCAdapter(),
             maxTurns: 10,
+            maxNudges: 3,
             workingDir: "/workspace",
         });
 
@@ -197,16 +110,27 @@ describe("AgentConversation — workdir observation unavailability", () => {
 
         expect(result.finishReason).toBe("completed");
 
-        // The nudge message should NOT appear — observation failure means
-        // "assume progress" to avoid misleading the agent.
-        const nudgeWarnings = warnSpy.mock.calls.filter(
+        // Progress nudge must not fire
+        const progressNudgeWarnings = warnSpy.mock.calls.filter(
             (args) => typeof args[0] === "string"
                 && args[0].includes("without visible progress"),
         );
-        expect(nudgeWarnings).toHaveLength(0);
+        expect(progressNudgeWarnings).toHaveLength(0);
+
+        // No-tool-calls nudge must not fire
+        const noToolCallsWarnings = warnSpy.mock.calls.filter(
+            (args) => typeof args[0] === "string"
+                && args[0].includes("model returned text without tool calls"),
+        );
+        expect(noToolCallsWarnings).toHaveLength(0);
+
+        // Observation must not run (gated behind nudge availability)
+        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(0);
     });
 
-    test("observation works normally when git is available (non-container)", async () => {
+    test("workdir observation does not run when nudges disabled", async () => {
+        // Even with workingDir set and snapshotWorkdir available, the
+        // observation is gated behind nudge availability and does not run.
         snapshotWorkdirMock.mockResolvedValue({
             files: new Map([["main.rs", "hash1"]]),
             truncated: false,
@@ -238,7 +162,109 @@ describe("AgentConversation — workdir observation unavailability", () => {
 
         await conversation.run("Create a project");
 
-        // snapshotWorkdir was called on every tool-call turn (2 times)
-        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(2);
+        // snapshotWorkdir never called — observation is gated on nudge policy
+        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(0);
+    });
+
+    test("no workdir observation when workingDir not set", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        let callCount = 0;
+        const gateway = {
+            complete: async (): Promise<CompletionResponse> => {
+                callCount++;
+                if (callCount <= 2) {
+                    return toolCallResponse("write_file", `tc-${callCount}`);
+                }
+                return textResponse("done");
+            },
+        };
+
+        const registry = createMockRegistry();
+        const conversation = new AgentConversation(gateway, registry, {
+            staticSystemPrompt: "test",
+            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
+            capability: "Strong" as const,
+            adapter: new NativeFCAdapter(),
+            maxTurns: 5,
+            // workingDir deliberately omitted
+        });
+
+        const result = await conversation.run("Create a project");
+
+        expect(result.finishReason).toBe("completed");
+        expect(snapshotWorkdirMock).toHaveBeenCalledTimes(0);
+    });
+
+    test("conversation completes normally with tool calls then text", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        let callCount = 0;
+        const gateway = {
+            complete: async (): Promise<CompletionResponse> => {
+                callCount++;
+                if (callCount <= 2) {
+                    return toolCallResponse("write_file", `tc-${callCount}`);
+                }
+                return textResponse("task complete");
+            },
+        };
+
+        const registry = createMockRegistry();
+        const conversation = new AgentConversation(gateway, registry, {
+            staticSystemPrompt: "test",
+            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
+            capability: "Strong" as const,
+            adapter: new NativeFCAdapter(),
+            maxTurns: 5,
+            workingDir: "/workspace",
+        });
+
+        const result = await conversation.run("Create a project");
+
+        expect(result.finishReason).toBe("completed");
+        expect(result.turns.length).toBe(3);
+        expect(result.turns[0].toolCalls.length).toBe(1);
+        expect(result.turns[2].assistantMessage).toBe("task complete");
+    });
+
+    test("nudge does not fire at turn limit despite many turns without progress", async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // Fill the turn budget with tool calls that produce no observed
+        // progress. Without the policy disablement, the progress nudge
+        // would fire after turn 5. With it, the conversation runs to the
+        // turn limit undisturbed.
+        let callCount = 0;
+        const gateway = {
+            complete: async (): Promise<CompletionResponse> => {
+                callCount++;
+                return toolCallResponse("write_file", `tc-${callCount}`);
+            },
+        };
+
+        const registry = createMockRegistry();
+        const conversation = new AgentConversation(gateway, registry, {
+            staticSystemPrompt: "test",
+            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
+            capability: "Strong" as const,
+            adapter: new NativeFCAdapter(),
+            maxTurns: 8,
+            maxNudges: 3,
+            workingDir: "/workspace",
+        });
+
+        const result = await conversation.run("Create a project");
+
+        expect(result.finishReason).toBe("turn_limit");
+        expect(result.turns.length).toBe(8);
+
+        // No nudge of any kind fired despite 8 turns without progress
+        const allNudgeWarnings = warnSpy.mock.calls.filter(
+            (args) => typeof args[0] === "string"
+                && (args[0].includes("without visible progress")
+                    || args[0].includes("model returned text without tool calls")),
+        );
+        expect(allNudgeWarnings).toHaveLength(0);
     });
 });

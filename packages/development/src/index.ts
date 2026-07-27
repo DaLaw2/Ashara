@@ -54,8 +54,8 @@ export type {
 export { observeProduct } from "./gates/observe.js";
 export type { ObserveDeps, ObserveRequest, HttpEndpoint } from "./gates/observe.js";
 export { DevelopmentService } from "./execution-service.js";
-export type { WorkdirInfo } from "./workspace.js";
-export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
+export type { WorkdirInfo, ConversationRecordExpectation } from "./workspace.js";
+export { assertValidTargetProjectPath, InvalidTargetProjectPath, persistConversationRecord } from "./workspace.js";
 export type { MergeResult } from "./merge.js";
 export {
   taskBranchName,

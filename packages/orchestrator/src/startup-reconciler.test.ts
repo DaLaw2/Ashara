@@ -52,6 +52,8 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
         return 6;
       },
     },
+    // Required: an empty repo returns no dirs, so the sweep is a no-op.
+    workdirBase: "/nonexistent-test-workdir",
     ...overrides,
   };
 

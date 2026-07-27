@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { ASHARA_CONTROL_DIR, isAsharaControlPath } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "@ashara/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -392,6 +392,63 @@ async function findGitWorkingTreeAncestor(startDir: string): Promise<string | nu
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
+  }
+}
+
+/**
+ * Whether the agent subprocess ran, determining ENOENT semantics.
+ * - `"agent-ran"` — the agent was launched; a missing record means it crashed
+ *   before writing its first turn. ENOENT is a diagnostic fact and is warned.
+ * - `"pre-launch"` — the agent was never launched (stub execution, outer catch
+ *   before dispatch). No conversation.jsonl was ever created. ENOENT is
+ *   expected and silent.
+ */
+export type ConversationRecordExpectation = "agent-ran" | "pre-launch";
+
+/**
+ * Copies the agent's conversation record out of the worktree to a durable
+ * location before cleanup destroys it. The record is the ONLY per-turn trace
+ * of what the agent did — without this, diagnosing a run requires capturing
+ * the filesystem while the process is still live.
+ *
+ * Organized as `<workdirBase>/records/<taskId>/conversation.jsonl`, locatable
+ * by task id after the worktree is gone.
+ *
+ * Never throws. The task outcome is already determined by the time this runs,
+ * and destroying a good outcome to save a diagnostic artifact would be
+ * backwards. Discipline A: persisting the record is a policy decision (the
+ * system chooses what to archive), and its output flows into zero verdicts —
+ * a persist failure leaves the run no worse than the status quo where the
+ * record was always lost.
+ */
+export async function persistConversationRecord(
+  workDir: string,
+  taskId: string,
+  workdirBase: string,
+  expectation: ConversationRecordExpectation,
+): Promise<void> {
+  const source = join(workDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
+  const destDir = join(workdirBase, CONVERSATION_RECORDS_DIR, taskId);
+  const dest = join(destDir, "conversation.jsonl");
+
+  try {
+    const content = await readFile(source);
+    await mkdir(destDir, { recursive: true });
+    await writeFile(dest, content);
+  } catch (e: unknown) {
+    if (e instanceof Error && "code" in e && e.code === "ENOENT") {
+      if (expectation === "agent-ran") {
+        console.warn(
+          `[persistConversationRecord] expected conversation record for task ${taskId} ` +
+            `but none exists at ${source} — the agent may have crashed before writing its first turn`,
+        );
+      }
+      return;
+    }
+    console.warn(
+      `[persistConversationRecord] failed to persist conversation record for task ${taskId} ` +
+        `from ${source} to ${dest}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
