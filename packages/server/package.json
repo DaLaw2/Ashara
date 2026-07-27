@@ -17,11 +17,11 @@
     "@ashara/orchestrator": "*",
     "@ashara/planning": "*",
     "@ashara/shared": "*",
-    "hono": "^4.12.29",
-    "pg": "^8.22.0"
+    "hono": "4.12.32",
+    "pg": "8.22.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.20.0",
-    "zod": "^4.4.3"
+    "@types/pg": "8.20.0",
+    "zod": "4.4.3"
   }
 }

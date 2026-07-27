@@ -16,6 +16,6 @@
     "@ashara/engagement": "*",
     "@ashara/planning": "*",
     "@ashara/llm-gateway": "*",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   }
 }

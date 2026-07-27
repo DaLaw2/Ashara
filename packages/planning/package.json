@@ -11,6 +11,6 @@
   "dependencies": {
     "@ashara/llm-gateway": "*",
     "@ashara/shared": "*",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   }
 }

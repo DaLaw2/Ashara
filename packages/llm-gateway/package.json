@@ -12,11 +12,11 @@
     "dev": "bun run src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.8",
-    "@ai-sdk/openai": "^4.0.7",
+    "@ai-sdk/anthropic": "4.0.21",
+    "@ai-sdk/openai": "4.0.20",
     "@ashara/shared": "*",
-    "ai": "7.0.15",
-    "smol-toml": "^1.3.1",
-    "zod": "^4.4.3"
+    "ai": "7.0.37",
+    "smol-toml": "1.7.1",
+    "zod": "4.4.3"
   }
 }
