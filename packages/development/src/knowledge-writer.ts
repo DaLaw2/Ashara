@@ -60,10 +60,18 @@ export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
     .join(" ");
 }
 
+/**
+ * Persists agent output as knowledge entries. `filesChanged` is the
+ * host-computed list from `getChangedFiles(workDir)` (execution-service),
+ * not the agent's own observation — the agent cannot observe this inside a
+ * container (git worktree paths are host-absolute), so the host is the
+ * single source.
+ */
 export async function storeKnowledge(
   knowledgeSink: KnowledgeSink,
   task: TaskDescriptor,
   output: Record<string, unknown>,
+  filesChanged: readonly string[],
 ): Promise<void> {
   // task.epicId is the true walked-up Epic id the orchestrator resolves
   // (kl-t2/Q5); task.parentId (a Story for a Task leaf) is a fallback for
@@ -92,10 +100,8 @@ export async function storeKnowledge(
 
   const summary = typeof output.summary === "string" ? output.summary : "";
   if (summary) {
-    const filesChanged = Array.isArray(output.files_changed)
-      ? (output.files_changed as string[]).join(", ")
-      : "";
-    const content = `Task completed: ${summary}\n\nFiles changed: ${filesChanged}`;
+    const fileList = filesChanged.join(", ");
+    const content = `Task completed: ${summary}\n\nFiles changed: ${fileList}`;
     try {
       await knowledgeSink.storeInsight(task.id, epicId, summary.slice(0, 100), content);
     } catch (e) {

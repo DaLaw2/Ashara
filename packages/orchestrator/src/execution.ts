@@ -44,6 +44,19 @@ export async function executeTask(
   errorEnvelope?: ErrorEnvelope;
   /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
   agentInvoked: boolean;
+  /**
+   * Files the agent changed, observed on the HOST by `getChangedFiles` before
+   * the worktree is cleaned — never reported by the agent.
+   *
+   * The agent cannot observe this: it runs in a container where the worktree's
+   * `.git` file points at a host path that is not mounted, so every git command
+   * inside `/workspace` fails. It used to arrive as `output.files_changed`, and
+   * when that field was removed the split decision silently began reading zero
+   * on every run — an evidence default flowing straight into a verdict.
+   * Carried here rather than on `TaskResult`, which is Published Language and
+   * has no business growing a field for one consumer.
+   */
+  filesChanged: readonly string[];
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -74,6 +87,7 @@ export async function executeTask(
       output: execResult.output,
       attempt: execResult.attempt,
       agentInvoked: execResult.agentInvoked,
+      filesChanged: execResult.filesChanged,
     };
   }
 
@@ -86,6 +100,7 @@ export async function executeTask(
       attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
       agentInvoked: execResult.agentInvoked,
+      filesChanged: execResult.filesChanged,
     };
   }
 
@@ -95,6 +110,7 @@ export async function executeTask(
     attempt: execResult.attempt,
     errorEnvelope: execResult.errorEnvelope,
     agentInvoked: execResult.agentInvoked,
+    filesChanged: execResult.filesChanged,
   };
 }
 
@@ -199,7 +215,14 @@ export async function processTask(
   // resulting dispatch_count off the reloaded WorkItem.
   await deps.workItemRepo.incrementDispatchCount(task.id);
 
-  const { result, output, attempt, errorEnvelope: execEnvelope, agentInvoked } = await executeTask(
+  const {
+    result,
+    output,
+    attempt,
+    errorEnvelope: execEnvelope,
+    agentInvoked,
+    filesChanged: changedFiles,
+  } = await executeTask(
     routingDeps,
     deps.developmentService,
     task,
@@ -244,7 +267,13 @@ export async function processTask(
       // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
       const attempts = current.dispatchCount;
       const finishReason = typeof output.finish_reason === "string" ? output.finish_reason : "unknown";
-      const filesChanged = Array.isArray(output.files_changed) ? output.files_changed.length : 0;
+      // From the HOST observation, never from the agent's output. The agent
+      // cannot run git inside its container, and when `output.files_changed`
+      // was removed this read silently became a constant 0 — which made
+      // shouldSplit constantly false and killed split-on-turn-limit outright.
+      // `?? 0` is deliberately absent: a missing supplier must fail to compile,
+      // not resolve to the value that means "nothing happened".
+      const filesChanged = changedFiles.length;
 
       // Split-on-failure: agent hit turn limit while making progress (files
       // changed) — structurally "too big," not a specific bug.

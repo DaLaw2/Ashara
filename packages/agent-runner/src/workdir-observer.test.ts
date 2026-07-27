@@ -5,15 +5,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import {
-    observeChangedFiles,
     snapshotWorkdir,
     hasProgressSince,
     EMPTY_SNAPSHOT,
-    MAX_OBSERVABLE_FILES,
     WorkdirObservationError,
 } from "./workdir-observer.js";
 import type { WorkdirSnapshot } from "./workdir-observer.js";
-import { OutputCollector } from "./output.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -39,67 +36,6 @@ async function initRepo(dir: string): Promise<void> {
 
 afterAll(async () => {
     for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
-});
-
-// ---------------------------------------------------------------------------
-// observeChangedFiles — the path-list primitive (for output.ts)
-// ---------------------------------------------------------------------------
-
-describe("observeChangedFiles", () => {
-    test("reports individual files, not parent directories (--untracked-files=all)", async () => {
-        const dir = await makeDir("ashara-obs-");
-        await initRepo(dir);
-
-        // Simulate what `cargo init` would do through run_command.
-        await mkdir(join(dir, "src"), { recursive: true });
-        await writeFile(join(dir, "Cargo.toml"), '[package]\nname = "hello"', "utf-8");
-        await writeFile(join(dir, "src/main.rs"), 'fn main() {}', "utf-8");
-
-        const files = await observeChangedFiles(dir);
-        expect(files).toContain("Cargo.toml");
-        // The real file, not its parent directory. `--untracked-files=all`
-        // expands `?? src/` into `?? src/main.rs`, which matters because
-        // filesChanged is a dispatch input (task-split.ts:13) and is written
-        // verbatim into knowledge entries (knowledge-writer.ts:98).
-        expect(files).toContain("src/main.rs");
-        expect(files).not.toContain("src/");
-        expect(files.length).toBe(2);
-    });
-
-    test("excludes .ashara/ control directory files", async () => {
-        const dir = await makeDir("ashara-obs-ctrl-");
-        await initRepo(dir);
-
-        await mkdir(join(dir, ".ashara"), { recursive: true });
-        await writeFile(join(dir, ".ashara", "brief.json"), "{}", "utf-8");
-        await writeFile(join(dir, ".ashara", "output.json"), "{}", "utf-8");
-        await writeFile(join(dir, "real-file.ts"), "export const x = 1;", "utf-8");
-
-        const files = await observeChangedFiles(dir);
-        expect(files).toContain("real-file.ts");
-        expect(files).not.toContain(".ashara/brief.json");
-        expect(files).not.toContain(".ashara/output.json");
-        expect(files.every((f) => !f.startsWith(".ashara"))).toBe(true);
-    });
-
-    test("returns empty array when no files changed (not an error)", async () => {
-        const dir = await makeDir("ashara-obs-clean-");
-        await initRepo(dir);
-
-        const files = await observeChangedFiles(dir);
-        expect(files).toEqual([]);
-    });
-
-    test("throws WorkdirObservationError for non-git directory (fail-closed)", async () => {
-        const dir = await makeDir("ashara-obs-nongit-");
-        await expect(observeChangedFiles(dir)).rejects.toThrow(WorkdirObservationError);
-    });
-
-    test("throws WorkdirObservationError for missing directory (fail-closed)", async () => {
-        await expect(observeChangedFiles("/nonexistent-dir-abc123")).rejects.toThrow(
-            WorkdirObservationError,
-        );
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -133,6 +69,30 @@ describe("snapshotWorkdir", () => {
         const snap2 = await snapshotWorkdir(dir);
 
         expect(snap1.files.get("app.ts")).not.toBe(snap2.files.get("app.ts"));
+    });
+
+    test("excludes .ashara/ control directory files", async () => {
+        const dir = await makeDir("ashara-snap-ctrl-");
+        await initRepo(dir);
+
+        await mkdir(join(dir, ".ashara"), { recursive: true });
+        await writeFile(join(dir, ".ashara", "brief.json"), "{}", "utf-8");
+        await writeFile(join(dir, "real-file.ts"), "export const x = 1;", "utf-8");
+
+        const s = await snapshotWorkdir(dir);
+        expect(s.files.has("real-file.ts")).toBe(true);
+        expect([...s.files.keys()].every((f) => !f.startsWith(".ashara"))).toBe(true);
+    });
+
+    test("throws WorkdirObservationError for non-git directory (fail-closed)", async () => {
+        const dir = await makeDir("ashara-snap-nongit-");
+        await expect(snapshotWorkdir(dir)).rejects.toThrow(WorkdirObservationError);
+    });
+
+    test("throws WorkdirObservationError for missing directory (fail-closed)", async () => {
+        await expect(snapshotWorkdir("/nonexistent-dir-abc123")).rejects.toThrow(
+            WorkdirObservationError,
+        );
     });
 });
 
@@ -183,36 +143,16 @@ describe("hasProgressSince", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Observation cap — the npm-install-before-gitignore window
+// Observation cap — snapshotWorkdir truncation
 // ---------------------------------------------------------------------------
 
 describe("observation cap", () => {
-    test("MAX_OBSERVABLE_FILES is exported and positive", () => {
-        expect(MAX_OBSERVABLE_FILES).toBeGreaterThan(0);
-    });
-
-    test("observeChangedFiles truncates beyond the cap and still reports non-empty", async () => {
-        const dir = await makeDir("ashara-obs-cap-");
-        await initRepo(dir);
-
-        // Create more files than the cap. Flat directory keeps creation fast.
-        const count = MAX_OBSERVABLE_FILES + 50;
-        for (let i = 0; i < count; i++) {
-            await writeFile(join(dir, `file-${String(i).padStart(5, "0")}.txt`), `content-${i}`, "utf-8");
-        }
-
-        const files = await observeChangedFiles(dir);
-        // Truncated to the cap, NOT empty — the "files > 0" check in
-        // task-split.ts:13 still fires correctly.
-        expect(files.length).toBe(MAX_OBSERVABLE_FILES);
-        expect(files.length).toBeLessThan(count);
-    });
-
     test("snapshotWorkdir marks as truncated beyond the cap and reports progress", async () => {
         const dir = await makeDir("ashara-snap-cap-");
         await initRepo(dir);
 
-        const count = MAX_OBSERVABLE_FILES + 50;
+        // MAX_SNAPSHOT_FILES is internal (2000), create beyond it
+        const count = 2050;
         for (let i = 0; i < count; i++) {
             await writeFile(join(dir, `file-${String(i).padStart(5, "0")}.txt`), `content-${i}`, "utf-8");
         }
@@ -263,39 +203,5 @@ describe("content-aware progress across turns (integration)", () => {
         // No file changes between snapshots
         const snap2 = await snapshotWorkdir(dir);
         expect(hasProgressSince(snap1, snap2)).toBe(false);
-    });
-});
-
-// ---------------------------------------------------------------------------
-// OutputCollector.detectChangedFiles — proves the point for the output path
-// ---------------------------------------------------------------------------
-
-describe("OutputCollector.detectChangedFiles (directory observation)", () => {
-    test("reports individual files, not parent directories (the Run 40 defect)", async () => {
-        const dir = await makeDir("ashara-out-detect-");
-        await initRepo(dir);
-
-        await mkdir(join(dir, "src"), { recursive: true });
-        await writeFile(join(dir, "Cargo.toml"), '[package]\nname = "hello"', "utf-8");
-        await writeFile(join(dir, "src/main.rs"), 'fn main() { println!("hello"); }', "utf-8");
-
-        const collector = new OutputCollector(dir);
-        const files = await collector.detectChangedFiles();
-
-        expect(files).toContain("Cargo.toml");
-        // Individual file, not parent directory — this flows into task-split
-        // (a decision) and knowledge-writer (a permanent record).
-        expect(files).toContain("src/main.rs");
-        expect(files).not.toContain("src/");
-        expect(files.length).toBe(2);
-    });
-
-    test("reports zero files when agent produced nothing (not a false positive)", async () => {
-        const dir = await makeDir("ashara-out-empty-");
-        await initRepo(dir);
-
-        const collector = new OutputCollector(dir);
-        const files = await collector.detectChangedFiles();
-        expect(files).toEqual([]);
     });
 });

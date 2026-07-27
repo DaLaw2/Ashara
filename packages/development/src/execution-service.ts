@@ -845,7 +845,7 @@ export class DevelopmentService {
     await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
     await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
-    await storeKnowledge(this.deps.knowledgeSink, task, output);
+    await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
     return {
       status: "completed",
       detail: "task completed and verified successfully",
@@ -1306,7 +1306,6 @@ function stubAgentOutput(): Record<string, unknown> {
     // A measured zero, not a missing field: no LLM call happened, so the budget
     // must charge $0 rather than fall back to the unknown-cost estimate.
     total_cost: 0,
-    files_changed: [],
     findings: [],
     build_log: null,
     test_log: null,

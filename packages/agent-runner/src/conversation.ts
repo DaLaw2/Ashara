@@ -201,6 +201,11 @@ export class AgentConversation {
         // so the progress check detects both new files AND edits to existing
         // files, rather than only new paths appearing.
         let previousSnapshot: WorkdirSnapshot = EMPTY_SNAPSHOT;
+        // Inside a container, git status fails structurally (the worktree
+        // .git file points to a host-absolute path). Detect the failure once,
+        // log it clearly, and skip all subsequent observations rather than
+        // re-running a failing git command every turn.
+        let workdirObservationAvailable = true;
 
         for (let turn = 0; turn < this.config.maxTurns; turn++) {
             const maxContextTokens = this.config.contextWindowTokens ?? 128_000;
@@ -515,22 +520,33 @@ export class AgentConversation {
             // changed, not which tool changed it.
             let madeProgress = hasFileWrites;
             if (!madeProgress && this.config.workingDir) {
-                try {
-                    const currentSnapshot = await snapshotWorkdir(this.config.workingDir);
-                    if (hasProgressSince(previousSnapshot, currentSnapshot)) {
+                if (workdirObservationAvailable) {
+                    try {
+                        const currentSnapshot = await snapshotWorkdir(this.config.workingDir);
+                        if (hasProgressSince(previousSnapshot, currentSnapshot)) {
+                            madeProgress = true;
+                        }
+                        previousSnapshot = currentSnapshot;
+                    } catch (e: unknown) {
+                        // Observation failed — typically because git status cannot
+                        // work inside a container (the worktree .git file points to
+                        // a host-absolute path that does not exist here). This is a
+                        // structural property, not a transient glitch, so disable
+                        // observation for the remainder of the conversation.
+                        workdirObservationAvailable = false;
+                        const msg = e instanceof Error ? e.message : String(e);
+                        console.warn(
+                            `[AgentConversation] progress detection is unavailable in this environment ` +
+                                `(first failure on turn ${turn + 1}): ${msg}. ` +
+                                `Workdir observation disabled for remaining turns; nudge will not fire.`,
+                        );
                         madeProgress = true;
                     }
-                    previousSnapshot = currentSnapshot;
-                } catch (e: unknown) {
-                    // Observation failed (workdir missing, git broken). Log and
-                    // do NOT nudge: the nudge is the risky action (injecting
-                    // messages that may mislead the agent), so fail-closed for
-                    // the nudge means "don't inject".
-                    const msg = e instanceof Error ? e.message : String(e);
-                    console.warn(
-                        `[AgentConversation] turn ${turn + 1}: workdir observation failed, ` +
-                            `skipping progress check: ${msg}`,
-                    );
+                } else {
+                    // Observation was disabled by a prior failure. Assume
+                    // progress to prevent the nudge from firing — the nudge is
+                    // the risky action (injecting messages that may mislead the
+                    // agent), so the closed direction is "don't inject".
                     madeProgress = true;
                 }
             }

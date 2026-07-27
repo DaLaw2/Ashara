@@ -49,16 +49,8 @@ export class WorkdirObservationError extends Error {
  *
  * Always passes `--untracked-files=all`. Without it git groups an untracked
  * directory as a single entry (`?? src/`) instead of naming its files
- * (`?? src/main.rs`), and both callers need the individual paths:
- * {@link snapshotWorkdir} cannot hash a directory entry, and
- * {@link observeChangedFiles} feeds `filesChanged`, which is read by
- * `task-split.ts:13` as a dispatch decision and written verbatim into
- * knowledge entries by `knowledge-writer.ts:98`. Reporting `src/` where the
- * truth is `src/main.rs` degrades a permanent record.
- *
- * The two observers deliberately share one granularity: two functions reading
- * the same directory through different flags is a trap for whoever reads this
- * next, and the flag costs nothing.
+ * (`?? src/main.rs`), and {@link snapshotWorkdir} cannot hash a directory
+ * entry.
  */
 async function gitStatusPaths(workDir: string): Promise<string[]> {
     const args = ["status", "--porcelain", "--untracked-files=all"];
@@ -75,54 +67,6 @@ async function gitStatusPaths(workDir: string): Promise<string[]> {
         .filter((line) => line.trim().length > 0)
         .map((line) => line.slice(3).trim())
         .filter((path) => !isAsharaControlPath(path));
-}
-
-// ---------------------------------------------------------------------------
-// Path-list observation (output.ts — "which files changed?")
-// ---------------------------------------------------------------------------
-
-/**
- * Ceiling on paths returned by {@link observeChangedFiles}. Shared with
- * {@link MAX_SNAPSHOT_FILES} in spirit — both functions observe the same
- * directory through the same `--untracked-files=all` flag, so the same
- * dependency-tree blowup window applies. The path list is cheaper than the
- * hash step (no file reads), but a 30K-element array flowing into event
- * emission, knowledge records, and JSON serialization is still waste.
- *
- * When the cap is hit the truncation is logged (docs/context.md rule: "if
- * a workflow bounds coverage, log what was dropped — silent truncation
- * reads as 'covered everything' when it didn't").
- */
-export const MAX_OBSERVABLE_FILES = 2000;
-
-/**
- * Observe which files have changed in a git working directory.
- *
- * Fail-closed: if `git status` fails (not a git repo, git not installed,
- * workdir missing), throws `WorkdirObservationError` rather than returning
- * `[]`. An empty array is evidence of "no changes"; returning it on error
- * would be an evidence default flowing into both the nudge verdict and the
- * `filesChanged` report (CLAUDE.md absence rule: evidence default flowing
- * into a verdict must fail closed).
- *
- * Bounded: when the file count exceeds {@link MAX_OBSERVABLE_FILES}, the
- * list is truncated and the truncation is logged. Truncation preserves the
- * "files exist" signal (the list is non-empty) while bounding the output
- * that flows into event sinks, knowledge records, and JSON serialization.
- */
-export async function observeChangedFiles(workDir: string): Promise<string[]> {
-    const paths = await gitStatusPaths(workDir);
-    if (paths.length > MAX_OBSERVABLE_FILES) {
-        const dropped = paths.length - MAX_OBSERVABLE_FILES;
-        console.warn(
-            `[workdir-observer] observeChangedFiles: ${paths.length} changed paths exceed the ` +
-                `${MAX_OBSERVABLE_FILES}-file ceiling; returning first ${MAX_OBSERVABLE_FILES} ` +
-                `(${dropped} dropped). A dependency tree is probably untracked because no ` +
-                `.gitignore exists yet.`,
-        );
-        return paths.slice(0, MAX_OBSERVABLE_FILES);
-    }
-    return paths;
 }
 
 // ---------------------------------------------------------------------------

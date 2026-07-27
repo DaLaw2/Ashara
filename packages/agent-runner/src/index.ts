@@ -57,5 +57,5 @@ export { enrichBrief, extractProjectConventions } from "./brief-builder.js";
 export { runInlineVerify } from "./inline-verify.js";
 export type { InlineVerifyResult, InlineVerifyTaskSpec, VerifyTierResult, VerifyCheckResult } from "./inline-verify.js";
 
-export { observeChangedFiles, snapshotWorkdir, hasProgressSince, EMPTY_SNAPSHOT, MAX_OBSERVABLE_FILES, WorkdirObservationError } from "./workdir-observer.js";
+export { snapshotWorkdir, hasProgressSince, EMPTY_SNAPSHOT, WorkdirObservationError } from "./workdir-observer.js";
 export type { WorkdirSnapshot } from "./workdir-observer.js";

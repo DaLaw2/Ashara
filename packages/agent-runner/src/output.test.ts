@@ -1,17 +1,7 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
 import type { AgentOutput, ErrorDetail } from "./output.js";
 import { OutputCollector } from "./output.js";
-
-// OutputCollector.detectChangedFiles calls observeChangedFiles (git status).
-// These tests exercise collect(), not the filesystem — mock the observation.
-vi.mock("./workdir-observer.js", () => ({
-    observeChangedFiles: vi.fn().mockResolvedValue([]),
-    snapshotWorkdir: vi.fn().mockResolvedValue({ files: new Map(), truncated: false, totalPaths: 0 }),
-    hasProgressSince: vi.fn().mockReturnValue(false),
-    EMPTY_SNAPSHOT: { files: new Map(), truncated: false, totalPaths: 0 },
-    MAX_OBSERVABLE_FILES: 500,
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers — build ConversationResult fixtures with minimal boilerplate
@@ -261,5 +251,62 @@ describe("OutputCollector.collect — blocked diagnostic enrichment", () => {
         expect(output.status).toBe("done");
         expect(output.errorDetail).toBeNull();
         expect(output.summary).toBe("task complete");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Run 41 regression: output collection must succeed regardless of git state
+// ---------------------------------------------------------------------------
+
+describe("OutputCollector.collect — Run 41 regression (container git crash)", () => {
+    test("collect succeeds in a non-git directory (the Run 41 shape)", async () => {
+        // Run 41 crashed because detectChangedFiles() ran git status in
+        // /workspace where git worktree paths are host-absolute and
+        // unreachable. The fix: output collection no longer calls git at
+        // all — filesChanged is computed by the host, not the agent.
+        const collector = new OutputCollector("/nonexistent-dir-not-a-git-repo");
+        const result = conversationResult({
+            turns: [
+                turn(1, {
+                    assistantMessage: "Created project files",
+                    toolCalls: [toolCall("write_file", "tc-1")],
+                    toolResults: [toolResult("write_file", "ok", { toolCallId: "tc-1" })],
+                }),
+            ],
+            finalMessage: "task complete",
+            finishReason: "completed",
+            model: "deepseek-v4-pro",
+        });
+
+        // This must NOT throw — the entire point of the fix.
+        const output: AgentOutput = await collector.collect(result);
+
+        expect(output.status).toBe("done");
+        expect(output.summary).toBe("task complete");
+        expect(output.turnCount).toBe(1);
+        // filesChanged is no longer part of AgentOutput
+        expect("filesChanged" in output).toBe(false);
+    });
+
+    test("output JSON serialization has no files_changed field", async () => {
+        // The host computes filesChanged; the agent's output.json must not
+        // carry a stale or fabricated copy.
+        const collector = new OutputCollector("/tmp/fake");
+        const result = conversationResult({
+            turns: [turn(1)],
+            finalMessage: "done",
+            finishReason: "completed",
+        });
+
+        const output = await collector.collect(result);
+        const tmpPath = "/tmp/ashara-test-output-no-files-changed.json";
+        await collector.writeOutput(output, tmpPath);
+
+        const { readFile } = await import("node:fs/promises");
+        const written = JSON.parse(await readFile(tmpPath, "utf-8"));
+        expect(written).not.toHaveProperty("files_changed");
+        // Clean up
+        const { unlink } = await import("node:fs/promises");
+        await unlink(tmpPath).catch(() => {});
     });
 });

@@ -1,7 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
-import { observeChangedFiles } from "./workdir-observer.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -14,10 +13,18 @@ export interface ErrorDetail {
     readonly message: string;
 }
 
+/**
+ * Agent output collected after the conversation loop. `filesChanged` was
+ * removed because the agent runs inside a container where git worktree
+ * paths are host-absolute and unreachable — `git status` structurally
+ * cannot work. The host (execution-service.ts) already computes the same
+ * list via `getChangedFiles(workDir)` in the orchestrator process where
+ * the worktree resolves normally, so the agent's copy was always redundant
+ * and is now deleted rather than filled with a guess (Discipline D).
+ */
 export interface AgentOutput {
     readonly status: "done" | "blocked" | "failed";
     readonly summary: string;
-    readonly filesChanged: string[];
     readonly findings: string[];
     readonly buildLog: string | null;
     readonly testLog: string | null;
@@ -42,7 +49,6 @@ interface ErrorDetailJson {
 interface AgentOutputJson {
     readonly status: "done" | "blocked" | "failed";
     readonly summary: string;
-    readonly files_changed: string[];
     readonly findings: string[];
     readonly build_log: string | null;
     readonly test_log: string | null;
@@ -57,7 +63,6 @@ function toJson(output: AgentOutput): AgentOutputJson {
     return {
         status: output.status,
         summary: output.summary,
-        files_changed: output.filesChanged,
         findings: output.findings,
         build_log: output.buildLog,
         test_log: output.testLog,
@@ -89,7 +94,6 @@ export class OutputCollector {
 
     async collect(result: ConversationResult): Promise<AgentOutput> {
         const status = this.determineStatus(result);
-        const filesChanged = await this.detectChangedFiles();
         const buildLog = this.extractBuildLog(result.turns);
         const testLog = this.extractTestLog(result.turns);
         const findings = this.extractFindings(result.turns);
@@ -113,15 +117,9 @@ export class OutputCollector {
         if (status === "blocked") {
             const lastToolCall = this.findLastToolCall(result.turns);
             const blockedMarker = this.findBlockedMarker(result.turns);
-            // Distinguish "ran out of turns while working" from "stopped
-            // because something was missing" — a reader needs both to be
-            // legible, and flattening them into one label hides the cause.
             const reasonLabel = blockedMarker !== null
                 ? `BLOCKED: ${blockedMarker}`
                 : "turn limit reached";
-            // When finalMessage is empty (the normal case for a turn-limit
-            // hit on a tool-call-only turn), the structural reason IS the
-            // message. When non-empty, append it as supplementary context.
             const message = result.finalMessage
                 ? `${reasonLabel} — ${result.finalMessage}`
                 : reasonLabel;
@@ -139,7 +137,6 @@ export class OutputCollector {
         return {
             status,
             summary,
-            filesChanged,
             findings,
             buildLog,
             testLog,
@@ -181,21 +178,6 @@ export class OutputCollector {
             }
         }
         return last;
-    }
-
-    /**
-     * Observe which files have been changed in the working directory. This is
-     * a directory observation (`git status`), not an inference from tool-call
-     * names — so files created by `run_command` (e.g. `cargo init`) are
-     * reported just as files created by `write_file` are.
-     *
-     * Fail-closed: if the observation fails, the error propagates. An empty
-     * array would be an evidence default ("nothing changed") flowing into the
-     * `files_changed` field that the orchestrator reads — CLAUDE.md absence
-     * rule, question 2.
-     */
-    async detectChangedFiles(): Promise<string[]> {
-        return observeChangedFiles(this.workingDir);
     }
 
     extractBuildLog(turns: readonly ConversationTurn[]): string | null {
