@@ -138,6 +138,48 @@ export async function commitAllChanges(workDir: string, message: string): Promis
   await execFileAsync("git", ["commit", "-m", message, "--allow-empty-message"], { cwd: workDir });
 }
 
+// ---------------------------------------------------------------------------
+// Partial-work commit (ADR-036 point 6)
+// ---------------------------------------------------------------------------
+
+export type PartialCommitOutcome =
+  | { readonly committed: true; readonly filesCount: number }
+  | { readonly committed: false; readonly reason: "no-changes" }
+  | { readonly committed: false; readonly reason: "git-error"; readonly message: string };
+
+/**
+ * Best-effort commit of whatever the agent left in the worktree before cleanup
+ * on a failure path. ADR-036 point 6: a retry's worktree seeds from the task
+ * branch, so uncommitted work destroyed with the worktree is work lost.
+ *
+ * Never throws. The caller is already on a failure path, and a commit problem
+ * must not replace or mask the original failure (design point 5).
+ *
+ * "Nothing to commit" is the normal case — an agent that produced nothing —
+ * and is silent (design point 1). A real git failure is logged at warn so it
+ * stays visible even though no gate reads it (design point 2). The commit
+ * message identifies the work as partial (design point 3) — the caller
+ * provides a message containing task ID, dispatch number, and failure path.
+ */
+export async function commitPartialWork(
+  workDir: string,
+  message: string,
+): Promise<PartialCommitOutcome> {
+  try {
+    const files = await getChangedFiles(workDir);
+    if (files.length === 0) {
+      return { committed: false, reason: "no-changes" };
+    }
+    await execFileAsync("git", ["add", "-A"], { cwd: workDir });
+    await execFileAsync("git", ["commit", "-m", message], { cwd: workDir });
+    return { committed: true, filesCount: files.length };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[commitPartialWork] git failure in ${workDir}: ${msg}`);
+    return { committed: false, reason: "git-error", message: msg };
+  }
+}
+
 export async function cleanupWorkdir(workDir: string, targetProjectPath?: string, taskBranch?: string): Promise<void> {
   if (targetProjectPath) {
     await removeWorktree(targetProjectPath, workDir, taskBranch);

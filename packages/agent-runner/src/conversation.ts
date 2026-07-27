@@ -13,6 +13,8 @@ import type {
 } from "@ashara/llm-gateway";
 import type { CapabilityLevel } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR } from "@ashara/shared";
+import { snapshotWorkdir, hasProgressSince, EMPTY_SNAPSHOT } from "./workdir-observer.js";
+import type { WorkdirSnapshot } from "./workdir-observer.js";
 import type { ToolResult } from "./tools/types.js";
 import type { ToolRegistry } from "./tools/index.js";
 import { ConversationContextManager } from "./context-manager.js";
@@ -96,11 +98,12 @@ const ERROR_TEMPLATES = {
     no_tool_calls_prune:
         "Your previous responses were removed because you did not call any tools. " +
         "You MUST call tools to complete this task. Call write_file now.",
-    run_command_loop:
-        "STOP. You have been calling run_command repeatedly without writing any files. " +
-        "Do NOT start servers or long-running processes. Do NOT run the application. " +
-        "Your job is to write code using write_file/edit_file and verify with build/test commands only. " +
-        "Call write_file or edit_file NOW.",
+    no_visible_progress:
+        "You have been running commands for several turns but no new files have appeared in the working directory. " +
+        "If you are creating files via shell commands (e.g. cargo init, npm init, echo >), that is fine — " +
+        "but verify the files actually exist by listing the directory. " +
+        "If you are stuck, try a different approach. " +
+        "Do NOT start servers or long-running processes.",
     tool_not_found: (name: string, available: string) =>
         `Tool '${name}' does not exist. Available tools: ${available}. ` +
         `Use only tools from this list. Do not invent tool names.`,
@@ -192,8 +195,12 @@ export class AgentConversation {
         let lastText = "";
         let lastModel: string | null = null;
         let nudgeCount = 0;
-        let turnsWithoutWrite = 0;
+        let turnsWithoutProgress = 0;
         let pruneCount = 0;
+        // Workdir observation: content-aware snapshots (path → content hash)
+        // so the progress check detects both new files AND edits to existing
+        // files, rather than only new paths appearing.
+        let previousSnapshot: WorkdirSnapshot = EMPTY_SNAPSHOT;
 
         for (let turn = 0; turn < this.config.maxTurns; turn++) {
             const maxContextTokens = this.config.contextWindowTokens ?? 128_000;
@@ -350,7 +357,7 @@ export class AgentConversation {
                 messages.push({ role: "tool", content: resultBlocks });
 
                 if (fileWriteResults.some((fwr) => fwr.result.success)) {
-                    turnsWithoutWrite = 0;
+                    turnsWithoutProgress = 0;
                 }
 
                 const syntheticToolCalls: ToolCall[] = fileWriteResults.map((fwr, i) => ({
@@ -378,11 +385,11 @@ export class AgentConversation {
             }
 
             if (!hasToolCalls && !hasFileWrites) {
-                turnsWithoutWrite++;
+                turnsWithoutProgress++;
                 const shouldNudge =
                     response.content.length > 0 &&
                     this.config.tools.length > 0 &&
-                    turnsWithoutWrite >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
+                    turnsWithoutProgress >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
                     nudgeCount < this.config.maxNudges;
 
                 if (shouldNudge) {
@@ -404,7 +411,7 @@ export class AgentConversation {
                     );
                     messages.push({ role: "user", content: ERROR_TEMPLATES.no_tool_calls_prune });
                     nudgeCount = 0;
-                    turnsWithoutWrite = 0;
+                    turnsWithoutProgress = 0;
                     continue;
                 }
 
@@ -501,25 +508,50 @@ export class AgentConversation {
             // Append tool results as a single tool message
             messages.push({ role: "tool", content: resultBlocks });
 
-            const hasWriteOrEdit =
-                toolCalls.some((tc) => tc.name === "write_file" || tc.name === "edit_file") || hasFileWrites;
-            if (hasWriteOrEdit) {
-                turnsWithoutWrite = 0;
+            // Progress detection: observe the working directory for new files
+            // rather than checking which tool names were called. A Rust agent
+            // using `cargo init` through `run_command` creates files just as
+            // validly as `write_file` does — the signal is that the directory
+            // changed, not which tool changed it.
+            let madeProgress = hasFileWrites;
+            if (!madeProgress && this.config.workingDir) {
+                try {
+                    const currentSnapshot = await snapshotWorkdir(this.config.workingDir);
+                    if (hasProgressSince(previousSnapshot, currentSnapshot)) {
+                        madeProgress = true;
+                    }
+                    previousSnapshot = currentSnapshot;
+                } catch (e: unknown) {
+                    // Observation failed (workdir missing, git broken). Log and
+                    // do NOT nudge: the nudge is the risky action (injecting
+                    // messages that may mislead the agent), so fail-closed for
+                    // the nudge means "don't inject".
+                    const msg = e instanceof Error ? e.message : String(e);
+                    console.warn(
+                        `[AgentConversation] turn ${turn + 1}: workdir observation failed, ` +
+                            `skipping progress check: ${msg}`,
+                    );
+                    madeProgress = true;
+                }
+            }
+
+            if (madeProgress) {
+                turnsWithoutProgress = 0;
             } else {
-                turnsWithoutWrite++;
+                turnsWithoutProgress++;
             }
 
             if (
-                !hasWriteOrEdit &&
-                turnsWithoutWrite >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
+                !madeProgress &&
+                turnsWithoutProgress >= NUDGE_AFTER_TURNS_WITHOUT_WRITE &&
                 nudgeCount < this.config.maxNudges
             ) {
                 nudgeCount++;
                 console.warn(
-                    `[AgentConversation] turn ${turn + 1}: ${turnsWithoutWrite} turns without write_file/edit_file, ` +
+                    `[AgentConversation] turn ${turn + 1}: ${turnsWithoutProgress} turns without visible progress, ` +
                         `nudging (${nudgeCount}/${this.config.maxNudges})`,
                 );
-                messages.push({ role: "user", content: ERROR_TEMPLATES.run_command_loop });
+                messages.push({ role: "user", content: ERROR_TEMPLATES.no_visible_progress });
             }
 
             const toolTurn: ConversationTurn = {

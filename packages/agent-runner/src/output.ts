@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
+import { observeChangedFiles } from "./workdir-observer.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -88,7 +89,7 @@ export class OutputCollector {
 
     async collect(result: ConversationResult): Promise<AgentOutput> {
         const status = this.determineStatus(result);
-        const filesChanged = this.detectChangedFiles(result.turns);
+        const filesChanged = await this.detectChangedFiles();
         const buildLog = this.extractBuildLog(result.turns);
         const testLog = this.extractTestLog(result.turns);
         const findings = this.extractFindings(result.turns);
@@ -107,6 +108,32 @@ export class OutputCollector {
             };
             const modelLabel = result.model ?? "unknown";
             summary = `[${modelLabel}, turn ${turnCount}${lastToolCall ? `, last tool: ${lastToolCall}` : ""}] ${result.finalMessage}`;
+        }
+
+        if (status === "blocked") {
+            const lastToolCall = this.findLastToolCall(result.turns);
+            const blockedMarker = this.findBlockedMarker(result.turns);
+            // Distinguish "ran out of turns while working" from "stopped
+            // because something was missing" — a reader needs both to be
+            // legible, and flattening them into one label hides the cause.
+            const reasonLabel = blockedMarker !== null
+                ? `BLOCKED: ${blockedMarker}`
+                : "turn limit reached";
+            // When finalMessage is empty (the normal case for a turn-limit
+            // hit on a tool-call-only turn), the structural reason IS the
+            // message. When non-empty, append it as supplementary context.
+            const message = result.finalMessage
+                ? `${reasonLabel} — ${result.finalMessage}`
+                : reasonLabel;
+
+            errorDetail = {
+                model: result.model,
+                turnCount,
+                lastToolCall,
+                message,
+            };
+            const modelLabel = result.model ?? "unknown";
+            summary = `[${modelLabel}, turn ${turnCount}${lastToolCall ? `, last tool: ${lastToolCall}` : ""}] ${reasonLabel}`;
         }
 
         return {
@@ -134,19 +161,41 @@ export class OutputCollector {
         return null;
     }
 
-    detectChangedFiles(turns: readonly ConversationTurn[]): string[] {
-        const files = new Set<string>();
+    /**
+     * Scans tool results for an explicit BLOCKED: marker and extracts the
+     * reason text. Returns the LAST marker found (most specific), or null
+     * when blocking was caused by the turn limit rather than an explicit
+     * signal. Mirrors the detection logic in {@link determineStatus} so
+     * the two agree on what counts as a marker.
+     */
+    private findBlockedMarker(turns: readonly ConversationTurn[]): string | null {
+        let last: string | null = null;
         for (const turn of turns) {
-            for (const tc of turn.toolCalls) {
-                if (tc.name === "write_file" || tc.name === "edit_file") {
-                    const path = tc.input["path"];
-                    if (typeof path === "string" && path.length > 0) {
-                        files.add(path);
-                    }
+            for (const tr of turn.toolResults) {
+                const fromOutput = extractBlockedText(tr.result.output);
+                if (fromOutput !== null) last = fromOutput;
+                if (tr.result.error) {
+                    const fromError = extractBlockedText(tr.result.error);
+                    if (fromError !== null) last = fromError;
                 }
             }
         }
-        return [...files];
+        return last;
+    }
+
+    /**
+     * Observe which files have been changed in the working directory. This is
+     * a directory observation (`git status`), not an inference from tool-call
+     * names — so files created by `run_command` (e.g. `cargo init`) are
+     * reported just as files created by `write_file` are.
+     *
+     * Fail-closed: if the observation fails, the error propagates. An empty
+     * array would be an evidence default ("nothing changed") flowing into the
+     * `files_changed` field that the orchestrator reads — CLAUDE.md absence
+     * rule, question 2.
+     */
+    async detectChangedFiles(): Promise<string[]> {
+        return observeChangedFiles(this.workingDir);
     }
 
     extractBuildLog(turns: readonly ConversationTurn[]): string | null {
@@ -240,6 +289,20 @@ export class OutputCollector {
 
 }
 
+
+/**
+ * Extracts the reason text after a "BLOCKED:" marker. Returns null when
+ * the marker is absent or the text after it is empty (a bare "BLOCKED:"
+ * with no explanation). Takes the first line only — multi-line tool
+ * output should not bleed into a single-line summary.
+ */
+function extractBlockedText(text: string): string | null {
+    const idx = text.indexOf("BLOCKED:");
+    if (idx === -1) return null;
+    const rest = text.slice(idx + "BLOCKED:".length).trim();
+    const firstLine = rest.split("\n")[0].trim();
+    return firstLine.length > 0 ? firstLine : null;
+}
 
 function isRunCommandResult(tr: ConversationToolResult, _turn: ConversationTurn): boolean {
     return tr.toolName === "run_command";

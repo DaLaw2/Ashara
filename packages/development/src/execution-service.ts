@@ -23,6 +23,7 @@ import { readVerifyConfig } from "./verify-config.js";
 import {
   buildFileTree,
   cleanupWorkdir,
+  commitPartialWork,
   createWorkdir,
   createWorkdirForRetry,
   getChangedFiles,
@@ -642,6 +643,9 @@ export class DevelopmentService {
     if (agentStatus === "failed") {
       const summary = typeof output.summary === "string" ? output.summary : "no summary";
       const turnCount = typeof output.turn_count === "number" ? output.turn_count : 0;
+      // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
+      // worktree is gone and git status would fail.
+      const filesChanged = await getChangedFiles(workDir);
       eventSink?.emit({
         event: "agent_completed",
         taskId: task.id,
@@ -649,7 +653,14 @@ export class DevelopmentService {
         status: "failed",
         turns: turnCount,
         summary,
+        filesChanged,
       });
+      if (targetProjectPath) {
+        await commitPartialWork(
+          workDir,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-failed)`,
+        );
+      }
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
@@ -667,7 +678,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged: [],
+        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: true,
@@ -677,6 +688,9 @@ export class DevelopmentService {
     if (agentStatus === "blocked") {
       const summary = typeof output.summary === "string" ? output.summary : "no summary";
       const turnCount = typeof output.turn_count === "number" ? output.turn_count : 0;
+      // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
+      // worktree is gone and git status would fail.
+      const filesChanged = await getChangedFiles(workDir);
       eventSink?.emit({
         event: "agent_completed",
         taskId: task.id,
@@ -684,7 +698,14 @@ export class DevelopmentService {
         status: "blocked",
         turns: turnCount,
         summary,
+        filesChanged,
       });
+      if (targetProjectPath) {
+        await commitPartialWork(
+          workDir,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-blocked)`,
+        );
+      }
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
@@ -701,7 +722,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged: [],
+        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: true,
@@ -769,6 +790,12 @@ export class DevelopmentService {
         attempt: 1,
         reason: "verification failed",
       });
+      if (targetProjectPath) {
+        await commitPartialWork(
+          workDir,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, verify-failed)`,
+        );
+      }
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "verify", "verification failed", { taskId: task.id });
       return {
