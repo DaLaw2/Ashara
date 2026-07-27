@@ -1,0 +1,145 @@
+# Ashara CI — runs the same gates a developer runs locally via `just check`
+# and `just test`, so there is one definition of "the gates" with two callers.
+#
+# Numeric invariants (test-count floor, skip ceiling) live in ci.toml at the
+# repo root — the workflow reads them, never duplicates them.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Require GITGUARDIAN_API_KEY
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        run: |
+          # Fail closed on a missing key. A secret scanner that skips because
+          # it has no credential reports the same clean result as one that
+          # scanned and found nothing.
+          if [ -z "${GITGUARDIAN_API_KEY}" ]; then
+            echo "::error::GITGUARDIAN_API_KEY is not set. The secret scan cannot run, so this job fails rather than passing unscanned."
+            exit 1
+          fi
+
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield-action@da20be06cafe5e8633dc24744efe1efe8d30f06b # v1.52.2
+        env:
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+
+  check-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: ashara_ci
+          POSTGRES_DB: ashara_ci
+          # No password, deliberately. This service lives inside the job's
+          # network and is destroyed when the job ends, so a credential would
+          # guard nothing. An earlier revision hardcoded one and triggered a
+          # real GitGuardian incident. Do not add a password or a secret here:
+          # the correct state is that there is nothing to leak.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ashara_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://ashara_ci@localhost:5432/ashara_ci
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install just
+        run: |
+          curl -sSf https://just.systems/install.sh | bash -s -- --tag 1.44.0 --to /usr/local/bin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migrations
+        run: npx tsx scripts/migrate.ts
+
+      - name: Gate — typecheck + boundary lint + knip + eslint
+        run: just check
+
+      - name: Test suite
+        id: test
+        run: |
+          # Run vitest with JSON reporter to capture counts, plus default for human output.
+          npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
+
+      - name: Enforce test-count invariants
+        if: always() && steps.test.outcome == 'success'
+        run: |
+          set -euo pipefail
+
+          # Read floors from ci.toml — the single source of truth.
+          MIN_PASSED=$(grep '^min_passed' ci.toml | head -1 | sed 's/[^0-9]//g')
+          MAX_SKIPPED=$(grep '^max_skipped' ci.toml | head -1 | sed 's/[^0-9]//g')
+
+          # A missing or renamed key yields an empty string, and `[ 348 -lt "" ]`
+          # is a shell error that `if` reads as false — so the floor would pass
+          # without ever being compared. The guard against a vacuous test count
+          # must not itself be vacuous.
+          for pair in "min_passed:${MIN_PASSED}" "max_skipped:${MAX_SKIPPED}"; do
+            key=${pair%%:*}
+            val=${pair#*:}
+            case "$val" in
+              ''|*[!0-9]*)
+                echo "::error::ci.toml did not yield an integer for ${key} (got '${val}'). Refusing to report green on an unenforced invariant."
+                exit 1
+                ;;
+            esac
+          done
+
+          PASSED=$(node -e "const r=require('./vitest-results.json'); console.log(r.numPassedTests)")
+          SKIPPED=$(node -e "const r=require('./vitest-results.json'); console.log(r.numPendingTests)")
+
+          echo "Passed:  ${PASSED} (floor: ${MIN_PASSED})"
+          echo "Skipped: ${SKIPPED} (ceiling: ${MAX_SKIPPED})"
+
+          FAIL=0
+          if [ "$PASSED" -lt "$MIN_PASSED" ]; then
+            echo "::error::Test count ${PASSED} is below the floor of ${MIN_PASSED}. If tests were legitimately removed, update ci.toml."
+            FAIL=1
+          fi
+          if [ "$SKIPPED" -gt "$MAX_SKIPPED" ]; then
+            echo "::error::Skipped count ${SKIPPED} exceeds ceiling of ${MAX_SKIPPED}. No tests should be skipped."
+            FAIL=1
+          fi
+          if [ "$FAIL" -eq 1 ]; then
+            exit 1
+          fi
