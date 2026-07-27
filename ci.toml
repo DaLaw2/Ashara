@@ -7,8 +7,8 @@
 
 [tests]
 # Minimum number of passing tests. CI fails if vitest reports fewer.
-# Measured 2026-07-27: 342 passed / 34 files / 0 skipped.
-min_passed = 342
+# Measured 2026-07-27: 348 passed / 35 files / 0 skipped.
+min_passed = 348
 
 # Maximum number of skipped tests. CI fails if vitest reports more.
 max_skipped = 0
