@@ -310,7 +310,10 @@ async function postWorkItems(client: AsharaClient, decomposition: DecompositionR
 
     const edges = decomposition.dependencyEdges.map((edge) => ({ from: edge.from, to: edge.to }));
 
-    await client.createWorkItemsBulk({ items, edges });
+    // The graph travels with the plan that produced it (ADR-052). Before this it
+    // never left the CLI: the server derived a contract from task prose alone and
+    // wrote an empty knowledge graph, so nothing downstream could name the stack.
+    await client.createWorkItemsBulk({ items, edges, knowledge: decomposition.knowledge });
 }
 
 // --- Main entry ---

@@ -24,7 +24,7 @@ import type { AppDeps } from "./routes.js";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
-  return (items, edges) =>
+  return (items, edges, knowledge) =>
     createBulkPlanWithContract(
       {
         withPlanningTransaction: (fn) =>
@@ -34,6 +34,7 @@ function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
       },
       items,
       edges,
+      knowledge,
     );
 }
 
@@ -247,6 +248,17 @@ describe("Work Items", () => {
 // ===========================================================================
 
 describe("Work Items Bulk", () => {
+  // A deliberately non-JS graph: the defect this suite now pins let a Go vision
+  // reach the agent with an empty contract, and "package.json" is what the
+  // downstream readers substituted when nothing stated otherwise.
+  const GO_KNOWLEDGE = {
+    nodes: [
+      { id: "lang-go", kind: "language", label: "Go" },
+      { id: "entry-cli", kind: "entry_point", label: "cmd/jot/main.go", meta: { mountKind: "cli" } },
+    ],
+    edges: [{ from: "entry-cli", to: "lang-go", rel: "uses" }],
+  };
+
   test("happy path: creates hierarchy + edges atomically", async () => {
     const nonce = randomUUID().slice(0, 8);
     const res = await req("POST", "/work-items/bulk", {
@@ -257,6 +269,7 @@ describe("Work Items Bulk", () => {
         { tempId: "task-2", level: "Task", title: `bulk-task-2-${nonce}`, parentId: "story-1" },
       ],
       edges: [{ from: "task-2", to: "task-1" }],
+      knowledge: GO_KNOWLEDGE,
     });
     expect(res.status).toBe(201);
 
@@ -275,6 +288,50 @@ describe("Work Items Bulk", () => {
     expect(deps.rowCount).toBe(1);
   });
 
+  // The regression that motivated ADR-052. These items name no HTTP endpoint and
+  // no module path — the normal case for a CLI — which used to return early from
+  // deriveAndWriteContract and drop the graph on the floor. Asserting on the
+  // PERSISTED contract, not on the response, because every layer in between was
+  // individually green while the end-to-end result was an empty graph.
+  test("the posted knowledge graph reaches the persisted contract", async () => {
+    const nonce = randomUUID().slice(0, 8);
+    const res = await req("POST", "/work-items/bulk", {
+      items: [
+        { tempId: "epic-1", level: "Epic", title: `bulk-kg-epic-${nonce}` },
+        { tempId: "task-1", level: "Task", title: `bulk-kg-task-${nonce}`, parentId: "epic-1" },
+      ],
+      edges: [],
+      knowledge: GO_KNOWLEDGE,
+    });
+    expect(res.status).toBe(201);
+
+    const map = (await res.json()).tempIdToId as Record<string, string>;
+    for (const id of Object.values(map)) createdWorkItemIds.push(id);
+
+    const contract = await pool.query(
+      "SELECT contract FROM project_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1",
+      [map["epic-1"]],
+    );
+    expect(contract.rowCount).toBe(1);
+    const knowledge = contract.rows[0].contract.knowledge;
+    expect(knowledge.nodes.map((n: { label: string }) => n.label)).toContain("Go");
+  });
+
+  test("a batch with no knowledge graph is refused", async () => {
+    const nonce = randomUUID().slice(0, 8);
+    const res = await req("POST", "/work-items/bulk", {
+      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-nokg-epic-${nonce}` }],
+      edges: [],
+    });
+    expect(res.status).toBe(400);
+
+    const survivors = await pool.query(
+      "SELECT count(*)::int AS n FROM work_items WHERE title LIKE $1",
+      [`bulk-nokg-%-${nonce}`],
+    );
+    expect(survivors.rows[0].n).toBe(0);
+  });
+
   test("unresolved edge rolls the whole batch back", async () => {
     const nonce = randomUUID().slice(0, 8);
     const res = await req("POST", "/work-items/bulk", {
@@ -283,6 +340,7 @@ describe("Work Items Bulk", () => {
         { tempId: "task-1", level: "Task", title: `bulk-rb-task-${nonce}`, parentId: "epic-1" },
       ],
       edges: [{ from: "task-1", to: "ghost" }],
+      knowledge: GO_KNOWLEDGE,
     });
     expect(res.status).toBe(400);
 

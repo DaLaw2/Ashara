@@ -75,7 +75,6 @@ export interface CreateBulkPlanDeps {
   readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
-  readonly knowledge?: ProjectKnowledge;
 }
 
 /**
@@ -83,11 +82,19 @@ export interface CreateBulkPlanDeps {
  * writes the ProjectContract, all in one transaction. Reference resolution runs
  * inside the transaction so an unresolved parent/edge fails closed with nothing
  * persisted.
+ *
+ * `knowledge` is a REQUIRED POSITIONAL (ADR-052, following ADR-051's `unchecked`).
+ * It was an optional field on `CreateBulkPlanDeps` with zero suppliers, defaulted
+ * to `{nodes:[],edges:[]}` one line before use — so every project this path
+ * created got a contract that stated nothing about its own stack. An optional
+ * dependency is how an unwired producer still compiles; a positional cannot be
+ * forgotten at the call site.
  */
 export async function createBulkPlanWithContract(
   deps: CreateBulkPlanDeps,
   items: readonly BulkPlanItem[],
   edges: readonly BulkPlanEdge[],
+  knowledge: ProjectKnowledge,
 ): Promise<BulkPlanResult> {
   return deps.withPlanningTransaction(async ({ workItemRepo, contractRepo }) => {
     const tempIdToId = new Map<string, WorkItemId>();
@@ -123,7 +130,7 @@ export async function createBulkPlanWithContract(
       await workItemRepo.addDependency(fromId, toId);
     }
 
-    await deriveAndWriteContract(contractRepo, created, deps.knowledge ?? { nodes: [], edges: [] });
+    await deriveAndWriteContract(contractRepo, created, knowledge);
 
     const tempIdToIdRecord: Record<string, string> = {};
     for (const [tempId, id] of tempIdToId) tempIdToIdRecord[tempId] = id;
@@ -134,11 +141,17 @@ export async function createBulkPlanWithContract(
 /**
  * Derives the contract fragment the created hierarchy implies and seeds it
  * (writeContract) if the project has no contract, else merges it (amendContract) —
- * the SAME seed-once-then-amend protocol decomposition uses. A no-op fragment
- * (nothing recognized) writes nothing, so an endpoint-less plan never seeds a
- * contentless contract. Keyed by the single project ROOT (the item with no
- * parent); a batch without exactly one root skips the contract (nothing else in
- * the system knows how to key it).
+ * the SAME seed-once-then-amend protocol decomposition uses. Keyed by the single
+ * project ROOT (the item with no parent); a batch without exactly one root skips
+ * the contract (nothing else in the system knows how to key it).
+ *
+ * The write is gated on WHAT THIS CALL ACTUALLY ADDS — knowledge included — never
+ * on the endpoint/module fragment alone. This mirrors the fix ADR-046 already
+ * applied to the story path's `writeOrAmendContract`; the copy here was left
+ * behind. The old gate returned early whenever the prose regexes found no HTTP
+ * method+path and no module path, which is the NORMAL case for a CLI, a library,
+ * or a kernel — so those projects reached `writeContract` with a valid knowledge
+ * graph in hand and discarded it on the way past.
  */
 async function deriveAndWriteContract(
   contractRepo: ContractRepository,
@@ -157,11 +170,12 @@ async function deriveAndWriteContract(
     .map((item) => ({ title: item.title, description: item.description ?? "" }));
 
   const fragment = deriveContractFragment(intentSources, tasks);
-  if (fragment.endpoints.length === 0 && fragment.modules.length === 0) return;
+  const hasFragment = fragment.endpoints.length > 0 || fragment.modules.length > 0;
 
   const projectId = parseProjectId(root.id);
   const existing = await contractRepo.getLatest(projectId);
   if (!existing) {
+    if (!hasFragment && knowledge.nodes.length === 0) return;
     const body: ContractInput = {
       knowledge,
       endpoints: fragment.endpoints,
@@ -175,7 +189,15 @@ async function deriveAndWriteContract(
       if (!(e instanceof ContractAlreadyExists)) throw e;
     }
   }
-  await amendContractWithRetry(contractRepo, projectId, toContractDelta(fragment));
+
+  // Knowledge merges by KIND (applyContractDelta): a kind the base already has is
+  // never overwritten, so a delta carrying only kinds already present is a no-op
+  // and must not mint a contract version.
+  const establishedKinds = new Set((existing?.knowledge.nodes ?? []).map((n) => n.kind));
+  const knowledgeAddsKind = knowledge.nodes.some((n) => !establishedKinds.has(n.kind));
+  if (!hasFragment && !knowledgeAddsKind) return;
+
+  await amendContractWithRetry(contractRepo, projectId, { ...toContractDelta(fragment), knowledge });
 }
 
 /**

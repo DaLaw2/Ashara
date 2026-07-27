@@ -650,7 +650,8 @@ async function main(): Promise<void> {
     runner,
     // Bulk plan creation writes the derived ProjectContract in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
-    createBulkPlan: (items, edges) => createBulkPlanWithContract({ withPlanningTransaction: planningTransaction }, items, edges),
+    createBulkPlan: (items, edges, knowledge) =>
+      createBulkPlanWithContract({ withPlanningTransaction: planningTransaction }, items, edges, knowledge),
   };
 
   const app = new Hono();

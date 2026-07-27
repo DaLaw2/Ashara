@@ -9,7 +9,7 @@ import {
   ContractConflict,
 } from "./domain/index.js";
 import type { DecompositionInput, ExistingWorkItemSummary } from "./decomposition-types.js";
-import { UnresolvableDependencyError } from "./decomposition-types.js";
+import { KnowledgeDerivationError, UnresolvableDependencyError } from "./decomposition-types.js";
 import type { DecompositionEngine } from "./decomposition.js";
 import {
   deriveContractFragment,
@@ -21,36 +21,23 @@ export interface StoryDecomposerDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly decompositionEngine: DecompositionEngine;
   readonly repoPath: string;
-  readonly detectTechStack?: (dir: string) => Promise<string[]>;
   readonly readManifestContext?: (dir: string) => Promise<string | undefined>;
   /**
    * Shares ONE database transaction between the work-item creation loop and the
    * derived ProjectContract write (ADR-028 + ADR-029, mig-phase-9): a
    * ContractConflict (a divergent redeclaration — the decomposition batch
    * contradicts what's already declared) rolls back the tasks created in the
-   * same call, and any DB failure on either half undoes both. Optional so
-   * existing callers/tests that don't supply it keep working unchanged — the
-   * contract write is SHADOW mode (no consumer yet), so skipping it here is
-   * safe, never a silent failure of anything actually required.
+   * same call, and any DB failure on either half undoes both.
+   *
+   * Required (ADR-052). It was optional on the grounds that the contract write
+   * was SHADOW mode with no consumer, and that stopped being true: the contract
+   * is where this path now READS the project's knowledge graph from, and its
+   * absence meant a `contractRepo: null` branch that decomposed against no
+   * stated stack at all.
    */
-  readonly withPlanningTransaction?: <T>(
+  readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
-}
-
-interface PlanningTxRepos {
-  readonly workItemRepo: WorkItemRepository;
-  readonly contractRepo: ContractRepository | null;
-}
-
-async function runPlanningTransaction<T>(
-  deps: StoryDecomposerDeps,
-  fn: (repos: PlanningTxRepos) => Promise<T>,
-): Promise<T> {
-  if (deps.withPlanningTransaction) {
-    return deps.withPlanningTransaction(({ workItemRepo, contractRepo }) => fn({ workItemRepo, contractRepo }));
-  }
-  return deps.workItemRepo.withTransaction((workItemRepo) => fn({ workItemRepo, contractRepo: null }));
 }
 
 /**
@@ -115,45 +102,35 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
   const stories = await PlanningService.findStoriesNeedingDecomposition(deps.workItemRepo);
   if (stories.length === 0) return 0;
 
-  // Derive knowledge graph ONCE per project (ADR-038). The graph captures the
-  // project's tech stack, entry points, and checks as a DAG, replacing the flat
-  // techStack/entryPoint/checks triple. Runs before spec derivation so the
-  // knowledge graph seeds the contract first.
+  // The knowledge graph is NOT derived here (ADR-052). Its single producer is
+  // DecompositionEngine.decompose, which runs on the vision path and seeds the
+  // contract through createBulkPlanWithContract. What used to sit here was a
+  // SECOND producer, and it never ran once: its enclosing function returns at
+  // line 1 unless a Story-level item exists, and `maxDepth: 2` forces
+  // Epic -> Task. The warning it printed on a barren graph — the one naming the
+  // Run-36/37 stack loss — was unreachable too.
+  //
+  // Reading from the contract also makes the contract the single durable source
+  // of the graph, which is what ADR-038 intended. A project whose contract
+  // states no stack fails closed: decomposing against an empty graph is how a
+  // Go vision got `index.js`.
   const projectKnowledge = new Map<string, ProjectKnowledge>();
-  const emptyKnowledge: ProjectKnowledge = { nodes: [], edges: [] };
-  {
-    const derivedProjects = new Set<string>();
-    for (const story of stories) {
-      const projectKey = story.parentId ?? story.id;
-      if (derivedProjects.has(projectKey)) continue;
-      derivedProjects.add(projectKey);
+  for (const story of stories) {
+    const projectKey = story.parentId ?? story.id;
+    if (projectKnowledge.has(projectKey)) continue;
 
-      const root = await PlanningService.findWorkItem(deps.workItemRepo, projectKey);
-      const manifestContext = deps.readManifestContext
-        ? await deps.readManifestContext(deps.repoPath)
-        : undefined;
-
-      const visionTitle = root?.title ?? story.title;
-      const knowledge = await deps.decompositionEngine.deriveKnowledge(
-        visionTitle,
-        root?.description ?? story.description ?? "",
-        root?.northStar ?? story.northStar ?? "",
-        manifestContext,
+    const contract = await deps.withPlanningTransaction(({ contractRepo }) =>
+      contractRepo.getLatest(parseProjectId(projectKey)),
+    );
+    if (!contract || contract.knowledge.nodes.length === 0) {
+      throw new KnowledgeDerivationError(
+        story.title,
+        contract
+          ? `project ${projectKey} has a contract (v${contract.version}) whose knowledge graph is empty`
+          : `project ${projectKey} has no contract to read a knowledge graph from`,
       );
-      if (!knowledge) {
-        // Discipline C: this is the seat of the Run-36/37 stack loss — an empty
-        // graph seeds an empty contract, and an empty contract states nothing
-        // about the target, so every downstream reader falls back to its prior.
-        // The frame ladder (ADR-046) still has the vision-derivation rung, but
-        // that costs an LLM call per project and this line is why it is needed.
-        console.warn(
-          `[${projectKey}] knowledge derivation returned no graph for vision "${visionTitle}" ` +
-            `(story ${story.id}); the contract will carry no stack and the scaffold task falls back ` +
-            `to vision-derived stack resolution`,
-        );
-      }
-      projectKnowledge.set(projectKey, knowledge ?? emptyKnowledge);
     }
+    projectKnowledge.set(projectKey, contract.knowledge);
   }
 
   // Show each story the graph as it stands so far — sibling stories' tasks and anything
@@ -190,7 +167,13 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
 
     try {
       const projectKey = story.parentId ?? story.id;
-      const knowledge = projectKnowledge.get(projectKey) ?? emptyKnowledge;
+      const knowledge = projectKnowledge.get(projectKey);
+      if (!knowledge) {
+        throw new KnowledgeDerivationError(
+          story.title,
+          `no knowledge graph was resolved for project ${projectKey} (story ${story.id})`,
+        );
+      }
       const manifestContext = deps.readManifestContext
         ? await deps.readManifestContext(deps.repoPath)
         : undefined;
@@ -226,11 +209,11 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
       // transaction and only merged into `existingItems` after it commits, so a
       // rollback leaves no phantom entries visible to later stories in the batch.
       // The derived ProjectContract write (mig-phase-9) shares this same
-      // transaction (see runPlanningTransaction); a residual endpoint-divergence
-      // ContractConflict is now caught fail-soft below (Run-10 blocker #2) so it
-      // skips only the contract fragment, never the story's tasks. Any OTHER error
-      // still rolls the whole batch back, so a genuine failure never partially applies.
-      const createdSummaries = await runPlanningTransaction(deps, async ({ workItemRepo: txRepo, contractRepo }) => {
+      // transaction; a residual endpoint-divergence ContractConflict is now caught
+      // fail-soft below (Run-10 blocker #2) so it skips only the contract fragment,
+      // never the story's tasks. Any OTHER error still rolls the whole batch back,
+      // so a genuine failure never partially applies.
+      const createdSummaries = await deps.withPlanningTransaction(async ({ workItemRepo: txRepo, contractRepo }) => {
         // Map the decomposer's synthetic task id (WorkItemSpec.id, e.g. "task-0007")
         // to the persisted WorkItemId. `WorkItemSpec.dependsOn` already holds those
         // synthetic ids (resolved by ref/title inside DecompositionEngine, G3), so
@@ -287,23 +270,21 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
           }
         }
 
-        if (contractRepo) {
-          // FAIL-SOFT ON THE FRAGMENT (Run-10 blocker #2): path normalization now
-          // collapses the common {id}/:id and trailing-slash "conflicts", but a
-          // RESIDUAL genuine conflict (e.g. a task redeclaring an endpoint at a
-          // different METHOD than the spec) must NOT roll back this story's tasks.
-          // A wrongly-declared endpoint is worse than a missed one — the tasks are
-          // real work; the contract fragment is skipped (logged) and spec-derivation
-          // + reconciliation converge coverage later. Only the divergence conflict is
-          // swallowed; any other error still fails the batch closed.
-          try {
-            await writeOrAmendContract(contractRepo, story, createdTasks, knowledge);
-          } catch (e) {
-            if (!(e instanceof ContractConflict)) throw e;
-            console.warn(
-              `[${story.id}] contract fragment skipped (residual endpoint conflict, fail-soft): ${e.message}`,
-            );
-          }
+        // FAIL-SOFT ON THE FRAGMENT (Run-10 blocker #2): path normalization now
+        // collapses the common {id}/:id and trailing-slash "conflicts", but a
+        // RESIDUAL genuine conflict (e.g. a task redeclaring an endpoint at a
+        // different METHOD than the spec) must NOT roll back this story's tasks.
+        // A wrongly-declared endpoint is worse than a missed one — the tasks are
+        // real work; the contract fragment is skipped (logged) and spec-derivation
+        // + reconciliation converge coverage later. Only the divergence conflict is
+        // swallowed; any other error still fails the batch closed.
+        try {
+          await writeOrAmendContract(contractRepo, story, createdTasks, knowledge);
+        } catch (e) {
+          if (!(e instanceof ContractConflict)) throw e;
+          console.warn(
+            `[${story.id}] contract fragment skipped (residual endpoint conflict, fail-soft): ${e.message}`,
+          );
         }
 
         return summaries;

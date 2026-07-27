@@ -71,6 +71,40 @@ export interface DecompositionResult {
     readonly features: WorkItemSpec[];
     readonly tasks: Array<WorkItemSpec & { readonly taskSpec: TaskSpec }>;
     readonly dependencyEdges: Array<{ readonly from: string; readonly to: string }>;
+    /**
+     * The project's knowledge graph (ADR-038), derived by the SAME call that
+     * produced the tasks. Required, and deliberately so: the previous producer
+     * lived in `decomposeLeafStories`, behind a Story-level gate that
+     * `maxDepth: 2` holds permanently shut, while the only other injection point
+     * (`createBulkPlanWithContract`) took it as an optional dependency with zero
+     * suppliers and substituted `{nodes:[],edges:[]}`. Both halves typechecked;
+     * together they made the contract graph structurally unfillable. A required
+     * field on the one type every decomposition path already returns removes the
+     * identity element rather than guarding against it (ADR-048 cause A).
+     */
+    readonly knowledge: ProjectKnowledge;
+}
+
+/**
+ * Raised when decomposition cannot state what the project is built in. Fails the
+ * whole decomposition closed (Discipline A) rather than emitting tasks alongside
+ * an empty graph: an empty graph seeds an empty contract, an empty contract states
+ * nothing about the target, and every downstream reader then substitutes its own
+ * prior — which is precisely how Runs 36 and 37 built `index.js` + `package.json`
+ * for a Go vision.
+ */
+export class KnowledgeDerivationError extends Error {
+    readonly context: { readonly visionTitle: string; readonly reason: string };
+
+    constructor(visionTitle: string, reason: string) {
+        super(
+            `Cannot derive the project knowledge graph for vision "${visionTitle}": ${reason}. ` +
+            `Decomposition is refused: tasks without a stated language or runtime leave every ` +
+            `downstream consumer (contract, scaffold, brief, verification) to guess the stack.`,
+        );
+        this.name = "KnowledgeDerivationError";
+        this.context = { visionTitle, reason };
+    }
 }
 
 export interface DecompositionConfig {

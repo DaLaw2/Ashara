@@ -14,6 +14,6 @@ export type { DevelopmentService, TaskDescriptor } from "@ashara/development";
 export type { AttributionResult } from "@ashara/development";
 
 // --- Values (re-exported) ---
-export { detectTechStack, readManifestContext } from "@ashara/development";
+export { readManifestContext } from "@ashara/development";
 export { assertValidTargetProjectPath } from "@ashara/development";
 export { extractImplicatedFiles, attributeFilesToTasks } from "@ashara/development";

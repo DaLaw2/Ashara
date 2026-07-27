@@ -2,7 +2,7 @@ import type { RunState } from "@ashara/shared";
 
 import type { WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph, decomposeLeafStories } from "./acl/planning-acl.js";
-import { detectTechStack, readManifestContext } from "./acl/development-acl.js";
+import { readManifestContext } from "./acl/development-acl.js";
 
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
@@ -54,7 +54,6 @@ export class CoreLoop {
         workItemRepo: deps.workItemRepo,
         decompositionEngine: deps.decompositionEngine,
         repoPath: deps.config.repoPath,
-        detectTechStack,
         readManifestContext,
         withPlanningTransaction: deps.withPlanningTransaction,
       });

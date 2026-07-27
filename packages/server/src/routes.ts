@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { z } from "zod";
 
-import type { WorkItemId, WorkItemStatus } from "@ashara/shared";
+import type { WorkItemId, WorkItemStatus, ProjectKnowledge } from "@ashara/shared";
 import {
   createDomainEvent,
   parseWorkItemStatus,
   parseWorkItemLevel,
   parseWorkItemId,
+  ProjectKnowledgeSchema,
 } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -50,6 +51,7 @@ export interface AppDeps {
   readonly createBulkPlan: (
     items: readonly BulkPlanItem[],
     edges: readonly BulkPlanEdge[],
+    knowledge: ProjectKnowledge,
   ) => Promise<BulkPlanResult>;
 }
 
@@ -78,9 +80,16 @@ const BulkEdgeSchema = z.object({
   to: z.string().min(1),
 });
 
+// `knowledge` is REQUIRED and has no default (ADR-052). It is the project's
+// knowledge graph as the decomposition that produced these items derived it, and
+// it is the only statement anywhere in this request of what the project is built
+// in. A `.default({nodes:[],edges:[]})` here would reinstate exactly the
+// identity-element fail-open this change removes, one layer further out — an old
+// client posting without it must be rejected, not silently planned stackless.
 const BulkCreateSchema = z.object({
   items: z.array(BulkItemSchema).min(1),
   edges: z.array(BulkEdgeSchema).default([]),
+  knowledge: ProjectKnowledgeSchema,
 });
 
 const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
@@ -226,7 +235,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: "invalid bulk request", issues: parsed.error.issues }, 400);
     }
-    const { items, edges } = parsed.data;
+    const { items, edges, knowledge } = parsed.data;
 
     // The whole hierarchy AND its derived ProjectContract commit or roll back as
     // one unit (mig9-t5). Reference resolution and the contract write happen inside
@@ -234,7 +243,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     // closed: nothing is left persisted.
     let result: BulkPlanResult;
     try {
-      result = await createBulkPlan(items, edges);
+      result = await createBulkPlan(items, edges, knowledge);
     } catch (e) {
       if (e instanceof BulkReferenceError) {
         return c.json({ error: e.message }, 400);

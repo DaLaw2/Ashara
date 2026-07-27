@@ -15,6 +15,7 @@ import type {
 } from "./decomposition-types.js";
 import {
     DEFAULT_DECOMPOSITION_CONFIG,
+    KnowledgeDerivationError,
     TaskOutputSchema,
     UnresolvableDependencyError,
 } from "./decomposition-types.js";
@@ -83,10 +84,22 @@ export class DecompositionEngine {
         this.config = { ...DEFAULT_DECOMPOSITION_CONFIG, ...config };
     }
 
+    /**
+     * Refuses rather than degrades when no LLM is configured. The previous
+     * behavior returned `emptyResult` — an epic with zero tasks and, once
+     * DecompositionResult carried a knowledge graph, no honest value to put in
+     * it. A zero-task plan is indistinguishable from a successfully planned
+     * project with nothing to do, so stub mode got a silent no-op where it
+     * should get a refusal. This matches the convention agent-runner already
+     * follows (runner.ts:560): a component with no stub execution path refuses
+     * to start under ASHARA_TEST_STUB_LLM rather than pretending to run.
+     */
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
         if (!this.llm) {
-            console.warn("[DecompositionEngine] No LLM configured — skipping decomposition");
-            return this.emptyResult(input);
+            throw new KnowledgeDerivationError(
+                input.epicTitle,
+                "no LLM is configured, and decomposition has no stub execution path",
+            );
         }
         return this.decomposeInternal(input);
     }
@@ -94,25 +107,6 @@ export class DecompositionEngine {
     private get requiredLlm(): DecompositionLLM {
         if (!this.llm) throw new Error("DecompositionEngine: LLM required but not configured");
         return this.llm;
-    }
-
-    private emptyResult(input: DecompositionInput): DecompositionResult {
-        const epicId = generateId("epic");
-        return {
-            epic: {
-                id: epicId,
-                level: "epic",
-                title: input.epicTitle,
-                description: input.epicDescription,
-                northStar: input.epicNorthStar,
-                successCriteria: [],
-                dependsOn: [],
-            },
-            stories: [],
-            features: [],
-            tasks: [],
-            dependencyEdges: [],
-        };
     }
 
     generateTaskSpec(task: WorkItemSpec, context: DecompositionInput): TaskSpec {
@@ -137,14 +131,18 @@ export class DecompositionEngine {
         return POSITIVE_FRAMING_RULES.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text);
     }
 
-    async deriveKnowledge(
+    /**
+     * The single producer of the project knowledge graph. Private on purpose:
+     * the duplicate copy in `decomposeLeafStories` is deleted, so there is one
+     * call site (`decomposeInternal`) and no way to obtain a decomposition whose
+     * graph was never derived.
+     */
+    private async deriveKnowledge(
         visionTitle: string,
         visionDescription: string,
         northStar?: string,
         manifestContext?: string,
-    ): Promise<ProjectKnowledge | undefined> {
-        if (!this.llm) return undefined;
-
+    ): Promise<ProjectKnowledge> {
         const contextParts = [`Vision: "${visionTitle}"\nDescription: ${visionDescription}`];
         if (northStar && northStar.trim().length > 0) {
             contextParts.push(`North Star: ${northStar}`);
@@ -169,7 +167,10 @@ export class DecompositionEngine {
             `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
         ].join("\n");
 
-        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
+        // The ladder re-asks on a barren graph (validateKnowledgeGraph) and throws
+        // when the attempts are exhausted, so a graph returned here has already
+        // stated a language or a runtime.
+        return this.requiredLlm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
@@ -195,9 +196,22 @@ export class DecompositionEngine {
         const allTasks: Array<WorkItemSpec & { taskSpec: TaskSpec }> = [];
         const dependencyEdges: Array<{ from: string; to: string }> = [];
 
-        const tasks = await this.decomposeEpicIntoTasks(epic, input);
+        // Derive the graph BEFORE the tasks so the task prompt is stack-aware
+        // (buildDecomposePrompt reads input.knowledge) and so a vision whose
+        // language cannot be established costs one LLM call, not a whole plan.
+        // An explicitly supplied graph — a re-decomposition against a contract
+        // that already states the stack — is authoritative and is not re-derived.
+        const knowledge = input.knowledge ?? await this.deriveKnowledge(
+            input.epicTitle,
+            input.epicDescription,
+            input.epicNorthStar,
+            input.manifestContext,
+        );
+        const knownInput: DecompositionInput = { ...input, knowledge };
+
+        const tasks = await this.decomposeEpicIntoTasks(epic, knownInput);
         for (const task of this.capItems(tasks, maxTotalItems, 1)) {
-            const taskSpec = this.generateTaskSpec(task, input);
+            const taskSpec = this.generateTaskSpec(task, knownInput);
             allTasks.push({ ...task, taskSpec });
             for (const dep of task.dependsOn) {
                 dependencyEdges.push({ from: task.id, to: dep });
@@ -205,7 +219,7 @@ export class DecompositionEngine {
         }
 
         if (allTasks.length > 0) {
-            this.ensureScaffoldTask(allTasks, dependencyEdges, input);
+            this.ensureScaffoldTask(allTasks, dependencyEdges, knownInput);
         }
 
         return {
@@ -214,6 +228,7 @@ export class DecompositionEngine {
             features: [],
             tasks: allTasks,
             dependencyEdges,
+            knowledge,
         };
     }
 

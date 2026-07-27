@@ -194,10 +194,13 @@ export interface CoreLoopDeps {
   /**
    * Shares one DB transaction between decomposeLeafStories' work-item creation
    * and its derived ProjectContract write (ADR-028 + ADR-029, mig-phase-9).
-   * Optional — the composition root wires a real one; tests that don't care
-   * about the contract shadow-write may omit it.
+   *
+   * Required (ADR-052). "Tests that don't care about the contract shadow-write
+   * may omit it" stopped being true when decomposeLeafStories began READING the
+   * project's knowledge graph from the contract; omitting it now means planning
+   * against no stated stack.
    */
-  readonly withPlanningTransaction?: <T>(
+  readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
   /**

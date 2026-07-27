@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 
-import type { SessionPhase } from "@ashara/shared";
+import type { SessionPhase, ProjectKnowledge } from "@ashara/shared";
 import { loadServerEnv } from "@ashara/shared";
 
 // --- Error types ---
@@ -42,6 +42,12 @@ export interface BulkWorkItem {
 export interface BulkCreateRequest {
     readonly items: BulkWorkItem[];
     readonly edges: Array<{ readonly from: string; readonly to: string }>;
+    /**
+     * The knowledge graph the decomposition that produced these items derived
+     * (ADR-052). Required — the server rejects a batch without it, because it is
+     * the only statement in this request of what the project is built in.
+     */
+    readonly knowledge: ProjectKnowledge;
 }
 
 export interface WorkItem {
