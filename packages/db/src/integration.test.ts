@@ -1,7 +1,6 @@
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
-
 import { createDb, type Database } from "./connection.js";
 import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
@@ -51,7 +50,7 @@ beforeAll(() => {
 
 afterAll(async () => {
   await cleanupAll();
-  const pool = (db as any)._.client as import("pg").Pool;
+  const pool = db.$client;
   if (pool && typeof pool.end === "function") {
     await pool.end();
   }

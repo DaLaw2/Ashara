@@ -1,5 +1,4 @@
 import type { Message as GatewayMessage, ContentBlock } from "@ashara/llm-gateway";
-
 import { createMaskingAdapter } from "./acl/development-acl.js";
 import type {
     ContextMaskingPort,

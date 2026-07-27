@@ -1,5 +1,4 @@
 import { sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { brainstormLog } from "../schema.js";
 

@@ -1,6 +1,5 @@
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { resolvePlanDependencies } from "../domain/index.js";
-
 import type { RunSummaryItem } from "./run-summary.js";
 
 export interface SnapshotAssemblyDeps {

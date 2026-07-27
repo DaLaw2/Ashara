@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { z } from "zod";
-
 import type { WorkItemId, WorkItemStatus, ProjectKnowledge } from "@ashara/shared";
 import {
   createDomainEvent,

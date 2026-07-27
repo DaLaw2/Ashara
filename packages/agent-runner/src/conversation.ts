@@ -1,7 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-
 import type {
     CompletionRequest,
     CompletionResponse,
@@ -14,7 +13,6 @@ import type {
 } from "@ashara/llm-gateway";
 import type { CapabilityLevel } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR } from "@ashara/shared";
-
 import type { ToolResult } from "./tools/types.js";
 import type { ToolRegistry } from "./tools/index.js";
 import { ConversationContextManager } from "./context-manager.js";
@@ -72,6 +70,8 @@ export interface ConversationResult {
 export interface Gateway {
     complete(request: CompletionRequest): Promise<CompletionResponse>;
     streamComplete?(request: CompletionRequest, options?: StreamOptions): Promise<CompletionResponse>;
+    resolveEffectiveCapability?(capability: CapabilityLevel): CapabilityLevel;
+    resolveFormatGroup?(capability: CapabilityLevel): string | undefined;
 }
 
 // ---------------------------------------------------------------------------

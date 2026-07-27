@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { promisify } from "node:util";
-
 import { describe, test, expect, vi, beforeEach, afterAll } from "vitest";
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,7 @@
 import type { ZodType } from "zod";
-
 import type { CapabilityLevel } from "@ashara/shared";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
-
 import type { BrainstormLLM } from "./brainstorm-types.js";
 import type { NorthStarLLM } from "./northstar.js";
 import type { DecompositionLLM } from "./decomposition.js";

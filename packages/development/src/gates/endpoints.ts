@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-
 import {
   computeReachableFiles,
   extractImportBindings,

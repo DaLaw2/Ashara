@@ -2,7 +2,6 @@ import { access, constants, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { delimiter, join } from "node:path";
 import { spawn } from "node:child_process";
-
 import type { ProductObservation, EndpointProbe } from "@ashara/shared";
 import { deriveEndpoints } from "./endpoints.js";
 import { prepare, ToolchainError } from "../project-toolchain.js";
@@ -339,9 +338,22 @@ export async function observeProduct(request: ObserveRequest): Promise<ProductOb
   const hasProcExited = (): boolean => proc.exitCode !== null || proc.signalCode !== null;
   const signalProc = (signal: NodeJS.Signals): void => {
     if (proc.pid !== undefined) {
-      try { process.kill(-proc.pid, signal); return; } catch { /* group gone */ }
+      try {
+        process.kill(-proc.pid, signal);
+        return;
+      } catch (e: unknown) {
+        if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+          console.warn(`[observe] Failed to signal process group ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     }
-    try { proc.kill(signal); } catch { /* reaped */ }
+    try {
+      proc.kill(signal);
+    } catch (e: unknown) {
+      if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+        console.warn(`[observe] Failed to signal process ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   };
   const killProc = async (): Promise<void> => {
     if (hasProcExited()) return;

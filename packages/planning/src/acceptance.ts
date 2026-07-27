@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import type { ProductObservation } from "@ashara/shared";
 import type { ProjectContract, Endpoint } from "@ashara/shared";
 import type { StructuredLLMProvider } from "./gateway-adapters.js";

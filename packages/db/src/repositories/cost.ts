@@ -1,5 +1,4 @@
 import { eq, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { taskCostHistory, modelConfigs, providerConfigs } from "../schema.js";
 

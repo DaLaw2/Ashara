@@ -1,5 +1,4 @@
 import { eq, asc, desc, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { domainEvents } from "../schema.js";
 

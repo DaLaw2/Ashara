@@ -6,7 +6,6 @@ import { z } from "zod";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
-
 import {
   createDb,
   WorkItemRepository as DbWorkItemRepository,
@@ -89,9 +88,8 @@ import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
 import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
-
+import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { loadServerConfig } from "./config.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
@@ -124,8 +122,8 @@ async function main(): Promise<void> {
         }
       }
     }
-  } catch {
-    // .env not found, that's fine
+  } catch (e: unknown) {
+    console.warn(`[server] Failed to load .env from ${dotenvPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   const config = loadServerConfig();

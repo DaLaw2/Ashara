@@ -3,7 +3,6 @@
 // ---------------------------------------------------------------------------
 
 import { createInterface } from "node:readline";
-
 import {
     AlignmentEngine,
     StubAlignmentLLM,
@@ -361,8 +360,8 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
                     console.warn(`[ashara] WARNING: DeepSeek balance is low ($${balance.toFixed(2)})`);
                 }
             }
-        } catch {
-            // Non-fatal
+        } catch (e: unknown) {
+            console.warn(`[ashara] Failed to check DeepSeek balance: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
 

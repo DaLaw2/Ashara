@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 import type { CommandPolicy } from "./command-policy.js";
@@ -114,7 +113,13 @@ export class RunCommandExecutor implements ToolExecutor {
             const killGroup = (signal: NodeJS.Signals): void => {
                 const pid = child.pid;
                 if (pid !== undefined) {
-                    try { process.kill(-pid, signal); } catch { /* already exited */ }
+                    try {
+                        process.kill(-pid, signal);
+                    } catch (e: unknown) {
+                        if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+                            console.warn(`[runCommand] Failed to signal process group ${pid}: ${e instanceof Error ? e.message : String(e)}`);
+                        }
+                    }
                 }
             };
 

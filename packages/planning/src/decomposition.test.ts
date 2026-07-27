@@ -1,5 +1,4 @@
 import { describe, expect, test, beforeEach } from "vitest";
-
 import type { DecompositionInput, WorkItemSpec } from "./decomposition-types.js";
 import { DecompositionEngine, buildContextAwareExamples, resetIdCounter } from "./decomposition.js";
 

@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-
 import type { TaskDescriptor } from "./execution-service.js";
 
 const execFileAsync = promisify(execFile);
@@ -139,8 +138,8 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
     if (stdout.trim() !== "main") {
       await execFileAsync("git", ["checkout", "main"], { cwd: targetPath });
     }
-  } catch {
-    // no commits yet, or detached HEAD with nothing to recover onto
+  } catch (e: unknown) {
+    console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

@@ -1,5 +1,4 @@
 import { and, eq, isNull, ne, or, desc, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { knowledgeEntries } from "../schema.js";
 

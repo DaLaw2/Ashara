@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { LLMGateway } from "@ashara/llm-gateway";
@@ -479,8 +478,8 @@ export class DevelopmentService {
     try {
       const tree = await buildFileTree(targetProjectPath, 4, 200, contractExcludePaths);
       if (tree) sections.push("## File Tree\n" + tree);
-    } catch {
-      // target project may not exist yet
+    } catch (e: unknown) {
+      console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     let hasNodeManifest = false;
@@ -499,8 +498,8 @@ export class DevelopmentService {
         if (devDepsStr) depLines.push(`Dev: ${devDepsStr}`);
         sections.push(depLines.join("\n"));
       }
-    } catch {
-      // no package.json
+    } catch (e: unknown) {
+      console.warn(`[buildContextMap] Failed to read package.json in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // Target-generality fallback (kl-t2/Q5 gap): package.json is Node-specific.
@@ -508,18 +507,15 @@ export class DevelopmentService {
     // all otherwise — this reads whichever one is present, raw, the same way the
     // entry point below is read raw.
     if (!hasNodeManifest) {
-      try {
-        for (const manifest of ["Cargo.toml", "go.mod", "pyproject.toml"]) {
-          try {
-            const content = await readFile(join(targetProjectPath, manifest), "utf-8");
-            sections.push(`## Project Manifest (${manifest})\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\``);
-            break;
-          } catch {
-            continue;
-          }
+      for (const manifest of ["Cargo.toml", "go.mod", "pyproject.toml"]) {
+        try {
+          const content = await readFile(join(targetProjectPath, manifest), "utf-8");
+          sections.push(`## Project Manifest (${manifest})\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\``);
+          break;
+        } catch (e: unknown) {
+          if (e instanceof Error && 'code' in e && e.code === 'ENOENT') continue;
+          console.warn(`[buildContextMap] Failed to read ${manifest} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
         }
-      } catch {
-        // no non-Node manifest found
       }
     }
 
@@ -528,8 +524,8 @@ export class DevelopmentService {
         const content = await readFile(join(targetProjectPath, contractEntryPointPath), "utf-8");
         const head = content.split("\n").slice(0, 50).join("\n");
         sections.push(`## Entry Point (${contractEntryPointPath})\n\`\`\`\n${head}\n\`\`\``);
-      } catch {
-        // contract entry point does not exist yet
+      } catch (e: unknown) {
+        console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 
@@ -542,15 +538,15 @@ export class DevelopmentService {
         }
         sections.push(lines.join("\n"));
       }
-    } catch {
-      // no verify.toml or parse error
+    } catch (e: unknown) {
+      console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     try {
       const conventions = await this.deps.conventionsExtractor.extract(targetProjectPath);
       if (conventions) sections.push("## Conventions\n" + conventions);
-    } catch {
-      // conventions extraction failed
+    } catch (e: unknown) {
+      console.warn(`[buildContextMap] Failed to extract conventions for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
@@ -581,8 +577,8 @@ export class DevelopmentService {
         }
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
-    } catch {
-      // knowledge retrieval failed
+    } catch (e: unknown) {
+      console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     try {
@@ -597,8 +593,8 @@ export class DevelopmentService {
         }
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
-    } catch {
-      // failed approach retrieval failed
+    } catch (e: unknown) {
+      console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     return sections.length > 1 ? sections.join("\n\n") : "";

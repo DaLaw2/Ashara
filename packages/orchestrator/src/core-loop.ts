@@ -1,9 +1,7 @@
 import type { RunState } from "@ashara/shared";
-
 import type { WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph, decomposeLeafStories } from "./acl/planning-acl.js";
 import { readManifestContext } from "./acl/development-acl.js";
-
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";

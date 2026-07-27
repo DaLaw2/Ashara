@@ -4,7 +4,6 @@
  */
 
 import { CodebaseIndexer, Bm25Index } from "./indexer/index.js";
-
 import type { GraphClient, GraphTraversalResult, KeywordResult } from "./graph-client.js";
 
 /**

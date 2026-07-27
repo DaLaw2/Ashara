@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
-
 import type { AcceptanceVerdict } from "../acceptance.js";
 import type { TerminationPlanExhausted } from "../termination.js";
-
 import { buildRunSummary } from "./run-summary.js";
 
 // ---------------------------------------------------------------------------

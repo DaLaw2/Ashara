@@ -1,7 +1,7 @@
-import type { CapabilityLevel } from "@ashara/shared";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
+import type { CapabilityLevel } from "@ashara/shared";
 import { NoProviderAvailableError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";

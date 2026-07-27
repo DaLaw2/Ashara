@@ -7,7 +7,6 @@ import {
   ContractAlreadyExists,
 } from "./domain/index.js";
 import { amendContractWithRetry } from "./contract-retry.js";
-
 import {
   deriveContractFragment,
   toContractDelta,

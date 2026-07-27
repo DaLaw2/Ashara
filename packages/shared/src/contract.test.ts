@@ -1,5 +1,4 @@
 import { describe, test, expect } from "vitest";
-
 import { ContractBodySchema, ContractDeltaSchema, normalizePath } from "./contract.js";
 
 // A fully-populated body (every optional present) so round-trip equality is

@@ -18,6 +18,7 @@ check:
     npx tsc --noEmit
     npx tsx scripts/check-boundaries.ts
     npx knip
+    npx eslint .
 
 test:
     npx vitest run

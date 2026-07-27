@@ -1,5 +1,5 @@
-import type { CapabilityLevel } from "@ashara/shared";
 import type { ZodType } from "zod";
+import type { CapabilityLevel } from "@ashara/shared";
 
 export interface ModelPreferences {
   preferredProvider?: string;

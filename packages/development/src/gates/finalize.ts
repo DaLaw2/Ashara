@@ -68,8 +68,8 @@ export async function finalizeSuccess(
 ): Promise<FinalizeResult> {
   try {
     await commitAllChanges(workDir, `ashara: agent output for task ${task.id}`);
-  } catch {
-    // nothing to commit
+  } catch (e: unknown) {
+    console.warn(`[finalize] commitAllChanges failed for task ${task.id}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   if (targetProjectPath) {

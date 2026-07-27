@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { Message as GatewayMessage } from "@ashara/llm-gateway";
-
 import { ConversationContextManager } from "./context-manager.js";
 
 function userMsg(content: string): GatewayMessage {

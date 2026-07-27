@@ -1,7 +1,5 @@
 import { eq, notInArray } from "drizzle-orm";
-
 import { TERMINAL_SESSION_PHASES } from "@ashara/shared";
-
 import type { Database } from "../connection.js";
 import { devSessions } from "../schema.js";
 

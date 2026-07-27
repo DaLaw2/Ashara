@@ -3,9 +3,9 @@
 // Ashara CLI — entry point
 // ---------------------------------------------------------------------------
 
+import { NoLLMProvidersConfigured } from "@ashara/llm-gateway";
 import { runVision, VisionError } from "./commands/vision.js";
 import { ClientError } from "./client.js";
-import { NoLLMProvidersConfigured } from "@ashara/llm-gateway";
 
 const NO_INTERACT_FLAG = "--no-interact";
 

@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
-
 import { parseProjectId } from "@ashara/shared";
 import type { ProductObservation, ProjectContract } from "@ashara/shared";
-
 import { runAcceptanceCheck } from "./termination-snapshot.js";
 import type { AcceptanceCheckDeps } from "./termination-snapshot.js";
 

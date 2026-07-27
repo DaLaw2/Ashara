@@ -3,9 +3,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
-
 import { commitMerge, resetCheckoutToHead, tentativeMerge } from "./merge.js";
 import { ensureTargetGitInit } from "./workspace.js";
 

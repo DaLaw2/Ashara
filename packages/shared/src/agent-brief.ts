@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import { ProjectFrameSchema } from "./project-frame.js";
 
 /**

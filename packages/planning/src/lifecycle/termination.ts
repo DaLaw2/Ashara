@@ -1,6 +1,6 @@
-import type { DependencyResolution } from "../domain/index.js";
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 import { TERMINAL_STATUSES } from "@ashara/shared";
+import type { DependencyResolution } from "../domain/index.js";
 import type { TerminationDecision, TerminationCounts, StalledItem, StalledCause, TerminationPlanExhausted } from "../termination.js";
 
 export interface TerminationItemSnapshot {

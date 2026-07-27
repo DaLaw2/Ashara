@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-
 import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseCapabilityLevel, parseAgentBrief } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief } from "@ashara/shared";
 import {
     LLMGateway,
     loadGatewayConfig,
@@ -11,7 +10,6 @@ import {
     NoLLMProvidersConfigured,
 } from "@ashara/llm-gateway";
 import type { ToolDefinition as GatewayToolDefinition } from "@ashara/llm-gateway";
-
 import { AgentConversation } from "./conversation.js";
 import type { Gateway } from "./conversation.js";
 import { createDefaultRegistry } from "./tools/index.js";
@@ -217,17 +215,12 @@ export class AgentRunner {
 // ---------------------------------------------------------------------------
 
 function resolveEffectiveCapability(gateway: Gateway, requested: CapabilityLevel): CapabilityLevel {
-    if ("registry" in gateway && typeof (gateway as any).registry?.resolve === "function") {
-        try {
-            const resolved = (gateway as any).registry.resolve(requested);
-            const actual = parseCapabilityLevel(String(resolved.modelConfig.capabilityLevel));
-            if (actual !== requested) {
-                console.log(`[agent-runner] capability downgraded: ${requested} → ${actual} (model: ${resolved.modelConfig.id})`);
-            }
-            return actual;
-        } catch {
-            return requested;
+    if (gateway.resolveEffectiveCapability) {
+        const actual = gateway.resolveEffectiveCapability(requested);
+        if (actual !== requested) {
+            console.log(`[agent-runner] capability downgraded: ${requested} → ${actual}`);
         }
+        return actual;
     }
     return requested;
 }
@@ -257,13 +250,8 @@ function capabilityToolSet(capability: CapabilityLevel): Set<string> {
 // ---------------------------------------------------------------------------
 
 function resolveFormatGroup(gateway: Gateway, capability: CapabilityLevel): string | undefined {
-    if ("registry" in gateway && typeof (gateway as any).registry?.resolve === "function") {
-        try {
-            const resolved = (gateway as any).registry.resolve(capability);
-            return resolved.modelConfig.formatGroup;
-        } catch {
-            return undefined;
-        }
+    if (gateway.resolveFormatGroup) {
+        return gateway.resolveFormatGroup(capability);
     }
     return undefined;
 }

@@ -1,6 +1,5 @@
-import type { CapabilityLevel } from "@ashara/shared";
 import type { ZodType } from "zod";
-
+import type { CapabilityLevel } from "@ashara/shared";
 import { GatewayError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import type { KnownLLMSite } from "./types.js";

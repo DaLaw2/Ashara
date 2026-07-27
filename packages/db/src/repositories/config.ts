@@ -1,5 +1,4 @@
 import { asc, eq, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { modelConfigs, providerConfigs, systemSettings } from "../schema.js";
 

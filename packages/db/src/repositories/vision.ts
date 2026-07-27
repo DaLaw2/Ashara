@@ -1,5 +1,4 @@
 import { desc, eq, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { visionDocuments } from "../schema.js";
 

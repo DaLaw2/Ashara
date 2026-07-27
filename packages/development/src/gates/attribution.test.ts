@@ -1,5 +1,4 @@
 import { describe, test, expect, vi } from "vitest";
-
 import { extractImplicatedFiles, attributeFilesToTasks } from "./attribution.js";
 import type { WorkItemLookup, GitLogRunner } from "./attribution.js";
 

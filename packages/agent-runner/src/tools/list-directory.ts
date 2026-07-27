@@ -1,6 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 

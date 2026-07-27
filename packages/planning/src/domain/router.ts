@@ -1,5 +1,4 @@
 import type { WorkItemId, DomainEvent } from "@ashara/shared";
-
 import type { WorkItemRepository } from "./repository.js";
 import type { WorkItem } from "./work-item.js";
 import { completeWorkItem, failWorkItem, startWorkItem, takeEvents } from "./work-item.js";

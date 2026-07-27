@@ -1,5 +1,4 @@
 import { describe, test, expect } from "vitest";
-
 import { isAllowedCheck, isHttpCheck, validateBodyShape } from "./check-runner.js";
 
 describe("isHttpCheck", () => {

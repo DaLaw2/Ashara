@@ -1,7 +1,5 @@
 import { describe, expect, test } from "vitest";
-
 import type { RetrievalResult } from "@ashara/memory";
-
 import {
   assembleBrief,
   checkQualityGate,

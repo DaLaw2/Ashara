@@ -1,8 +1,6 @@
 import { describe, expect, test } from "vitest";
-
 import type { ProductObservation, ProjectContract } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
-
 import { assessProductObservation, buildAcceptanceVerdict } from "./acceptance.js";
 
 // ---------------------------------------------------------------------------

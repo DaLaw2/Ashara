@@ -1,7 +1,5 @@
 import { describe, expect, test } from "vitest";
-
 import type { RunState } from "@ashara/shared";
-
 import type { RunStateStore } from "./run-state.js";
 import { closeRun, openRun, persistRun } from "./run-state.js";
 

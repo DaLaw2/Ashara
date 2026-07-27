@@ -1,5 +1,4 @@
 import type { StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
-
 import {
   AlignmentInferenceResponseSchema,
   ALL_DIRECTION_CATEGORIES,

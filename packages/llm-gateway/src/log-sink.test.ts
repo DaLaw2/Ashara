@@ -1,4 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
+import { LLMGateway } from "./gateway.js";
+import type { GatewayConfig, LLMCallRecord } from "./types.js";
 
 vi.mock("ai", () => ({
   generateText: vi.fn().mockResolvedValue({
@@ -13,9 +15,6 @@ vi.mock("ai", () => ({
   generateObject: vi.fn(),
   jsonSchema: vi.fn((s: unknown) => s),
 }));
-
-import { LLMGateway } from "./gateway.js";
-import type { GatewayConfig, LLMCallRecord } from "./types.js";
 
 function makeConfig(): GatewayConfig {
   return {

@@ -1,5 +1,4 @@
 import { desc, eq } from "drizzle-orm";
-
 import {
   ContractBodySchema,
   parseProjectId,
@@ -10,7 +9,6 @@ import {
   RepositoryError,
   ContractVersionConflict,
 } from "@ashara/shared";
-
 import type { DbHandle } from "../connection.js";
 import { projectContracts } from "../schema.js";
 

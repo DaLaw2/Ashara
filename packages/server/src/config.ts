@@ -1,7 +1,6 @@
 import path from "node:path";
 import os from "node:os";
 import { execSync } from "node:child_process";
-
 import type { CoreLoopConfig } from "@ashara/orchestrator";
 import { DEFAULT_CONFIG } from "@ashara/orchestrator";
 

@@ -1,9 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-
 import type { GraphClient, Reranker, RankedResult, RetrievalConfig, RetrievalResult } from "@ashara/memory";
 import { retrieve } from "@ashara/memory";
-
 import type { ProjectProfile } from "./brief-assembly.js";
 
 /** Signature for the retrieval function passed to brief assembly */

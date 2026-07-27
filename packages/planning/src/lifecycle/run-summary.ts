@@ -2,7 +2,6 @@ import { TERMINAL_STATUSES } from "@ashara/shared";
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
-
 import type { TerminationItemSnapshot } from "./termination.js";
 import type { EventSink } from "./ports.js";
 

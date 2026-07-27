@@ -3,9 +3,7 @@
 
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { Language, Node as TSNode, Parser } from "web-tree-sitter";
-
 import type { ParseResult, RefKind, SymbolDef, SymbolId, SymbolKind, SymbolRef } from "./types.js";
 
 // Resolved through the package name, not a hardcoded node_modules path: the

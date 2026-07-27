@@ -1,8 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-
 import type { AgentBrief } from "@ashara/shared";
-
 import { createProfileAdapter } from "./acl/development-acl.js";
 import type { ProjectProfilePort } from "./acl/development-acl.js";
 
@@ -131,8 +129,8 @@ async function collectFiles(
                 out.push(relativePath);
             }
         }
-    } catch {
-        // directory not readable
+    } catch (e: unknown) {
+        console.warn(`[collectFiles] Failed to read directory ${dir}: ${e instanceof Error ? e.message : String(e)}`);
     }
 }
 
@@ -275,7 +273,9 @@ async function detectEntryPointFromManifest(projectDir: string): Promise<string 
             const pkg = JSON.parse(raw) as Record<string, unknown>;
             if (typeof pkg.main === "string") return pkg.main;
         }
-    } catch { /* not a Node project */ }
+    } catch (e: unknown) {
+        console.warn(`[detectEntryPoint] Failed to parse package.json in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     const cargoEntry = await detectCargoEntryPoint(projectDir);
     if (cargoEntry !== undefined) return cargoEntry;
@@ -297,7 +297,9 @@ async function detectCargoEntryPoint(projectDir: string): Promise<string | null 
         const content = await readFile(cargoPath, "utf-8");
         const binPathMatch = /\[\[bin]]\s[\s\S]*?path\s*=\s*"([^"]+)"/m.exec(content);
         if (binPathMatch?.[1]) return binPathMatch[1];
-    } catch { /* parse failure — fall through to filesystem check */ }
+    } catch (e: unknown) {
+        console.warn(`[detectCargoEntry] Failed to parse Cargo.toml in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     if (await fileExistsSafe(join(projectDir, "src/main.rs"))) return "src/main.rs";
     if (await fileExistsSafe(join(projectDir, "src/lib.rs"))) return "src/lib.rs";
@@ -326,7 +328,9 @@ async function detectPyEntryPoint(projectDir: string): Promise<string | null | u
                 if (await fileExistsSafe(join(projectDir, filePath))) return filePath;
             }
         }
-    } catch { /* parse failure — fall through to filesystem check */ }
+    } catch (e: unknown) {
+        console.warn(`[detectPyEntry] Failed to parse pyproject.toml in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     if (await fileExistsSafe(join(projectDir, "main.py"))) return "main.py";
     if (await fileExistsSafe(join(projectDir, "app.py"))) return "app.py";

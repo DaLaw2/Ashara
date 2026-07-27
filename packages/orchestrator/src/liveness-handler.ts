@@ -1,5 +1,4 @@
 import { recoverFromAbandoned } from "./acl/planning-acl.js";
-
 import type { CoreLoopDeps } from "./types.js";
 
 export async function attemptLivenessRecovery(deps: CoreLoopDeps): Promise<number> {

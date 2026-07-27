@@ -7,16 +7,15 @@
  * When useStubs=false with an API key, uses ONLY Haiku for verification.
  */
 
-import {
-    AlignmentEngine,
-    StubAlignmentLLM,
-} from "@ashara/engagement";
-import type { AlignmentLLM, AlignmentResult as EngagementAlignmentResult } from "@ashara/engagement";
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import type { AlignmentLLM, AlignmentResult as EngagementAlignmentResult } from "@ashara/engagement";
+import {
+    AlignmentEngine,
+    StubAlignmentLLM,
+} from "@ashara/engagement";
 import {
     BrainstormEngine,
     StubBrainstormLLM,
@@ -31,7 +30,6 @@ import type {
     DecompositionResult,
     TaskSpec as PlanningTaskSpec,
 } from "@ashara/planning";
-
 import type {
     RetrievalResult,
     KnowledgeStore,
@@ -40,7 +38,6 @@ import type {
     GraphTraversalResult,
     KeywordResult,
 } from "@ashara/memory";
-
 import {
     LLMGateway,
     loadGatewayConfig,
@@ -49,7 +46,6 @@ import type {
     CostSummary,
     CompletionResponse,
 } from "@ashara/llm-gateway";
-
 import { buildAutoProfile } from "../src/dispatch-utils.js";
 import {
     assembleBrief,

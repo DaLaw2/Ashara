@@ -7,7 +7,6 @@
  */
 
 import type { RetrievalResult } from "@ashara/memory";
-
 import type { TaskSpec } from "./types.js";
 import { pruneContext, DEFAULT_MIN_RELEVANCE } from "./pruner.js";
 import type { PrunedChunk } from "./pruner.js";

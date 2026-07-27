@@ -1,5 +1,4 @@
 import { readFile, writeFile } from "node:fs/promises";
-
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 import { DiagnosticChecker } from "../diagnostics.js";

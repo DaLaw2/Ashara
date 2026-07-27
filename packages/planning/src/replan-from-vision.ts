@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import type { StructuredLLMProvider } from "./gateway-adapters.js";
 
 export const ReplanProposalSchema = z.object({

@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
-
 import { InvalidRoutingProfiles } from "./errors.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";

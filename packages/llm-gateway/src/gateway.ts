@@ -1,5 +1,5 @@
 import { generateObject, generateText, streamText, jsonSchema } from "ai";
-import type { CallWarning, ToolSet } from "ai";
+import type { CallWarning, ModelMessage, ToolSet } from "ai";
 import { extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import { BudgetLedger } from "./budget-ledger.js";
@@ -233,17 +233,12 @@ export class LLMGateway {
     const t0 = Date.now();
     const messages = request.messages.map((m) => convertMessage(m));
 
-    // TODO: remove cast when AI SDK types are properly mapped
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const generateParams: Parameters<typeof generateText>[0] = {
+    const result = await generateText({
       model: resolved.provider,
-      messages: messages as any,
+      messages: messages as unknown as ModelMessage[],
       maxOutputTokens: request.maxTokens,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ...(this.buildCommonParams(request, resolved) as any),
-    };
-
-    const result = await generateText(generateParams);
+      ...this.buildCommonParams(request, resolved),
+    } as Parameters<typeof generateText>[0]);
 
     const usage = extractUsage(result.usage, result.providerMetadata);
 
@@ -309,10 +304,9 @@ export class LLMGateway {
     const t0 = Date.now();
     const messages = request.messages.map((m) => convertMessage(m));
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const streamParams: Parameters<typeof streamText>[0] = {
+    const result = streamText({
       model: resolved.provider,
-      messages: messages as any,
+      messages: messages as unknown as ModelMessage[],
       maxOutputTokens: request.maxTokens,
       onChunk({ chunk }) {
         if (chunk.type === "tool-call" && options?.onToolCall) {
@@ -323,11 +317,8 @@ export class LLMGateway {
           });
         }
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ...(this.buildCommonParams(request, resolved) as any),
-    };
-
-    const result = streamText(streamParams);
+      ...this.buildCommonParams(request, resolved),
+    } as Parameters<typeof streamText>[0]);
 
     const [text, streamToolCalls, sdkUsage, providerMetadata, finishReason, reasoningText, warnings] = await Promise.all([
       result.text,
@@ -565,6 +556,24 @@ export class LLMGateway {
       totalCost: this.budgetLedger.totalSpent(),
       costByProvider: this.budgetLedger.providerBreakdown(),
     };
+  }
+
+  resolveEffectiveCapability(capability: CapabilityLevel): CapabilityLevel {
+    try {
+      const resolved = this.registry.resolve(capability);
+      return resolved.modelConfig.capabilityLevel;
+    } catch {
+      return capability;
+    }
+  }
+
+  resolveFormatGroup(capability: CapabilityLevel): string | undefined {
+    try {
+      const resolved = this.registry.resolve(capability);
+      return resolved.modelConfig.formatGroup;
+    } catch {
+      return undefined;
+    }
   }
 }
 

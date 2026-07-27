@@ -1,5 +1,4 @@
 import { desc, eq, isNull, or, sql } from "drizzle-orm";
-
 import type { Database } from "../connection.js";
 import { failedApproaches } from "../schema.js";
 

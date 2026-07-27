@@ -1,6 +1,5 @@
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-
 import type { CommandRunner } from "./verify-core.js";
 import { defaultRunCommand } from "./check-runner.js";
 

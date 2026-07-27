@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import type { CapabilityLevel } from "./enums.js";
 import { parseCapabilityLevel } from "./enums.js";
 

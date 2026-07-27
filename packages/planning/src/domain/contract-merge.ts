@@ -1,6 +1,5 @@
 import type { ContractBody, ContractDelta, Endpoint, ContractModule, Mount, ProjectKnowledge } from "@ashara/shared";
 import { normalizePath } from "@ashara/shared";
-
 import { ContractConflict } from "./errors.js";
 
 /**

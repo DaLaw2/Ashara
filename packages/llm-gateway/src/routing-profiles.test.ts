@@ -2,7 +2,6 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-
 import { InvalidRoutingProfiles } from "./errors.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 

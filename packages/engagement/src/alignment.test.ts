@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import type { AlignmentConfig, DirectionCategory, DirectionInference } from "./alignment-types.js";
 import { AlignmentEngine, StubAlignmentLLM } from "./alignment.js";
 

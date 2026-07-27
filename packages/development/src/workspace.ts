@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-
 import { ASHARA_CONTROL_DIR, isAsharaControlPath } from "@ashara/shared";
 
 const execFileAsync = promisify(execFile);

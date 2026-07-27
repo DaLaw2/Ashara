@@ -13,7 +13,6 @@ import {
   buildUnverifiedVerdict,
   createPendingWorkItem,
 } from "./acl/planning-acl.js";
-
 import type { CoreLoopDeps, TerminationOutcome } from "./types.js";
 
 export async function evaluateRunTermination(

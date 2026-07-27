@@ -4,7 +4,6 @@
 import { createHash } from "crypto";
 import { readdirSync, readFileSync } from "fs";
 import { extname, join } from "path";
-
 import { SymbolGraph } from "./graph.js";
 import { canParse, parseFile, parserCoverage } from "./parser.js";
 import type { GrammarUnavailable } from "./parser.js";

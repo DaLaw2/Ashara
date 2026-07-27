@@ -60,13 +60,18 @@ function signalGroup(proc: ChildProcess, pid: number, signal: NodeJS.Signals): v
     // Negative pid targets the whole process group led by `pid` — this is what
     // reaps the npx/tsx/node chain (requires the child spawned detached:true).
     process.kill(-pid, signal);
-  } catch {
+  } catch (e: unknown) {
+    if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+      console.warn(`[signalGroup] Failed to signal process group ${pid}: ${e instanceof Error ? e.message : String(e)}`);
+    }
     // Group already gone, or the child was not detached — fall back to the
     // immediate child so termination is still best-effort rather than silent.
     try {
       proc.kill(signal);
-    } catch {
-      // Already reaped — nothing to signal.
+    } catch (e2: unknown) {
+      if (!(e2 instanceof Error && 'code' in e2 && e2.code === 'ESRCH')) {
+        console.warn(`[signalGroup] Failed to signal process ${pid} directly: ${e2 instanceof Error ? e2.message : String(e2)}`);
+      }
     }
   }
 }

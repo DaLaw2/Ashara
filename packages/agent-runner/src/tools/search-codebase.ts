@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 
 const DEFAULT_MAX_RESULTS = 50;

@@ -1,5 +1,4 @@
 import type { WorkItemId, WorkItemStatus } from "@ashara/shared";
-
 import type { WorkItemRepository } from "./repository.js";
 import { CycleDetected } from "./errors.js";
 

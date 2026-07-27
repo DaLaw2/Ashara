@@ -1,7 +1,5 @@
 import type { ZodType } from "zod";
-
 import type { StructuredValidation } from "@ashara/llm-gateway";
-
 import type { DecompositionLLM } from "../decomposition.js";
 
 export class StubDecompositionLLM implements DecompositionLLM {

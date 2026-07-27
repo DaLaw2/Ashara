@@ -1,6 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-
 import type { VerifyRequest, VerifyResponse } from "./types.js";
 import { runVerifyCore } from "./verify-core.js";
 

@@ -1,5 +1,4 @@
 import type { WorkItemId, WorkItemLevel, WorkItemStatus } from "@ashara/shared";
-
 import type { WorkItem } from "./work-item.js";
 
 export interface WorkItemRepository {

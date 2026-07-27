@@ -1,6 +1,5 @@
 import { listenForEvents } from "@ashara/db";
 import type { PgListener } from "@ashara/db";
-
 import type { CycleResult } from "./types.js";
 import { emitRunSummary } from "./acl/planning-acl.js";
 import type { EventLogger } from "./event-logger.js";

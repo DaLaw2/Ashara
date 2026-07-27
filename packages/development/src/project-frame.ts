@@ -9,7 +9,6 @@
  */
 
 import { readdir } from "node:fs/promises";
-
 import type { ProjectContract, ProjectFrame, ProjectFrameAttempt } from "@ashara/shared";
 import { ProjectFrameSchema, ProjectFrameUnresolvable, nodeLabels } from "@ashara/shared";
 

@@ -1,8 +1,6 @@
 import { eq } from "drizzle-orm";
-
 import type { RunState } from "@ashara/shared";
 import { parseRunState, serializeRunState } from "@ashara/shared";
-
 import type { Database } from "../connection.js";
 import { systemSettings } from "../schema.js";
 

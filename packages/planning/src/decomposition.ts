@@ -1,9 +1,7 @@
 import { z, type ZodType } from "zod";
-
 import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
 import { ProjectKnowledgeSchema, nodeLabels } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
-
 import type {
     DecompositionConfig,
     DecompositionInput,

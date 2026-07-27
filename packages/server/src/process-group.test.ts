@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { describe, expect, test } from "vitest";
-
 import { terminateProcessTree } from "./process-group.js";
 
 // Findings (e)+(f), E2E Run 11: a "stop" must reap the WHOLE spawned tree — the

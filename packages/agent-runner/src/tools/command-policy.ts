@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { resolve, normalize } from "node:path";
+import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Config schema

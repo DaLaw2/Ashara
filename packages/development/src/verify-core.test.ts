@@ -1,9 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import { describe, test, expect, vi } from "vitest";
-
 import { runVerifyCore, InvalidVerifyPathError } from "./verify-core.js";
 import type { CoreVerifyInput, CoreVerifyDeps, CommandRunner } from "./verify-core.js";
 import type { ToolchainResult } from "./project-toolchain.js";

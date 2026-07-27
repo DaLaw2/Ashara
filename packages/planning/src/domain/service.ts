@@ -9,7 +9,6 @@ import type {
   ContractDelta,
 } from "@ashara/shared";
 import { ContractBodySchema, ContractDeltaSchema } from "@ashara/shared";
-
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import type { ContractRepository } from "./contract-repository.js";

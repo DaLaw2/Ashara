@@ -9,8 +9,8 @@ export function extractJson(text: string): string {
     try {
         JSON.parse(trimmed);
         return trimmed;
-    } catch {
-        // expected: parse probe returns null on invalid JSON
+    } catch (e: unknown) {
+        if (!(e instanceof SyntaxError)) throw e;
     }
 
     // Strip markdown code fences: ```json\n...\n``` or ```\n...\n```

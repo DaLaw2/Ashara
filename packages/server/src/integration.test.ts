@@ -1,10 +1,9 @@
 // Server integration tests — boot Hono app, hit every endpoint, verify format
 
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
 import pg from "pg";
-
 import {
   createDbFromPool,
   type Database,
@@ -16,8 +15,8 @@ import {
   withPlanningTransaction,
 } from "@ashara/db";
 import { initParser } from "@ashara/memory";
+import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
-
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
@@ -90,8 +89,8 @@ beforeAll(async () => {
 
   try {
     await initParser();
-  } catch {
-    // tree-sitter may not be available in test env
+  } catch (e: unknown) {
+    console.warn(`[integration.test] initParser failed (tree-sitter may not be available): ${e instanceof Error ? e.message : String(e)}`);
   }
 
   const workItemRepo = new WorkItemRepository(db);
@@ -99,7 +98,7 @@ beforeAll(async () => {
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
   const configRepo = new ConfigRepository(db);
-  const runner = { wake: () => {} } as any;
+  const runner = { wake: () => {} } as unknown as ContinuousRunner;
 
   const deps: AppDeps = {
     workItemRepo,
