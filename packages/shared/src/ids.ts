@@ -4,9 +4,6 @@ export type SessionId = string & { readonly __brand: "SessionId" };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// CI PROBE: explicit any to test eslint gate
-export function eslintProbe(x: any): void { console.log(x); }
-
 /**
  * Validated narrowing of an external string into a branded `ProjectId` (used at
  * the contract read boundary, ADR-028). Rejects anything that is not a UUID so
