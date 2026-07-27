@@ -43,7 +43,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22
+          node-version: 22.22.1
           cache: npm
 
       - name: Install just
@@ -54,7 +54,7 @@ jobs:
         run: npm ci
 
       - name: Run migrations
-        run: npx tsx scripts/migrate.ts
+        run: node --import tsx scripts/migrate.ts
 
       - name: Gate — typecheck + boundary lint + knip + eslint
         run: just check
