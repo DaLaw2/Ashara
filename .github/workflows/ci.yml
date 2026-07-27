@@ -43,7 +43,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 22.22.1
+          node-version: 22
           cache: npm
 
       - name: Install just
@@ -52,24 +52,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Debug environment
-        run: |
-          echo "Node: $(node --version)"
-          echo "npm: $(npm --version)"
-          echo "tsx: $(npx tsx --version 2>&1 || echo FAIL)"
-          echo "---"
-          ls -la scripts/
-          echo "---"
-          ls node_modules/.bin/tsx || echo "tsx not in .bin"
-          echo "---"
-          ls -la node_modules/tsx/dist/ | head -5
-          echo "---"
-          # Try different invocations
-          echo "=== npx tsx --eval ==="
-          npx tsx -e "console.log('tsx works')" 2>&1 || true
-          echo "=== node --experimental-strip-types ==="
-          node --experimental-strip-types scripts/migrate.ts 2>&1 || true
 
       - name: Run migrations
         run: npx tsx scripts/migrate.ts
