@@ -1,5 +1,5 @@
 import type { CapabilityLevel } from "@ashara/shared";
-import type { z, ZodType } from "zod";
+import type { ZodType } from "zod";
 
 import { GatewayError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
@@ -261,8 +261,7 @@ export type StructuredValidation =
 export interface StructuredProviderRequest<T> {
   readonly capability: CapabilityLevel;
   readonly prompt: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mirrors StructuredRequest's ZodType signature so T infers from the schema.
-  readonly schema: ZodType<T, z.ZodTypeDef, any>;
+  readonly schema: ZodType<T>;
   readonly systemPrompt?: string;
   readonly maxTokens?: number;
   readonly temperature?: number;

@@ -181,6 +181,5 @@ export { searchCodebaseTool, SearchCodebaseExecutor } from "./search-codebase.js
 export { listDirectoryTool, ListDirectoryExecutor } from "./list-directory.js";
 export { validatePath } from "./path-validation.js";
 export { buildSanitizedEnv, ENV_ALLOWLIST } from "./sanitized-env.js";
-export { CommandPolicy, CommandPolicyConfigSchema, defaultCommandPolicyConfig } from "./command-policy.js";
-export type { CommandPolicyConfig, CommandValidationResult } from "./command-policy.js";
+export type { CommandPolicyConfig } from "./command-policy.js";
 export * from "./types.js";

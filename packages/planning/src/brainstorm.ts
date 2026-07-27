@@ -38,7 +38,7 @@ const DEFAULT_CONFIG: BrainstormConfig = {
 export class StubBrainstormLLM implements BrainstormLLM {
   readonly calls: string[] = [];
 
-  async generateStructured<T>(prompt: string, schema: ZodType<T, z.ZodTypeDef, any>): Promise<T> {
+  async generateStructured<T>(prompt: string, schema: ZodType<T>): Promise<T> {
     this.calls.push(prompt);
     return schema.parse({
       recommendations: [

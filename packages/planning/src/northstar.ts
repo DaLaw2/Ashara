@@ -1,7 +1,7 @@
 import { z, type ZodType } from "zod";
 
 export interface NorthStarLLM {
-  generateStructured<T>(prompt: string, schema: ZodType<T, z.ZodTypeDef, any>): Promise<T>;
+  generateStructured<T>(prompt: string, schema: ZodType<T>): Promise<T>;
 }
 
 export interface NorthStarCheckInput {
@@ -86,7 +86,7 @@ export class NorthStarChecker {
 export class StubNorthStarLLM implements NorthStarLLM {
   readonly calls: string[] = [];
 
-  async generateStructured<T>(prompt: string, schema: ZodType<T, z.ZodTypeDef, any>): Promise<T> {
+  async generateStructured<T>(prompt: string, schema: ZodType<T>): Promise<T> {
     this.calls.push(prompt);
 
     const northStarMatch = prompt.match(/## Story North Star\n(.+)/);

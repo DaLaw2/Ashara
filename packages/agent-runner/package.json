@@ -9,9 +9,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/shared": "workspace:*",
-    "@ashara/llm-gateway": "workspace:*",
-    "@ashara/development": "workspace:*",
-    "zod": "^3.24.1"
+    "@ashara/shared": "*",
+    "@ashara/llm-gateway": "*",
+    "@ashara/development": "*",
+    "zod": "^4.4.3"
   }
 }

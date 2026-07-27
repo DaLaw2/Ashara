@@ -1,4 +1,4 @@
-import { z, type ZodType } from "zod";
+import type { ZodType } from "zod";
 
 import type { StructuredValidation } from "@ashara/llm-gateway";
 
@@ -7,7 +7,7 @@ import type { DecompositionLLM } from "../decomposition.js";
 export class StubDecompositionLLM implements DecompositionLLM {
     async generateStructured<T>(
         prompt: string,
-        schema: ZodType<T, z.ZodTypeDef, any>,
+        schema: ZodType<T>,
         _validate?: (value: T) => StructuredValidation,
     ): Promise<T> {
         if (prompt.includes("decompose this epic into tasks")) {

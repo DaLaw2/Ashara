@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/shared": "workspace:*",
+    "@ashara/shared": "*",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.22.0"
   },

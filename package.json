@@ -1,7 +1,9 @@
 {
   "name": "ashara",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "devDependencies": {
     "@types/node": "^26.1.1",
     "knip": "^6.26.0",

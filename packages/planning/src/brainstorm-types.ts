@@ -1,4 +1,4 @@
-import { z, type ZodType } from "zod";
+import type { ZodType } from "zod";
 
 export type BrainstormLevel = "standard" | "high" | "deep";
 
@@ -62,5 +62,5 @@ export interface TriggerContext {
 }
 
 export interface BrainstormLLM {
-  generateStructured<T>(prompt: string, schema: ZodType<T, z.ZodTypeDef, any>): Promise<T>;
+  generateStructured<T>(prompt: string, schema: ZodType<T>): Promise<T>;
 }

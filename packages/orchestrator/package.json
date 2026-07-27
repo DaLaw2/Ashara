@@ -9,12 +9,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/agent-runner": "workspace:*",
-    "@ashara/db": "workspace:*",
-    "@ashara/development": "workspace:*",
-    "@ashara/llm-gateway": "workspace:*",
-    "@ashara/memory": "workspace:*",
-    "@ashara/planning": "workspace:*",
-    "@ashara/shared": "workspace:*"
+    "@ashara/agent-runner": "*",
+    "@ashara/db": "*",
+    "@ashara/development": "*",
+    "@ashara/llm-gateway": "*",
+    "@ashara/memory": "*",
+    "@ashara/planning": "*",
+    "@ashara/shared": "*"
   }
 }

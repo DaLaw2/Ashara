@@ -13,12 +13,12 @@
     "start": "bun run src/index.ts"
   },
   "dependencies": {
-    "@ashara/llm-gateway": "workspace:*",
-    "@ashara/memory": "workspace:*",
-    "@ashara/shared": "workspace:*"
+    "@ashara/llm-gateway": "*",
+    "@ashara/memory": "*",
+    "@ashara/shared": "*"
   },
   "devDependencies": {
-    "@ashara/engagement": "workspace:*",
-    "@ashara/planning": "workspace:*"
+    "@ashara/engagement": "*",
+    "@ashara/planning": "*"
   }
 }

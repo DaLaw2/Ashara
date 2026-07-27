@@ -30,7 +30,7 @@ export interface DecompositionLLM {
      */
     generateStructured<T>(
         prompt: string,
-        schema: ZodType<T, z.ZodTypeDef, any>,
+        schema: ZodType<T>,
         validate?: (value: T) => StructuredValidation,
     ): Promise<T>;
 }

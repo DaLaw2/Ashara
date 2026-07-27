@@ -1,5 +1,5 @@
 import type { CapabilityLevel } from "@ashara/shared";
-import { z, type ZodType } from "zod";
+import type { ZodType } from "zod";
 
 export interface ModelPreferences {
   preferredProvider?: string;
@@ -229,7 +229,7 @@ export interface LLMCallRecord {
 export interface StructuredRequest<T> {
   capability: CapabilityLevel;
   prompt: string;
-  schema: ZodType<T, z.ZodTypeDef, any>;
+  schema: ZodType<T>;
   systemPrompt?: string;
   temperature?: number;
   maxTokens?: number;

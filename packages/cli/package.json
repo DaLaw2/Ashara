@@ -12,10 +12,10 @@
     "ashara": "src/index.ts"
   },
   "dependencies": {
-    "@ashara/shared": "workspace:*",
-    "@ashara/engagement": "workspace:*",
-    "@ashara/planning": "workspace:*",
-    "@ashara/llm-gateway": "workspace:*",
-    "zod": "^3.25.67"
+    "@ashara/shared": "*",
+    "@ashara/engagement": "*",
+    "@ashara/planning": "*",
+    "@ashara/llm-gateway": "*",
+    "zod": "^4.4.3"
   }
 }

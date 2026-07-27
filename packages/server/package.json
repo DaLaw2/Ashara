@@ -9,19 +9,19 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/agent-runner": "workspace:*",
-    "@ashara/db": "workspace:*",
-    "@ashara/development": "workspace:*",
-    "@ashara/llm-gateway": "workspace:*",
-    "@ashara/memory": "workspace:*",
-    "@ashara/orchestrator": "workspace:*",
-    "@ashara/planning": "workspace:*",
-    "@ashara/shared": "workspace:*",
+    "@ashara/agent-runner": "*",
+    "@ashara/db": "*",
+    "@ashara/development": "*",
+    "@ashara/llm-gateway": "*",
+    "@ashara/memory": "*",
+    "@ashara/orchestrator": "*",
+    "@ashara/planning": "*",
+    "@ashara/shared": "*",
     "hono": "^4.12.29",
     "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/pg": "^8.20.0",
-    "zod": "3"
+    "zod": "^4.4.3"
   }
 }

@@ -1,4 +1,4 @@
-import { z, type ZodType } from "zod";
+import type { ZodType } from "zod";
 
 import type { CapabilityLevel } from "@ashara/shared";
 import { withStructuredLadder } from "@ashara/llm-gateway";
@@ -8,8 +8,7 @@ import type { BrainstormLLM } from "./brainstorm-types.js";
 import type { NorthStarLLM } from "./northstar.js";
 import type { DecompositionLLM } from "./decomposition.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches ZodType signature used by BrainstormLLM/NorthStarLLM/StructuredRequest
-type ZodSchema<T> = ZodType<T, z.ZodTypeDef, any>;
+type ZodSchema<T> = ZodType<T>;
 
 export interface StructuredLLMProvider {
   generateStructured<T>(request: {

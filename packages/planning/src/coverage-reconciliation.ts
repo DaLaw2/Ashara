@@ -288,8 +288,6 @@ export function computeCoverageGaps(
   return gaps;
 }
 
-export type { CoverageHold } from "./domain/index.js";
-
 export interface CoverageRollupGuardDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly contractRepo: ContractRepository;
