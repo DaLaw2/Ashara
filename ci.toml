@@ -2,13 +2,18 @@
 #
 # The GitHub Actions workflow reads this file and enforces these floors.
 # Update the values here when tests are legitimately added or removed.
-# A stale floor is caught by CI itself: it blocks legitimate green runs
-# until someone updates it to match reality.
+#
+# A floor set too HIGH is caught by CI itself: it blocks legitimate green runs
+# until someone updates it. A floor set too LOW is caught by nothing — it
+# under-enforces in silence, and reports the same green as an accurate one.
+# This file sat at 348 while the suite reached 399, so 51 tests could have
+# vanished unnoticed. Raise it whenever the count legitimately moves; the cost
+# of forgetting is not symmetric.
 
 [tests]
 # Minimum number of passing tests. CI fails if vitest reports fewer.
-# Measured 2026-07-27: 348 passed / 35 files / 0 skipped.
-min_passed = 348
+# Measured 2026-07-27: 399 passed / 40 files / 0 skipped.
+min_passed = 399
 
 # Maximum number of skipped tests. CI fails if vitest reports more.
 max_skipped = 0
