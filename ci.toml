@@ -1,0 +1,14 @@
+# CI invariants — single source of truth for numeric thresholds.
+#
+# The GitHub Actions workflow reads this file and enforces these floors.
+# Update the values here when tests are legitimately added or removed.
+# A stale floor is caught by CI itself: it blocks legitimate green runs
+# until someone updates it to match reality.
+
+[tests]
+# Minimum number of passing tests. CI fails if vitest reports fewer.
+# Measured 2026-07-27: 342 passed / 34 files / 0 skipped.
+min_passed = 342
+
+# Maximum number of skipped tests. CI fails if vitest reports more.
+max_skipped = 0
