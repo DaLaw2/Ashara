@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -81,12 +81,12 @@ import {
   NoLLMProvidersConfigured,
   withStructuredLadder,
 } from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
+import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
 import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
-import { parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -311,6 +311,43 @@ async function main(): Promise<void> {
       knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
   };
 
+  // Build the gateway catalog at spawn time from the DB. Fresh per spawn so
+  // model-config changes between dispatches are picked up. Carries no secrets:
+  // the agent reads API keys from its own environment via providerKeyEnvNames().
+  async function buildSpawnCatalog(): Promise<GatewayCatalog> {
+    const [modelRows, providerRows, settingsRows] = await Promise.all([
+      configRepo.listModelConfigs(),
+      configRepo.listProviderConfigs(),
+      configRepo.getSettings(),
+    ]);
+
+    const settings: Record<string, string> = {};
+    for (const row of settingsRows) {
+      settings[row.key] = row.value;
+    }
+
+    return {
+      models: modelRows.map((row) => ({
+        modelId: row.modelId,
+        providerName: row.providerName,
+        apiModelId: row.apiModelId,
+        capability: row.capability,
+        formatGroup: row.formatGroup,
+        strictMode: row.strictMode,
+        inputCostPer1m: row.inputCostPer1m,
+        outputCostPer1m: row.outputCostPer1m,
+        maxContextTokens: row.maxContextTokens,
+        supportsCaching: row.supportsCaching,
+      })),
+      providers: providerRows.map((row) => ({
+        name: row.name,
+        providerType: row.providerType,
+        baseUrl: row.baseUrl,
+      })),
+      settings,
+    };
+  }
+
   // Every in-flight agent-runner process, so shutdown can reap the whole tree
   // (findings e+f). Populated on spawn, drained on exit; iterated on shutdown.
   const activeAgentProcs = new Set<ChildProcess>();
@@ -327,6 +364,13 @@ async function main(): Promise<void> {
       if (capability === "Frontier") {
         console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
       }
+
+      // Write the gateway catalog file into the task's control directory.
+      // The .ashara/ dir is created by execution-service before spawn is called.
+      const catalogPath = join(opts.workDir, ASHARA_CONTROL_DIR, "gateway-catalog.json");
+      const catalog = await buildSpawnCatalog();
+      writeFileSync(catalogPath, JSON.stringify(catalog, null, 2));
+
       console.log(`[${opts.taskId}] launching agent-runner subprocess`);
 
       const proc = spawn("npx", ["tsx", runnerScript], {
@@ -336,8 +380,7 @@ async function main(): Promise<void> {
           ASHARA_BRIEF_PATH: opts.briefPath,
           ASHARA_OUTPUT_PATH: opts.outputPath,
           ASHARA_WORKING_DIR: opts.workDir,
-          ASHARA_SERVER_URL: config.coreLoop.selfUrl,
-          ASHARA_API_TOKEN: config.coreLoop.apiToken,
+          ASHARA_CATALOG_PATH: catalogPath,
           AGENT_CAPABILITY: capability,
         },
         stdio: ["ignore", "pipe", "pipe"],

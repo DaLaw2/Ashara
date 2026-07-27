@@ -2,7 +2,15 @@ export { LLMGateway } from "./gateway.js";
 export { convertMessage } from "./message-conversion.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export { ProviderRegistry } from "./provider-registry.js";
-export { buildGatewayConfig, loadGatewayConfig, loadGatewayConfigFromApi, parseFormatGroup } from "./config.js";
+export {
+  buildGatewayConfig,
+  loadGatewayConfig,
+  loadGatewayConfigFromApi,
+  loadGatewayCatalogFromFile,
+  parseFormatGroup,
+  GatewayCatalogSchema,
+} from "./config.js";
+export type { GatewayCatalog } from "./config.js";
 export {
   calculateCost,
   CAPABILITY_RANK,
@@ -36,6 +44,7 @@ export {
   NoLLMProvidersConfigured,
   RoutingProfileIncomplete,
   InvalidRoutingProfiles,
+  InvalidGatewayCatalog,
   TemperatureNotHonored,
 } from "./errors.js";
 export { KNOWN_LLM_SITES } from "./types.js";

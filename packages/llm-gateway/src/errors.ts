@@ -98,6 +98,25 @@ export class NoLLMProvidersConfigured extends GatewayError {
   }
 }
 
+/**
+ * Thrown when the gateway catalog — from a file or an HTTP response — is
+ * absent, unparseable, or structurally invalid. Carries the source (file
+ * path or URL) and a list of issues for diagnosis (Discipline C).
+ */
+export class InvalidGatewayCatalog extends GatewayError {
+  readonly source: string;
+  readonly issues: readonly string[];
+
+  constructor(source: string, issues: readonly string[]) {
+    super(
+      `Invalid gateway catalog at ${source}: ${issues.join("; ") || "unknown error"}`,
+    );
+    this.name = "InvalidGatewayCatalog";
+    this.source = source;
+    this.issues = issues;
+  }
+}
+
 function quoteList(values: readonly string[]): string {
   return values.map((v) => `"${v}"`).join(", ") || "none";
 }

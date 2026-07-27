@@ -4,10 +4,10 @@ import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared
 import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief } from "@ashara/shared";
 import {
     LLMGateway,
-    loadGatewayConfig,
-    loadGatewayConfigFromApi,
+    loadGatewayCatalogFromFile,
     buildGateway,
     NoLLMProvidersConfigured,
+    InvalidGatewayCatalog,
 } from "@ashara/llm-gateway";
 import type { ToolDefinition as GatewayToolDefinition } from "@ashara/llm-gateway";
 import { AgentConversation } from "./conversation.js";
@@ -516,24 +516,13 @@ if (import.meta.main) {
     const config = loadRunnerConfigFromEnv();
     const env = loadAgentRunnerEnv();
 
-    let gatewayConfig;
-    const checkedSources: string[] = [];
-    if (env.serverUrl && env.apiToken) {
-        try {
-            gatewayConfig = await loadGatewayConfigFromApi(env.serverUrl, env.apiToken);
-            checkedSources.push(`API ${env.serverUrl}`);
-            console.log(`[agent-runner] config loaded from API (${env.serverUrl})`);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.warn(`[agent-runner] API config load failed, falling back to TOML: ${msg}`);
-            checkedSources.push(`API ${env.serverUrl} (failed: ${msg})`);
-            gatewayConfig = loadGatewayConfig();
-            checkedSources.push("TOML/env fallback");
-        }
-    } else {
-        gatewayConfig = loadGatewayConfig();
-        checkedSources.push("TOML/env");
-    }
+    // Fail-closed: the catalog file is the sole source for the agent's model
+    // config. Its absence or malformedness is a typed error (InvalidGatewayCatalog),
+    // never a silent fallback to an empty config. The server writes this file at
+    // spawn time; the old HTTP path (ASHARA_SERVER_URL) is gone.
+    const gatewayConfig = await loadGatewayCatalogFromFile(env.catalogPath);
+    const checkedSources = [`catalog file ${env.catalogPath}`];
+    console.log(`[agent-runner] config loaded from catalog file (${env.catalogPath})`);
 
     // Single composition-root factory for the gateway (ADR-030) -- no inline
     // refuse-to-start guard duplicated here. Agent-runner has no stub

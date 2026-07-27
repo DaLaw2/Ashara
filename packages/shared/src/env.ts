@@ -138,8 +138,7 @@ export const ExecutionContextSchema = z.object({
     ASHARA_BRIEF_PATH: z.string().min(1),
     ASHARA_OUTPUT_PATH: z.string().min(1),
     ASHARA_WORKING_DIR: z.string().min(1),
-    ASHARA_SERVER_URL: z.string().min(1).optional(),
-    ASHARA_API_TOKEN: z.string().min(1).optional(),
+    ASHARA_CATALOG_PATH: z.string().min(1),
     AGENT_CAPABILITY: z.string().min(1).default("Strong"),
 });
 
@@ -157,10 +156,9 @@ export interface AgentRunnerEnv {
     readonly workingDir: string;
     readonly briefPath: string;
     readonly outputPath: string;
+    readonly catalogPath: string;
     readonly capability: CapabilityLevel;
     readonly diagnosticsEnabled: boolean;
-    readonly serverUrl?: string;
-    readonly apiToken?: string;
     readonly modelsConfigPath?: string;
 }
 
@@ -170,10 +168,9 @@ export function loadAgentRunnerEnv(): AgentRunnerEnv {
         workingDir: ctx.ASHARA_WORKING_DIR,
         briefPath: ctx.ASHARA_BRIEF_PATH,
         outputPath: ctx.ASHARA_OUTPUT_PATH,
+        catalogPath: ctx.ASHARA_CATALOG_PATH,
         capability: parseCapabilityLevel(ctx.AGENT_CAPABILITY),
         diagnosticsEnabled: loadDiagnosticsEnabledEnv(),
-        serverUrl: ctx.ASHARA_SERVER_URL,
-        apiToken: ctx.ASHARA_API_TOKEN,
         modelsConfigPath: loadModelsConfigPathEnvOverride(),
     };
 }

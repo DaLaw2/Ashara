@@ -59,32 +59,32 @@ describe("parseExecutionContext", () => {
         ASHARA_BRIEF_PATH: "/tmp/brief.json",
         ASHARA_OUTPUT_PATH: "/tmp/output.json",
         ASHARA_WORKING_DIR: "/tmp/work",
+        ASHARA_CATALOG_PATH: "/tmp/catalog.json",
     };
 
     test("parses a fully-populated env", () => {
         const ctx = parseExecutionContext({
             ...REQUIRED,
-            ASHARA_SERVER_URL: "http://localhost:3000",
-            ASHARA_API_TOKEN: "tok",
             AGENT_CAPABILITY: "Frontier",
         });
         expect(ctx).toEqual({
             ...REQUIRED,
-            ASHARA_SERVER_URL: "http://localhost:3000",
-            ASHARA_API_TOKEN: "tok",
             AGENT_CAPABILITY: "Frontier",
         });
     });
 
-    test("defaults AGENT_CAPABILITY to Strong and leaves optional fields undefined when absent", () => {
+    test("defaults AGENT_CAPABILITY to Strong", () => {
         const ctx = parseExecutionContext({ ...REQUIRED });
         expect(ctx.AGENT_CAPABILITY).toBe("Strong");
-        expect(ctx.ASHARA_SERVER_URL).toBeUndefined();
-        expect(ctx.ASHARA_API_TOKEN).toBeUndefined();
     });
 
     test("fails closed when a required field is missing", () => {
         const { ASHARA_BRIEF_PATH: _omit, ...rest } = REQUIRED;
+        expect(() => parseExecutionContext(rest)).toThrow();
+    });
+
+    test("fails closed when ASHARA_CATALOG_PATH is missing", () => {
+        const { ASHARA_CATALOG_PATH: _omit, ...rest } = REQUIRED;
         expect(() => parseExecutionContext(rest)).toThrow();
     });
 
