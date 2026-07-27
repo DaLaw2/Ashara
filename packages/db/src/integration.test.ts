@@ -42,7 +42,20 @@ const createdCostIds: string[] = [];
 const createdBrainstormLogIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
 
-const DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://ashara:ashara_dev@localhost:5432/ashara";
+class MissingDatabaseUrlError extends Error {
+  constructor(readonly testFile: string) {
+    super(
+      `DATABASE_URL environment variable is required for ${testFile}. ` +
+        "Run via `just test` (which loads .env) or set DATABASE_URL explicitly.",
+    );
+    this.name = "MissingDatabaseUrlError";
+  }
+}
+
+if (!process.env.DATABASE_URL) {
+  throw new MissingDatabaseUrlError("db/integration.test");
+}
+const DATABASE_URL = process.env.DATABASE_URL;
 
 beforeAll(() => {
   db = createDb(DATABASE_URL);

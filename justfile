@@ -11,7 +11,7 @@ db-reset:
     podman compose -f docker/postgres.yml up -d
 
 migrate:
-    podman exec docker_postgres_1 psql -U ashara -d ashara -f /dev/stdin < migrations/001_initial.sql
+    npx tsx scripts/migrate.ts
 
 # Every gate, in order, aborting on the first failure (ADR-048 decision 6).
 #

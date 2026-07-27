@@ -3,7 +3,7 @@
   "ignoreExportsUsedInFile": true,
   "workspaces": {
     ".": {
-      "entry": ["scripts/check-boundaries.ts"],
+      "entry": ["scripts/check-boundaries.ts", "scripts/migrate.ts"],
       "project": ["scripts/**/*.ts"]
     },
     "packages/*": {
