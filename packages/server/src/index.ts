@@ -1,7 +1,5 @@
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { z } from "zod";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -95,8 +93,13 @@ import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
 import { resolveAgentOutput } from "./agent-output.js";
-import { buildAgentSpawnLocation } from "./agent-spawn.js";
-import { terminateProcessTree } from "./process-group.js";
+import {
+  buildContainerName,
+  buildContainerEnv,
+  spawnContainer,
+  terminateContainer,
+  ContainerSpawnError,
+} from "./container-spawn.js";
 import { wireLlmGateway } from "./gateway-wiring.js";
 
 async function main(): Promise<void> {
@@ -348,18 +351,12 @@ async function main(): Promise<void> {
     };
   }
 
-  // Every in-flight agent-runner process, so shutdown can reap the whole tree
-  // (findings e+f). Populated on spawn, drained on exit; iterated on shutdown.
-  const activeAgentProcs = new Set<ChildProcess>();
+  // Every in-flight agent container name, so shutdown can stop them all.
+  // Populated on spawn, drained on exit or cleanup; iterated on shutdown.
+  const activeContainers = new Set<string>();
 
   const agentInvoker: AgentInvoker = {
     async spawn(opts: AgentSpawnOptions): Promise<Record<string, unknown>> {
-      // GIT-SAFETY (b): cwd is the task's own worktree, never the Ashara repo
-      // checkout — see agent-spawn.ts for why. Only runnerScript's location
-      // still derives from asharaSourceDir; it is resolved absolute so it
-      // doesn't need cwd to be asharaSourceDir to be found.
-      const { cwd, runnerScript } = buildAgentSpawnLocation(config.coreLoop.asharaSourceDir, opts.workDir);
-
       const capability = determineCapability(opts.dispatchCount ?? 0, opts.blockedReason);
       if (capability === "Frontier") {
         console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
@@ -371,32 +368,38 @@ async function main(): Promise<void> {
       const catalog = await buildSpawnCatalog();
       writeFileSync(catalogPath, JSON.stringify(catalog, null, 2));
 
-      console.log(`[${opts.taskId}] launching agent-runner subprocess`);
-
-      const proc = spawn("npx", ["tsx", runnerScript], {
-        cwd,
-        env: {
-          ...buildSanitizedEnv([...providerKeyEnvNames()]),
-          ASHARA_BRIEF_PATH: opts.briefPath,
-          ASHARA_OUTPUT_PATH: opts.outputPath,
-          ASHARA_WORKING_DIR: opts.workDir,
-          ASHARA_CATALOG_PATH: catalogPath,
-          AGENT_CAPABILITY: capability,
+      const containerName = buildContainerName(opts.taskId);
+      const containerEnv = buildContainerEnv(
+        buildSanitizedEnv([...providerKeyEnvNames()]),
+        opts.workDir,
+        {
+          briefPath: opts.briefPath,
+          outputPath: opts.outputPath,
+          workDir: opts.workDir,
+          catalogPath,
+          capability,
         },
-        stdio: ["ignore", "pipe", "pipe"],
-        // Own a process group (finding e): the runner is an npx -> tsx -> node
-        // wrapper chain. detached:true makes `proc` the group leader so a
-        // timeout or shutdown can signal the WHOLE tree via
-        // terminateProcessTree(-pid); a plain proc.kill() would orphan tsx/node.
-        detached: true,
-      });
-      activeAgentProcs.add(proc);
+      );
+
+      console.log(`[${opts.taskId}] launching agent-runner in container ${containerName}`);
+
+      // The podman client process forwards the container's stdout/stderr and
+      // exits when the container does. Termination goes through
+      // `podman stop <name>` — killing only the client would orphan the
+      // container (the incident that motivated this isolation).
+      const proc = spawnContainer(
+        containerName,
+        opts.workDir,
+        config.coreLoop.asharaSourceDir,
+        containerEnv,
+      );
+      activeContainers.add(containerName);
 
       const timer = setTimeout(() => {
         console.warn(
-          `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — terminating process group`,
+          `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — stopping container ${containerName}`,
         );
-        void terminateProcessTree(proc);
+        void terminateContainer(containerName);
       }, config.coreLoop.agentTimeoutMs);
       try {
         let stdout = "";
@@ -406,7 +409,18 @@ async function main(): Promise<void> {
 
         const exitCode = await new Promise<number | null>((resolve, reject) => {
           proc.on("close", resolve);
-          proc.on("error", reject);
+          proc.on("error", (err) => {
+            // Fail closed: if podman itself cannot be spawned (missing binary,
+            // permission denied), surface a typed error with full context.
+            reject(new ContainerSpawnError({
+              operation: "spawn",
+              containerName,
+              taskId: opts.taskId,
+              exitCode: null,
+              cause: err.message,
+              stderr: "",
+            }));
+          });
         });
 
         if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
@@ -422,7 +436,10 @@ async function main(): Promise<void> {
         return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
       } finally {
         clearTimeout(timer);
-        activeAgentProcs.delete(proc);
+        activeContainers.delete(containerName);
+        // Ensure the container is cleaned up even on normal exit — belt +
+        // suspenders with --rm. Idempotent: swallows "no such container".
+        void terminateContainer(containerName);
       }
     },
   };
@@ -751,14 +768,13 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log("Shutting down...");
     abortController.abort();
-    // Reap every in-flight agent-runner process group (findings e+f): SIGTERM
-    // the whole npx/tsx/node tree, escalate to SIGKILL, and await exit so no
-    // descendant survives the stop to keep dispatching/spending. Includes any
-    // smoke-boot app the gate spawned inside that tree.
-    const procs = [...activeAgentProcs];
-    if (procs.length > 0) {
-      console.log(`Terminating ${procs.length} in-flight agent process group(s)...`);
-      await Promise.all(procs.map((p) => terminateProcessTree(p)));
+    // Stop every in-flight agent container (p0-isolation): `podman stop` sends
+    // SIGTERM to PID 1 inside the container, then SIGKILL after a grace period.
+    // Unlike killing the podman client, this actually stops the workload.
+    const containers = [...activeContainers];
+    if (containers.length > 0) {
+      console.log(`Stopping ${containers.length} in-flight agent container(s)...`);
+      await Promise.all(containers.map((name) => terminateContainer(name)));
     }
     server.close();
   };

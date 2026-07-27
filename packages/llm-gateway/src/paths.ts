@@ -5,11 +5,12 @@ import { fileURLToPath } from "node:url";
 // ---------------------------------------------------------------------------
 // CWD-independent Ashara root anchoring (rp-t2 — subprocess CWD blindness)
 //
-// agent-runner subprocesses run with process.cwd() set to the task's own git
-// worktree (server/agent-spawn.ts sets cwd = workDir), NOT the Ashara source
-// checkout. A cwd-relative config default therefore silently mis-resolves in
-// that subprocess: config/models.toml is not found and routing profiles fall
-// through to capability logic. Observed live (Run 11 attempt 1, $1.48 burned).
+// agent-runner runs with process.cwd() set to the task's own git worktree, NOT
+// the Ashara source checkout (server/container-spawn.ts passes `-w` as the
+// container's work directory; before ADR-058 this was the subprocess cwd). A
+// cwd-relative config default therefore silently mis-resolves: config/models.toml
+// is not found and routing profiles fall through to capability logic. Observed
+// live (Run 11 attempt 1, $1.48 burned).
 //
 // Anchoring to THIS module's on-disk location (import.meta.url) instead of
 // process.cwd() makes those defaults correct by construction regardless of the

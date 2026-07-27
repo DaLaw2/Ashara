@@ -29,7 +29,8 @@
       ]
     },
     "packages/server": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreBinaries": ["podman"]
     }
   }
 }
