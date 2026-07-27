@@ -10,3 +10,6 @@ node_modules/
 project/
 .claude/
 CLAUDE.md
+
+# Added by ggshield
+.cache_ggshield

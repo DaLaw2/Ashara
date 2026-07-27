@@ -37,9 +37,20 @@ function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
     );
 }
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  "postgresql://ashara:ashara_dev@localhost:5432/ashara";
+class MissingDatabaseUrlError extends Error {
+  constructor(readonly testFile: string) {
+    super(
+      `DATABASE_URL environment variable is required for ${testFile}. ` +
+        "Run via `just test` (which loads .env) or set DATABASE_URL explicitly.",
+    );
+    this.name = "MissingDatabaseUrlError";
+  }
+}
+
+if (!process.env.DATABASE_URL) {
+  throw new MissingDatabaseUrlError("server/integration.test");
+}
+const DATABASE_URL = process.env.DATABASE_URL;
 const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;
 
 let db: Database;

@@ -11,7 +11,7 @@ db-reset:
     podman compose -f docker/postgres.yml up -d
 
 migrate:
-    podman exec docker_postgres_1 psql -U ashara -d ashara -f /dev/stdin < migrations/001_initial.sql
+    npx tsx scripts/migrate.ts
 
 # Every gate, in order, aborting on the first failure (ADR-048 decision 6).
 #
@@ -36,6 +36,25 @@ typecheck-full:
 
 test:
     npx vitest run
+
+# Secret scan. Deliberately NOT part of `just check`: it calls the GitGuardian API,
+# and a gate that needs the network is a gate that fails for the wrong reason.
+#
+# Enforcement is automatic in two other places — the `.git/hooks/pre-commit` hook
+# (`ggshield install --mode local`) and the CI workflow, which fails closed when
+# GITGUARDIAN_API_KEY is absent. This recipe is for scanning on demand, e.g. before
+# a force-push or after a history rewrite.
+#
+# Known limitation, measured 2026-07-27 rather than assumed: the hook caught a
+# short lowercase password in a POSTGRES_PASSWORD field and a `ghp_` token, and did
+# NOT catch an invented password of similar shape in that same field. It is a net
+# with holes, not a proof of absence.
+#
+# Second lesson from the same run: writing the offending value into a comment to
+# document the incident re-creates the secret. Both this file and the CI workflow
+# tripped the scanner that way. Describe the shape, never quote the value.
+secrets:
+    ggshield secret scan repo .
 
 server:
     npx tsx packages/server/src/index.ts
