@@ -16,6 +16,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Require GITGUARDIAN_API_KEY
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        run: |
+          # Fail closed on a missing key. A secret scanner that skips because
+          # it has no credential reports the same clean result as one that
+          # scanned and found nothing.
+          if [ -z "${GITGUARDIAN_API_KEY}" ]; then
+            echo "::error::GITGUARDIAN_API_KEY is not set. The secret scan cannot run, so this job fails rather than passing unscanned."
+            exit 1
+          fi
+
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield-action@da20be06cafe5e8633dc24744efe1efe8d30f06b # v1.52.2
+        env:
+          GITHUB_PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GITHUB_PUSH_BASE_SHA: ${{ github.event.base }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+
   check-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -51,23 +82,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Secret scan
-        env:
-          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
-        run: |
-          # Fail closed on a missing key. A secret scanner that skips because it
-          # has no credential reports the same clean result as one that scanned
-          # and found nothing, which is the failure mode this repo keeps hitting.
-          if [ -z "${GITGUARDIAN_API_KEY}" ]; then
-            echo "::error::GITGUARDIAN_API_KEY is not set. The secret scan cannot run, so this job fails rather than passing unscanned."
-            exit 1
-          fi
-          pip install --quiet ggshield==1.50.4
-          ggshield secret scan ci
-
       - name: Install just
         run: |
-          curl -sSf https://just.systems/install.sh | bash -s -- --tag 1.44.0 --to /usr/local/bin
+          curl -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 
       - name: Install dependencies
         run: npm ci
