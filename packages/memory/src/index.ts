@@ -1,7 +1,7 @@
 // CI PROBE: boundary violation — memory may not import planning
-import type { DecomposeResult } from "@ashara/planning";
+import type { DecompositionResult } from "@ashara/planning";
 
-export type { DecomposeResult as _BoundaryProbe };
+export type { DecompositionResult as _BoundaryProbe };
 
 export type {
     EmbedderConfig,
