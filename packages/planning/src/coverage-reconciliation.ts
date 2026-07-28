@@ -330,6 +330,7 @@ export interface CoverageReconciliationDeps {
   ) => Promise<T>;
   /** ENFORCING creates task proposals for unplanned endpoints; observe-only logs+reports only. */
   readonly enforcing: boolean;
+  readonly runScope: string;
 }
 
 /**
@@ -425,6 +426,7 @@ async function proposeCoverageTask(
     const task = createPendingWorkItem(
       "Task",
       `Create ${endpoint.method} ${endpoint.path} endpoint`,
+      deps.runScope,
       rootId,
       `Implement the ${endpoint.method} ${endpoint.path} endpoint (${endpoint.purpose}). ` +
         `Declared in the project contract but not covered by any planned task ` +

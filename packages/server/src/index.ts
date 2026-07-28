@@ -85,7 +85,7 @@ import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memor
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -708,7 +708,7 @@ async function main(): Promise<void> {
     // Bulk plan creation writes the derived ProjectContract in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
     createBulkPlan: (items, edges, knowledge) =>
-      createBulkPlanWithContract({ withPlanningTransaction: planningTransaction }, items, edges, knowledge),
+      createBulkPlanWithContract({ withPlanningTransaction: planningTransaction, runScope: RUN_SCOPE_AD_HOC }, items, edges, knowledge),
   };
 
   const app = new Hono();
@@ -787,14 +787,31 @@ async function main(): Promise<void> {
   // leaves it OPEN — that process was killed mid-run, and a restart must resume
   // the same cap rather than being handed the whole budget again.
   if (!shuttingDown) {
-    // Terminalize Pending and InProgress work items so the next run starts from
-    // a clean board. Without this, Pending items (which have no other cleanup
-    // path) survive into the next run and pollute its summary (the Runs 39/40/41
-    // leak). Blocked (owner-parked) and Failed (startup-reconciler routes them)
-    // are deliberately excluded. SIGTERM leaves items as-is — the startup
-    // reconciler handles crash-orphans on the next boot.
+    // Terminalize this run's Pending and InProgress work items so the next run
+    // starts from a clean board. The sweep is scoped to the ending run — ad-hoc,
+    // pre-scoping, and other-run items are excluded (fail-closed: a run should
+    // not destroy work it did not create). Blocked (owner-parked) and Failed
+    // (startup-reconciler routes them) are also excluded by status.
+    //
+    // SIGTERM leaves items as-is: this block is behind `!shuttingDown`, so a
+    // killed process never sweeps. The startup reconciler handles InProgress
+    // (requeue) and Failed (FailureRouter) but NOT Pending — no reconciler
+    // reclaims Pending crash-orphans from a killed run. The dispatch gate
+    // will eventually pick them up (it selects all Pending Tasks regardless
+    // of scope), but undispatched ones persist. Run-scoping widened this gap:
+    // before, the next run's whole-board sweep cleaned them accidentally; now
+    // the scoped sweep skips them (different scope).
+    // Tracked as t-startup-reconciler-pending.
     try {
-      await terminalizeOnRunEnd({ workItemRepo, eventStore });
+      const runState = await runStateRepo.load();
+      if (runState && !runState.closed) {
+        await terminalizeOnRunEnd({ workItemRepo, eventStore }, runState.runId);
+      } else {
+        console.warn(
+          "[shutdown] skipping run-end sweep: no open run state found " +
+            "(the runner may have errored before opening a run)",
+        );
+      }
     } catch (e) {
       console.warn("Shutdown work-item terminalization failed:", e);
     }

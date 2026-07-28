@@ -32,6 +32,7 @@ export async function createBugFixTask(
   culprit: AttributionResult,
   gateOutput: string,
   gateType: string,
+  runScope: string,
 ): Promise<void> {
   const allItems = await workItemRepo.listAll();
   const existing = allItems.find((item) => {
@@ -62,7 +63,7 @@ export async function createBugFixTask(
     suggestedFix: buildSuggestedFix(gateType),
   };
 
-  const item = createPendingWorkItem("Task", title, parentId, diagnostic, { ...taskSpec });
+  const item = createPendingWorkItem("Task", title, runScope, parentId, diagnostic, { ...taskSpec });
   await PlanningService.createWorkItem(workItemRepo, item);
   console.log(
     `[bug-fix] created task ${item.id}: ${title}`,

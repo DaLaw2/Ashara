@@ -18,6 +18,7 @@ import type { CoreLoopDeps, TerminationOutcome } from "./types.js";
 export async function evaluateRunTermination(
   deps: CoreLoopDeps,
   budgetExhausted: boolean,
+  runScope: string,
 ): Promise<TerminationOutcome> {
   const items = await assembleRunSummaryItems({
     workItemRepo: deps.workItemRepo,
@@ -34,11 +35,11 @@ export async function evaluateRunTermination(
   }
 
   if (decision.decision === "stop") {
-    const summary = buildRunSummary({ items, endpointGaps }, decision);
+    const summary = buildRunSummary({ items, endpointGaps, currentRunScope: runScope }, decision);
     return { decision, summary };
   }
 
-  return handlePlanExhausted(deps, decision, items, endpointGaps);
+  return handlePlanExhausted(deps, decision, items, endpointGaps, runScope);
 }
 
 async function handlePlanExhausted(
@@ -46,13 +47,14 @@ async function handlePlanExhausted(
   decision: TerminationPlanExhausted,
   items: Awaited<ReturnType<typeof assembleRunSummaryItems>>,
   endpointGaps: EndpointCoverageGap[],
+  runScope: string,
 ): Promise<TerminationOutcome> {
   const acceptance = await runAcceptanceCheck(deps, items);
 
   if (acceptance.outcome === "rejected") {
     const maxGapAttempts = deps.config.maxGapAttempts ?? 2;
     if (deps.acceptanceAttempts < maxGapAttempts) {
-      await createGapTasks(deps, acceptance.gaps);
+      await createGapTasks(deps, acceptance.gaps, runScope);
       return { decision: { decision: "continue", counts: decision.counts }, summary: null };
     }
   }
@@ -67,7 +69,7 @@ async function handlePlanExhausted(
     abandonedRoots: [] as string[],
   };
 
-  const summary = buildRunSummary({ items, endpointGaps, acceptance }, decision);
+  const summary = buildRunSummary({ items, endpointGaps, acceptance, currentRunScope: runScope }, decision);
 
   return { decision: stopDecision, summary };
 }
@@ -245,6 +247,7 @@ async function latestContract(deps: AcceptanceCheckDeps): Promise<ProjectContrac
 async function createGapTasks(
   deps: CoreLoopDeps,
   gaps: readonly AcceptanceGap[],
+  runScope: string,
 ): Promise<void> {
   if (gaps.length === 0) return;
 
@@ -273,7 +276,7 @@ async function createGapTasks(
     if (gap.suggestedApproach) taskSpec.suggestedApproach = gap.suggestedApproach;
     if (gap.supersedes) taskSpec.supersedes = gap.supersedes;
 
-    const item = createPendingWorkItem("Task", title, root.id, gap.observed, taskSpec);
+    const item = createPendingWorkItem("Task", title, runScope, root.id, gap.observed, taskSpec);
     await deps.workItemRepo.create(item);
   }
 }

@@ -130,6 +130,7 @@ describe("WorkItemRepository", () => {
       northStar: "Verify all repos work",
       successCriteria: ["tests pass"],
       blockedReason: null,
+      runScope: "test-run",
     };
     createdWorkItemIds.push(epicId);
 
@@ -165,6 +166,7 @@ describe("DevSessionRepository", () => {
       level: "Task",
       status: "Pending",
       title: "Task for DevSession test",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(taskId);
   });
@@ -339,6 +341,7 @@ describe("KnowledgeRepository", () => {
       level: "Epic",
       status: "Pending",
       title: "Knowledge Test Epic",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(epicId);
 
@@ -348,6 +351,7 @@ describe("KnowledgeRepository", () => {
       status: "Completed",
       parentId: epicId,
       title: "Knowledge Test Task",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(taskId);
   });
@@ -460,6 +464,7 @@ describe("FailedApproachRepository", () => {
       level: "Epic",
       status: "Pending",
       title: "FailedApproach Test Epic",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(epicId);
 
@@ -469,6 +474,7 @@ describe("FailedApproachRepository", () => {
       status: "Pending",
       parentId: epicId,
       title: "FailedApproach Test Task",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(taskId);
   });
@@ -521,6 +527,7 @@ describe("ContextBriefRepository", () => {
       level: "Epic",
       status: "InProgress",
       title: "ContextBrief Test Epic",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(epicId);
 
@@ -530,6 +537,7 @@ describe("ContextBriefRepository", () => {
       status: "InProgress",
       parentId: epicId,
       title: "ContextBrief Test Story",
+      runScope: "test-run",
     });
     createdWorkItemIds.push(storyId);
 
@@ -543,6 +551,7 @@ describe("ContextBriefRepository", () => {
       parentId: storyId,
       title: "ContextBrief Substitute Abandoned Task",
       blockedReason: { reason: "duplicate", substitutedBy: storyId },
+      runScope: "test-run",
     });
     createdWorkItemIds.push(substituteAbandonedTaskId);
 
@@ -553,6 +562,7 @@ describe("ContextBriefRepository", () => {
       parentId: storyId,
       title: "ContextBrief Exhausted Abandoned Task",
       blockedReason: { reason: "retry_budget_exhausted" },
+      runScope: "test-run",
     });
     createdWorkItemIds.push(exhaustedAbandonedTaskId);
   });

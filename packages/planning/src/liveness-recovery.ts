@@ -7,6 +7,7 @@ export interface LivenessRecoveryDeps {
   readonly failedApproachRepo: FailedApproachSource;
   readonly replanLlm: ReplanLLM;
   readonly visionText: string;
+  readonly runScope: string;
 }
 
 export interface FailedApproachSource {
@@ -127,6 +128,7 @@ export async function recoverFromAbandoned(deps: LivenessRecoveryDeps): Promise<
       const substitute = createPendingWorkItem(
         "Task",
         proposal.title,
+        deps.runScope,
         abandoned.parentId,
         proposal.description,
         {

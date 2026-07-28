@@ -7,6 +7,7 @@ import {
   parseWorkItemLevel,
   parseWorkItemId,
   ProjectKnowledgeSchema,
+  RUN_SCOPE_AD_HOC,
 } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -197,6 +198,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const item = createPendingWorkItem(
       level,
       title,
+      RUN_SCOPE_AD_HOC,
       parentId ? parseWorkItemId(parentId) : undefined,
       description,
       taskSpec,
@@ -212,6 +214,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       description: item.description ?? null,
       taskSpec: item.taskSpec ?? null,
       northStar: item.northStar ?? null,
+      runScope: item.runScope,
     });
 
     const event = createDomainEvent("work_item.created", "server", {
@@ -313,6 +316,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       northStar: row.northStar ?? undefined,
       successCriteria: (row.successCriteria as unknown[]) ?? undefined,
       blockedReason: (row.blockedReason as Record<string, unknown>) ?? undefined,
+      runScope: row.runScope,
       dispatchCount: row.dispatchCount,
       createdAt: row.createdAt ?? new Date(),
       updatedAt: row.updatedAt ?? new Date(),

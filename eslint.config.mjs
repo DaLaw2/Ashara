@@ -28,10 +28,10 @@ export default tseslint.config(
       // No empty catch blocks — CLAUDE.md Discipline C.
       //
       // `no-empty` alone does NOT enforce this rule. It ignores any block
-      // containing a comment, so `catch { /* ignore */ }` passes it — and that
-      // is the form all 24 of this repo's swallowed catches take, while zero are
-      // syntactically empty. Adopting `no-empty` and calling the rule enforced
-      // would have been the claimed-enforced failure class ADR-048 names.
+      // containing a comment, so `catch { /* ignore */ }` passes it. No
+      // syntactically empty catches remain, but the gate says nothing about
+      // catches with at least one statement: `catch { return null; }` passes
+      // regardless of whether the error needed logging (Discipline C).
       //
       // The selector matches on STATEMENT count, and a comment is not a
       // statement, so it enforces what CLAUDE.md actually writes: a catch that

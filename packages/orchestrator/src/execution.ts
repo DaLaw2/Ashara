@@ -175,6 +175,7 @@ async function publishBestEffort(
 export async function processTask(
   deps: CoreLoopDeps,
   task: WorkItem,
+  runScope: string,
 ): Promise<{ result: TaskResult; costInfo: TaskCostInfo }> {
   const workItem = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!workItem) {
@@ -256,6 +257,7 @@ export async function processTask(
           task.id,
           { detail: result.detail },
           targetProjectPath,
+          runScope,
         );
       }
 
@@ -279,7 +281,7 @@ export async function processTask(
       // Split-on-failure: agent hit turn limit while making progress (files
       // changed) — structurally "too big," not a specific bug.
       if (shouldSplit(finishReason, filesChanged, current)) {
-        await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore }, current, failure);
+        await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore, runScope }, current, failure);
         await recordFailedApproach(
           deps.failedApproachRepo,
           deps.workItemRepo,
@@ -324,6 +326,7 @@ async function handleCompletedPoison(
   currentTaskId: string,
   execResult: { detail: string },
   targetProjectPath: string,
+  runScope: string,
 ): Promise<void> {
   const gateOutput = execResult.detail;
   const files = extractImplicatedFiles(gateOutput);
@@ -344,7 +347,7 @@ async function handleCompletedPoison(
   const gateType = inferGateType(gateOutput);
   for (const culprit of externalCulprits) {
     try {
-      await createBugFixTask(deps.workItemRepo, culprit, gateOutput, gateType);
+      await createBugFixTask(deps.workItemRepo, culprit, gateOutput, gateType, runScope);
     } catch (err) {
       console.warn(`[bug-fix] failed to create task for culprit ${culprit.culpritTaskId}:`, err);
     }

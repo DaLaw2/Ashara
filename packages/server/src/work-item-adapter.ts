@@ -25,6 +25,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     northStar: row.northStar ?? undefined,
     successCriteria: (row.successCriteria as unknown[]) ?? undefined,
     blockedReason: (row.blockedReason as Record<string, unknown>) ?? undefined,
+    runScope: row.runScope,
     dispatchCount: row.dispatchCount,
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
@@ -45,6 +46,7 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
         taskSpec: item.taskSpec ?? null,
         northStar: item.northStar ?? null,
         successCriteria: item.successCriteria ?? null,
+        runScope: item.runScope,
       });
       return rowToWorkItem(row);
     },

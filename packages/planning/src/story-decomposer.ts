@@ -38,6 +38,7 @@ export interface StoryDecomposerDeps {
   readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
+  readonly runScope: string;
 }
 
 /**
@@ -227,6 +228,7 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
           const workItem = createPendingWorkItem(
             "Task",
             taskSpec.title,
+            deps.runScope,
             story.id as WorkItemId,
             taskSpec.description,
             {

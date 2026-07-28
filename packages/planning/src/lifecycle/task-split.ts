@@ -25,6 +25,7 @@ function splitDeliverables(deliverables: unknown): [string[], string[]] {
 export interface TaskSplitDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventPublisher: EventPublisher;
+  readonly runScope: string;
 }
 
 export async function splitFailedTask(
@@ -36,13 +37,13 @@ export async function splitFailedTask(
   const [firstHalf, secondHalf] = splitDeliverables(spec.deliverables);
   const prerequisiteIds = await deps.workItemRepo.getDependencies(task.id);
 
-  const partA = createTask(`${task.title} (part 1 of 2)`, task.parentId, {
+  const partA = createTask(`${task.title} (part 1 of 2)`, deps.runScope, task.parentId, {
     ...spec,
     deliverables: firstHalf,
     splitDepth: 1,
     splitFrom: task.id,
   });
-  const partB = createTask(`${task.title} (part 2 of 2)`, task.parentId, {
+  const partB = createTask(`${task.title} (part 2 of 2)`, deps.runScope, task.parentId, {
     ...spec,
     deliverables: secondHalf,
     splitDepth: 1,

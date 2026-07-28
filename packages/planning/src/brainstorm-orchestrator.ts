@@ -39,6 +39,7 @@ export interface BrainstormOrchestrationDeps {
   readonly brainstormCooldownThreshold: number;
   readonly maxPendingWorkItems: number;
   readonly maxBrainstormItems: number;
+  readonly runScope: string;
 }
 
 interface CycleResultLike {
@@ -240,7 +241,7 @@ export async function executeBrainstorm(
       continue;
     }
 
-    const workItem = createPendingWorkItem(level, rec.title, parentId, rec.description);
+    const workItem = createPendingWorkItem(level, rec.title, deps.runScope, parentId, rec.description);
     // Per-proposal atomicity (ADR-029): the item and every declared edge commit
     // or roll back together, so a mid-loop failure never leaves a proposal
     // persisted without its dependencies (which the Gate would treat as ready).

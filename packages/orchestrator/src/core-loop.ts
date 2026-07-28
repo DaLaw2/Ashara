@@ -20,6 +20,24 @@ export class CoreLoop {
     this.budget = new BudgetTracker(deps.config);
   }
 
+  /**
+   * The runId of the currently open run. Derived from `runState`, which is
+   * set by `ensureRunOpen` and is never null after that. A throw here means
+   * a work-item creation path ran before `ensureRunOpen` — that is a bug,
+   * not a fallback case. The value is passed explicitly to every function
+   * that stamps it onto a work item, so `""` is unrepresentable: there is
+   * no field to seed it into.
+   */
+  private get currentRunScope(): string {
+    if (!this.runState) {
+      throw new Error(
+        "currentRunScope accessed before ensureRunOpen — " +
+          "a work item cannot be created until the run is open",
+      );
+    }
+    return this.runState.runId;
+  }
+
   async runCycle(): Promise<CycleResult> {
     const { deps } = this;
 
@@ -30,6 +48,7 @@ export class CoreLoop {
 
     await this.budget.ensureLoaded(deps.costRepo);
     await this.ensureRunOpen();
+    const runScope = this.currentRunScope;
 
     const budgetStatus = this.budget.checkpoint();
     if (budgetStatus === "low") {
@@ -54,6 +73,7 @@ export class CoreLoop {
         repoPath: deps.config.repoPath,
         readManifestContext,
         withPlanningTransaction: deps.withPlanningTransaction,
+        runScope,
       });
       if (decomposed > 0) {
         console.log(`Decomposed ${decomposed} leaf stories into tasks`);
@@ -63,7 +83,7 @@ export class CoreLoop {
       // spec-derived endpoints are in the contract) and BEFORE the gate, so any
       // proposed coverage task is eligible for dispatch this same cycle. ENFORCING
       // proposes tasks for uncovered declared endpoints; observe-only just logs.
-      await reconcileCoverageGaps(deps);
+      await reconcileCoverageGaps(deps, runScope);
 
       const eligible = await PlanningService.gate(deps.workItemRepo);
       if (eligible.length > 0) {
@@ -82,7 +102,7 @@ export class CoreLoop {
           console.log(`[${task.id}] pre-dispatch estimate: $${estCost.toFixed(4)} (${capability})`);
 
           try {
-            const { result, costInfo } = await processTask(deps, task);
+            const { result, costInfo } = await processTask(deps, task, runScope);
             this.budget.accumulateCost(costInfo, capability, result.status === "completed");
             await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
             await this.persistRunCounters();
@@ -112,10 +132,10 @@ export class CoreLoop {
       // the quiescence contract (mig7-t1) requires they get their chance BEFORE the
       // termination snapshot is taken below — otherwise a liveness verdict could race
       // items about to appear this cycle.
-      await runPostCycleChecks(deps, batch, { tasksProcessed: batch.length, results }, completedCount);
+      await runPostCycleChecks(deps, batch, { tasksProcessed: batch.length, results }, completedCount, runScope);
 
       if (batch.length === 0) {
-        const recovered = await attemptLivenessRecovery(deps);
+        const recovered = await attemptLivenessRecovery(deps, runScope);
         if (recovered > 0) {
           const retryEligible = await PlanningService.gate(deps.workItemRepo);
           if (retryEligible.length > 0) {
@@ -127,7 +147,7 @@ export class CoreLoop {
               if (this.budget.isExhausted()) break;
               const capability = extractCapability(task);
               try {
-                const { result, costInfo } = await processTask(deps, task);
+                const { result, costInfo } = await processTask(deps, task, runScope);
                 this.budget.accumulateCost(costInfo, capability, result.status === "completed");
                 await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
                 await this.persistRunCounters();
@@ -156,7 +176,7 @@ export class CoreLoop {
     // sprout work on a later idle cycle that this snapshot fails to see. If that gate
     // ever becomes WALL-CLOCK-based, that guarantee breaks and the race reopens; re-add a
     // next-cycle re-verification before acting on a liveness stop.
-    const termination = await evaluateRunTermination(deps, this.budget.isExhausted());
+    const termination = await evaluateRunTermination(deps, this.budget.isExhausted(), runScope);
 
     // AFTER the termination evaluation: acceptanceAttempts is incremented inside
     // it, so persisting earlier would lose the very increment that bounds it.

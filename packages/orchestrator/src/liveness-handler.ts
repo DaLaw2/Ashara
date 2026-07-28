@@ -1,7 +1,7 @@
 import { recoverFromAbandoned } from "./acl/planning-acl.js";
 import type { CoreLoopDeps } from "./types.js";
 
-export async function attemptLivenessRecovery(deps: CoreLoopDeps): Promise<number> {
+export async function attemptLivenessRecovery(deps: CoreLoopDeps, runScope: string): Promise<number> {
   const maxRounds = deps.config.maxReplanRounds ?? 3;
   if (deps.replanRounds >= maxRounds) return 0;
   if (!deps.replanLlm) return 0;
@@ -19,6 +19,7 @@ export async function attemptLivenessRecovery(deps: CoreLoopDeps): Promise<numbe
       failedApproachRepo: deps.failedApproachRepo,
       replanLlm: deps.replanLlm,
       visionText: vision.visionText,
+      runScope,
     });
 
     if (created > 0) {

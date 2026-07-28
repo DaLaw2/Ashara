@@ -74,6 +74,7 @@ export interface CreateBulkPlanDeps {
   readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
+  readonly runScope: string;
 }
 
 /**
@@ -111,6 +112,7 @@ export async function createBulkPlanWithContract(
       const item = createPendingWorkItem(
         level,
         spec.title,
+        deps.runScope,
         parentRealId,
         spec.description,
         spec.taskSpec,

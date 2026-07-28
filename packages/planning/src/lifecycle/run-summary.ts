@@ -1,4 +1,4 @@
-import { TERMINAL_STATUSES } from "@ashara/shared";
+import { TERMINAL_STATUSES, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
@@ -8,10 +8,14 @@ import type { EventSink } from "./ports.js";
 export interface RunSummaryItem extends TerminationItemSnapshot {
   readonly title: string;
   readonly blockedReason?: Record<string, unknown>;
+  /** Which run created this item (a runId, RUN_SCOPE_PRE_SCOPING, or RUN_SCOPE_AD_HOC). */
+  readonly runScope: string;
 }
 
 export interface RunSummaryInput {
   readonly items: readonly RunSummaryItem[];
+  /** The runId of the current run — used to scope counts in the narrative. */
+  readonly currentRunScope: string;
   readonly endpointGaps?: readonly EndpointCoverageGap[];
   readonly acceptance?: AcceptanceVerdict;
 }
@@ -49,13 +53,20 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     : { decision: "stop", reason: decision.trigger, counts: decision.counts, stalled: stalledItems, abandonedRoots: [...abandonedRoots] };
   const gaps = buildGaps(input.items, gapDecision, byId);
   const endpointGaps = input.endpointGaps ?? [];
+
+  const runItems = input.items.filter((it) => it.runScope === input.currentRunScope);
+  const runShipped = buildShipped(runItems);
+  const runAbandoned = buildAbandoned(runItems);
+  const outOfScope = classifyOutOfScope(input.items, input.currentRunScope);
+
   const narrative = buildNarrative(
     stopReason,
     decision.counts,
-    shipped,
-    abandoned,
+    runShipped,
+    runAbandoned,
     gaps,
     endpointGaps,
+    outOfScope,
     input.acceptance,
   );
 
@@ -236,13 +247,47 @@ function describeStalled(
   }
 }
 
+/** Breakdown of items on the board that were NOT created by this run. */
+interface OutOfScopeCounts {
+  readonly total: number;
+  readonly preScopingCount: number;
+  readonly adHocCount: number;
+  readonly otherRunCount: number;
+}
+
+/**
+ * Partitions items NOT belonging to the current run into pre-scoping, ad-hoc,
+ * and other-run buckets. Every item on the board appears in exactly one
+ * partition (this-run or one of the three below).
+ */
+function classifyOutOfScope(items: readonly RunSummaryItem[], currentRunScope: string): OutOfScopeCounts {
+  let preScopingCount = 0;
+  let adHocCount = 0;
+  let otherRunCount = 0;
+
+  for (const item of items) {
+    if (item.runScope === currentRunScope) continue;
+    if (item.runScope === RUN_SCOPE_PRE_SCOPING) preScopingCount++;
+    else if (item.runScope === RUN_SCOPE_AD_HOC) adHocCount++;
+    else otherRunCount++;
+  }
+
+  return {
+    total: preScopingCount + adHocCount + otherRunCount,
+    preScopingCount,
+    adHocCount,
+    otherRunCount,
+  };
+}
+
 function buildNarrative(
   reason: StopReason,
   counts: TerminationCounts,
-  shipped: readonly ShippedItem[],
-  abandoned: readonly AbandonedItem[],
+  runShipped: readonly ShippedItem[],
+  runAbandoned: readonly AbandonedItem[],
   gaps: readonly CoverageGap[],
   endpointGaps: readonly EndpointCoverageGap[],
+  outOfScope: OutOfScopeCounts,
   acceptance?: AcceptanceVerdict,
 ): string {
   const headlineMap: Record<StopReason, string> = {
@@ -261,9 +306,15 @@ function buildNarrative(
       ? `${headlineMap[reason]} Cause: ${unverifiedReason}.`
       : headlineMap[reason];
 
-  const shippedNote = `${shipped.length} item(s) shipped (Completed).`;
+  // Run-scoped shipped/abandoned — "This run" is load-bearing: it is what
+  // makes the sentence falsifiable against a specific scope rather than
+  // ambiguously true of the board.
+  const shippedNote = `This run shipped ${runShipped.length} item(s).`;
   const abandonedNote =
-    abandoned.length > 0 ? ` ${abandoned.length} item(s) abandoned (${summarizeKinds(abandoned)}).` : "";
+    runAbandoned.length > 0
+      ? ` This run abandoned ${runAbandoned.length} item(s) (${summarizeKinds(runAbandoned)}).`
+      : "";
+
   const gapsNote =
     gaps.length > 0
       ? ` ${gaps.length} coverage gap(s) left undone: ${gaps.map((g) => `${g.title} (${g.reason})`).join(" ")}`
@@ -284,7 +335,26 @@ function buildNarrative(
           .join("; ")}.`
       : "";
 
-  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote}${acceptanceNote} (total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
+  // Out-of-scope items: silence about them is how the original defect read as
+  // success — the four "shipped" items included three from prior runs, and the
+  // sentence did not say so.
+  const outOfScopeNote = buildOutOfScopeNote(outOfScope);
+
+  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote}${acceptanceNote}${outOfScopeNote} (board total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
+}
+
+function buildOutOfScopeNote(outOfScope: OutOfScopeCounts): string {
+  if (outOfScope.total === 0) return "";
+
+  const parts: string[] = [];
+  if (outOfScope.preScopingCount > 0)
+    parts.push(`${outOfScope.preScopingCount} pre-scoping`);
+  if (outOfScope.adHocCount > 0)
+    parts.push(`${outOfScope.adHocCount} ad-hoc`);
+  if (outOfScope.otherRunCount > 0)
+    parts.push(`${outOfScope.otherRunCount} from other runs`);
+
+  return ` ${outOfScope.total} item(s) on the board were created outside this run (${parts.join(", ")}).`;
 }
 
 function summarizeKinds(abandoned: readonly AbandonedItem[]): string {

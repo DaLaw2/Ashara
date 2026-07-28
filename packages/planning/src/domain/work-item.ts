@@ -21,6 +21,13 @@ export interface WorkItem {
   successCriteria?: unknown[];
   blockedReason?: Record<string, unknown>;
   /**
+   * Which run created this item: either a runId (UUID from openRun),
+   * RUN_SCOPE_PRE_SCOPING (migration backfill), or RUN_SCOPE_AD_HOC
+   * (created outside any run, e.g. via the HTTP API). Every insert site
+   * must supply this explicitly — there is no default (Discipline A).
+   */
+  runScope: string;
+  /**
    * Number of times this item has been dispatched for execution (migration 018,
    * r9f-t1). Incremented UNCONDITIONALLY at the dispatch seam (CoreLoop.processTask)
    * so it counts real dispatches even when the agent crashes or its output is lost.
@@ -35,6 +42,7 @@ export interface WorkItem {
 export function createPendingWorkItem(
   level: WorkItemLevel,
   title: string,
+  runScope: string,
   parentId?: WorkItemId,
   description?: string,
   taskSpec?: Record<string, unknown>,
@@ -52,6 +60,7 @@ export function createPendingWorkItem(
     taskSpec,
     northStar,
     successCriteria,
+    runScope,
     dispatchCount: 0,
     createdAt: now,
     updatedAt: now,
@@ -61,10 +70,11 @@ export function createPendingWorkItem(
 
 export function createTask(
   title: string,
+  runScope: string,
   parentId?: WorkItemId,
   taskSpec?: Record<string, unknown>,
 ): WorkItem {
-  return createPendingWorkItem("Task", title, parentId, undefined, taskSpec);
+  return createPendingWorkItem("Task", title, runScope, parentId, undefined, taskSpec);
 }
 
 // canTransitionTo is now in @ashara/shared (Published Language, ADR-044).

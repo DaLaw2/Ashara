@@ -16,7 +16,7 @@ import type { CycleResult, CoreLoopDeps } from "./types.js";
  * work rather than a silent hole. Never throws into the cycle — a reconciliation
  * failure is logged and the cycle proceeds (the rollup HOLD is the safety net).
  */
-export async function reconcileCoverageGaps(deps: CoreLoopDeps): Promise<void> {
+export async function reconcileCoverageGaps(deps: CoreLoopDeps, runScope: string): Promise<void> {
   if (!deps.contractRepo) return;
   try {
     const gaps = await reconcileCoverage({
@@ -24,6 +24,7 @@ export async function reconcileCoverageGaps(deps: CoreLoopDeps): Promise<void> {
       contractRepo: deps.contractRepo,
       withPlanningTransaction: deps.withPlanningTransaction,
       enforcing: deps.config.coverageEnforcing,
+      runScope,
     });
     for (const gap of gaps) {
       console.log(
@@ -41,8 +42,9 @@ export async function runPostCycleChecks(
   batch: WorkItem[],
   cycleResult: CycleResult,
   completedCount: number,
+  runScope: string,
 ): Promise<void> {
-  const brainstormDeps = buildBrainstormDeps(deps);
+  const brainstormDeps = buildBrainstormDeps(deps, runScope);
   let brainstormTriggered = false;
 
   if (completedCount > 0) {
@@ -95,7 +97,7 @@ export async function runPostCycleChecks(
 
 }
 
-function buildBrainstormDeps(deps: CoreLoopDeps): BrainstormOrchestrationDeps {
+function buildBrainstormDeps(deps: CoreLoopDeps, runScope: string): BrainstormOrchestrationDeps {
   return {
     workItemRepo: deps.workItemRepo,
     brainstormEngine: deps.brainstormEngine,
@@ -105,5 +107,6 @@ function buildBrainstormDeps(deps: CoreLoopDeps): BrainstormOrchestrationDeps {
     brainstormCooldownThreshold: deps.config.brainstormCooldownThreshold,
     maxPendingWorkItems: deps.config.maxPendingWorkItems,
     maxBrainstormItems: deps.config.maxBrainstormItems,
+    runScope,
   };
 }

@@ -17,6 +17,7 @@ import {
 import { initParser } from "@ashara/memory";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
+import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
@@ -30,6 +31,7 @@ function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
           withPlanningTransaction(dbHandle, ({ workItemRepo: w, contractRepo }) =>
             fn({ workItemRepo: adaptWorkItemRepo(w), contractRepo }),
           ),
+        runScope: RUN_SCOPE_AD_HOC,
       },
       items,
       edges,

@@ -36,6 +36,7 @@ export async function assembleRunSummaryItems(deps: SnapshotAssemblyDeps): Promi
       recoverable,
       title: item.title,
       blockedReason: item.blockedReason,
+      runScope: item.runScope,
     });
   }
 

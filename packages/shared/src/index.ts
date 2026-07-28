@@ -77,6 +77,8 @@ export {
 export type { RunState } from "./run-state.js";
 export { parseRunState, serializeRunState } from "./run-state.js";
 
+export { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "./run-scope.js";
+
 export type { ContractRepository } from "./repository-ports.js";
 
 export { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "./workspace-layout.js";
