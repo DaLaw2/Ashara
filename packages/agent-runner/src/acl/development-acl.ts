@@ -56,7 +56,7 @@ export interface VerifyTierResult {
 }
 
 export interface VerifyOutput {
-    readonly passed: boolean;
+    readonly verdict: "passed" | "failed" | "unverified";
     readonly tiers: {
         readonly deterministic: VerifyTierResult;
     };
@@ -182,7 +182,7 @@ export function createVerifyAdapter(): VerifyPort {
  * only this function needs updating.
  */
 function translateVerifyOutput(devResult: {
-    readonly passed: boolean;
+    readonly verdict: "passed" | "failed" | "unverified";
     readonly tiers: {
         readonly deterministic: {
             readonly status: "pass" | "fail" | "skipped" | "error";
@@ -198,7 +198,7 @@ function translateVerifyOutput(devResult: {
 }): VerifyOutput {
     const devTier = devResult.tiers.deterministic;
     return {
-        passed: devResult.passed,
+        verdict: devResult.verdict,
         tiers: {
             deterministic: {
                 status: devTier.status,

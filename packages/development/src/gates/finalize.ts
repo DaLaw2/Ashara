@@ -140,7 +140,7 @@ export async function finalizeSuccess(
       },
     );
 
-    if (!postMergeVerify.passed) {
+    if (postMergeVerify.verdict !== "passed") {
       return abortAndFail(
         task.id,
         targetProjectPath,

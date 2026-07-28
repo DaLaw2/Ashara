@@ -134,7 +134,7 @@ interface DispatchRecord {
 }
 
 interface VerifyTaskOutcome {
-  readonly passed: boolean;
+  readonly verdict: "passed" | "failed" | "unverified";
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +789,45 @@ export class DevelopmentService {
     eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
     const verifyOutcome = await this.verifyTask(task, workDir, output, 1);
 
-    if (!verifyOutcome.passed) {
+    if (verifyOutcome.verdict === "unverified") {
+      // Zero executable checks: a verdict computed from nothing must not read
+      // as success (Discipline A). The orchestrator commits this as Failed and
+      // routes it through the FailureRouter to replan-or-abandon — same path
+      // as a failed verification, bounded by the replan limit.
+      eventSink?.emit({
+        event: "task_failed",
+        taskId: task.id,
+        attempt: 1,
+        reason: "verification unverified — no executable checks",
+      });
+      if (targetProjectPath) {
+        await commitPartialWork(
+          workDir,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, verify-unverified)`,
+        );
+      }
+      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
+      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      const chain = wrapError("development", "verify", "zero executable checks — task unverified", { taskId: task.id });
+      const envelope: ErrorEnvelope = {
+        outcome: "failed",
+        summary: "verification unverified — no executable checks exist to confirm task output",
+        chain,
+        agentOutput: output,
+      };
+      return {
+        status: "failed",
+        detail: envelope.summary,
+        output,
+        sessionId,
+        filesChanged: [],
+        attempt: 1,
+        errorEnvelope: envelope,
+        agentInvoked: true,
+      };
+    }
+
+    if (verifyOutcome.verdict !== "passed") {
       eventSink?.emit({
         event: "task_failed",
         taskId: task.id,
@@ -892,7 +930,7 @@ export class DevelopmentService {
         : undefined;
       const response = await verify(verifyRequest, verifyLogOpts);
       console.log(
-        `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, passed=${response.passed}`,
+        `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, verdict=${response.verdict}`,
       );
       this.deps.eventSink?.emit({
         event: "verify_result",
@@ -901,10 +939,10 @@ export class DevelopmentService {
         deterministic: response.tiers.deterministic.status,
         deterministicDetails: response.tiers.deterministic.details,
         deterministicChecks: response.tiers.deterministic.checks ?? [],
-        passed: response.passed,
+        verdict: response.verdict,
       });
 
-      return { passed: response.passed };
+      return { verdict: response.verdict };
     } catch (e) {
       // Discipline A: verification unreachable -> false, never true. The agent's
       // own self-reported output.verify.passed is discarded here — trusting it
@@ -925,7 +963,7 @@ export class DevelopmentService {
         attempt,
         error: String(e).slice(0, 500),
       });
-      return { passed: false };
+      return { verdict: "failed" };
     }
   }
 

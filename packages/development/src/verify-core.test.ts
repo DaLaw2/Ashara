@@ -89,10 +89,10 @@ describe("runVerifyCore — GIT-SAFETY (a) fail-closed workdir validation", () =
         { runCommand },
       );
 
-      // Empty dir has no project markers, so all builtin checks are skipped —
-      // the point here is only that validation did not block it.
-      expect(result.tiers.deterministic.status).toBe("pass");
-      expect(result.passed).toBe(true);
+      // Empty dir has no project markers and no custom checks, so nothing is
+      // executable — the point here is only that validation did not block it.
+      expect(result.verdict).toBe("unverified");
+      expect(result.tiers.deterministic.status).toBe("skipped");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -116,7 +116,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
       expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
@@ -136,7 +136,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
       expect(checks[0].name).toBe("cargo check");
@@ -156,7 +156,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
       expect(checks[0].name).toBe("go build ./...");
@@ -165,7 +165,7 @@ describe("runVerifyCore — baseline check injection", () => {
     }
   });
 
-  test("empty checks + no project files passes with warning", async () => {
+  test("empty checks + no project files produces unverified verdict", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ashara-verify-empty-"));
     try {
       const log = vi.fn();
@@ -175,8 +175,8 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
-      expect(result.tiers.deterministic.status).toBe("pass");
+      expect(result.verdict).toBe("unverified");
+      expect(result.tiers.deterministic.status).toBe("skipped");
 
       const warningEvent = log.mock.calls.find(
         (c) => (c[0] as Record<string, unknown>).event === "verify_no_checks_warning",
@@ -203,7 +203,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(false);
+      expect(result.verdict).toBe("failed");
       expect(result.tiers.deterministic.status).toBe("fail");
       expect(result.tiers.deterministic.details).toContain("no executable checks");
     } finally {
@@ -228,7 +228,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(2);
       expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
@@ -250,7 +250,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
       expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
@@ -271,7 +271,7 @@ describe("runVerifyCore — baseline check injection", () => {
         deps,
       );
 
-      expect(result.passed).toBe(true);
+      expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
       expect(checks[0].name).toBe("npx --no-install tsc --noEmit");

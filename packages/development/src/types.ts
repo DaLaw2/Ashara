@@ -36,9 +36,11 @@ export interface TierResult {
   readonly issues?: string[];
 }
 
+export type VerifyVerdict = "passed" | "failed" | "unverified";
+
 export interface VerifyResponse {
   readonly session_id: SessionId;
-  readonly passed: boolean;
+  readonly verdict: VerifyVerdict;
   readonly tiers: {
     readonly deterministic: TierResult;
   };

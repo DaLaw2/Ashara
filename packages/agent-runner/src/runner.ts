@@ -189,7 +189,7 @@ export class AgentRunner {
                     checks: brief.constraints,
                 },
             );
-            console.log(`[agent-runner] inline verify: passed=${verifyResult.passed}`);
+            console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             console.error(`[agent-runner] inline verify failed: ${msg}`);

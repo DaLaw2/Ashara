@@ -1,5 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { isAllowedCheck, isHttpCheck, validateBodyShape } from "./check-runner.js";
+import { isAllowedCheck, isHttpCheck, validateBodyShape, runDeterministicChecks } from "./check-runner.js";
+import type { CommandRunner } from "./verify-core.js";
 
 describe("isHttpCheck", () => {
   test("recognizes GET with exact status", () => {
@@ -117,6 +118,30 @@ describe("isAllowedCheck — HTTP checks pass the allowlist", () => {
 
   test("natural language still rejected", () => {
     expect(isAllowedCheck("npx tsc --noEmit passes")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDeterministicChecks — zero-check identity-element trap (Discipline A)
+//
+// "The identity element of a collection, a conjunction, or a sum always reads
+// as fine — that is a property of arithmetic, not evidence about the world."
+// An empty loop over zero checks must not produce status "pass".
+// ---------------------------------------------------------------------------
+
+describe("runDeterministicChecks — zero checks", () => {
+  const stubRunner: CommandRunner = async () => ({ exitCode: 0, output: "" });
+
+  test("zero checks must not produce a pass status", async () => {
+    const result = await runDeterministicChecks(stubRunner, "/tmp/test", [], []);
+    expect(result.tier.status).not.toBe("pass");
+    expect(result.tier.details).not.toContain("All 0 checks passed");
+  });
+
+  test("zero checks produces skipped status with empty checks array", async () => {
+    const result = await runDeterministicChecks(stubRunner, "/tmp/test", [], []);
+    expect(result.tier.status).toBe("skipped");
+    expect(result.tier.checks).toEqual([]);
   });
 });
 

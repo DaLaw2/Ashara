@@ -37,8 +37,16 @@ import { readVerifyConfig } from "./verify-config.js";
 // ambient working directory happened to be (Discipline A violation).
 // ---------------------------------------------------------------------------
 
+/**
+ * Three-state verification outcome. `"unverified"` is the honest result when
+ * zero executable checks existed — neither pass nor fail, because nothing was
+ * tested. The concept aligns with the acceptance system's existing `unverified`
+ * verdict (AcceptanceOutcome in planning/acceptance.ts).
+ */
+export type VerifyVerdict = "passed" | "failed" | "unverified";
+
 export interface CoreVerifyResult {
-  readonly passed: boolean;
+  readonly verdict: VerifyVerdict;
   readonly tiers: {
     readonly deterministic: CoreTierResult;
   };
@@ -139,7 +147,7 @@ async function prepareToolchainForVerify(
     const details = toolchainFailureDetails(err);
     log?.({ event: "verify_toolchain_failed", details });
     return {
-      passed: false,
+      verdict: "failed",
       tiers: {
         deterministic: { status: "fail", details },
       },
@@ -203,7 +211,7 @@ async function detectBaselineChecks(workDir: string): Promise<BaselineCheck[]> {
  * is exactly the deterministic tier's outcome — nothing else feeds it.
  *
  * Never fails open: a toolchain-preparation failure or a failing check yields
- * `passed=false`. A throwing log sink propagates (fail-closed at the caller).
+ * `verdict="failed"`. A throwing log sink propagates (fail-closed at the caller).
  */
 export async function runVerifyCore(
   input: CoreVerifyInput,
@@ -275,19 +283,25 @@ export async function runVerifyCore(
       checks: [],
       checksSkipped: skippedChecks,
     });
-    log?.({ event: "verify_final", passed: false });
+    log?.({ event: "verify_final", verdict: "failed" });
     return {
-      passed: false,
+      verdict: "failed",
       tiers: { deterministic: { status: "fail", details } },
     };
   }
 
   if (executableChecks.length === 0) {
+    const details = "no executable checks — unverified";
     log?.({
       event: "verify_no_checks_warning",
       workDir: input.workDir,
       reason: "no tech stack detected and no custom checks specified",
     });
+    log?.({ event: "verify_final", verdict: "unverified" });
+    return {
+      verdict: "unverified",
+      tiers: { deterministic: { status: "skipped", details } },
+    };
   }
 
   const deterministicOutcome = await runDeterministicChecks(run, input.workDir, executableChecks, skippedChecks);
@@ -301,12 +315,12 @@ export async function runVerifyCore(
     checksSkipped: deterministicOutcome.checksSkipped,
   });
 
-  const passed = deterministic.status === "pass";
+  const verdict: VerifyVerdict = deterministic.status === "pass" ? "passed" : "failed";
 
-  log?.({ event: "verify_final", passed });
+  log?.({ event: "verify_final", verdict });
 
   return {
-    passed,
+    verdict,
     tiers: {
       deterministic,
     },

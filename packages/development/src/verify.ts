@@ -36,7 +36,7 @@ export async function verify(
 
   return {
     session_id: request.session_id,
-    passed: result.passed,
+    verdict: result.verdict,
     tiers: result.tiers,
   };
 }

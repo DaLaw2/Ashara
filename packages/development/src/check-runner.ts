@@ -475,6 +475,20 @@ export async function runDeterministicChecks(
     }
   }
 
+  // The identity element of a conjunction always reads as "fine" — a property
+  // of arithmetic, not evidence about the world (Discipline A). An empty loop
+  // that never falsified allPassed must not be reported as "pass".
+  if (results.length === 0) {
+    return {
+      tier: {
+        status: "skipped",
+        details: "no checks executed — nothing to verify",
+        checks: [],
+      },
+      checksSkipped: skippedChecks,
+    };
+  }
+
   const failCount = results.filter((r) => !r.passed).length;
 
   return {
