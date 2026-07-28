@@ -6,7 +6,6 @@ import type { WorkItemStatus } from "@ashara/shared";
 export {
   InvalidStatusTransition,
   WorkItemNotFound,
-  RepositoryError,
   ContractVersionConflict,
 } from "@ashara/shared";
 

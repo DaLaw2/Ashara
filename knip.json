@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreExportsUsedInFile": true,
+  "includeEntryExports": true,
   "workspaces": {
     ".": {
       "entry": ["scripts/check-boundaries.ts"],

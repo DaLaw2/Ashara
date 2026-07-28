@@ -1,14 +1,82 @@
-export * from "./ids.js";
-export * from "./enums.js";
-export * from "./env.js";
-export * from "./json-utils.js";
-export * from "./types.js";
-export * from "./contract.js";
-export * from "./project-frame.js";
-export * from "./agent-brief.js";
-export * from "./observation.js";
-export * from "./error-envelope.js";
-export * from "./transitions.js";
-export * from "./run-state.js";
-export * from "./repository-ports.js";
-export * from "./workspace-layout.js";
+export type { ProjectId, WorkItemId, SessionId } from "./ids.js";
+export { parseProjectId, parseWorkItemId, createWorkItemId, createSessionId } from "./ids.js";
+
+export type { WorkItemLevel, WorkItemStatus, CapabilityLevel, SessionPhase } from "./enums.js";
+export {
+  TERMINAL_SESSION_PHASES,
+  WORK_ITEM_STATUSES,
+  parseCapabilityLevel,
+  parseWorkItemLevel,
+  parseWorkItemStatus,
+} from "./enums.js";
+
+export type { AgentRunnerEnv } from "./env.js";
+export {
+  providerKeyEnvNames,
+  loadProviderKeys,
+  loadProviderBaseUrls,
+  loadBudgetEnv,
+  loadServerEnv,
+  loadAgentRunnerEnv,
+  loadDiagnosticsEnabledEnv,
+  loadModelsConfigPathEnvOverride,
+} from "./env.js";
+
+export { extractJson } from "./json-utils.js";
+
+export type { DomainEvent } from "./types.js";
+export { createDomainEvent } from "./types.js";
+
+export type {
+  ProjectKnowledge,
+  ContractBody,
+  ContractInput,
+  ContractDelta,
+  Endpoint,
+  ContractModule,
+  Mount,
+  ProjectContract,
+} from "./contract.js";
+export {
+  HttpMethodSchema,
+  ProjectKnowledgeSchema,
+  ContractBodySchema,
+  ContractDeltaSchema,
+  nodesByKind,
+  nodeByKind,
+  nodeLabel,
+  nodeLabels,
+  normalizePath,
+} from "./contract.js";
+
+export type { ProjectFrame, ProjectFrameAttempt } from "./project-frame.js";
+export { ProjectFrameSchema, ProjectFrameUnresolvable } from "./project-frame.js";
+
+export type { AgentBrief } from "./agent-brief.js";
+export { parseAgentBrief } from "./agent-brief.js";
+
+export type { EndpointProbe, ProductObservation } from "./observation.js";
+
+export type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
+export {
+  errorEnvelopeSchema,
+  wrapError,
+  flattenChain,
+  renderChainForBrief,
+} from "./error-envelope.js";
+
+export {
+  TERMINAL_STATUSES,
+  canTransitionTo,
+  InvalidStatusTransition,
+  WorkItemNotFound,
+  RepositoryError,
+  ContractVersionConflict,
+} from "./transitions.js";
+
+export type { RunState } from "./run-state.js";
+export { parseRunState, serializeRunState } from "./run-state.js";
+
+export type { ContractRepository } from "./repository-ports.js";
+
+export { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "./workspace-layout.js";

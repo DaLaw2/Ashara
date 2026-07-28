@@ -88,6 +88,7 @@ import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectCon
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { loadServerConfig } from "./config.js";
 import { bearerAuth } from "./middleware.js";
@@ -354,7 +355,7 @@ async function main(): Promise<void> {
   const activeContainers = new Set<string>();
 
   const agentInvoker: AgentInvoker = {
-    async spawn(opts: AgentSpawnOptions): Promise<Record<string, unknown>> {
+    async spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson> {
       const capability = determineCapability(opts.dispatchCount ?? 0, opts.blockedReason);
       if (capability === "Frontier") {
         console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);

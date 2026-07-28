@@ -7,6 +7,7 @@ import type {
   CostRepository,
 } from "@ashara/db";
 import type { ProductObservation, ProjectContract } from "@ashara/shared";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   RunSummary,
   TerminationDecision,
@@ -130,13 +131,6 @@ export function blockedResult(taskId: string, detail: string): TaskResult {
   return { taskId, status: "blocked", detail };
 }
 
-export interface BrainstormTriggerInfo {
-  readonly reason: string;
-  readonly level: string;
-  readonly context: string;
-  readonly relatedItemIds: string[];
-}
-
 export interface TaskCostInfo {
   /**
    * What this dispatch cost, or `null` for "an agent ran and we cannot tell".
@@ -160,25 +154,28 @@ export function zeroCost(): TaskCostInfo {
 }
 
 export function costFromOutput(
-  output: Record<string, unknown>,
+  output: AgentOutputJson | null,
   attempt: number,
   agentInvoked: boolean,
 ): TaskCostInfo {
-  const rawCost = output.total_cost;
-  // No total_cost AND the agent was launched => tokens were burned and the
-  // amount is unrecoverable. No total_cost and no launch => genuinely nothing.
+  if (!output) {
+    // No output means no agent ran (early exit) or the output was unavailable.
+    // agentInvoked distinguishes "genuinely $0" from "unknown cost."
+    return { costUsd: agentInvoked ? null : 0, inputTokens: 0, outputTokens: 0, modelId: null, attempt };
+  }
   const costUsd =
-    typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0
-      ? rawCost
+    Number.isFinite(output.total_cost) && output.total_cost >= 0
+      ? output.total_cost
       : agentInvoked
         ? null
         : 0;
-  const tokens = output.total_tokens as Record<string, unknown> | undefined;
-  const inputTokens = typeof tokens?.input === "number" ? tokens.input : 0;
-  const outputTokens = typeof tokens?.output === "number" ? tokens.output : 0;
-  const errorDetail = output.error_detail as Record<string, unknown> | undefined;
-  const modelId = typeof errorDetail?.model === "string" ? errorDetail.model : null;
-  return { costUsd, inputTokens, outputTokens, modelId, attempt };
+  return {
+    costUsd,
+    inputTokens: output.total_tokens.input,
+    outputTokens: output.total_tokens.output,
+    modelId: output.error_detail?.model ?? null,
+    attempt,
+  };
 }
 
 export interface CoreLoopDeps {

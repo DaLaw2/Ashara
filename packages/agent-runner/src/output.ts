@@ -1,5 +1,6 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
 
 // ---------------------------------------------------------------------------
@@ -33,31 +34,15 @@ export interface AgentOutput {
     readonly totalTokens: { input: number; output: number };
     readonly totalCost: number;
     readonly turnCount: number;
+    readonly finishReason: "completed" | "turn_limit" | "error";
 }
 
 // ---------------------------------------------------------------------------
 // JSON serialization shape (snake_case for Rust compatibility)
+// AgentOutputJson is the Published Language type from @ashara/shared — the
+// single definition that both producer (here) and consumers (execution-service,
+// orchestrator) compile against.
 // ---------------------------------------------------------------------------
-
-interface ErrorDetailJson {
-    readonly model: string | null;
-    readonly turn_count: number;
-    readonly last_tool_call: string | null;
-    readonly message: string;
-}
-
-interface AgentOutputJson {
-    readonly status: "done" | "blocked" | "failed";
-    readonly summary: string;
-    readonly findings: string[];
-    readonly build_log: string | null;
-    readonly test_log: string | null;
-    readonly error: string | null;
-    readonly error_detail: ErrorDetailJson | null;
-    readonly total_tokens: { input: number; output: number };
-    readonly total_cost: number;
-    readonly turn_count: number;
-}
 
 function toJson(output: AgentOutput): AgentOutputJson {
     return {
@@ -73,6 +58,7 @@ function toJson(output: AgentOutput): AgentOutputJson {
         total_tokens: output.totalTokens,
         total_cost: output.totalCost,
         turn_count: output.turnCount,
+        finish_reason: output.finishReason,
     };
 }
 
@@ -145,6 +131,7 @@ export class OutputCollector {
             totalTokens: result.totalTokens,
             totalCost: result.totalCost,
             turnCount,
+            finishReason: result.finishReason,
         };
     }
 

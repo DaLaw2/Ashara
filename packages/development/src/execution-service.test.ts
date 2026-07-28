@@ -48,7 +48,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
   return {
     status,
     detail: `${status} detail`,
-    output: {},
+    output: null,
     sessionId: "s",
     filesChanged: [],
     attempt: 1,

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
 import { describeIndexShortfall } from "@ashara/memory";
@@ -43,7 +44,7 @@ export interface SessionStore {
 }
 
 export interface AgentInvoker {
-  spawn(opts: AgentSpawnOptions): Promise<Record<string, unknown>>;
+  spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson>;
 }
 
 export interface AgentSpawnOptions {
@@ -102,7 +103,7 @@ export interface TaskDescriptor {
 export interface ExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
   readonly detail: string;
-  readonly output: Record<string, unknown>;
+  readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   readonly filesChanged: string[];
   /**
@@ -232,7 +233,7 @@ export class DevelopmentService {
       const result: ExecutionResult = {
         status: "blocked",
         detail: envelope.summary,
-        output: {},
+        output: null,
         sessionId,
         filesChanged: [],
         attempt: 1,
@@ -270,7 +271,7 @@ export class DevelopmentService {
         const result: ExecutionResult = {
           status: "failed",
           detail: envelope.summary,
-          output: {},
+          output: null,
           sessionId,
           filesChanged: [],
           attempt: 1,
@@ -318,7 +319,7 @@ export class DevelopmentService {
       const result: ExecutionResult = {
         status: "failed",
         detail: envelope.summary,
-        output: {},
+        output: null,
         sessionId,
         filesChanged: [],
         attempt: 1,
@@ -629,7 +630,7 @@ export class DevelopmentService {
       briefPath,
     });
 
-    let output: Record<string, unknown>;
+    let output: AgentOutputJson;
 
     dispatch.agentInvoked = true;
     if (config.useRealAgent) {
@@ -640,11 +641,10 @@ export class DevelopmentService {
       console.log(`[${task.id}] agent execution stub — set useRealAgent to enable real execution`);
     }
 
-    const agentStatus = typeof output.status === "string" ? output.status : "failed";
+    const agentStatus = output.status;
 
     if (agentStatus === "failed") {
-      const summary = typeof output.summary === "string" ? output.summary : "no summary";
-      const turnCount = typeof output.turn_count === "number" ? output.turn_count : 0;
+      const { summary, turn_count: turnCount, finish_reason: finishReason } = output;
       // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
       // worktree is gone and git status would fail.
       const filesChanged = await getChangedFiles(workDir);
@@ -668,7 +668,7 @@ export class DevelopmentService {
       const chain = wrapError("development", "agentExecution", summary, {
         taskId: task.id,
         turnCount,
-        finishReason: typeof output.finish_reason === "string" ? output.finish_reason : undefined,
+        finishReason,
       });
       const envelope: ErrorEnvelope = {
         outcome: "failed",
@@ -689,8 +689,7 @@ export class DevelopmentService {
     }
 
     if (agentStatus === "blocked") {
-      const summary = typeof output.summary === "string" ? output.summary : "no summary";
-      const turnCount = typeof output.turn_count === "number" ? output.turn_count : 0;
+      const { summary, turn_count: turnCount } = output;
       // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
       // worktree is gone and git status would fail.
       const filesChanged = await getChangedFiles(workDir);
@@ -733,7 +732,7 @@ export class DevelopmentService {
       };
     }
 
-    if (agentStatus === "stub") {
+    if (!config.useRealAgent) {
       await persistConversationRecord(workDir, task.id, recordsBase, "pre-launch");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "stub agent output — skipping verify", { taskId: task.id });
@@ -761,7 +760,7 @@ export class DevelopmentService {
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
       const chain = wrapError("development", "agentExecution", "agent produced no file changes", {
         taskId: task.id,
-        turnCount: typeof output.turn_count === "number" ? output.turn_count : undefined,
+        turnCount: output.turn_count,
       });
       return {
         status: "failed",
@@ -781,8 +780,8 @@ export class DevelopmentService {
       taskId: task.id,
       attempt: 1,
       status: "done",
-      turns: typeof output.turn_count === "number" ? output.turn_count : null,
-      cost: typeof output.total_cost === "number" ? output.total_cost : null,
+      turns: output.turn_count,
+      cost: output.total_cost,
       filesChanged,
     });
 
@@ -907,7 +906,7 @@ export class DevelopmentService {
   private async verifyTask(
     task: TaskDescriptor,
     workDir: string,
-    output: Record<string, unknown>,
+    _output: AgentOutputJson,
     attempt: number,
   ): Promise<VerifyTaskOutcome> {
     const taskSpec = task.taskSpec;
@@ -945,15 +944,12 @@ export class DevelopmentService {
       return { verdict: response.verdict };
     } catch (e) {
       // Discipline A: verification unreachable -> false, never true. The agent's
-      // own self-reported output.verify.passed is discarded here — trusting it
-      // when real verification errored lets an optimistic/dishonest agent grade
-      // itself (Run 9 readiness review X1). It is still logged (Discipline C)
-      // so the discarded self-report is visible for diagnosis.
-      const inlineVerify = output.verify as Record<string, unknown> | undefined;
-      const selfReportedPassed =
-        typeof inlineVerify?.passed === "boolean" ? inlineVerify.passed : "unknown";
+      // own self-reported verify result is not part of the AgentOutputJson contract
+      // (the field never existed in the schema) and was always discarded — trusting
+      // it when real verification errored lets an optimistic/dishonest agent grade
+      // itself (Run 9 readiness review X1).
       console.warn(
-        `[${task.id}] verify failed, failing closed (self-reported passed=${selfReportedPassed} discarded):`,
+        `[${task.id}] verify failed, failing closed:`,
         e,
       );
       this.deps.eventSink?.emit({
@@ -1346,9 +1342,9 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
 // Pure utility functions (no BC dependencies)
 // ---------------------------------------------------------------------------
 
-function stubAgentOutput(): Record<string, unknown> {
+function stubAgentOutput(): AgentOutputJson {
   return {
-    status: "stub",
+    status: "failed",
     summary: "agent execution not yet wired — orchestration flow complete",
     // A measured zero, not a missing field: no LLM call happened, so the budget
     // must charge $0 rather than fall back to the unknown-cost estimate.
@@ -1357,6 +1353,10 @@ function stubAgentOutput(): Record<string, unknown> {
     build_log: null,
     test_log: null,
     error: null,
+    error_detail: null,
+    total_tokens: { input: 0, output: 0 },
+    turn_count: 0,
+    finish_reason: "error",
   };
 }
 

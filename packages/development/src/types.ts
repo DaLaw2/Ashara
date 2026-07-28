@@ -1,5 +1,4 @@
-import type { AgentBrief, SessionId, WorkItemId } from "@ashara/shared";
-export type { AgentBrief };
+import type { SessionId, WorkItemId } from "@ashara/shared";
 
 export interface TaskSpec {
   readonly goal: string;

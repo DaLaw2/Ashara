@@ -16,8 +16,6 @@ export interface RunSummaryInput {
   readonly acceptance?: AcceptanceVerdict;
 }
 
-export type RunSummaryDecision = TerminationStop | (TerminationPlanExhausted & { readonly stopReason: StopReason; readonly abandonedRoots?: readonly string[] });
-
 function deriveStopReason(decision: TerminationStop | TerminationPlanExhausted, acceptance?: AcceptanceVerdict): StopReason {
   if (decision.decision === "stop") return decision.reason as StopReason;
   // No verdict at all is not a passing verdict — the plan exhausted without

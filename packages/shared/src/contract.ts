@@ -116,7 +116,7 @@ export const ProjectKnowledgeSchema = z.object({
 }).strict();
 
 export type ProjectKnowledgeNode = z.infer<typeof ProjectKnowledgeNodeSchema>;
-export type ProjectKnowledgeEdge = z.infer<typeof ProjectKnowledgeEdgeSchema>;
+type ProjectKnowledgeEdge = z.infer<typeof ProjectKnowledgeEdgeSchema>;
 export type ProjectKnowledge = z.infer<typeof ProjectKnowledgeSchema>;
 
 export function nodesByKind(graph: ProjectKnowledge, kind: string): ProjectKnowledgeNode[] {
@@ -180,7 +180,7 @@ export type ContractDelta = z.infer<typeof ContractDeltaSchema>;
 export type Endpoint = z.infer<typeof EndpointSchema>;
 export type ContractModule = z.infer<typeof ModuleSchema>;
 export type Mount = z.infer<typeof MountSchema>;
-export type Check = z.infer<typeof CheckSchema>;
+type Check = z.infer<typeof CheckSchema>;
 
 /**
  * The domain-facing contract: the body plus the repo-managed key and version.

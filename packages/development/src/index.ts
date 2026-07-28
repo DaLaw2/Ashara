@@ -23,7 +23,6 @@ export {
 } from "./brief-assembly.js";
 
 export type {
-  AgentBrief,
   TaskSpec,
   CheckResult,
   TierResult,

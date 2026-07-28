@@ -1,20 +1,6 @@
-export type {
-    ParseResult,
-    RefKind,
-    SymbolDef,
-    SymbolId,
-    SymbolKind,
-    SymbolRef,
-} from "./types.js";
-export { symbolIdKey } from "./types.js";
+export { initParser } from "./parser.js";
 
-export { initParser, parseFile } from "./parser.js";
-export type { GrammarUnavailable } from "./parser.js";
-
-export { SymbolGraph } from "./graph.js";
-
-export { Bm25Index, tokenize } from "./bm25.js";
-export type { SearchResult } from "./bm25.js";
+export { Bm25Index } from "./bm25.js";
 
 export { CodebaseIndexer, describeIndexShortfall } from "./indexer.js";
-export type { IndexCoverage, IndexFailure, UnparsableGroup } from "./indexer.js";
+export type { IndexCoverage } from "./indexer.js";

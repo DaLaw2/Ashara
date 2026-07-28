@@ -2,6 +2,7 @@ import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, CoverageHold, RawFailureContext } from "./acl/planning-acl.js";
 import {
   PlanningService,
@@ -39,7 +40,7 @@ export async function executeTask(
   targetProjectPath: string | null,
 ): Promise<{
   result: TaskResult;
-  output: Record<string, unknown>;
+  output: AgentOutputJson | null;
   attempt: number;
   errorEnvelope?: ErrorEnvelope;
   /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
@@ -253,20 +254,20 @@ export async function processTask(
         await handleCompletedPoison(
           deps,
           task.id,
-          { detail: result.detail, output },
+          { detail: result.detail },
           targetProjectPath,
         );
       }
 
       const failure: RawFailureContext = {
         detail: result.detail,
-        raw: execEnvelope ? { ...execEnvelope } : output,
+        raw: execEnvelope ? { ...execEnvelope } : (output ?? {}),
       };
       // dispatchCount was already incremented for this attempt at the dispatch
       // seam above and is not mutated by recoverFailedItem, so it is the exact
       // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
       const attempts = current.dispatchCount;
-      const finishReason = typeof output.finish_reason === "string" ? output.finish_reason : "unknown";
+      const finishReason = output?.finish_reason ?? "unknown";
       // From the HOST observation, never from the agent's output. The agent
       // cannot run git inside its container, and when `output.files_changed`
       // was removed this read silently became a constant 0 — which made
@@ -321,7 +322,7 @@ export async function processTask(
 async function handleCompletedPoison(
   deps: CoreLoopDeps,
   currentTaskId: string,
-  execResult: { detail: string; output: Record<string, unknown> },
+  execResult: { detail: string },
   targetProjectPath: string,
 ): Promise<void> {
   const gateOutput = execResult.detail;

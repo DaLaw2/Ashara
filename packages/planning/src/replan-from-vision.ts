@@ -10,8 +10,6 @@ export const ReplanProposalSchema = z.object({
   differentiator: z.string().min(1),
   deliverables: z.array(z.string()).default([]),
 });
-export type ReplanProposal = z.infer<typeof ReplanProposalSchema>;
-
 export const ReplanResultSchema = z.object({
   proposals: z.array(ReplanProposalSchema),
   noAlternativeIds: z.array(z.string()).default([]),

@@ -1,8 +1,11 @@
-export * from "./alignment-types.js";
+export type {
+  DirectionInference,
+  DirectionQuestion,
+  AlignmentResult,
+} from "./alignment-types.js";
 export {
   AlignmentEngine,
   StubAlignmentLLM,
-  AlignmentInferenceError,
   createGatewayAlignmentLLM,
   alignmentReask,
   DEFAULT_DIRECTION_ASSUMPTIONS,

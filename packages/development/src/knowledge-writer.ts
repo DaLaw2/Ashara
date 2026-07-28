@@ -1,3 +1,4 @@
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { TaskDescriptor, ExecutionResult } from "./execution-service.js";
 import type { TaskSpec } from "./types.js";
 
@@ -70,7 +71,7 @@ export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
 export async function storeKnowledge(
   knowledgeSink: KnowledgeSink,
   task: TaskDescriptor,
-  output: Record<string, unknown>,
+  output: AgentOutputJson,
   filesChanged: readonly string[],
 ): Promise<void> {
   // task.epicId is the true walked-up Epic id the orchestrator resolves
@@ -79,26 +80,23 @@ export async function storeKnowledge(
   // directly), not a substitute in production.
   const epicId = task.epicId ?? task.parentId ?? null;
 
-  const findings = output.findings as unknown[] | undefined;
-  if (Array.isArray(findings)) {
-    for (const finding of findings) {
-      if (typeof finding === "string" && finding.length > 0) {
-        try {
-          await knowledgeSink.storeFinding(
-            task.id,
-            epicId,
-            finding.slice(0, 100),
-            finding,
-            ["agent-finding"],
-          );
-        } catch (e) {
-          console.warn(`[${task.id}] failed to store finding:`, e);
-        }
+  for (const finding of output.findings) {
+    if (finding.length > 0) {
+      try {
+        await knowledgeSink.storeFinding(
+          task.id,
+          epicId,
+          finding.slice(0, 100),
+          finding,
+          ["agent-finding"],
+        );
+      } catch (e) {
+        console.warn(`[${task.id}] failed to store finding:`, e);
       }
     }
   }
 
-  const summary = typeof output.summary === "string" ? output.summary : "";
+  const summary = output.summary;
   if (summary) {
     const fileList = filesChanged.join(", ");
     const content = `Task completed: ${summary}\n\nFiles changed: ${fileList}`;

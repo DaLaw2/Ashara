@@ -196,8 +196,3 @@ export class ContinuousRunner {
     });
   }
 }
-
-export function computeBackoff(consecutiveErrors: number): number {
-  const exponent = Math.min(consecutiveErrors, 6);
-  return Math.pow(2, exponent) * 1000;
-}

@@ -7,8 +7,6 @@ import type { VerifyOutput, VerifyPort } from "./acl/development-acl.js";
 // development's verify contract locally.
 // ---------------------------------------------------------------------------
 
-export type { VerifyCheckResult, VerifyTierResult } from "./acl/development-acl.js";
-
 export type InlineVerifyResult = VerifyOutput;
 
 export interface InlineVerifyTaskSpec {

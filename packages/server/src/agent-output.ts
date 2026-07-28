@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { z } from "zod";
-import type { ZodType } from "zod";
+import { agentOutputJsonSchema } from "@ashara/shared/agent-output";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 
 /**
  * Typed failure for a spawned agent whose output.json is genuinely missing or
@@ -27,15 +27,6 @@ export class AgentSpawnError extends Error {
 }
 
 /**
- * The agent output.json is a subprocess trust boundary — validate it with Zod rather
- * than asserting its shape (CLAUDE.md). A permissive object schema is deliberate: the
- * consumers (costFromOutput, execution-service) read individual fields defensively, so
- * the only invariant enforced here is "it is a JSON object", which is what distinguishes
- * a real result from a corrupt/absent one.
- */
-const agentOutputSchema: ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown());
-
-/**
  * Reads and validates a spawned agent's output.json REGARDLESS of exit code (r9f-t2).
  * A failing agent (turn-limit "blocked", "failed") writes a valid output.json with its
  * real status and total_cost before exiting non-zero, so that output must flow back
@@ -44,13 +35,17 @@ const agentOutputSchema: ZodType<Record<string, unknown>> = z.record(z.string(),
  * counted, the retry bound never binding (Run-9). Fail-closed (Discipline A): a genuinely
  * missing or unparseable file — the runner crashed before writing — throws a typed
  * AgentSpawnError instead of fabricating a success.
+ *
+ * The schema enforces the full agent-output contract (agentOutputJsonSchema from
+ * @ashara/shared) — a missing or misnamed field (like the finish_reason that killed
+ * shouldSplit for 42 runs) is now a validation failure, not a silent undefined.
  */
 export async function resolveAgentOutput(
   taskId: string,
   outputPath: string,
   exitCode: number | null,
   stderr: string,
-): Promise<Record<string, unknown>> {
+): Promise<AgentOutputJson> {
   let raw: string;
   try {
     raw = await readFile(outputPath, "utf-8");
@@ -77,13 +72,13 @@ export async function resolveAgentOutput(
     });
   }
 
-  const validated = agentOutputSchema.safeParse(parsed);
+  const validated = agentOutputJsonSchema.safeParse(parsed);
   if (!validated.success) {
     throw new AgentSpawnError({
       taskId,
       outputPath,
       exitCode,
-      cause: `output is not a JSON object: ${validated.error.issues.map((i) => i.message).join("; ")}`,
+      cause: `agent output schema validation failed: ${validated.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
       stderr: stderr.slice(0, 500),
     });
   }

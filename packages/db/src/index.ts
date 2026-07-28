@@ -1,6 +1,8 @@
-export * from "./schema.js";
-export * from "./connection.js";
-export * from "./listener.js";
+export type { Database } from "./connection.js";
+export { createDb, createDbFromPool } from "./connection.js";
+
+export type { PgListener } from "./listener.js";
+export { listenForEvents } from "./listener.js";
 
 export { WorkItemRepository } from "./repositories/work-item.js";
 export { DevSessionRepository } from "./repositories/dev-session.js";
@@ -16,4 +18,3 @@ export { ConfigRepository } from "./repositories/config.js";
 export { RunStateRepository } from "./repositories/run-state.js";
 export { ContractRepository } from "./repositories/contract.js";
 export { withPlanningTransaction } from "./repositories/planning-transaction.js";
-export type { PlanningTransactionRepos } from "./repositories/planning-transaction.js";
