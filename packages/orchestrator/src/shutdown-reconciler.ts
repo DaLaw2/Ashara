@@ -80,17 +80,16 @@ export interface ShutdownReconcileSummary {
  * AFTER the runner stops. They are sequential and cannot fight: requeueOrphan
  * handles crash-orphans from a killed process; this handles the clean-exit path.
  *
- * KNOWN GAP (widened by run-scoping): a SIGTERM kills the process before this
- * function runs, and the startup reconciler handles InProgress (requeue) and
- * Failed (FailureRouter) but not Pending. Before run-scoping, the next run's
- * whole-board sweep would accidentally clean up the killed run's Pending items
- * when it terminated. Run-scoping removed that accidental cleanup: the next
- * run's scoped sweep skips them (different scope), so they now accumulate
- * rather than being swept. Those items ARE reachable by the gate
- * (PlanningService.gate selects all Pending Tasks regardless of scope), so
- * they will eventually be dispatched — but items that are never dispatched
- * persist indefinitely. Closing this gap requires the startup reconciler to
- * query Pending items from the still-open (previous) run and terminalize them.
+ * KNOWN GAP (closed by startup-reconciler Pending-orphan pass): a SIGTERM
+ * kills the process before this function runs. Before run-scoping, the next
+ * run's whole-board sweep accidentally cleaned up the killed run's Pending
+ * items when it terminated. Run-scoping WIDENED this gap: the next run's
+ * scoped sweep skips them (different scope), so they accumulated rather than
+ * being swept. The startup reconciler now closes this gap: on boot, it loads
+ * the run state, identifies Pending items whose scope is NOT the
+ * about-to-be-resumed run (still-open, adopted by openRun), and abandons
+ * them. Items from the active run are preserved; ad-hoc and pre-scoping
+ * items are left alone per the same scope partition this function applies.
  *
  * Fail-soft per item: a single item's transition failure must not prevent the
  * rest from being terminalized, and must not crash the shutdown sequence. Items

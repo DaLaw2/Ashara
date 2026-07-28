@@ -77,7 +77,16 @@ export {
 export type { RunState } from "./run-state.js";
 export { parseRunState, serializeRunState } from "./run-state.js";
 
-export { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "./run-scope.js";
+export type { StoredTaskSpec } from "./task-spec.js";
+export { parseStoredTaskSpec } from "./task-spec.js";
+
+export type { StoredBlockedReason } from "./blocked-reason.js";
+export { blockedReasonToRecord, parseStoredBlockedReason, withSubstitutedBy } from "./blocked-reason.js";
+
+export type { StoredSuccessCriteria } from "./success-criteria.js";
+export { parseStoredSuccessCriteria } from "./success-criteria.js";
+
+export { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 
 export type { ContractRepository } from "./repository-ports.js";
 

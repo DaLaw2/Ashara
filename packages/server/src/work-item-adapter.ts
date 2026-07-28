@@ -1,6 +1,13 @@
 import { WorkItemRepository as DbWorkItemRepository } from "@ashara/db";
 import type { WorkItemId } from "@ashara/shared";
-import { parseWorkItemLevel, parseWorkItemStatus } from "@ashara/shared";
+import {
+  parseWorkItemLevel,
+  parseWorkItemStatus,
+  parseStoredTaskSpec,
+  parseStoredBlockedReason,
+  parseStoredSuccessCriteria,
+  parseRunScope,
+} from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 
 /**
@@ -21,11 +28,11 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     parentId: (row.parentId as WorkItemId) ?? undefined,
     title: row.title,
     description: row.description ?? undefined,
-    taskSpec: (row.taskSpec as Record<string, unknown>) ?? undefined,
+    taskSpec: parseStoredTaskSpec(row.taskSpec),
     northStar: row.northStar ?? undefined,
-    successCriteria: (row.successCriteria as unknown[]) ?? undefined,
-    blockedReason: (row.blockedReason as Record<string, unknown>) ?? undefined,
-    runScope: row.runScope,
+    successCriteria: parseStoredSuccessCriteria(row.successCriteria),
+    blockedReason: parseStoredBlockedReason(row.blockedReason),
+    runScope: parseRunScope(row.runScope),
     dispatchCount: row.dispatchCount,
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),

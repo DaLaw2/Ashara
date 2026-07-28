@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { WorkItemStatus } from "@ashara/shared";
+import type { WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
 import { RUN_SCOPE_AD_HOC, RUN_SCOPE_PRE_SCOPING } from "@ashara/shared";
 import { createPendingWorkItem, startWorkItem, failWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
@@ -22,12 +22,12 @@ function seedItem(status: WorkItemStatus, runScope = THIS_RUN): WorkItem {
       // transition audit trail.
       startWorkItem(item);
       item.status = "Blocked";
-      item.blockedReason = { reason: "dependency" };
+      item.blockedReason = { source: "api", reason: "dependency" } satisfies StoredBlockedReason;
       item.updatedAt = new Date();
       break;
     case "Failed":
       startWorkItem(item);
-      failWorkItem(item, { reason: "agent error" });
+      failWorkItem(item, { source: "task_failed", reason: "agent error" });
       break;
     case "Completed":
     case "Abandoned":

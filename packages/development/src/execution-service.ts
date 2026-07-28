@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer } from "@ashara/shared";
+import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
@@ -53,7 +53,7 @@ export interface AgentSpawnOptions {
   readonly outputPath: string;
   readonly taskId: string;
   readonly dispatchCount?: number;
-  readonly blockedReason?: Record<string, unknown>;
+  readonly blockedReason?: StoredBlockedReason;
 }
 
 export interface ConventionsExtractor {
@@ -82,9 +82,9 @@ export interface TaskDescriptor {
   readonly id: WorkItemId;
   readonly title: string;
   readonly parentId?: string;
-  readonly taskSpec?: Record<string, unknown>;
+  readonly taskSpec?: StoredTaskSpec;
   /** WorkItem.blockedReason, carried through so a replanned attempt can see why the prior attempt failed. */
-  readonly blockedReason?: Record<string, unknown>;
+  readonly blockedReason?: StoredBlockedReason;
   /**
    * The task's true Epic ancestor id, walked up by the orchestrator (which owns
    * the WorkItem hierarchy) before constructing this descriptor — @ashara/development
@@ -916,7 +916,7 @@ export class DevelopmentService {
       task_id: task.id,
       task_spec: taskSpec
         ? {
-            checks: Array.isArray(taskSpec.checks) ? (taskSpec.checks as string[]) : undefined,
+            checks: taskSpec.checks,
           }
         : undefined,
       working_directory: workDir,
@@ -1184,9 +1184,11 @@ function isReplanContext(value: unknown): value is ReplanContext {
  */
 function extractReplanContext(
   taskId: string,
-  blockedReason: Record<string, unknown> | undefined,
+  blockedReason: StoredBlockedReason | undefined,
 ): ReplanContext | null {
   if (!blockedReason) return null;
+  // Only the "replan" variant carries replanContext; other variants do not.
+  if (blockedReason.source !== "replan") return null;
   const candidate = blockedReason.replanContext;
   if (candidate === undefined) return null;
 

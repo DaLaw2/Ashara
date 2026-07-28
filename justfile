@@ -25,6 +25,7 @@ check:
     npx tsx scripts/check-boundaries.ts
     npx knip
     npx eslint .
+    npx tsx scripts/check-docs.ts
 
 # The gate typechecks with TS 7; typescript-eslint and tsx resolve TS 6. Both report
 # zero errors today, but that is a measurement, not a guarantee — a native-port

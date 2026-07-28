@@ -194,9 +194,7 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
           level: "story",
           title: story.title,
           description: story.description ?? "",
-          successCriteria: Array.isArray(story.successCriteria)
-            ? (story.successCriteria as string[])
-            : [],
+          successCriteria: story.successCriteria ?? [],
           dependsOn: [],
         },
         input,

@@ -37,7 +37,7 @@ export async function createBugFixTask(
   const allItems = await workItemRepo.listAll();
   const existing = allItems.find((item) => {
     if (item.status !== "Pending" && item.status !== "InProgress") return false;
-    const spec = item.taskSpec as Record<string, unknown> | undefined;
+    const spec = item.taskSpec;
     return spec?.origin === "bug-fix" && spec?.culpritTaskId === culprit.culpritTaskId;
   });
   if (existing) {

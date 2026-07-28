@@ -221,8 +221,8 @@ describe("run-scoped narrative counts", () => {
 
   test("run-scoped abandoned items report their kinds", () => {
     const items: RunSummaryItem[] = [
-      item({ id: "a", runScope: THIS_RUN, status: "Abandoned", blockedReason: { reason: "retries exhausted" } }),
-      item({ id: "b", runScope: THIS_RUN, status: "Abandoned", blockedReason: { substitutedBy: "c" } }),
+      item({ id: "a", runScope: THIS_RUN, status: "Abandoned", blockedReason: { source: "failure_router", reason: "retries exhausted" } }),
+      item({ id: "b", runScope: THIS_RUN, status: "Abandoned", blockedReason: { source: "failure_router", reason: "duplicate", substitutedBy: "c" } }),
       item({ id: "c", runScope: THIS_RUN, status: "Completed" }),
     ];
 
@@ -239,6 +239,87 @@ describe("run-scoped narrative counts", () => {
     expect(narrative).toContain("This run abandoned 2 item(s)");
     expect(narrative).toContain("1 exhausted");
     expect(narrative).toContain("1 substituted");
+  });
+
+  test("failure_router abandoned item carries attempts and lastFailure through the typed seam", () => {
+    const items: RunSummaryItem[] = [
+      item({
+        id: "f1",
+        runScope: THIS_RUN,
+        status: "Abandoned",
+        blockedReason: {
+          source: "failure_router",
+          reason: "retries exhausted",
+          attempts: 3,
+          lastFailure: { detail: "gate check timed out" },
+        },
+      }),
+    ];
+
+    const decision: TerminationStop = {
+      ...COMPLETENESS_STOP,
+      counts: { ...COMPLETENESS_STOP.counts, total: 1, completed: 0, abandoned: 1 },
+    };
+
+    const { abandoned } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      decision,
+    );
+
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0].kind).toBe("exhausted-abandon");
+    expect(abandoned[0].attempts).toBe(3);
+    expect(abandoned[0].lastFailureDetail).toBe("gate check timed out");
+    expect(abandoned[0].reason).toContain("3 attempt(s)");
+  });
+
+  test("task_failed variant without attempts classifies correctly — absence is represented", () => {
+    const items: RunSummaryItem[] = [
+      item({
+        id: "tf1",
+        runScope: THIS_RUN,
+        status: "Abandoned",
+        blockedReason: {
+          source: "task_failed",
+          reason: "compilation error in generated code",
+        },
+      }),
+    ];
+
+    const decision: TerminationStop = {
+      ...COMPLETENESS_STOP,
+      counts: { ...COMPLETENESS_STOP.counts, total: 1, completed: 0, abandoned: 1 },
+    };
+
+    const { abandoned } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      decision,
+    );
+
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0].kind).toBe("exhausted-abandon");
+    expect(abandoned[0].attempts).toBeUndefined();
+    expect(abandoned[0].reason).toContain("compilation error");
+  });
+
+  test("abandoned item with no blockedReason gets unspecified-abandon", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "no-br", runScope: THIS_RUN, status: "Abandoned" }),
+    ];
+
+    const decision: TerminationStop = {
+      ...COMPLETENESS_STOP,
+      counts: { ...COMPLETENESS_STOP.counts, total: 1, completed: 0, abandoned: 1 },
+    };
+
+    const { abandoned } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      decision,
+    );
+
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0].kind).toBe("unspecified-abandon");
+    expect(abandoned[0].reason).toContain("no recorded reason");
   });
 
   test("board-wide counts use 'board total' to prevent confusion with run-scoped counts", () => {

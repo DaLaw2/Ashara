@@ -179,6 +179,6 @@ export class BudgetTracker {
 }
 
 export function extractCapability(task: WorkItem): string {
-  const spec = task.taskSpec as Record<string, unknown> | undefined;
+  const spec = task.taskSpec;
   return typeof spec?.capability === "string" ? spec.capability : "Strong";
 }

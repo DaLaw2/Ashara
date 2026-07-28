@@ -1,4 +1,4 @@
-import type { ContractInput, ProjectId, WorkItemId, ContractDelta, ProjectKnowledge } from "@ashara/shared";
+import type { ContractInput, ProjectId, WorkItemId, ContractDelta, ProjectKnowledge, StoredTaskSpec } from "@ashara/shared";
 import { parseProjectId, parseWorkItemLevel } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository, ContractRepository } from "./domain/index.js";
 import {
@@ -39,7 +39,7 @@ export interface BulkPlanItem {
   readonly title: string;
   readonly description?: string;
   readonly parentId?: string;
-  readonly taskSpec?: Record<string, unknown>;
+  readonly taskSpec?: StoredTaskSpec;
   readonly northStar?: string;
 }
 
@@ -209,10 +209,10 @@ async function deriveAndWriteContract(
  */
 function derivationText(item: WorkItem): string {
   const parts: string[] = [item.description ?? ""];
-  const deliverables = item.taskSpec?.["deliverables"];
-  if (Array.isArray(deliverables)) {
+  const deliverables = item.taskSpec?.deliverables;
+  if (deliverables) {
     for (const entry of deliverables) {
-      if (typeof entry === "string") parts.push(entry);
+      parts.push(entry);
     }
   }
   return parts.join(" ");

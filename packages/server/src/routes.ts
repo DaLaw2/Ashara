@@ -1,11 +1,15 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { WorkItemId, WorkItemStatus, ProjectKnowledge } from "@ashara/shared";
+import type { WorkItemId, WorkItemStatus, ProjectKnowledge, StoredBlockedReason } from "@ashara/shared";
 import {
   createDomainEvent,
   parseWorkItemStatus,
   parseWorkItemLevel,
   parseWorkItemId,
+  parseStoredTaskSpec,
+  parseStoredBlockedReason,
+  parseStoredSuccessCriteria,
+  parseRunScope,
   ProjectKnowledgeSchema,
   RUN_SCOPE_AD_HOC,
 } from "@ashara/shared";
@@ -312,11 +316,11 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       parentId: row.parentId as WorkItemId | undefined,
       title: row.title,
       description: row.description ?? undefined,
-      taskSpec: (row.taskSpec as Record<string, unknown>) ?? undefined,
+      taskSpec: parseStoredTaskSpec(row.taskSpec),
       northStar: row.northStar ?? undefined,
-      successCriteria: (row.successCriteria as unknown[]) ?? undefined,
-      blockedReason: (row.blockedReason as Record<string, unknown>) ?? undefined,
-      runScope: row.runScope,
+      successCriteria: parseStoredSuccessCriteria(row.successCriteria),
+      blockedReason: parseStoredBlockedReason(row.blockedReason),
+      runScope: parseRunScope(row.runScope),
       dispatchCount: row.dispatchCount,
       createdAt: row.createdAt ?? new Date(),
       updatedAt: row.updatedAt ?? new Date(),
@@ -333,12 +337,16 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
         case "Completed":
           completeWorkItem(item);
           break;
-        case "Blocked":
-          blockWorkItem(item, reason);
+        case "Blocked": {
+          const blockReason: StoredBlockedReason = { ...reason, source: "api" };
+          blockWorkItem(item, blockReason);
           break;
-        case "Failed":
-          failWorkItem(item, reason);
+        }
+        case "Failed": {
+          const failReason: StoredBlockedReason = { ...reason, source: "api" };
+          failWorkItem(item, failReason);
           break;
+        }
         case "Pending":
           // Failed -> Pending and Blocked -> Pending are both legal per
           // canTransitionTo, but they are different domain events
@@ -358,7 +366,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           // caller-supplied payload apart from FailureRouter's structured
           // exhausted/substitute shapes instead of duck-typing on field names
           // that happen to collide (e.g. a caller-supplied "reason" string).
-          const abandonReason = { ...callerReason, source: "api" };
+          const abandonReason: StoredBlockedReason = { ...callerReason, source: "api" };
           abandonWorkItem(item, abandonReason);
           break;
         }

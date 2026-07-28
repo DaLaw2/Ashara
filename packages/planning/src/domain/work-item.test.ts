@@ -1,4 +1,5 @@
 import { describe, test, expect } from "vitest";
+import type { StoredBlockedReason } from "@ashara/shared";
 import { TERMINAL_STATUSES, WORK_ITEM_STATUSES, RUN_SCOPE_AD_HOC, RUN_SCOPE_PRE_SCOPING } from "@ashara/shared";
 import {
   createPendingWorkItem,
@@ -19,10 +20,16 @@ import { InvalidStatusTransition } from "./errors.js";
 // escaping a stale local copy.
 const ALL_STATUSES = WORK_ITEM_STATUSES;
 
+// Test fixture: a valid StoredBlockedReason for use in domain method calls.
+const FAIL_REASON: StoredBlockedReason = { source: "task_failed", reason: "task_failed" };
+const BLOCK_REASON: StoredBlockedReason = { source: "api", reason: "waiting on dependency" };
+const ABANDON_REASON: StoredBlockedReason = { source: "failure_router", reason: "unrecoverable" };
+const SHUTDOWN_REASON: StoredBlockedReason = { source: "shutdown-reconciler", reason: "run terminated", previousStatus: "Pending" };
+
 function seedFailed() {
   const item = createPendingWorkItem("Task", "leaf-task", "test-run");
   startWorkItem(item);
-  failWorkItem(item, { reason: "task_failed" });
+  failWorkItem(item, FAIL_REASON);
   takeEvents(item);
   return item;
 }
@@ -87,9 +94,9 @@ describe("state-machine totality", () => {
 
   test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {
     const item = createPendingWorkItem("Task", "parked-task", "test-run");
-    blockWorkItem(item, { reason: "waiting on owner" });
+    blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
-    abandonWorkItem(item, { reason: "owner dropped it", source: "api" });
+    abandonWorkItem(item, { source: "api", reason: "owner dropped it" });
     expect(item.status).toBe("Abandoned");
   });
 });
@@ -139,7 +146,7 @@ describe("method-level preconditions guard the shared -> Pending edge", () => {
 
   function seedBlocked() {
     const item = createPendingWorkItem("Task", "leaf-task", "test-run");
-    blockWorkItem(item, { reason: "waiting on dependency" });
+    blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     return item;
   }
@@ -192,11 +199,11 @@ describe("abandonWorkItem", () => {
   test("moves a Failed item to the terminal Abandoned status and emits work_item.abandoned", () => {
     const item = seedFailed();
 
-    abandonWorkItem(item, { reason: "unrecoverable" });
+    abandonWorkItem(item, ABANDON_REASON);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Abandoned");
-    expect(item.blockedReason).toEqual({ reason: "unrecoverable" });
+    expect(item.blockedReason).toEqual(ABANDON_REASON);
     expect(events).toHaveLength(1);
     expect(events[0]?.eventType).toBe("work_item.abandoned");
     expect(events[0]?.payload.work_item_id).toBe(item.id);
@@ -205,7 +212,7 @@ describe("abandonWorkItem", () => {
   test("moves a Pending item directly to Abandoned (run-end terminalization)", () => {
     const item = createPendingWorkItem("Task", "leaf-task", "test-run");
 
-    abandonWorkItem(item, { reason: "run terminated", source: "shutdown-reconciler" });
+    abandonWorkItem(item, SHUTDOWN_REASON);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Abandoned");
@@ -218,7 +225,7 @@ describe("abandonWorkItem", () => {
     startWorkItem(item);
     takeEvents(item);
 
-    abandonWorkItem(item, { reason: "run terminated", source: "shutdown-reconciler" });
+    abandonWorkItem(item, SHUTDOWN_REASON);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Abandoned");
@@ -229,18 +236,18 @@ describe("abandonWorkItem", () => {
   test("throws InvalidStatusTransition from a terminal status", () => {
     const item = createPendingWorkItem("Task", "leaf-task", "test-run");
     startWorkItem(item);
-    failWorkItem(item, { reason: "failed" });
-    abandonWorkItem(item, { reason: "give up" });
+    failWorkItem(item, FAIL_REASON);
+    abandonWorkItem(item, ABANDON_REASON);
     takeEvents(item);
 
-    expect(() => abandonWorkItem(item, { reason: "double abandon" })).toThrow(
+    expect(() => abandonWorkItem(item, ABANDON_REASON)).toThrow(
       InvalidStatusTransition,
     );
   });
 
   test("Abandoned cannot be replanned — abandon is terminal", () => {
     const item = seedFailed();
-    abandonWorkItem(item, { reason: "unrecoverable" });
+    abandonWorkItem(item, ABANDON_REASON);
     takeEvents(item);
 
     expect(() => replanWorkItem(item)).toThrow(InvalidStatusTransition);

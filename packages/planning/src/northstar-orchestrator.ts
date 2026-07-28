@@ -52,9 +52,7 @@ export async function checkNorthStarAlignment(
 
   const epicNorthStar = epic?.northStar ?? "";
 
-  const storyCriteria = Array.isArray(story.successCriteria)
-    ? (story.successCriteria as string[])
-    : [];
+  const storyCriteria = story.successCriteria ?? [];
 
   const input: NorthStarCheckInput = {
     completedWork: completedSummaries.join(". "),

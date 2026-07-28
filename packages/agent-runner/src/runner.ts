@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief, parseStoredTaskSpec } from "@ashara/shared";
 import {
     LLMGateway,
     loadGatewayCatalogFromFile,
@@ -178,16 +178,12 @@ export class AgentRunner {
         let verifyResult: InlineVerifyResult | null = null;
         try {
             const rawBrief = JSON.parse(briefRaw) as Record<string, unknown>;
-            const taskSpec = rawBrief["task_spec"] as Record<string, unknown> | undefined;
+            const taskSpec = parseStoredTaskSpec(rawBrief["task_spec"]);
             verifyResult = await runInlineVerify(
                 this.config.workingDir,
-                taskSpec ? {
-                    checks: Array.isArray(taskSpec["checks"])
-                        ? (taskSpec["checks"] as string[])
-                        : brief.constraints,
-                } : {
-                    checks: brief.constraints,
-                },
+                taskSpec?.checks
+                    ? { checks: taskSpec.checks }
+                    : { checks: brief.constraints },
             );
             console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
         } catch (err) {

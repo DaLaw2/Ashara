@@ -1,4 +1,4 @@
-import { TERMINAL_STATUSES, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { blockedReasonToRecord, TERMINAL_STATUSES, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
@@ -7,7 +7,7 @@ import type { EventSink } from "./ports.js";
 
 export interface RunSummaryItem extends TerminationItemSnapshot {
   readonly title: string;
-  readonly blockedReason?: Record<string, unknown>;
+  readonly blockedReason?: import("@ashara/shared").StoredBlockedReason;
   /** Which run created this item (a runId, RUN_SCOPE_PRE_SCOPING, or RUN_SCOPE_AD_HOC). */
   readonly runScope: string;
 }
@@ -116,7 +116,11 @@ function buildAbandoned(items: readonly RunSummaryItem[]): AbandonedItem[] {
 }
 
 function classifyAbandon(item: RunSummaryItem): AbandonedItem {
-  const raw = item.blockedReason ?? {};
+  // Widen through the exhaustive seam — a new source variant is a compile
+  // error in blockedReasonToRecord, not a silent assignment to Record.
+  const raw: Record<string, unknown> = item.blockedReason
+    ? blockedReasonToRecord(item.blockedReason)
+    : {};
   const source = readString(raw, "source");
 
   if (source === "api") {

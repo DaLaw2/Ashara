@@ -70,7 +70,7 @@ export async function executeTask(
     id: task.id,
     title: task.title,
     parentId: task.parentId,
-    taskSpec: task.taskSpec as Record<string, unknown> | undefined,
+    taskSpec: task.taskSpec,
     // Carries FailureRouter's replan context (Failed -> Pending via
     // applyReplan) through to buildBrief, so a replanned attempt is informed
     // by why the prior attempt failed instead of repeating it identically.
@@ -148,7 +148,7 @@ async function commitFailure(workItemRepo: WorkItemRepository, taskId: WorkItem[
       return [];
     }
     const previousStatus = item.status;
-    failWorkItem(item, { reason: "orchestrator error" });
+    failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" });
     await PlanningService.saveWorkItem(workItemRepo, item, previousStatus);
     return takeEvents(item);
   }
@@ -376,7 +376,7 @@ export async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promi
       events = [];
     } else {
       const previousStatus = item.status;
-      failWorkItem(item, { reason: "orchestrator error" });
+      failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" });
       await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
       events = takeEvents(item);
     }

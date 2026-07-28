@@ -1,3 +1,4 @@
+import { blockedReasonToRecord, withSubstitutedBy } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { createPendingWorkItem, extractSubstitutedBy } from "./domain/index.js";
 import type { ReplanLLM, AbandonedItemContext } from "./replan-from-vision.js";
@@ -82,11 +83,11 @@ export async function recoverFromAbandoned(deps: LivenessRecoveryDeps): Promise<
         id: item.id,
         title: item.title,
         goal: readString(item.taskSpec, "goal"),
-        deliverables: Array.isArray(item.taskSpec?.deliverables)
-          ? (item.taskSpec.deliverables as string[]).filter((d): d is string => typeof d === "string")
-          : undefined,
-        attempts: readNumber(item.blockedReason, "attempts"),
-        failureDetail: readString(item.blockedReason, "reason"),
+        deliverables: item.taskSpec?.deliverables,
+        // Widen through the exhaustive seam — `attempts` and `reason` exist on
+        // most but not all source types; the seam forces reviewing new variants.
+        attempts: readNumber(item.blockedReason ? blockedReasonToRecord(item.blockedReason) : undefined, "attempts"),
+        failureDetail: readString(item.blockedReason ? blockedReasonToRecord(item.blockedReason) : undefined, "reason"),
         priorLessons: approaches.map(
           (a) => `[${a.title}] ${a.failureReason} — learned: ${a.learned}`,
         ),
@@ -153,11 +154,13 @@ export async function recoverFromAbandoned(deps: LivenessRecoveryDeps): Promise<
           extractSubstitutedBy(i.blockedReason) === abandoned.id,
       );
       for (const prior of priorAbandoned) {
-        prior.blockedReason = { ...prior.blockedReason, substitutedBy: saved.id };
+        // The filter guarantees blockedReason is defined (extractSubstitutedBy
+        // returns undefined for undefined input, which cannot === a string).
+        prior.blockedReason = withSubstitutedBy(prior.blockedReason!, saved.id);
         await txRepo.save(prior, "Abandoned");
       }
 
-      abandoned.blockedReason = { ...abandoned.blockedReason, substitutedBy: saved.id };
+      abandoned.blockedReason = withSubstitutedBy(abandoned.blockedReason!, saved.id);
       await txRepo.save(abandoned, "Abandoned");
 
       created += 1;

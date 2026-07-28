@@ -9,7 +9,7 @@
  * the identical fail-closed rule for what counts as "the work exists elsewhere."
  */
 export function extractSubstitutedBy(
-  blockedReason: Record<string, unknown> | undefined,
+  blockedReason: { substitutedBy?: string } | undefined,
 ): string | undefined {
   const value = blockedReason?.substitutedBy;
   return typeof value === "string" ? value : undefined;

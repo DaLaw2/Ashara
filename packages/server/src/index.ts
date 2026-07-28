@@ -84,7 +84,7 @@ import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } f
 import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
-import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta } from "@ashara/shared";
+import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
@@ -745,6 +745,7 @@ async function main(): Promise<void> {
       failureRouter,
       devSessionStore: devSessionRepo,
       workdirBase: config.coreLoop.workdirBase,
+      runStateStore: runStateRepo,
     });
   } catch (e) {
     console.warn("Startup reconciliation failed; starting runner anyway:", e);
@@ -825,16 +826,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function extractPriorEnvelope(blockedReason: Record<string, unknown> | undefined): ReturnType<typeof tryParseEnvelope> {
+function extractPriorEnvelope(blockedReason: StoredBlockedReason | undefined): ReturnType<typeof tryParseEnvelope> {
   if (!blockedReason) return null;
-  const replanContext = blockedReason.replanContext;
-  if (!isRecord(replanContext)) return null;
-  const raw = replanContext.raw;
+  // Only the "replan" variant carries replanContext.
+  if (blockedReason.source !== "replan") return null;
+  const raw = blockedReason.replanContext.raw;
   if (!isRecord(raw)) return null;
   return tryParseEnvelope(raw);
 }
 
-function determineCapability(dispatchCount: number, blockedReason: Record<string, unknown> | undefined): string {
+function determineCapability(dispatchCount: number, blockedReason: StoredBlockedReason | undefined): string {
   if (dispatchCount === 0) return "Strong";
 
   const envelope = extractPriorEnvelope(blockedReason);

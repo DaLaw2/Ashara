@@ -1,4 +1,4 @@
-import type { WorkItemStatus, ProjectContract } from "@ashara/shared";
+import type { WorkItemStatus, ProjectContract, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
@@ -34,7 +34,7 @@ function buildContractKeyMap(contract: ProjectContract): Map<string, string[]> {
 }
 
 function deliverableModuleKeys(
-  taskSpec: Record<string, unknown> | undefined,
+  taskSpec: StoredTaskSpec | undefined,
   filter?: ModulePathFilter,
 ): string[] {
   const raw = taskSpec?.deliverables;
@@ -45,7 +45,7 @@ function deliverableModuleKeys(
 }
 
 function registryKeysFor(
-  item: { id: string; taskSpec?: Record<string, unknown> },
+  item: { id: string; taskSpec?: StoredTaskSpec },
   contractKeys: Map<string, string[]> | null,
   filter?: ModulePathFilter,
 ): string[] {
@@ -189,8 +189,8 @@ async function applyReplan(
   replanWorkItem(item);
 
   const spec = item.taskSpec ?? {};
-  const existingChecks = Array.isArray(spec.checks) ? (spec.checks as string[]) : [];
-  const existingDeliverables = Array.isArray(spec.deliverables) ? (spec.deliverables as string[]) : [];
+  const existingChecks = spec.checks ?? [];
+  const existingDeliverables = spec.deliverables ?? [];
 
   const mergedChecks = deriveRetryChecks(failure, existingChecks);
   const mergedDeliverables = deriveRetryDeliverables(failure, existingDeliverables);
@@ -200,6 +200,7 @@ async function applyReplan(
   }
 
   item.blockedReason = {
+    source: "replan",
     replanContext: { attempt, detail: failure.detail, raw: failure.raw },
   };
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
@@ -209,7 +210,7 @@ async function applyReplan(
 export async function applyAbandon(
   deps: Pick<FailureRecoveryDeps, "workItemRepo" | "eventPublisher">,
   item: WorkItem,
-  reason: Record<string, unknown> & { readonly source: string },
+  reason: StoredBlockedReason,
 ): Promise<void> {
   const previousStatus = item.status;
   abandonWorkItem(item, reason);

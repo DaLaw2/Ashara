@@ -81,8 +81,10 @@ export async function recordFailedApproach(
 ): Promise<void> {
   try {
     const epicId = await findEpicId(workItemRepo, task);
-    const affectedArea = (task.taskSpec as Record<string, unknown> | undefined)?.area as string | undefined
-      ?? task.title.toLowerCase();
+    // FINDING: taskSpec.area was read but never written by any producer — a silent
+    // death of the shouldSplit class. The fallback was always taken. Removed the
+    // dead read; only the fallback remains.
+    const affectedArea = task.title.toLowerCase();
 
     await failedApproachRepo.record(
       task.id,

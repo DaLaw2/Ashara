@@ -5,6 +5,7 @@ import type {
   Endpoint,
   WorkItemId,
   WorkItemStatus,
+  StoredTaskSpec,
 } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
 import type { EndpointCoverageGap } from "./run-summary.js";
@@ -475,7 +476,7 @@ function rootOf(id: string, parentById: ReadonlyMap<string, string | undefined>)
   }
 }
 
-function buildCoverageTaskSpec(endpoint: Endpoint): Record<string, unknown> {
+function buildCoverageTaskSpec(endpoint: Endpoint): StoredTaskSpec {
   return {
     goal: `Implement the ${endpoint.method} ${endpoint.path} endpoint`,
     endState: `${endpoint.method} ${endpoint.path} responds with the correct status and body`,

@@ -3,6 +3,9 @@ import {
   type WorkItemLevel,
   type WorkItemStatus,
   type DomainEvent,
+  type StoredTaskSpec,
+  type StoredBlockedReason,
+  type StoredSuccessCriteria,
   createWorkItemId,
   createDomainEvent,
   canTransitionTo,
@@ -16,10 +19,10 @@ export interface WorkItem {
   parentId?: WorkItemId;
   title: string;
   description?: string;
-  taskSpec?: Record<string, unknown>;
+  taskSpec?: StoredTaskSpec;
   northStar?: string;
-  successCriteria?: unknown[];
-  blockedReason?: Record<string, unknown>;
+  successCriteria?: StoredSuccessCriteria;
+  blockedReason?: StoredBlockedReason;
   /**
    * Which run created this item: either a runId (UUID from openRun),
    * RUN_SCOPE_PRE_SCOPING (migration backfill), or RUN_SCOPE_AD_HOC
@@ -45,9 +48,9 @@ export function createPendingWorkItem(
   runScope: string,
   parentId?: WorkItemId,
   description?: string,
-  taskSpec?: Record<string, unknown>,
+  taskSpec?: StoredTaskSpec,
   northStar?: string,
-  successCriteria?: unknown[],
+  successCriteria?: StoredSuccessCriteria,
 ): WorkItem {
   const now = new Date();
   return {
@@ -72,7 +75,7 @@ export function createTask(
   title: string,
   runScope: string,
   parentId?: WorkItemId,
-  taskSpec?: Record<string, unknown>,
+  taskSpec?: StoredTaskSpec,
 ): WorkItem {
   return createPendingWorkItem("Task", title, runScope, parentId, undefined, taskSpec);
 }
@@ -109,7 +112,7 @@ export function completeWorkItem(item: WorkItem): void {
   );
 }
 
-export function failWorkItem(item: WorkItem, reason: Record<string, unknown>): void {
+export function failWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
   if (!canTransitionTo(item.status, "Failed")) {
     throw new InvalidStatusTransition(item.id, item.status, "Failed");
   }
@@ -124,7 +127,7 @@ export function failWorkItem(item: WorkItem, reason: Record<string, unknown>): v
   );
 }
 
-export function blockWorkItem(item: WorkItem, reason: Record<string, unknown>): void {
+export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
   if (!canTransitionTo(item.status, "Blocked")) {
     throw new InvalidStatusTransition(item.id, item.status, "Blocked");
   }
@@ -194,7 +197,7 @@ export function replanWorkItem(item: WorkItem): void {
  * Abandoned, ADR-029), the HTTP PATCH give-up path (Blocked → Abandoned),
  * and the shutdown reconciler (Pending/InProgress → Abandoned on run end).
  */
-export function abandonWorkItem(item: WorkItem, reason: Record<string, unknown>): void {
+export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
   if (!canTransitionTo(item.status, "Abandoned")) {
     throw new InvalidStatusTransition(item.id, item.status, "Abandoned");
   }

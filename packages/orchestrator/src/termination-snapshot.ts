@@ -1,5 +1,5 @@
 import { parseProjectId } from "@ashara/shared";
-import type { ProductObservation, ProjectContract, ProjectId } from "@ashara/shared";
+import type { ProductObservation, ProjectContract, ProjectId, StoredTaskSpec } from "@ashara/shared";
 import type { AcceptanceLLM, EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
@@ -265,7 +265,7 @@ async function createGapTasks(
     const title = `[acceptance] ${gap.expected}`;
     if (existingTitles.has(title.toLowerCase())) continue;
 
-    const taskSpec: Record<string, unknown> = {
+    const taskSpec: StoredTaskSpec = {
       goal: gap.expected,
       endState: gap.expected,
       checks: [],
