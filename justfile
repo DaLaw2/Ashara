@@ -25,6 +25,14 @@ check:
     npx tsx scripts/check-boundaries.ts
     npx knip
     npx eslint .
+
+# The executable-claims gate. NOT in `check`, and the reason is not that it is optional:
+# it scans CLAUDE.md, docs/*.md and .claude/commands/*.md, and ALL THREE ARE GITIGNORED.
+# CI checks out from git, finds zero documents, and fails closed -- correctly, but it means
+# CI can never run this gate while the claims live in untracked files. Making it pass on zero
+# documents would be the "All 0 checks passed" defect. Run it before every commit; `just save`
+# is not a substitute for the decision recorded in story `swamp-cleanup`.
+check-docs:
     npx tsx scripts/check-docs.ts
 
 # The gate typechecks with TS 7; typescript-eslint and tsx resolve TS 6. Both report
