@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief, parseStoredTaskSpec } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief } from "@ashara/shared";
 import {
     LLMGateway,
     loadGatewayCatalogFromFile,
@@ -179,13 +179,10 @@ export class AgentRunner {
         // 7. Run inline verification
         let verifyResult: InlineVerifyResult | null = null;
         try {
-            // contract-erasing: brief.json has AgentBriefSchema but task_spec is read off the raw parse
-            const rawBrief = JSON.parse(briefRaw) as Record<string, unknown>;
-            const taskSpec = parseStoredTaskSpec(rawBrief["task_spec"]);
             verifyResult = await runInlineVerify(
                 this.config.workingDir,
-                taskSpec?.checks
-                    ? { checks: taskSpec.checks }
+                brief.task_spec?.checks
+                    ? { checks: brief.task_spec.checks }
                     : { checks: brief.constraints },
             );
             console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);

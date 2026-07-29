@@ -36,11 +36,14 @@ import { ProjectFrameSchema } from "./project-frame.js";
  *    sections.
  *
  * `task_spec` — INCLUDED, consciously. It is not rendered into the system
- * prompt, but the agent-runner reads it back off `brief.json` to seed inline
- * verification (goal / endState / checks). Excluding it would drop that field on
- * a strict parse and blind inline verify. Kept as an opaque record: its internal
- * shape is owned by the DB `task_spec` column and validated where it is
- * consumed, not re-specified at this seam.
+ * prompt, but the agent-runner reads `task_spec.checks` off `brief.json` to
+ * seed inline verification. Declared as a typed object with only the consumed
+ * field (`checks`); the producer passes the full `StoredTaskSpec` and the
+ * unrecognized keys are stripped at parse time (Zod default). This is
+ * deliberate: only what the consumer reads crosses the process seam, and a
+ * missing `checks` is a parse failure rather than a silent fallback to
+ * `brief.constraints`. `goal` and `endState` are read from the domain
+ * `WorkItem.taskSpec` before the brief is assembled, not from this field.
  *
  * Arrays default to `[]` when absent (a Rust-era fallback stub brief may omit
  * them); a present-but-wrong-typed array is a parse error, not a silent `[]`
@@ -62,8 +65,17 @@ export const AgentBriefSchema = z
     // Supplementary tier — reference context rendered after binding sections.
     codeContext: z.string().optional(),
     contextMap: z.string().optional(),
-    // Opaque passthrough — consumed by inline verify, never the prompt.
-    task_spec: z.record(z.string(), z.unknown()).optional(),
+    // Typed passthrough — only `checks` is consumed (by inline verify in
+    // agent-runner); the producer passes the full StoredTaskSpec and unrecognized
+    // keys are stripped. Not `.strict()`: the producer (execution-service) is a
+    // separate package that passes the full StoredTaskSpec, and strictness would
+    // force a coupled change there. Strip achieves the goal — undeclared fields
+    // do not travel across the process seam.
+    task_spec: z
+      .object({
+        checks: z.array(z.string()).optional(),
+      })
+      .optional(),
     // Binding, conditional. Non-empty when present: the producer only emits
     // these when it has real content, so an empty string is a malformed brief.
     priorAttemptFailure: z.string().min(1).optional(),
