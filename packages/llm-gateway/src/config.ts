@@ -13,19 +13,30 @@ import { InvalidGatewayCatalog } from "./errors.js";
 import type { FormatGroup, GatewayConfig, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
 
 /**
- * Build a {@link GatewayConfig} from an already-loaded model catalog and
- * routing profiles. Pure function: reads env vars for API keys and budget
- * but performs no file I/O for model data.
+ * A provider's credentials for gateway configuration. Decoupled from the
+ * source: the server passes DB-sourced data; the CLI and agent-runner pass
+ * env-sourced data.
+ */
+export interface ProviderCredential {
+  readonly name: string;
+  readonly apiKey?: string | null;
+  readonly baseUrl?: string | null;
+}
+
+/**
+ * Build a {@link GatewayConfig} from an already-loaded model catalog,
+ * routing profiles, and provider credentials.
  *
- * The server passes models loaded from the DB (seeded by migration 002).
- * Routing profiles are deployment-specific config that still lives in TOML.
+ * The caller owns the credential source: the server reads from the database
+ * (`provider_configs.api_key`), while the CLI and agent-runner read from
+ * the process environment. Budget config is still read from env (it is
+ * deployment tuning, not a secret).
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
   routingProfiles: RoutingProfiles,
+  credentials: readonly ProviderCredential[],
 ): GatewayConfig {
-  const keys = loadProviderKeys();
-  const urls = loadProviderBaseUrls();
   const budget = loadBudgetEnv();
 
   const modelsByProvider: Record<string, Record<string, ModelConfig>> = {};
@@ -37,58 +48,25 @@ export function buildGatewayConfig(
   }
 
   const providers: ProviderConfig[] = [];
+  for (const cred of credentials) {
+    const providerModels = modelsByProvider[cred.name];
+    if (!providerModels) continue;
 
-  if (keys.anthropicApiKey && modelsByProvider["anthropic"]) {
+    const hasCredentials =
+      (cred.apiKey != null && cred.apiKey !== "") ||
+      (cred.name === "local" && cred.baseUrl != null);
+    if (!hasCredentials) continue;
+
     providers.push({
-      name: "anthropic",
-      apiKey: keys.anthropicApiKey,
-      models: Object.values(modelsByProvider["anthropic"]),
+      name: cred.name,
+      apiKey: cred.apiKey ?? undefined,
+      baseUrl: cred.baseUrl ?? undefined,
+      models: Object.values(providerModels),
       enabled: true,
     });
   }
 
-  if (keys.openaiApiKey && modelsByProvider["openai"]) {
-    providers.push({
-      name: "openai",
-      apiKey: keys.openaiApiKey,
-      models: Object.values(modelsByProvider["openai"]),
-      enabled: true,
-    });
-  }
-
-  if (keys.localLlmUrl && modelsByProvider["local"]) {
-    providers.push({
-      name: "local",
-      baseUrl: keys.localLlmUrl,
-      models: Object.values(modelsByProvider["local"]),
-      enabled: true,
-    });
-  }
-
-  const oaiCompatProviders: ReadonlyArray<{ name: string; key: string | undefined; url: string }> = [
-    { name: "deepseek", key: keys.deepseekApiKey, url: urls.deepseekBaseUrl },
-    { name: "mistral", key: keys.mistralApiKey, url: urls.mistralBaseUrl },
-    { name: "xai", key: keys.xaiApiKey, url: urls.xaiBaseUrl },
-    { name: "google", key: keys.googleApiKey, url: urls.googleBaseUrl },
-  ];
-
-  for (const cfg of oaiCompatProviders) {
-    if (cfg.key && modelsByProvider[cfg.name]) {
-      providers.push({
-        name: cfg.name,
-        apiKey: cfg.key,
-        baseUrl: cfg.url,
-        models: Object.values(modelsByProvider[cfg.name]),
-        enabled: true,
-      });
-    }
-  }
-
-  const defaultProvider = keys.anthropicApiKey
-    ? "anthropic"
-    : keys.openaiApiKey
-      ? "openai"
-      : "local";
+  const defaultProvider = providers.length > 0 ? providers[0].name : "local";
 
   return {
     providers,
@@ -114,7 +92,18 @@ export function buildGatewayConfig(
  */
 export function loadGatewayConfig(): GatewayConfig {
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-  return buildGatewayConfig({}, routingProfiles);
+  const keys = loadProviderKeys();
+  const urls = loadProviderBaseUrls();
+  const credentials: ProviderCredential[] = [
+    { name: "anthropic", apiKey: keys.anthropicApiKey },
+    { name: "openai", apiKey: keys.openaiApiKey },
+    { name: "deepseek", apiKey: keys.deepseekApiKey, baseUrl: urls.deepseekBaseUrl },
+    { name: "mistral", apiKey: keys.mistralApiKey, baseUrl: urls.mistralBaseUrl },
+    { name: "xai", apiKey: keys.xaiApiKey, baseUrl: urls.xaiBaseUrl },
+    { name: "google", apiKey: keys.googleApiKey, baseUrl: urls.googleBaseUrl },
+    { name: "local", baseUrl: keys.localLlmUrl },
+  ];
+  return buildGatewayConfig({}, routingProfiles, credentials);
 }
 
 // ---------------------------------------------------------------------------

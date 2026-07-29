@@ -12,7 +12,6 @@ export {
 
 export type { AgentRunnerEnv } from "./env.js";
 export {
-  providerKeyEnvNames,
   loadProviderKeys,
   loadProviderBaseUrls,
   loadBudgetEnv,

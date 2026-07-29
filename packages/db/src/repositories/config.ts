@@ -92,6 +92,14 @@ export class ConfigRepository {
     return this.db.select().from(systemSettings);
   }
 
+  async getSetting(key: string): Promise<string | null> {
+    const rows = await this.db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, key));
+    return rows[0]?.value ?? null;
+  }
+
   async updateSetting(key: string, value: string) {
     await this.db
       .insert(systemSettings)
@@ -124,8 +132,12 @@ export class ConfigRepository {
           target: providerConfigs.name,
           set: {
             providerType: sql`EXCLUDED.provider_type`,
-            apiKey: sql`EXCLUDED.api_key`,
-            baseUrl: sql`EXCLUDED.base_url`,
+            // COALESCE: seeding without a key must never destroy a hand-written
+            // key already in the row. The seed caller passes no key, so
+            // EXCLUDED.api_key is NULL — without COALESCE every server start
+            // would silently revert an operator's INSERT.
+            apiKey: sql`COALESCE(EXCLUDED.api_key, provider_configs.api_key)`,
+            baseUrl: sql`COALESCE(EXCLUDED.base_url, provider_configs.base_url)`,
             updatedAt: sql`EXCLUDED.updated_at`,
           },
         });

@@ -321,6 +321,35 @@ describe("ConfigRepository", () => {
     const settings = await repo.getSettings();
     expect(settings.find((s) => s.key === testSettingKey)?.value).toBe("initial-value");
   });
+
+  test("seedProviders without a key does not clobber an existing key", async () => {
+    // Seed with a key first.
+    const providerName = `test-noclobber-${randomUUID().slice(0, 8)}`;
+    createdProviderNames.push(providerName);
+    await repo.seedProviders([
+      { name: providerName, providerType: "anthropic", apiKey: "sk-real-key-abc" },
+    ]);
+
+    // Re-seed WITHOUT a key — simulates the server startup seed path.
+    await repo.seedProviders([
+      { name: providerName, providerType: "anthropic" },
+    ]);
+
+    const providers = await repo.listProviderConfigs();
+    const row = providers.find((p) => p.name === providerName);
+    expect(row?.apiKey).toBe("sk-real-key-abc");
+  });
+
+  test("getSetting returns the value for an existing key", async () => {
+    const key = `test-getsetting-${randomUUID().slice(0, 8)}`;
+    createdSettingKeys.push(key);
+    await repo.updateSetting(key, "hello");
+    expect(await repo.getSetting(key)).toBe("hello");
+  });
+
+  test("getSetting returns null for a missing key", async () => {
+    expect(await repo.getSetting("nonexistent-key-xyz")).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -80,17 +80,17 @@ import {
   NoLLMProvidersConfigured,
   withStructuredLadder,
 } from "@ashara/llm-gateway";
-import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
+import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
 import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, providerKeyEnvNames, nodeByKind, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService, ContractVersionConflict } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
-import { loadServerConfig } from "./config.js";
+import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
@@ -131,9 +131,9 @@ async function main(): Promise<void> {
     console.warn(`[server] Failed to load .env from ${dotenvPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const config = loadServerConfig();
-
-  const db = createDb(config.databaseUrl);
+  // Phase 1: bootstrap — database URL from env or policy default.
+  const databaseUrl = loadDatabaseUrl();
+  const db = createDb(databaseUrl);
 
   const dbWorkItemRepo = new DbWorkItemRepository(db);
   const eventStore = new EventStoreRepository(db);
@@ -153,12 +153,29 @@ async function main(): Promise<void> {
   await configRepo.seedProviders([
     { name: "anthropic", providerType: "anthropic", baseUrl: null },
     { name: "openai", providerType: "openai", baseUrl: null },
-    { name: "deepseek", providerType: "openai-compatible", baseUrl: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com/v1" },
+    { name: "deepseek", providerType: "openai-compatible", baseUrl: "https://api.deepseek.com/v1" },
     { name: "mistral", providerType: "openai-compatible", baseUrl: null },
     { name: "xai", providerType: "openai-compatible", baseUrl: null },
     { name: "google", providerType: "openai-compatible", baseUrl: null },
-    { name: "local", providerType: "openai-compatible", baseUrl: process.env.LOCAL_LLM_URL ?? null },
+    { name: "local", providerType: "openai-compatible", baseUrl: null },
   ]);
+
+  // Phase 2: API token from the database (systemSettings). Fail-closed:
+  // a missing token means the server cannot authenticate any request. The
+  // error names the table and key so the operator knows where to INSERT.
+  const apiToken = await configRepo.getSetting("api_token");
+  if (!apiToken) {
+    console.error(
+      "FATAL: api_token not found in system_settings table. " +
+        "The server cannot start without an API token.\n" +
+        "  looked in: system_settings WHERE key = 'api_token'\n" +
+        "  how to fix: INSERT INTO system_settings (key, value) " +
+        "VALUES ('api_token', '<your-token>');",
+    );
+    process.exit(1);
+  }
+
+  const config = loadServerConfig(databaseUrl, apiToken);
 
   // Single composition-root call for the LLM gateway (ADR-030). There is no
   // silent fallback here: providers configured -> real gateway; zero
@@ -206,8 +223,19 @@ async function main(): Promise<void> {
         supportsCaching: row.supportsCaching,
       };
     }
+    // Provider credentials from the database — the env path is gone from the
+    // server (Discipline D). The agent-runner subprocess still reads keys from
+    // its own environment (packages/agent-runner/src/runner.ts:522 →
+    // loadGatewayCatalogFromFile → buildConfigFromCatalog → loadProviderKeys);
+    // those env vars are injected from DB data at container spawn time below.
+    const dbProviderRows = await configRepo.listProviderConfigs();
+    const credentials: ProviderCredential[] = dbProviderRows.map((row) => ({
+      name: row.name,
+      apiKey: row.apiKey,
+      baseUrl: row.baseUrl,
+    }));
     const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-    const gwConfig = buildGatewayConfig(models, routingProfiles);
+    const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
     gwConfig.budget = {
       maxCostTotal: config.coreLoop.budgetLimitUsd,
       maxCostPerProvider: gwConfig.budget?.maxCostPerProvider,
@@ -313,10 +341,30 @@ async function main(): Promise<void> {
       knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
   };
 
-  // Build the gateway catalog at spawn time from the DB. Fresh per spawn so
-  // model-config changes between dispatches are picked up. Carries no secrets:
-  // the agent reads API keys from its own environment via providerKeyEnvNames().
-  async function buildSpawnCatalog(): Promise<GatewayCatalog> {
+  // Provider name → env var name mapping for container key injection.
+  // The agent-runner subprocess reads keys from its own process.env via
+  // loadProviderKeys() (packages/agent-runner/src/runner.ts:522 →
+  // loadGatewayCatalogFromFile → buildConfigFromCatalog → loadProviderKeys).
+  // The server reads keys from the database and injects them into the
+  // container environment using these names.
+  const PROVIDER_KEY_ENV_MAP: Readonly<Record<string, string>> = {
+    anthropic: "ANTHROPIC_API_KEY",
+    openai: "OPENAI_API_KEY",
+    deepseek: "DEEPSEEK_API_KEY",
+    mistral: "MISTRAL_API_KEY",
+    xai: "XAI_API_KEY",
+    google: "GOOGLE_API_KEY",
+  };
+
+  // Build the gateway catalog and provider key env vars at spawn time from
+  // the DB. Fresh per spawn so config changes between dispatches are picked
+  // up. The catalog carries no secrets; keys travel as container env vars.
+  interface SpawnData {
+    readonly catalog: GatewayCatalog;
+    readonly providerKeyEnv: Record<string, string>;
+  }
+
+  async function buildSpawnData(): Promise<SpawnData> {
     const [modelRows, providerRows, settingsRows] = await Promise.all([
       configRepo.listModelConfigs(),
       configRepo.listProviderConfigs(),
@@ -328,7 +376,7 @@ async function main(): Promise<void> {
       settings[row.key] = row.value;
     }
 
-    return {
+    const catalog: GatewayCatalog = {
       models: modelRows.map((row) => ({
         modelId: row.modelId,
         providerName: row.providerName,
@@ -348,6 +396,21 @@ async function main(): Promise<void> {
       })),
       settings,
     };
+
+    // Inject provider API keys from the database into env vars for the
+    // container. The agent-runner reads these via loadProviderKeys().
+    const providerKeyEnv: Record<string, string> = {};
+    for (const row of providerRows) {
+      const envName = PROVIDER_KEY_ENV_MAP[row.name];
+      if (envName && row.apiKey) {
+        providerKeyEnv[envName] = row.apiKey;
+      }
+      if (row.name === "local" && row.baseUrl) {
+        providerKeyEnv["LOCAL_LLM_URL"] = row.baseUrl;
+      }
+    }
+
+    return { catalog, providerKeyEnv };
   }
 
   // Every in-flight agent container name, so shutdown can stop them all.
@@ -364,12 +427,15 @@ async function main(): Promise<void> {
       // Write the gateway catalog file into the task's control directory.
       // The .ashara/ dir is created by execution-service before spawn is called.
       const catalogPath = join(opts.workDir, ASHARA_CONTROL_DIR, "gateway-catalog.json");
-      const catalog = await buildSpawnCatalog();
-      writeFileSync(catalogPath, JSON.stringify(catalog, null, 2));
+      const spawnData = await buildSpawnData();
+      writeFileSync(catalogPath, JSON.stringify(spawnData.catalog, null, 2));
 
       const containerName = buildContainerName(opts.taskId);
+      // Provider API keys come from the database, injected into the container
+      // env so the agent-runner can read them via loadProviderKeys(). The base
+      // sanitized env carries non-secret vars; DB-sourced keys are merged on top.
       const containerEnv = buildContainerEnv(
-        buildSanitizedEnv([...providerKeyEnvNames()]),
+        { ...buildSanitizedEnv([]), ...spawnData.providerKeyEnv },
         opts.workDir,
         {
           briefPath: opts.briefPath,

@@ -13,9 +13,21 @@ export interface ServerConfig {
   readonly modelsConfigPath: string;
 }
 
-export function loadServerConfig(): ServerConfig {
-  const databaseUrl = requireEnv("DATABASE_URL");
-  const apiToken = requireEnv("ASHARA_API_TOKEN");
+/**
+ * The default DATABASE_URL when the environment does not provide one.
+ * This is a POLICY default (CLAUDE.md Discipline A): the caller deliberately
+ * delegates "where to connect?" to the local-dev answer. It is not an
+ * evidence default — it does not answer an epistemic question the caller
+ * does not know is being asked. A deployment that needs a different DSN
+ * overrides via the DATABASE_URL env var.
+ */
+export const DEFAULT_DATABASE_URL = "postgresql://ashara@localhost:5432/ashara";
+
+export function loadDatabaseUrl(): string {
+  return process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+}
+
+export function loadServerConfig(databaseUrl: string, apiToken: string): ServerConfig {
 
   const port = parseIntOr(process.env["ASHARA_PORT"], 3000);
 
@@ -106,15 +118,6 @@ export function loadServerConfig(): ServerConfig {
     workerOfflineSecs,
     modelsConfigPath,
   };
-}
-
-function requireEnv(key: string): string {
-  const value = process.env[key];
-  if (!value || value.trim() === "") {
-    console.error(`${key} is required. Set it in .env or environment.`);
-    process.exit(1);
-  }
-  return value;
 }
 
 function nonEmptyEnv(key: string): string | undefined {

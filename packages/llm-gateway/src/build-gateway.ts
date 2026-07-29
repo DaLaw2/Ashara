@@ -10,10 +10,9 @@ const TEST_STUB_ENV_VAR = "ASHARA_TEST_STUB_LLM";
 const TEST_STUB_ENV_VALUE = "1";
 
 const HOW_TO_FIX =
-  "Configure at least one provider (ANTHROPIC_API_KEY, OPENAI_API_KEY, " +
-  "DEEPSEEK_API_KEY, MISTRAL_API_KEY, XAI_API_KEY, GOOGLE_API_KEY, or " +
-  "LOCAL_LLM_URL), or set ASHARA_TEST_STUB_LLM=1 to explicitly permit " +
-  "stub-mode for tests/local dev.";
+  "Set an api_key in the provider_configs table for at least one provider " +
+  "(e.g. UPDATE provider_configs SET api_key = '...' WHERE name = 'anthropic'), " +
+  "or set ASHARA_TEST_STUB_LLM=1 to explicitly permit stub-mode for tests/local dev.";
 
 const ROUTING_PROFILE_HOW_TO_FIX =
   "Map the missing site(s) in this combo's [routing.profiles] table, or empty " +

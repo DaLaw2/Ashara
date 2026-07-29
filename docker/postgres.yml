@@ -2,11 +2,14 @@ services:
   postgres:
     image: docker.io/pgvector/pgvector:pg17
     ports:
+      # 127.0.0.1-only binding is the sole access boundary under trust auth.
+      # A prior binding to 0.0.0.0 once let an E2E-built app write into the
+      # orchestrator's own database. Do not widen without restoring password auth.
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ashara
+      POSTGRES_DB: ashara
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - ashara_pgdata:/var/lib/postgresql/data
     healthcheck:

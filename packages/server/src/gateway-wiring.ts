@@ -35,7 +35,7 @@ export async function wireLlmGateway(
   ledger: BudgetLedger,
   logSink?: (record: LLMCallRecord) => void,
 ): Promise<GatewayWiringResult> {
-  const result = buildGateway({ config: gwConfig, checkedSources: ["DB/env"], ledger, logSink });
+  const result = buildGateway({ config: gwConfig, checkedSources: ["provider_configs.api_key (database)"], ledger, logSink });
 
   if (result.kind === "stub") {
     return { llmGateway: null, mode: "stub" };

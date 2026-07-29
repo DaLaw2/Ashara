@@ -16,20 +16,6 @@ export interface ProviderKeys {
     readonly localLlmUrl?: string;
 }
 
-const PROVIDER_KEY_ENV_NAMES: readonly string[] = [
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "MISTRAL_API_KEY",
-    "XAI_API_KEY",
-    "GOOGLE_API_KEY",
-    "LOCAL_LLM_URL",
-];
-
-export function providerKeyEnvNames(): readonly string[] {
-    return PROVIDER_KEY_ENV_NAMES;
-}
-
 export function loadProviderKeys(): ProviderKeys {
     return {
         anthropicApiKey: nonEmpty(process.env["ANTHROPIC_API_KEY"]),

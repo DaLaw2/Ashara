@@ -10,7 +10,7 @@ export {
   parseFormatGroup,
   GatewayCatalogSchema,
 } from "./config.js";
-export type { GatewayCatalog } from "./config.js";
+export type { GatewayCatalog, ProviderCredential } from "./config.js";
 export {
   calculateCost,
   CAPABILITY_RANK,
