@@ -52,7 +52,7 @@ async function handlePlanExhausted(
   const acceptance = await runAcceptanceCheck(deps, items);
 
   if (acceptance.outcome === "rejected") {
-    const maxGapAttempts = deps.config.maxGapAttempts ?? 2;
+    const maxGapAttempts = deps.config.maxGapAttempts;
     if (deps.acceptanceAttempts < maxGapAttempts) {
       await createGapTasks(deps, acceptance.gaps, runScope);
       return { decision: { decision: "continue", counts: decision.counts }, summary: null };

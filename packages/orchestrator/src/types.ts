@@ -54,8 +54,8 @@ export interface CoreLoopConfig {
    */
   readonly coverageEnforcing: boolean;
   readonly maxAcceptanceAttempts: number;
-  readonly maxReplanRounds?: number;
-  readonly maxGapAttempts?: number;
+  readonly maxReplanRounds: number;
+  readonly maxGapAttempts: number;
 }
 
 /**
@@ -85,6 +85,8 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   verifyTimeoutMs: 120_000,
   coverageEnforcing: true,
   maxAcceptanceAttempts: 2,
+  maxReplanRounds: 3,
+  maxGapAttempts: 2,
 };
 
 export interface CycleResult {

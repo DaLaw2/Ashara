@@ -119,7 +119,7 @@ export class LLMGateway {
    */
   private recordCost(extraction: ExtractedUsage, model: ModelConfig, provider: string): CostBreakdown {
     if (!extraction.measured) {
-      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0 };
+      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false };
     }
     const cost = calculateCost(
       extraction.usage.inputTokens,
@@ -129,7 +129,7 @@ export class LLMGateway {
       model,
     );
     this.budgetLedger.record(cost.totalCost, provider);
-    return cost;
+    return { ...cost, measured: true };
   }
 
   /**

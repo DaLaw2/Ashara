@@ -221,6 +221,20 @@ export interface CostBreakdown {
   outputCost: number;
   cacheSavings: number;
   totalCost: number;
+  /**
+   * `true` when the cost was calculated from provider-reported token counts;
+   * `false` when the usage was absent and the numeric fields are zero-filled
+   * placeholders. Downstream cost paths must map `measured === false` to a
+   * null cost (i.e. `TaskCostInfo.costUsd = null`) so the orchestrator's
+   * `unknownCostCharge` fires — the zeros are structural, not a measurement.
+   *
+   * Optional for backward compatibility with constructors outside the
+   * gateway that predate the flag (agent-runner test stubs). The gateway
+   * always sets it explicitly. Consumers must check `=== false`, never
+   * `!cost.measured` — `undefined` means "predates the flag", not
+   * "unmeasured."
+   */
+  readonly measured?: boolean;
 }
 
 export interface BudgetConfig {
