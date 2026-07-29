@@ -26,6 +26,13 @@ export const agentOutputJsonSchema = z.object({
   error_detail: agentErrorDetailSchema.nullable(),
   total_tokens: z.object({ input: z.number(), output: z.number() }),
   total_cost: z.number(),
+  /**
+   * `true` when every gateway call reported measured token counts; `false`
+   * when at least one call was unmeasured. Required at the subprocess
+   * boundary — an omitted flag must be a parse failure, not a silent
+   * `undefined` that reads as "measured".
+   */
+  cost_measured: z.boolean(),
   turn_count: z.number(),
   finish_reason: z.enum(["completed", "turn_limit", "error"]),
 });

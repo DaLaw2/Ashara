@@ -25,7 +25,7 @@ const { NativeFCAdapter } = await import("./format-adapter.js");
 // ---------------------------------------------------------------------------
 
 const USAGE = { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 };
-const COST = { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0.001 };
+const COST = { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0.001, measured: true };
 
 function toolCallResponse(name: string, id: string): CompletionResponse {
     return {
@@ -266,5 +266,93 @@ describe("AgentConversation — nudge policy (ADR-060 part 2)", () => {
                     || args[0].includes("model returned text without tool calls")),
         );
         expect(allNudgeWarnings).toHaveLength(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// costMeasured flag propagation
+// ---------------------------------------------------------------------------
+
+describe("AgentConversation — costMeasured propagation", () => {
+    beforeEach(() => {
+        snapshotWorkdirMock.mockReset();
+        vi.restoreAllMocks();
+    });
+
+    test("costMeasured is true when all gateway calls report measured costs", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        let callCount = 0;
+        const gateway = {
+            complete: async (): Promise<CompletionResponse> => {
+                callCount++;
+                if (callCount <= 2) {
+                    return toolCallResponse("write_file", `tc-${callCount}`);
+                }
+                return textResponse("done");
+            },
+        };
+
+        const registry = createMockRegistry();
+        const conversation = new AgentConversation(gateway, registry, {
+            staticSystemPrompt: "test",
+            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
+            capability: "Strong" as const,
+            adapter: new NativeFCAdapter(),
+            maxTurns: 5,
+        });
+
+        const result = await conversation.run("Create a project");
+
+        expect(result.finishReason).toBe("completed");
+        expect(result.costMeasured).toBe(true);
+    });
+
+    test("costMeasured is false when any gateway call has measured === false", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const UNMEASURED_COST = { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false };
+
+        let callCount = 0;
+        const gateway = {
+            complete: async (): Promise<CompletionResponse> => {
+                callCount++;
+                if (callCount === 1) {
+                    // First call: measured
+                    return toolCallResponse("write_file", "tc-1");
+                }
+                if (callCount === 2) {
+                    // Second call: UNMEASURED — provider reported no token counts
+                    return {
+                        content: "",
+                        toolCalls: [{ id: "tc-2", name: "write_file", input: {} }],
+                        usage: USAGE,
+                        cost: UNMEASURED_COST,
+                        provider: "test",
+                        model: "test-model",
+                        finishReason: "tool_use",
+                    };
+                }
+                return textResponse("done");
+            },
+        };
+
+        const registry = createMockRegistry();
+        const conversation = new AgentConversation(gateway, registry, {
+            staticSystemPrompt: "test",
+            tools: [{ name: "write_file", description: "Write a file", parameters: {} }],
+            capability: "Strong" as const,
+            adapter: new NativeFCAdapter(),
+            maxTurns: 5,
+        });
+
+        const result = await conversation.run("Create a project");
+
+        expect(result.finishReason).toBe("completed");
+        expect(result.costMeasured).toBe(false);
+        // totalCost accumulated from 3 calls: 0.001 (measured) + 0 (unmeasured)
+        // + 0.001 (measured text response) = 0.002. The unmeasured call
+        // contributed $0 — that is the understated number this change fixes.
+        expect(result.totalCost).toBe(0.002);
     });
 });

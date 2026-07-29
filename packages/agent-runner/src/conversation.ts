@@ -62,6 +62,13 @@ export interface ConversationResult {
     readonly finishReason: "completed" | "turn_limit" | "error";
     readonly totalTokens: { input: number; output: number };
     readonly totalCost: number;
+    /**
+     * `true` when EVERY gateway call in the conversation reported measured
+     * token counts; `false` when at least one call was unmeasured. A `false`
+     * here means `totalCost` is understated — downstream must treat the
+     * whole run's cost as unknown rather than trusting the accumulated number.
+     */
+    readonly costMeasured: boolean;
     readonly model: string | null;
 }
 
@@ -221,6 +228,7 @@ export class AgentConversation {
         let totalInput = 0;
         let totalOutput = 0;
         let totalCost = 0;
+        let allCostsMeasured = true;
         let lastText = "";
         let lastModel: string | null = null;
         let nudgeCount = 0;
@@ -306,7 +314,7 @@ export class AgentConversation {
                             turn + 1,
                             reactiveCompacted,
                             errMsg,
-                            { input: totalInput, output: totalOutput, cost: totalCost },
+                            { input: totalInput, output: totalOutput, cost: totalCost, measured: allCostsMeasured },
                             lastModel,
                         );
                     }
@@ -317,7 +325,7 @@ export class AgentConversation {
                         turn + 1,
                         compacted,
                         errMsg,
-                        { input: totalInput, output: totalOutput, cost: totalCost },
+                        { input: totalInput, output: totalOutput, cost: totalCost, measured: allCostsMeasured },
                         lastModel,
                     );
                 }
@@ -338,6 +346,7 @@ export class AgentConversation {
                     totalInput += response.usage.inputTokens;
                     totalOutput += response.usage.outputTokens;
                     totalCost += response.cost.totalCost;
+                    if (!response.cost.measured) allCostsMeasured = false;
 
                     messages.push({ role: "assistant", content: response.content });
                     messages.push({ role: "user", content: RECOVERY_MESSAGE });
@@ -367,6 +376,7 @@ export class AgentConversation {
             totalInput += response.usage.inputTokens;
             totalOutput += response.usage.outputTokens;
             totalCost += response.cost.totalCost;
+            if (!response.cost.measured) allCostsMeasured = false;
             lastText = response.content;
             lastModel = response.model;
 
@@ -474,6 +484,7 @@ export class AgentConversation {
                     finishReason: isFailedCompletion ? "error" : "completed",
                     totalTokens: { input: totalInput, output: totalOutput },
                     totalCost,
+                    costMeasured: allCostsMeasured,
                     model: lastModel,
                 };
             }
@@ -614,6 +625,7 @@ export class AgentConversation {
             finishReason: "turn_limit",
             totalTokens: { input: totalInput, output: totalOutput },
             totalCost,
+            costMeasured: allCostsMeasured,
             model: lastModel,
         };
     }
@@ -623,7 +635,7 @@ export class AgentConversation {
         turnNumber: number,
         compacted: { totalTokens: number; compactedMessages: number },
         errMsg: string,
-        totals: { input: number; output: number; cost: number },
+        totals: { input: number; output: number; cost: number; measured: boolean },
         model: string | null,
     ): ConversationResult {
         turns.push({
@@ -641,6 +653,7 @@ export class AgentConversation {
             finishReason: "error",
             totalTokens: { input: totals.input, output: totals.output },
             totalCost: totals.cost,
+            costMeasured: totals.measured,
             model,
         };
     }

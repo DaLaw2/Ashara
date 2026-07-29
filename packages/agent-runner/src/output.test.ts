@@ -49,6 +49,7 @@ function conversationResult(overrides: Partial<ConversationResult> = {}): Conver
         finishReason: "completed",
         totalTokens: { input: 1000, output: 500 },
         totalCost: 0.01,
+        costMeasured: true,
         model: "test-model-v1",
         ...overrides,
     };

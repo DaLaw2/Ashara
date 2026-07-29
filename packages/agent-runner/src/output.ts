@@ -33,6 +33,13 @@ export interface AgentOutput {
     readonly errorDetail: ErrorDetail | null;
     readonly totalTokens: { input: number; output: number };
     readonly totalCost: number;
+    /**
+     * `true` when every gateway call in the conversation reported measured
+     * token counts; `false` when at least one call was unmeasured. When
+     * `false`, `totalCost` is understated — the orchestrator must treat the
+     * cost as unknown and charge pessimistically.
+     */
+    readonly costMeasured: boolean;
     readonly turnCount: number;
     readonly finishReason: "completed" | "turn_limit" | "error";
 }
@@ -57,6 +64,7 @@ function toJson(output: AgentOutput): AgentOutputJson {
             : null,
         total_tokens: output.totalTokens,
         total_cost: output.totalCost,
+        cost_measured: output.costMeasured,
         turn_count: output.turnCount,
         finish_reason: output.finishReason,
     };
@@ -130,6 +138,7 @@ export class OutputCollector {
             errorDetail,
             totalTokens: result.totalTokens,
             totalCost: result.totalCost,
+            costMeasured: result.costMeasured,
             turnCount,
             finishReason: result.finishReason,
         };

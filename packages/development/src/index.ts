@@ -6,7 +6,7 @@ export type { PrunerConfig, PrunedChunk, PruningResult } from "./pruner.js";
 export { pruneContext, splitAtSyntaxBoundaries, DEFAULT_MIN_RELEVANCE } from "./pruner.js";
 
 export type { RetrieveFn } from "./dispatch-utils.js";
-export { buildAutoProfile, buildProjectContext, createRetrievalFn, detectTechStack, readManifestContext } from "./dispatch-utils.js";
+export { buildAutoProfile, buildProjectContext, createRetrievalFn, readManifestContext } from "./dispatch-utils.js";
 
 export type { Message, MaskingConfig, MaskingResult } from "./observation-masking.js";
 export { ObservationMasker } from "./observation-masking.js";

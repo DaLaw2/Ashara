@@ -165,6 +165,13 @@ export function costFromOutput(
     // agentInvoked distinguishes "genuinely $0" from "unknown cost."
     return { costUsd: agentInvoked ? null : 0, inputTokens: 0, outputTokens: 0, modelId: null, attempt };
   }
+  // An unmeasured run's total_cost is understated (at least one gateway call
+  // contributed $0 because its provider reported no token counts). Treat the
+  // entire run's cost as unknown so the budget's unknownCostCharge fires
+  // rather than the ledger recording a number known to be wrong.
+  if (!output.cost_measured) {
+    return { costUsd: null, inputTokens: output.total_tokens.input, outputTokens: output.total_tokens.output, modelId: output.error_detail?.model ?? null, attempt };
+  }
   const costUsd =
     Number.isFinite(output.total_cost) && output.total_cost >= 0
       ? output.total_cost

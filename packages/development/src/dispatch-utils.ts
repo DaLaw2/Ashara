@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { GraphClient, Reranker, RankedResult, RetrievalConfig, RetrievalResult } from "@ashara/memory";
 import { retrieve } from "@ashara/memory";
@@ -52,27 +52,6 @@ const MAX_INSTRUCTION_CHARS = 2000;
 const MAX_LISTING_ENTRIES = 100;
 const MAX_LISTING_DEPTH = 2;
 
-const TECH_STACK_MARKERS: readonly string[] = [
-    "Cargo.toml",
-    "package.json",
-    "tsconfig.json",
-    "go.mod",
-    "pyproject.toml",
-    "requirements.txt",
-    "Gemfile",
-    "pom.xml",
-    "build.gradle",
-];
-
-async function fileExists(path: string): Promise<boolean> {
-    try {
-        await stat(path);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
 async function readFileSafe(path: string, maxChars?: number): Promise<string | null> {
     try {
         const content = await readFile(path, "utf-8");
@@ -111,28 +90,64 @@ async function getDirectoryListing(dir: string, depth: number = 0): Promise<stri
     }
 }
 
-export async function detectTechStack(dir: string): Promise<string[]> {
-    const detected: string[] = [];
-    for (const marker of TECH_STACK_MARKERS) {
-        if (await fileExists(join(dir, marker))) {
-            detected.push(marker);
-        }
-    }
-    return detected;
-}
-
 const MANIFEST_HEAD_CHARS = 500;
 
+/**
+ * Read the head of every top-level text file and return formatted content
+ * blocks for the decomposition LLM.
+ *
+ * Replaces the former hardcoded TECH_STACK_MARKERS iteration: a project
+ * whose stack Ashara has never seen (composer.json, build.zig, mix.exs, …)
+ * now reaches the planner with its own manifest contents.
+ *
+ * Bounds:
+ *  - per-file: MANIFEST_HEAD_CHARS (500 chars)
+ *  - count:    MAX_LISTING_ENTRIES  (100 files)
+ *
+ * Exclusion is by observable property only:
+ *  - dotfiles  (convention: not project manifests)
+ *  - directories
+ *  - binary content (null byte in head)
+ */
 export async function readManifestContext(dir: string): Promise<string | undefined> {
+    let entries: import("node:fs").Dirent[];
+    try {
+        entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+        return undefined;
+    }
+
     const sections: string[] = [];
-    for (const marker of TECH_STACK_MARKERS) {
-        const filePath = join(dir, marker);
+    for (const entry of entries) {
+        if (sections.length >= MAX_LISTING_ENTRIES) break;
+        if (entry.name.startsWith(".") || entry.isDirectory()) continue;
+
+        const filePath = join(dir, entry.name);
         const content = await readFileSafe(filePath, MANIFEST_HEAD_CHARS);
-        if (content && content.trim().length > 0) {
-            sections.push(`--- ${marker} ---\n${content.trim()}\n--- end ---`);
+        if (content && content.trim().length > 0 && !content.includes("\0")) {
+            sections.push(`--- ${entry.name} ---\n${content.trim()}\n--- end ---`);
         }
     }
     return sections.length > 0 ? sections.join("\n") : undefined;
+}
+
+/**
+ * List non-dot, non-directory filenames at the project root.
+ * Used by buildAutoProfile to populate techStack without a hardcoded table.
+ */
+async function listRootFiles(dir: string): Promise<string[]> {
+    try {
+        const entries = await readdir(dir, { withFileTypes: true });
+        const files: string[] = [];
+        for (const entry of entries) {
+            if (files.length >= MAX_LISTING_ENTRIES) break;
+            if (entry.name.startsWith(".") || entry.isDirectory()) continue;
+            files.push(entry.name);
+        }
+        return files;
+    } catch {
+        return [];
+    }
 }
 
 interface ScriptCommands {
@@ -196,7 +211,7 @@ async function detectCommands(dir: string): Promise<ScriptCommands> {
 }
 
 export async function buildAutoProfile(workingDir: string): Promise<ProjectProfile> {
-    const techStack = await detectTechStack(workingDir);
+    const techStack = await listRootFiles(workingDir);
     const commands = await detectCommands(workingDir);
 
     return {
@@ -225,10 +240,10 @@ export async function buildProjectContext(workingDir: string): Promise<string> {
         }
     }
 
-    const techStack = await detectTechStack(workingDir);
-    if (techStack.length > 0) {
-        sections.push(`# Tech Stack\n${techStack.join(", ")}`);
-    }
+    // The # Tech Stack section is removed: it rendered marker FILENAMES
+    // (e.g., "Cargo.toml") instead of language labels, contradicting the
+    // ProjectFrame the prompt already carries (ADR-046). The project
+    // structure listing above already shows what files exist at the root.
 
     return sections.join("\n\n");
 }

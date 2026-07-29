@@ -1409,6 +1409,7 @@ function stubAgentOutput(): AgentOutputJson {
     // A measured zero, not a missing field: no LLM call happened, so the budget
     // must charge $0 rather than fall back to the unknown-cost estimate.
     total_cost: 0,
+    cost_measured: true,
     findings: [],
     build_log: null,
     test_log: null,
