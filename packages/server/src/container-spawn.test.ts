@@ -7,6 +7,7 @@ import {
   PathOutsideWorkDir,
   SANDBOX_IMAGE,
   SANDBOX_TAG,
+  ASHARA_MOUNT_ENTRIES,
 } from "./container-spawn.js";
 
 describe("translateHostPath", () => {
@@ -105,13 +106,22 @@ describe("buildPodmanRunArgs", () => {
     const workMount = args[args.indexOf("-v") + 1];
     expect(workMount).toBe("/tmp/work:/workspace:z");
 
-    // Ashara mount: read-only with SELinux label
+    // Ashara mounts: one per entry in the enumerated allowlist, all ro,z.
+    // The old single root mount (/opt/ashara:/ashara:ro,z) must be absent —
+    // it exposed .env to commands in the agent's allowlist.
     const vIndices = args.reduce<number[]>((acc, v, i) => {
       if (v === "-v") acc.push(i);
       return acc;
     }, []);
-    const asharaMount = args[vIndices[1] + 1];
-    expect(asharaMount).toBe("/opt/ashara:/ashara:ro,z");
+    const mountArgs = vIndices.map((i) => args[i + 1]);
+    // First mount is the workspace; remaining are the enumerated Ashara paths
+    expect(mountArgs).toHaveLength(1 + ASHARA_MOUNT_ENTRIES.length);
+    for (const entry of ASHARA_MOUNT_ENTRIES) {
+      const expected = `/opt/ashara/${entry.hostRelative}:${entry.containerPath}:ro,z`;
+      expect(mountArgs).toContainEqual(expected);
+    }
+    // The old root mount must not appear
+    expect(mountArgs).not.toContainEqual("/opt/ashara:/ashara:ro,z");
 
     // Env vars passed through
     const eIndices = args.reduce<number[]>((acc, v, i) => {

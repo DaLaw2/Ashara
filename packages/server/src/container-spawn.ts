@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,89 @@ export class ContainerSpawnError extends Error {
     );
     this.name = "ContainerSpawnError";
     this.context = ctx;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Enumerated mount set (Discipline A: allowlist, not denylist)
+//
+// Each entry is a path the agent-runner actually needs from the Ashara
+// checkout. Together they replace the old whole-checkout mount that
+// exposed .env, .git, and every other root file to any command the
+// agent can run (cat, grep, head, tail are all in the command allowlist).
+//
+// How this list was derived (2026-07-29):
+//   - node_modules: tsx runtime + third-party deps + @ashara/* symlinks
+//   - packages/agent-runner: entry point (RUNNER_RELATIVE)
+//   - packages/shared, llm-gateway, development: direct @ashara/* imports
+//     in agent-runner/src/ (traced through acl/development-acl.ts)
+//   - packages/memory: transitive via development → dispatch-utils.ts:4
+//   - tsconfig.json: every package extends "../../tsconfig.json"
+//   - package.json: Node module resolution for workspace packages
+// ---------------------------------------------------------------------------
+
+interface AsharaMountEntry {
+  /** Path relative to the Ashara source directory on the host */
+  readonly hostRelative: string;
+  /** Absolute path inside the container */
+  readonly containerPath: string;
+  /** Expected filesystem type for fail-closed validation */
+  readonly kind: "file" | "directory";
+}
+
+export const ASHARA_MOUNT_ENTRIES: readonly AsharaMountEntry[] = [
+  { hostRelative: "node_modules",          containerPath: `${CONTAINER_ASHARA_DIR}/node_modules`,          kind: "directory" },
+  { hostRelative: "packages/agent-runner", containerPath: `${CONTAINER_ASHARA_DIR}/packages/agent-runner`, kind: "directory" },
+  { hostRelative: "packages/shared",       containerPath: `${CONTAINER_ASHARA_DIR}/packages/shared`,       kind: "directory" },
+  { hostRelative: "packages/llm-gateway",  containerPath: `${CONTAINER_ASHARA_DIR}/packages/llm-gateway`,  kind: "directory" },
+  { hostRelative: "packages/development",  containerPath: `${CONTAINER_ASHARA_DIR}/packages/development`,  kind: "directory" },
+  { hostRelative: "packages/memory",       containerPath: `${CONTAINER_ASHARA_DIR}/packages/memory`,       kind: "directory" },
+  { hostRelative: "tsconfig.json",         containerPath: `${CONTAINER_ASHARA_DIR}/tsconfig.json`,         kind: "file" },
+  { hostRelative: "package.json",          containerPath: `${CONTAINER_ASHARA_DIR}/package.json`,          kind: "file" },
+];
+
+// ---------------------------------------------------------------------------
+// Typed error for missing mount paths (Discipline C)
+// ---------------------------------------------------------------------------
+
+export class MissingMountPathError extends Error {
+  readonly context: {
+    readonly path: string;
+    readonly expected: "file" | "directory";
+    readonly asharaSourceDir: string;
+    readonly operation: string;
+  };
+
+  constructor(path: string, expected: "file" | "directory", asharaSourceDir: string) {
+    super(
+      `Required mount path missing: ${path} (expected ${expected}) — ` +
+      `cannot start agent container. Ashara source dir: ${asharaSourceDir}`,
+    );
+    this.name = "MissingMountPathError";
+    this.context = { path, expected, asharaSourceDir, operation: "validateMountPaths" };
+  }
+}
+
+/**
+ * Validates that every path in ASHARA_MOUNT_ENTRIES exists and has the
+ * expected type. Fail-closed (Discipline A): a missing path throws
+ * MissingMountPathError rather than falling back to mounting the root
+ * or spawning with an incomplete mount set.
+ */
+export function validateMountPaths(asharaSourceDir: string): void {
+  const resolvedAshara = resolve(asharaSourceDir);
+  for (const entry of ASHARA_MOUNT_ENTRIES) {
+    const hostPath = join(resolvedAshara, entry.hostRelative);
+    if (!existsSync(hostPath)) {
+      throw new MissingMountPathError(hostPath, entry.kind, resolvedAshara);
+    }
+    const stat = statSync(hostPath);
+    if (entry.kind === "directory" && !stat.isDirectory()) {
+      throw new MissingMountPathError(hostPath, entry.kind, resolvedAshara);
+    }
+    if (entry.kind === "file" && !stat.isFile()) {
+      throw new MissingMountPathError(hostPath, entry.kind, resolvedAshara);
+    }
   }
 }
 
@@ -185,13 +269,18 @@ export function buildPodmanRunArgs(
     // Work directory: the only writable path shared with the host (criterion 2).
     // :z for SELinux relabeling (Rocky 10.2, enforcing).
     "-v", `${resolvedWork}:${CONTAINER_WORK_DIR}:z`,
-    // Ashara checkout: read-only — the stronger form of GIT-SAFETY (b).
-    // A destructive git command against the Ashara repo is impossible, not
-    // just policy-checked.
-    "-v", `${resolvedAshara}:${CONTAINER_ASHARA_DIR}:ro,z`,
     // Container working directory is the task worktree.
     "-w", CONTAINER_WORK_DIR,
   ];
+
+  // Ashara source: enumerated read-only mounts of exactly the paths the
+  // agent-runner needs. The old single-root mount exposed .env and every
+  // other file at the checkout root to cat/grep/head — commands the
+  // CommandPolicy allowlist permits. This allowlist replaces that denylist.
+  for (const entry of ASHARA_MOUNT_ENTRIES) {
+    const hostPath = join(resolvedAshara, entry.hostRelative);
+    args.push("-v", `${hostPath}:${entry.containerPath}:ro,z`);
+  }
 
   for (const [key, value] of Object.entries(env)) {
     args.push("-e", `${key}=${value}`);
@@ -228,6 +317,10 @@ export function spawnContainer(
   asharaSourceDir: string,
   env: Record<string, string>,
 ): ChildProcess {
+  // Fail closed: every required path must exist before spawn. A missing
+  // path throws MissingMountPathError — never fall back to the old root
+  // mount and never spawn with an incomplete mount set.
+  validateMountPaths(asharaSourceDir);
   const args = buildPodmanRunArgs(containerName, hostWorkDir, asharaSourceDir, env);
   return spawn("podman", args, {
     stdio: ["ignore", "pipe", "pipe"],
