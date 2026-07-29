@@ -1,8 +1,8 @@
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
-import { createTask } from "../domain/index.js";
+import { createTask, abandonWorkItem, PlanningService } from "../domain/index.js";
 import type { RawFailureContext } from "../failure-router.js";
+import { publishEvents } from "./failure-recovery.js";
 import type { EventPublisher } from "./ports.js";
-import { applyAbandon } from "./failure-recovery.js";
 
 export function shouldSplit(
   finishReason: string,
@@ -50,6 +50,12 @@ export async function splitFailedTask(
     splitFrom: task.id,
   });
 
+  // The parent retirement MUST be in the same transaction as the child creation.
+  // Without this, a concurrent abandon (HTTP PATCH, shutdown reconciler) can move
+  // the parent to Abandoned between the child-commit and the retire, leaving
+  // orphan children with no lifecycle path (absence-is-unrepresentable).
+  const previousStatus = task.status;
+
   await deps.workItemRepo.withTransaction(async (repo) => {
     await repo.create(partA);
     await repo.create(partB);
@@ -57,13 +63,17 @@ export async function splitFailedTask(
       await repo.addDependency(partA.id, depId);
     }
     await repo.addDependency(partB.id, partA.id);
+
+    abandonWorkItem(task, {
+      reason: "split into 2 subtasks: agent hit turn limit with partial progress",
+      substitutedBy: partB.id,
+      attempts: task.dispatchCount,
+      lastFailure: failure,
+      source: "split_on_failure",
+    });
+    await PlanningService.saveWorkItem(repo, task, previousStatus);
   });
 
-  await applyAbandon(deps, task, {
-    reason: "split into 2 subtasks: agent hit turn limit with partial progress",
-    substitutedBy: partB.id,
-    attempts: task.dispatchCount,
-    lastFailure: failure,
-    source: "split_on_failure",
-  });
+  // Events publish after commit — audit-only and already fire-and-forget.
+  await publishEvents(deps, task);
 }

@@ -218,7 +218,7 @@ export async function applyAbandon(
   await publishEvents(deps, item);
 }
 
-async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, item: WorkItem): Promise<void> {
+export async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, item: WorkItem): Promise<void> {
   const events = takeEvents(item);
   for (const event of events) {
     try {
