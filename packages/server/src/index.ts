@@ -419,9 +419,9 @@ async function main(): Promise<void> {
 
   const agentInvoker: AgentInvoker = {
     async spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson> {
-      const capability = determineCapability(opts.dispatchCount ?? 0, opts.blockedReason);
+      const capability = determineCapability(opts.dispatchCount, opts.blockedReason);
       if (capability === "Frontier") {
-        console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${(opts.dispatchCount ?? 0) + 1})`);
+        console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${opts.dispatchCount + 1})`);
       }
 
       // Write the gateway catalog file into the task's control directory.

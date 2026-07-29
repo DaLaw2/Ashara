@@ -1,4 +1,4 @@
-export { LLMGateway } from "./gateway.js";
+export { LLMGateway, extractUsage } from "./gateway.js";
 export { convertMessage } from "./message-conversion.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export { ProviderRegistry } from "./provider-registry.js";
@@ -62,6 +62,9 @@ export type {
   ToolDefinition,
   ToolCall,
   TokenUsage,
+  ExtractedUsage,
+  MeasuredUsage,
+  UnmeasuredUsage,
   CostBreakdown,
   BudgetConfig,
   CostSummary,

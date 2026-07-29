@@ -53,7 +53,7 @@ export interface AgentSpawnOptions {
   readonly briefPath: string;
   readonly outputPath: string;
   readonly taskId: string;
-  readonly dispatchCount?: number;
+  readonly dispatchCount: number;
   readonly blockedReason?: StoredBlockedReason;
 }
 
@@ -95,7 +95,14 @@ export interface TaskDescriptor {
    * set it, e.g. unit tests) falls back to `parentId` at the write site below.
    */
   readonly epicId?: string | null;
-  readonly dispatchCount?: number;
+  /**
+   * Number of times this task has been dispatched. The DB column is NOT NULL
+   * with default 0, `createPendingWorkItem` always sets it, and the sole
+   * production construction site (orchestrator/execution.ts) always passes it.
+   * Required so the `?? 0` absence default that silently prevented model
+   * escalation is structurally impossible.
+   */
+  readonly dispatchCount: number;
   /**
    * Prose acceptance statements from work_items.success_criteria. Required: the
    * sole construction site (orchestrator/execution.ts) always has the WorkItem.
@@ -676,7 +683,7 @@ export class DevelopmentService {
       if (targetProjectPath) {
         await commitPartialWork(
           workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-failed)`,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, agent-failed)`,
         );
       }
       await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
@@ -721,7 +728,7 @@ export class DevelopmentService {
       if (targetProjectPath) {
         await commitPartialWork(
           workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, agent-blocked)`,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, agent-blocked)`,
         );
       }
       await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
@@ -818,7 +825,7 @@ export class DevelopmentService {
       if (targetProjectPath) {
         await commitPartialWork(
           workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, verify-unverified)`,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-unverified)`,
         );
       }
       await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
@@ -852,7 +859,7 @@ export class DevelopmentService {
       if (targetProjectPath) {
         await commitPartialWork(
           workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount ?? 1}, verify-failed)`,
+          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-failed)`,
         );
       }
       await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");

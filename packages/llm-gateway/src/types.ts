@@ -188,6 +188,34 @@ export interface TokenUsage {
   cacheWriteTokens: number;
 }
 
+/**
+ * Discriminated union returned by `extractUsage`: a `TokenUsage` paired with
+ * a tag that separates provider-reported values from absent ones.
+ *
+ * When `measured` is `false`, the inner `usage` fields are zero-filled and
+ * `missingFields` names which SDK fields were absent. Downstream cost paths
+ * must treat the `false` branch as "unknown cost" — the zero-filled token
+ * counts are structural placeholders, not measurements.
+ *
+ * A wrapper around `TokenUsage` rather than a boolean-on-`TokenUsage` so that
+ * existing consumers of the inner type (`emitLogRecord`, `calculateCost`,
+ * agent-runner accumulation) compile unchanged. The "absence must not be
+ * expressible as a number" invariant lives in the wrapper's discriminant, not
+ * in the inner numeric fields.
+ */
+export type ExtractedUsage = MeasuredUsage | UnmeasuredUsage;
+
+export interface MeasuredUsage {
+  readonly measured: true;
+  readonly usage: TokenUsage;
+}
+
+export interface UnmeasuredUsage {
+  readonly measured: false;
+  readonly usage: TokenUsage;
+  readonly missingFields: readonly string[];
+}
+
 export interface CostBreakdown {
   inputCost: number;
   outputCost: number;

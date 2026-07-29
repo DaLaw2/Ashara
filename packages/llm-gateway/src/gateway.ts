@@ -18,6 +18,7 @@ import type {
   CompletionResponse,
   CostBreakdown,
   CostSummary,
+  ExtractedUsage,
   GatewayConfig,
   KnownLLMSite,
   LLMCallRecord,
@@ -108,16 +109,52 @@ export class LLMGateway {
     }
   }
 
-  private recordCost(usage: TokenUsage, model: ModelConfig, provider: string): CostBreakdown {
+  /**
+   * Records the cost of a completed call in the gateway's in-process budget
+   * ledger.  When usage is unmeasured, no entry is written — the gateway
+   * ledger cannot produce a pessimistic estimate (the capability-based
+   * estimator lives in the orchestrator's `BudgetTracker.unknownCostCharge`),
+   * and recording $0 would be the identity-element defect this change exists
+   * to eliminate.
+   */
+  private recordCost(extraction: ExtractedUsage, model: ModelConfig, provider: string): CostBreakdown {
+    if (!extraction.measured) {
+      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0 };
+    }
     const cost = calculateCost(
-      usage.inputTokens,
-      usage.outputTokens,
-      usage.cacheReadTokens,
-      usage.cacheWriteTokens,
+      extraction.usage.inputTokens,
+      extraction.usage.outputTokens,
+      extraction.usage.cacheReadTokens,
+      extraction.usage.cacheWriteTokens,
       model,
     );
     this.budgetLedger.record(cost.totalCost, provider);
     return cost;
+  }
+
+  /**
+   * Discipline C structured warning for unmeasured usage (Discipline A: the
+   * throw that used to live here was strictly worse — it lost the first call's
+   * accounting AND discarded a successful completion AND paid for a fallback
+   * retry). Logs at `warn` with the provider, model, site, operation, and
+   * which SDK fields were absent.
+   */
+  private warnUnmeasuredUsage(
+    extraction: ExtractedUsage,
+    provider: string,
+    model: string,
+    site: string,
+    operation: string,
+  ): void {
+    if (extraction.measured) return;
+    console.warn(
+      `[LLMGateway] unmeasured usage: provider=${provider}, model=${model}, ` +
+        `site=${site}, operation=${operation}, ` +
+        `missingFields=[${extraction.missingFields.join(", ")}]. ` +
+        `Token counts are zero-filled; the cost for this call is an estimate, ` +
+        `not a measurement. The orchestrator's pessimistic charge path ` +
+        `(BudgetTracker.unknownCostCharge) handles the real budget accounting.`,
+    );
   }
 
   /**
@@ -242,9 +279,10 @@ export class LLMGateway {
       ...this.buildCommonParams(request, resolved),
     } as Parameters<typeof generateText>[0]);
 
-    const usage = extractUsage(result.usage, result.providerMetadata);
+    const extraction = extractUsage(result.usage, result.providerMetadata);
+    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "generateText");
 
-    const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
 
     // Asserted AFTER recordCost at every call site: the tokens were spent
     // whether or not the parameter was honored, so failing closed must not
@@ -271,13 +309,13 @@ export class LLMGateway {
 
     const finishReason = mapFinishReason(result.finishReason);
 
-    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), result.text, usage, cost.totalCost, t0);
+    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), result.text, extraction.usage, cost.totalCost, t0);
 
     return {
       content: result.text,
       reasoningContent: result.reasoningText ?? undefined,
       toolCalls,
-      usage,
+      usage: extraction.usage,
       cost,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
@@ -335,9 +373,10 @@ export class LLMGateway {
     ]);
 
     // contract-erasing: providerMetadata carries provider-specific cache token counts (e.g. anthropic.cacheReadInputTokens)
-    const usage = extractUsage(sdkUsage, providerMetadata as Record<string, Record<string, unknown>> | undefined);
+    const extraction = extractUsage(sdkUsage, providerMetadata as Record<string, Record<string, unknown>> | undefined);
+    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "streamText");
 
-    const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
 
     assertTemperatureHonored({
       requestedTemperature: request.temperature,
@@ -358,13 +397,13 @@ export class LLMGateway {
       }));
     }
 
-    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), text, usage, cost.totalCost, t0);
+    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), text, extraction.usage, cost.totalCost, t0);
 
     return {
       content: text,
       reasoningContent: reasoningText ?? undefined,
       toolCalls,
-      usage,
+      usage: extraction.usage,
       cost,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
@@ -424,8 +463,9 @@ export class LLMGateway {
 
     const result = await generateObject(params);
 
-    const usage = extractUsage(result.usage, result.providerMetadata);
-    const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+    const extraction = extractUsage(result.usage, result.providerMetadata);
+    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "generateObject");
+    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
 
     assertTemperatureHonored({
       requestedTemperature: request.temperature,
@@ -437,11 +477,11 @@ export class LLMGateway {
     });
 
     const responseExcerpt = JSON.stringify(result.object).slice(0, 200);
-    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, request.prompt.slice(0, 200), responseExcerpt, usage, cost.totalCost, t0);
+    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, request.prompt.slice(0, 200), responseExcerpt, extraction.usage, cost.totalCost, t0);
 
     return {
       data: result.object as T,
-      usage,
+      usage: extraction.usage,
       cost,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
@@ -484,8 +524,9 @@ export class LLMGateway {
       const result = await generateText(params);
       lastRawResponse = result.text;
 
-      const usage = extractUsage(result.usage, result.providerMetadata);
-      const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
+      const extraction = extractUsage(result.usage, result.providerMetadata);
+      this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "generateText:structured-fallback");
+      const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
 
       // Throws OUT of the retry loop rather than `continue`-ing: a dropped
       // temperature is a property of the model, not a transient malformation,
@@ -512,10 +553,10 @@ export class LLMGateway {
       const validation = request.schema.safeParse(parsed);
       if (validation.success) {
         const responseExcerpt = JSON.stringify(validation.data).slice(0, 200);
-        this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, request.prompt.slice(0, 200), responseExcerpt, usage, cost.totalCost, t0);
+        this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, request.prompt.slice(0, 200), responseExcerpt, extraction.usage, cost.totalCost, t0);
         return {
           data: validation.data,
-          usage,
+          usage: extraction.usage,
           cost,
           provider: resolved.providerName,
           model: resolved.modelConfig.id,
@@ -648,14 +689,63 @@ function extractPromptExcerpt(request: CompletionRequest): string {
   return text.slice(0, 200);
 }
 
-function extractUsage(
+/**
+ * Extracts token usage from the SDK response, returning a discriminated
+ * `ExtractedUsage` that separates measured from unmeasured values.
+ *
+ * Two levels of absence:
+ * - **Object-level** (`sdkUsage` is falsy): unreachable per the AI SDK's types
+ *   (`LanguageModelUsage` is non-optional on every result type). A defensive
+ *   guard remains because the SDK is a trust boundary and TypeScript types
+ *   cannot be enforced at runtime. Handled identically to field-level absence.
+ * - **Field-level** (`inputTokens` or `outputTokens` is undefined): documented
+ *   in the SDK contract (`inputTokens?: number` at `ai/dist/index.d.ts:324`).
+ *   This is the branch that fires in practice.
+ *
+ * Neither branch throws. The throw that used to live here (MissingUsageError)
+ * was caught by `withFallback`, which discarded the successful completion,
+ * lost its cost accounting, and paid for a second call — strictly worse than
+ * the `?? 0` it replaced.
+ */
+export function extractUsage(
   sdkUsage: { inputTokens?: number; outputTokens?: number } | undefined,
   // contract-erasing: providerMetadata carries provider-specific fields (e.g. anthropic cache tokens)
   providerMetadata: Record<string, Record<string, unknown>> | undefined,
-): TokenUsage {
+): ExtractedUsage {
+  // Object-level absence: unreachable per SDK types, guarded defensively
+  // across the trust boundary. Not a separate error class — the same
+  // "unmeasured" treatment applies, and adding a throw for the unreachable
+  // case is exactly the defect this change removes.
+  if (!sdkUsage) {
+    return {
+      measured: false,
+      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      missingFields: ["sdkUsageObject"],
+    };
+  }
+
+  // Field-level absence: documented in the SDK contract.
+  // Guard structure uses direct undefined checks so TypeScript narrows the
+  // fields to `number` on the happy path without non-null assertions.
+  if (sdkUsage.inputTokens === undefined || sdkUsage.outputTokens === undefined) {
+    const missingFields: string[] = [];
+    if (sdkUsage.inputTokens === undefined) missingFields.push("inputTokens");
+    if (sdkUsage.outputTokens === undefined) missingFields.push("outputTokens");
+    return {
+      measured: false,
+      usage: {
+        inputTokens: sdkUsage.inputTokens ?? 0,
+        outputTokens: sdkUsage.outputTokens ?? 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      missingFields,
+    };
+  }
+
   const usage: TokenUsage = {
-    inputTokens: sdkUsage?.inputTokens ?? 0,
-    outputTokens: sdkUsage?.outputTokens ?? 0,
+    inputTokens: sdkUsage.inputTokens,
+    outputTokens: sdkUsage.outputTokens,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
   };
@@ -671,5 +761,5 @@ function extractUsage(
     }
   }
 
-  return usage;
+  return { measured: true, usage };
 }
