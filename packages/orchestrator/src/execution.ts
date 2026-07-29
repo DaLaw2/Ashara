@@ -244,77 +244,126 @@ export async function processTask(
       await handleTaskError(deps, task);
       current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     }
-    // executeTask commits the WorkItem to status Failed for BOTH failed and
-    // blocked TaskResults (a "blocked" result is a routine agent outcome —
-    // a BLOCKED: marker or turn-limit — not a dependency wait; dependency
-    // Blocked status is only reachable via the HTTP PATCH path). Any item that
-    // landed at Failed is routed through the FailureRouter so it recovers
-    // (replan) or terminates (abandon/substitute) rather than sitting in Failed
-    // and deadlocking its dependents (Run-8 C2, migration Phase 6).
-    if (current && current.status === "Failed") {
-      if (targetProjectPath) {
-        await handleCompletedPoison(
-          deps,
-          task.id,
-          { detail: result.detail },
-          targetProjectPath,
-          runScope,
-        );
-      }
+    // Exhaustive over WorkItemStatus: adding a status without a case here is
+    // a compile error, not a new silent fall-through. executeTask commits the
+    // WorkItem to Failed for BOTH failed and blocked TaskResults (a "blocked"
+    // result is a routine agent outcome — a BLOCKED: marker or turn-limit —
+    // not a dependency wait; dependency Blocked status is only reachable via
+    // the HTTP PATCH path). Any item that landed at Failed is routed through
+    // the FailureRouter so it recovers (replan) or terminates
+    // (abandon/substitute) rather than sitting in Failed and deadlocking its
+    // dependents (Run-8 C2, migration Phase 6).
+    if (!current) {
+      console.warn(
+        `[${task.id}] work item vanished after agent returned ` +
+        `(result: ${result.status}); dispatchCount already incremented, ` +
+        `agent spend unrecoverable`,
+      );
+    } else {
+      switch (current.status) {
+        case "Failed": {
+          if (targetProjectPath) {
+            await handleCompletedPoison(
+              deps,
+              task.id,
+              { detail: result.detail },
+              targetProjectPath,
+              runScope,
+            );
+          }
 
-      const failure: RawFailureContext = {
-        detail: result.detail,
-        raw: execEnvelope ? { ...execEnvelope } : (output ?? {}),
-      };
-      // dispatchCount was already incremented for this attempt at the dispatch
-      // seam above and is not mutated by recoverFailedItem, so it is the exact
-      // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
-      const attempts = current.dispatchCount;
-      const finishReason = output?.finish_reason ?? "unknown";
-      // From the HOST observation, never from the agent's output. The agent
-      // cannot run git inside its container, and when `output.files_changed`
-      // was removed this read silently became a constant 0 — which made
-      // shouldSplit constantly false and killed split-on-turn-limit outright.
-      // `?? 0` is deliberately absent: a missing supplier must fail to compile,
-      // not resolve to the value that means "nothing happened".
-      const filesChanged = changedFiles.length;
+          const failure: RawFailureContext = {
+            detail: result.detail,
+            raw: execEnvelope ? { ...execEnvelope } : (output ?? {}),
+          };
+          // dispatchCount was already incremented for this attempt at the dispatch
+          // seam above and is not mutated by recoverFailedItem, so it is the exact
+          // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
+          const attempts = current.dispatchCount;
+          const finishReason = output?.finish_reason ?? "unknown";
+          // From the HOST observation, never from the agent's output. The agent
+          // cannot run git inside its container, and when `output.files_changed`
+          // was removed this read silently became a constant 0 — which made
+          // shouldSplit constantly false and killed split-on-turn-limit outright.
+          // `?? 0` is deliberately absent: a missing supplier must fail to compile,
+          // not resolve to the value that means "nothing happened".
+          const filesChanged = changedFiles.length;
 
-      // Split-on-failure: agent hit turn limit while making progress (files
-      // changed) — structurally "too big," not a specific bug.
-      if (shouldSplit(finishReason, filesChanged, current)) {
-        await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore, runScope }, current, failure);
-        await recordFailedApproach(
-          deps.failedApproachRepo,
-          deps.workItemRepo,
-          current,
-          failure.detail,
-          `Task split: agent hit turn limit (finish_reason=${finishReason}) with ${filesChanged} files changed.`,
-        );
-      } else {
-        const action = await recoverFailedItem(
-          {
-            workItemRepo: deps.workItemRepo,
-            eventPublisher: deps.eventStore,
-            failureRouter: deps.failureRouter,
-            contractLookup: deps.contractLookup,
-          },
-          current,
-          failure,
-        );
-        // Every FailureRouter decision here (replan/abandon/substitute) means this
-        // dispatch attempt did not succeed (kl-t1): capture it as a failed_approaches
-        // lesson so a later brief sees WHY, closing the gap where only a THROWN
-        // orchestrator error (the catch block below) ever reached
-        // recordFailedApproach. This is the ONLY call site that writes for the
-        // typed-failed-results path — the catch block's own recoverFailedItem call
-        // does not, so a thrown error never double-writes.
-        await recordFailedApproach(
-          deps.failedApproachRepo,
-          deps.workItemRepo,
-          current,
-          failure.detail,
-          composeRoutedLesson(current.title, action, attempts, failure.detail),
-        );
+          // Split-on-failure: agent hit turn limit while making progress (files
+          // changed) — structurally "too big," not a specific bug.
+          if (shouldSplit(finishReason, filesChanged, current)) {
+            await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore, runScope }, current, failure);
+            await recordFailedApproach(
+              deps.failedApproachRepo,
+              deps.workItemRepo,
+              current,
+              failure.detail,
+              `Task split: agent hit turn limit (finish_reason=${finishReason}) with ${filesChanged} files changed.`,
+            );
+          } else {
+            const action = await recoverFailedItem(
+              {
+                workItemRepo: deps.workItemRepo,
+                eventPublisher: deps.eventStore,
+                failureRouter: deps.failureRouter,
+                contractLookup: deps.contractLookup,
+              },
+              current,
+              failure,
+            );
+            // Every FailureRouter decision here (replan/abandon/substitute) means
+            // this dispatch attempt did not succeed (kl-t1): capture it as a
+            // failed_approaches lesson so a later brief sees WHY, closing the gap
+            // where only a THROWN orchestrator error (the catch block below) ever
+            // reached recordFailedApproach. This is the ONLY call site that writes
+            // for the typed-failed-results path — the catch block's own
+            // recoverFailedItem call does not, so a thrown error never
+            // double-writes.
+            await recordFailedApproach(
+              deps.failedApproachRepo,
+              deps.workItemRepo,
+              current,
+              failure.detail,
+              composeRoutedLesson(current.title, action, attempts, failure.detail),
+            );
+          }
+          break;
+        }
+
+        case "InProgress":
+          // handleTaskError was called but the concurrent pre-image guard
+          // rejected the save — another writer moved the item first. The
+          // startup reconciler will requeue on next restart.
+          console.warn(
+            `[${task.id}] work item still InProgress after handleTaskError ` +
+            `(expected Failed); agent result (${result.status}) discarded — ` +
+            `startup reconciler will requeue on next restart`,
+          );
+          break;
+
+        case "Completed":
+        case "Pending":
+        case "Blocked":
+        case "Abandoned":
+          // Preempted: an external actor (HTTP PATCH or reconciler) moved the
+          // item's status while the agent was executing. The agent's result
+          // is not routable — failure routing requires Failed. dispatchCount
+          // was already incremented and agent spend was already incurred.
+          console.warn(
+            `[${task.id}] work item preempted: expected Failed, ` +
+            `found "${current.status}" after agent returned ` +
+            `(result: ${result.status}); agent result discarded, ` +
+            `dispatchCount already incremented, agent spend unrecoverable`,
+          );
+          break;
+
+        default: {
+          const _exhaustive: never = current.status;
+          throw new Error(
+            `Unhandled WorkItemStatus in processTask post-agent ladder: ` +
+            `${String(_exhaustive)}`,
+          );
+        }
       }
     }
   }
@@ -416,17 +465,59 @@ export async function handleProcessingError(
 
   try {
     const current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
-    if (current && current.status === "Failed") {
-      await recoverFailedItem(
-        {
-          workItemRepo: deps.workItemRepo,
-          eventPublisher: deps.eventStore,
-          failureRouter: deps.failureRouter,
-          contractLookup: deps.contractLookup,
-        },
-        current,
-        { detail: chain.message, raw: { ...envelope } },
+    if (!current) {
+      console.warn(
+        `[${task.id}] work item vanished during orchestrator error recovery; ` +
+        `item left for startup reconciler`,
       );
+    } else {
+      // Exhaustive over WorkItemStatus so a new member is a compile error
+      // here, not a silent skip of recovery.
+      switch (current.status) {
+        case "Failed":
+          await recoverFailedItem(
+            {
+              workItemRepo: deps.workItemRepo,
+              eventPublisher: deps.eventStore,
+              failureRouter: deps.failureRouter,
+              contractLookup: deps.contractLookup,
+            },
+            current,
+            { detail: chain.message, raw: { ...envelope } },
+          );
+          break;
+
+        case "InProgress":
+          // handleTaskError was called but the concurrent pre-image guard
+          // rejected the transition. The startup reconciler will requeue.
+          console.warn(
+            `[${task.id}] work item still InProgress after handleTaskError ` +
+            `in error recovery (expected Failed); ` +
+            `item left for startup reconciler`,
+          );
+          break;
+
+        case "Completed":
+        case "Pending":
+        case "Blocked":
+        case "Abandoned":
+          // Preempted by an external actor while the agent was executing.
+          // Recovery is not meaningful for a non-Failed item.
+          console.warn(
+            `[${task.id}] work item preempted during error recovery: ` +
+            `expected Failed, found "${current.status}"; ` +
+            `recovery skipped, dispatchCount already incremented`,
+          );
+          break;
+
+        default: {
+          const _exhaustive: never = current.status;
+          throw new Error(
+            `Unhandled WorkItemStatus in handleProcessingError: ` +
+            `${String(_exhaustive)}`,
+          );
+        }
+      }
     }
   } catch (recoveryError) {
     console.warn(
