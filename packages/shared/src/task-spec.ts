@@ -37,7 +37,8 @@ export const storedTaskSpecSchema = z.object({
   implicatedFiles: z.array(z.string()).optional(),
   suggestedFix: z.string().optional(),
 
-  // Acceptance-gap lifecycle (termination-snapshot.ts via acceptance.ts)
+  // Acceptance-gap lifecycle (termination-snapshot.ts via acceptance.ts).
+  // Written by termination-snapshot, read by nothing today — story unwired-surface.
   lesson: z.string().optional(),
   suggestedApproach: z.string().optional(),
   supersedes: z.string().optional(),
