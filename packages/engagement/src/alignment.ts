@@ -208,31 +208,6 @@ export const DEFAULT_DIRECTION_ASSUMPTIONS: Record<DirectionCategory, string> = 
   priorities: "Reliability / production-readiness",
 };
 
-/**
- * Test/stub double for `AlignmentLLM`. Deliberately conservative: it only
- * infers a couple of categories from a handful of keywords and never flags
- * anything ambiguous, so any category it doesn't recognize falls through to
- * a question (safe default for the CLI's explicit no-real-LLM test mode,
- * `ASHARA_TEST_STUB_LLM=1`). The genuine ambiguity-gate behavior (a
- * confident LLM commits to defaults and yields zero questions) is exercised
- * against a purpose-built fake in alignment.test.ts, not this stub.
- */
-export class StubAlignmentLLM implements AlignmentLLM {
-  readonly calls: string[] = [];
-
-  async infer(prompt: string): Promise<AlignmentInferenceResponse> {
-    this.calls.push(prompt);
-    return {
-      inferences: [
-        { category: "platform" as DirectionCategory, inference: "web application", confidence: "high" as const },
-        { category: "persistence" as DirectionCategory, inference: "relational database", confidence: "medium" as const },
-        { category: "stack" as DirectionCategory, inference: "TypeScript", confidence: "medium" as const },
-      ],
-      ambiguousCategories: [],
-    };
-  }
-}
-
 function buildInferencePrompt(visionRaw: string, categories: readonly DirectionCategory[]): string {
   const lines = [
     `You are inferring unstated technical/product directions for a project vision.`,

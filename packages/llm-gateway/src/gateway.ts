@@ -128,8 +128,9 @@ export class LLMGateway {
    * itself. Loosely typed to match the "ai" SDK interop boundary the two
    * callers already cast through.
    */
+  // open-by-design: AI SDK interop boundary — param shape varies per provider/feature combination
   private buildCommonParams(request: CompletionRequest, resolved: ResolvedProvider): Record<string, unknown> {
-    const params: Record<string, unknown> = {};
+    const params: Record<string, unknown> = {}; // open-by-design (see method comment above)
 
     if (request.cachePrefixLength && request.systemPrompt) {
       const staticPart = request.systemPrompt.slice(0, request.cachePrefixLength);
@@ -156,6 +157,7 @@ export class LLMGateway {
       for (const td of request.tools) {
         tools[td.name] = {
           description: td.description,
+          // open-by-design: tool parameters is a JSON Schema object, shape defined per tool
           inputSchema: jsonSchema(td.parameters as Record<string, unknown>),
         };
       }
@@ -259,10 +261,11 @@ export class LLMGateway {
 
     let toolCalls: ToolCall[] | undefined;
     if (result.toolCalls && result.toolCalls.length > 0) {
+      // open-by-design: LLM-authored tool arguments, shape varies per tool
       toolCalls = result.toolCalls.map((tc) => ({
         id: tc.toolCallId,
         name: tc.toolName,
-        input: (tc.input ?? {}) as Record<string, unknown>,
+        input: (tc.input ?? {}) as Record<string, unknown>, // open-by-design
       }));
     }
 
@@ -313,6 +316,7 @@ export class LLMGateway {
           options.onToolCall({
             id: chunk.toolCallId,
             name: chunk.toolName,
+            // open-by-design: LLM-authored tool arguments, shape varies per tool
             input: (chunk.input ?? {}) as Record<string, unknown>,
           });
         }
@@ -330,6 +334,7 @@ export class LLMGateway {
       result.warnings,
     ]);
 
+    // contract-erasing: providerMetadata carries provider-specific cache token counts (e.g. anthropic.cacheReadInputTokens)
     const usage = extractUsage(sdkUsage, providerMetadata as Record<string, Record<string, unknown>> | undefined);
 
     const cost = this.recordCost(usage, resolved.modelConfig, resolved.providerName);
@@ -345,10 +350,11 @@ export class LLMGateway {
 
     let toolCalls: ToolCall[] | undefined;
     if (streamToolCalls && streamToolCalls.length > 0) {
+      // open-by-design: LLM-authored tool arguments, shape varies per tool
       toolCalls = streamToolCalls.map((tc) => ({
         id: tc.toolCallId,
         name: tc.toolName,
-        input: (tc.input ?? {}) as Record<string, unknown>,
+        input: (tc.input ?? {}) as Record<string, unknown>, // open-by-design
       }));
     }
 
@@ -644,6 +650,7 @@ function extractPromptExcerpt(request: CompletionRequest): string {
 
 function extractUsage(
   sdkUsage: { inputTokens?: number; outputTokens?: number } | undefined,
+  // contract-erasing: providerMetadata carries provider-specific fields (e.g. anthropic cache tokens)
   providerMetadata: Record<string, Record<string, unknown>> | undefined,
 ): TokenUsage {
   const usage: TokenUsage = {
@@ -654,6 +661,7 @@ function extractUsage(
   };
 
   if (providerMetadata?.["anthropic"]) {
+    // contract-erasing: anthropic metadata has known fields (cacheReadInputTokens, cacheCreationInputTokens)
     const anthropicMeta = providerMetadata["anthropic"] as Record<string, unknown>;
     if (typeof anthropicMeta["cacheReadInputTokens"] === "number") {
       usage.cacheReadTokens = anthropicMeta["cacheReadInputTokens"];

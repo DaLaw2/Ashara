@@ -8,6 +8,7 @@ import type { ContentBlock } from "./types.js";
 
 export type AISdkMessage = {
   role: "system" | "user" | "assistant" | "tool";
+  // open-by-design: AI SDK message parts vary per role (text, tool-call, tool-result, reasoning)
   content: string | Array<Record<string, unknown>>;
 };
 
@@ -40,6 +41,7 @@ export function convertMessage(m: { role: string; content: string | ContentBlock
   }
 
   if (m.role === "tool") {
+    // open-by-design: AI SDK tool-result parts, shape varies per tool
     const parts: Array<Record<string, unknown>> = [];
     for (const block of m.content) {
       if (block.type === "tool_result") {
@@ -58,6 +60,7 @@ export function convertMessage(m: { role: string; content: string | ContentBlock
   }
 
   if (m.role === "assistant") {
+    // open-by-design: AI SDK assistant parts (reasoning, text, tool-call)
     const parts: Array<Record<string, unknown>> = [];
     if (m.reasoning_content) {
       parts.push({ type: "reasoning", text: m.reasoning_content });
@@ -93,6 +96,7 @@ export function convertMessage(m: { role: string; content: string | ContentBlock
 
 export function buildCacheProviderOptions(
   providerName: string,
+// open-by-design: provider-specific cache options, shape varies per provider
 ): Record<string, Record<string, unknown>> | undefined {
   switch (providerName) {
     case "anthropic":

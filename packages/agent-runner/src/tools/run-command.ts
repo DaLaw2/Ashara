@@ -52,6 +52,7 @@ export class RunCommandExecutor implements ToolExecutor {
         private readonly env?: Record<string, string>,
     ) {}
 
+    // open-by-design: implements ToolExecutor — LLM-authored tool arguments
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
         const command = input["command"];
         if (typeof command !== "string" || command.length === 0) {

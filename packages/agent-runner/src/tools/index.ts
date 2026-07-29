@@ -80,6 +80,7 @@ export const toolSearchTool: ToolDefinition = {
 export class ToolSearchExecutor implements ToolExecutor {
     constructor(private readonly registry: ToolRegistry) {}
 
+    // open-by-design: implements ToolExecutor — LLM-authored tool arguments
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
         const name = input["name"];
         if (typeof name !== "string" || name.length === 0) {

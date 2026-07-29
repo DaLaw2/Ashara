@@ -5,7 +5,6 @@
 import { createInterface } from "node:readline";
 import {
     AlignmentEngine,
-    StubAlignmentLLM,
     createGatewayAlignmentLLM,
     alignmentReask,
     DEFAULT_DIRECTION_ASSUMPTIONS,
@@ -22,7 +21,7 @@ import { monitorProgress } from "../display.js";
 
 // --- Error type ---
 
-type VisionErrorKind = "empty_vision" | "alignment_failed" | "decomposition_failed" | "server_error";
+type VisionErrorKind = "empty_vision" | "llm_unavailable" | "alignment_failed" | "decomposition_failed" | "server_error";
 
 export class VisionError extends Error {
     readonly kind: VisionErrorKind;
@@ -55,12 +54,13 @@ function createLLMFromGateway(gateway: LLMGateway): AlignmentLLM & Decomposition
 
 // Composition-root LLM acquisition (ADR-030). Config acquisition keeps its
 // API-then-TOML fallback chain, but the *result* always goes through
-// buildGateway: providers configured -> real gateway; zero providers +
-// ASHARA_TEST_STUB_LLM=1 -> explicit stub permission (returns null here, and
-// the caller falls back to Stub* engines); zero providers with no test flag
-// -> NoLLMProvidersConfigured propagates to the caller. This function must
-// not catch-and-return-null on that error -- there is no silent fallback.
-export async function tryCreateLLM(): Promise<(AlignmentLLM & DecompositionLLM) | null> {
+// buildGateway: providers configured -> real gateway; zero providers with no
+// test flag -> NoLLMProvidersConfigured propagates. Zero providers +
+// ASHARA_TEST_STUB_LLM=1 is now ALSO a failure: alignment requires a real
+// LLM and cannot proceed on a stub (Discipline A). The error names the
+// actual cause — which config sources were checked and what each yielded —
+// rather than a blanket "STUB MODE" that ends the investigation.
+export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
     const serverUrl = process.env.ASHARA_SERVER_URL;
     const apiToken = process.env.ASHARA_API_TOKEN;
 
@@ -85,7 +85,15 @@ export async function tryCreateLLM(): Promise<(AlignmentLLM & DecompositionLLM) 
 
     const result = buildGateway({ config, checkedSources });
     if (result.kind === "stub") {
-        return null;
+        throw new VisionError(
+            "llm_unavailable",
+            `Alignment requires a real LLM but no providers are configured ` +
+            `(checked: ${checkedSources.join(", ") || "none"}). ` +
+            `ASHARA_TEST_STUB_LLM=1 permits stub mode for other subsystems, ` +
+            `but alignment cannot proceed without a provider — configure at ` +
+            `least one (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, ` +
+            `MISTRAL_API_KEY, XAI_API_KEY, GOOGLE_API_KEY, or LOCAL_LLM_URL).`,
+        );
     }
     return createLLMFromGateway(result.gateway);
 }
@@ -215,8 +223,8 @@ function toServerLevel(level: string): WorkItemLevel {
 
 // --- Alignment helper ---
 
-export async function alignVision(visionText: string, llm?: AlignmentLLM): Promise<AlignmentResult> {
-    const engine = new AlignmentEngine(llm ?? new StubAlignmentLLM());
+export async function alignVision(visionText: string, llm: AlignmentLLM): Promise<AlignmentResult> {
+    const engine = new AlignmentEngine(llm);
 
     try {
         return await engine.align({ description: visionText });
@@ -335,16 +343,12 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     const { serverUrl } = loadServerEnv();
     const client = new AsharaClient(serverUrl);
 
-    // 0. Real LLM gateway, or explicit stub mode (ASHARA_TEST_STUB_LLM=1).
-    // tryCreateLLM lets NoLLMProvidersConfigured propagate -- it is never
-    // caught here, so a mis-set provider config surfaces as a CLI failure
-    // instead of silently running on stubs.
+    // 0. Real LLM gateway — required. tryCreateLLM throws on both
+    // NoLLMProvidersConfigured (no providers, no test flag) and stub mode
+    // (ASHARA_TEST_STUB_LLM=1 but no providers): alignment requires a real
+    // LLM and cannot proceed on a constant answer (Discipline A).
     const llm = await tryCreateLLM();
-    if (llm) {
-        console.log("[ashara] Using real LLM gateway for alignment and decomposition");
-    } else {
-        console.warn("[ashara] STUB MODE (ASHARA_TEST_STUB_LLM=1) -- using stub engines, no real LLM calls");
-    }
+    console.log("[ashara] Using real LLM gateway for alignment and decomposition");
 
     // 0b. Pre-flight DeepSeek balance check (best-effort)
     if (process.env["DEEPSEEK_API_KEY"]) {
@@ -367,7 +371,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
 
     // 1. Alignment
     console.log("[ashara] Analyzing vision...");
-    const alignment = await alignVision(visionText, llm ?? undefined);
+    const alignment = await alignVision(visionText, llm);
 
     // 2. Display inferences and completeness
     displayInferences(alignment.inferences);
@@ -453,6 +457,9 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
         const openQuestions = alignment.questions
             .filter(q => !answeredQuestions.has(q.question))
             .map(q => q.question);
+        // contract-erasing: keys are DirectionCategory, values are inference
+        // strings — widened for createVision's untyped JSON field. A Zod schema
+        // belongs here when the vision persistence endpoint gets a typed contract.
         const inferencesJson: Record<string, unknown> = {};
         for (const inf of alignment.inferences) {
             inferencesJson[inf.category] = inf.inference;
@@ -475,7 +482,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
 
     // 6. Decomposition (with user answers and/or recorded assumptions)
     console.log("[ashara] Decomposing into work items...");
-    const decomposition = await decomposeVision(visionText, alignment, llm ?? undefined, answers, assumptions);
+    const decomposition = await decomposeVision(visionText, alignment, llm, answers, assumptions);
     console.log(
         `[ashara] Created: ${decomposition.stories.length} stories, ${decomposition.tasks.length} tasks`,
     );

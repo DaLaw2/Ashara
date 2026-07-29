@@ -34,6 +34,7 @@ export const editFileTool: ToolDefinition = {
 export class EditFileExecutor implements ToolExecutor {
     constructor(private readonly workingDir: string) {}
 
+    // open-by-design: implements ToolExecutor — LLM-authored tool arguments
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
         const rawPath = input["path"];
         if (typeof rawPath !== "string" || rawPath.length === 0) {

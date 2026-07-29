@@ -70,7 +70,9 @@ export async function findEntryPoint(projectRoot: string, contractEntryPoint: st
   } catch {
     return null;
   }
+  // contract-erasing: package.json has a well-known shape (npm spec)
   const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
+  // contract-erasing: scripts is Record<string, string>
   const scripts = pkg.scripts as Record<string, unknown> | undefined;
   if (scripts && typeof scripts.start === "string") {
     const match = scripts.start.match(/(?:node|npx\s+tsx)\s+(\S+)/);

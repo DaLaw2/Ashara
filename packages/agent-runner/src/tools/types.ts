@@ -38,6 +38,7 @@ export interface ToolResult {
 }
 
 export interface ToolExecutor {
+    // open-by-design: LLM-authored tool arguments, shape varies per tool's JSON Schema
     execute(input: Record<string, unknown>): Promise<ToolResult>;
 }
 

@@ -12,10 +12,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AlignmentLLM, AlignmentResult as EngagementAlignmentResult } from "@ashara/engagement";
-import {
-    AlignmentEngine,
-    StubAlignmentLLM,
-} from "@ashara/engagement";
+import { AlignmentEngine } from "@ashara/engagement";
 import {
     BrainstormEngine,
     StubBrainstormLLM,
@@ -300,7 +297,19 @@ export async function runIntegrationTest(
 
     // ---- Step 2: Vision -> Alignment ----
     steps.push(await runStep("Vision to Alignment", async () => {
-        const llm = new StubAlignmentLLM();
+        // Hand-matched fake: these inferences match the test vision below,
+        // not a hardcoded stack. If you change the vision, change these to match.
+        const llm: AlignmentLLM = {
+            async infer() {
+                return {
+                    inferences: [
+                        { category: "platform", inference: "REST API", confidence: "high" },
+                        { category: "persistence", inference: "PostgreSQL (relational database)", confidence: "medium" },
+                    ],
+                    ambiguousCategories: [],
+                };
+            },
+        };
         const engine = new AlignmentEngine(llm);
 
         const result: EngagementAlignmentResult = await engine.align({

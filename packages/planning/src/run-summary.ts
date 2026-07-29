@@ -52,7 +52,7 @@ export interface AbandonedItem {
   readonly attempts?: number;
   /** Raw failure detail from the last attempt, when the router provided one. */
   readonly lastFailureDetail?: string;
-  /** The untouched blockedReason payload — kept alongside so nothing is lost in translation. */
+  // contract-erasing: the original StoredBlockedReason is widened via blockedReasonToRecord
   readonly raw: Record<string, unknown>;
 }
 

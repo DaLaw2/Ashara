@@ -145,6 +145,7 @@ export interface ContentBlock {
   text?: string;
   id?: string;
   name?: string;
+  // open-by-design: LLM-authored tool input, shape defined per tool's JSON Schema
   input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: string;
@@ -154,6 +155,7 @@ export interface ContentBlock {
 export interface ToolDefinition {
   name: string;
   description: string;
+  // open-by-design: tool parameters is a JSON Schema object, shape defined per tool
   parameters: Record<string, unknown>;
 }
 
@@ -171,6 +173,7 @@ export interface CompletionResponse {
 export interface ToolCall {
   id: string;
   name: string;
+  // open-by-design: LLM-authored tool arguments, shape varies per tool
   input: Record<string, unknown>;
 }
 

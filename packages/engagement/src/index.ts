@@ -5,7 +5,6 @@ export type {
 } from "./alignment-types.js";
 export {
   AlignmentEngine,
-  StubAlignmentLLM,
   createGatewayAlignmentLLM,
   alignmentReask,
   DEFAULT_DIRECTION_ASSUMPTIONS,

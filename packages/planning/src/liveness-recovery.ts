@@ -30,12 +30,14 @@ function findEpicId(item: WorkItem, allItems: readonly WorkItem[]): string | nul
 }
 
 
+// contract-erasing: accessor for widened StoredBlockedReason fields that were originally typed
 function readString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
   if (!obj) return undefined;
   const value = obj[key];
   return typeof value === "string" ? value : undefined;
 }
 
+// contract-erasing: accessor for widened StoredBlockedReason fields that were originally typed
 function readNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
   if (!obj) return undefined;
   const value = obj[key];

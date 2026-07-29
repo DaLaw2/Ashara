@@ -822,6 +822,7 @@ async function main(): Promise<void> {
 }
 
 
+// open-by-design: generic type guard — narrows unknown to Record as a stepping stone
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

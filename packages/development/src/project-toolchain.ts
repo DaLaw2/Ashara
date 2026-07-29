@@ -134,6 +134,7 @@ export class ToolchainError extends Error {
   }
 }
 
+// open-by-design: log payloads carry caller-defined diagnostic fields
 export type ToolchainLogFn = (event: Record<string, unknown>) => void;
 
 export interface ToolchainDeps {
@@ -305,6 +306,7 @@ interface ToolchainState {
 
 function isFingerprint(value: unknown): value is Fingerprint {
   if (typeof value !== "object" || value === null) return false;
+  // contract-erasing: narrowing for Fingerprint, which has a known shape {mtimeMs, size}
   const v = value as Record<string, unknown>;
   return typeof v.mtimeMs === "number" && typeof v.size === "number";
 }
@@ -321,6 +323,7 @@ function parseState(raw: string): ToolchainState | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
+  // contract-erasing: narrowing for ToolchainState, which has a known shape
   const obj = parsed as Record<string, unknown>;
 
   const lockfile = obj.lockfile === null ? null : isFingerprint(obj.lockfile) ? obj.lockfile : undefined;

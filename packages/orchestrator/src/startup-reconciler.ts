@@ -163,6 +163,7 @@ function reconstructFailure(item: WorkItem): RawFailureContext {
   // Widen through the exhaustive seam — a new source variant in the
   // discriminated union is a compile error in blockedReasonToRecord,
   // not a silent pass-through.
+  // contract-erasing: StoredBlockedReason widened via blockedReasonToRecord for duck-typed access
   const raw: Record<string, unknown> = item.blockedReason
     ? blockedReasonToRecord(item.blockedReason)
     : {};

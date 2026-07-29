@@ -281,6 +281,7 @@ function getCommandFromTurn(tr: ConversationToolResult, turn: ConversationTurn):
     // Find the matching tool call to retrieve the command argument
     for (const tc of turn.toolCalls) {
         if (tc.id === tr.toolCallId) {
+            // contract-erasing: tool call input has per-tool known fields (e.g. "command")
             const input = tc.input as Record<string, unknown>;
             if (typeof input["command"] === "string") {
                 return input["command"];

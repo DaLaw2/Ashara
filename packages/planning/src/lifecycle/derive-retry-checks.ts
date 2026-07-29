@@ -46,39 +46,48 @@ function collectSearchableText(failure: RawFailureContext): string {
 
   const chain = failure.raw.chain;
   if (chain && typeof chain === "object") {
+    // contract-erasing: chain is an ErrorLayer (has errorLayerSchema) accessed via widened RawFailureContext.raw
     collectChainMessages(chain as Record<string, unknown>, parts);
   }
 
   const gateResults = failure.raw.gateResults;
   if (gateResults && typeof gateResults === "object") {
+    // contract-erasing: declared in ErrorEnvelope but never written by any construction site (story retry-derivation-is-text-scraping)
     collectCheckOutputs(gateResults as Record<string, unknown>, parts);
   }
 
   return parts.join("\n");
 }
 
+// contract-erasing: walks ErrorLayer fields (message, context, cause) via widened Record
 function collectChainMessages(layer: Record<string, unknown>, out: string[]): void {
   if (typeof layer.message === "string") out.push(layer.message);
   if (layer.context && typeof layer.context === "object") {
+    // open-by-design: ErrorLayer.context is declared Record<string, unknown> — caller-supplied diagnostic fields
     for (const value of Object.values(layer.context as Record<string, unknown>)) {
       if (typeof value === "string") out.push(value);
     }
   }
   if (layer.cause && typeof layer.cause === "object") {
+    // contract-erasing: ErrorLayer.cause is another ErrorLayer, walked as Record
     collectChainMessages(layer.cause as Record<string, unknown>, out);
   }
 }
 
+// contract-erasing: gateResults declared in ErrorEnvelope but never populated — this function has never executed (retry-derivation-is-text-scraping)
 function collectCheckOutputs(gateResults: Record<string, unknown>, out: string[]): void {
   for (const gate of Object.values(gateResults)) {
     if (!gate || typeof gate !== "object") continue;
+    // contract-erasing: dead path — gateResults is never written (retry-derivation-is-text-scraping)
     const tierHolder = gate as Record<string, unknown>;
     const tier = tierHolder.tier ?? tierHolder;
     if (!tier || typeof tier !== "object") continue;
+    // contract-erasing: dead path — gateResults is never written (retry-derivation-is-text-scraping)
     const checks = (tier as Record<string, unknown>).checks;
     if (!Array.isArray(checks)) continue;
     for (const check of checks) {
       if (!check || typeof check !== "object") continue;
+      // contract-erasing: dead path — gateResults is never written (retry-derivation-is-text-scraping)
       const c = check as Record<string, unknown>;
       if (c.passed === false && typeof c.output === "string") {
         out.push(c.output);

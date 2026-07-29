@@ -118,6 +118,7 @@ function buildAbandoned(items: readonly RunSummaryItem[]): AbandonedItem[] {
 function classifyAbandon(item: RunSummaryItem): AbandonedItem {
   // Widen through the exhaustive seam — a new source variant is a compile
   // error in blockedReasonToRecord, not a silent assignment to Record.
+  // contract-erasing: StoredBlockedReason widened via blockedReasonToRecord for duck-typed access
   const raw: Record<string, unknown> = item.blockedReason
     ? blockedReasonToRecord(item.blockedReason)
     : {};
@@ -178,6 +179,7 @@ function classifyAbandon(item: RunSummaryItem): AbandonedItem {
   };
 }
 
+// contract-erasing: navigates widened StoredBlockedReason fields by string key
 function describeUnspecified(raw: Record<string, unknown>): string {
   const note = readString(raw, "note");
   if (note !== undefined) return `Abandoned: ${note}`;
@@ -186,6 +188,7 @@ function describeUnspecified(raw: Record<string, unknown>): string {
   return `Abandoned with an unrecognized reason payload (keys: ${keys.join(", ")}).`;
 }
 
+// contract-erasing: navigates widened StoredBlockedReason (api variant) fields by string key
 function describeApiAbandon(raw: Record<string, unknown>): string {
   const reasonText = readString(raw, "reason");
   if (reasonText !== undefined) return `Abandoned via API: ${reasonText}`;
@@ -376,20 +379,24 @@ function summarizeKinds(abandoned: readonly AbandonedItem[]): string {
   return parts.join(", ");
 }
 
+// open-by-design: generic type guard — narrows unknown to Record as a stepping stone
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// contract-erasing: accessor for widened Record fields that were originally typed
 function readString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
 }
 
+// contract-erasing: accessor for widened Record fields that were originally typed
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" ? value : undefined;
 }
 
+// contract-erasing: accessor for widened Record fields that were originally typed
 function readFailureDetail(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   if (!isRecord(value)) return undefined;

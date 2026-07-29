@@ -124,6 +124,7 @@ export class AgentRunner {
                 description: def.description,
                 parameters: {
                     type: def.inputSchema.type,
+                    // contract-erasing: inputSchema.properties is Record<string, SchemaProperty>
                     properties: def.inputSchema.properties as Record<string, unknown>,
                     required: [...def.inputSchema.required],
                 },
@@ -136,6 +137,7 @@ export class AgentRunner {
                     description: `${def.description} [Schema not loaded — call tool_search("${name}") first]`,
                     parameters: {
                         type: "object" as const,
+                        // open-by-design: deferred tool stub has no properties yet
                         properties: {} as Record<string, unknown>,
                         required: [] as string[],
                     },
@@ -177,6 +179,7 @@ export class AgentRunner {
         // 7. Run inline verification
         let verifyResult: InlineVerifyResult | null = null;
         try {
+            // contract-erasing: brief.json has AgentBriefSchema but task_spec is read off the raw parse
             const rawBrief = JSON.parse(briefRaw) as Record<string, unknown>;
             const taskSpec = parseStoredTaskSpec(rawBrief["task_spec"]);
             verifyResult = await runInlineVerify(

@@ -139,15 +139,12 @@ export function withSubstitutedBy(
  */
 /**
  * Deliberately widens a typed StoredBlockedReason to Record<string, unknown>.
- *
- * Three consumers need the wide shape because their downstream contracts
- * (AbandonedItem.raw, RawFailureContext.raw) are Record-typed. The exhaustive
- * switch ensures that adding a new `source` variant is a compile error HERE,
- * so the widening site is never silently skipped for an unhandled variant.
- * Without this, an `as Record<string, unknown>` cast compiles for any variant
- * — including one the consumer's duck-typing logic has never seen.
+ * The original shape IS known (StoredBlockedReason), but three consumers need
+ * the wide form (AbandonedItem.raw, RawFailureContext.raw). The exhaustive
+ * switch ensures a new `source` variant is a compile error HERE, not a silent
+ * pass-through.
  */
-export function blockedReasonToRecord(reason: StoredBlockedReason): Record<string, unknown> {
+export function blockedReasonToRecord(reason: StoredBlockedReason): Record<string, unknown> { // contract-erasing
   switch (reason.source) {
     case "task_failed":
     case "orchestrator_error":

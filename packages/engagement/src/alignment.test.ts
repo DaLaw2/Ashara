@@ -1,6 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { AlignmentConfig, DirectionCategory, DirectionInference } from "./alignment-types.js";
-import { AlignmentEngine, StubAlignmentLLM } from "./alignment.js";
+import type { AlignmentLLM } from "./alignment.js";
+import { AlignmentEngine } from "./alignment.js";
+
+/** Tests below exercise non-LLM engine methods only; this fake fails fast if called. */
+const unusedLLM: AlignmentLLM = {
+  infer() {
+    throw new Error("LLM should not be invoked in these tests");
+  },
+};
 
 const DEFAULT_REQUIRED: DirectionCategory[] = ["platform", "architecture", "data_flow", "persistence"];
 const DEFAULT_OPTIONAL: DirectionCategory[] = ["scale", "deployment", "integration", "security"];
@@ -15,8 +23,7 @@ function makeConfig(overrides: Partial<AlignmentConfig> = {}): AlignmentConfig {
 }
 
 describe("parseVision", () => {
-  const llm = new StubAlignmentLLM();
-  const engine = new AlignmentEngine(llm);
+  const engine = new AlignmentEngine(unusedLLM);
 
   test("returns raw text unchanged", () => {
     const parsed = engine.parseVision("Build a web app for task management");
@@ -30,8 +37,7 @@ describe("parseVision", () => {
 });
 
 describe("generateQuestions", () => {
-  const llm = new StubAlignmentLLM();
-  const engine = new AlignmentEngine(llm);
+  const engine = new AlignmentEngine(unusedLLM);
 
   test("generates questions for missing required categories", () => {
     const inferences: DirectionInference[] = [
@@ -60,8 +66,7 @@ describe("generateQuestions", () => {
 });
 
 describe("checkCompleteness", () => {
-  const llm = new StubAlignmentLLM();
-  const engine = new AlignmentEngine(llm);
+  const engine = new AlignmentEngine(unusedLLM);
 
   test("complete when all required categories covered", () => {
     const inferences: DirectionInference[] = [

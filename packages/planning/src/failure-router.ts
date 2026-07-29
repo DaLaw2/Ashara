@@ -78,9 +78,10 @@ export type FailureDecision =
     };
 
 export class FailureRouterError extends Error {
+  // open-by-design: diagnostic context varies per error site (config, item state, etc.)
   readonly context: Record<string, unknown>;
 
-  constructor(message: string, context: Record<string, unknown>) {
+  constructor(message: string, context: Record<string, unknown>) { // open-by-design
     super(message);
     this.name = "FailureRouterError";
     this.context = context;

@@ -81,6 +81,7 @@ export interface SessionInfo {
 export interface CreateVisionRequest {
     readonly visionText: string;
     readonly summary: string;
+    // open-by-design: user/alignment-supplied inference results, shape varies per vision
     readonly inferences?: Record<string, unknown>;
     readonly scopeBoundaries?: string[];
     readonly confirmedDirections?: Array<{

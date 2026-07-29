@@ -232,7 +232,9 @@ async function bootApp(workDir: string): Promise<AppHandle> {
   }
 
   const pkgContent = await readFile(pkgJsonPath, "utf-8");
+  // contract-erasing: package.json has a well-known shape (npm spec)
   const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
+  // contract-erasing: scripts is Record<string, string>
   const scripts = pkg.scripts as Record<string, unknown> | undefined;
 
   let startCmd: string | null = null;

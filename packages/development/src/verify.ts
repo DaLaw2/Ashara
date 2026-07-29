@@ -12,6 +12,7 @@ export interface VerifyLogOptions {
   readonly logPath: string;
 }
 
+// open-by-design: log payloads carry caller-defined diagnostic fields
 function emitVerifyLog(opts: VerifyLogOptions | undefined, data: Record<string, unknown>): void {
   if (!opts) return;
   mkdirSync(dirname(opts.logPath), { recursive: true });

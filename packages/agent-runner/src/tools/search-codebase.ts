@@ -36,6 +36,7 @@ export const searchCodebaseTool: ToolDefinition = {
 export class SearchCodebaseExecutor implements ToolExecutor {
     constructor(private readonly workingDir: string) {}
 
+    // open-by-design: implements ToolExecutor — LLM-authored tool arguments
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
         const pattern = input["pattern"];
         if (typeof pattern !== "string" || pattern.length === 0) {

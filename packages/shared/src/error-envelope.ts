@@ -4,6 +4,7 @@ export interface ErrorLayer {
   readonly boundary: string;
   readonly operation: string;
   readonly message: string;
+  // open-by-design: diagnostic context is caller-supplied, shape varies per boundary/operation
   readonly context?: Record<string, unknown>;
   readonly cause?: ErrorLayer;
   readonly timestamp: string;
@@ -41,6 +42,7 @@ function extractErrorLayer(error: unknown): ErrorLayer | undefined {
     if (parsed.success) return parsed.data;
   }
   if (error instanceof Error && "context" in error) {
+    // open-by-design: typed Error subclasses carry caller-defined diagnostic context
     const ctx = error as Error & { context: Record<string, unknown> };
     return {
       boundary: "origin",
@@ -58,6 +60,7 @@ export function wrapError(
   boundary: string,
   operation: string,
   error: unknown,
+  // open-by-design: diagnostic context is caller-supplied, shape varies per boundary/operation
   context?: Record<string, unknown>,
 ): ErrorLayer {
   const existingLayer = extractErrorLayer(error);

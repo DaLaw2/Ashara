@@ -12,6 +12,7 @@ export class EventStoreRepository {
       timestamp: Date;
       sourceContext: string;
       correlationId?: string;
+      // open-by-design: event payload is BC-specific, matches DomainEvent.payload
       payload: Record<string, unknown>;
     },
     priority: "External" | "Internal",

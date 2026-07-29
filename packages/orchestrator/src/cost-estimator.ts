@@ -158,7 +158,9 @@ export class CostEstimator {
           console.warn(`Provider balance check failed for ${name}: ${resp.status}`);
           return null;
         }
+        // contract-erasing: DeepSeek balance API has a known response shape
         const body = await resp.json() as Record<string, unknown>;
+        // contract-erasing: balance_infos entries have known fields (currency, total_balance)
         const infos = body.balance_infos as Array<Record<string, unknown>> | undefined;
         if (!Array.isArray(infos)) return null;
         for (const entry of infos) {

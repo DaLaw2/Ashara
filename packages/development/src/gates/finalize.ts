@@ -35,6 +35,7 @@ async function abortAndFail(
   failedLogMessage: string,
   gateFailureContext: string,
   extra: Partial<FinalizeResult> = {},
+  // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
   errorLayerInfo?: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);

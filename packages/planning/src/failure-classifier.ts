@@ -105,6 +105,7 @@ export function shouldEscalate(
   return priorCategories.includes(category);
 }
 
+// open-by-design: raw is a candidate, not a known ErrorEnvelope — safeParse tests whether it conforms
 export function tryParseEnvelope(raw: Record<string, unknown>): ErrorEnvelope | null {
   const parsed = errorEnvelopeSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;

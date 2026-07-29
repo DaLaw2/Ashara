@@ -63,6 +63,7 @@ export type CommandRunner = (
   timeout: number,
 ) => Promise<{ exitCode: number; output: string }>;
 
+// open-by-design: log payloads carry caller-defined diagnostic fields
 export type VerifyLogFn = (event: Record<string, unknown>) => void;
 
 export interface CoreVerifyInput {

@@ -61,6 +61,7 @@ export interface ConventionsExtractor {
 }
 
 export interface ExecutionEventSink {
+  // open-by-design: log events carry caller-defined fields alongside the required `event` tag
   emit(event: Record<string, unknown> & { readonly event: string }): void;
   readonly path: string;
 }
@@ -490,9 +491,11 @@ export class DevelopmentService {
       const pkgPath = join(targetProjectPath, "package.json");
       const pkgContent = await readFile(pkgPath, "utf-8");
       hasNodeManifest = true;
+      // contract-erasing: package.json has a well-known shape (npm spec)
       const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
+      // contract-erasing: dependencies/devDependencies are Record<string, string>
       const deps = pkg.dependencies as Record<string, unknown> | undefined;
-      const devDeps = pkg.devDependencies as Record<string, unknown> | undefined;
+      const devDeps = pkg.devDependencies as Record<string, unknown> | undefined; // contract-erasing
       const depsStr = deps ? Object.keys(deps).join(", ") : "";
       const devDepsStr = devDeps ? Object.keys(devDeps).join(", ") : "";
       if (depsStr || devDepsStr) {
@@ -1171,6 +1174,7 @@ interface ReplanContext {
 
 function isReplanContext(value: unknown): value is ReplanContext {
   if (typeof value !== "object" || value === null) return false;
+  // contract-erasing: narrowing for ReplanContext, which has a known shape
   const candidate = value as Record<string, unknown>;
   return typeof candidate.attempt === "number" && typeof candidate.detail === "string";
 }
