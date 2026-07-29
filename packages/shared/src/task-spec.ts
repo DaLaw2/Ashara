@@ -2,54 +2,52 @@ import { z } from "zod";
 
 /**
  * Published Language: the persisted task specification stored in the jsonb
- * `task_spec` column. Read back by the adapter, consumed by every downstream
- * reader (brief assembly, budget, failure recovery, task split, dispatch
- * selection). All fields are optional because not every work-item level carries
- * a spec (epics/stories do not) and different producers populate different
- * subsets.
- *
- * `.passthrough()` preserves lifecycle extensions that vary by origin —
- * bug-fix metadata, acceptance-gap lessons, split tracking — without
- * enumerating every origin's fields. The named fields are the ones code
- * reads through typed access; everything else rides through as `unknown`
- * via the index signature (open-world: origins are NOT a closed domain).
+ * `task_spec` column. All fields optional — not every level carries a spec,
+ * and different origins populate different subsets. Origin membership is open
+ * (`origin: z.string().optional()`); the key set is closed — every lifecycle
+ * extension is a declared field, so a producer writing an undeclared key is a
+ * compile error, not a silent `unknown`.
  */
-export const storedTaskSpecSchema = z
-  .object({
-    // Core specification (decomposition engine output)
-    goal: z.string().optional(),
-    endState: z.string().optional(),
-    scope: z.string().optional(),
-    deliverables: z.array(z.string()).optional(),
-    checks: z.array(z.string()).optional(),
+export const storedTaskSpecSchema = z.object({
+  // Core specification (decomposition engine output)
+  goal: z.string().optional(),
+  endState: z.string().optional(),
+  scope: z.string().optional(),
+  deliverables: z.array(z.string()).optional(),
+  checks: z.array(z.string()).optional(),
 
-    // Decomposition metadata
-    priorWorkPointers: z.array(z.string()).optional(),
-    capability: z.string().optional(),
+  // Decomposition metadata
+  priorWorkPointers: z.array(z.string()).optional(),
+  capability: z.string().optional(),
 
-    // Origin marker — open string, NOT an enum. Known values as of writing:
-    // "acceptance-gap", "coverage-reconciliation", "bug-fix". New origins
-    // appear without code changes; this field is read by dispatch selection
-    // (TaskSelector) and bug-fix dedup, not by a switch that needs exhaustiveness.
-    origin: z.string().optional(),
+  // Origin marker — open string, NOT an enum. Known values as of writing:
+  // "acceptance-gap", "coverage-reconciliation", "bug-fix". New origins
+  // appear without code changes; this field is read by dispatch selection
+  // (TaskSelector) and bug-fix dedup, not by a switch that needs exhaustiveness.
+  origin: z.string().optional(),
 
-    // Task-split lifecycle (task-split.ts)
-    splitDepth: z.number().optional(),
-    splitFrom: z.string().optional(),
+  // Task-split lifecycle (task-split.ts)
+  splitDepth: z.number().optional(),
+  splitFrom: z.string().optional(),
 
-    // Bug-fix metadata (bug-fix.ts)
-    culpritTaskId: z.string().optional(),
-    culpritTitle: z.string().optional(),
-    failureDiagnostic: z.string().optional(),
-    implicatedFiles: z.array(z.string()).optional(),
-    suggestedFix: z.string().optional(),
+  // Bug-fix metadata (bug-fix.ts)
+  culpritTaskId: z.string().optional(),
+  culpritTitle: z.string().optional(),
+  failureDiagnostic: z.string().optional(),
+  implicatedFiles: z.array(z.string()).optional(),
+  suggestedFix: z.string().optional(),
 
-    // Acceptance-gap lifecycle (termination-snapshot.ts via acceptance.ts)
-    lesson: z.string().optional(),
-    suggestedApproach: z.string().optional(),
-    supersedes: z.string().optional(),
-  })
-  .passthrough();
+  // Acceptance-gap lifecycle (termination-snapshot.ts via acceptance.ts)
+  lesson: z.string().optional(),
+  suggestedApproach: z.string().optional(),
+  supersedes: z.string().optional(),
+
+  // Liveness-recovery lifecycle (liveness-recovery.ts via replan-from-vision.ts).
+  // Written by liveness-recovery, read by nothing today — story unwired-surface.
+  approach: z.string().optional(),
+  differentiator: z.string().optional(),
+  substitutesFor: z.string().optional(),
+});
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;
 

@@ -9,7 +9,7 @@ export function shouldSplit(
   filesChanged: number,
   task: Pick<WorkItem, "taskSpec">,
 ): boolean {
-  const alreadySplit = typeof task.taskSpec?.splitDepth === "number" && (task.taskSpec.splitDepth as number) > 0;
+  const alreadySplit = typeof task.taskSpec?.splitDepth === "number" && task.taskSpec.splitDepth > 0;
   return finishReason === "turn_limit" && filesChanged > 0 && !alreadySplit;
 }
 

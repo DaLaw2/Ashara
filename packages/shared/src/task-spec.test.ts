@@ -67,24 +67,24 @@ describe("parseStoredTaskSpec", () => {
     expect(result).toEqual({});
   });
 
-  test("passthrough preserves unknown extension fields", () => {
+  test("closed schema strips undeclared keys (no passthrough)", () => {
     const input = {
       goal: "Fix the bug",
       origin: "bug-fix",
       culpritTaskId: "wi-deadbeef",
-      // A future extension field not in the schema's named set
       experimentalMetric: 0.95,
       customTag: "hotfix-urgent",
     };
 
     const result = parseStoredTaskSpec(input);
     expect(result).toBeDefined();
-    // Named fields typed
+    // Declared fields survive
     expect(result!.goal).toBe("Fix the bug");
     expect(result!.origin).toBe("bug-fix");
-    // Extension fields survive parsing via passthrough
-    expect((result as Record<string, unknown>)["experimentalMetric"]).toBe(0.95);
-    expect((result as Record<string, unknown>)["customTag"]).toBe("hotfix-urgent");
+    expect(result!.culpritTaskId).toBe("wi-deadbeef");
+    // Undeclared keys are stripped — the key set is closed
+    expect((result as Record<string, unknown>)["experimentalMetric"]).toBeUndefined();
+    expect((result as Record<string, unknown>)["customTag"]).toBeUndefined();
   });
 
   test("origin accepts an unrecognised string (open domain, not an enum)", () => {
