@@ -137,7 +137,10 @@ export class ConfigRepository {
             // EXCLUDED.api_key is NULL — without COALESCE every server start
             // would silently revert an operator's INSERT.
             apiKey: sql`COALESCE(EXCLUDED.api_key, provider_configs.api_key)`,
-            baseUrl: sql`COALESCE(EXCLUDED.base_url, provider_configs.base_url)`,
+            // Prefer the operator's existing base_url over the seed's default:
+            // the seed supplies well-known URLs as a convenience, but an operator
+            // who customized the URL must not have it reverted on restart.
+            baseUrl: sql`COALESCE(provider_configs.base_url, EXCLUDED.base_url)`,
             updatedAt: sql`EXCLUDED.updated_at`,
           },
         });

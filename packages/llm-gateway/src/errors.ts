@@ -240,6 +240,33 @@ export class TemperatureNotHonored extends GatewayError {
  * would disappear without a trace. A missing or unparseable file still
  * degrades — that is a deployment shape, not an authoring error.
  */
+/**
+ * Thrown by `createLanguageModel` when an openai-compatible provider has no
+ * `baseUrl`. The AI SDK defaults to `https://api.openai.com/v1` when
+ * `baseURL` is absent, so a NULL value silently routes traffic to the wrong
+ * vendor. Discipline A: absence must fail closed, not resolve to a default
+ * that changes the destination.
+ */
+export class ProviderMissingBaseUrl extends GatewayError {
+  readonly provider: string;
+  readonly howToFix: string;
+
+  constructor(provider: string) {
+    const howToFix =
+      `Set base_url for provider "${provider}" in the provider_configs table ` +
+      `(e.g. UPDATE provider_configs SET base_url = 'https://...' WHERE name = '${provider}'), ` +
+      `or disable the provider by removing its api_key.`;
+    super(
+      `Provider "${provider}" has no base_url configured. Without a base_url, ` +
+        `the AI SDK defaults to https://api.openai.com/v1 — traffic would silently ` +
+        `route to OpenAI instead of ${provider}. ${howToFix}`,
+    );
+    this.name = "ProviderMissingBaseUrl";
+    this.provider = provider;
+    this.howToFix = howToFix;
+  }
+}
+
 export class InvalidRoutingProfiles extends GatewayError {
   readonly configPath: string;
   readonly issues: readonly string[];

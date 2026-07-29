@@ -22,6 +22,7 @@ function makeConfig(): GatewayConfig {
       {
         name: "test-provider",
         apiKey: "test-key",
+        baseUrl: "https://test.example.com/v1",
         models: [
           {
             id: "test-model",

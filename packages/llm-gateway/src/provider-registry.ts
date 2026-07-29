@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { CapabilityLevel } from "@ashara/shared";
-import { NoProviderAvailableError } from "./errors.js";
+import { NoProviderAvailableError, ProviderMissingBaseUrl } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import type { GatewayConfig, KnownLLMSite, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
@@ -27,6 +27,9 @@ function createLanguageModel(
       return openai(modelConfig.apiModelId);
     }
     case "local": {
+      if (!providerConfig.baseUrl) {
+        throw new ProviderMissingBaseUrl(providerConfig.name);
+      }
       const local = createOpenAI({
         baseURL: providerConfig.baseUrl,
         apiKey: "not-needed",
@@ -34,6 +37,9 @@ function createLanguageModel(
       return local.chat(modelConfig.apiModelId);
     }
     default: {
+      if (!providerConfig.baseUrl) {
+        throw new ProviderMissingBaseUrl(providerConfig.name);
+      }
       const provider = createOpenAI({
         baseURL: providerConfig.baseUrl,
         apiKey: providerConfig.apiKey,

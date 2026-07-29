@@ -45,6 +45,7 @@ export {
   RoutingProfileIncomplete,
   InvalidRoutingProfiles,
   InvalidGatewayCatalog,
+  ProviderMissingBaseUrl,
   TemperatureNotHonored,
 } from "./errors.js";
 export { KNOWN_LLM_SITES } from "./types.js";

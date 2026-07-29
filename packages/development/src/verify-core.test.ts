@@ -5,6 +5,7 @@ import { describe, test, expect, vi } from "vitest";
 import type { ProjectKnowledge } from "@ashara/shared";
 import { runVerifyCore, InvalidVerifyPathError, extractContractChecks } from "./verify-core.js";
 import type { CoreVerifyInput, CoreVerifyDeps, CommandRunner } from "./verify-core.js";
+import { ToolchainError } from "./project-toolchain.js";
 import type { ToolchainResult } from "./project-toolchain.js";
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,61 @@ describe("runVerifyCore — GIT-SAFETY (a) fail-closed workdir validation", () =
       // executable — the point here is only that validation did not block it.
       expect(result.verdict).toBe("unverified");
       expect(result.tiers.deterministic.status).toBe("skipped");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-Node project reachability (t-nonnode-prepare-is-unreachable)
+//
+// The whole finding: prepareToolchainForVerify previously guarded on
+// package.json, returning null before calling prepare(). Since prepare()
+// routes to prepareNonNode() only when package.json is ABSENT, the guard
+// made non-Node preparation unreachable. These tests verify the fix.
+// ---------------------------------------------------------------------------
+
+describe("runVerifyCore — non-Node project reaches preparation", () => {
+  test("workDir without package.json calls prepareToolchain (the finding is that it previously did not)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-nonnode-reach-"));
+    try {
+      const prepareToolchain = vi.fn(async () => stubToolchain);
+      const runCommand = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" }));
+
+      await runVerifyCore(
+        { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+        { prepareToolchain, runCommand },
+      );
+
+      // The critical assertion: prepareToolchain was called with the workDir.
+      // Before the fix, the package.json guard returned null and this never fired.
+      expect(prepareToolchain).toHaveBeenCalledTimes(1);
+      expect(prepareToolchain).toHaveBeenCalledWith(dir, expect.objectContaining({ runCommand }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("non-Node preparation failure fails the verify closed (Discipline A)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-nonnode-fail-"));
+    try {
+      const prepareToolchain = vi.fn(async () => {
+        throw new ToolchainError("install", {
+          cwd: dir,
+          detail: "cargo build failed",
+          command: ["cargo", "build"],
+          exitCode: 101,
+        });
+      });
+
+      const result = await runVerifyCore(
+        { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+        { prepareToolchain },
+      );
+
+      expect(result.verdict).toBe("failed");
+      expect(result.tiers.deterministic.details).toContain("cargo build failed");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

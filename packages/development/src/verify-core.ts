@@ -1,5 +1,4 @@
-import { access } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { ProjectKnowledge } from "@ashara/shared";
 import { nodesByKind } from "@ashara/shared";
@@ -91,8 +90,8 @@ export interface CoreVerifyDeps {
   readonly runCommand?: CommandRunner;
   readonly log?: VerifyLogFn;
   /**
-   * Toolchain preparer, run before the deterministic checks when the workDir is
-   * a Node project (package.json present), using the SAME injected runCommand.
+   * Toolchain preparer, run before the deterministic checks using the SAME
+   * injected runCommand. Dispatches for any project type (Node, Cargo, Go).
    * Default: the real prepare(). Tests inject a deterministic stub.
    */
   readonly prepareToolchain?: (targetPath: string, deps?: ToolchainDeps) => Promise<ToolchainResult>;
@@ -140,10 +139,15 @@ function toolchainFailureDetails(err: unknown): string {
 }
 
 /**
- * Run the toolchain preparer for a Node workDir (package.json present). Returns
- * null on success or when the project is not Node (nothing to prepare); returns
+ * Run the toolchain preparer for the workDir. Returns null on success; returns
  * a fully-formed failed CoreVerifyResult when preparation throws, so the caller
  * fails closed without running any check on an unprepared tree.
+ *
+ * `prepare()` dispatches internally: Node projects (package.json present) get
+ * dependency installation and codegen; non-Node projects (Cargo.toml, go.mod)
+ * get their own build/download step; projects with no recognized manifest get
+ * a no-op return. This function does not gate on project type — `prepare()`
+ * owns that routing.
  */
 async function prepareToolchainForVerify(
   workDir: string,
@@ -151,10 +155,6 @@ async function prepareToolchainForVerify(
   deps: CoreVerifyDeps,
   log: VerifyLogFn | undefined,
 ): Promise<CoreVerifyResult | null> {
-  const hasPkgJson = await access(join(workDir, "package.json")).then(() => true, () => false);
-  if (!hasPkgJson) {
-    return null;
-  }
   const prepareFn = deps.prepareToolchain ?? prepare;
   try {
     await prepareFn(workDir, { runCommand: run, log });
@@ -233,11 +233,12 @@ export async function runVerifyCore(
 
   // Reproduce the project's build semantics BEFORE any deterministic check, so
   // the agent-worktree tsc runs against the same prepared tree the gate does
-  // (ADR-032 §1: one implementation, one environment). Only Node projects are
-  // preparable — a workDir with no package.json (e.g. a Rust crate) is left
-  // untouched. Fail-closed (Run 9 / R8-F6a class): a toolchain failure yields a
-  // failed deterministic tier carrying the typed, self-diagnosing context;
-  // never fall through to running tsc on an unprepared tree.
+  // (ADR-032 §1: one implementation, one environment). Preparation dispatches
+  // per project type: Node (npm/bun install + codegen), Cargo (cargo build),
+  // Go (go mod download), or no-op when no recognized manifest is present.
+  // Fail-closed (Run 9 / R8-F6a class): a toolchain failure yields a failed
+  // deterministic tier carrying the typed, self-diagnosing context; never fall
+  // through to running checks on an unprepared tree.
   const toolchainFailure = await prepareToolchainForVerify(input.workDir, run, deps, log);
   if (toolchainFailure) {
     return toolchainFailure;

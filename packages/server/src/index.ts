@@ -154,8 +154,8 @@ async function main(): Promise<void> {
     { name: "anthropic", providerType: "anthropic", baseUrl: null },
     { name: "openai", providerType: "openai", baseUrl: null },
     { name: "deepseek", providerType: "openai-compatible", baseUrl: "https://api.deepseek.com/v1" },
-    { name: "mistral", providerType: "openai-compatible", baseUrl: null },
-    { name: "xai", providerType: "openai-compatible", baseUrl: null },
+    { name: "mistral", providerType: "openai-compatible", baseUrl: "https://api.mistral.ai/v1" },
+    { name: "xai", providerType: "openai-compatible", baseUrl: "https://api.x.ai/v1" },
     { name: "google", providerType: "openai-compatible", baseUrl: null },
     { name: "local", providerType: "openai-compatible", baseUrl: null },
   ]);
