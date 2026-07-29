@@ -16,11 +16,11 @@ export function isRecoverableFailed(
 }
 
 export async function assembleRunSummaryItems(deps: SnapshotAssemblyDeps): Promise<RunSummaryItem[]> {
-  const { items, resolution } = await resolvePlanDependencies(deps.workItemRepo);
+  const { items, resolveItem } = await resolvePlanDependencies(deps.workItemRepo);
 
   const assembled: RunSummaryItem[] = [];
   for (const item of items) {
-    const resolved = resolution.get(item.id);
+    const resolved = resolveItem(item.id);
     const recoverable =
       item.status === "Failed"
         ? isRecoverableFailed(item, item.dispatchCount, deps.replanBound)
@@ -31,8 +31,8 @@ export async function assembleRunSummaryItems(deps: SnapshotAssemblyDeps): Promi
       parentId: item.parentId,
       status: item.status,
       level: item.level,
-      resolution: resolved?.resolution ?? "met",
-      blockedBy: resolved?.blockedBy ?? [],
+      resolution: resolved.resolution,
+      blockedBy: resolved.blockedBy,
       recoverable,
       title: item.title,
       blockedReason: item.blockedReason,

@@ -16,7 +16,7 @@ export interface TerminationItemSnapshot {
 export interface TerminationSnapshot {
   readonly items: readonly TerminationItemSnapshot[];
   readonly budgetExhausted: boolean;
-  readonly openCoverageGaps?: number;
+  readonly openCoverageGaps: number;
 }
 
 function isTerminal(status: WorkItemStatus): boolean {
@@ -24,8 +24,7 @@ function isTerminal(status: WorkItemStatus): boolean {
 }
 
 export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
-  const { items, budgetExhausted } = snapshot;
-  const openCoverageGaps = snapshot.openCoverageGaps ?? 0;
+  const { items, budgetExhausted, openCoverageGaps } = snapshot;
   const parentsWithChildren = collectParents(items);
   const counts = tallyCounts(items, parentsWithChildren);
 

@@ -91,9 +91,12 @@ export class DependencyGraph {
   }
 
   /**
-   * Resolves every node's dependency state in one memoized pass. Callers look up an
-   * item's `DependencyResolutionResult`; items with no dependencies are absent from
-   * the map (implicitly `met`). Traversal is safe because addEdge rejects cycles.
+   * Resolves every node's dependency state in one memoized pass. The returned map
+   * contains entries only for items that appear in at least one dependency edge —
+   * items with no edges are absent. `resolvePlanDependencies` (gate.ts) wraps this
+   * in a total resolver function that returns `NO_DEPENDENCIES` for absent items;
+   * direct callers (e.g. `isMet`) must handle absence themselves. Traversal is safe
+   * because addEdge rejects cycles.
    */
   resolveDependencies(ctx: DependencyContext): Map<string, DependencyResolutionResult> {
     const memo = new Map<string, DependencyResolutionResult>();
