@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { VerifyRequest, VerifyResponse } from "./types.js";
 import { runVerifyCore } from "./verify-core.js";
+import type { CommandRunner } from "./verify-core.js";
 
 // Thin in-process adapter over the shared verify-core library. Owns the
 // environment specifics of the server/orchestrator path: request/response
@@ -20,8 +21,16 @@ function emitVerifyLog(opts: VerifyLogOptions | undefined, data: Record<string, 
   appendFileSync(opts.logPath, line + "\n");
 }
 
+export interface VerifyRunners {
+  /** Network-isolated runner for deterministic checks (--network=none). */
+  readonly checkRunner: CommandRunner;
+  /** Network-enabled runner for toolchain preparation (npm install, etc.). */
+  readonly prepareRunner: CommandRunner;
+}
+
 export async function verify(
   request: VerifyRequest,
+  runners: VerifyRunners,
   logOpts?: VerifyLogOptions,
 ): Promise<VerifyResponse> {
   const result = await runVerifyCore(
@@ -32,6 +41,8 @@ export async function verify(
       contractChecks: request.contractChecks,
     },
     {
+      runCommand: runners.checkRunner,
+      prepareRunCommand: runners.prepareRunner,
       log: (event) => emitVerifyLog(logOpts, { taskId: request.task_id, ...event }),
     },
   );

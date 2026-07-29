@@ -5,8 +5,6 @@ import { nodesByKind } from "@ashara/shared";
 import { prepare, ToolchainError } from "./project-toolchain.js";
 import type { ToolchainDeps, ToolchainResult } from "./project-toolchain.js";
 import {
-  isAllowedCheck,
-  defaultRunCommand,
   runDeterministicChecks,
 } from "./check-runner.js";
 import type { CoreTierResult } from "./check-runner.js";
@@ -18,8 +16,14 @@ import { readVerifyConfig } from "./verify-config.js";
 // Single implementation behind both the in-process development verify() and the
 // out-of-process agent-runner runInlineVerify() adapters. The agent runs in a
 // subprocess, so this library is pure functions plus an injected command
-// runner — no shared runtime state. Each process supplies its own command
-// runner (defaulting to a local `spawn`).
+// runner — no shared runtime state.
+//
+// Containment is structural: each caller injects a CommandRunner (required,
+// no fallback). Host-side callers inject containerizedRunCommand (rootless
+// podman, --network=none, one mount). The agent-runner injects
+// defaultRunCommand because it is already inside the ADR-058 container.
+// The absence of a fallback is the mechanism: a caller that forgets to
+// inject a runner gets a compile error, not silent host execution.
 //
 // Verification is deterministic checks only: tsc/cargo check/npm test/custom
 // commands (check-runner.ts). Evidence across 11 E2E runs: every real quality
@@ -27,10 +31,6 @@ import { readVerifyConfig } from "./verify-config.js";
 // here and its only measured contribution was false abandonment (a refuted
 // claim carried forward until task exhaustion). It has been removed —
 // deterministic pass is the sole pass/fail signal.
-//
-// Divergence resolutions (docs/migration-plan.md Phase 2):
-//   - isAllowedCheck uses the ANCHORED allowlist (closes the agent-side
-//     "npx tsc --noEmit passes" NL-as-command hole).
 //
 // GIT-SAFETY (a, mig-phase-2 t2): workDir/gitRoot are required and validated
 // here, at the single choke point both adapters route through. Neither adapter
@@ -87,12 +87,34 @@ export interface CoreVerifyInput {
 }
 
 export interface CoreVerifyDeps {
-  readonly runCommand?: CommandRunner;
+  /**
+   * How to execute deterministic check commands (npm test, cargo check, etc.).
+   * Required — no fallback. Host-side callers inject containerizedRunCommand
+   * with --network=none; the in-container agent-runner injects
+   * defaultRunCommand explicitly. The absence of a default is the mechanism:
+   * a forgotten injection is a compile error, not silent host execution
+   * (Discipline A: the identity element is unavailable).
+   */
+  readonly runCommand: CommandRunner;
+  /**
+   * How to execute toolchain preparation commands (npm install, cargo build,
+   * go mod download). Required — no fallback. Separate from runCommand
+   * because preparation needs network access (to fetch dependencies) while
+   * checks do not. Host-side callers inject containerizedRunCommand with
+   * { network: true }; the agent-runner injects defaultRunCommand (the
+   * agent container already has network for this purpose).
+   *
+   * One mechanism, two configurations: both are containerizedRunCommand,
+   * differing only in the network flag. The split is here rather than
+   * inside containerizedRunCommand because the decision "preparation needs
+   * network" belongs to the caller, not to the runner.
+   */
+  readonly prepareRunCommand: CommandRunner;
   readonly log?: VerifyLogFn;
   /**
-   * Toolchain preparer, run before the deterministic checks using the SAME
-   * injected runCommand. Dispatches for any project type (Node, Cargo, Go).
-   * Default: the real prepare(). Tests inject a deterministic stub.
+   * Toolchain preparer, run before the deterministic checks. Dispatches for
+   * any project type (Node, Cargo, Go). Default: the real prepare(). Tests
+   * inject a deterministic stub.
    */
   readonly prepareToolchain?: (targetPath: string, deps?: ToolchainDeps) => Promise<ToolchainResult>;
 }
@@ -151,13 +173,13 @@ function toolchainFailureDetails(err: unknown): string {
  */
 async function prepareToolchainForVerify(
   workDir: string,
-  run: CommandRunner,
+  prepareRun: CommandRunner,
   deps: CoreVerifyDeps,
   log: VerifyLogFn | undefined,
 ): Promise<CoreVerifyResult | null> {
   const prepareFn = deps.prepareToolchain ?? prepare;
   try {
-    await prepareFn(workDir, { runCommand: run, log });
+    await prepareFn(workDir, { runCommand: prepareRun, log });
     return null;
   } catch (err) {
     const details = toolchainFailureDetails(err);
@@ -223,12 +245,13 @@ export function extractContractChecks(knowledge: ProjectKnowledge): string[] {
  */
 export async function runVerifyCore(
   input: CoreVerifyInput,
-  deps: CoreVerifyDeps = {},
+  deps: CoreVerifyDeps,
 ): Promise<CoreVerifyResult> {
   assertValidVerifyPath(input.workDir, "workDir");
   assertValidVerifyPath(input.gitRoot, "gitRoot");
 
-  const run = deps.runCommand ?? defaultRunCommand;
+  const checkRun = deps.runCommand;
+  const prepareRun = deps.prepareRunCommand;
   const log = deps.log;
 
   // Reproduce the project's build semantics BEFORE any deterministic check, so
@@ -239,7 +262,10 @@ export async function runVerifyCore(
   // Fail-closed (Run 9 / R8-F6a class): a toolchain failure yields a failed
   // deterministic tier carrying the typed, self-diagnosing context; never fall
   // through to running checks on an unprepared tree.
-  const toolchainFailure = await prepareToolchainForVerify(input.workDir, run, deps, log);
+  //
+  // prepareRun has network access; checkRun does not. Preparation fetches
+  // dependencies; checks observe the already-built tree.
+  const toolchainFailure = await prepareToolchainForVerify(input.workDir, prepareRun, deps, log);
   if (toolchainFailure) {
     return toolchainFailure;
   }
@@ -291,31 +317,7 @@ export async function runVerifyCore(
   addUnique(contractChecks);
   addUnique(input.checks);
 
-  const executableChecks = allChecks.filter(isAllowedCheck);
-  const skippedChecks = allChecks
-    .filter((c) => !isAllowedCheck(c))
-    .map((c) => ({ name: c, reason: "not in allowlist" }));
-
-  if (executableChecks.length === 0 && allChecks.length > 0) {
-    const droppedNames = skippedChecks.map((s) => s.name).join(", ");
-    const details =
-      `no executable checks — all ${allChecks.length} specified checks dropped ` +
-      `(not in allowlist: ${droppedNames})`;
-    log?.({
-      event: "verify_deterministic",
-      status: "fail",
-      details,
-      checks: [],
-      checksSkipped: skippedChecks,
-    });
-    log?.({ event: "verify_final", verdict: "failed" });
-    return {
-      verdict: "failed",
-      tiers: { deterministic: { status: "fail", details } },
-    };
-  }
-
-  if (executableChecks.length === 0) {
+  if (allChecks.length === 0) {
     const details = "no executable checks — unverified";
     log?.({
       event: "verify_no_checks_warning",
@@ -329,7 +331,7 @@ export async function runVerifyCore(
     };
   }
 
-  const deterministicOutcome = await runDeterministicChecks(run, input.workDir, executableChecks, skippedChecks);
+  const deterministicOutcome = await runDeterministicChecks(checkRun, input.workDir, allChecks);
   const deterministic = deterministicOutcome.tier;
 
   log?.({
@@ -337,38 +339,16 @@ export async function runVerifyCore(
     status: deterministic.status,
     details: deterministic.details,
     checks: deterministic.checks ?? [],
-    checksSkipped: deterministicOutcome.checksSkipped,
   });
 
-  // A partial drop means some checks were specified but never ran because
-  // isAllowedCheck rejected them. When the executed subset passes, "passed"
-  // would assert complete verification — the defect this fixes. "unverified"
-  // states what is true: evidence is incomplete. When any executed check
-  // *failed*, that real failure is the verdict regardless of drops.
-  const partialDrop = deterministic.status === "pass" && skippedChecks.length > 0;
-
   const verdict: VerifyVerdict = deterministic.status === "pass"
-    ? (skippedChecks.length > 0 ? "unverified" : "passed")
+    ? "passed"
     : "failed";
-
-  // Replace "All N checks passed" with a message that names what was dropped
-  // — a reader must not have to consult the log to see that verification was
-  // incomplete ("All 1 checks passed" IS the defect, one layer up).
-  const finalDeterministic: CoreTierResult = partialDrop
-    ? {
-        ...deterministic,
-        details:
-          `${executableChecks.length} of ${allChecks.length} specified checks ran and passed; ` +
-          `${skippedChecks.length} dropped (not in allowlist: ${skippedChecks.map((s) => s.name).join(", ")})`,
-      }
-    : deterministic;
 
   log?.({ event: "verify_final", verdict });
 
   return {
     verdict,
-    tiers: {
-      deterministic: finalDeterministic,
-    },
+    tiers: { deterministic },
   };
 }

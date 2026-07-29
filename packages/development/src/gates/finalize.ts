@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
@@ -12,6 +13,7 @@ import {
   tentativeMerge,
 } from "../merge.js";
 import { runVerifyCore } from "../verify-core.js";
+import type { CommandRunner } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
 
@@ -27,6 +29,17 @@ export interface FinalizeContractInfo {
 
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
+  /**
+   * How the post-merge verify executes check commands. Required — no fallback.
+   * Network-isolated (--network=none) — checks observe the built tree.
+   */
+  readonly runCommand: CommandRunner;
+  /**
+   * How the post-merge verify executes toolchain preparation (npm install,
+   * cargo build, go mod download). Required — no fallback. Network-enabled
+   * because preparation fetches dependencies.
+   */
+  readonly prepareRunCommand: CommandRunner;
 }
 
 async function abortAndFail(
@@ -134,6 +147,8 @@ export async function finalizeSuccess(
         contractChecks,
       },
       {
+        runCommand: deps.runCommand,
+        prepareRunCommand: deps.prepareRunCommand,
         log: (event) => deps.eventSink?.emit({
           ...event,
           event: "post_merge_verify",
@@ -154,6 +169,28 @@ export async function finalizeSuccess(
           operation: "postMergeVerify",
           gateOutput: postMergeVerify.tiers.deterministic.details,
           gateContext: { taskId: task.id, attempt, checks: [...taskChecks] },
+        },
+      );
+    }
+
+    // Dirty-tree check: detect tracked-file contamination from check commands.
+    // commitMerge commits only staged changes (the merge diff), so check-written
+    // modifications would persist in the working tree without being committed.
+    // But contamination of tracked files signals a check command that modifies
+    // source — that is unexpected and should abort rather than proceed.
+    const dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
+    if (dirtyFiles.length > 0) {
+      const fileList = dirtyFiles.slice(0, 20).join(", ");
+      return abortAndFail(
+        task.id,
+        targetProjectPath,
+        "post-merge dirty-tree check FAILED — check commands modified tracked files",
+        `Check commands modified ${dirtyFiles.length} tracked file(s): ${fileList}`,
+        {},
+        {
+          operation: "postMergeDirtyTree",
+          gateOutput: `${dirtyFiles.length} tracked file(s) modified by check commands: ${fileList}`,
+          gateContext: { taskId: task.id, attempt, dirtyFiles },
         },
       );
     }
@@ -192,4 +229,44 @@ export async function finalizeSuccess(
   // the one seam every outcome passes through. It used to happen here, on the success
   // path only, which is precisely how six failure returns came to have none.
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Dirty-tree detection: tracked files modified by check commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `git diff --name-only` against the index to detect tracked files
+ * modified during post-merge verification. Build artifacts in .gitignore
+ * are invisible to this check; only modifications to tracked files appear.
+ */
+function detectDirtyTrackedFiles(cwd: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    const proc = spawn("git", ["diff", "--name-only"], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+
+    proc.on("error", () => {
+      // git not available — fail open on this specific sub-check rather than
+      // blocking the entire finalize. The container boundary is the primary
+      // defense; the dirty-tree check is defense-in-depth.
+      resolve([]);
+    });
+
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        resolve([]);
+        return;
+      }
+      const files = stdout
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0);
+      resolve(files);
+    });
+  });
 }

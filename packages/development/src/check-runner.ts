@@ -5,35 +5,126 @@ import { delimiter, join } from "node:path";
 import type { CommandRunner } from "./verify-core.js";
 
 // ---------------------------------------------------------------------------
-// Command allowlist + deterministic check execution (Phase 2, mig-phase-2).
+// Deterministic check execution (Phase 2, mig-phase-2).
 //
 // Single implementation behind both the in-process development verify() and the
 // out-of-process agent-runner runInlineVerify() adapters — pure functions plus
-// an injected CommandRunner (defaulting to a local `spawn`), no shared runtime
-// state.
+// an injected CommandRunner, no shared runtime state.
 //
-// Anchored allowlist: the command must be the WHOLE string (^...$). An
-// unanchored variant treats natural-language acceptance criteria such as
-// "npx tsc --noEmit passes" as an executable command (matched by a leading
-// "npx tsc") and runs it — the vulnerability this anchoring closes.
+// Containment is structural, not enumerative: host-side paths inject
+// containerizedRunCommand which runs each check inside a rootless podman
+// container with --network=none and a single mount (the work directory).
+// The in-container path (agent-runner) injects defaultRunCommand because
+// it is already inside the ADR-058 agent container.
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_LENGTH = 2000;
 export const CHECK_TIMEOUT_MS = 30_000;
 
-export const ALLOWED_CHECK_COMMANDS = [
-  /^cargo\s+(test|check|clippy|fmt|build)(\s+-[\w-]+)*$/,
-  /^bun\s+(test|run\s+\w+)(\s+-[\w-]+)*$/,
-  /^bunx\s+tsc(\s+--[\w-]+)*$/,
-  /^npm\s+(test|run\s+\w+)(\s+--[\w-]+)*$/,
-  /^npx\s+(--no-install\s+)?\w+(\s+--[\w-]+)*$/,
-  /^go\s+(test|build|vet)(\s+-[\w-]+)*(\s+\.\/\.\.\.)?$/,
-  /^python\s+-m\s+(pytest|unittest)(\s+-[\w-]+)*$/,
-  /^make\s+\w+$/,
-  /^just\s+\w+$/,
-];
+// ---------------------------------------------------------------------------
+// Contained check execution — rootless podman container with no network,
+// one mount (the work directory), zero env vars, no Ashara checkout mount.
+// ---------------------------------------------------------------------------
 
-const SHELL_METACHARACTERS = /[;&|`$(){}[\]<>!\\]/;
+/**
+ * Typed error for when the structural containment mechanism is unavailable —
+ * podman binary not found, image missing, or container fails to start.
+ * Discipline C: self-diagnosing with operation + cause.
+ */
+export class ContainedCheckError extends Error {
+  constructor(
+    public readonly operation: "spawn" | "container_start" | "image_pull",
+    public readonly cause: string,
+  ) {
+    super(`Contained check failed at ${operation}: ${cause}`);
+    this.name = "ContainedCheckError";
+  }
+}
+
+// Podman exits 125 when it cannot start the container at all (image not
+// found, namespace creation failure, SELinux denial on the bind mount).
+const PODMAN_ENGINE_ERROR_EXIT = 125;
+
+export interface ContainerRunOptions {
+  /**
+   * Whether the container has network access. Default: false (--network=none).
+   *
+   * Toolchain preparation (`npm install`, `cargo build`, `go mod download`)
+   * needs network to fetch dependencies. Deterministic checks (`npm test`,
+   * `cargo check`) observe the already-built tree and do not. One mechanism,
+   * two configurations — the only difference is this flag.
+   */
+  readonly network?: boolean;
+}
+
+/**
+ * Build a CommandRunner that executes each command inside a short-lived podman
+ * container. The container is ephemeral (--rm), rootless (--userns=keep-id),
+ * and mounts only the work directory at /workspace. No Ashara checkout, no
+ * env vars, no second mount.
+ *
+ * Network access is off by default (--network=none). Callers that need
+ * network (toolchain preparation) pass `{ network: true }`.
+ *
+ * Fail-closed: if podman is not on PATH, the image is missing, or the
+ * container cannot start, throws ContainedCheckError — never falls back to
+ * uncontained host execution.
+ */
+export function containerizedRunCommand(
+  workDir: string,
+  image: string,
+  opts: ContainerRunOptions = {},
+): CommandRunner {
+  return (command, _cwd, timeout) => {
+    const podmanArgs = [
+      "run", "--rm",
+      "--userns=keep-id",
+      ...(opts.network ? [] : ["--network=none"]),
+      "-v", `${workDir}:/workspace:z`,
+      "-w", "/workspace",
+      image,
+      ...command,
+    ];
+    const proc = spawn("podman", podmanArgs, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const timer = setTimeout(() => proc.kill(), timeout);
+
+    return (async () => {
+      try {
+        let stdout = "";
+        let stderr = "";
+        proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+        proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+        const exitCode = await new Promise<number | null>((resolve, reject) => {
+          proc.on("close", resolve);
+          proc.on("error", (err: NodeJS.ErrnoException) => {
+            if (err.code === "ENOENT") {
+              reject(new ContainedCheckError("spawn", "podman binary not found on PATH"));
+            } else {
+              reject(new ContainedCheckError("spawn", `podman spawn error: ${err.message}`));
+            }
+          });
+        });
+
+        const code = exitCode ?? 1;
+
+        if (code === PODMAN_ENGINE_ERROR_EXIT) {
+          const detail = stderr.trim().slice(0, 500) || "container engine error (exit 125)";
+          const op = detail.toLowerCase().includes("image") ? "image_pull" as const : "container_start" as const;
+          throw new ContainedCheckError(op, detail);
+        }
+
+        const combined = (stdout + stderr).trim();
+        return { exitCode: code, output: truncateOutput(combined) };
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+  };
+}
 
 // ---------------------------------------------------------------------------
 // HTTP check pattern — recognizes assertions like:
@@ -46,12 +137,6 @@ const HTTP_CHECK_PATTERN = /^(GET|POST|PUT|DELETE|PATCH|HEAD) (\/\S+) returns (\
 
 export function isHttpCheck(cmd: string): boolean {
   return HTTP_CHECK_PATTERN.test(cmd);
-}
-
-export function isAllowedCheck(cmd: string): boolean {
-  if (isHttpCheck(cmd)) return true;
-  if (SHELL_METACHARACTERS.test(cmd)) return false;
-  return ALLOWED_CHECK_COMMANDS.some((re) => re.test(cmd));
 }
 
 // ---------------------------------------------------------------------------
@@ -447,14 +532,12 @@ async function executeHttpChecks(
 
 export interface DeterministicOutcome {
   readonly tier: CoreTierResult;
-  readonly checksSkipped: Array<{ name: string; reason: string }>;
 }
 
 export async function runDeterministicChecks(
   run: CommandRunner,
   workDir: string,
   customChecks: string[],
-  skippedChecks: Array<{ name: string; reason: string }> = [],
 ): Promise<DeterministicOutcome> {
   const shellChecks = customChecks.filter((c) => !isHttpCheck(c));
   const httpChecks = customChecks.filter(isHttpCheck);
@@ -487,7 +570,6 @@ export async function runDeterministicChecks(
         details: "no checks executed — nothing to verify",
         checks: [],
       },
-      checksSkipped: skippedChecks,
     };
   }
 
@@ -501,6 +583,5 @@ export async function runDeterministicChecks(
         : `${failCount}/${results.length} checks failed`,
       checks: results,
     },
-    checksSkipped: skippedChecks,
   };
 }

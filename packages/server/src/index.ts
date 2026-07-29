@@ -97,6 +97,8 @@ import type { AppDeps } from "./routes.js";
 import { resolveAgentOutput } from "./agent-output.js";
 import {
   buildContainerName,
+  SANDBOX_IMAGE,
+  SANDBOX_TAG,
   buildContainerEnv,
   spawnContainer,
   terminateContainer,
@@ -678,6 +680,7 @@ async function main(): Promise<void> {
     config: {
       workdirBase: config.coreLoop.workdirBase,
       useRealAgent: config.coreLoop.useRealAgent,
+      sandboxImage: `${SANDBOX_IMAGE}:${SANDBOX_TAG}`,
     },
     sessionStore,
     knowledgeSink,

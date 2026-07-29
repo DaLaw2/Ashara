@@ -14,6 +14,7 @@
 
 import {
     runVerifyCore,
+    defaultRunCommand,
     ObservationMasker,
     buildAutoProfile as devBuildAutoProfile,
     buildProjectContext as devBuildProjectContext,
@@ -166,11 +167,21 @@ export interface ProjectProfilePort {
 export function createVerifyAdapter(): VerifyPort {
     return {
         async runVerify(input: VerifyInput): Promise<VerifyOutput> {
-            const devResult = await runVerifyCore({
-                workDir: input.workDir,
-                gitRoot: input.gitRoot,
-                checks: [...input.checks],
-            });
+            // Explicit defaultRunCommand: this code runs inside the ADR-058
+            // agent container, so local spawn is already contained. Both
+            // preparation and checks use the same runner — the container
+            // already has network access for dependency fetching.
+            const devResult = await runVerifyCore(
+                {
+                    workDir: input.workDir,
+                    gitRoot: input.gitRoot,
+                    checks: [...input.checks],
+                },
+                {
+                    runCommand: defaultRunCommand,
+                    prepareRunCommand: defaultRunCommand,
+                },
+            );
             return translateVerifyOutput(devResult);
         },
     };

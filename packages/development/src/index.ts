@@ -35,9 +35,11 @@ export type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 export { resolveProjectFrame } from "./project-frame.js";
 export type { ContractAmender, CompletionDeliverables } from "./contract-completion.js";
 export { selectModulePaths } from "./contract-completion.js";
-export type { VerifyLogOptions } from "./verify.js";
+export type { VerifyLogOptions, VerifyRunners } from "./verify.js";
 export { verify } from "./verify.js";
 export { runVerifyCore, InvalidVerifyPathError, extractContractChecks } from "./verify-core.js";
+export type { CommandRunner } from "./verify-core.js";
+export { defaultRunCommand, containerizedRunCommand, ContainedCheckError } from "./check-runner.js";
 
 export { prepare, ToolchainError, isSafeToolchainCommand } from "./project-toolchain.js";
 export type {

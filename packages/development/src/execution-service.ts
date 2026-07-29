@@ -8,6 +8,7 @@ import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
 import { describeIndexShortfall } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
 import { verify } from "./verify.js";
+import { containerizedRunCommand } from "./check-runner.js";
 import type { ProjectProfile } from "./brief-assembly.js";
 import { buildBriefWithRetry, formatAcceptanceCriteria, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ContractSource } from "./contract-slice.js";
@@ -74,6 +75,14 @@ export interface ExecutionEventSink {
 export interface DevelopmentConfig {
   readonly workdirBase: string;
   readonly useRealAgent: boolean;
+  /**
+   * Full image tag for the check container (e.g. "ashara-sandbox:0.1.0").
+   * Used to build the containerizedRunCommand for host-side verification.
+   * The check container runs with --network=none, one mount (the work
+   * directory), zero env vars, and no Ashara checkout — structurally
+   * contained rather than allowlist-filtered.
+   */
+  readonly sandboxImage: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -881,7 +890,14 @@ export class DevelopmentService {
     const contractChecksForFinalize = contract
       ? extractContractChecks(contract.knowledge)
       : [];
-    const finalizeResult = await finalizeSuccess(this.deps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
+    const finalizeWorkDir = targetProjectPath ?? workDir;
+    const finalizeImage = this.deps.config.sandboxImage;
+    const finalizeDeps = {
+      ...this.deps,
+      runCommand: containerizedRunCommand(finalizeWorkDir, finalizeImage),
+      prepareRunCommand: containerizedRunCommand(finalizeWorkDir, finalizeImage, { network: true }),
+    };
+    const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
@@ -958,7 +974,12 @@ export class DevelopmentService {
       const verifyLogOpts: VerifyLogOptions | undefined = this.deps.eventSink
         ? { logPath: this.deps.eventSink.path }
         : undefined;
-      const response = await verify(verifyRequest, verifyLogOpts);
+      const image = this.deps.config.sandboxImage;
+      const runners = {
+        checkRunner: containerizedRunCommand(workDir, image),
+        prepareRunner: containerizedRunCommand(workDir, image, { network: true }),
+      };
+      const response = await verify(verifyRequest, runners, verifyLogOpts);
       console.log(
         `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, verdict=${response.verdict}`,
       );
