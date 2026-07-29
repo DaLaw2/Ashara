@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { BudgetTracker } from "@ashara/orchestrator";
 import type { TaskCostInfo } from "@ashara/orchestrator";
-import { loadServerConfig, loadDatabaseUrl, DEFAULT_DATABASE_URL } from "./config.js";
+import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 
 const TEST_DB_URL = "postgres://localhost:5432/test";
 const TEST_TOKEN = "test-token";

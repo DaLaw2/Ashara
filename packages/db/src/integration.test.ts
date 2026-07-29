@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
-import { createDb, type Database } from "./connection.js";
+import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
 import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
@@ -42,20 +42,7 @@ const createdCostIds: string[] = [];
 const createdBrainstormLogIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
 
-class MissingDatabaseUrlError extends Error {
-  constructor(readonly testFile: string) {
-    super(
-      `DATABASE_URL environment variable is required for ${testFile}. ` +
-        "Run via `just test` (which loads .env) or set DATABASE_URL explicitly.",
-    );
-    this.name = "MissingDatabaseUrlError";
-  }
-}
-
-if (!process.env.DATABASE_URL) {
-  throw new MissingDatabaseUrlError("db/integration.test");
-}
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
 beforeAll(() => {
   db = createDb(DATABASE_URL);

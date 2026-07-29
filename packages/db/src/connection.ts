@@ -2,6 +2,16 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema.js";
 
+/**
+ * The default DATABASE_URL when the environment does not provide one.
+ * This is a POLICY default (CLAUDE.md Discipline A): the caller deliberately
+ * delegates "where to connect?" to the local-dev answer. It is not an
+ * evidence default — it does not answer an epistemic question the caller
+ * does not know is being asked. A deployment that needs a different DSN
+ * overrides via the DATABASE_URL env var.
+ */
+export const DEFAULT_DATABASE_URL = "postgresql://ashara@localhost:5432/ashara";
+
 export type Database = ReturnType<typeof createDb>;
 
 /**

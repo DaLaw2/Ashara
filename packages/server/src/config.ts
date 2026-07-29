@@ -3,6 +3,7 @@ import os from "node:os";
 import { execSync } from "node:child_process";
 import type { CoreLoopConfig } from "@ashara/orchestrator";
 import { DEFAULT_CONFIG } from "@ashara/orchestrator";
+import { DEFAULT_DATABASE_URL } from "@ashara/db";
 
 export interface ServerConfig {
   readonly databaseUrl: string;
@@ -12,16 +13,6 @@ export interface ServerConfig {
   readonly workerOfflineSecs: number;
   readonly modelsConfigPath: string;
 }
-
-/**
- * The default DATABASE_URL when the environment does not provide one.
- * This is a POLICY default (CLAUDE.md Discipline A): the caller deliberately
- * delegates "where to connect?" to the local-dev answer. It is not an
- * evidence default — it does not answer an epistemic question the caller
- * does not know is being asked. A deployment that needs a different DSN
- * overrides via the DATABASE_URL env var.
- */
-export const DEFAULT_DATABASE_URL = "postgresql://ashara@localhost:5432/ashara";
 
 export function loadDatabaseUrl(): string {
   return process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
