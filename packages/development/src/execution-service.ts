@@ -9,7 +9,7 @@ import { describeIndexShortfall } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
 import { verify } from "./verify.js";
 import type { ProjectProfile } from "./brief-assembly.js";
-import { buildBriefWithRetry, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
+import { buildBriefWithRetry, formatAcceptanceCriteria, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ContractSource } from "./contract-slice.js";
 import { formatContractSlice } from "./contract-slice.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
@@ -20,6 +20,7 @@ import { deriveEndpoints } from "./gates/endpoints.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
+import { extractContractChecks } from "./verify-core.js";
 import {
   buildFileTree,
   cleanupWorkdir,
@@ -95,6 +96,14 @@ export interface TaskDescriptor {
    */
   readonly epicId?: string | null;
   readonly dispatchCount?: number;
+  /**
+   * Prose acceptance statements from work_items.success_criteria. Required: the
+   * sole construction site (orchestrator/execution.ts) always has the WorkItem.
+   * An empty array means "no criteria stated" and the brief section is omitted;
+   * undefined would be a second way to spell "none" that costs a supplier check
+   * on every new construction site.
+   */
+  readonly successCriteria: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -400,12 +409,16 @@ export class DevelopmentService {
       // a field this seam is meant to carry (codeContext / knowledgeContext /
       // contextMap — the finding-g drop) is now explicit and validated, and an
       // unexpected extra field fails closed here rather than leaking silently.
+      const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
+      const taskContext = acceptanceSection
+        ? `${brief.taskSpec}\n\n${acceptanceSection}`
+        : brief.taskSpec;
       return parseAgentBrief(
         {
           taskId: task.id,
           goal: spec.goal,
           projectFrame,
-          context: brief.taskSpec,
+          context: taskContext,
           tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
           constraints: spec.checks,
           deliverables: spec.deliverables,
@@ -789,7 +802,7 @@ export class DevelopmentService {
     });
 
     eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
-    const verifyOutcome = await this.verifyTask(task, workDir, output, 1);
+    const verifyOutcome = await this.verifyTask(task, workDir, output, 1, contract);
 
     if (verifyOutcome.verdict === "unverified") {
       // Zero executable checks: a verdict computed from nothing must not read
@@ -858,7 +871,10 @@ export class DevelopmentService {
     }
 
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
-    const finalizeResult = await finalizeSuccess(this.deps, workDir, task, targetProjectPath, 1, taskChecks, {
+    const contractChecksForFinalize = contract
+      ? extractContractChecks(contract.knowledge)
+      : [];
+    const finalizeResult = await finalizeSuccess(this.deps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
@@ -911,8 +927,12 @@ export class DevelopmentService {
     workDir: string,
     _output: AgentOutputJson,
     attempt: number,
+    contract: ProjectContract | null,
   ): Promise<VerifyTaskOutcome> {
     const taskSpec = task.taskSpec;
+    const contractChecks = contract
+      ? extractContractChecks(contract.knowledge)
+      : [];
 
     const verifyRequest = {
       session_id: createSessionId(),
@@ -922,6 +942,7 @@ export class DevelopmentService {
             checks: taskSpec.checks,
           }
         : undefined,
+      contractChecks,
       working_directory: workDir,
       git_root: workDir,
     };
@@ -1132,12 +1153,17 @@ function buildBasicBrief(
 
   const constraints = stringArrayOrEmpty(spec?.checks);
 
+  const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
+  const context = acceptanceSection
+    ? `End state: ${endState}\n\n${acceptanceSection}`
+    : `End state: ${endState}`;
+
   return parseAgentBrief(
     {
       taskId: task.id,
       goal,
       projectFrame,
-      context: `End state: ${endState}`,
+      context,
       tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
       constraints,
       deliverables,

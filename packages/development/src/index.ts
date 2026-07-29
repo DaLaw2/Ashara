@@ -37,7 +37,7 @@ export type { ContractAmender, CompletionDeliverables } from "./contract-complet
 export { selectModulePaths } from "./contract-completion.js";
 export type { VerifyLogOptions } from "./verify.js";
 export { verify } from "./verify.js";
-export { runVerifyCore, InvalidVerifyPathError } from "./verify-core.js";
+export { runVerifyCore, InvalidVerifyPathError, extractContractChecks } from "./verify-core.js";
 
 export { prepare, ToolchainError, isSafeToolchainCommand } from "./project-toolchain.js";
 export type {

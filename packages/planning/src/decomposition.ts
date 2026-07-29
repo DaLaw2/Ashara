@@ -119,7 +119,7 @@ export class DecompositionEngine {
             deliverables: task.deliverables && task.deliverables.length > 0
                 ? task.deliverables
                 : this.deriveDeliverables(task),
-            checks: task.checks && task.checks.length > 0 ? task.checks : this.deriveChecks(task, context),
+            checks: task.checks && task.checks.length > 0 ? task.checks : [],
             priorWorkPointers,
             capability: inferCapability(task),
         };
@@ -541,7 +541,7 @@ export class DecompositionEngine {
         }
 
         if (isTaskDecomposition) {
-            const examples = buildContextAwareExamples(description);
+            const examples = DECOMPOSITION_EXAMPLES;
             lines.push(
                 ``,
                 `Task Quality Requirements:`,
@@ -553,8 +553,8 @@ export class DecompositionEngine {
                 `- scope must name specific directories or modules (e.g., ${examples.scopeExample}) not "the project".`,
                 `- checks must include at least one runnable command to verify completion (e.g., ${examples.checksExample}).`,
                 `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id, and never reference an Existing Work Item id (e.g. "task-0017") — those are context, not dependencies. A "dependsOn" entry that names no "ref" in this response is invalid.`,
-                `- Do not create a project scaffold (package.json, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
-                `- Each task must be a complete vertical slice: implement the feature AND mount/wire it into the entry point (e.g. app.use(), route registration, module import) in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
+                `- Do not create a project scaffold (manifest, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
+                `- Each task must be a complete vertical slice: implement the feature AND wire it into the application's entry point — registering the route, adding the import, calling the initializer, or whatever the project's stack requires to make the feature reachable — in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
             );
         }
 
@@ -662,30 +662,6 @@ export class DecompositionEngine {
         return this.ensurePositiveFraming(`Only modify files related to ${task.title.toLowerCase()}`);
     }
 
-    private deriveChecks(task: WorkItemSpec, _context: DecompositionInput): string[] {
-        const checks: string[] = [];
-
-        const lower = `${task.title} ${task.description}`.toLowerCase();
-        if (/\bendpoint\b|\broute\b|\bapi\b/.test(lower)) {
-            checks.push("API endpoint returns expected status code");
-        }
-        if (/\bpage\b|\bview\b|\bcomponent\b|\bui\b/.test(lower)) {
-            checks.push("Page file exists and contains expected markup");
-        }
-        if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            checks.push("CLI command exits 0");
-        }
-        if (/\bmigration\b/.test(lower)) {
-            checks.push("Database migration applies without errors");
-        }
-        if (/\bvalidat/.test(lower)) {
-            checks.push("Invalid input is rejected with appropriate error response");
-        }
-
-        checks.push(...task.successCriteria);
-
-        return checks;
-    }
 }
 
 interface ContextExamples {
@@ -697,16 +673,14 @@ interface ContextExamples {
     readonly verticalSliceExample: string;
 }
 
-export function buildContextAwareExamples(_description: string): ContextExamples {
-    return {
-        titleExample: '"Create the user registration feature with validation"',
-        deliverablesExample: '"the relevant source files for this feature"',
-        endStateExample: '"the feature works as specified and passes verification"',
-        scopeExample: "\"the directories containing this feature's source files\"",
-        checksExample: "\"the project's build and test commands pass\"",
-        verticalSliceExample: "Implement the feature, wire it into the entry point, and verify it works end-to-end.",
-    };
-}
+const DECOMPOSITION_EXAMPLES: ContextExamples = {
+    titleExample: '"Create the user registration feature with validation"',
+    deliverablesExample: '"the relevant source files for this feature"',
+    endStateExample: '"the feature works as specified and passes verification"',
+    scopeExample: "\"the directories containing this feature's source files\"",
+    checksExample: "\"the project's build and test commands pass\"",
+    verticalSliceExample: "Implement the feature, wire it into the entry point, and verify it works end-to-end.",
+};
 
 let idCounter = 0;
 

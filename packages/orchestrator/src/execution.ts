@@ -77,6 +77,7 @@ export async function executeTask(
     blockedReason: task.blockedReason,
     epicId,
     dispatchCount: task.dispatchCount,
+    successCriteria: task.successCriteria ?? [],
   };
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);

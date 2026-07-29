@@ -180,6 +180,20 @@ export function formatTaskSpec(spec: TaskSpec): string {
     ].join("\n");
 }
 
+/**
+ * Renders success criteria as a brief section the agent reads as its acceptance
+ * target. Distinct from Verification Checks: criteria are prose the agent aims
+ * for; checks are commands the runner executes. Returns "" when the list is
+ * empty — an absent section, not a fabricated one (Discipline A).
+ */
+export function formatAcceptanceCriteria(criteria: readonly string[]): string {
+    if (criteria.length === 0) return "";
+    return [
+        "## Acceptance Criteria",
+        ...criteria.map((c) => `- ${c}`),
+    ].join("\n");
+}
+
 export function formatCodeContext(chunks: readonly PrunedChunk[]): string {
     if (chunks.length === 0) return EMPTY_CODE_CONTEXT;
 

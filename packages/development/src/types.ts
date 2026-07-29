@@ -14,6 +14,11 @@ export interface VerifyRequest {
   readonly task_spec?: {
     readonly checks?: string[];
   };
+  /**
+   * Executable checks extracted from the contract's knowledge-graph `check`
+   * nodes (zero-enum). Passed through to `runVerifyCore.contractChecks`.
+   */
+  readonly contractChecks?: readonly string[];
   // GIT-SAFETY (a): required, not optional — the caller must always supply the
   // real task working directory / git root. verify-core validates both are
   // non-empty absolute paths and fails closed rather than defaulting to the

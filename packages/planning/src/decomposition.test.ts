@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { DecompositionInput, WorkItemSpec } from "./decomposition-types.js";
-import { DecompositionEngine, buildContextAwareExamples, resetIdCounter } from "./decomposition.js";
+import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 
 function createTestInput(overrides?: Partial<DecompositionInput>): DecompositionInput {
     return {
@@ -11,24 +11,6 @@ function createTestInput(overrides?: Partial<DecompositionInput>): Decomposition
         ...overrides,
     };
 }
-
-describe("buildContextAwareExamples", () => {
-    test("returns generic examples regardless of description", () => {
-        const examples = buildContextAwareExamples("Build a simple frontend with login page");
-        expect(examples.titleExample).toContain("user registration feature");
-        expect(examples.deliverablesExample).toContain("relevant source files");
-        expect(examples.endStateExample).toContain("works as specified");
-        expect(examples.checksExample).toContain("build and test commands pass");
-    });
-
-    test("returns same examples for any description", () => {
-        const frontend = buildContextAwareExamples("Build a simple frontend with login page");
-        const cli = buildContextAwareExamples("Build a CLI tool with list subcommand");
-        const api = buildContextAwareExamples("Build a REST API with user registration");
-        expect(frontend.titleExample).toBe(cli.titleExample);
-        expect(frontend.titleExample).toBe(api.titleExample);
-    });
-});
 
 describe("derive* heuristics for frontend and CLI patterns", () => {
     let engine: DecompositionEngine;
@@ -143,38 +125,4 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
         expect(spec.deliverables[0]).toContain("CLI command handler");
     });
 
-    test("deriveChecks: page task gets markup check", () => {
-        const input = createTestInput();
-        const task: WorkItemSpec = {
-            id: "task-0001",
-            level: "task",
-            title: "Create signup page",
-            description: "Build the signup page UI",
-            successCriteria: [],
-            parentId: "epic-0001",
-            dependsOn: [],
-        };
-        const spec = engine.generateTaskSpec(task, input);
-        expect(spec.checks).toContain("Page file exists and contains expected markup");
-    });
-
-    test("deriveChecks: CLI command gets generic exit check", () => {
-        const input = createTestInput({
-            knowledge: {
-                nodes: [{ id: "lang-rust", kind: "language", label: "Rust" }],
-                edges: [],
-            },
-        });
-        const task: WorkItemSpec = {
-            id: "task-0001",
-            level: "task",
-            title: "Implement status command",
-            description: "Add the status subcommand to the CLI",
-            successCriteria: [],
-            parentId: "epic-0001",
-            dependsOn: [],
-        };
-        const spec = engine.generateTaskSpec(task, input);
-        expect(spec.checks).toContain("CLI command exits 0");
-    });
 });

@@ -233,7 +233,7 @@ export async function decomposeLeafStories(deps: StoryDecomposerDeps): Promise<n
               goal: taskSpec.goal || taskSpec.description || taskSpec.title,
               endState: taskSpec.endState || (taskSpec.successCriteria[0] ?? `${taskSpec.title} is complete`),
               scope: taskSpec.scope,
-              checks: taskSpec.checks && taskSpec.checks.length > 0 ? taskSpec.checks : taskSpec.successCriteria,
+              checks: taskSpec.checks && taskSpec.checks.length > 0 ? taskSpec.checks : [],
               deliverables: taskSpec.deliverables ?? [],
             },
           );

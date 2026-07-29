@@ -65,6 +65,7 @@ export async function finalizeSuccess(
   targetProjectPath: string | null,
   attempt: number,
   taskChecks: readonly string[],
+  contractChecks: readonly string[],
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
   try {
@@ -130,6 +131,7 @@ export async function finalizeSuccess(
         workDir: targetProjectPath,
         gitRoot: targetProjectPath,
         checks: [...taskChecks],
+        contractChecks,
       },
       {
         log: (event) => deps.eventSink?.emit({

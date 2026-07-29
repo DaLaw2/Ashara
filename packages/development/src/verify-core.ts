@@ -1,5 +1,8 @@
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { z } from "zod";
+import type { ProjectKnowledge } from "@ashara/shared";
+import { nodesByKind } from "@ashara/shared";
 import { prepare, ToolchainError } from "./project-toolchain.js";
 import type { ToolchainDeps, ToolchainResult } from "./project-toolchain.js";
 import {
@@ -50,6 +53,7 @@ export interface CoreVerifyResult {
   readonly tiers: {
     readonly deterministic: CoreTierResult;
   };
+  // Structured drop list lives in the JSONL log (checksSkipped); drop visibility is in details.
 }
 
 /**
@@ -70,6 +74,17 @@ export interface CoreVerifyInput {
   readonly workDir: string;
   readonly gitRoot: string;
   readonly checks: string[];
+  /**
+   * Executable checks extracted from the contract's knowledge-graph `check`
+   * nodes. These are LLM-derived at decomposition time and carry the command
+   * the LLM judged appropriate for this project's tech stack — no hardcoded
+   * language list, so a PHP or Zig target works with zero code changes.
+   *
+   * Merge order: verify.toml (agent-observed reality) > contractChecks
+   * (LLM-derived intent) > taskSpec checks (decomposition NL). A check
+   * already present in a higher-priority source is not re-added.
+   */
+  readonly contractChecks?: readonly string[];
 }
 
 export interface CoreVerifyDeps {
@@ -157,49 +172,41 @@ async function prepareToolchainForVerify(
 }
 
 // ---------------------------------------------------------------------------
-// Baseline check injection (tech-stack auto-detection)
+// Contract check extraction (zero-enum: replaces hardcoded baseline injection)
 // ---------------------------------------------------------------------------
 
-interface BaselineCheck {
-  readonly command: string;
-  readonly label: string;
-}
+/**
+ * Zod schema for the command array inside a knowledge-graph `check` node's
+ * `meta.command` field. The node's `meta` is `Record<string, unknown>`, so
+ * this is the boundary validation (Discipline A, Zod at every boundary).
+ */
+const CheckNodeCommandSchema = z.array(z.string().min(1)).nonempty();
 
-const BASELINE_TSC_RE = /\btsc\b/;
-const BASELINE_CARGO_RE = /^cargo\s+check\b/;
-const BASELINE_GO_RE = /^go\s+build\b/;
-
-function hasExistingCheck(checks: readonly string[], label: string): boolean {
-  switch (label) {
-    case "typescript": return checks.some((c) => BASELINE_TSC_RE.test(c));
-    case "rust": return checks.some((c) => BASELINE_CARGO_RE.test(c));
-    case "go": return checks.some((c) => BASELINE_GO_RE.test(c));
-    default: return false;
+/**
+ * Extract executable check commands from the contract's knowledge graph.
+ *
+ * The decomposition prompt asks the LLM to emit `check` nodes with
+ * `meta.command` set to a shell argv array (e.g. `["cargo", "check"]`).
+ * This function reads those nodes and joins each argv into a command string
+ * suitable for the deterministic check runner.
+ *
+ * Nodes whose `meta.command` is absent or fails Zod validation are silently
+ * skipped — they may carry a human-readable `label` (criterion) but no
+ * executable command.
+ *
+ * Target-generality: no language enumeration. A PHP project emitting
+ * `["php", "artisan", "test"]` works with zero code changes.
+ */
+export function extractContractChecks(knowledge: ProjectKnowledge): string[] {
+  const checkNodes = nodesByKind(knowledge, "check");
+  const commands: string[] = [];
+  for (const node of checkNodes) {
+    const parsed = CheckNodeCommandSchema.safeParse(node.meta?.command);
+    if (parsed.success) {
+      commands.push(parsed.data.join(" "));
+    }
   }
-}
-
-async function detectBaselineChecks(workDir: string): Promise<BaselineCheck[]> {
-  const fileExists = (name: string): Promise<boolean> =>
-    access(join(workDir, name)).then(() => true, () => false);
-
-  const [hasPkgJson, hasTsConfig, hasCargo, hasGoMod] = await Promise.all([
-    fileExists("package.json"),
-    fileExists("tsconfig.json"),
-    fileExists("Cargo.toml"),
-    fileExists("go.mod"),
-  ]);
-
-  const baselines: BaselineCheck[] = [];
-  if (hasPkgJson && hasTsConfig) {
-    baselines.push({ command: "npx --no-install tsc --noEmit", label: "typescript" });
-  }
-  if (hasCargo) {
-    baselines.push({ command: "cargo check", label: "rust" });
-  }
-  if (hasGoMod) {
-    baselines.push({ command: "go build ./...", label: "go" });
-  }
-  return baselines;
+  return commands;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,36 +254,52 @@ export async function runVerifyCore(
     });
   }
 
-  const baselines = await detectBaselineChecks(input.workDir);
-  const allExplicitChecks = hasVerifyToml ? configChecks : [];
-  const uniqueBaselines = hasVerifyToml
-    ? baselines.filter((b) => !hasExistingCheck(configChecks, b.label))
-    : baselines.filter((b) => !hasExistingCheck(input.checks, b.label));
+  const contractChecks = input.contractChecks ?? [];
 
-  if (uniqueBaselines.length > 0) {
+  if (contractChecks.length > 0) {
     log?.({
-      event: "verify_baseline_inject",
-      baselines: uniqueBaselines.map((b) => ({ command: b.command, label: b.label })),
+      event: "verify_contract_checks",
+      checks: contractChecks,
     });
   }
 
-  const taskChecksToAdd = hasVerifyToml
-    ? input.checks.filter((c) => !configChecks.includes(c))
-    : input.checks;
+  // Merge order (documented, not implicit):
+  //   1. verify.toml — agent-observed reality, authoritative
+  //   2. contractChecks — LLM-derived from knowledge-graph check nodes
+  //   3. taskSpec checks (input.checks) — decomposition NL, fill gaps
+  //
+  // verify.toml wins because it is what the agent WROTE after observing the
+  // project; the contract is what the LLM INFERRED before seeing it. A check
+  // already present in a higher-priority source is not re-added from a lower
+  // one.
+  const seen = new Set<string>();
+  const allChecks: string[] = [];
 
-  const allChecks = [
-    ...allExplicitChecks,
-    ...uniqueBaselines.map((b) => b.command),
-    ...taskChecksToAdd,
-  ];
+  const addUnique = (checks: readonly string[]): void => {
+    for (const c of checks) {
+      if (!seen.has(c)) {
+        seen.add(c);
+        allChecks.push(c);
+      }
+    }
+  };
+
+  if (hasVerifyToml) {
+    addUnique(configChecks);
+  }
+  addUnique(contractChecks);
+  addUnique(input.checks);
 
   const executableChecks = allChecks.filter(isAllowedCheck);
   const skippedChecks = allChecks
     .filter((c) => !isAllowedCheck(c))
     .map((c) => ({ name: c, reason: "not in allowlist" }));
 
-  if (executableChecks.length === 0 && input.checks.length > 0) {
-    const details = "no executable checks — cannot verify task output";
+  if (executableChecks.length === 0 && allChecks.length > 0) {
+    const droppedNames = skippedChecks.map((s) => s.name).join(", ");
+    const details =
+      `no executable checks — all ${allChecks.length} specified checks dropped ` +
+      `(not in allowlist: ${droppedNames})`;
     log?.({
       event: "verify_deterministic",
       status: "fail",
@@ -316,14 +339,35 @@ export async function runVerifyCore(
     checksSkipped: deterministicOutcome.checksSkipped,
   });
 
-  const verdict: VerifyVerdict = deterministic.status === "pass" ? "passed" : "failed";
+  // A partial drop means some checks were specified but never ran because
+  // isAllowedCheck rejected them. When the executed subset passes, "passed"
+  // would assert complete verification — the defect this fixes. "unverified"
+  // states what is true: evidence is incomplete. When any executed check
+  // *failed*, that real failure is the verdict regardless of drops.
+  const partialDrop = deterministic.status === "pass" && skippedChecks.length > 0;
+
+  const verdict: VerifyVerdict = deterministic.status === "pass"
+    ? (skippedChecks.length > 0 ? "unverified" : "passed")
+    : "failed";
+
+  // Replace "All N checks passed" with a message that names what was dropped
+  // — a reader must not have to consult the log to see that verification was
+  // incomplete ("All 1 checks passed" IS the defect, one layer up).
+  const finalDeterministic: CoreTierResult = partialDrop
+    ? {
+        ...deterministic,
+        details:
+          `${executableChecks.length} of ${allChecks.length} specified checks ran and passed; ` +
+          `${skippedChecks.length} dropped (not in allowlist: ${skippedChecks.map((s) => s.name).join(", ")})`,
+      }
+    : deterministic;
 
   log?.({ event: "verify_final", verdict });
 
   return {
     verdict,
     tiers: {
-      deterministic,
+      deterministic: finalDeterministic,
     },
   };
 }

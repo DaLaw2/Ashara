@@ -29,6 +29,7 @@ export async function verify(
       workDir: request.working_directory,
       gitRoot: request.git_root,
       checks: request.task_spec?.checks ?? [],
+      contractChecks: request.contractChecks,
     },
     {
       log: (event) => emitVerifyLog(logOpts, { taskId: request.task_id, ...event }),

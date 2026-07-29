@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test, expect, vi } from "vitest";
-import { runVerifyCore, InvalidVerifyPathError } from "./verify-core.js";
+import type { ProjectKnowledge } from "@ashara/shared";
+import { runVerifyCore, InvalidVerifyPathError, extractContractChecks } from "./verify-core.js";
 import type { CoreVerifyInput, CoreVerifyDeps, CommandRunner } from "./verify-core.js";
 import type { ToolchainResult } from "./project-toolchain.js";
 
@@ -100,39 +101,16 @@ describe("runVerifyCore — GIT-SAFETY (a) fail-closed workdir validation", () =
 });
 
 // ---------------------------------------------------------------------------
-// Baseline check injection + fail-closed on zero executable checks
+// Contract check wiring
 // ---------------------------------------------------------------------------
 
-describe("runVerifyCore — baseline check injection", () => {
-  test("empty checks + TypeScript project injects tsc", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-ts-"));
+describe("runVerifyCore — contract checks replace baseline injection", () => {
+  test("contract checks run when no verify.toml and no taskSpec checks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-contract-"));
     try {
-      await writeFile(join(dir, "package.json"), "{}");
-      await writeFile(join(dir, "tsconfig.json"), "{}");
-
       const deps = makeDeps();
       const result = await runVerifyCore(
-        { checks: [], workDir: dir, gitRoot: dir },
-        deps,
-      );
-
-      expect(result.verdict).toBe("passed");
-      const checks = result.tiers.deterministic.checks ?? [];
-      expect(checks).toHaveLength(1);
-      expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("empty checks + Rust project injects cargo check", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-rs-"));
-    try {
-      await writeFile(join(dir, "Cargo.toml"), "");
-
-      const deps = makeDeps();
-      const result = await runVerifyCore(
-        { checks: [], workDir: dir, gitRoot: dir },
+        { checks: [], contractChecks: ["cargo check"], workDir: dir, gitRoot: dir },
         deps,
       );
 
@@ -145,27 +123,34 @@ describe("runVerifyCore — baseline check injection", () => {
     }
   });
 
-  test("empty checks + Go project injects go build", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-go-"));
+  test("contract checks deduplicate against taskSpec checks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-dedup-"));
     try {
-      await writeFile(join(dir, "go.mod"), "");
-
       const deps = makeDeps();
       const result = await runVerifyCore(
-        { checks: [], workDir: dir, gitRoot: dir },
+        {
+          checks: ["npm test", "cargo check"],
+          contractChecks: ["cargo check", "cargo clippy"],
+          workDir: dir,
+          gitRoot: dir,
+        },
         deps,
       );
 
       expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
-      expect(checks).toHaveLength(1);
-      expect(checks[0].name).toBe("go build ./...");
+      // cargo check from contract, cargo clippy from contract, npm test from taskSpec
+      // Order: contract first, then unique taskSpec
+      expect(checks).toHaveLength(3);
+      expect(checks[0].name).toBe("cargo check");
+      expect(checks[1].name).toBe("cargo clippy");
+      expect(checks[2].name).toBe("npm test");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("empty checks + no project files produces unverified verdict", async () => {
+  test("no contract checks + no taskSpec checks produces unverified verdict", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ashara-verify-empty-"));
     try {
       const log = vi.fn();
@@ -206,23 +191,71 @@ describe("runVerifyCore — baseline check injection", () => {
       expect(result.verdict).toBe("failed");
       expect(result.tiers.deterministic.status).toBe("fail");
       expect(result.tiers.deterministic.details).toContain("no executable checks");
+      // Drop visibility is in details, not a separate field
+      expect(result.tiers.deterministic.details).toContain("npx tsc --noEmit passes");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("custom checks + baseline both run with baseline first", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-both-"));
+  test("contract checks all filtered by allowlist triggers fail-closed (Discipline A)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-contract-failclosed-"));
     try {
-      await writeFile(join(dir, "package.json"), "{}");
-      await writeFile(join(dir, "tsconfig.json"), "{}");
+      const deps = makeDeps();
+      const result = await runVerifyCore(
+        {
+          checks: [],
+          contractChecks: ["php artisan test", "zig build"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
 
-      const commands: string[] = [];
-      const runCommand = vi.fn<CommandRunner>(async (cmd) => {
-        commands.push(cmd.join(" "));
-        return { exitCode: 0, output: "" };
-      });
-      const deps = makeDeps({ runCommand });
+      // Checks existed but none survived isAllowedCheck — fail closed, not unverified
+      expect(result.verdict).toBe("failed");
+      expect(result.tiers.deterministic.status).toBe("fail");
+      expect(result.tiers.deterministic.details).toContain("no executable checks");
+      // Details must name the dropped checks
+      expect(result.tiers.deterministic.details).toContain("php artisan test");
+      expect(result.tiers.deterministic.details).toContain("zig build");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("contract checks rescue runs the executable check but verdict is unverified when NL check is dropped", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-rescue-"));
+    try {
+      const deps = makeDeps();
+      const result = await runVerifyCore(
+        {
+          checks: ["the project compiles without errors"],
+          contractChecks: ["npx --no-install tsc --noEmit"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
+
+      // The executable check ran and passed, but the NL check was dropped —
+      // verification is incomplete, not passed.
+      expect(result.verdict).toBe("unverified");
+      const checks = result.tiers.deterministic.checks ?? [];
+      expect(checks).toHaveLength(1);
+      expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
+
+      // Drop is visible through the details string
+      expect(result.tiers.deterministic.details).toContain("the project compiles without errors");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("omitting contractChecks is backward-compatible (defaults to empty)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-compat-"));
+    try {
+      const deps = makeDeps();
       const result = await runVerifyCore(
         { checks: ["npm test"], workDir: dir, gitRoot: dir },
         deps,
@@ -230,54 +263,193 @@ describe("runVerifyCore — baseline check injection", () => {
 
       expect(result.verdict).toBe("passed");
       const checks = result.tiers.deterministic.checks ?? [];
-      expect(checks).toHaveLength(2);
-      expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
-      expect(checks[1].name).toBe("npm test");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("LLM already included tsc — no duplicate injection", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-dedup-"));
-    try {
-      await writeFile(join(dir, "package.json"), "{}");
-      await writeFile(join(dir, "tsconfig.json"), "{}");
-
-      const deps = makeDeps();
-      const result = await runVerifyCore(
-        { checks: ["npx --no-install tsc --noEmit"], workDir: dir, gitRoot: dir },
-        deps,
-      );
-
-      expect(result.verdict).toBe("passed");
-      const checks = result.tiers.deterministic.checks ?? [];
       expect(checks).toHaveLength(1);
-      expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("baselines rescue when all custom checks are NL descriptions", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-rescue-"));
-    try {
-      await writeFile(join(dir, "package.json"), "{}");
-      await writeFile(join(dir, "tsconfig.json"), "{}");
-
-      const deps = makeDeps();
-      const result = await runVerifyCore(
-        { checks: ["the project compiles without errors"], workDir: dir, gitRoot: dir },
-        deps,
-      );
-
-      expect(result.verdict).toBe("passed");
-      const checks = result.tiers.deterministic.checks ?? [];
-      expect(checks).toHaveLength(1);
-      expect(checks[0].name).toBe("npx --no-install tsc --noEmit");
+      expect(checks[0].name).toBe("npm test");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 });
 
+// ---------------------------------------------------------------------------
+// Partial drop — some checks ran, some were dropped by the allowlist.
+// The defect: "All 1 checks passed" when 1 of 2 specified checks was silently
+// dropped. The fix: partial drop → verdict "unverified", details name what
+// was dropped, details names the drops and the JSONL log carries the structured list.
+// ---------------------------------------------------------------------------
+
+describe("runVerifyCore — partial check drop yields unverified", () => {
+  test("two checks, one dropped → verdict is unverified and result names the skipped one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-partial-"));
+    try {
+      const deps = makeDeps();
+      const result = await runVerifyCore(
+        {
+          checks: ["just check"],
+          contractChecks: ["php artisan test"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
+
+      expect(result.verdict).toBe("unverified");
+      expect(result.tiers.deterministic.status).toBe("pass");
+
+      // Details must name what was dropped — never "All 1 checks passed"
+      expect(result.tiers.deterministic.details).toContain("1 of 2");
+      expect(result.tiers.deterministic.details).toContain("php artisan test");
+      expect(result.tiers.deterministic.details).not.toContain("All");
+
+      // Drop is visible through the details string
+      expect(result.tiers.deterministic.details).toContain("php artisan test");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("multiple drops are all named in details", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-multidrop-"));
+    try {
+      const deps = makeDeps();
+      const result = await runVerifyCore(
+        {
+          checks: ["npm test"],
+          contractChecks: ["php artisan test", "zig build", "mix test"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
+
+      expect(result.verdict).toBe("unverified");
+      expect(result.tiers.deterministic.details).toContain("1 of 4");
+      expect(result.tiers.deterministic.details).toContain("3 dropped");
+      expect(result.tiers.deterministic.details).toContain("php artisan test");
+      expect(result.tiers.deterministic.details).toContain("zig build");
+      expect(result.tiers.deterministic.details).toContain("mix test");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("failing check with drops → verdict is failed, not unverified (failure trumps)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-fail-plus-drop-"));
+    try {
+      const runCommand = vi.fn<CommandRunner>(async () => ({ exitCode: 1, output: "type error" }));
+      const deps = makeDeps({ runCommand });
+      const result = await runVerifyCore(
+        {
+          checks: ["npm test"],
+          contractChecks: ["php artisan test"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
+
+      // A real failure is the verdict regardless of drops
+      expect(result.verdict).toBe("failed");
+      // The drop is still visible through the deterministic tier details
+      expect(result.tiers.deterministic.details).toBeDefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("all checks pass allowlist and pass → verdict is passed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-nodrop-"));
+    try {
+      const deps = makeDeps();
+      const result = await runVerifyCore(
+        {
+          checks: ["npm test", "cargo check"],
+          workDir: dir,
+          gitRoot: dir,
+        },
+        deps,
+      );
+
+      expect(result.verdict).toBe("passed");
+      // Details should say "All" when nothing was dropped
+      expect(result.tiers.deterministic.details).toContain("All");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractContractChecks — Zod-validated extraction from knowledge graph
+// ---------------------------------------------------------------------------
+
+describe("extractContractChecks", () => {
+  test("extracts commands from check nodes with valid meta.command", () => {
+    const knowledge: ProjectKnowledge = {
+      nodes: [
+        { id: "lang-ts", kind: "language", label: "TypeScript" },
+        { id: "check-tsc", kind: "check", label: "TypeScript compilation", meta: { command: ["npx", "--no-install", "tsc", "--noEmit"] } },
+        { id: "check-test", kind: "check", label: "Run tests", meta: { command: ["npm", "test"] } },
+      ],
+      edges: [],
+    };
+
+    const checks = extractContractChecks(knowledge);
+    expect(checks).toEqual(["npx --no-install tsc --noEmit", "npm test"]);
+  });
+
+  test("skips check nodes without meta.command", () => {
+    const knowledge: ProjectKnowledge = {
+      nodes: [
+        { id: "check-no-cmd", kind: "check", label: "The tests pass" },
+        { id: "check-with-cmd", kind: "check", label: "Lint", meta: { command: ["npm", "run", "lint"] } },
+      ],
+      edges: [],
+    };
+
+    const checks = extractContractChecks(knowledge);
+    expect(checks).toEqual(["npm run lint"]);
+  });
+
+  test("skips check nodes with invalid meta.command (not string array)", () => {
+    const knowledge: ProjectKnowledge = {
+      nodes: [
+        { id: "check-bad", kind: "check", label: "Bad command", meta: { command: "not an array" } },
+        { id: "check-empty", kind: "check", label: "Empty command", meta: { command: [] } },
+        { id: "check-num", kind: "check", label: "Number command", meta: { command: [42] } },
+        { id: "check-good", kind: "check", label: "Good", meta: { command: ["cargo", "test"] } },
+      ],
+      edges: [],
+    };
+
+    const checks = extractContractChecks(knowledge);
+    expect(checks).toEqual(["cargo test"]);
+  });
+
+  test("returns empty for knowledge graph with no check nodes", () => {
+    const knowledge: ProjectKnowledge = {
+      nodes: [
+        { id: "lang-rs", kind: "language", label: "Rust" },
+        { id: "rt-tokio", kind: "runtime", label: "Tokio" },
+      ],
+      edges: [],
+    };
+
+    const checks = extractContractChecks(knowledge);
+    expect(checks).toEqual([]);
+  });
+
+  test("works for any tech stack — PHP, Zig, Elixir (target generality)", () => {
+    const knowledge: ProjectKnowledge = {
+      nodes: [
+        { id: "lang-php", kind: "language", label: "PHP" },
+        { id: "check-php", kind: "check", label: "PHPUnit", meta: { command: ["php", "artisan", "test"] } },
+        { id: "check-lint", kind: "check", label: "PHPStan", meta: { command: ["vendor/bin/phpstan", "analyse"] } },
+      ],
+      edges: [],
+    };
+
+    const checks = extractContractChecks(knowledge);
+    expect(checks).toEqual(["php artisan test", "vendor/bin/phpstan analyse"]);
+  });
+});

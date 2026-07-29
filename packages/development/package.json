@@ -16,7 +16,8 @@
     "@ashara/llm-gateway": "*",
     "@ashara/memory": "*",
     "@ashara/shared": "*",
-    "smol-toml": "1.7.1"
+    "smol-toml": "1.7.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@ashara/engagement": "*",
