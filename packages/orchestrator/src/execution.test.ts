@@ -1,6 +1,7 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
 import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
-import { createWorkItemId } from "@ashara/shared";
+import { createWorkItemId, parseStoredBlockedReason } from "@ashara/shared";
+import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { createPendingWorkItem, startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
@@ -19,11 +20,13 @@ function freshPendingItem(): WorkItem {
   return item;
 }
 
-function freshAbandonedItem(): WorkItem {
+function freshAbandonedItem(opts?: { omitBlockedReason?: boolean }): WorkItem {
   const item = freshPendingItem();
   startWorkItem(item);
   item.status = "Abandoned";
-  item.blockedReason = { source: "api", reason: "cancelled by operator" } satisfies StoredBlockedReason;
+  if (!opts?.omitBlockedReason) {
+    item.blockedReason = { source: "api", reason: "cancelled by operator" } satisfies StoredBlockedReason;
+  }
   item.updatedAt = new Date();
   takeEvents(item);
   return item;
@@ -45,13 +48,28 @@ function notExercised(label: string): () => never {
  * correctness by calling the real function and observing its output, not by
  * satisfying every private field of a repository class.
  */
-function buildPreemptionDeps(): {
+interface PreemptionDepsOptions {
+  /** Override the agent's execution result status. Default: "failed". */
+  agentOutcome?: "completed" | "failed" | "blocked";
+  /** When true, the Abandoned item has no blockedReason (the NULL gap). */
+  omitBlockedReason?: boolean;
+}
+
+function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   deps: CoreLoopDeps;
   warns: string[];
+  logs: string[];
+  savedBlockedReasons: StoredBlockedReason[];
 } {
+  const agentOutcome = options?.agentOutcome ?? "failed";
   const warns: string[] = [];
+  const logs: string[] = [];
+  const savedBlockedReasons: StoredBlockedReason[] = [];
   vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
     warns.push(args.map(String).join(" "));
+  });
+  vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    logs.push(args.map(String).join(" "));
   });
 
   let findByIdCalls = 0;
@@ -59,9 +77,12 @@ function buildPreemptionDeps(): {
     findById: async (_id: WorkItemId) => {
       findByIdCalls++;
       if (findByIdCalls === 1) return freshPendingItem();
-      return freshAbandonedItem();
+      return freshAbandonedItem({ omitBlockedReason: options?.omitBlockedReason });
     },
-    save: async () => {},
+    save: async (item: WorkItem) => {
+      // Capture the blockedReason written by the salvage path
+      if (item.blockedReason) savedBlockedReasons.push(item.blockedReason);
+    },
     create: notExercised("create"),
     findByStatus: notExercised("findByStatus"),
     incrementDispatchCount: async () => 1,
@@ -88,9 +109,11 @@ function buildPreemptionDeps(): {
   const runStateStore = { load: async () => null, save: async () => {} };
   const developmentService = {
     execute: async () => ({
-      status: "failed" as const,
-      detail: "agent hit turn limit",
-      output: null,
+      status: agentOutcome,
+      detail: agentOutcome === "completed"
+        ? "task completed and verified successfully"
+        : "agent hit turn limit",
+      output: null as AgentOutputJson | null,
       sessionId: "test-session",
       filesChanged: [] as string[],
       attempt: 1,
@@ -113,7 +136,7 @@ function buildPreemptionDeps(): {
     runStateStore,
   } as unknown as CoreLoopDeps;
 
-  return { deps, warns };
+  return { deps, warns, logs, savedBlockedReasons };
 }
 
 afterEach(() => {
@@ -121,8 +144,8 @@ afterEach(() => {
 });
 
 describe("processTask post-agent status ladder", () => {
-  test("preempted item (Abandoned during execution) logs a warning and does not throw", async () => {
-    const { deps, warns } = buildPreemptionDeps();
+  test("preempted-to-Abandoned item with failed result salvages the result", async () => {
+    const { deps, logs, savedBlockedReasons } = buildPreemptionDeps();
     const task = freshPendingItem();
 
     const { result, costInfo } = await processTask(deps, task, RUN_SCOPE);
@@ -131,12 +154,76 @@ describe("processTask post-agent status ladder", () => {
     expect(result.status).toBe("failed");
     expect(costInfo.costUsd).toBe(0);
 
-    // The preemption must produce an observable warning (Discipline C)
-    const preemptionWarn = warns.find((w) => w.includes("preempted"));
-    expect(preemptionWarn).toBeDefined();
-    expect(preemptionWarn).toContain(ITEM_ID);
-    expect(preemptionWarn).toContain("Abandoned");
-    expect(preemptionWarn).toContain("dispatchCount already incremented");
+    // The salvage must produce a structured log (Discipline C)
+    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
+    expect(salvageLog).toBeDefined();
+    expect(salvageLog).toContain(ITEM_ID);
+    expect(salvageLog).toContain("outcome: failed");
+
+    // The blockedReason must carry the salvaged fields after save
+    expect(savedBlockedReasons.length).toBeGreaterThan(0);
+    const lastSaved = savedBlockedReasons[savedBlockedReasons.length - 1];
+    expect(lastSaved.salvagedOutcome).toBe("failed");
+    expect(lastSaved.salvagedDetail).toBeDefined();
+    expect(lastSaved.salvagedAt).toBeDefined();
+  });
+
+  test("preempted-to-Abandoned item with completed result salvages the result", async () => {
+    const { deps, logs, savedBlockedReasons } = buildPreemptionDeps({
+      agentOutcome: "completed",
+    });
+    const task = freshPendingItem();
+
+    const { result, costInfo } = await processTask(deps, task, RUN_SCOPE);
+
+    // The completed agent result is still returned
+    expect(result.status).toBe("completed");
+    expect(costInfo.costUsd).toBe(0);
+
+    // The salvage must produce a structured log
+    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
+    expect(salvageLog).toBeDefined();
+    expect(salvageLog).toContain(ITEM_ID);
+    expect(salvageLog).toContain("outcome: completed");
+
+    // The blockedReason must carry the salvaged outcome
+    expect(savedBlockedReasons.length).toBeGreaterThan(0);
+    const lastSaved = savedBlockedReasons[savedBlockedReasons.length - 1];
+    expect(lastSaved.salvagedOutcome).toBe("completed");
+    expect(typeof lastSaved.salvagedAt).toBe("string");
+  });
+
+  test("Abandoned item with no prior blockedReason still salvages the result", async () => {
+    const { deps, logs, warns, savedBlockedReasons } = buildPreemptionDeps({
+      omitBlockedReason: true,
+    });
+    const task = freshPendingItem();
+
+    const { result } = await processTask(deps, task, RUN_SCOPE);
+
+    expect(result.status).toBe("failed");
+
+    // A warning about the missing blockedReason must be emitted (Discipline C)
+    const gapWarn = warns.find((w) => w.includes("no blockedReason"));
+    expect(gapWarn).toBeDefined();
+    expect(gapWarn).toContain(ITEM_ID);
+
+    // The salvage must still succeed — the result must not be lost
+    const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
+    expect(salvageLog).toBeDefined();
+    expect(salvageLog).toContain("outcome: failed");
+
+    // The constructed reason must parse under storedBlockedReasonSchema
+    expect(savedBlockedReasons.length).toBeGreaterThan(0);
+    const lastSaved = savedBlockedReasons[savedBlockedReasons.length - 1];
+    expect(() => parseStoredBlockedReason(lastSaved)).not.toThrow();
+
+    // The constructed reason must carry the salvaged fields
+    expect(lastSaved.salvagedOutcome).toBe("failed");
+    expect(lastSaved.salvagedDetail).toBeDefined();
+    expect(lastSaved.salvagedAt).toBeDefined();
+    // The base reason must be orchestrator_error (honest about provenance)
+    expect(lastSaved.source).toBe("orchestrator_error");
   });
 
   test("vanished item (null re-read) logs a warning and does not throw", async () => {

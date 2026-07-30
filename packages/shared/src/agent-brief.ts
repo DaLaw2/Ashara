@@ -40,9 +40,13 @@ import { ProjectFrameSchema } from "./project-frame.js";
  * seed inline verification. Declared as a typed object with only the consumed
  * field (`checks`); the producer passes the full `StoredTaskSpec` and the
  * unrecognized keys are stripped at parse time (Zod default). This is
- * deliberate: only what the consumer reads crosses the process seam, and a
- * missing `checks` is a parse failure rather than a silent fallback to
- * `brief.constraints`. `goal` and `endState` are read from the domain
+ * deliberate: only what the consumer reads crosses the process seam. `checks`
+ * is optional within `task_spec` — it cannot be required because
+ * `StoredTaskSpec.checks` is optional and the producer passes the full
+ * object, so existing persisted rows without `checks` would break the
+ * parse. The consumer falls back to `[]` (no inline checks), not to
+ * `brief.constraints` — natural-language constraints must never reach the
+ * executable check pipeline. `goal` and `endState` are read from the domain
  * `WorkItem.taskSpec` before the brief is assembled, not from this field.
  *
  * Arrays default to `[]` when absent (a Rust-era fallback stub brief may omit

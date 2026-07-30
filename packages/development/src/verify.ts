@@ -37,7 +37,7 @@ export async function verify(
     {
       workDir: request.working_directory,
       gitRoot: request.git_root,
-      checks: request.task_spec?.checks ?? [],
+      checks: [...request.checks],
       contractChecks: request.contractChecks,
     },
     {

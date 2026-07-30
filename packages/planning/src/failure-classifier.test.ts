@@ -20,8 +20,8 @@ describe("classifyFailure", () => {
     expect(classifyFailure(envelope(layer("integrationGate", "gate failed")))).toBe("VERIFICATION_GAP");
   });
 
-  test("VERIFICATION_GAP — postMergeVerify operation", () => {
-    expect(classifyFailure(envelope(layer("postMergeVerify", "verify failed")))).toBe("VERIFICATION_GAP");
+  test("TREE_REGRESSION — postMergeVerify operation", () => {
+    expect(classifyFailure(envelope(layer("postMergeVerify", "verify failed")))).toBe("TREE_REGRESSION");
   });
 
   test("VERIFICATION_GAP — verify operation", () => {
@@ -138,6 +138,10 @@ describe("shouldEscalate", () => {
 
   test("MERGE_CONFLICT never escalates even with priors", () => {
     expect(shouldEscalate("MERGE_CONFLICT", ["MERGE_CONFLICT"])).toBe(false);
+  });
+
+  test("TREE_REGRESSION never escalates even with priors", () => {
+    expect(shouldEscalate("TREE_REGRESSION", ["TREE_REGRESSION"])).toBe(false);
   });
 
   test("escalatable with mixed priors containing match → true", () => {

@@ -11,14 +11,18 @@ export interface TaskSpec {
 export interface VerifyRequest {
   readonly session_id: SessionId;
   readonly task_id: WorkItemId;
-  readonly task_spec?: {
-    readonly checks?: string[];
-  };
+  /**
+   * Checks from the task spec's decomposition (NL-derived). Required so a
+   * caller cannot silently omit them — an absent task spec supplies `[]`
+   * explicitly at the call site, not via a `?? []` fallback inside the
+   * verify pipeline (C1: the identity element is unavailable).
+   */
+  readonly checks: readonly string[];
   /**
    * Executable checks extracted from the contract's knowledge-graph `check`
-   * nodes (zero-enum). Passed through to `runVerifyCore.contractChecks`.
+   * nodes (zero-enum). Required — same rationale as `checks`.
    */
-  readonly contractChecks?: readonly string[];
+  readonly contractChecks: readonly string[];
   // GIT-SAFETY (a): required, not optional — the caller must always supply the
   // real task working directory / git root. verify-core validates both are
   // non-empty absolute paths and fails closed rather than defaulting to the

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, storedBlockedReasonSchema, withSubstitutedBy } from "./blocked-reason.js";
+import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, storedBlockedReasonSchema, withSubstitutedBy, withSalvagedResult } from "./blocked-reason.js";
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
@@ -176,6 +176,47 @@ describe("withSubstitutedBy helper", () => {
     const augmented = withSubstitutedBy(original, "wi-new-123");
     expect(augmented.source).toBe("failure_router");
     expect(augmented.substitutedBy).toBe("wi-new-123");
+  });
+});
+
+describe("withSalvagedResult helper", () => {
+  test("augments a variant with salvaged fields, preserving source", () => {
+    const original: StoredBlockedReason = {
+      source: "shutdown-reconciler",
+      reason: "run terminated",
+      previousStatus: "InProgress",
+    };
+    const augmented = withSalvagedResult(original, "completed", "task completed");
+    expect(augmented.source).toBe("shutdown-reconciler");
+    expect(augmented.salvagedOutcome).toBe("completed");
+    expect(augmented.salvagedDetail).toBe("task completed");
+    expect(typeof augmented.salvagedAt).toBe("string");
+    // salvagedAt should be a valid ISO timestamp
+    expect(Number.isNaN(Date.parse(augmented.salvagedAt!))).toBe(false);
+  });
+
+  test("round-trips through parse after augmentation", () => {
+    const original: StoredBlockedReason = {
+      source: "task_failed",
+      reason: "agent crashed",
+    };
+    const augmented = withSalvagedResult(original, "failed", "timed out");
+    const parsed = parseStoredBlockedReason(augmented);
+    expect(parsed).toBeDefined();
+    expect(parsed!.salvagedOutcome).toBe("failed");
+    expect(parsed!.salvagedDetail).toBe("timed out");
+    expect(parsed!.salvagedAt).toBeDefined();
+    expect(parsed!.source).toBe("task_failed");
+  });
+
+  test("preserves existing substitutedBy when adding salvaged fields", () => {
+    const withSub = withSubstitutedBy(
+      { source: "failure_router", reason: "exhausted" } as StoredBlockedReason,
+      "wi-replacement",
+    );
+    const augmented = withSalvagedResult(withSub, "blocked", "blocked on external");
+    expect(augmented.substitutedBy).toBe("wi-replacement");
+    expect(augmented.salvagedOutcome).toBe("blocked");
   });
 });
 

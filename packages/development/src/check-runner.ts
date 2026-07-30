@@ -109,6 +109,7 @@ export function containerizedRunCommand(
           });
         });
 
+        // POLICY default: null exit code (process killed by signal) is failure, not unknown.
         const code = exitCode ?? 1;
 
         if (code === PODMAN_ENGINE_ERROR_EXIT) {
@@ -177,6 +178,7 @@ export const defaultRunCommand: CommandRunner = (command, cwd, timeout) => {
       });
 
       const combined = (stdout + stderr).trim();
+      // POLICY default: same as containerizedRunCommand — null means killed, which is failure.
       return { exitCode: exitCode ?? 1, output: truncateOutput(combined) };
     } finally {
       clearTimeout(timer);

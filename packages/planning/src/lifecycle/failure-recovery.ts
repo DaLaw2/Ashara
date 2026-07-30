@@ -2,6 +2,8 @@ import type { WorkItemStatus, ProjectContract, StoredTaskSpec, StoredBlockedReas
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
+import { classifyFailure, tryParseEnvelope } from "../failure-classifier.js";
+import type { FailureCategory } from "../failure-classifier.js";
 import type { EventPublisher, ModulePathFilter } from "./ports.js";
 import { deriveRetryChecks, deriveRetryDeliverables } from "./derive-retry-checks.js";
 
@@ -89,6 +91,13 @@ export async function recoverFailedItem(
         registryKeys: registryKeysFor(sibling, contractKeys, deps.selectModulePaths),
       }));
 
+    // Classify the failure so the router can short-circuit categories that
+    // must not consume the replan bound (e.g. TREE_REGRESSION — the merged
+    // tree is broken, not the task's own changes). Always returns a category
+    // (VERIFICATION_GAP for unparseable envelopes) because the router's
+    // category field is required.
+    const category = classifyFromRaw(failure);
+
     const decision = routeDecision(
       deps.failureRouter,
       item,
@@ -96,6 +105,7 @@ export async function recoverFailedItem(
       priorAttempts,
       candidates,
       registryKeysFor(item, contractKeys, deps.selectModulePaths),
+      category,
     );
 
     switch (decision.action) {
@@ -137,6 +147,7 @@ function routeDecision(
   priorAttempts: number,
   candidates: ReadonlyArray<{ id: string; title: string; status: WorkItemStatus; registryKeys: readonly string[] }>,
   itemRegistryKeys: readonly string[],
+  category: FailureCategory,
 ): FailureDecision {
   try {
     return failureRouter.route({
@@ -144,6 +155,7 @@ function routeDecision(
       failure,
       priorAttempts,
       planState: { candidates },
+      category,
     });
   } catch (error) {
     console.warn(
@@ -230,4 +242,21 @@ export async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublis
       );
     }
   }
+}
+
+/**
+ * Derives the FailureCategory from the raw failure context. Always returns a
+ * category — never undefined — because the FailureRouter's category field is
+ * required: an absent category would silently bypass the category-specific
+ * routing (e.g. the zero-replan bound for TREE_REGRESSION). When the raw
+ * payload is not a valid ErrorEnvelope, returns VERIFICATION_GAP — the same
+ * fail-closed default classifyFailure itself uses for unknown operations.
+ * This means an unparseable envelope replans normally (bounded), which is
+ * conservative: replanning costs money but does not silently pass.
+ */
+function classifyFromRaw(failure: RawFailureContext): FailureCategory {
+  // RawFailureContext.raw is Record<string, unknown> — tryParseEnvelope
+  // validates whether it conforms to the ErrorEnvelope shape.
+  const envelope = tryParseEnvelope(failure.raw);
+  return envelope ? classifyFailure(envelope) : "VERIFICATION_GAP";
 }

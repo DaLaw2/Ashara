@@ -9,15 +9,15 @@ import type { VerifyOutput, VerifyPort } from "./acl/development-acl.js";
 
 export type InlineVerifyResult = VerifyOutput;
 
-export interface InlineVerifyTaskSpec {
-    readonly checks?: string[];
-}
-
 // ---------------------------------------------------------------------------
 // Thin out-of-process adapter over the ACL's VerifyPort.
 //
 // The agent runs in a subprocess against its own worktree, so working dir and
 // git root are the same path and it supplies no pre-computed diff.
+//
+// Both `checks` and `contractChecks` are required — the caller resolves any
+// optionality at the call site, not here. A missing field is a compile error,
+// not a silent empty array (C1: the identity element is unavailable).
 // ---------------------------------------------------------------------------
 
 /**
@@ -26,12 +26,14 @@ export interface InlineVerifyTaskSpec {
  */
 export async function runInlineVerify(
     workingDir: string,
-    taskSpec?: InlineVerifyTaskSpec,
+    checks: readonly string[],
+    contractChecks: readonly string[],
     verify: VerifyPort = createVerifyAdapter(),
 ): Promise<InlineVerifyResult> {
     return verify.runVerify({
         workDir: workingDir,
         gitRoot: workingDir,
-        checks: taskSpec?.checks ?? [],
+        checks: [...checks],
+        contractChecks: [...contractChecks],
     });
 }

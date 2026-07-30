@@ -41,6 +41,7 @@ export interface VerifyInput {
     readonly workDir: string;
     readonly gitRoot: string;
     readonly checks: readonly string[];
+    readonly contractChecks: readonly string[];
 }
 
 export interface VerifyCheckResult {
@@ -176,6 +177,7 @@ export function createVerifyAdapter(): VerifyPort {
                     workDir: input.workDir,
                     gitRoot: input.gitRoot,
                     checks: [...input.checks],
+                    contractChecks: [...input.contractChecks],
                 },
                 {
                     runCommand: defaultRunCommand,

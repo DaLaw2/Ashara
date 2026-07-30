@@ -26,7 +26,14 @@ import type { CommandRunner } from "../verify-core.js";
 
 export interface ObserveDeps {
   readonly prepareToolchain?: (targetPath: string, deps?: ToolchainDeps) => Promise<unknown>;
-  readonly toolchainRunner?: CommandRunner;
+  /**
+   * Injected command runner for toolchain preparation. Required — the caller
+   * at the composition root decides which runner to supply. The absence of a
+   * default is the mechanism (mirroring CoreVerifyDeps.runCommand and
+   * ToolchainDeps.runCommand): a caller that forgets gets a compile error,
+   * not silent host execution.
+   */
+  readonly toolchainRunner: CommandRunner;
   readonly toolchainLog?: ToolchainLogFn;
 }
 
@@ -270,12 +277,12 @@ export interface ObserveRequest {
   readonly targetProjectPath: string;
   readonly contractEntryPoint: string | null;
   readonly contractEndpoints: ReadonlyArray<HttpEndpoint> | null;
-  readonly deps?: ObserveDeps;
+  readonly deps: ObserveDeps;
 }
 
 export async function observeProduct(request: ObserveRequest): Promise<ProductObservation> {
   const { targetProjectPath } = request;
-  const deps = request.deps ?? {};
+  const deps = request.deps;
   const contractEntryPoint = request.contractEntryPoint;
   const contractEndpoints = request.contractEndpoints ?? undefined;
   // Observability is decided BEFORE anything is spawned: a product this observer

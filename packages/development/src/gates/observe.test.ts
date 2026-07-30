@@ -12,6 +12,12 @@ import { observeProduct } from "./observe.js";
 
 const NOTES_ENDPOINT = [{ method: "GET", path: "/notes" }] as const;
 
+// Stub runner satisfying ObserveDeps.toolchainRunner — never reached in these
+// tests (all return before toolchain preparation) but required by the type.
+const stubRunner = async (_cmd: string[], _cwd: string, _timeout: number) =>
+  ({ exitCode: 0, output: "" });
+const stubDeps = { toolchainRunner: stubRunner } as const;
+
 let projectPath: string;
 
 beforeEach(async () => {
@@ -26,7 +32,7 @@ describe("a product this observer cannot judge", () => {
   test("a project with no declared HTTP surface is not-observable, never a failed boot", async () => {
     await writeFile(join(projectPath, "main.go"), "package main\n\nfunc main() {}\n");
 
-    const observation = await observeProduct({ targetProjectPath: projectPath, contractEntryPoint: null, contractEndpoints: null });
+    const observation = await observeProduct({ targetProjectPath: projectPath, contractEntryPoint: null, contractEndpoints: null, deps: stubDeps });
 
     expect(observation.kind).toBe("not-observable");
     if (observation.kind !== "not-observable") throw new Error("unreachable");
@@ -35,7 +41,7 @@ describe("a product this observer cannot judge", () => {
   });
 
   test("a missing package.json is not evidence about the product", async () => {
-    const observation = await observeProduct({ targetProjectPath: projectPath, contractEntryPoint: null, contractEndpoints: null });
+    const observation = await observeProduct({ targetProjectPath: projectPath, contractEntryPoint: null, contractEndpoints: null, deps: stubDeps });
 
     expect(observation.kind).not.toBe("boot-failed");
     if (observation.kind !== "not-observable") throw new Error("unreachable");
@@ -49,6 +55,7 @@ describe("a product this observer cannot judge", () => {
       targetProjectPath: projectPath,
       contractEntryPoint: "cmd/server/main.go",
       contractEndpoints: NOTES_ENDPOINT,
+      deps: stubDeps,
     });
 
     expect(observation.kind).toBe("not-observable");
@@ -66,7 +73,7 @@ describe("a product this observer cannot judge", () => {
       targetProjectPath: projectPath,
       contractEntryPoint: null,
       contractEndpoints: NOTES_ENDPOINT,
-      deps: { prepareToolchain: async () => { throw new Error("registry unreachable"); } },
+      deps: { toolchainRunner: stubRunner, prepareToolchain: async () => { throw new Error("registry unreachable"); } },
     });
 
     expect(observation.kind).toBe("not-observable");

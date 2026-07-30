@@ -18,6 +18,7 @@ import type { ToolchainResult } from "./project-toolchain.js";
 
 const baseInput: Omit<CoreVerifyInput, "workDir" | "gitRoot"> = {
   checks: [],
+  contractChecks: [],
 };
 
 const stubToolchain: ToolchainResult = {
@@ -122,7 +123,7 @@ describe("runVerifyCore — non-Node project reaches preparation", () => {
       const prepareRunCommand = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" }));
 
       await runVerifyCore(
-        { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
         { prepareToolchain, runCommand, prepareRunCommand },
       );
 
@@ -148,7 +149,7 @@ describe("runVerifyCore — non-Node project reaches preparation", () => {
       });
 
       const result = await runVerifyCore(
-        { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
         {
           prepareToolchain,
           runCommand: vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" })),
@@ -220,7 +221,7 @@ describe("runVerifyCore — contract checks replace baseline injection", () => {
       const log = vi.fn();
       const deps = makeDeps({ log });
       const result = await runVerifyCore(
-        { checks: [], workDir: dir, gitRoot: dir },
+        { checks: [], contractChecks: [], workDir: dir, gitRoot: dir },
         deps,
       );
 
@@ -236,12 +237,12 @@ describe("runVerifyCore — contract checks replace baseline injection", () => {
     }
   });
 
-  test("omitting contractChecks is backward-compatible (defaults to empty)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-compat-"));
+  test("empty contractChecks with taskSpec checks runs only taskSpec checks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-empty-contract-"));
     try {
       const deps = makeDeps();
       const result = await runVerifyCore(
-        { checks: ["npm test"], workDir: dir, gitRoot: dir },
+        { checks: ["npm test"], contractChecks: [], workDir: dir, gitRoot: dir },
         deps,
       );
 
@@ -318,6 +319,7 @@ describe("runVerifyCore — all checks execute (no allowlist)", () => {
       const result = await runVerifyCore(
         {
           checks: ["npm test", "cargo check"],
+          contractChecks: [],
           workDir: dir,
           gitRoot: dir,
         },
@@ -339,6 +341,7 @@ describe("runVerifyCore — all checks execute (no allowlist)", () => {
       const result = await runVerifyCore(
         {
           checks: ["npm test"],
+          contractChecks: [],
           workDir: dir,
           gitRoot: dir,
         },
@@ -370,7 +373,7 @@ describe("runVerifyCore — preparation uses prepareRunCommand, checks use runCo
       const prepareToolchain = vi.fn(async () => stubToolchain);
 
       const result = await runVerifyCore(
-        { checks: ["npm test"], workDir: dir, gitRoot: dir },
+        { checks: ["npm test"], contractChecks: [], workDir: dir, gitRoot: dir },
         {
           runCommand: checkRunner,
           prepareRunCommand: prepareRunner,
@@ -404,7 +407,7 @@ describe("runVerifyCore — preparation uses prepareRunCommand, checks use runCo
       const prepareToolchain = vi.fn(async () => stubToolchain);
 
       const result = await runVerifyCore(
-        { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
         {
           runCommand: sharedRunner,
           prepareRunCommand: sharedRunner,
@@ -442,7 +445,7 @@ describe("runVerifyCore — container unavailability fails closed", () => {
       // into a "passed" or "unverified" verdict.
       await expect(
         runVerifyCore(
-          { checks: ["npm test"], workDir: dir, gitRoot: dir },
+          { checks: ["npm test"], contractChecks: [], workDir: dir, gitRoot: dir },
           deps,
         ),
       ).rejects.toBeInstanceOf(ContainedCheckError);
@@ -461,7 +464,7 @@ describe("runVerifyCore — container unavailability fails closed", () => {
 
       await expect(
         runVerifyCore(
-          { checks: ["cargo check"], workDir: dir, gitRoot: dir },
+          { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
           deps,
         ),
       ).rejects.toBeInstanceOf(ContainedCheckError);

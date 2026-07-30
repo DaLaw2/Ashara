@@ -81,5 +81,23 @@ describe("AgentBriefSchema", () => {
       const brief = parseAgentBrief(raw, "test");
       expect(brief.task_spec).toBeUndefined();
     });
+
+    test("constraints never substitute for absent checks — the two fields serve different consumers", () => {
+      // brief.constraints carries natural-language prose for the agent prompt;
+      // brief.task_spec.checks carries executable shell commands for inline verify.
+      // The consumer (runner.ts) must fall back to [] when checks is absent, not
+      // to brief.constraints — prose executed as shell commands fails for the
+      // wrong reason.
+      const raw = {
+        ...minimalBrief(),
+        constraints: ["All endpoints must return JSON", "Code must compile"],
+        task_spec: {},
+      };
+      const brief = parseAgentBrief(raw, "test");
+      // task_spec.checks is undefined — the consumer's ?? [] yields [], not constraints
+      const inlineChecks = brief.task_spec?.checks ?? [];
+      expect(inlineChecks).toEqual([]);
+      expect(brief.constraints).toEqual(["All endpoints must return JSON", "Code must compile"]);
+    });
   });
 });

@@ -102,6 +102,9 @@ export class BudgetTracker {
   accumulateCost(costInfo: TaskCostInfo, capability: string, completed: boolean): void {
     if (completed) this.completedTaskCount += 1;
 
+    // EVIDENCE default: the caller reports the cost it observed; null means
+    // it could not observe one, not "pick a price for me." Fail-closed via
+    // unknownCostCharge — overestimates or exhausts the cap.
     const cost = costInfo.costUsd ?? this.unknownCostCharge(capability);
     if (cost > 0) {
       this.cumulativeCostUsd += cost;

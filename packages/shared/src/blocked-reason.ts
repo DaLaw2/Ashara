@@ -13,21 +13,31 @@ import { z } from "zod";
  * LLM-authored or human-authored content, not a closed vocabulary.
  */
 
-// Shared optional field: liveness-recovery can augment any variant.
-const substitutedByField = { substitutedBy: z.string().optional() };
+// Shared optional fields: liveness-recovery and result salvage can augment
+// any variant after the fact, regardless of which producer wrote the original.
+// `substitutedBy` — liveness-recovery's substitute pointer.
+// `salvagedOutcome/salvagedDetail/salvagedAt` — a result that returned for an
+// Abandoned item, persisted so cascade-completion and liveness-recovery can see
+// the work was done (or what the failure was) without reopening the terminal status.
+const augmentationFields = {
+  substitutedBy: z.string().optional(),
+  salvagedOutcome: z.enum(["completed", "failed", "blocked"]).optional(),
+  salvagedDetail: z.string().optional(),
+  salvagedAt: z.string().optional(),
+};
 
 /** PlanningService.route marks a task as failed (no recovery path). */
 const taskFailedSchema = z.object({
   source: z.literal("task_failed"),
   reason: z.string(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /** Orchestrator fallback when lifecycle route itself throws. */
 const orchestratorErrorSchema = z.object({
   source: z.literal("orchestrator_error"),
   reason: z.string(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /**
@@ -42,7 +52,7 @@ const replanSchema = z.object({
     detail: z.string(),
     raw: z.unknown(),
   }),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /** FailureRouter abandon/substitute decisions (failure-recovery.ts). */
@@ -52,7 +62,7 @@ const failureRouterSchema = z.object({
   attempts: z.number().optional(),
   lastFailure: z.unknown().optional(),
   detail: z.string().optional(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /** Shutdown-reconciler run-end sweep (shutdown-reconciler.ts). */
@@ -60,7 +70,7 @@ const shutdownReconcilerSchema = z.object({
   source: z.literal("shutdown-reconciler"),
   reason: z.string(),
   previousStatus: z.string(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /** Startup-reconciler orphan cleanup (startup-reconciler.ts). */
@@ -68,7 +78,7 @@ const startupReconcilerSchema = z.object({
   source: z.literal("startup-reconciler"),
   reason: z.string(),
   previousScope: z.string(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /** Task-split abandon: the original task is abandoned in favor of two subtasks. */
@@ -77,7 +87,7 @@ const splitOnFailureSchema = z.object({
   reason: z.string(),
   attempts: z.number().optional(),
   lastFailure: z.unknown().optional(),
-  ...substitutedByField,
+  ...augmentationFields,
 });
 
 /**
@@ -87,7 +97,7 @@ const splitOnFailureSchema = z.object({
 const apiSchema = z
   .object({
     source: z.literal("api"),
-    ...substitutedByField,
+    ...augmentationFields,
   })
   .passthrough();
 
@@ -130,13 +140,26 @@ export function withSubstitutedBy(
 }
 
 /**
- * Parses a jsonb value from the `blocked_reason` column. Returns `undefined`
- * for null/undefined — absent blockedReason is a policy default (items in
- * Pending/InProgress/Completed legitimately carry none; unblockWorkItem and
- * replanWorkItem explicitly clear it). THROWS on a non-null value that
- * cannot be validated: a corrupt record must not masquerade as absent
- * (Discipline A).
+ * Augments any StoredBlockedReason variant with salvaged-result fields. Used by
+ * the orchestrator when an agent returns a result for an item that was preempted
+ * to Abandoned during execution. The result (outcome + detail) is persisted on
+ * the existing blockedReason so cascade-completion and liveness-recovery can see
+ * it without reopening the terminal status. Same spread + assertion pattern as
+ * withSubstitutedBy.
  */
+export function withSalvagedResult(
+  reason: StoredBlockedReason,
+  salvagedOutcome: "completed" | "failed" | "blocked",
+  salvagedDetail: string,
+): StoredBlockedReason {
+  return {
+    ...reason,
+    salvagedOutcome,
+    salvagedDetail,
+    salvagedAt: new Date().toISOString(),
+  } as StoredBlockedReason;
+}
+
 /**
  * Deliberately widens a typed StoredBlockedReason to Record<string, unknown>.
  * The original shape IS known (StoredBlockedReason), but three consumers need

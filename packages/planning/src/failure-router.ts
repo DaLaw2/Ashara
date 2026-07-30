@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { FailureCategory } from "./failure-classifier.js";
 
 /**
  * Raw failure context handed to the FailureRouter. Carries the unabridged
@@ -55,6 +56,16 @@ export interface FailureRouteInput {
    */
   readonly priorAttempts: number;
   readonly planState: FailurePlanState;
+  /**
+   * Classified failure category from the ErrorEnvelope (failure-classifier.ts).
+   * The router consults it before applying the replan bound: TREE_REGRESSION
+   * terminates on first occurrence regardless of remaining attempts. Required
+   * so that an unparseable envelope cannot silently restore the replan ladder
+   * for a tree regression — the caller must supply a category, and the
+   * fail-closed default for an unclassifiable failure is VERIFICATION_GAP
+   * (the same default classifyFailure itself uses for unknown operations).
+   */
+  readonly category: FailureCategory;
 }
 
 /**
@@ -163,6 +174,23 @@ export class FailureRouter {
       };
     }
 
+    // Zero-replan bound for tree regressions: the post-merge verification
+    // failed against the merged tree, not against the task's own changes.
+    // Replanning would dispatch an agent into the same broken tree with the
+    // instruction "fix the failing checks" — checks it did not break and
+    // cannot fix. Terminalizing on first occurrence prevents burning the
+    // replan bound against an external regression.
+    //
+    // Honest cost: the task's own code may have been correct, so early
+    // termination gives up work that could have succeeded once the tree was
+    // fixed. That is not a regression from the prior behavior — before this
+    // change the task reached the same terminal state after paying for two
+    // more failed dispatches — but it is a real trade-off: we save the cost
+    // of doomed retries at the price of not automatically resuming when the
+    // tree heals.
+    const abandon = this.categoryRequiresImmediateTermination(input.category, failure, input.priorAttempts);
+    if (abandon) return abandon;
+
     if (input.priorAttempts < this.maxReplanAttempts) {
       return { action: "replan", attempt: input.priorAttempts + 1, failure };
     }
@@ -173,6 +201,45 @@ export class FailureRouter {
       attempts: input.priorAttempts,
       failure,
     };
+  }
+
+  /**
+   * Exhaustive switch over FailureCategory: a new member without a case here
+   * is a compile error, not a silent fall-through. Returns an abandon decision
+   * for categories that must not consume the replan bound; null means "proceed
+   * to the normal replan-or-abandon ladder."
+   */
+  private categoryRequiresImmediateTermination(
+    category: FailureCategory,
+    failure: RawFailureContext,
+    priorAttempts: number,
+  ): FailureDecision | null {
+    switch (category) {
+      case "TREE_REGRESSION":
+        return {
+          action: "abandon",
+          reason:
+            "post-merge verification failed against the merged tree (tree regression); " +
+            "the task's own changes did not cause this failure and replanning would " +
+            "dispatch into the same broken tree",
+          attempts: priorAttempts,
+          failure,
+        };
+
+      case "VERIFICATION_GAP":
+      case "COMPILATION_ERROR":
+      case "AGENT_STUCK":
+      case "SPAWN_FAILURE":
+      case "MERGE_CONFLICT":
+        return null;
+
+      default: {
+        const _exhaustive: never = category;
+        throw new Error(
+          `Unhandled FailureCategory in FailureRouter: ${String(_exhaustive)}`,
+        );
+      }
+    }
   }
 
   /**

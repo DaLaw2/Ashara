@@ -107,17 +107,25 @@ export class LifecycleRouter {
   }
 
   /**
-   * A sibling settles its parent when Completed, or when Abandoned with an
-   * explicit substitute (blockedReason.substitutedBy) that itself resolved to
-   * Completed — the identical fail-closed rule DependencyGraph.classifyDependency
-   * applies at the dispatch gate (dependency.ts:159-174). An exhausted Abandoned
-   * sibling (no substitute recorded, or a substitute that never completed) means
-   * the work is genuinely missing, so it must NOT settle the parent (Run-9
-   * redteam L2) — the parent stays incomplete rather than silently rolling up.
+   * A sibling settles its parent when:
+   *  1. Completed — the canonical happy path.
+   *  2. Abandoned with a salvaged completed result — the agent succeeded but
+   *     the item was preempted to Abandoned during execution. The work is done;
+   *     keeping the item terminal is correct, and the salvage makes it visible.
+   *  3. Abandoned with a substitute that itself settled — liveness-recovery
+   *     created a replacement that completed the work under a new id.
+   *
+   * An Abandoned item outside these three cases is genuinely missing work and
+   * must not settle its parent — the parent stays incomplete rather than
+   * silently rolling up (Run-9 redteam L2).
    */
   private static async isSettled(repo: WorkItemRepository, item: WorkItem): Promise<boolean> {
     if (item.status === "Completed") return true;
     if (item.status !== "Abandoned") return false;
+
+    // An Abandoned item whose agent actually completed its work: the result was
+    // salvaged onto the blockedReason, so the work is done.
+    if (item.blockedReason?.salvagedOutcome === "completed") return true;
 
     const substituteId = extractSubstitutedBy(item.blockedReason);
     if (substituteId === undefined) return false;

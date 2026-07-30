@@ -1,7 +1,6 @@
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { CommandRunner } from "./verify-core.js";
-import { defaultRunCommand } from "./check-runner.js";
 
 // ---------------------------------------------------------------------------
 // ProjectToolchain (Phase T, ADR-032 §1).
@@ -140,11 +139,12 @@ export type ToolchainLogFn = (event: Record<string, unknown>) => void;
 export interface ToolchainDeps {
   /**
    * Injected command runner — same seam as verify-core's CommandRunner
-   * (packages/development/src/verify-core.ts). Reused so all three consumers
-   * (gate, smoke, agent-worktree verify) pass their existing runner. Tests
-   * substitute a deterministic runner; no real install ever runs in a unit test.
+   * (packages/development/src/verify-core.ts). Required — no fallback. The
+   * absence of a default is the mechanism: a caller that forgets to inject a
+   * runner gets a compile error, not silent host execution (Discipline A,
+   * mirroring CoreVerifyDeps.runCommand).
    */
-  readonly runCommand?: CommandRunner;
+  readonly runCommand: CommandRunner;
   readonly log?: ToolchainLogFn;
 }
 
@@ -441,7 +441,7 @@ async function prepareNonNode(
  * codegen failure throws a typed ToolchainError; there is no partial-success
  * return. The caller (gate/smoke/verify) decides whether that is fatal to it.
  */
-export async function prepare(targetPath: string, deps: ToolchainDeps = {}): Promise<ToolchainResult> {
+export async function prepare(targetPath: string, deps: ToolchainDeps): Promise<ToolchainResult> {
   if (typeof targetPath !== "string" || targetPath.length === 0) {
     throw new ToolchainError("detect", {
       cwd: String(targetPath),
@@ -452,7 +452,7 @@ export async function prepare(targetPath: string, deps: ToolchainDeps = {}): Pro
     throw new ToolchainError("detect", { cwd: targetPath, detail: "targetPath must be absolute" });
   }
 
-  const run = deps.runCommand ?? defaultRunCommand;
+  const run = deps.runCommand;
   const log = deps.log;
 
   if (!(await pathExists(join(targetPath, "package.json")))) {

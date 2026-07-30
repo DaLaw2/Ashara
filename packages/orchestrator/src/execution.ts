@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent } from "@ashara/shared";
-import { wrapError } from "@ashara/shared";
+import { wrapError, InvalidStatusTransition, withSalvagedResult } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, CoverageHold, RawFailureContext } from "./acl/planning-acl.js";
@@ -83,7 +83,19 @@ export async function executeTask(
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
   if (execResult.status === "completed") {
-    await routeAsSuccess(deps, task);
+    try {
+      await routeAsSuccess(deps, task);
+    } catch (e) {
+      // The item's status changed while the agent was executing (e.g., preempted
+      // to Abandoned by the shutdown reconciler or HTTP PATCH). The agent's work
+      // succeeded; processTask reloads the item and salvages the result based on
+      // its actual status. Any non-preemption error must still propagate.
+      if (!(e instanceof InvalidStatusTransition)) throw e;
+      console.warn(
+        `[${task.id}] completion route rejected (${e.from} -> Completed); ` +
+        `agent succeeded, processTask will handle salvage`,
+      );
+    }
     return {
       result: completedResult(task.id),
       output: execResult.output,
@@ -173,6 +185,58 @@ async function publishBestEffort(
   }
 }
 
+/**
+ * Durably records a returning agent result on an Abandoned work item's
+ * blockedReason, so cascade-completion (isSettled) and liveness-recovery can
+ * see the work's outcome without reopening the terminal status. Uses the same
+ * augmentation pattern as withSubstitutedBy: the existing blockedReason is
+ * spread with salvaged fields and saved as an Abandoned → Abandoned metadata
+ * write (no status transition, no outbound edge needed).
+ *
+ * Best-effort: a salvage failure is logged (Discipline C) but must not crash
+ * processTask — the item is already terminal and the agent spend is sunk.
+ */
+async function salvagePreemptedResult(
+  workItemRepo: WorkItemRepository,
+  item: WorkItem,
+  outcome: "completed" | "failed" | "blocked",
+  detail: string,
+): Promise<void> {
+  try {
+    if (!item.blockedReason) {
+      // The item reached Abandoned with no recorded reason — a data integrity
+      // gap, not an expected state. Construct a minimal reason so the returning
+      // result is not discarded. orchestrator_error is truthful: the orchestrator
+      // detected the gap, and the reason text states what happened without
+      // asserting a cause we do not know.
+      console.warn(
+        `[${item.id}] Abandoned item has no blockedReason; ` +
+        `constructing orchestrator_error to persist salvaged result (outcome: ${outcome})`,
+      );
+      item.blockedReason = {
+        source: "orchestrator_error",
+        reason: "Abandoned with no prior blocked_reason; reason constructed by salvage",
+      };
+    }
+    item.blockedReason = withSalvagedResult(item.blockedReason, outcome, detail);
+    item.updatedAt = new Date();
+    await PlanningService.saveWorkItem(workItemRepo, item, "Abandoned");
+    console.log(
+      `[${item.id}] salvaged preempted result (outcome: ${outcome}) ` +
+      `on Abandoned item; dispatchCount: ${item.dispatchCount}`,
+    );
+  } catch (salvageError) {
+    // The item is already terminal — a salvage failure does not change its status.
+    // Log structured context (Discipline C) so the lost result is visible.
+    console.warn(
+      `[${item.id}] failed to salvage preempted result ` +
+      `(outcome: ${outcome}, detail: ${detail.slice(0, 200)}); ` +
+      `item remains Abandoned, result data lost:`,
+      salvageError,
+    );
+  }
+}
+
 export async function processTask(
   deps: CoreLoopDeps,
   task: WorkItem,
@@ -238,6 +302,19 @@ export async function processTask(
   // The former completion-gated persist here was a redundant duplicate
   // writer against the same DB row and has been removed.
 
+  // Salvage check for completed results: when the agent succeeded but the item
+  // was preempted to Abandoned (by the shutdown reconciler or HTTP PATCH) during
+  // execution, executeTask catches the InvalidStatusTransition from routeAsSuccess
+  // and returns a completed result. The result's value — "the work is done" — must
+  // be durably recorded on the Abandoned item so cascade-completion (isSettled) and
+  // liveness-recovery can see the work was done without reopening the terminal status.
+  if (result.status === "completed") {
+    const currentForSalvage = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
+    if (currentForSalvage && currentForSalvage.status === "Abandoned") {
+      await salvagePreemptedResult(deps.workItemRepo, currentForSalvage, "completed", result.detail);
+    }
+  }
+
   if (result.status === "failed" || result.status === "blocked") {
     let current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (current && current.status === "InProgress") {
@@ -280,6 +357,12 @@ export async function processTask(
           // seam above and is not mutated by recoverFailedItem, so it is the exact
           // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
           const attempts = current.dispatchCount;
+          // EVIDENCE default: "why did the agent stop?" is epistemic. output
+          // is AgentOutputJson | null; when present, finish_reason is required
+          // by the Zod enum (shared/src/agent-output.ts:37), so this ?? fires
+          // only when the whole output is null. Fail-closed: "unknown" !== "turn_limit"
+          // in shouldSplit (planning/src/lifecycle/task-split.ts:13), so the task
+          // falls through to failure routing — the conservative path.
           const finishReason = output?.finish_reason ?? "unknown";
           // From the HOST observation, never from the agent's output. The agent
           // cannot run git inside its container, and when `output.files_changed`
@@ -344,11 +427,8 @@ export async function processTask(
         case "Completed":
         case "Pending":
         case "Blocked":
-        case "Abandoned":
-          // Preempted: an external actor (HTTP PATCH or reconciler) moved the
-          // item's status while the agent was executing. The agent's result
-          // is not routable — failure routing requires Failed. dispatchCount
-          // was already incremented and agent spend was already incurred.
+          // Preempted to a non-Abandoned, non-Failed status. The agent's
+          // result is not routable. dispatchCount was already incremented.
           console.warn(
             `[${task.id}] work item preempted: expected Failed, ` +
             `found "${current.status}" after agent returned ` +
@@ -356,6 +436,24 @@ export async function processTask(
             `dispatchCount already incremented, agent spend unrecoverable`,
           );
           break;
+
+        case "Abandoned": {
+          // Preempted to Abandoned while the agent was executing. The
+          // agent's result has value: persist it on the existing
+          // blockedReason so cascade-completion and liveness-recovery can
+          // see the work's outcome without reopening the terminal status.
+          const outcomeKind = result.status === "blocked" ? "blocked" as const : "failed" as const;
+          await salvagePreemptedResult(deps.workItemRepo, current, outcomeKind, result.detail);
+          await recordFailedApproach(
+            deps.failedApproachRepo,
+            deps.workItemRepo,
+            current,
+            result.detail,
+            `Preempted to Abandoned during execution (result: ${result.status}). ` +
+            `Agent spend incurred, result salvaged.`,
+          );
+          break;
+        }
 
         default: {
           const _exhaustive: never = current.status;

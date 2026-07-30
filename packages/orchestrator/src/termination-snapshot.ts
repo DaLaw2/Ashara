@@ -125,10 +125,12 @@ export async function runAcceptanceCheck(
   items: readonly AcceptanceCheckItem[],
 ): Promise<AcceptanceVerdict> {
   const maxAttempts = deps.config.maxAcceptanceAttempts;
-  // The last completed evaluation's findings. A termination can be superseded by a
-  // NOTIFY and re-entered (runner.ts handleTermination), and on re-entry the cap
-  // below may leave nothing to recompute; carrying these forward is the difference
-  // between reporting the last known gaps and reporting none at all.
+  // POLICY default: no prior verdict → no prior gaps to carry. The epistemic
+  // state is outcome:"unverified" (acceptance.ts:318-321), not the array length.
+  // A termination can be superseded by a NOTIFY and re-entered (runner.ts
+  // handleTermination), and on re-entry the cap below may leave nothing to
+  // recompute; carrying these forward is the difference between reporting the
+  // last known gaps and reporting none at all.
   const priorGaps = deps.lastAcceptanceVerdict?.gaps ?? [];
 
   if (!deps.acceptanceLlm && !deps.observeProduct) {

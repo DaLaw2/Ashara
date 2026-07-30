@@ -731,6 +731,8 @@ export function extractUsage(
     const missingFields: string[] = [];
     if (sdkUsage.inputTokens === undefined) missingFields.push("inputTokens");
     if (sdkUsage.outputTokens === undefined) missingFields.push("outputTokens");
+    // POLICY default: structural placeholders inside measured:false — the
+    // discriminant carries the signal, not the zeros (see JSDoc above).
     return {
       measured: false,
       usage: {

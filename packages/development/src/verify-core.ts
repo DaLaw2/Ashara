@@ -83,7 +83,7 @@ export interface CoreVerifyInput {
    * (LLM-derived intent) > taskSpec checks (decomposition NL). A check
    * already present in a higher-priority source is not re-added.
    */
-  readonly contractChecks?: readonly string[];
+  readonly contractChecks: readonly string[];
 }
 
 export interface CoreVerifyDeps {
@@ -281,7 +281,7 @@ export async function runVerifyCore(
     });
   }
 
-  const contractChecks = input.contractChecks ?? [];
+  const contractChecks = input.contractChecks;
 
   if (contractChecks.length > 0) {
     log?.({

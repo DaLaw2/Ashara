@@ -6,12 +6,8 @@ export type FailureCategory =
   | "COMPILATION_ERROR"
   | "AGENT_STUCK"
   | "SPAWN_FAILURE"
-  | "MERGE_CONFLICT";
-
-const ESCALATABLE_CATEGORIES: ReadonlySet<FailureCategory> = new Set([
-  "VERIFICATION_GAP",
-  "AGENT_STUCK",
-]);
+  | "MERGE_CONFLICT"
+  | "TREE_REGRESSION";
 
 export function classifyFailure(envelope: ErrorEnvelope): FailureCategory {
   const layers = flattenChain(envelope.chain);
@@ -39,11 +35,13 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
     case "agentExecution":
       return classifyAgentExecution(layer, envelope);
 
+    case "postMergeVerify":
+      return "TREE_REGRESSION";
+
     case "smokeTest":
     case "smokeFailed":
     case "integrationGate":
     case "integrationGateFailed":
-    case "postMergeVerify":
     case "verify":
     case "entryPointRewriteCheck":
       return "VERIFICATION_GAP";
@@ -101,8 +99,22 @@ export function shouldEscalate(
   category: FailureCategory,
   priorCategories: readonly FailureCategory[],
 ): boolean {
-  if (!ESCALATABLE_CATEGORIES.has(category)) return false;
-  return priorCategories.includes(category);
+  switch (category) {
+    case "VERIFICATION_GAP":
+    case "AGENT_STUCK":
+      return priorCategories.includes(category);
+
+    case "COMPILATION_ERROR":
+    case "SPAWN_FAILURE":
+    case "MERGE_CONFLICT":
+    case "TREE_REGRESSION":
+      return false;
+
+    default: {
+      const _exhaustive: never = category;
+      throw new Error(`Unhandled FailureCategory in shouldEscalate: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 // open-by-design: raw is a candidate, not a known ErrorEnvelope — safeParse tests whether it conforms

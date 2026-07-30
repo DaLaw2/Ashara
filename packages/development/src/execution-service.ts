@@ -387,6 +387,7 @@ export class DevelopmentService {
       endState: (typeof taskSpec?.endState === "string" ? taskSpec.endState : `Implement: ${task.title}`),
       scope: (typeof taskSpec?.scope === "string" ? taskSpec.scope : ""),
       deliverables: stringArrayOrEmpty(taskSpec?.deliverables),
+      // POLICY default: empty checks → verify-core.ts:320 verdict "unverified" → line 823 routes as "failed".
       checks: stringArrayOrEmpty(taskSpec?.checks),
     };
 
@@ -886,6 +887,7 @@ export class DevelopmentService {
       };
     }
 
+    // POLICY default: empty checks → finalize.ts:161 gates on verdict !== "passed" (fail-closed).
     const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
     const contractChecksForFinalize = contract
       ? extractContractChecks(contract.knowledge)
@@ -960,11 +962,8 @@ export class DevelopmentService {
     const verifyRequest = {
       session_id: createSessionId(),
       task_id: task.id,
-      task_spec: taskSpec
-        ? {
-            checks: taskSpec.checks,
-          }
-        : undefined,
+      // POLICY default: same downstream as buildBrief — empty checks fail closed via verify-core.ts:320.
+      checks: stringArrayOrEmpty(taskSpec?.checks),
       contractChecks,
       working_directory: workDir,
       git_root: workDir,
@@ -1261,7 +1260,7 @@ function extractReplanContext(
   return candidate;
 }
 
-type GateKind = "entry-point" | "merge" | "agent" | "verify" | "unknown";
+type GateKind = "entry-point" | "merge" | "agent" | "verify" | "post-merge-verify" | "unknown";
 
 function detectGateKind(envelope: ErrorEnvelope): GateKind {
   const layers = flattenChain(envelope.chain);
@@ -1270,7 +1269,7 @@ function detectGateKind(envelope: ErrorEnvelope): GateKind {
       case "entryPointRewriteCheck": return "entry-point";
       case "tentativeMerge": return "merge";
       case "agentExecution": return "agent";
-      case "postMergeVerify":
+      case "postMergeVerify": return "post-merge-verify";
       case "verify": return "verify";
     }
   }
@@ -1338,6 +1337,9 @@ function derivePrescriptiveInstruction(envelope: ErrorEnvelope): string {
 
     case "verify":
       return `Verification failed. The changes do not pass the required checks. Fix the failing checks listed below before proceeding.${fileRef}`;
+
+    case "post-merge-verify":
+      return `Post-merge verification failed. The tree you merged into is broken — this is NOT caused by your changes. Do not attempt to fix checks you did not break.${fileRef}`;
 
     default:
       return `Review the failure details below and address the root cause before proceeding.${fileRef}`;

@@ -54,6 +54,7 @@ import {
   createRetrievalFn,
   DevelopmentService,
   observeProduct,
+  defaultRunCommand,
 } from "@ashara/development";
 import type {
   SessionStore,
@@ -736,11 +737,21 @@ async function main(): Promise<void> {
     acceptanceLlm: acceptanceLlm ?? undefined,
     // The entry point lives in the knowledge graph since ADR-038, not as a
     // top-level contract field.
+    // Host execution is deliberate and explicit, not a fallback — it replaced a
+    // `?? defaultRunCommand` that hid it (accepted pending story
+    // `observe-runs-on-the-host`). BOTH halves run on the host: toolchain
+    // preparation here via `defaultRunCommand`, AND the product launch itself
+    // (observe.ts spawns the product directly via child_process.spawn, outside
+    // CommandRunner entirely). The accepted risk is that package-manager install
+    // steps execute arbitrary third-party lifecycle scripts as the host user
+    // with full network access, whereas the verify path runs the same class of
+    // commands in a container.
     observeProduct: ({ targetPath, contract }) =>
       observeProduct({
         targetProjectPath: targetPath,
         contractEntryPoint: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
         contractEndpoints: contract?.endpoints ?? null,
+        deps: { toolchainRunner: defaultRunCommand },
       }),
     // Seeded to 0 and immediately overwritten by CoreLoop from the durable run
     // record on the first cycle (a resumed run keeps its spent attempts).

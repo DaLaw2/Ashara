@@ -181,9 +181,9 @@ export class AgentRunner {
         try {
             verifyResult = await runInlineVerify(
                 this.config.workingDir,
-                brief.task_spec?.checks
-                    ? { checks: brief.task_spec.checks }
-                    : { checks: brief.constraints },
+                // POLICY default: empty checks → verify-core.ts:320 verdict "unverified" (fail-closed).
+                brief.task_spec?.checks ?? [],
+                [], // agent-runner has no contract context; contracts live on the host side
             );
             console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
         } catch (err) {

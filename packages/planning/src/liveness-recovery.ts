@@ -49,7 +49,11 @@ export async function recoverFromAbandoned(deps: LivenessRecoveryDeps): Promise<
 
   const abandonedBlockers = allItems.filter(
     (item) =>
-      item.status === "Abandoned" && extractSubstitutedBy(item.blockedReason) === undefined,
+      item.status === "Abandoned"
+      && extractSubstitutedBy(item.blockedReason) === undefined
+      // Skip items whose agent actually completed — salvaged result means the
+      // work is done; creating a substitute would duplicate already-done work.
+      && item.blockedReason?.salvagedOutcome !== "completed",
   );
 
   const nonTerminalStatuses = new Set(["Pending", "InProgress", "Failed", "Blocked"]);
