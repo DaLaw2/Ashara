@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseAgentBrief, InvalidAgentBriefError } from "./agent-brief.js";
+import { createAgentBrief, parseAgentBrief, InvalidAgentBriefError } from "./agent-brief.js";
 
 /** Minimal valid brief — every required field present, no optionals. */
 function minimalBrief(): Record<string, unknown> {
@@ -40,11 +40,9 @@ describe("AgentBriefSchema", () => {
       expect(brief.task_spec).toEqual({ checks: [] });
     });
 
-    test("accepts task_spec with no checks (field omitted)", () => {
+    test("rejects task_spec with no checks (field omitted) — checks is required", () => {
       const raw = { ...minimalBrief(), task_spec: {} };
-      const brief = parseAgentBrief(raw, "test");
-      expect(brief.task_spec).toEqual({});
-      expect(brief.task_spec?.checks).toBeUndefined();
+      expect(() => parseAgentBrief(raw, "test")).toThrow(InvalidAgentBriefError);
     });
 
     test("strips unrecognized fields from task_spec (producer sends full StoredTaskSpec)", () => {
@@ -85,19 +83,68 @@ describe("AgentBriefSchema", () => {
     test("constraints never substitute for absent checks — the two fields serve different consumers", () => {
       // brief.constraints carries natural-language prose for the agent prompt;
       // brief.task_spec.checks carries executable shell commands for inline verify.
-      // The consumer (runner.ts) must fall back to [] when checks is absent, not
-      // to brief.constraints — prose executed as shell commands fails for the
-      // wrong reason.
+      // When task_spec is absent, inline verify is SKIPPED (the named absence
+      // case), not run with an empty array derived from constraints.
       const raw = {
         ...minimalBrief(),
         constraints: ["All endpoints must return JSON", "Code must compile"],
-        task_spec: {},
       };
       const brief = parseAgentBrief(raw, "test");
-      // task_spec.checks is undefined — the consumer's ?? [] yields [], not constraints
-      const inlineChecks = brief.task_spec?.checks ?? [];
-      expect(inlineChecks).toEqual([]);
+      expect(brief.task_spec).toBeUndefined();
       expect(brief.constraints).toEqual(["All endpoints must return JSON", "Code must compile"]);
+    });
+  });
+
+  describe("createAgentBrief — typed producer entry point", () => {
+    test("produces the same result as parseAgentBrief for a valid input", () => {
+      const input = {
+        taskId: "11111111-1111-4111-8111-111111111111",
+        goal: "implement the thing",
+        projectFrame: { intent: "a project", stack: ["TypeScript"], source: "vision-derivation" as const },
+        context: "end state: the thing works",
+        tools: [] as string[],
+        constraints: [] as string[],
+        deliverables: [] as string[],
+        task_spec: { checks: ["npm test"] },
+      };
+      const fromCreate = createAgentBrief(input, "test");
+      const fromParse = parseAgentBrief(input, "test");
+      expect(fromCreate).toEqual(fromParse);
+    });
+
+    test("still runs the Zod parse at runtime — a .min(1) violation is caught", () => {
+      // Even though the TypeScript type is satisfied, the Zod .min(1) constraint
+      // on taskId catches an empty string at runtime.
+      const input = {
+        taskId: "",
+        goal: "implement the thing",
+        projectFrame: { intent: "a project", stack: ["TypeScript"], source: "vision-derivation" as const },
+        context: "end state: the thing works",
+        tools: [] as string[],
+        constraints: [] as string[],
+        deliverables: [] as string[],
+      };
+      // TypeScript allows this (string satisfies string), but Zod rejects it
+      expect(() => createAgentBrief(input, "test")).toThrow(InvalidAgentBriefError);
+    });
+
+    test("the ?? brief.constraints fallback is structurally impossible — checks is string[], not optional", () => {
+      // This test guards against the regression where someone re-introduces
+      // `brief.task_spec?.checks ?? brief.constraints` at the consumer. After
+      // making checks required, a present task_spec ALWAYS has checks: string[],
+      // so the fallback chain can only reach [] via task_spec absence (the named
+      // case), never via an absent checks field that could be silently filled by
+      // constraints.
+      const raw = {
+        ...minimalBrief(),
+        constraints: ["All endpoints must return JSON"],
+        task_spec: { checks: [] },
+      };
+      const brief = parseAgentBrief(raw, "test");
+      // task_spec is present → checks is string[], never undefined
+      expect(brief.task_spec!.checks).toEqual([]);
+      // constraints are completely separate
+      expect(brief.constraints).toEqual(["All endpoints must return JSON"]);
     });
   });
 });

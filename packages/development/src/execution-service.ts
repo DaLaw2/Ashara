@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, createSessionId, parseAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
@@ -422,15 +422,16 @@ export class DevelopmentService {
         relevance: qualityGate.checks.relevance.detail,
         economy: qualityGate.checks.economy.detail,
       });
-      // parseAgentBrief validates the on-wire shape at the producing boundary:
-      // a field this seam is meant to carry (codeContext / knowledgeContext /
-      // contextMap — the finding-g drop) is now explicit and validated, and an
-      // unexpected extra field fails closed here rather than leaking silently.
+      // createAgentBrief: the compiler checks the shape at this construction
+      // site (Layer 1 — a misspelt or omitted field is a TS error), and the Zod
+      // parse runs underneath as defence-in-depth (Layer 2). The finding-g field
+      // drop that motivated the shared schema is now caught at compile time, not
+      // just at runtime.
       const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
       const taskContext = acceptanceSection
         ? `${brief.taskSpec}\n\n${acceptanceSection}`
         : brief.taskSpec;
-      return parseAgentBrief(
+      return createAgentBrief(
         {
           taskId: task.id,
           goal: spec.goal,
@@ -439,7 +440,7 @@ export class DevelopmentService {
           tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
           constraints: spec.checks,
           deliverables: spec.deliverables,
-          ...(taskSpec !== undefined ? { task_spec: taskSpec } : {}),
+          ...(taskSpec !== undefined ? { task_spec: { checks: stringArrayOrEmpty(taskSpec.checks) } } : {}),
           codeContext: brief.codeContext,
           knowledgeContext: brief.knowledgeContext,
           contextMap: brief.contextMap,
@@ -1185,7 +1186,7 @@ function buildBasicBrief(
     ? `End state: ${endState}\n\n${acceptanceSection}`
     : `End state: ${endState}`;
 
-  return parseAgentBrief(
+  return createAgentBrief(
     {
       taskId: task.id,
       goal,
@@ -1194,7 +1195,7 @@ function buildBasicBrief(
       tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
       constraints,
       deliverables,
-      ...(spec !== undefined ? { task_spec: spec } : {}),
+      ...(spec !== undefined ? { task_spec: { checks: stringArrayOrEmpty(spec.checks) } } : {}),
       ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
       ...(contractSlice !== undefined ? { contractSlice } : {}),
     },

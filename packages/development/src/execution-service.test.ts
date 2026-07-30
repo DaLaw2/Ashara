@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { AgentBrief } from "@ashara/shared";
-import { parseAgentBrief } from "@ashara/shared";
+import { createAgentBrief } from "@ashara/shared";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { withSessionLifecycle } from "./execution-service.js";
 
@@ -30,7 +30,7 @@ class RecordingSessionStore implements SessionStore {
 }
 
 function brief(): AgentBrief {
-  return parseAgentBrief(
+  return createAgentBrief(
     {
       taskId: "11111111-1111-4111-8111-111111111111",
       goal: "do the thing",

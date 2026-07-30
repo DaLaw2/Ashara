@@ -38,16 +38,19 @@ import { ProjectFrameSchema } from "./project-frame.js";
  * `task_spec` — INCLUDED, consciously. It is not rendered into the system
  * prompt, but the agent-runner reads `task_spec.checks` off `brief.json` to
  * seed inline verification. Declared as a typed object with only the consumed
- * field (`checks`); the producer passes the full `StoredTaskSpec` and the
- * unrecognized keys are stripped at parse time (Zod default). This is
- * deliberate: only what the consumer reads crosses the process seam. `checks`
- * is optional within `task_spec` — it cannot be required because
- * `StoredTaskSpec.checks` is optional and the producer passes the full
- * object, so existing persisted rows without `checks` would break the
- * parse. The consumer falls back to `[]` (no inline checks), not to
- * `brief.constraints` — natural-language constraints must never reach the
- * executable check pipeline. `goal` and `endState` are read from the domain
- * `WorkItem.taskSpec` before the brief is assembled, not from this field.
+ * field (`checks`); the producer constructs this field explicitly (normalising
+ * the optional `StoredTaskSpec.checks` into a required `string[]`), and
+ * unrecognized keys from the full `StoredTaskSpec` never reach this schema.
+ * This is deliberate: only what the consumer reads crosses the process seam.
+ * `checks` is REQUIRED within `task_spec`: the producer normalises
+ * `StoredTaskSpec.checks ?? []` at the construction site, so the "no checks
+ * stated" case is an explicit empty array, never an absent field. The consumer
+ * falls back to `[]` ONLY when `task_spec` itself is absent (a task with no
+ * spec at all), not when `checks` is missing — that second case is now a parse
+ * error. Natural-language constraints must never reach the executable check
+ * pipeline (constraint ≠ check). `goal` and `endState` are read from the
+ * domain `WorkItem.taskSpec` before the brief is assembled, not from this
+ * field.
  *
  * Arrays default to `[]` when absent (a Rust-era fallback stub brief may omit
  * them); a present-but-wrong-typed array is a parse error, not a silent `[]`
@@ -70,14 +73,14 @@ export const AgentBriefSchema = z
     codeContext: z.string().optional(),
     contextMap: z.string().optional(),
     // Typed passthrough — only `checks` is consumed (by inline verify in
-    // agent-runner); the producer passes the full StoredTaskSpec and unrecognized
-    // keys are stripped. Not `.strict()`: the producer (execution-service) is a
-    // separate package that passes the full StoredTaskSpec, and strictness would
-    // force a coupled change there. Strip achieves the goal — undeclared fields
-    // do not travel across the process seam.
+    // agent-runner); the producer constructs this object explicitly with the
+    // normalised checks array. Not `.strict()`: the inner object is the
+    // producer's construction, not an external boundary, and strictness would
+    // couple it to the full StoredTaskSpec shape for no gain — undeclared fields
+    // never arrive because the producer constructs only `{ checks }`.
     task_spec: z
       .object({
-        checks: z.array(z.string()).optional(),
+        checks: z.array(z.string()),
       })
       .optional(),
     // Binding, conditional. Non-empty when present: the producer only emits
@@ -111,10 +114,35 @@ export class InvalidAgentBriefError extends Error {
 }
 
 /**
- * Parses an untrusted `brief.json` value into a validated `AgentBrief`,
- * throwing a typed {@link InvalidAgentBriefError} on failure. Both the producer
- * (Development, at write time) and the consumer (agent-runner, at read time)
- * call this — one schema, validated not transformed, across the seam.
+ * Constructs an `AgentBrief` from a TYPED local value — used at producer sites
+ * where the shape is known at compile time (execution-service.ts). The TypeScript
+ * compiler checks the input type: a misspelt field, a wrong type, or an omitted
+ * required field is a `TS####` error at the construction site. The Zod parse
+ * still runs as a defence-in-depth layer (C2: the producer-side parse is
+ * additional, not replaced by the compiler check).
+ *
+ * The input type is `AgentBrief` itself — the schema's OUTPUT type (`z.infer`),
+ * not its input type (`z.input`). This means every field with a `.default()`
+ * (`tools`, `constraints`, `deliverables`) must be supplied explicitly by the
+ * producer: omission is a compile error, not a silent default. The `.default()`
+ * clauses still serve the CONSUMER (the `unknown` entry point), where a
+ * legacy/degraded brief might omit them. Fields that are `.optional()` in the
+ * schema (`knowledgeContext`, `codeContext`, `task_spec`, etc.) remain
+ * legitimately omittable.
+ *
+ * For untrusted input crossing a process boundary (agent-runner reading
+ * `brief.json` from disk), use {@link parseAgentBrief} instead.
+ */
+export function createAgentBrief(input: AgentBrief, source: string): AgentBrief {
+  return parseAgentBrief(input, source);
+}
+
+/**
+ * Parses an UNTRUSTED `brief.json` value into a validated `AgentBrief`,
+ * throwing a typed {@link InvalidAgentBriefError} on failure. Used at the
+ * consumer (agent-runner), where JSON arrives from a subprocess and types do
+ * not survive serialisation. The producer uses {@link createAgentBrief} for
+ * compile-time checking with the same runtime parse underneath.
  */
 export function parseAgentBrief(raw: unknown, source: string): AgentBrief {
   const result = AgentBriefSchema.safeParse(raw);

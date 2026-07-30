@@ -176,19 +176,23 @@ export class AgentRunner {
         const collector = new OutputCollector(this.config.workingDir);
         const output = await collector.collect(result);
 
-        // 7. Run inline verification
+        // 7. Run inline verification — task_spec absence is a named case, not
+        // a silent [] (Discipline A: the identity element must be unavailable).
         let verifyResult: InlineVerifyResult | null = null;
-        try {
-            verifyResult = await runInlineVerify(
-                this.config.workingDir,
-                // POLICY default: empty checks → verify-core.ts:320 verdict "unverified" (fail-closed).
-                brief.task_spec?.checks ?? [],
-                [], // agent-runner has no contract context; contracts live on the host side
-            );
-            console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[agent-runner] inline verify failed: ${msg}`);
+        if (brief.task_spec) {
+            try {
+                verifyResult = await runInlineVerify(
+                    this.config.workingDir,
+                    brief.task_spec.checks,
+                    [], // agent-runner has no contract context; contracts live on the host side
+                );
+                console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[agent-runner] inline verify failed: ${msg}`);
+            }
+        } else {
+            console.log(`[agent-runner] inline verify skipped: no task_spec in brief`);
         }
 
         // 8. Write output to file (include verify results)

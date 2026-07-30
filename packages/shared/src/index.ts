@@ -52,7 +52,7 @@ export type { ProjectFrame, ProjectFrameAttempt } from "./project-frame.js";
 export { ProjectFrameSchema, ProjectFrameUnresolvable } from "./project-frame.js";
 
 export type { AgentBrief } from "./agent-brief.js";
-export { parseAgentBrief } from "./agent-brief.js";
+export { createAgentBrief, parseAgentBrief } from "./agent-brief.js";
 
 export type { EndpointProbe, ProductObservation } from "./observation.js";
 
