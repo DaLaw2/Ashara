@@ -37,14 +37,16 @@ RUN curl -fsSL https://sh.rustup.rs \
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
 # Writable directories the agent process needs at runtime.
-# npm/npx cache, tsx transform cache, Go module cache, Cargo registry.
+# npm/npx cache, tsx transform cache.
 # These survive as anonymous volumes or are overridden by the spawn task.
-RUN mkdir -p /tmp/npm-cache /tmp/tsx-cache /tmp/go-cache /tmp/cargo-cache \
- && chmod 1777 /tmp/npm-cache /tmp/tsx-cache /tmp/go-cache /tmp/cargo-cache
+# Go and Cargo caches are redirected under /workspace at runtime (see
+# containerizedRunCommand in packages/development/src/check-runner.ts) since
+# /workspace is the only mount shared between the prepare and check
+# containers — anything outside it is destroyed when a container exits.
+RUN mkdir -p /tmp/npm-cache /tmp/tsx-cache \
+ && chmod 1777 /tmp/npm-cache /tmp/tsx-cache
 ENV npm_config_cache="/tmp/npm-cache" \
-    TSX_CACHE="/tmp/tsx-cache" \
-    GOPATH="/tmp/go-cache" \
-    CARGO_HOME_RUNTIME="/tmp/cargo-cache"
+    TSX_CACHE="/tmp/tsx-cache"
 
 # No USER directive — rootless podman maps the caller's uid via
 # --userns=keep-id, so the container process already runs as that uid.

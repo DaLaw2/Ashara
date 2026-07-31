@@ -82,6 +82,9 @@ export function containerizedRunCommand(
       ...(opts.network ? [] : ["--network=none"]),
       "-v", `${workDir}:/workspace:z`,
       "-w", "/workspace",
+      "-e", "CARGO_HOME=/workspace/.cargo",
+      "-e", "GOPATH=/workspace/.gopath",
+      "-e", "GOMODCACHE=/workspace/.gomodcache",
       image,
       ...command,
     ];
