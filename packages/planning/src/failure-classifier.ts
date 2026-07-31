@@ -27,6 +27,8 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
       return "SPAWN_FAILURE";
 
     case "tentativeMerge": {
+      // POLICY default: absent context is empty — the "conflict" discriminator
+      // this branch searches for lives in layer.message, not layer.context.
       const text = `${layer.message} ${JSON.stringify(layer.context ?? {})}`.toLowerCase();
       if (text.includes("conflict")) return "MERGE_CONFLICT";
       return "SPAWN_FAILURE";

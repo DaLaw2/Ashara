@@ -17,11 +17,9 @@ import type { CommandRunner } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
 
-export interface FinalizeResult {
-  readonly success: boolean;
-  readonly gateFailureContext?: string;
-  readonly errorLayer?: ErrorLayer;
-}
+export type FinalizeResult =
+  | { readonly success: true }
+  | { readonly success: false; readonly gateFailureContext: string; readonly errorLayer: ErrorLayer };
 
 export interface FinalizeContractInfo {
   readonly entryPointPath: string | null;
@@ -47,9 +45,8 @@ async function abortAndFail(
   targetProjectPath: string,
   failedLogMessage: string,
   gateFailureContext: string,
-  extra: Partial<FinalizeResult> = {},
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
-  errorLayerInfo?: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
+  errorLayerInfo: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
 
@@ -61,14 +58,12 @@ async function abortAndFail(
   }
   console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
 
-  const errorLayer = errorLayerInfo
-    ? wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, {
-        ...errorLayerInfo.gateContext,
-        ...(abortError ? { abortError } : {}),
-      })
-    : undefined;
+  const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, {
+    ...errorLayerInfo.gateContext,
+    ...(abortError ? { abortError } : {}),
+  });
 
-  return { success: false, gateFailureContext, errorLayer, ...extra };
+  return { success: false, gateFailureContext, errorLayer };
 }
 
 export async function finalizeSuccess(
@@ -164,7 +159,6 @@ export async function finalizeSuccess(
         targetProjectPath,
         "post-merge verification FAILED — aborting tentative merge",
         `Post-merge verify failed (same checks, target environment):\n${postMergeVerify.tiers.deterministic.details}`,
-        {},
         {
           operation: "postMergeVerify",
           gateOutput: postMergeVerify.tiers.deterministic.details,
@@ -186,7 +180,6 @@ export async function finalizeSuccess(
         targetProjectPath,
         "post-merge dirty-tree check FAILED — check commands modified tracked files",
         `Check commands modified ${dirtyFiles.length} tracked file(s): ${fileList}`,
-        {},
         {
           operation: "postMergeDirtyTree",
           gateOutput: `${dirtyFiles.length} tracked file(s) modified by check commands: ${fileList}`,
@@ -210,7 +203,6 @@ export async function finalizeSuccess(
         targetProjectPath,
         "entry-point-rewrite check FAILED — aborting tentative merge",
         `Entry-point rewrite check failed:\n${entryPointCheck.output}`,
-        {},
         {
           operation: "entryPointRewriteCheck",
           gateOutput: entryPointCheck.output,

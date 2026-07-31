@@ -904,8 +904,7 @@ export class DevelopmentService {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
-      const gateChain = finalizeResult.errorLayer
-        ?? wrapError("development", "finalizeSuccess", finalizeResult.gateFailureContext ?? "unknown gate failure", { taskId: task.id });
+      const gateChain = finalizeResult.errorLayer;
       const envelope: ErrorEnvelope = {
         outcome: "failed",
         summary: `post-merge verify failed for ${task.id}`,
