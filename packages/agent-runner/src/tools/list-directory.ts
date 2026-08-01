@@ -1,12 +1,10 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { loadSkipDirs } from "@ashara/shared";
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 
 const DEFAULT_MAX_DEPTH = 3;
-// Build-artifact directories by convention — large generated trees that add
-// noise. .gitignore-based exclusion is the intended general replacement.
-const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".next"]);
 
 export const listDirectoryTool: ToolDefinition = {
     name: "list_directory",
@@ -62,8 +60,9 @@ export class ListDirectoryExecutor implements ToolExecutor {
         const maxDepth = typeof input["max_depth"] === "number" ? input["max_depth"] : DEFAULT_MAX_DEPTH;
 
         try {
+            const skip = await loadSkipDirs(resolved);
             const entries: string[] = [];
-            await this.walk(resolved, resolved, recursive, maxDepth, 0, entries);
+            await this.walk(resolved, resolved, recursive, maxDepth, 0, entries, skip);
             if (entries.length === 0) {
                 return { success: true, output: "(empty directory)" };
             }
@@ -81,12 +80,13 @@ export class ListDirectoryExecutor implements ToolExecutor {
         maxDepth: number,
         currentDepth: number,
         results: string[],
+        skip: ReadonlySet<string>,
     ): Promise<void> {
         const items = await readdir(currentDir);
         items.sort();
 
         for (const item of items) {
-            if (SKIP_DIRS.has(item)) continue;
+            if (skip.has(item)) continue;
 
             const fullPath = join(currentDir, item);
             const itemStat = await stat(fullPath);
@@ -95,7 +95,7 @@ export class ListDirectoryExecutor implements ToolExecutor {
             if (itemStat.isDirectory()) {
                 results.push(rel + "/");
                 if (recursive && currentDepth < maxDepth) {
-                    await this.walk(baseDir, fullPath, recursive, maxDepth, currentDepth + 1, results);
+                    await this.walk(baseDir, fullPath, recursive, maxDepth, currentDepth + 1, results, skip);
                 }
             } else {
                 results.push(rel);

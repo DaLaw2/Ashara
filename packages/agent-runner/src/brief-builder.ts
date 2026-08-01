@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentBrief } from "@ashara/shared";
+import { loadSkipDirs } from "@ashara/shared";
 import { createProfileAdapter } from "./acl/development-acl.js";
 import type { ProjectProfilePort } from "./acl/development-acl.js";
 
@@ -47,19 +48,8 @@ export async function enrichBrief(
 // extractProjectConventions — reads actual project state and formats patterns
 // ---------------------------------------------------------------------------
 
-// Build-artifact directories by convention — large generated trees that add
-// noise. .gitignore-based exclusion is the intended general replacement.
-const SKIP_DIRS = new Set([
-    "node_modules",
-    "target",
-    "__pycache__",
-    "vendor",
-    "build",
-    "dist",
-    ".gradle",
-    "obj",
-    "bin",
-]);
+// Skip set loaded from the project's own .gitignore — the project decides
+// which directories are build artifacts, not a hardcoded table.
 
 const EXEMPLAR_DIR_CANDIDATES = [
     "src/routes",
@@ -99,12 +89,12 @@ async function readFirstLines(filePath: string, lineCount: number): Promise<stri
     }
 }
 
-async function listSrcTree(projectDir: string): Promise<string[]> {
+async function listSrcTree(projectDir: string, skip: ReadonlySet<string>): Promise<string[]> {
     const srcDir = join(projectDir, "src");
     if (!(await dirExistsSafe(srcDir))) return [];
 
     const files: string[] = [];
-    await collectFiles(srcDir, "src", files, 0, 2);
+    await collectFiles(srcDir, "src", files, 0, 2, skip);
     return files;
 }
 
@@ -114,6 +104,7 @@ async function collectFiles(
     out: string[],
     depth: number,
     maxDepth: number,
+    skip: ReadonlySet<string>,
 ): Promise<void> {
     if (depth >= maxDepth || out.length >= 50) return;
 
@@ -121,12 +112,12 @@ async function collectFiles(
         const entries = await readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
             if (out.length >= 50) break;
-            if (SKIP_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
+            if (skip.has(entry.name) || entry.name.startsWith(".")) continue;
 
             const relativePath = `${prefix}/${entry.name}`;
             if (entry.isDirectory()) {
                 out.push(`${relativePath}/`);
-                await collectFiles(join(dir, entry.name), relativePath, out, depth + 1, maxDepth);
+                await collectFiles(join(dir, entry.name), relativePath, out, depth + 1, maxDepth, skip);
             } else {
                 out.push(relativePath);
             }
@@ -137,9 +128,10 @@ async function collectFiles(
 }
 
 export async function extractProjectConventions(projectDir: string): Promise<string> {
+    const skip = await loadSkipDirs(projectDir);
     const pkgPath = join(projectDir, "package.json");
     if (!(await fileExistsSafe(pkgPath))) {
-        return extractGeneralConventions(projectDir);
+        return extractGeneralConventions(projectDir, skip);
     }
 
     const sections: string[] = [];
@@ -180,7 +172,7 @@ export async function extractProjectConventions(projectDir: string): Promise<str
         ? entryFromPkg
         : null;
 
-    await appendConventionsTail(sections, projectDir, entryPoint);
+    await appendConventionsTail(sections, projectDir, entryPoint, skip);
 
     if (sections.length <= 2) return "";
 
@@ -193,7 +185,7 @@ export async function extractProjectConventions(projectDir: string): Promise<str
 // for the decomposition LLM; this side reads any text config file it finds.
 const NON_SOURCE_SKIP = new Set(["license", "readme", "changelog", "contributing", "authors"]);
 
-async function extractGeneralConventions(projectDir: string): Promise<string> {
+async function extractGeneralConventions(projectDir: string, skip: ReadonlySet<string>): Promise<string> {
     const sections: string[] = [];
     let entries: string[];
     try {
@@ -223,7 +215,7 @@ async function extractGeneralConventions(projectDir: string): Promise<string> {
 
     if (sections.length <= 1) return "";
 
-    await appendConventionsTail(sections, projectDir, null);
+    await appendConventionsTail(sections, projectDir, null, skip);
 
     return sections.join("\n");
 }
@@ -232,6 +224,7 @@ async function appendConventionsTail(
     sections: string[],
     projectDir: string,
     entryPoint: string | null,
+    skip: ReadonlySet<string>,
 ): Promise<void> {
     if (entryPoint) {
         sections.push(`Entry point: ${entryPoint}`);
@@ -241,7 +234,7 @@ async function appendConventionsTail(
         }
     }
 
-    const tree = await listSrcTree(projectDir);
+    const tree = await listSrcTree(projectDir, skip);
     if (tree.length > 0) {
         sections.push(`File tree:\n  ${tree.join(", ")}`);
     }

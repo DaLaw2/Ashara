@@ -54,6 +54,8 @@ export { ProjectFrameSchema, ProjectFrameUnresolvable } from "./project-frame.js
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief, parseAgentBrief } from "./agent-brief.js";
 
+export { loadSkipDirs } from "./gitignore.js";
+
 export type { EndpointProbe, ProductObservation } from "./observation.js";
 
 export type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";

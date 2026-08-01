@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath, loadSkipDirs } from "@ashara/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -188,12 +188,11 @@ export async function cleanupWorkdir(workDir: string, targetProjectPath?: string
   }
 }
 
-// Build-artifact directories by convention. These are not stack-specific in the
-// sense C5 prohibits — they are structural: large generated trees that add noise
-// without information. .gitignore-based exclusion is the intended general
-// replacement (it would cover zig-cache, zig-out, and any future ecosystem's
-// output directory without code changes). Until then, this is the bridge set.
-const FILE_TREE_SKIP_DIRS = new Set([
+// Bridge set: used only when the caller has no contractExcludePaths AND the
+// project has no .gitignore. loadSkipDirs is the primary mechanism; this is
+// the last-resort fallback so a project with neither gitignore nor contract
+// still gets a usable tree listing.
+const FALLBACK_SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", "coverage", ".next", ".turbo", ".cache",
   "target", "__pycache__", "vendor", "venv", ".venv",
 ]);
@@ -204,10 +203,9 @@ export async function buildFileTree(
   maxFiles: number,
   contractExcludePaths?: readonly string[],
 ): Promise<string> {
-  // bridge: when no contract excludePaths, use the hardcoded set
   const skipDirs = contractExcludePaths && contractExcludePaths.length > 0
     ? new Set([".git", ...contractExcludePaths])
-    : FILE_TREE_SKIP_DIRS;
+    : await loadSkipDirs(rootDir).catch(() => FALLBACK_SKIP_DIRS);
   const paths: string[] = [];
 
   async function walk(dir: string, depth: number): Promise<void> {
