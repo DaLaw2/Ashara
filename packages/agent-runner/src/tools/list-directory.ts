@@ -4,6 +4,8 @@ import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 
 const DEFAULT_MAX_DEPTH = 3;
+// Build-artifact directories by convention — large generated trees that add
+// noise. .gitignore-based exclusion is the intended general replacement.
 const SKIP_DIRS = new Set(["node_modules", ".git", "target", "dist", ".next"]);
 
 export const listDirectoryTool: ToolDefinition = {

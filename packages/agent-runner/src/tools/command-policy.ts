@@ -27,6 +27,10 @@ export type CommandValidationResult =
 // Default config factory
 // ---------------------------------------------------------------------------
 
+// OPEN domain: which binaries an unattended agent may invoke. Data cannot and
+// must not supply membership — this is a trust-boundary decision (Discipline B),
+// expanded only by explicit human review. The categories are ecosystem-spanning
+// (build tools, VCS, POSIX utilities, test runners), not stack-specific.
 const DEFAULT_ALLOWED_COMMANDS: Record<string, readonly string[]> = {
     build: [
         "npm", "npx", "node", "tsx", "cargo", "make", "just", "cmake",
@@ -43,6 +47,10 @@ const DEFAULT_ALLOWED_COMMANDS: Record<string, readonly string[]> = {
     test: ["jest", "vitest", "pytest", "mocha"],
 };
 
+// OPEN domain: binaries an agent must NEVER invoke, regardless of context.
+// These are OS-level destructive, network, escalation, or container-escape
+// operations. Data cannot supply membership — adding an entry is a security
+// decision, not a detection problem (Discipline B: Trust Boundary Enforcement).
 const DEFAULT_BLOCKED_BINARIES: readonly string[] = [
     // Process
     "kill", "pkill", "killall", "fuser", "skill",
@@ -60,6 +68,9 @@ const DEFAULT_BLOCKED_BINARIES: readonly string[] = [
     "docker", "podman", "nsenter", "unshare", "chroot",
 ];
 
+// OPEN domain: git subcommands safe for an unattended agent. The domain is the
+// full git subcommand set; membership is curated because some subcommands
+// (filter-branch, gc --aggressive, push --force) can cause irreversible damage.
 const SAFE_GIT_SUBCOMMANDS = new Set([
     "status", "diff", "log", "show", "add", "commit", "branch", "checkout",
     "switch", "merge", "rebase", "stash", "tag", "fetch", "pull", "push",

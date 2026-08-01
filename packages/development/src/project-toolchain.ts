@@ -186,25 +186,20 @@ function isLocalBinCommand(command: readonly string[]): boolean {
   return dirname(resolve(bin)).endsWith(LOCAL_BIN_PARENT_SUFFIX);
 }
 
-const SAFE_SYSTEM_BINARIES: ReadonlySet<string> = new Set([
-  "cargo", "go", "python", "python3",
-]);
-
-function isSystemBinaryCommand(command: readonly string[]): boolean {
-  return SAFE_SYSTEM_BINARIES.has(command[0]);
-}
+// SAFE_SYSTEM_BINARIES deleted: containment is structural (podman
+// --network=none / --userns=keep-id), not string-based. Same reasoning
+// as the ALLOWED_CHECK_COMMANDS deletion (ADR-068, cycle 126).
 
 /**
- * The single security invariant, exported so it can be asserted directly: a
- * command is safe to spawn iff it is the package manager itself (bun/npm), an
- * executable resolving to a direct child of a node_modules/.bin directory, or a
- * known system binary (cargo/go/python). Any other form (notably a bare
- * `npx <tool>`/`bunx <tool>` that auto-installs from the registry, or a
- * traversal-escape path) is unsafe.
+ * The single security invariant for Node toolchain commands: a command is safe
+ * to spawn iff it is the package manager itself (bun/npm) or an executable
+ * resolving to a direct child of a node_modules/.bin directory. Non-Node
+ * toolchain preparation runs inside a container where containment is structural
+ * (--network controlled, --userns=keep-id, single mount), not string-based.
  */
 export function isSafeToolchainCommand(command: readonly string[]): boolean {
   if (command.length === 0) return false;
-  return isPackageManagerCommand(command) || isLocalBinCommand(command) || isSystemBinaryCommand(command);
+  return isPackageManagerCommand(command) || isLocalBinCommand(command);
 }
 
 function assertSafeCommand(command: readonly string[], step: ToolchainStep, cwd: string): void {
@@ -386,44 +381,11 @@ async function detectManager(targetPath: string): Promise<PackageManager> {
 // Non-Node project preparation
 // ---------------------------------------------------------------------------
 
-const NON_NODE_PREPARE_TIMEOUT_MS = 120_000;
-
-interface NonNodeManifest {
-  readonly marker: string;
-  readonly command: readonly string[];
-}
-
-const NON_NODE_MANIFESTS: ReadonlyArray<NonNodeManifest> = [
-  { marker: "Cargo.toml", command: ["cargo", "build"] },
-  { marker: "go.mod", command: ["go", "mod", "download"] },
-];
-
-async function prepareNonNode(
-  targetPath: string,
-  run: CommandRunner,
-  log?: ToolchainLogFn,
-): Promise<ToolchainResult> {
-  for (const { marker, command } of NON_NODE_MANIFESTS) {
-    if (await pathExists(join(targetPath, marker))) {
-      log?.({ event: "toolchain_non_node_prepare", cwd: targetPath, marker, command });
-      await runStep(run, command, targetPath, NON_NODE_PREPARE_TIMEOUT_MS, "install");
-      return {
-        manager: null,
-        installRan: true,
-        installReason: `${marker} present — ran ${command.join(" ")}`,
-        codegen: [],
-      };
-    }
-  }
-
-  log?.({ event: "toolchain_no_manifest", cwd: targetPath });
-  return {
-    manager: null,
-    installRan: false,
-    installReason: "no recognized project manifest, skipping prepare",
-    codegen: [],
-  };
-}
+// NON_NODE_MANIFESTS / prepareNonNode deleted: the hardcoded {Cargo.toml →
+// cargo build, go.mod → go mod download} table gave known stacks a prepare
+// step while unseen stacks (Zig, Elixir) got a silent no-op. The long-term
+// replacement is LLM-generated Containerfiles (ADR-015); until then, non-Node
+// projects skip prepare honestly, same as they did for 42 runs before e668ddfc.
 
 // ---------------------------------------------------------------------------
 // prepare — the module entry point
@@ -456,7 +418,13 @@ export async function prepare(targetPath: string, deps: ToolchainDeps): Promise<
   const log = deps.log;
 
   if (!(await pathExists(join(targetPath, "package.json")))) {
-    return prepareNonNode(targetPath, run, log);
+    log?.({ event: "toolchain_no_manifest", cwd: targetPath });
+    return {
+      manager: null,
+      installRan: false,
+      installReason: "no package.json — non-Node prepare deferred to ADR-015 (LLM-generated Containerfile)",
+      codegen: [],
+    };
   }
 
   const manager = await detectManager(targetPath);

@@ -5,8 +5,8 @@ import {
   extractImportBindings,
   extractMounts,
   findEntryPoint,
+  isSourceFile,
   resolveImportSpec,
-  SOURCE_FILE_PATTERN,
 } from "./internal.js";
 import type { RouterMount } from "./internal.js";
 
@@ -95,7 +95,7 @@ export async function deriveEndpoints(
 
   const parsedFiles: ParsedFile[] = [];
   for (const file of await computeReachableFiles(entryPoint)) {
-    if (!SOURCE_FILE_PATTERN.test(file) || file.endsWith(".d.ts")) continue;
+    if (!isSourceFile(file)) continue;
     let content: string;
     try {
       content = await readFile(file, "utf-8");

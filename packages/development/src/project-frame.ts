@@ -12,23 +12,11 @@ import { readdir } from "node:fs/promises";
 import type { ProjectContract, ProjectFrame, ProjectFrameAttempt } from "@ashara/shared";
 import { ProjectFrameSchema, ProjectFrameUnresolvable, nodeLabels } from "@ashara/shared";
 
-/**
- * Marker file → stack LABEL. Detective (reads what exists) and factual: it names
- * what the project IS, never what to do about it. Fixes the behavior where a Rust
- * project was told its language is "Cargo.toml" — the marker FILENAME leaking into
- * the prompt as if it were a language.
- */
-const MARKER_LABELS: Readonly<Record<string, string>> = {
-  "Cargo.toml": "Rust",
-  "go.mod": "Go",
-  "package.json": "Node.js",
-  "tsconfig.json": "TypeScript",
-  "pyproject.toml": "Python",
-  "requirements.txt": "Python",
-  Gemfile: "Ruby",
-  "pom.xml": "Java (Maven)",
-  "build.gradle": "Java/Kotlin (Gradle)",
-};
+// MARKER_LABELS deleted: a hardcoded {filename → language} table gave 9 known
+// stacks a shortcut while every unseen stack (Zig, Elixir, COBOL) fell through
+// to the LLM rung. The system should treat every stack the same — rung 1 now
+// reports which manifest files exist without mapping them to language names.
+// The consuming LLM already understands that "Cargo.toml" means Rust.
 
 /** Knowledge-graph node kinds that describe the target stack (ADR-038 graph). */
 const CONTRACT_STACK_KINDS = ["language", "runtime", "framework", "database", "build_tool"] as const;
@@ -117,6 +105,19 @@ async function loadIntent(
   }
 }
 
+// Well-known build/manifest filenames — any file whose name or extension
+// indicates it is a project descriptor, not source code or documentation.
+// This is a RECOGNITION heuristic, not a LABEL table: it identifies which
+// top-level files are worth reporting as stack indicators without mapping
+// them to language names. The consuming LLM understands "Cargo.toml" and
+// "build.zig" without a translation table.
+const MANIFEST_EXTENSIONS = new Set(["toml", "json", "yaml", "yml", "xml", "sbt", "gradle", "lock"]);
+const MANIFEST_BASENAMES = new Set([
+  "Makefile", "Justfile", "Gemfile", "Rakefile", "CMakeLists.txt",
+  "go.mod", "go.sum", "Cargo.lock", "flake.nix", "shell.nix",
+  "BUILD", "WORKSPACE", "Tiltfile", "Procfile",
+]);
+
 async function observedManifestLabels(
   targetProjectPath: string | null,
   attempted: ProjectFrameAttempt[],
@@ -135,22 +136,27 @@ async function observedManifestLabels(
     });
     return [];
   }
-  const present = new Set(entries);
-  // Iterate the marker table (not the directory listing) so the label order is
-  // deterministic regardless of how the filesystem enumerates the tree — stack[0]
-  // is the label the agent reads as the project's primary language.
-  const labels = dedupe(
-    Object.entries(MARKER_LABELS)
-      .filter(([marker]) => present.has(marker))
-      .map(([, label]) => label),
-  );
-  if (labels.length === 0) {
+
+  const manifests: string[] = [];
+  for (const name of [...entries].sort()) {
+    if (name.startsWith(".")) continue;
+    if (MANIFEST_BASENAMES.has(name)) {
+      manifests.push(name);
+      continue;
+    }
+    const dot = name.lastIndexOf(".");
+    if (dot > 0 && MANIFEST_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())) {
+      manifests.push(name);
+    }
+  }
+
+  if (manifests.length === 0) {
     attempted.push({
       source: "observed-manifest",
-      reason: `no known manifest at the top level of ${targetProjectPath} (looked for ${Object.keys(MARKER_LABELS).join(", ")})`,
+      reason: `no manifest or build file found at the top level of ${targetProjectPath}`,
     });
   }
-  return labels;
+  return manifests;
 }
 
 function contractKnowledgeLabels(

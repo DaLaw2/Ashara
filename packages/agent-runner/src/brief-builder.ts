@@ -47,6 +47,8 @@ export async function enrichBrief(
 // extractProjectConventions — reads actual project state and formats patterns
 // ---------------------------------------------------------------------------
 
+// Build-artifact directories by convention — large generated trees that add
+// noise. .gitignore-based exclusion is the intended general replacement.
 const SKIP_DIRS = new Set([
     "node_modules",
     "target",
@@ -137,7 +139,7 @@ async function collectFiles(
 export async function extractProjectConventions(projectDir: string): Promise<string> {
     const pkgPath = join(projectDir, "package.json");
     if (!(await fileExistsSafe(pkgPath))) {
-        return extractNonJsConventions(projectDir);
+        return extractGeneralConventions(projectDir);
     }
 
     const sections: string[] = [];
@@ -174,12 +176,9 @@ export async function extractProjectConventions(projectDir: string): Promise<str
         sections.push(`Dependencies: ${dependencies.slice(0, 20).join(", ")}`);
     }
 
-    let entryPoint: string | null = null;
-    if (entryFromPkg && (await fileExistsSafe(join(projectDir, entryFromPkg)))) {
-        entryPoint = entryFromPkg;
-    } else {
-        entryPoint = await detectEntryPointFromManifest(projectDir);
-    }
+    const entryPoint = entryFromPkg && (await fileExistsSafe(join(projectDir, entryFromPkg)))
+        ? entryFromPkg
+        : null;
 
     await appendConventionsTail(sections, projectDir, entryPoint);
 
@@ -188,33 +187,43 @@ export async function extractProjectConventions(projectDir: string): Promise<str
     return sections.join("\n");
 }
 
-const NON_JS_MANIFESTS = [
-    { path: "Cargo.toml", lines: 40 },
-    { path: "go.mod", lines: 30 },
-    { path: "pyproject.toml", lines: 30 },
-] as const;
+// NON_JS_MANIFESTS deleted: the hardcoded {Cargo.toml, go.mod, pyproject.toml}
+// table silently skipped manifests Ashara had never seen. readManifestContext
+// (development/dispatch-utils.ts) already reads ALL top-level files generically
+// for the decomposition LLM; this side reads any text config file it finds.
+const NON_SOURCE_SKIP = new Set(["license", "readme", "changelog", "contributing", "authors"]);
 
-async function extractNonJsConventions(projectDir: string): Promise<string> {
+async function extractGeneralConventions(projectDir: string): Promise<string> {
     const sections: string[] = [];
-
-    for (const manifest of NON_JS_MANIFESTS) {
-        const fullPath = join(projectDir, manifest.path);
-        if (await fileExistsSafe(fullPath)) {
-            sections.push("## Project State (follow these patterns)");
-            const raw = await readFirstLines(fullPath, manifest.lines);
-            if (raw.trim()) {
-                sections.push(`${manifest.path}:\n${indent(raw)}`);
-            }
-            break;
-        }
+    let entries: string[];
+    try {
+        entries = await readdir(projectDir);
+    } catch {
+        return "";
     }
 
-    if (sections.length === 0) return "";
+    sections.push("## Project State (follow these patterns)");
 
-    const ep = await detectEntryPointFromManifest(projectDir);
-    const entryPoint = ep && (await fileExistsSafe(join(projectDir, ep))) ? ep : null;
+    for (const name of entries.sort()) {
+        if (name.startsWith(".")) continue;
+        if (NON_SOURCE_SKIP.has(name.toLowerCase().replace(/\.[^.]+$/, ""))) continue;
+        const full = join(projectDir, name);
+        if (!(await fileExistsSafe(full))) continue;
+        const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+        if (["toml", "json", "yaml", "yml", "mod", "sbt", "gradle", "xml", "lock"].includes(ext)
+            || name === "Makefile" || name === "Justfile" || name === "Gemfile"
+            || name === "Rakefile" || name === "CMakeLists.txt") {
+            const raw = await readFirstLines(full, 30);
+            if (raw.trim()) {
+                sections.push(`${name}:\n${indent(raw)}`);
+            }
+        }
+        if (sections.length > 6) break;
+    }
 
-    await appendConventionsTail(sections, projectDir, entryPoint);
+    if (sections.length <= 1) return "";
+
+    await appendConventionsTail(sections, projectDir, null);
 
     return sections.join("\n");
 }
@@ -243,12 +252,13 @@ async function appendConventionsTail(
         try {
             const entries = await readdir(fullDir);
             const exemplarFile = entries.find(
-                (e) =>
-                    e.endsWith(".ts") ||
-                    e.endsWith(".js") ||
-                    e.endsWith(".rs") ||
-                    e.endsWith(".go") ||
-                    e.endsWith(".py"),
+                (e) => {
+                    const dot = e.lastIndexOf(".");
+                    if (dot <= 0) return false;
+                    const ext = e.slice(dot).toLowerCase();
+                    const nonSource = new Set([".json", ".yaml", ".yml", ".toml", ".xml", ".md", ".txt", ".lock", ".sum"]);
+                    return !nonSource.has(ext) && !e.startsWith(".");
+                },
             );
             if (exemplarFile) {
                 const exemplarPath = `${exemplarDir}/${exemplarFile}`;
@@ -268,78 +278,11 @@ async function appendConventionsTail(
     );
 }
 
-async function detectEntryPointFromManifest(projectDir: string): Promise<string | null> {
-    try {
-        const pkgPath = join(projectDir, "package.json");
-        const raw = await readFile(pkgPath, "utf-8").catch(() => null);
-        if (raw) {
-            // contract-erasing: package.json has a well-known shape (npm spec)
-            const pkg = JSON.parse(raw) as Record<string, unknown>;
-            if (typeof pkg.main === "string") return pkg.main;
-        }
-    } catch (e: unknown) {
-        console.warn(`[detectEntryPoint] Failed to parse package.json in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    const cargoEntry = await detectCargoEntryPoint(projectDir);
-    if (cargoEntry !== undefined) return cargoEntry;
-
-    const goEntry = await detectGoEntryPoint(projectDir);
-    if (goEntry !== undefined) return goEntry;
-
-    const pyEntry = await detectPyEntryPoint(projectDir);
-    if (pyEntry !== undefined) return pyEntry;
-
-    return null;
-}
-
-async function detectCargoEntryPoint(projectDir: string): Promise<string | null | undefined> {
-    const cargoPath = join(projectDir, "Cargo.toml");
-    if (!(await fileExistsSafe(cargoPath))) return undefined;
-
-    try {
-        const content = await readFile(cargoPath, "utf-8");
-        const binPathMatch = /\[\[bin]]\s[\s\S]*?path\s*=\s*"([^"]+)"/m.exec(content);
-        if (binPathMatch?.[1]) return binPathMatch[1];
-    } catch (e: unknown) {
-        console.warn(`[detectCargoEntry] Failed to parse Cargo.toml in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    if (await fileExistsSafe(join(projectDir, "src/main.rs"))) return "src/main.rs";
-    if (await fileExistsSafe(join(projectDir, "src/lib.rs"))) return "src/lib.rs";
-    return null;
-}
-
-async function detectGoEntryPoint(projectDir: string): Promise<string | null | undefined> {
-    if (!(await fileExistsSafe(join(projectDir, "go.mod")))) return undefined;
-    if (await fileExistsSafe(join(projectDir, "main.go"))) return "main.go";
-    if (await fileExistsSafe(join(projectDir, "cmd/main.go"))) return "cmd/main.go";
-    return null;
-}
-
-async function detectPyEntryPoint(projectDir: string): Promise<string | null | undefined> {
-    const pyprojectPath = join(projectDir, "pyproject.toml");
-    if (!(await fileExistsSafe(pyprojectPath))) return undefined;
-
-    try {
-        const content = await readFile(pyprojectPath, "utf-8");
-        const scriptsMatch = /\[(?:project\.scripts|tool\.poetry\.scripts)]\s*\n([\s\S]*?)(?:\n\[|\z)/m.exec(content);
-        if (scriptsMatch?.[1]) {
-            const entryMatch = /=\s*"([^"]+)"/m.exec(scriptsMatch[1]);
-            if (entryMatch?.[1]) {
-                const moduleRef = entryMatch[1].split(":")[0];
-                const filePath = moduleRef.replace(/\./g, "/") + ".py";
-                if (await fileExistsSafe(join(projectDir, filePath))) return filePath;
-            }
-        }
-    } catch (e: unknown) {
-        console.warn(`[detectPyEntry] Failed to parse pyproject.toml in ${projectDir}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    if (await fileExistsSafe(join(projectDir, "main.py"))) return "main.py";
-    if (await fileExistsSafe(join(projectDir, "app.py"))) return "app.py";
-    return null;
-}
+// Entry-point detection cascade deleted: the hand-written per-ecosystem
+// checks (Cargo → src/main.rs, Go → main.go, Python → pyproject.toml
+// scripts) covered only 4 stacks and silently returned null for everything
+// else. The manifest content surfaced by extractGeneralConventions and
+// readManifestContext is sufficient for the LLM to infer entry points.
 
 function indent(text: string): string {
     return text

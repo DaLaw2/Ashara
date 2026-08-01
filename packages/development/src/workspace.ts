@@ -188,7 +188,11 @@ export async function cleanupWorkdir(workDir: string, targetProjectPath?: string
   }
 }
 
-// bridge: will be replaced by contract.excludePaths when available
+// Build-artifact directories by convention. These are not stack-specific in the
+// sense C5 prohibits — they are structural: large generated trees that add noise
+// without information. .gitignore-based exclusion is the intended general
+// replacement (it would cover zig-cache, zig-out, and any future ecosystem's
+// output directory without code changes). Until then, this is the bridge set.
 const FILE_TREE_SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", "coverage", ".next", ".turbo", ".cache",
   "target", "__pycache__", "vendor", "venv", ".venv",

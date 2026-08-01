@@ -9,9 +9,31 @@ import { readdir, readFile, stat } from "node:fs/promises";
 // here rather than being duplicated or owned by a single consumer.
 // ---------------------------------------------------------------------------
 
-export const SOURCE_FILE_PATTERN = /\.(?:ts|tsx|js|mjs|cjs)$/;
+// Blocklist approach: everything that is NOT a known non-source artifact IS
+// source. Binary, config, media and lock formats are a finite, slowly-changing
+// set; source-code extensions are open and grow with every new language.
+const NON_SOURCE_EXTENSIONS = new Set([
+  ".json", ".yaml", ".yml", ".toml", ".xml",
+  ".lock", ".sum", ".mod",
+  ".md", ".txt", ".csv", ".log",
+  ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp",
+  ".woff", ".woff2", ".ttf", ".eot", ".otf",
+  ".map", ".min.js", ".min.css",
+  ".pdf", ".zip", ".tar", ".gz", ".tgz", ".bz2",
+  ".wasm", ".so", ".dylib", ".dll", ".exe", ".o", ".a",
+  ".snap", ".bin", ".dat", ".db", ".sqlite",
+]);
 
-// bridge: used when contract.excludePaths is not available
+export function isSourceFile(name: string): boolean {
+  if (name.endsWith(".d.ts")) return false;
+  const dot = name.lastIndexOf(".");
+  if (dot === -1) return false;
+  return !NON_SOURCE_EXTENSIONS.has(name.slice(dot).toLowerCase());
+}
+
+// Build-artifact directories by convention — bridge set used when
+// contract.excludePaths is not available. .gitignore-based exclusion is the
+// intended general replacement.
 const BRIDGE_EXCLUDED_DIR_NAMES = new Set(["node_modules", "dist", "build", ".git", "target", "__pycache__", "vendor", "venv", ".venv"]);
 
 /**
@@ -38,8 +60,7 @@ export async function collectSourceFiles(
       }
     } else if (
       entry.isFile() &&
-      SOURCE_FILE_PATTERN.test(entry.name) &&
-      !entry.name.endsWith(".d.ts")
+      isSourceFile(entry.name)
     ) {
       acc.push(join(dir, entry.name));
     }
