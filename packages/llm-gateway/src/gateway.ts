@@ -1,5 +1,5 @@
-import { generateObject, generateText, streamText, jsonSchema } from "ai";
-import type { CallWarning, ModelMessage, ToolSet } from "ai";
+import { generateObject, generateText } from "ai";
+import type { CallWarning, LanguageModel } from "ai";
 import { extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import { BudgetLedger } from "./budget-ledger.js";
@@ -12,10 +12,7 @@ import {
 import { calculateCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
-import { convertMessage, buildCacheProviderOptions, mapFinishReason } from "./message-conversion.js";
 import type {
-  CompletionRequest,
-  CompletionResponse,
   CostBreakdown,
   CostSummary,
   ExtractedUsage,
@@ -23,12 +20,18 @@ import type {
   KnownLLMSite,
   LLMCallRecord,
   ModelConfig,
-  StreamOptions,
   StructuredRequest,
   StructuredResponse,
-  ToolCall,
   TokenUsage,
 } from "./types.js";
+
+export interface ResolvedModel {
+  model: LanguageModel;
+  modelId: string;
+  provider: string;
+  modelConfig: ModelConfig;
+  effectiveCapability: CapabilityLevel;
+}
 
 export class LLMGateway {
   private readonly registry: ProviderRegistry;
@@ -158,71 +161,15 @@ export class LLMGateway {
   }
 
   /**
-   * Builds the call-shape params shared by generateText/streamText (system
-   * prompt incl. cache-prefix splitting, temperature, tools, toolChoice,
-   * strict-mode providerOptions) — everything except the model-family-specific
-   * fields (`messages`/`maxOutputTokens`/`onChunk`) each caller still sets
-   * itself. Loosely typed to match the "ai" SDK interop boundary the two
-   * callers already cast through.
-   */
-  // open-by-design: AI SDK interop boundary — param shape varies per provider/feature combination
-  private buildCommonParams(request: CompletionRequest, resolved: ResolvedProvider): Record<string, unknown> {
-    const params: Record<string, unknown> = {}; // open-by-design (see method comment above)
-
-    if (request.cachePrefixLength && request.systemPrompt) {
-      const staticPart = request.systemPrompt.slice(0, request.cachePrefixLength);
-      const dynamicPart = request.systemPrompt.slice(request.cachePrefixLength);
-      const cacheOptions = buildCacheProviderOptions(resolved.providerName);
-      params.system = [
-        {
-          role: "system" as const,
-          content: staticPart,
-          ...(cacheOptions ? { providerOptions: cacheOptions } : {}),
-        },
-        ...(dynamicPart ? [{ role: "system" as const, content: dynamicPart }] : []),
-      ];
-    } else {
-      params.system = request.systemPrompt;
-    }
-
-    if (request.temperature !== undefined) {
-      params.temperature = request.temperature;
-    }
-
-    if (request.tools && request.tools.length > 0) {
-      const tools: ToolSet = {};
-      for (const td of request.tools) {
-        tools[td.name] = {
-          description: td.description,
-          // open-by-design: tool parameters is a JSON Schema object, shape defined per tool
-          inputSchema: jsonSchema(td.parameters as Record<string, unknown>),
-        };
-      }
-      params.tools = tools;
-
-      if (request.toolChoice !== undefined) {
-        params.toolChoice = request.toolChoice;
-      }
-    }
-
-    if (resolved.modelConfig.strictMode) {
-      params.providerOptions = { openai: { strictJsonSchema: true } };
-    }
-
-    return params;
-  }
-
-  /**
    * Shared "resolve → try → catch → fallback → retry once" shape for
-   * complete/streamComplete/generateStructured: run `execute` against
-   * `resolved`; on failure, resolve one fallback provider and retry once,
-   * or throw a typed ProviderError if none is available. `shouldRethrow`
-   * lets a caller opt an error class out of the fallback retry and propagate
-   * it immediately instead — generateStructured does so for
-   * SchemaValidationError, and all three do for TemperatureNotHonored, whose
-   * whole point is that the next model may drop the parameter just as
-   * silently (the fallback is resolved by capability, which knows nothing
-   * about sampling-parameter support).
+   * generateStructured: run `execute` against `resolved`; on failure, resolve
+   * one fallback provider and retry once, or throw a typed ProviderError if
+   * none is available. `shouldRethrow` lets a caller opt an error class out of
+   * the fallback retry and propagate it immediately instead —
+   * generateStructured does so for SchemaValidationError. Both rethrow
+   * TemperatureNotHonored, whose whole point is that the next model may drop
+   * the parameter just as silently (the fallback is resolved by capability,
+   * which knows nothing about sampling-parameter support).
    */
   private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
     request: TRequest,
@@ -252,163 +199,6 @@ export class LLMGateway {
 
       return await execute(request, fallback);
     }
-  }
-
-  async complete(request: CompletionRequest): Promise<CompletionResponse> {
-    const resolved = this.resolveWithBudgetDegrade(request.capability, request.site);
-    return this.withFallback(
-      request,
-      resolved,
-      (req, r) => this.executeCall(req, r),
-      "request",
-      isTemperatureViolation,
-    );
-  }
-
-  private async executeCall(
-    request: CompletionRequest,
-    resolved: ResolvedProvider,
-  ): Promise<CompletionResponse> {
-    const t0 = Date.now();
-    const messages = request.messages.map((m) => convertMessage(m));
-
-    const result = await generateText({
-      model: resolved.provider,
-      messages: messages as unknown as ModelMessage[],
-      maxOutputTokens: request.maxTokens,
-      ...this.buildCommonParams(request, resolved),
-    } as Parameters<typeof generateText>[0]);
-
-    const extraction = extractUsage(result.usage, result.providerMetadata);
-    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "generateText");
-
-    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
-
-    // Asserted AFTER recordCost at every call site: the tokens were spent
-    // whether or not the parameter was honored, so failing closed must not
-    // also lose the budget accounting for the call that failed.
-    // `result.warnings` aggregates every step, so the tool loop is covered.
-    assertTemperatureHonored({
-      requestedTemperature: request.temperature,
-      warnings: result.warnings,
-      provider: resolved.providerName,
-      model: resolved.modelConfig.id,
-      site: request.site,
-      operation: "generateText",
-    });
-
-    let toolCalls: ToolCall[] | undefined;
-    if (result.toolCalls && result.toolCalls.length > 0) {
-      // open-by-design: LLM-authored tool arguments, shape varies per tool
-      toolCalls = result.toolCalls.map((tc) => ({
-        id: tc.toolCallId,
-        name: tc.toolName,
-        input: (tc.input ?? {}) as Record<string, unknown>, // open-by-design
-      }));
-    }
-
-    const finishReason = mapFinishReason(result.finishReason);
-
-    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), result.text, extraction.usage, cost.totalCost, t0);
-
-    return {
-      content: result.text,
-      reasoningContent: result.reasoningText ?? undefined,
-      toolCalls,
-      usage: extraction.usage,
-      cost,
-      provider: resolved.providerName,
-      model: resolved.modelConfig.id,
-      finishReason,
-    };
-  }
-
-  async streamComplete(
-    request: CompletionRequest,
-    options?: StreamOptions,
-  ): Promise<CompletionResponse> {
-    const resolved = this.resolveWithBudgetDegrade(request.capability, request.site);
-    return this.withFallback(
-      request,
-      resolved,
-      (req, r) => this.executeStreamCall(req, r, options),
-      "stream request",
-      isTemperatureViolation,
-    );
-  }
-
-  private async executeStreamCall(
-    request: CompletionRequest,
-    resolved: ResolvedProvider,
-    options?: StreamOptions,
-  ): Promise<CompletionResponse> {
-    const t0 = Date.now();
-    const messages = request.messages.map((m) => convertMessage(m));
-
-    const result = streamText({
-      model: resolved.provider,
-      messages: messages as unknown as ModelMessage[],
-      maxOutputTokens: request.maxTokens,
-      onChunk({ chunk }) {
-        if (chunk.type === "tool-call" && options?.onToolCall) {
-          options.onToolCall({
-            id: chunk.toolCallId,
-            name: chunk.toolName,
-            // open-by-design: LLM-authored tool arguments, shape varies per tool
-            input: (chunk.input ?? {}) as Record<string, unknown>,
-          });
-        }
-      },
-      ...this.buildCommonParams(request, resolved),
-    } as Parameters<typeof streamText>[0]);
-
-    const [text, streamToolCalls, sdkUsage, providerMetadata, finishReason, reasoningText, warnings] = await Promise.all([
-      result.text,
-      result.toolCalls,
-      result.usage,
-      result.providerMetadata,
-      result.finishReason,
-      result.reasoningText,
-      result.warnings,
-    ]);
-
-    // contract-erasing: providerMetadata carries provider-specific cache token counts (e.g. anthropic.cacheReadInputTokens)
-    const extraction = extractUsage(sdkUsage, providerMetadata as Record<string, Record<string, unknown>> | undefined);
-    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", "streamText");
-
-    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
-
-    assertTemperatureHonored({
-      requestedTemperature: request.temperature,
-      warnings,
-      provider: resolved.providerName,
-      model: resolved.modelConfig.id,
-      site: request.site,
-      operation: "streamText",
-    });
-
-    let toolCalls: ToolCall[] | undefined;
-    if (streamToolCalls && streamToolCalls.length > 0) {
-      // open-by-design: LLM-authored tool arguments, shape varies per tool
-      toolCalls = streamToolCalls.map((tc) => ({
-        id: tc.toolCallId,
-        name: tc.toolName,
-        input: (tc.input ?? {}) as Record<string, unknown>, // open-by-design
-      }));
-    }
-
-    this.emitLogRecord(request.site ?? "unknown", request.capability, resolved, extractPromptExcerpt(request), text, extraction.usage, cost.totalCost, t0);
-
-    return {
-      content: text,
-      reasoningContent: reasoningText ?? undefined,
-      toolCalls,
-      usage: extraction.usage,
-      cost,
-      provider: resolved.providerName,
-      model: resolved.modelConfig.id,
-      finishReason: mapFinishReason(finishReason),
-    };
   }
 
   async generateStructured<T>(request: StructuredRequest<T>): Promise<StructuredResponse<T>> {
@@ -622,6 +412,17 @@ export class LLMGateway {
       return undefined;
     }
   }
+
+  resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
+    const resolved = this.resolveWithBudgetDegrade(capability, site);
+    return {
+      model: resolved.provider,
+      modelId: resolved.modelConfig.id,
+      provider: resolved.providerName,
+      modelConfig: resolved.modelConfig,
+      effectiveCapability: resolved.modelConfig.capabilityLevel,
+    };
+  }
 }
 
 function isTemperatureViolation(error: unknown): boolean {
@@ -679,15 +480,6 @@ const TEMPERATURE_HOW_TO_FIX =
   "config/models.toml), or stop requesting a temperature for this call if it does not need " +
   "determinism. Do not suppress this check — an ignored temperature makes a call the system " +
   "treats as deterministic silently non-deterministic.";
-
-function extractPromptExcerpt(request: CompletionRequest): string {
-  const lastUserMsg = [...request.messages].reverse().find((m) => m.role === "user");
-  if (!lastUserMsg) return "";
-  const text = typeof lastUserMsg.content === "string"
-    ? lastUserMsg.content
-    : lastUserMsg.content.find((b) => b.type === "text")?.text ?? "";
-  return text.slice(0, 200);
-}
 
 /**
  * Extracts token usage from the SDK response, returning a discriminated

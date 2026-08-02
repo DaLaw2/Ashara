@@ -1,4 +1,8 @@
-import type { RegisteredTool, ToolDefinition, ToolExecutor, ToolPromptContext, ToolResult } from "./types.js";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tool as aiTool, jsonSchema } from "ai";
+import type { ToolSet } from "ai";
+import type { RegisteredTool, ToolDefinition, ToolExecutor, ToolPromptContext, ToolResult, ToolSchema } from "./types.js";
 import { readFileTool, ReadFileExecutor } from "./read-file.js";
 import { writeFileTool, WriteFileExecutor } from "./write-file.js";
 import { editFileTool, EditFileExecutor } from "./edit-file.js";
@@ -53,6 +57,96 @@ export class ToolRegistry {
         }
         return prompts.sort();
     }
+
+    asAiSdkTools(config?: AiSdkToolsConfig): ToolSet {
+        const maxChars = config?.maxResultSizeChars ?? 50_000;
+        const overflowDir = config?.overflowDir;
+        const result: ToolSet = {};
+
+        for (const registered of this.tools.values()) {
+            if (!registered.executor) continue;
+            if (config?.allowedTools && !config.allowedTools.has(registered.definition.name)) continue;
+
+            const { definition, executor } = registered;
+            const perToolMax = registered.maxResultSizeChars ?? maxChars;
+
+            result[definition.name] = aiTool({
+                description: definition.description,
+                inputSchema: jsonSchema(toMutableJsonSchema(definition.inputSchema)),
+                execute: buildExecuteFn(executor, perToolMax, overflowDir, definition.name),
+            });
+        }
+
+        return result;
+    }
+}
+
+function toMutableJsonSchema(schema: ToolSchema): Record<string, unknown> {
+    const properties: Record<string, Record<string, unknown>> = {};
+    for (const [key, prop] of Object.entries(schema.properties)) {
+        const mutable: Record<string, unknown> = {
+            type: prop.type,
+            description: prop.description,
+        };
+        if (prop.items) mutable.items = { type: prop.items.type };
+        if (prop.enum) mutable.enum = [...prop.enum];
+        properties[key] = mutable;
+    }
+    return {
+        type: "object",
+        properties,
+        required: [...schema.required],
+    };
+}
+
+export interface AiSdkToolsConfig {
+    readonly maxResultSizeChars?: number;
+    readonly overflowDir?: string;
+    readonly allowedTools?: ReadonlySet<string>;
+}
+
+let overflowCounter = 0;
+
+function buildExecuteFn(
+    executor: ToolExecutor,
+    maxChars: number,
+    overflowDir: string | undefined,
+    toolName: string,
+): (input: Record<string, unknown>) => Promise<string> {
+    return async (input: Record<string, unknown>): Promise<string> => {
+        let result: ToolResult;
+        try {
+            result = await executor.execute(input);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            return JSON.stringify({ type: "error", message });
+        }
+
+        if (!result.success) {
+            return JSON.stringify({
+                type: "error",
+                message: result.error ?? "Tool execution failed",
+            });
+        }
+
+        let output = result.output;
+        if (output.length > maxChars) {
+            if (overflowDir) {
+                overflowCounter += 1;
+                const overflowPath = join(overflowDir, `overflow-${toolName}-${overflowCounter}.txt`);
+                await writeFile(overflowPath, output, "utf-8");
+                output =
+                    output.slice(0, maxChars) +
+                    `\n\n[truncated — full output written to ${overflowPath}]`;
+            } else {
+                output =
+                    output.slice(0, maxChars) +
+                    `\n\n[truncated — ${output.length - maxChars} characters omitted]`;
+            }
+        }
+
+        return output;
+    };
 }
 
 // ---------------------------------------------------------------------------

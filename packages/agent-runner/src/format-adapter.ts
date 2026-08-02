@@ -1,4 +1,14 @@
-import type { CompletionResponse, ToolCall } from "@ashara/llm-gateway";
+export interface ResponseToolCall {
+    readonly id: string;
+    readonly name: string;
+    // open-by-design: LLM-authored tool arguments, shape varies per tool
+    readonly input: Record<string, unknown>;
+}
+
+export interface ParseableResponse {
+    readonly content: string;
+    readonly toolCalls?: readonly ResponseToolCall[];
+}
 
 export interface FileWrite {
     readonly path: string;
@@ -7,24 +17,23 @@ export interface FileWrite {
 }
 
 export interface ParsedResponse {
-    readonly toolCalls: ToolCall[];
+    readonly toolCalls: readonly ResponseToolCall[];
     readonly fileWrites: FileWrite[];
 }
 
 export interface FormatAdapter {
     readonly name: string;
-    parseResponse(response: CompletionResponse): ParsedResponse;
+    parseResponse(response: ParseableResponse): ParsedResponse;
 }
 
 export class NativeFCAdapter implements FormatAdapter {
     readonly name = "native-fc";
 
-    parseResponse(response: CompletionResponse): ParsedResponse {
+    parseResponse(response: ParseableResponse): ParsedResponse {
         const toolCalls = response.toolCalls ?? [];
         if (toolCalls.length > 0) {
             return { toolCalls, fileWrites: [] };
         }
-        // Fallback: if response text contains code fences, try CodeFenceAdapter
         if (response.content && /^```\w/m.test(response.content)) {
             console.warn("[NativeFCAdapter] no tool calls but code fences detected, falling back to CodeFenceAdapter");
             const fileWrites = parseCodeFences(response.content);
@@ -39,7 +48,7 @@ export class NativeFCAdapter implements FormatAdapter {
 export class CodeFenceAdapter implements FormatAdapter {
     readonly name = "code-fence";
 
-    parseResponse(response: CompletionResponse): ParsedResponse {
+    parseResponse(response: ParseableResponse): ParsedResponse {
         const toolCalls = response.toolCalls ?? [];
         if (toolCalls.length > 0) {
             return { toolCalls, fileWrites: [] };

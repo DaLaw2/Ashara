@@ -8,9 +8,6 @@ export { pruneContext, splitAtSyntaxBoundaries, DEFAULT_MIN_RELEVANCE } from "./
 export type { RetrieveFn } from "./dispatch-utils.js";
 export { buildAutoProfile, buildProjectContext, createRetrievalFn, readManifestContext } from "./dispatch-utils.js";
 
-export type { Message, MaskingConfig, MaskingResult } from "./observation-masking.js";
-export { ObservationMasker } from "./observation-masking.js";
-
 export type { BriefConfig, ProjectProfile, Brief, QualityCheckResult, QualityGateResult } from "./brief-assembly.js";
 export {
   assembleBrief,

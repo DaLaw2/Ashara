@@ -11,6 +11,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import type { AlignmentLLM, AlignmentResult as EngagementAlignmentResult } from "@ashara/engagement";
 import { AlignmentEngine } from "@ashara/engagement";
 import {
@@ -41,7 +42,6 @@ import {
 } from "@ashara/llm-gateway";
 import type {
     CostSummary,
-    CompletionResponse,
 } from "@ashara/llm-gateway";
 import { buildAutoProfile } from "../src/dispatch-utils.js";
 import {
@@ -608,17 +608,18 @@ export async function runIntegrationTest(
 
         const gateway = new LLMGateway(gatewayConfig);
 
-        const response: CompletionResponse = await gateway.complete({
+        const response = await gateway.generateStructured({
             capability: "Light",
-            messages: [{ role: "user", content: "Reply with exactly: INTEGRATION_TEST_OK" }],
-            maxTokens: 20,
+            prompt: "Reply with exactly: INTEGRATION_TEST_OK",
+            schema: z.object({ reply: z.string() }),
+            maxTokens: 50,
             temperature: 0,
         });
 
         const costSummary: CostSummary = gateway.getCostSummary();
         totalCost += costSummary.totalCost;
 
-        if (!response.content) {
+        if (!response.data.reply) {
             throw new Error("Empty response from LLM");
         }
         if (response.usage.inputTokens <= 0) {
@@ -626,7 +627,7 @@ export async function runIntegrationTest(
         }
 
         return [
-            `Response: "${response.content.trim().substring(0, 40)}"`,
+            `Response: "${response.data.reply.trim().substring(0, 40)}"`,
             `Model: ${response.model}`,
             `Input tokens: ${response.usage.inputTokens}`,
             `Output tokens: ${response.usage.outputTokens}`,

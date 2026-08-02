@@ -15,15 +15,11 @@
 import {
     runVerifyCore,
     defaultRunCommand,
-    ObservationMasker,
     buildAutoProfile as devBuildAutoProfile,
     buildProjectContext as devBuildProjectContext,
     formatProjectProfile as devFormatProjectProfile,
 } from "@ashara/development";
 import type {
-    Message as DevMessage,
-    MaskingConfig as DevMaskingConfig,
-    MaskingResult as DevMaskingResult,
     ProjectProfile as DevProjectProfile,
 } from "@ashara/development";
 
@@ -65,37 +61,6 @@ export interface VerifyOutput {
 }
 
 // ---------------------------------------------------------------------------
-// Observation masking types (mirrors Message / MaskingConfig / MaskingResult
-// from development's observation-masking)
-// ---------------------------------------------------------------------------
-
-export interface MaskerMessage {
-    readonly role: "user" | "assistant" | "tool";
-    readonly content: string;
-    readonly timestamp: Date;
-    readonly tokenCount: number;
-    readonly metadata?: {
-        readonly toolName?: string;
-        readonly isReasoning?: boolean;
-    };
-}
-
-export interface MaskerConfig {
-    readonly maxContextTokens: number;
-    readonly preserveRecentTools: number;
-    readonly maskPlaceholder?: string;
-    readonly summarizationThreshold?: number;
-}
-
-export interface MaskerResult {
-    readonly messages: MaskerMessage[];
-    readonly totalTokens: number;
-    readonly maskedCount: number;
-    readonly preservedCount: number;
-    readonly needsSummarization: boolean;
-}
-
-// ---------------------------------------------------------------------------
 // Project profile types (mirrors ProjectProfile from development's
 // brief-assembly)
 // ---------------------------------------------------------------------------
@@ -120,22 +85,6 @@ export interface ProjectProfile {
  */
 export interface VerifyPort {
     runVerify(input: VerifyInput): Promise<VerifyOutput>;
-}
-
-/**
- * Observation masker: compresses old tool outputs in conversation history to
- * stay within the context window. Used by context-manager.ts.
- */
-export interface ObservationMaskerPort {
-    mask(messages: readonly MaskerMessage[]): MaskerResult;
-    append(history: readonly MaskerMessage[], newMessage: MaskerMessage): MaskerResult;
-}
-
-/**
- * Factory for creating observation maskers with a given configuration.
- */
-export interface ContextMaskingPort {
-    createMasker(config: Partial<MaskerConfig>): ObservationMaskerPort;
 }
 
 /**
@@ -224,78 +173,6 @@ function translateVerifyOutput(devResult: {
                 issues: devTier.issues ? [...devTier.issues] : undefined,
             },
         },
-    };
-}
-
-// ---------------------------------------------------------------------------
-// Context masking adapter
-// ---------------------------------------------------------------------------
-
-/**
- * Create a ContextMaskingPort backed by development's ObservationMasker class.
- *
- * The adapter wraps the class constructor behind a factory method and
- * translates between agent-runner's MaskerMessage / MaskerResult types and
- * development's Message / MaskingResult types.
- */
-export function createMaskingAdapter(): ContextMaskingPort {
-    return {
-        createMasker(config: Partial<MaskerConfig>): ObservationMaskerPort {
-            // An absent key must stay absent: ObservationMasker spreads this over
-            // its defaults, so forwarding an explicit `undefined` erases them.
-            const devConfig: Partial<DevMaskingConfig> = {
-                ...(config.maxContextTokens !== undefined && { maxContextTokens: config.maxContextTokens }),
-                ...(config.preserveRecentTools !== undefined && { preserveRecentTools: config.preserveRecentTools }),
-                ...(config.maskPlaceholder !== undefined && { maskPlaceholder: config.maskPlaceholder }),
-                ...(config.summarizationThreshold !== undefined && {
-                    summarizationThreshold: config.summarizationThreshold,
-                }),
-            };
-            const devMasker = new ObservationMasker(devConfig);
-
-            return {
-                mask(messages: readonly MaskerMessage[]): MaskerResult {
-                    const devMessages = messages.map(toDevMessage);
-                    const devResult = devMasker.mask(devMessages);
-                    return translateMaskerResult(devResult);
-                },
-
-                append(history: readonly MaskerMessage[], newMessage: MaskerMessage): MaskerResult {
-                    const devHistory = history.map(toDevMessage);
-                    const devNew = toDevMessage(newMessage);
-                    const devResult = devMasker.append(devHistory, devNew);
-                    return translateMaskerResult(devResult);
-                },
-            };
-        },
-    };
-}
-
-/** Translate agent-runner MaskerMessage to development Message. */
-function toDevMessage(msg: MaskerMessage): DevMessage {
-    return {
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        tokenCount: msg.tokenCount,
-        metadata: msg.metadata,
-    };
-}
-
-/** Translate development MaskingResult to agent-runner MaskerResult. */
-function translateMaskerResult(devResult: DevMaskingResult): MaskerResult {
-    return {
-        messages: devResult.messages.map((m: DevMessage): MaskerMessage => ({
-            role: m.role,
-            content: m.content,
-            timestamp: m.timestamp,
-            tokenCount: m.tokenCount,
-            metadata: m.metadata,
-        })),
-        totalTokens: devResult.totalTokens,
-        maskedCount: devResult.maskedCount,
-        preservedCount: devResult.preservedCount,
-        needsSummarization: devResult.needsSummarization,
     };
 }
 

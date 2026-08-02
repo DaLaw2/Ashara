@@ -9,9 +9,8 @@ import {
     NoLLMProvidersConfigured,
     InvalidGatewayCatalog,
 } from "@ashara/llm-gateway";
-import type { ToolDefinition as GatewayToolDefinition } from "@ashara/llm-gateway";
+import type { ResolvedModel } from "@ashara/llm-gateway";
 import { AgentConversation } from "./conversation.js";
-import type { Gateway } from "./conversation.js";
 import { createDefaultRegistry } from "./tools/index.js";
 import type { ToolPromptContext } from "./tools/types.js";
 import { OutputCollector } from "./output.js";
@@ -38,6 +37,12 @@ export interface RunnerConfig {
 
 export type { AgentBrief } from "@ashara/shared";
 
+export interface RunnerGateway {
+    resolveModel(capability: CapabilityLevel, site: string): ResolvedModel;
+    resolveEffectiveCapability?(capability: CapabilityLevel): CapabilityLevel;
+    resolveFormatGroup?(capability: CapabilityLevel): string | undefined;
+}
+
 // ---------------------------------------------------------------------------
 // AgentRunner
 // ---------------------------------------------------------------------------
@@ -55,7 +60,7 @@ export function loadRunnerConfigFromEnv(overrides?: Partial<RunnerConfig>): Runn
 
 export class AgentRunner {
     constructor(
-        private readonly gateway: Gateway,
+        private readonly gateway: RunnerGateway,
         private readonly config: RunnerConfig,
         private readonly profiles: ProjectProfilePort = createProfileAdapter(),
     ) {}
@@ -98,60 +103,22 @@ export class AgentRunner {
         // 4. Create tool registry with working directory
         const registry = createDefaultRegistry(this.config.workingDir);
 
-        // 5. Resolve format group and build system prompt
+        // 5. Resolve model and format group, build system prompt
+        const resolvedCapability = resolveEffectiveCapability(this.gateway, this.config.capability);
+        const resolved = this.gateway.resolveModel(resolvedCapability, "agent-runner");
         const formatGroup = resolveFormatGroup(this.gateway, this.config.capability);
         const toolPrompts = registry.collectPrompts(toolPromptCtx);
-        // The frame states the stack as a FACT ahead of the task (ADR-046); the
-        // static prompt stays stack-neutral so it cannot restate it as an
-        // instruction (ADR-045). frameStack feeds tool-prompt context only.
         const staticSystemPrompt = buildStaticSystemPrompt(formatGroup, toolPrompts);
         const dynamicSystemPrompt = buildDynamicSystemPrompt(brief);
 
-        // 4. Build gateway-compatible tool definitions, filtered by resolved model capability
-        const resolvedCapability = resolveEffectiveCapability(this.gateway, this.config.capability);
         const allowed = capabilityToolSet(resolvedCapability);
 
-        const coreTools = registry
-            .getCoreDefinitions()
-            .filter((def) => allowed.has(def.name));
-        const deferredNames = registry
-            .getDeferredNames()
-            .filter((name) => allowed.has(name));
-
-        const gatewayTools: GatewayToolDefinition[] = [
-            ...coreTools.map((def) => ({
-                name: def.name,
-                description: def.description,
-                parameters: {
-                    type: def.inputSchema.type,
-                    // contract-erasing: inputSchema.properties is Record<string, SchemaProperty>
-                    properties: def.inputSchema.properties as Record<string, unknown>,
-                    required: [...def.inputSchema.required],
-                },
-            })),
-            ...deferredNames.map((name) => {
-                const def = registry.getDefinition(name);
-                if (!def) return null;
-                return {
-                    name: def.name,
-                    description: `${def.description} [Schema not loaded — call tool_search("${name}") first]`,
-                    parameters: {
-                        type: "object" as const,
-                        // open-by-design: deferred tool stub has no properties yet
-                        properties: {} as Record<string, unknown>,
-                        required: [] as string[],
-                    },
-                };
-            }).filter((t) => t !== null),
-        ];
-
         console.log(
-            `[agent-runner] tool filtering: capability=${resolvedCapability}, ` +
-            `core=${coreTools.map((t) => t.name).join(", ")}, ` +
-            `deferred=${deferredNames.join(", ") || "(none)"}`,
+            `[agent-runner] resolved model: ${resolved.modelId} (${resolved.provider}), ` +
+            `capability=${resolvedCapability}, tools=${[...allowed].join(", ")}`,
         );
 
-        // 5. Create and run conversation — goal is the task instruction (always non-empty)
+        // 6. Create and run conversation — goal is the task instruction (always non-empty)
         const isWeakModel =
             resolvedCapability === "Light" || resolvedCapability === "Medium";
 
@@ -159,16 +126,16 @@ export class AgentRunner {
 
         const conversationLogPath = join(this.config.workingDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
 
-        const conversation = new AgentConversation(this.gateway, registry, {
+        const conversation = new AgentConversation(resolved.model, registry, {
             staticSystemPrompt: isWeakModel ? buildWeakModelSystemPrompt(brief) : staticSystemPrompt,
             dynamicSystemPrompt: isWeakModel ? "" : dynamicSystemPrompt,
-            tools: gatewayTools,
             capability: this.config.capability,
             adapter,
             maxTurns: this.config.maxTurns,
             workingDir: this.config.workingDir,
             conversationLogPath,
-        });
+            allowedTools: allowed,
+        }, resolved.modelConfig);
 
         const result = await conversation.run(brief.goal);
 
@@ -214,7 +181,7 @@ export class AgentRunner {
 // Tool filtering by capability
 // ---------------------------------------------------------------------------
 
-function resolveEffectiveCapability(gateway: Gateway, requested: CapabilityLevel): CapabilityLevel {
+function resolveEffectiveCapability(gateway: RunnerGateway, requested: CapabilityLevel): CapabilityLevel {
     if (gateway.resolveEffectiveCapability) {
         const actual = gateway.resolveEffectiveCapability(requested);
         if (actual !== requested) {
@@ -249,7 +216,7 @@ function capabilityToolSet(capability: CapabilityLevel): Set<string> {
 // Adapter selection
 // ---------------------------------------------------------------------------
 
-function resolveFormatGroup(gateway: Gateway, capability: CapabilityLevel): string | undefined {
+function resolveFormatGroup(gateway: RunnerGateway, capability: CapabilityLevel): string | undefined {
     if (gateway.resolveFormatGroup) {
         return gateway.resolveFormatGroup(capability);
     }

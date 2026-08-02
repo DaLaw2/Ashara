@@ -1,33 +1,30 @@
 import { describe, expect, test, vi } from "vitest";
+import { z } from "zod";
 import { LLMGateway } from "./gateway.js";
 import type { GatewayConfig, LLMCallRecord } from "./types.js";
 
 vi.mock("ai", () => ({
-  generateText: vi.fn().mockResolvedValue({
-    text: "mock response text here",
-    toolCalls: [],
+  generateObject: vi.fn().mockResolvedValue({
+    object: { greeting: "hello" },
     usage: { inputTokens: 100, outputTokens: 50 },
     providerMetadata: undefined,
-    finishReason: "stop",
-    reasoningText: undefined,
+    warnings: [],
   }),
-  streamText: vi.fn(),
-  generateObject: vi.fn(),
-  jsonSchema: vi.fn((s: unknown) => s),
+  generateText: vi.fn(),
 }));
 
 function makeConfig(): GatewayConfig {
   return {
     providers: [
       {
-        name: "test-provider",
+        name: "anthropic",
         apiKey: "test-key",
         baseUrl: "https://test.example.com/v1",
         models: [
           {
             id: "test-model",
             apiModelId: "test-model-api",
-            provider: "test-provider",
+            provider: "anthropic",
             capabilityLevel: "Strong",
             inputCostPer1M: 3,
             outputCostPer1M: 15,
@@ -38,18 +35,19 @@ function makeConfig(): GatewayConfig {
         enabled: true,
       },
     ],
-    defaultProvider: "test-provider",
+    defaultProvider: "anthropic",
   };
 }
 
 describe("LLMGateway logSink", () => {
-  test("complete() emits an LLMCallRecord to the logSink", async () => {
+  test("generateStructured() emits an LLMCallRecord to the logSink", async () => {
     const records: LLMCallRecord[] = [];
     const gateway = new LLMGateway(makeConfig(), undefined, (r) => records.push(r));
 
-    await gateway.complete({
+    await gateway.generateStructured({
       capability: "Strong",
-      messages: [{ role: "user", content: "hello world" }],
+      prompt: "say hello",
+      schema: z.object({ greeting: z.string() }),
       site: "agent-runner",
     });
 
@@ -58,9 +56,7 @@ describe("LLMGateway logSink", () => {
     expect(r.site).toBe("agent-runner");
     expect(r.capability).toBe("Strong");
     expect(r.model).toBe("test-model");
-    expect(r.provider).toBe("test-provider");
-    expect(r.promptExcerpt).toBe("hello world");
-    expect(r.responseExcerpt).toBe("mock response text here");
+    expect(r.provider).toBe("anthropic");
     expect(r.inputTokens).toBe(100);
     expect(r.outputTokens).toBe(50);
     expect(r.costUsd).toBeGreaterThan(0);
@@ -68,14 +64,15 @@ describe("LLMGateway logSink", () => {
     expect(r.timestamp).toBeTruthy();
   });
 
-  test("complete() without logSink does not throw", async () => {
+  test("generateStructured() without logSink does not throw", async () => {
     const gateway = new LLMGateway(makeConfig());
 
-    const result = await gateway.complete({
+    const result = await gateway.generateStructured({
       capability: "Strong",
-      messages: [{ role: "user", content: "hello" }],
+      prompt: "say hello",
+      schema: z.object({ greeting: z.string() }),
     });
 
-    expect(result.content).toBe("mock response text here");
+    expect(result.data).toEqual({ greeting: "hello" });
   });
 });

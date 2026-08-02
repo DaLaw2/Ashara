@@ -12,6 +12,7 @@
     "@ashara/shared": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/development": "*",
+    "ai": "^7.0.37",
     "zod": "4.4.3"
   }
 }

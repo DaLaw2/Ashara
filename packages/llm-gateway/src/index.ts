@@ -1,5 +1,5 @@
 export { LLMGateway, extractUsage } from "./gateway.js";
-export { convertMessage } from "./message-conversion.js";
+export type { ResolvedModel } from "./gateway.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export { ProviderRegistry } from "./provider-registry.js";
 export {
@@ -56,12 +56,6 @@ export type {
   ProviderConfig,
   FormatGroup,
   ModelConfig,
-  CompletionRequest,
-  CompletionResponse,
-  Message,
-  ContentBlock,
-  ToolDefinition,
-  ToolCall,
   TokenUsage,
   ExtractedUsage,
   MeasuredUsage,
@@ -69,8 +63,6 @@ export type {
   CostBreakdown,
   BudgetConfig,
   CostSummary,
-  ToolChoice,
-  StreamOptions,
   StructuredRequest,
   StructuredResponse,
   RoutingProfiles,

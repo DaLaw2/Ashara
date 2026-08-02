@@ -66,9 +66,9 @@ export interface GatewayConfig {
  * The exhaustive registry of call-site identifiers used for static per-site
  * routing (`GatewayConfig.routingProfiles`). Enforced in both directions:
  *
- * - Forward: `CompletionRequest.site` / `StructuredRequest.site` /
- *   `StructuredLadderOptions.site` are typed `KnownLLMSite`, so tagging a new
- *   call site is a compile error until it is registered here.
+ * - Forward: `StructuredRequest.site` / `StructuredLadderOptions.site` are
+ *   typed `KnownLLMSite`, so tagging a new call site is a compile error until
+ *   it is registered here.
  * - Reverse: `buildGateway` refuses to start when a non-empty routing profile
  *   fails to map one of these, and the models.toml schema rejects a profile
  *   key that is not one of these.
@@ -116,69 +116,6 @@ export interface ModelConfig {
   outputCostPer1M: number;
   maxContextTokens: number;
   supportsCaching: boolean;
-}
-
-export type ToolChoice = "auto" | "required" | "none" | { type: "tool"; toolName: string };
-
-export interface CompletionRequest {
-  capability: CapabilityLevel;
-  messages: Message[];
-  systemPrompt?: string;
-  temperature?: number;
-  maxTokens?: number;
-  tools?: ToolDefinition[];
-  toolChoice?: ToolChoice;
-  cachePrefixLength?: number;
-  /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
-  site?: KnownLLMSite;
-}
-
-export interface Message {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | ContentBlock[];
-  tool_call_id?: string;
-  reasoning_content?: string;
-}
-
-export interface ContentBlock {
-  type: "text" | "tool_use" | "tool_result" | "reasoning";
-  text?: string;
-  id?: string;
-  name?: string;
-  // open-by-design: LLM-authored tool input, shape defined per tool's JSON Schema
-  input?: Record<string, unknown>;
-  tool_use_id?: string;
-  content?: string;
-  is_error?: boolean;
-}
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  // open-by-design: tool parameters is a JSON Schema object, shape defined per tool
-  parameters: Record<string, unknown>;
-}
-
-export interface CompletionResponse {
-  content: string;
-  reasoningContent?: string;
-  toolCalls?: ToolCall[];
-  usage: TokenUsage;
-  cost: CostBreakdown;
-  provider: string;
-  model: string;
-  finishReason: string;
-}
-
-export interface ToolCall {
-  id: string;
-  name: string;
-  // open-by-design: LLM-authored tool arguments, shape varies per tool
-  input: Record<string, unknown>;
-}
-
-export interface StreamOptions {
-  onToolCall?: (toolCall: ToolCall) => void;
 }
 
 export interface TokenUsage {
