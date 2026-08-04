@@ -116,9 +116,18 @@ export class DependencyGraph {
     itemId: string,
     ctx: DependencyContext,
     memo: Map<string, DependencyResolutionResult>,
+    resolving?: Set<string>,
   ): DependencyResolutionResult {
     const cached = memo.get(itemId);
     if (cached) return cached;
+
+    const active = resolving ?? new Set<string>();
+    if (active.has(itemId)) {
+      const blocked: DependencyResolutionResult = { resolution: "blocked", blockedBy: [itemId] };
+      memo.set(itemId, blocked);
+      return blocked;
+    }
+    active.add(itemId);
 
     const deps = this.edges.get(itemId);
     if (!deps || deps.size === 0) {
@@ -130,7 +139,7 @@ export class DependencyGraph {
     let hasPending = false;
     const blockedBy = new Set<string>();
     for (const dep of deps) {
-      const state = this.classifyDependency(dep, ctx, memo);
+      const state = this.classifyDependency(dep, ctx, memo, undefined, active);
       if (state.kind === "unsatisfiable") {
         for (const cause of state.blockedBy) blockedBy.add(cause);
       } else if (state.kind === "pending") {
@@ -150,6 +159,7 @@ export class DependencyGraph {
     ctx: DependencyContext,
     memo: Map<string, DependencyResolutionResult>,
     substitutionVisited?: Set<string>,
+    resolving?: Set<string>,
   ): DepState {
     const visited = substitutionVisited ?? new Set<string>();
     if (visited.has(dep)) return { kind: "unsatisfiable", blockedBy: [dep] };
@@ -166,14 +176,14 @@ export class DependencyGraph {
 
     if (view.status === "Abandoned") {
       if (view.substitutedBy !== undefined) {
-        return this.classifyDependency(view.substitutedBy, ctx, memo, visited);
+        return this.classifyDependency(view.substitutedBy, ctx, memo, visited, resolving);
       }
       return { kind: "unsatisfiable", blockedBy: [dep] };
     }
 
     // Pending / InProgress / Failed / Blocked may still progress — unless the
     // dependency is itself transitively blocked by an Abandoned item.
-    const downstream = this.resolveNode(dep, ctx, memo);
+    const downstream = this.resolveNode(dep, ctx, memo, resolving);
     if (downstream.resolution === "blocked") {
       return { kind: "unsatisfiable", blockedBy: downstream.blockedBy };
     }

@@ -125,10 +125,10 @@ export class WorkItemRepository {
 
   async getDependencies(itemId: string) {
     const rows = await this.db
-      .select({ fromId: dependencies.fromId })
+      .select({ toId: dependencies.toId })
       .from(dependencies)
-      .where(eq(dependencies.toId, itemId));
-    return rows.map((r) => r.fromId);
+      .where(eq(dependencies.fromId, itemId));
+    return rows.map((r) => r.toId);
   }
 
   async findChildren(parentId: string) {
