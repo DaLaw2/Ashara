@@ -8,7 +8,7 @@ import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
 import { describeIndexShortfall } from "@ashara/memory";
 import type { VerifyLogOptions } from "./verify.js";
 import { verify } from "./verify.js";
-import { containerizedRunCommand } from "./check-runner.js";
+import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
 import type { ProjectProfile } from "./brief-assembly.js";
 import { buildBriefWithRetry, formatAcceptanceCriteria, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ContractSource } from "./contract-slice.js";
@@ -22,6 +22,8 @@ import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
 import { extractContractChecks } from "./verify-core.js";
+import type { CommandRunner } from "./verify-core.js";
+import { containerizedRunCommand } from "./check-runner.js";
 import {
   buildFileTree,
   cleanupWorkdir,
@@ -34,6 +36,17 @@ import {
 import { branchExists, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
+
+// ---------------------------------------------------------------------------
+// Provisioner → CommandRunner bridge
+// ---------------------------------------------------------------------------
+
+function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv): CommandRunner {
+  return async (command: string[], _cwd: string, timeout: number) => {
+    const result = await provisioner.execute(env, command.join(" "), { timeout });
+    return { exitCode: result.exitCode ?? 1, output: (result.stdout + result.stderr).trim() };
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Injected dependency interfaces
@@ -209,6 +222,7 @@ export interface DevelopmentServiceDeps {
    * brief then says out loud rather than passing off as "nothing relevant".
    */
   readonly populateIndex?: (targetPath: string) => IndexCoverage;
+  readonly provisioner?: Provisioner;
 }
 
 export class DevelopmentService {
@@ -216,6 +230,13 @@ export class DevelopmentService {
 
   constructor(deps: DevelopmentServiceDeps) {
     this.deps = deps;
+  }
+
+  private buildRunners(workDir: string, image: string): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
+    return {
+      runCommand: containerizedRunCommand(workDir, image),
+      prepareRunCommand: containerizedRunCommand(workDir, image, { network: true }),
+    };
   }
 
   async execute(
@@ -897,8 +918,7 @@ export class DevelopmentService {
     const finalizeImage = this.deps.config.sandboxImage;
     const finalizeDeps = {
       ...this.deps,
-      runCommand: containerizedRunCommand(finalizeWorkDir, finalizeImage),
-      prepareRunCommand: containerizedRunCommand(finalizeWorkDir, finalizeImage, { network: true }),
+      ...this.buildRunners(finalizeWorkDir, finalizeImage),
     };
     const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
@@ -974,10 +994,8 @@ export class DevelopmentService {
         ? { logPath: this.deps.eventSink.path }
         : undefined;
       const image = this.deps.config.sandboxImage;
-      const runners = {
-        checkRunner: containerizedRunCommand(workDir, image),
-        prepareRunner: containerizedRunCommand(workDir, image, { network: true }),
-      };
+      const { runCommand: checkRunner, prepareRunCommand: prepareRunner } = this.buildRunners(workDir, image);
+      const runners = { checkRunner, prepareRunner };
       const response = await verify(verifyRequest, runners, verifyLogOpts);
       console.log(
         `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, verdict=${response.verdict}`,

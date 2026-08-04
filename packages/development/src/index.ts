@@ -84,3 +84,27 @@ export { readVerifyConfig, VerifyConfigParseError } from "./verify-config.js";
 
 export type { AttributionResult, WorkItemLookup, GitLogRunner } from "./gates/attribution.js";
 export { extractImplicatedFiles, attributeFilesToTasks } from "./gates/attribution.js";
+
+export {
+  EnvironmentSpecSchema,
+  ExecResultSchema,
+  ProvisioningError,
+  TeardownError,
+} from "./provisioner.js";
+export type {
+  Toolchain,
+  NetworkPolicy,
+  EnvironmentSpec,
+  ExecResult,
+  ExecOptions,
+  ProvisionedEnvStatus,
+  ProvisionedEnv,
+  EnvChangeKind,
+  SafetyTier,
+  EnvChangeRequest,
+  EnvChangeDelta,
+  ProvisioningErrorContext,
+  ExecErrorContext,
+  TeardownErrorContext,
+  Provisioner,
+} from "./provisioner.js";

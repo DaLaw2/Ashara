@@ -106,6 +106,7 @@ import {
   ContainerSpawnError,
 } from "./container-spawn.js";
 import { wireLlmGateway } from "./gateway-wiring.js";
+import { PodmanProvisioner } from "./podman-provisioner.js";
 
 async function main(): Promise<void> {
   const dotenvPath = `${process.cwd()}/.env`;
@@ -698,6 +699,7 @@ async function main(): Promise<void> {
     // No extension list here: the indexer derives its file set from the grammars
     // the parser actually loaded, and reports what it could not cover.
     populateIndex: parserReady ? (targetPath) => indexer.indexDirectory(targetPath) : undefined,
+    provisioner: new PodmanProvisioner(config.coreLoop.workdirBase),
   });
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the
