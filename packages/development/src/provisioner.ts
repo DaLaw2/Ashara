@@ -92,21 +92,19 @@ export interface ProvisionedEnv {
 // EnvChangeRequest — a proposed change from any stage, before governance
 // ---------------------------------------------------------------------------
 
-export type EnvChangeKind =
-  | "add_toolchain"
-  | "add_package"
-  | "set_env"
-  | "change_network";
-
 export type SafetyTier = "auto" | "orchestrator" | "owner";
 
-export interface EnvChangeRequest {
-  readonly kind: EnvChangeKind;
-  readonly detail: Toolchain | string | Record<string, string> | Partial<NetworkPolicy>;
+interface EnvChangeBase {
   readonly reason: string;
   readonly requestedBy: string;
   readonly safetyTier: SafetyTier;
 }
+
+export type EnvChangeRequest =
+  | (EnvChangeBase & { readonly kind: "add_toolchain"; readonly detail: Toolchain })
+  | (EnvChangeBase & { readonly kind: "add_package"; readonly detail: string })
+  | (EnvChangeBase & { readonly kind: "set_env"; readonly detail: Record<string, string> })
+  | (EnvChangeBase & { readonly kind: "change_network"; readonly detail: Partial<NetworkPolicy> });
 
 // ---------------------------------------------------------------------------
 // EnvChangeDelta — an approved change (after governance review)
@@ -134,25 +132,6 @@ export class ProvisioningError extends Error {
       `provisioning failed at ${context.operation}: ${context.detail}`,
     );
     this.name = "ProvisioningError";
-  }
-}
-
-export interface ExecErrorContext {
-  readonly envId: string;
-  readonly command: string;
-  readonly detail: string;
-  readonly exitCode: number | null;
-  readonly timedOut: boolean;
-}
-
-class ExecError extends Error {
-  constructor(public readonly context: ExecErrorContext) {
-    const code = context.exitCode !== null ? ` (exit ${context.exitCode})` : "";
-    const timeout = context.timedOut ? " [timed out]" : "";
-    super(
-      `exec failed in env ${context.envId}${code}${timeout}: ${context.detail}`,
-    );
-    this.name = "ExecError";
   }
 }
 

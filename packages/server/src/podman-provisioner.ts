@@ -8,7 +8,6 @@ import type {
   Provisioner,
   EnvironmentSpec,
   ProvisionedEnv,
-  ProvisionedEnvStatus,
   EnvChangeDelta,
   ExecResult,
   ExecOptions,
@@ -92,12 +91,8 @@ export class PodmanProvisioner implements Provisioner {
       id: envId,
       version: 1,
       spec,
-      status: "ready" as ProvisionedEnvStatus,
+      status: "ready",
     };
-  }
-
-  containerNameForEnv(envId: string): string | undefined {
-    return this.handles.get(envId)?.containerName;
   }
 
   activeContainerName(): string | undefined {
@@ -204,13 +199,13 @@ function applyDelta(spec: EnvironmentSpec, delta: EnvChangeDelta): EnvironmentSp
   const req = delta.request;
   switch (req.kind) {
     case "add_toolchain":
-      return { ...spec, toolchains: [...spec.toolchains, req.detail as Toolchain] };
+      return { ...spec, toolchains: [...spec.toolchains, req.detail] };
     case "add_package":
-      return { ...spec, systemPackages: [...spec.systemPackages, req.detail as string] };
+      return { ...spec, systemPackages: [...spec.systemPackages, req.detail] };
     case "set_env":
-      return { ...spec, envVars: { ...spec.envVars, ...(req.detail as Record<string, string>) } };
+      return { ...spec, envVars: { ...spec.envVars, ...req.detail } };
     case "change_network":
-      return { ...spec, networkPolicy: { ...spec.networkPolicy, ...(req.detail as Partial<Record<string, boolean>>) } };
+      return { ...spec, networkPolicy: { ...spec.networkPolicy, ...req.detail } };
   }
 }
 

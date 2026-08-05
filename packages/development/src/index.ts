@@ -99,12 +99,10 @@ export type {
   ExecOptions,
   ProvisionedEnvStatus,
   ProvisionedEnv,
-  EnvChangeKind,
   SafetyTier,
   EnvChangeRequest,
   EnvChangeDelta,
   ProvisioningErrorContext,
-  ExecErrorContext,
   TeardownErrorContext,
   Provisioner,
 } from "./provisioner.js";
