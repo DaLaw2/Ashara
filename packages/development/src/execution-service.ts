@@ -443,7 +443,7 @@ export class DevelopmentService {
     };
 
     const contractEntryPoint = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-    const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
+    const { contextMap, greenfield } = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
     this.refreshIndex(task.id, targetProjectPath);
@@ -456,6 +456,7 @@ export class DevelopmentService {
         {},
         contextMap,
         knowledgeContext,
+        greenfield,
       );
       // The gate's verdict used to be discarded, so a brief that failed every
       // retry shipped indistinguishably from one that passed first try.
@@ -556,14 +557,22 @@ export class DevelopmentService {
    * project whose context happened to be omitted — so it proceeds on its prior.
    * Saying the directory is empty is what makes the frame the only thing known.
    */
-  private async buildContextMap(targetProjectPath: string | null, contractEntryPointPath?: string, contractExcludePaths?: readonly string[]): Promise<string> {
-    if (!targetProjectPath) return EMPTY_WORKDIR_CONTEXT_MAP;
+  private async buildContextMap(
+    targetProjectPath: string | null,
+    contractEntryPointPath?: string,
+    contractExcludePaths?: readonly string[],
+  ): Promise<{ contextMap: string; greenfield: boolean }> {
+    if (!targetProjectPath) return { contextMap: EMPTY_WORKDIR_CONTEXT_MAP, greenfield: true };
 
     const sections: string[] = ["# Project Context"];
+    let hasFileTree = false;
 
     try {
       const tree = await buildFileTree(targetProjectPath, 4, 200, contractExcludePaths);
-      if (tree) sections.push("## File Tree\n" + tree);
+      if (tree) {
+        sections.push("## File Tree\n" + tree);
+        hasFileTree = true;
+      }
     } catch (e: unknown) {
       console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -637,7 +646,8 @@ export class DevelopmentService {
       console.warn(`[buildContextMap] Failed to extract conventions for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
+    const contextMap = sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
+    return { contextMap, greenfield: !hasFileTree };
   }
 
   private async buildKnowledgeContext(task: TaskDescriptor, spec: TaskSpec): Promise<string> {

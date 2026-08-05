@@ -57,7 +57,7 @@ describe("empty retrieval is absence, not agreement", () => {
   });
 
   test("still passes for a greenfield project, where zero is the expected observation", () => {
-    const brief = assembleBrief(SPEC, [], PROFILE, {}, EMPTY_WORKDIR_CONTEXT_MAP, "");
+    const brief = assembleBrief(SPEC, [], PROFILE, {}, EMPTY_WORKDIR_CONTEXT_MAP, "", true);
     const gate = checkQualityGate(brief, []);
 
     expect(gate.checks.relevance.passed).toBe(true);
@@ -65,6 +65,15 @@ describe("empty retrieval is absence, not agreement", () => {
     // The greenfield economy exception must survive the new code-context
     // sentinel — EMPTY_CODE_CONTEXT is prose about absence, not context.
     expect(gate.checks.economy.passed).toBe(true);
+  });
+
+  test("greenfield with prior knowledge still passes economy gate", () => {
+    const knowledgeContext = "## Recent Findings\n- prior attempt learned something";
+    const brief = assembleBrief(SPEC, [], PROFILE, {}, EMPTY_WORKDIR_CONTEXT_MAP, knowledgeContext, true);
+    const gate = checkQualityGate(brief, []);
+
+    expect(gate.checks.economy.passed).toBe(true);
+    expect(gate.checks.economy.detail).toContain("greenfield");
   });
 
   test("states the emptiness in the brief the agent reads", () => {

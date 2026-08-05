@@ -47,6 +47,7 @@ export interface Brief {
     readonly prefixTokens: number;
     readonly suffixTokens: number;
     readonly utilization: number;
+    readonly greenfield: boolean;
 }
 
 export interface QualityCheckResult {
@@ -229,6 +230,7 @@ export function assembleBrief(
     config: Partial<BriefConfig> = {},
     contextMap: string = "",
     knowledgeContext: string = "",
+    greenfield: boolean = false,
 ): Brief {
     const contextWindowTokens = config.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW;
     const targetUtilization = config.targetUtilization ?? DEFAULT_TARGET_UTILIZATION;
@@ -280,6 +282,7 @@ export function assembleBrief(
         prefixTokens,
         suffixTokens,
         utilization,
+        greenfield,
     };
 }
 
@@ -287,17 +290,8 @@ export function assembleBrief(
 // Quality gate
 // ---------------------------------------------------------------------------
 
-/**
- * True when the brief has no observed context of ANY kind — an empty tree, no
- * retrieved code, no prior knowledge. Both gate checks branch on this, because
- * "nothing to show" is the correct state for a scaffold task and a defect for
- * every task after it. `EMPTY_*` sentinels count as absence: they state emptiness
- * in prose, they are not evidence.
- */
 function isGreenfield(brief: Brief): boolean {
-    const hasObservedContext = Boolean(brief.contextMap) && brief.contextMap !== EMPTY_WORKDIR_CONTEXT_MAP;
-    const hasCodeContext = Boolean(brief.codeContext) && brief.codeContext !== EMPTY_CODE_CONTEXT;
-    return !hasObservedContext && !hasCodeContext && !brief.knowledgeContext;
+    return brief.greenfield;
 }
 
 export function checkQualityGate(
@@ -402,6 +396,7 @@ export async function buildBriefWithRetry(
     config: Partial<BriefConfig> = {},
     contextMap: string = "",
     knowledgeContext: string = "",
+    greenfield: boolean = false,
 ): Promise<{ brief: Brief; qualityGate: QualityGateResult }> {
     const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES;
 
@@ -427,6 +422,7 @@ export async function buildBriefWithRetry(
             config,
             contextMap,
             knowledgeContext,
+            greenfield,
         );
 
         const qualityGate = checkQualityGate(brief, results);

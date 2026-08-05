@@ -79,7 +79,7 @@ export const VisionGapResultSchema = z.object({
     suggestedApproach: z.string().optional(),
     supersedes: z.string().optional(),
   })).default([]),
-  reasoning: z.string(),
+  reasoning: z.string().default(""),
 });
 export type VisionGapResult = z.infer<typeof VisionGapResultSchema>;
 
