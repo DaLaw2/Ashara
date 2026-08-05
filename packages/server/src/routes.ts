@@ -561,15 +561,12 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const rows = await configRepo.listProviderConfigs();
 
     const configs = rows.map((row) => {
-      const hasApiKey = row.name === "local"
-        ? (row.baseUrl ?? null) !== null
-        : (row.apiKey ?? null) !== null;
       const baseUrl = row.baseUrl ?? null;
       return {
         name: row.name,
         providerType: row.providerType,
-        hasApiKey,
         baseUrl,
+        apiKey: row.apiKey ?? null,
       };
     });
     return c.json(configs);

@@ -133,6 +133,7 @@ const CatalogProviderSchema = z.object({
   name: z.string().min(1),
   providerType: z.string().min(1),
   baseUrl: z.string().nullable(),
+  apiKey: z.string().nullable().optional(),
 });
 
 export const GatewayCatalogSchema = z.object({
@@ -194,31 +195,35 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
     else modelsByProvider.set(m.providerName, [model]);
   }
 
-  const keys = loadProviderKeys();
-  const keysByProvider: Record<string, string | undefined> = {
-    anthropic: keys.anthropicApiKey,
-    openai: keys.openaiApiKey,
-    deepseek: keys.deepseekApiKey,
-    mistral: keys.mistralApiKey,
-    xai: keys.xaiApiKey,
-    google: keys.googleApiKey,
+  // Provider credentials: prefer catalog-supplied keys (from DB via API),
+  // fall back to env vars for standalone CLI / agent-runner subprocess.
+  const envKeys = loadProviderKeys();
+  const envKeysByProvider: Record<string, string | undefined> = {
+    anthropic: envKeys.anthropicApiKey,
+    openai: envKeys.openaiApiKey,
+    deepseek: envKeys.deepseekApiKey,
+    mistral: envKeys.mistralApiKey,
+    xai: envKeys.xaiApiKey,
+    google: envKeys.googleApiKey,
   };
 
   const providers: ProviderConfig[] = [];
   for (const p of catalog.providers) {
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
-    const envKey = keysByProvider[p.name];
+    const catalogKey = (p.apiKey != null && p.apiKey !== "") ? p.apiKey : undefined;
+    const envKey = envKeysByProvider[p.name];
+    const resolvedKey = catalogKey ?? envKey;
     const hasCredentials =
-      envKey !== undefined ||
-      (p.name === "local" && (keys.localLlmUrl ?? p.baseUrl) != null);
+      resolvedKey !== undefined ||
+      (p.name === "local" && (envKeys.localLlmUrl ?? p.baseUrl) != null);
     if (!hasCredentials) continue;
     providers.push({
       name: p.name,
-      apiKey: envKey,
+      apiKey: resolvedKey,
       baseUrl:
         p.name === "local"
-          ? (keys.localLlmUrl ?? p.baseUrl ?? undefined)
+          ? (envKeys.localLlmUrl ?? p.baseUrl ?? undefined)
           : (p.baseUrl ?? undefined),
       models,
       enabled: true,
