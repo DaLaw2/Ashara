@@ -11,8 +11,12 @@ import { resolve, relative, join } from "node:path";
 // scattered (CLAUDE.md Target Generality: config, not literal).
 // ---------------------------------------------------------------------------
 
-export const SANDBOX_IMAGE = "ashara-sandbox";
-export const SANDBOX_TAG = "0.1.0";
+// Fallback image for agent containers when no provisioner is active.
+// With provisioner, project-specific images are built dynamically from
+// EnvironmentSpec (ADR-071). This is the baseline for scaffold tasks and
+// the container-spawn legacy path.
+export const SANDBOX_IMAGE = "alpine";
+export const SANDBOX_TAG = "3.20";
 
 // Fixed mount points inside the container. All env-var paths the agent reads
 // are translated from host paths to these before spawn.

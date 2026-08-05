@@ -91,7 +91,7 @@ export interface DevelopmentConfig {
   readonly workdirBase: string;
   readonly useRealAgent: boolean;
   /**
-   * Full image tag for the check container (e.g. "ashara-sandbox:0.1.0").
+   * Full image tag for the check container (e.g. "alpine:3.20").
    * Used to build the containerizedRunCommand for host-side verification.
    * The check container runs with --network=none, one mount (the work
    * directory), zero env vars, and no Ashara checkout — structurally
