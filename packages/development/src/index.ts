@@ -108,3 +108,5 @@ export type {
   TeardownErrorContext,
   Provisioner,
 } from "./provisioner.js";
+
+export { deriveEnvironmentSpec } from "./env-spec-derivation.js";

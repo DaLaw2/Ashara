@@ -24,6 +24,8 @@ import { readVerifyConfig } from "./verify-config.js";
 import { extractContractChecks } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
 import { containerizedRunCommand } from "./check-runner.js";
+import { readManifestContext } from "./dispatch-utils.js";
+import { deriveEnvironmentSpec } from "./env-spec-derivation.js";
 import {
   buildFileTree,
   cleanupWorkdir,
@@ -223,6 +225,7 @@ export interface DevelopmentServiceDeps {
    */
   readonly populateIndex?: (targetPath: string) => IndexCoverage;
   readonly provisioner?: Provisioner;
+  readonly provisionedEnv?: ProvisionedEnv;
 }
 
 export class DevelopmentService {
@@ -232,7 +235,11 @@ export class DevelopmentService {
     this.deps = deps;
   }
 
-  private buildRunners(workDir: string, image: string): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
+  private buildRunners(workDir: string, image: string, env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
+    if (this.deps.provisioner && env) {
+      const runner = provisionerAsRunner(this.deps.provisioner, env);
+      return { runCommand: runner, prepareRunCommand: runner };
+    }
     return {
       runCommand: containerizedRunCommand(workDir, image),
       prepareRunCommand: containerizedRunCommand(workDir, image, { network: true }),
@@ -333,11 +340,26 @@ export class DevelopmentService {
       workDir = await mkdtemp(join(base, "task-"));
     }
 
+    let localEnv: ProvisionedEnv | undefined;
+    const preSuppliedEnv = this.deps.provisionedEnv;
+    if (!preSuppliedEnv && this.deps.provisioner && this.deps.llmGateway && targetProjectPath) {
+      try {
+        const manifestContent = await readManifestContext(targetProjectPath);
+        if (manifestContent) {
+          const spec = await deriveEnvironmentSpec(manifestContent, this.deps.llmGateway);
+          localEnv = await this.deps.provisioner.provision(spec);
+        }
+      } catch (e) {
+        console.warn(`[${task.id}] environment provisioning failed, falling back to containerized execution:`, e);
+      }
+    }
+    const envForRunners = preSuppliedEnv ?? localEnv;
+
     const dispatch: DispatchRecord = { agentInvoked: false };
 
     try {
       const result = await withSessionLifecycle(this.deps.sessionStore, sessionId, task.id, brief, () =>
-        this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract, dispatch),
+        this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract, dispatch, envForRunners),
       );
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
@@ -375,6 +397,14 @@ export class DevelopmentService {
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
+    } finally {
+      if (localEnv && this.deps.provisioner) {
+        try {
+          await this.deps.provisioner.teardown(localEnv);
+        } catch (e) {
+          console.warn(`[${task.id}] environment teardown failed:`, e);
+        }
+      }
     }
   }
 
@@ -666,6 +696,7 @@ export class DevelopmentService {
     sessionId: string,
     contract: ProjectContract | null,
     dispatch: DispatchRecord,
+    provisionedEnv?: ProvisionedEnv,
   ): Promise<ExecutionResult> {
     const { config, eventSink, agentInvoker } = this.deps;
     const recordsBase = config.workdirBase;
@@ -841,7 +872,7 @@ export class DevelopmentService {
     });
 
     eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
-    const verifyOutcome = await this.verifyTask(task, workDir, output, 1, contract);
+    const verifyOutcome = await this.verifyTask(task, workDir, output, 1, contract, provisionedEnv);
 
     if (verifyOutcome.verdict === "unverified") {
       // Zero executable checks: a verdict computed from nothing must not read
@@ -918,7 +949,7 @@ export class DevelopmentService {
     const finalizeImage = this.deps.config.sandboxImage;
     const finalizeDeps = {
       ...this.deps,
-      ...this.buildRunners(finalizeWorkDir, finalizeImage),
+      ...this.buildRunners(finalizeWorkDir, finalizeImage, provisionedEnv),
     };
     const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
@@ -973,6 +1004,7 @@ export class DevelopmentService {
     _output: AgentOutputJson,
     attempt: number,
     contract: ProjectContract | null,
+    provisionedEnv?: ProvisionedEnv,
   ): Promise<VerifyTaskOutcome> {
     const taskSpec = task.taskSpec;
     const contractChecks = contract
@@ -994,7 +1026,7 @@ export class DevelopmentService {
         ? { logPath: this.deps.eventSink.path }
         : undefined;
       const image = this.deps.config.sandboxImage;
-      const { runCommand: checkRunner, prepareRunCommand: prepareRunner } = this.buildRunners(workDir, image);
+      const { runCommand: checkRunner, prepareRunCommand: prepareRunner } = this.buildRunners(workDir, image, provisionedEnv);
       const runners = { checkRunner, prepareRunner };
       const response = await verify(verifyRequest, runners, verifyLogOpts);
       console.log(
