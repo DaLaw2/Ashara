@@ -45,7 +45,7 @@ import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "
 
 function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv): CommandRunner {
   return async (command: string[], _cwd: string, timeout: number) => {
-    const result = await provisioner.execute(env, command.join(" "), { timeout });
+    const result = await provisioner.execute(env, command, { timeout });
     return { exitCode: result.exitCode ?? 1, output: (result.stdout + result.stderr).trim() };
   };
 }

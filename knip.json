@@ -12,7 +12,8 @@
     },
     "packages/agent-runner": {
       "entry": ["src/runner.ts"],
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts"],
+      "ignoreBinaries": ["podman"]
     },
     "packages/development": {
       "project": ["src/**/*.ts", "test/**/*.ts"],

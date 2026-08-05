@@ -175,6 +175,6 @@ export class TeardownError extends Error {
 export interface Provisioner {
   provision(spec: EnvironmentSpec): Promise<ProvisionedEnv>;
   update(env: ProvisionedEnv, delta: EnvChangeDelta): Promise<ProvisionedEnv>;
-  execute(env: ProvisionedEnv, command: string, opts?: ExecOptions): Promise<ExecResult>;
+  execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult>;
   teardown(env: ProvisionedEnv): Promise<void>;
 }

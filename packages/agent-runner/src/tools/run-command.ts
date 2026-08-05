@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, relative, join } from "node:path";
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 import type { CommandPolicy } from "./command-policy.js";
@@ -92,12 +92,27 @@ export class RunCommandExecutor implements ToolExecutor {
             let killed = false;
             let killTimer: ReturnType<typeof setTimeout> | undefined;
 
-            const child = spawn("sh", ["-c", command], {
-                cwd,
-                stdio: ["ignore", "pipe", "pipe"],
-                env: this.env ?? { ...process.env },
-                detached: true,
-            });
+            const execContainer = process.env["ASHARA_EXEC_CONTAINER"];
+            let child;
+            if (execContainer) {
+                const hostWorkDir = process.env["ASHARA_HOST_WORKDIR"] ?? cwd;
+                const containerMount = process.env["ASHARA_CONTAINER_MOUNT"] ?? "/workspace";
+                const containerPath = hostWorkDir === cwd
+                    ? containerMount
+                    : join(containerMount, relative(hostWorkDir, cwd));
+
+                child = spawn("podman", ["exec", "-w", containerPath, execContainer, "sh", "-c", command], {
+                    stdio: ["ignore", "pipe", "pipe"],
+                    env: this.env ?? { ...process.env },
+                });
+            } else {
+                child = spawn("sh", ["-c", command], {
+                    cwd,
+                    stdio: ["ignore", "pipe", "pipe"],
+                    env: this.env ?? { ...process.env },
+                    detached: true,
+                });
+            }
 
             child.stdout.on("data", (chunk: Buffer) => {
                 if (stdoutBuf.length < this.maxOutputBytes) {
@@ -111,14 +126,18 @@ export class RunCommandExecutor implements ToolExecutor {
                 }
             });
 
-            const killGroup = (signal: NodeJS.Signals): void => {
-                const pid = child.pid;
-                if (pid !== undefined) {
-                    try {
-                        process.kill(-pid, signal);
-                    } catch (e: unknown) {
-                        if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
-                            console.warn(`[runCommand] Failed to signal process group ${pid}: ${e instanceof Error ? e.message : String(e)}`);
+            const killChild = (signal: NodeJS.Signals): void => {
+                if (execContainer) {
+                    child.kill(signal);
+                } else {
+                    const pid = child.pid;
+                    if (pid !== undefined) {
+                        try {
+                            process.kill(-pid, signal);
+                        } catch (e: unknown) {
+                            if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+                                console.warn(`[runCommand] Failed to signal process group ${pid}: ${e instanceof Error ? e.message : String(e)}`);
+                            }
                         }
                     }
                 }
@@ -126,9 +145,9 @@ export class RunCommandExecutor implements ToolExecutor {
 
             const timer = setTimeout(() => {
                 killed = true;
-                killGroup("SIGTERM");
+                killChild("SIGTERM");
                 killTimer = setTimeout(() => {
-                    killGroup("SIGKILL");
+                    killChild("SIGKILL");
                 }, KILL_GRACE_MS);
             }, timeoutMs);
 

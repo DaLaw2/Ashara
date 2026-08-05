@@ -132,9 +132,9 @@ describe("ExecResult mapping", () => {
     };
 
     // No container handle for this env — should throw ProvisioningError
-    await expect(provisioner.execute(fakeEnv, "echo hello")).rejects.toThrow(ProvisioningError);
+    await expect(provisioner.execute(fakeEnv, ["echo", "hello"])).rejects.toThrow(ProvisioningError);
     try {
-      await provisioner.execute(fakeEnv, "echo hello");
+      await provisioner.execute(fakeEnv, ["echo", "hello"]);
     } catch (e) {
       expect(e).toBeInstanceOf(ProvisioningError);
       if (e instanceof ProvisioningError) {

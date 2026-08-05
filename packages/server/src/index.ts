@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -421,6 +422,8 @@ async function main(): Promise<void> {
   // Populated on spawn, drained on exit or cleanup; iterated on shutdown.
   const activeContainers = new Set<string>();
 
+  const provisioner = new PodmanProvisioner(config.coreLoop.workdirBase);
+
   const agentInvoker: AgentInvoker = {
     async spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson> {
       const capability = determineCapability(opts.dispatchCount, opts.blockedReason);
@@ -434,10 +437,69 @@ async function main(): Promise<void> {
       const spawnData = await buildSpawnData();
       writeFileSync(catalogPath, JSON.stringify(spawnData.catalog, null, 2));
 
+      const execContainerName = provisioner.activeContainerName();
+      if (execContainerName) {
+        // Host-spawn path: agent-runner runs on the host; run_command routes
+        // commands into the provisioned container via ASHARA_EXEC_CONTAINER.
+        const agentEnv: Record<string, string> = {
+          ...buildSanitizedEnv([]),
+          ...spawnData.providerKeyEnv,
+          ASHARA_BRIEF_PATH: opts.briefPath,
+          ASHARA_OUTPUT_PATH: opts.outputPath,
+          ASHARA_WORKING_DIR: opts.workDir,
+          ASHARA_CATALOG_PATH: catalogPath,
+          AGENT_CAPABILITY: capability,
+          ASHARA_EXEC_CONTAINER: execContainerName,
+          ASHARA_HOST_WORKDIR: opts.workDir,
+          ASHARA_CONTAINER_MOUNT: "/workspace",
+        };
+
+        console.log(`[${opts.taskId}] launching agent-runner on host (exec container: ${execContainerName})`);
+
+        const proc = spawn("node", [
+          resolve(config.coreLoop.asharaSourceDir, "node_modules/tsx/dist/cli.mjs"),
+          resolve(config.coreLoop.asharaSourceDir, "packages/agent-runner/src/runner.ts"),
+        ], {
+          cwd: opts.workDir,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: agentEnv,
+        });
+
+        const timer = setTimeout(() => {
+          console.warn(
+            `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — killing host process`,
+          );
+          proc.kill("SIGTERM");
+        }, config.coreLoop.agentTimeoutMs);
+        try {
+          let stdout = "";
+          let stderr = "";
+          proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+          proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+          const exitCode = await new Promise<number | null>((resolveCode, reject) => {
+            proc.on("close", resolveCode);
+            proc.on("error", (err) => {
+              reject(new ContainerSpawnError({
+                operation: "host-spawn",
+                containerName: execContainerName,
+                taskId: opts.taskId,
+                exitCode: null,
+                cause: err.message,
+                stderr: "",
+              }));
+            });
+          });
+
+          if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
+          return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      // Container-spawn path (fallback: no provisioned environment).
       const containerName = buildContainerName(opts.taskId);
-      // Provider API keys come from the database, injected into the container
-      // env so the agent-runner can read them via loadProviderKeys(). The base
-      // sanitized env carries non-secret vars; DB-sourced keys are merged on top.
       const containerEnv = buildContainerEnv(
         { ...buildSanitizedEnv([]), ...spawnData.providerKeyEnv },
         opts.workDir,
@@ -452,10 +514,6 @@ async function main(): Promise<void> {
 
       console.log(`[${opts.taskId}] launching agent-runner in container ${containerName}`);
 
-      // The podman client process forwards the container's stdout/stderr and
-      // exits when the container does. Termination goes through
-      // `podman stop <name>` — killing only the client would orphan the
-      // container (the incident that motivated this isolation).
       const proc = spawnContainer(
         containerName,
         opts.workDir,
@@ -476,11 +534,9 @@ async function main(): Promise<void> {
         proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
         proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
-        const exitCode = await new Promise<number | null>((resolve, reject) => {
-          proc.on("close", resolve);
+        const exitCode = await new Promise<number | null>((resolveCode, reject) => {
+          proc.on("close", resolveCode);
           proc.on("error", (err) => {
-            // Fail closed: if podman itself cannot be spawned (missing binary,
-            // permission denied), surface a typed error with full context.
             reject(new ContainerSpawnError({
               operation: "spawn",
               containerName,
@@ -494,20 +550,10 @@ async function main(): Promise<void> {
 
         if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
 
-        // Do NOT throw on a non-zero exit (r9f-t2). The agent-runner writes output.json
-        // — carrying the REAL status ("blocked"/"failed") and total_cost — BEFORE it
-        // exits non-zero on a routine bad outcome (agent-runner/runner.ts). Throwing here
-        // discarded that output, so the orchestrator saw an empty result: zero cost, no
-        // dispatch counted, the retry bound never bound (Run-9). Read the output
-        // regardless of exit code; only a genuinely absent/unparseable file is
-        // fail-closed as a typed throw inside resolveAgentOutput. The exit code rides
-        // into that error for diagnosis (Discipline C).
         return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
       } finally {
         clearTimeout(timer);
         activeContainers.delete(containerName);
-        // Ensure the container is cleaned up even on normal exit — belt +
-        // suspenders with --rm. Idempotent: swallows "no such container".
         void terminateContainer(containerName);
       }
     },
@@ -699,7 +745,7 @@ async function main(): Promise<void> {
     // No extension list here: the indexer derives its file set from the grammars
     // the parser actually loaded, and reports what it could not cover.
     populateIndex: parserReady ? (targetPath) => indexer.indexDirectory(targetPath) : undefined,
-    provisioner: new PodmanProvisioner(config.coreLoop.workdirBase),
+    provisioner,
   });
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the

@@ -96,6 +96,17 @@ export class PodmanProvisioner implements Provisioner {
     };
   }
 
+  containerNameForEnv(envId: string): string | undefined {
+    return this.handles.get(envId)?.containerName;
+  }
+
+  activeContainerName(): string | undefined {
+    for (const handle of this.handles.values()) {
+      return handle.containerName;
+    }
+    return undefined;
+  }
+
   async update(env: ProvisionedEnv, delta: EnvChangeDelta): Promise<ProvisionedEnv> {
     const newSpec = applyDelta(env.spec, delta);
     await this.teardown(env);
@@ -103,7 +114,7 @@ export class PodmanProvisioner implements Provisioner {
     return { ...newEnv, version: env.version + 1 };
   }
 
-  async execute(env: ProvisionedEnv, command: string, opts?: ExecOptions): Promise<ExecResult> {
+  async execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult> {
     const handle = this.handles.get(env.id);
     if (!handle) {
       throw new ProvisioningError({
@@ -123,7 +134,7 @@ export class PodmanProvisioner implements Provisioner {
         execArgs.push("-e", `${k}=${v}`);
       }
     }
-    execArgs.push(handle.containerName, "sh", "-c", command);
+    execArgs.push(handle.containerName, ...command);
 
     return new Promise<ExecResult>((resolve, reject) => {
       const proc = spawn("podman", execArgs, {
