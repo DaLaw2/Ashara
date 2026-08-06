@@ -11,7 +11,6 @@ export interface ServerConfig {
   readonly port: number;
   readonly coreLoop: CoreLoopConfig;
   readonly workerOfflineSecs: number;
-  readonly modelsConfigPath: string;
 }
 
 export function loadDatabaseUrl(): string {
@@ -74,9 +73,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     process.env["WORKER_OFFLINE_SECS"],
     30,
   );
-  const modelsConfigPath =
-    process.env["ASHARA_MODELS_CONFIG"] ?? "config/models.toml";
-
   // Coverage reconciliation is ENFORCING by default (mig9-t2, ADR-032 §2). The
   // rollback: ASHARA_COVERAGE_ENFORCING=0 (or "false") switches to observe-only —
   // gaps are logged and reported but never block a rollup or completeness.
@@ -107,7 +103,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     port,
     coreLoop,
     workerOfflineSecs,
-    modelsConfigPath,
   };
 }
 

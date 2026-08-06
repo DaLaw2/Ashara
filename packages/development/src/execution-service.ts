@@ -23,7 +23,7 @@ import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
 import { extractContractChecks } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
-import { containerizedRunCommand } from "./check-runner.js";
+import { containerizedRunCommand, defaultRunCommand } from "./check-runner.js";
 import { readManifestContext } from "./dispatch-utils.js";
 import { deriveEnvironmentSpec } from "./env-spec-derivation.js";
 import {
@@ -241,8 +241,8 @@ export class DevelopmentService {
       return { runCommand: runner, prepareRunCommand: runner };
     }
     return {
-      runCommand: containerizedRunCommand(workDir, image),
-      prepareRunCommand: containerizedRunCommand(workDir, image, { network: true }),
+      runCommand: defaultRunCommand,
+      prepareRunCommand: defaultRunCommand,
     };
   }
 

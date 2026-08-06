@@ -1,7 +1,6 @@
 export { LLMGateway, extractUsage } from "./gateway.js";
 export type { ResolvedModel } from "./gateway.js";
 export { BudgetLedger } from "./budget-ledger.js";
-export { ProviderRegistry } from "./provider-registry.js";
 export {
   buildGatewayConfig,
   loadGatewayConfig,
@@ -16,7 +15,7 @@ export {
   CAPABILITY_RANK,
   resolveModelsConfigPath,
 } from "./pricing.js";
-export { loadRoutingProfilesFromToml, computeProviderCombo } from "./routing-profiles.js";
+export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { buildGateway } from "./build-gateway.js";
 export type { GatewayBuildResult, BuildGatewayOptions } from "./build-gateway.js";
 export {
@@ -48,7 +47,6 @@ export {
   ProviderMissingBaseUrl,
   TemperatureNotHonored,
 } from "./errors.js";
-export { KNOWN_LLM_SITES } from "./types.js";
 export type {
   GatewayConfig,
   LLMCallRecord,
@@ -68,5 +66,4 @@ export type {
   RoutingProfiles,
   RoutingProfileEntry,
   RoutingProfileCapabilityTable,
-  KnownLLMSite,
 } from "./types.js";

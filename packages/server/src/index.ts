@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Hono } from "hono";
@@ -98,44 +98,14 @@ import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
 import { resolveAgentOutput } from "./agent-output.js";
 import {
-  buildContainerName,
   SANDBOX_IMAGE,
   SANDBOX_TAG,
-  buildContainerEnv,
-  spawnContainer,
-  terminateContainer,
   ContainerSpawnError,
 } from "./container-spawn.js";
 import { wireLlmGateway } from "./gateway-wiring.js";
 import { PodmanProvisioner } from "./podman-provisioner.js";
 
 async function main(): Promise<void> {
-  const dotenvPath = `${process.cwd()}/.env`;
-  try {
-    if (existsSync(dotenvPath)) {
-      const text = readFileSync(dotenvPath, "utf-8");
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith("#")) continue;
-        const eqIdx = trimmed.indexOf("=");
-        if (eqIdx === -1) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        let value = trimmed.slice(eqIdx + 1).trim();
-        if (
-          (value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))
-        ) {
-          value = value.slice(1, -1);
-        }
-        if (!(key in process.env)) {
-          process.env[key] = value;
-        }
-      }
-    }
-  } catch (e: unknown) {
-    console.warn(`[server] Failed to load .env from ${dotenvPath}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
   // Phase 1: bootstrap — database URL from env or policy default.
   const databaseUrl = loadDatabaseUrl();
   const db = createDb(databaseUrl);
@@ -418,10 +388,6 @@ async function main(): Promise<void> {
     return { catalog, providerKeyEnv };
   }
 
-  // Every in-flight agent container name, so shutdown can stop them all.
-  // Populated on spawn, drained on exit or cleanup; iterated on shutdown.
-  const activeContainers = new Set<string>();
-
   const provisioner = new PodmanProvisioner(config.coreLoop.workdirBase);
 
   const agentInvoker: AgentInvoker = {
@@ -437,96 +403,45 @@ async function main(): Promise<void> {
       const spawnData = await buildSpawnData();
       writeFileSync(catalogPath, JSON.stringify(spawnData.catalog, null, 2));
 
+      // Agent-runner always runs on the host. When a provisioned container
+      // exists, run_command routes commands into it via ASHARA_EXEC_CONTAINER;
+      // otherwise commands execute locally.
+      const agentEnv: Record<string, string> = {
+        ...buildSanitizedEnv([]),
+        ...spawnData.providerKeyEnv,
+        ASHARA_BRIEF_PATH: opts.briefPath,
+        ASHARA_OUTPUT_PATH: opts.outputPath,
+        ASHARA_WORKING_DIR: opts.workDir,
+        ASHARA_CATALOG_PATH: catalogPath,
+        AGENT_CAPABILITY: capability,
+      };
+
       const execContainerName = provisioner.activeContainerName();
       if (execContainerName) {
-        // Host-spawn path: agent-runner runs on the host; run_command routes
-        // commands into the provisioned container via ASHARA_EXEC_CONTAINER.
-        const agentEnv: Record<string, string> = {
-          ...buildSanitizedEnv([]),
-          ...spawnData.providerKeyEnv,
-          ASHARA_BRIEF_PATH: opts.briefPath,
-          ASHARA_OUTPUT_PATH: opts.outputPath,
-          ASHARA_WORKING_DIR: opts.workDir,
-          ASHARA_CATALOG_PATH: catalogPath,
-          AGENT_CAPABILITY: capability,
-          ASHARA_EXEC_CONTAINER: execContainerName,
-          ASHARA_HOST_WORKDIR: opts.workDir,
-          ASHARA_CONTAINER_MOUNT: "/workspace",
-        };
-
-        console.log(`[${opts.taskId}] launching agent-runner on host (exec container: ${execContainerName})`);
-
-        const proc = spawn("node", [
-          resolve(config.coreLoop.asharaSourceDir, "node_modules/tsx/dist/cli.mjs"),
-          resolve(config.coreLoop.asharaSourceDir, "packages/agent-runner/src/runner.ts"),
-        ], {
-          cwd: opts.workDir,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: agentEnv,
-        });
-
-        const timer = setTimeout(() => {
-          console.warn(
-            `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — killing host process`,
-          );
-          proc.kill("SIGTERM");
-        }, config.coreLoop.agentTimeoutMs);
-        try {
-          let stdout = "";
-          let stderr = "";
-          proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-          proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-          const exitCode = await new Promise<number | null>((resolveCode, reject) => {
-            proc.on("close", resolveCode);
-            proc.on("error", (err) => {
-              reject(new ContainerSpawnError({
-                operation: "host-spawn",
-                containerName: execContainerName,
-                taskId: opts.taskId,
-                exitCode: null,
-                cause: err.message,
-                stderr: "",
-              }));
-            });
-          });
-
-          if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
-          return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
-        } finally {
-          clearTimeout(timer);
-        }
+        agentEnv["ASHARA_EXEC_CONTAINER"] = execContainerName;
+        agentEnv["ASHARA_HOST_WORKDIR"] = opts.workDir;
+        agentEnv["ASHARA_CONTAINER_MOUNT"] = "/workspace";
       }
 
-      // Container-spawn path (fallback: no provisioned environment).
-      const containerName = buildContainerName(opts.taskId);
-      const containerEnv = buildContainerEnv(
-        { ...buildSanitizedEnv([]), ...spawnData.providerKeyEnv },
-        opts.workDir,
-        {
-          briefPath: opts.briefPath,
-          outputPath: opts.outputPath,
-          workDir: opts.workDir,
-          catalogPath,
-          capability,
-        },
+      console.log(
+        `[${opts.taskId}] launching agent-runner on host`
+        + (execContainerName ? ` (exec container: ${execContainerName})` : " (local execution)"),
       );
 
-      console.log(`[${opts.taskId}] launching agent-runner in container ${containerName}`);
-
-      const proc = spawnContainer(
-        containerName,
-        opts.workDir,
-        config.coreLoop.asharaSourceDir,
-        containerEnv,
-      );
-      activeContainers.add(containerName);
+      const proc = spawn("node", [
+        resolve(config.coreLoop.asharaSourceDir, "node_modules/tsx/dist/cli.mjs"),
+        resolve(config.coreLoop.asharaSourceDir, "packages/agent-runner/src/runner.ts"),
+      ], {
+        cwd: opts.workDir,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: agentEnv,
+      });
 
       const timer = setTimeout(() => {
         console.warn(
-          `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — stopping container ${containerName}`,
+          `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — killing host process`,
         );
-        void terminateContainer(containerName);
+        proc.kill("SIGTERM");
       }, config.coreLoop.agentTimeoutMs);
       try {
         let stdout = "";
@@ -538,8 +453,8 @@ async function main(): Promise<void> {
           proc.on("close", resolveCode);
           proc.on("error", (err) => {
             reject(new ContainerSpawnError({
-              operation: "spawn",
-              containerName,
+              operation: "host-spawn",
+              containerName: execContainerName ?? "local",
               taskId: opts.taskId,
               exitCode: null,
               cause: err.message,
@@ -549,12 +464,9 @@ async function main(): Promise<void> {
         });
 
         if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
-
         return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
       } finally {
         clearTimeout(timer);
-        activeContainers.delete(containerName);
-        void terminateContainer(containerName);
       }
     },
   };
@@ -896,14 +808,9 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log("Shutting down...");
     abortController.abort();
-    // Stop every in-flight agent container (p0-isolation): `podman stop` sends
-    // SIGTERM to PID 1 inside the container, then SIGKILL after a grace period.
-    // Unlike killing the podman client, this actually stops the workload.
-    const containers = [...activeContainers];
-    if (containers.length > 0) {
-      console.log(`Stopping ${containers.length} in-flight agent container(s)...`);
-      await Promise.all(containers.map((name) => terminateContainer(name)));
-    }
+    // Agent-runner processes are host-spawned children — they inherit the
+    // server's process group, so SIGTERM propagates naturally on shutdown.
+    // Provisioned containers are cleaned up by DevelopmentService's teardown.
     server.close();
   };
   process.on("SIGTERM", () => void shutdown());

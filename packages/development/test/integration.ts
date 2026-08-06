@@ -18,7 +18,6 @@ import {
     BrainstormEngine,
     StubBrainstormLLM,
     DecompositionEngine,
-    StubDecompositionLLM,
     NorthStarChecker,
     StubNorthStarLLM,
     resetIdCounter,
@@ -43,6 +42,7 @@ import {
 import type {
     CostSummary,
 } from "@ashara/llm-gateway";
+import { StubDecompositionLLM } from "../../planning/src/__stubs__/decomposition-llm.js";
 import { buildAutoProfile } from "../src/dispatch-utils.js";
 import {
     assembleBrief,

@@ -37,14 +37,14 @@ describe("generateContainerfile", () => {
     );
   });
 
-  test("toolchains without installMethod use apt-get install", () => {
+  test("toolchains without installMethod get apt-get update + install", () => {
     const toolchains: Toolchain[] = [
       { name: "zig" },
       { name: "elixir", version: "1.17" },
     ];
     const result = generateContainerfile(minimalSpec({ toolchains }));
-    expect(result).toContain("apt-get install -y zig");
-    expect(result).toContain("apt-get install -y elixir=1.17");
+    expect(result).toContain("apt-get update && apt-get install -y zig elixir=1.17");
+    expect(result).toContain("rm -rf /var/lib/apt/lists/*");
   });
 
   test("toolchains with installMethod use it directly", () => {
@@ -56,7 +56,7 @@ describe("generateContainerfile", () => {
     expect(result).not.toContain("apt-get install -y cobol");
   });
 
-  test("multiple toolchains join into a single RUN line", () => {
+  test("multiple apt-based toolchains combine into a single RUN line", () => {
     const toolchains: Toolchain[] = [
       { name: "zig" },
       { name: "elixir" },
@@ -64,7 +64,7 @@ describe("generateContainerfile", () => {
     const result = generateContainerfile(minimalSpec({ toolchains }));
     const runLines = result.split("\n").filter((l) => l.startsWith("RUN"));
     expect(runLines).toHaveLength(1);
-    expect(runLines[0]).toContain("apt-get install -y zig && apt-get install -y elixir");
+    expect(runLines[0]).toContain("apt-get update && apt-get install -y zig elixir");
   });
 
   test("env vars produce ENV directives", () => {
@@ -81,7 +81,7 @@ describe("generateContainerfile", () => {
     expect(result).not.toContain("/workspace");
   });
 
-  test("section order is FROM < system packages < toolchains < ENV < WORKDIR", () => {
+  test("system packages and apt toolchains combine into one RUN", () => {
     const spec = minimalSpec({
       baseImage: "debian:bookworm",
       systemPackages: ["git"],
@@ -92,14 +92,36 @@ describe("generateContainerfile", () => {
     const lines = result.split("\n");
     const fromIdx = lines.findIndex((l) => l.startsWith("FROM"));
     const aptIdx = lines.findIndex((l) => l.includes("apt-get update"));
-    const tcIdx = lines.findIndex((l) => l.includes("apt-get install -y zig"));
     const envIdx = lines.findIndex((l) => l.startsWith("ENV LANG"));
     const wdIdx = lines.findIndex((l) => l.startsWith("WORKDIR"));
 
+    // System packages and apt-based toolchains on the same line
+    expect(lines[aptIdx]).toContain("git");
+    expect(lines[aptIdx]).toContain("zig");
     expect(fromIdx).toBeLessThan(aptIdx);
-    expect(aptIdx).toBeLessThan(tcIdx);
-    expect(tcIdx).toBeLessThan(envIdx);
+    expect(aptIdx).toBeLessThan(envIdx);
     expect(envIdx).toBeLessThan(wdIdx);
+  });
+
+  test("custom installMethod toolchains get their own RUN after apt", () => {
+    const spec = minimalSpec({
+      systemPackages: ["git"],
+      toolchains: [
+        { name: "zig" },
+        { name: "rust", installMethod: "curl -fsSL https://sh.rustup.rs | sh -s -- -y" },
+      ],
+    });
+    const result = generateContainerfile(spec);
+    const lines = result.split("\n");
+    const aptIdx = lines.findIndex((l) => l.includes("apt-get update"));
+    const customIdx = lines.findIndex((l) => l.includes("rustup"));
+
+    // apt line has git and zig but not rust
+    expect(lines[aptIdx]).toContain("git");
+    expect(lines[aptIdx]).toContain("zig");
+    expect(lines[aptIdx]).not.toContain("rust");
+    // custom installer is a separate RUN after apt
+    expect(customIdx).toBeGreaterThan(aptIdx);
   });
 
   test("zero hardcoded toolchain names in generated output", () => {

@@ -47,7 +47,6 @@ export type {
 } from "./decomposition-types.js";
 export { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 export type { DecompositionLLM } from "./decomposition.js";
-export { StubDecompositionLLM } from "./__stubs__/decomposition-llm.js";
 export { deriveCompletionEndpoint, deriveCompletionModule } from "./contract-derivation.js";
 
 export { NorthStarChecker, StubNorthStarLLM } from "./northstar.js";

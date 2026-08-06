@@ -12,7 +12,7 @@ import {
 import type { AlignmentLLM, AlignmentResult, DirectionInference, DirectionQuestion } from "@ashara/engagement";
 import { DecompositionEngine, resetIdCounter, createGatewayDecompositionLLM } from "@ashara/planning";
 import type { DecompositionLLM, DecompositionResult, WorkItemSpec } from "@ashara/planning";
-import { LLMGateway, buildGateway, loadGatewayConfig, loadGatewayConfigFromApi, withStructuredLadder } from "@ashara/llm-gateway";
+import { LLMGateway, buildGateway, loadGatewayConfigFromApi, withStructuredLadder } from "@ashara/llm-gateway";
 import type { GatewayConfig } from "@ashara/llm-gateway";
 import { loadServerEnv } from "@ashara/shared";
 import { AsharaClient } from "../client.js";
@@ -64,23 +64,28 @@ export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
     const serverUrl = process.env.ASHARA_SERVER_URL;
     const apiToken = process.env.ASHARA_API_TOKEN;
 
+    if (!serverUrl || !apiToken) {
+        throw new VisionError(
+            "llm_unavailable",
+            `ASHARA_SERVER_URL and ASHARA_API_TOKEN must both be set. ` +
+            `The CLI loads its LLM configuration from the Ashara server; ` +
+            `there is no local fallback.`,
+        );
+    }
+
     const checkedSources: string[] = [];
     let config: GatewayConfig;
-    if (serverUrl && apiToken) {
-        try {
-            config = await loadGatewayConfigFromApi(serverUrl, apiToken);
-            checkedSources.push(`API ${serverUrl}`);
-            console.log(`[Vision] config loaded from API (${serverUrl})`);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            console.warn(`[Vision] API config load failed, falling back to TOML: ${msg}`);
-            checkedSources.push(`API ${serverUrl} (failed: ${msg})`);
-            config = loadGatewayConfig();
-            checkedSources.push("TOML/env fallback");
-        }
-    } else {
-        config = loadGatewayConfig();
-        checkedSources.push("TOML/env");
+    try {
+        config = await loadGatewayConfigFromApi(serverUrl, apiToken);
+        checkedSources.push(`API ${serverUrl}`);
+        console.log(`[Vision] config loaded from API (${serverUrl})`);
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new VisionError(
+            "llm_unavailable",
+            `Failed to load LLM config from API (${serverUrl}): ${msg}`,
+            { cause: e },
+        );
     }
 
     const result = buildGateway({ config, checkedSources });

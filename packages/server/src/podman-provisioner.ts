@@ -11,7 +11,6 @@ import type {
   EnvChangeDelta,
   ExecResult,
   ExecOptions,
-  Toolchain,
 } from "@ashara/development";
 import { ProvisioningError, TeardownError } from "@ashara/development";
 
@@ -19,24 +18,31 @@ import { ProvisioningError, TeardownError } from "@ashara/development";
 // Containerfile generation
 // ---------------------------------------------------------------------------
 
-function toolchainInstallLine(tc: Toolchain): string {
-  if (tc.installMethod) return tc.installMethod;
-  const pkg = tc.version ? `${tc.name}=${tc.version}` : tc.name;
-  return `apt-get install -y ${pkg}`;
-}
-
 export function generateContainerfile(spec: EnvironmentSpec): string {
   const lines: string[] = [`FROM ${spec.baseImage}`];
 
-  if (spec.systemPackages.length > 0) {
+  // Partition toolchains: default (apt-get) vs custom installMethod
+  const aptToolchainPkgs: string[] = [];
+  const customInstallCmds: string[] = [];
+  for (const tc of spec.toolchains) {
+    if (tc.installMethod) {
+      customInstallCmds.push(tc.installMethod);
+    } else {
+      aptToolchainPkgs.push(tc.version ? `${tc.name}=${tc.version}` : tc.name);
+    }
+  }
+
+  // Single apt-get update + install for system packages and apt-based toolchains
+  const allAptPkgs = [...spec.systemPackages, ...aptToolchainPkgs];
+  if (allAptPkgs.length > 0) {
     lines.push(
-      `RUN apt-get update && apt-get install -y ${spec.systemPackages.join(" ")} && rm -rf /var/lib/apt/lists/*`,
+      `RUN apt-get update && apt-get install -y ${allAptPkgs.join(" ")} && rm -rf /var/lib/apt/lists/*`,
     );
   }
 
-  if (spec.toolchains.length > 0) {
-    const installCmds = spec.toolchains.map(toolchainInstallLine);
-    lines.push(`RUN ${installCmds.join(" && ")}`);
+  // Custom install methods (e.g. curl-based installers) run in their own RUN layer
+  if (customInstallCmds.length > 0) {
+    lines.push(`RUN ${customInstallCmds.join(" && ")}`);
   }
 
   for (const [key, value] of Object.entries(spec.envVars)) {
