@@ -28,43 +28,30 @@ describe("generateContainerfile", () => {
     expect(result).not.toContain("ENV ");
   });
 
-  test("system packages produce a single apt-get install", () => {
+  test("system packages produce RUN lines from caller-supplied commands", () => {
     const result = generateContainerfile(minimalSpec({
-      systemPackages: ["git", "curl", "build-essential"],
+      systemPackages: ["apt-get update && apt-get install -y git curl"],
     }));
-    expect(result).toContain(
-      "RUN apt-get update && apt-get install -y git curl build-essential",
-    );
+    expect(result).toContain("RUN apt-get update && apt-get install -y git curl");
   });
 
-  test("toolchains without installMethod get apt-get update + install", () => {
+  test("toolchains with installMethod produce RUN lines", () => {
     const toolchains: Toolchain[] = [
-      { name: "zig" },
-      { name: "elixir", version: "1.17" },
+      { name: "gcc", installMethod: "apk add --no-cache gcc musl-dev make" },
+      { name: "elixir", version: "1.17", installMethod: "apt-get update && apt-get install -y elixir=1.17" },
     ];
     const result = generateContainerfile(minimalSpec({ toolchains }));
-    expect(result).toContain("apt-get update && apt-get install -y zig elixir=1.17");
-    expect(result).toContain("rm -rf /var/lib/apt/lists/*");
+    expect(result).toContain("RUN apk add --no-cache gcc musl-dev make");
+    expect(result).toContain("RUN apt-get update && apt-get install -y elixir=1.17");
   });
 
-  test("toolchains with installMethod use it directly", () => {
-    const toolchains: Toolchain[] = [
-      { name: "cobol", installMethod: "curl -fsSL https://example.com/install-cobol.sh | bash" },
-    ];
-    const result = generateContainerfile(minimalSpec({ toolchains }));
-    expect(result).toContain("curl -fsSL https://example.com/install-cobol.sh | bash");
-    expect(result).not.toContain("apt-get install -y cobol");
-  });
-
-  test("multiple apt-based toolchains combine into a single RUN line", () => {
+  test("toolchains without installMethod produce no RUN line", () => {
     const toolchains: Toolchain[] = [
       { name: "zig" },
-      { name: "elixir" },
     ];
     const result = generateContainerfile(minimalSpec({ toolchains }));
     const runLines = result.split("\n").filter((l) => l.startsWith("RUN"));
-    expect(runLines).toHaveLength(1);
-    expect(runLines[0]).toContain("apt-get update && apt-get install -y zig elixir");
+    expect(runLines).toHaveLength(0);
   });
 
   test("env vars produce ENV directives", () => {
@@ -81,47 +68,39 @@ describe("generateContainerfile", () => {
     expect(result).not.toContain("/workspace");
   });
 
-  test("system packages and apt toolchains combine into one RUN", () => {
+  test("system packages before toolchains before env vars before workdir", () => {
     const spec = minimalSpec({
       baseImage: "debian:bookworm",
-      systemPackages: ["git"],
-      toolchains: [{ name: "zig" }],
+      systemPackages: ["apt-get update && apt-get install -y git"],
+      toolchains: [{ name: "zig", installMethod: "apt-get install -y zig" }],
       envVars: { LANG: "C.UTF-8" },
     });
     const result = generateContainerfile(spec);
     const lines = result.split("\n");
     const fromIdx = lines.findIndex((l) => l.startsWith("FROM"));
-    const aptIdx = lines.findIndex((l) => l.includes("apt-get update"));
+    const sysIdx = lines.findIndex((l) => l.includes("git"));
+    const tcIdx = lines.findIndex((l) => l.includes("zig"));
     const envIdx = lines.findIndex((l) => l.startsWith("ENV LANG"));
     const wdIdx = lines.findIndex((l) => l.startsWith("WORKDIR"));
 
-    // System packages and apt-based toolchains on the same line
-    expect(lines[aptIdx]).toContain("git");
-    expect(lines[aptIdx]).toContain("zig");
-    expect(fromIdx).toBeLessThan(aptIdx);
-    expect(aptIdx).toBeLessThan(envIdx);
+    expect(fromIdx).toBeLessThan(sysIdx);
+    expect(sysIdx).toBeLessThan(tcIdx);
+    expect(tcIdx).toBeLessThan(envIdx);
     expect(envIdx).toBeLessThan(wdIdx);
   });
 
-  test("custom installMethod toolchains get their own RUN after apt", () => {
+  test("each toolchain gets its own RUN line", () => {
     const spec = minimalSpec({
-      systemPackages: ["git"],
       toolchains: [
-        { name: "zig" },
+        { name: "gcc", installMethod: "apk add --no-cache gcc" },
         { name: "rust", installMethod: "curl -fsSL https://sh.rustup.rs | sh -s -- -y" },
       ],
     });
     const result = generateContainerfile(spec);
-    const lines = result.split("\n");
-    const aptIdx = lines.findIndex((l) => l.includes("apt-get update"));
-    const customIdx = lines.findIndex((l) => l.includes("rustup"));
-
-    // apt line has git and zig but not rust
-    expect(lines[aptIdx]).toContain("git");
-    expect(lines[aptIdx]).toContain("zig");
-    expect(lines[aptIdx]).not.toContain("rust");
-    // custom installer is a separate RUN after apt
-    expect(customIdx).toBeGreaterThan(aptIdx);
+    const runLines = result.split("\n").filter((l) => l.startsWith("RUN"));
+    expect(runLines).toHaveLength(2);
+    expect(runLines[0]).toContain("apk add --no-cache gcc");
+    expect(runLines[1]).toContain("rustup");
   });
 
   test("zero hardcoded toolchain names in generated output", () => {

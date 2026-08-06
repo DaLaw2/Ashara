@@ -24,6 +24,7 @@ import type { EnvironmentSpec } from "./provisioner.js";
 const LlmToolchainSchema = z.object({
   name: z.string().min(1),
   version: z.string().optional(),
+  installMethod: z.string().min(1),
 });
 
 const LlmEnvironmentSpecSchema = z.object({
@@ -65,7 +66,11 @@ function toCanonicalSpec(raw: LlmEnvironmentSpec): EnvironmentSpec {
 
   return {
     baseImage: raw.baseImage,
-    toolchains: raw.toolchains,
+    toolchains: raw.toolchains.map(tc => ({
+      name: tc.name,
+      ...(tc.version ? { version: tc.version } : {}),
+      installMethod: tc.installMethod,
+    })),
     systemPackages: raw.systemPackages,
     envVars: raw.envVars,
     networkPolicy,
@@ -121,13 +126,19 @@ function buildDerivationPrompt(manifestContent: string): string {
     "   appropriate for the languages and tools the manifests declare.",
     "",
     "2. toolchains: every language runtime, compiler, and package manager the",
-    "   project requires, each as an object with 'name' (required) and 'version'",
-    "   (optional — include only if the manifests specify a version constraint).",
+    "   project requires, each as an object with 'name' (required), 'version'",
+    "   (optional — include only if the manifests specify a version constraint),",
+    "   and 'installMethod' (required — the full shell command to install this",
+    "   toolchain inside the base image you chose, e.g. 'apt-get update && apt-get install -y gcc'",
+    "   or 'apk add --no-cache go' or 'curl -fsSL https://... | sh').",
+    "   Match the package manager to the base image's distribution.",
     "   Derive these ENTIRELY from the manifest content.",
     "",
     "3. systemPackages: OS-level packages beyond the base image that the",
     "   project's build or runtime dependencies require (e.g. native libraries,",
-    "   development headers). Return an empty array if none are evident.",
+    "   development headers). Each entry is a full install command matching the",
+    "   base image's package manager (e.g. 'apt-get update && apt-get install -y libssl-dev').",
+    "   Return an empty array if none are evident.",
     "",
     "4. envVars: environment variables the manifests indicate are needed at",
     "   build or provision time (not runtime secrets). Return an empty object",

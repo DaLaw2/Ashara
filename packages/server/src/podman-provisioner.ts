@@ -21,28 +21,17 @@ import { ProvisioningError, TeardownError } from "@ashara/development";
 export function generateContainerfile(spec: EnvironmentSpec): string {
   const lines: string[] = [`FROM ${spec.baseImage}`];
 
-  // Partition toolchains: default (apt-get) vs custom installMethod
-  const aptToolchainPkgs: string[] = [];
-  const customInstallCmds: string[] = [];
+  // System packages: each entry is a full install command from the LLM
+  for (const cmd of spec.systemPackages) {
+    lines.push(`RUN ${cmd}`);
+  }
+
+  // Toolchains: each carries its own installMethod — the provisioner does not
+  // know which package manager the base image uses (Target Generality).
   for (const tc of spec.toolchains) {
     if (tc.installMethod) {
-      customInstallCmds.push(tc.installMethod);
-    } else {
-      aptToolchainPkgs.push(tc.version ? `${tc.name}=${tc.version}` : tc.name);
+      lines.push(`RUN ${tc.installMethod}`);
     }
-  }
-
-  // Single apt-get update + install for system packages and apt-based toolchains
-  const allAptPkgs = [...spec.systemPackages, ...aptToolchainPkgs];
-  if (allAptPkgs.length > 0) {
-    lines.push(
-      `RUN apt-get update && apt-get install -y ${allAptPkgs.join(" ")} && rm -rf /var/lib/apt/lists/*`,
-    );
-  }
-
-  // Custom install methods (e.g. curl-based installers) run in their own RUN layer
-  if (customInstallCmds.length > 0) {
-    lines.push(`RUN ${customInstallCmds.join(" && ")}`);
   }
 
   for (const [key, value] of Object.entries(spec.envVars)) {
