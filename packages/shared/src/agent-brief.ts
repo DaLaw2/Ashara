@@ -87,6 +87,12 @@ export const AgentBriefSchema = z
     // these when it has real content, so an empty string is a malformed brief.
     priorAttemptFailure: z.string().min(1).optional(),
     contractSlice: z.string().min(1).optional(),
+    // Per-task binary unblock: the orchestrator can selectively allow binaries
+    // that are otherwise in DEFAULT_BLOCKED_BINARIES (e.g. "docker" for a
+    // container-provisioning task). The agent-runner filters blockedBinaries
+    // against this list when constructing CommandPolicyConfig. Optional: when
+    // absent, all defaults remain blocked.
+    allowedBinaries: z.array(z.string().min(1)).optional(),
   })
   .strict();
 

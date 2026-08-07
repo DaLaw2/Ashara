@@ -100,8 +100,11 @@ export class AgentRunner {
             toolPromptCtx = undefined;
         }
 
-        // 4. Create tool registry with working directory
-        const registry = createDefaultRegistry(this.config.workingDir);
+        // 4. Create tool registry with working directory, threading per-task
+        // binary overrides from the brief (e.g. allowedBinaries: ["docker"])
+        const registry = createDefaultRegistry(this.config.workingDir, {
+            allowedBinaries: brief.allowedBinaries,
+        });
 
         // 5. Resolve model and format group, build system prompt
         const resolvedCapability = resolveEffectiveCapability(this.gateway, this.config.capability);

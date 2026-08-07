@@ -66,45 +66,47 @@ export class ContinuousRunner {
 
     let consecutiveErrors = 0;
 
-    while (!mergedSignal.aborted) {
-      // Arm the wake guard BEFORE running the cycle: any NOTIFY from here until we act
-      // on the verdict sets wakePending, so a stop cannot swallow work that arrived
-      // after this cycle's snapshot was taken.
-      this.wakePending = false;
+    try {
+      while (!mergedSignal.aborted) {
+        // Arm the wake guard BEFORE running the cycle: any NOTIFY from here until we act
+        // on the verdict sets wakePending, so a stop cannot swallow work that arrived
+        // after this cycle's snapshot was taken.
+        this.wakePending = false;
 
-      try {
-        const result: CycleResult = await this.coreLoop.runCycle();
-        consecutiveErrors = 0;
-        console.log(`Cycle complete: ${result.tasksProcessed} tasks processed`);
+        try {
+          const result: CycleResult = await this.coreLoop.runCycle();
+          consecutiveErrors = 0;
+          console.log(`Cycle complete: ${result.tasksProcessed} tasks processed`);
 
-        const action = this.handleTermination(result);
-        if (action === "stop") break;
-        // A stop verdict superseded by an in-cycle wake: re-cycle immediately (skip the
-        // idle wait) so the newly-arrived work is observed on the very next snapshot.
-        if (action === "recycle") continue;
+          const action = this.handleTermination(result);
+          if (action === "stop") break;
+          // A stop verdict superseded by an in-cycle wake: re-cycle immediately (skip the
+          // idle wait) so the newly-arrived work is observed on the very next snapshot.
+          if (action === "recycle") continue;
 
-        const waitMs = result.tasksProcessed === 0
-          ? this.config.idleIntervalMs
-          : this.config.pollIntervalMs;
+          const waitMs = result.tasksProcessed === 0
+            ? this.config.idleIntervalMs
+            : this.config.pollIntervalMs;
 
-        await this.waitForWakeOrTimeout(waitMs, mergedSignal);
-      } catch (e) {
-        consecutiveErrors += 1;
-        console.error(`Cycle error (consecutive: ${consecutiveErrors}):`, e);
+          await this.waitForWakeOrTimeout(waitMs, mergedSignal);
+        } catch (e) {
+          consecutiveErrors += 1;
+          console.error(`Cycle error (consecutive: ${consecutiveErrors}):`, e);
 
-        if (consecutiveErrors >= this.config.maxConsecutiveErrors) {
-          const exponent = Math.min(consecutiveErrors, 6);
-          const backoffMs = Math.pow(2, exponent) * 1000;
-          console.warn(`Backing off for ${backoffMs / 1000}s after ${consecutiveErrors} consecutive errors`);
-          await this.waitForWakeOrTimeout(backoffMs, mergedSignal);
+          if (consecutiveErrors >= this.config.maxConsecutiveErrors) {
+            const exponent = Math.min(consecutiveErrors, 6);
+            const backoffMs = Math.pow(2, exponent) * 1000;
+            console.warn(`Backing off for ${backoffMs / 1000}s after ${consecutiveErrors} consecutive errors`);
+            await this.waitForWakeOrTimeout(backoffMs, mergedSignal);
+          }
         }
       }
+    } finally {
+      if (pgListener) {
+        pgListener.stop();
+      }
+      this.pgListener = null;
     }
-
-    if (pgListener) {
-      pgListener.stop();
-    }
-    this.pgListener = null;
 
     console.log("Continuous runner stopped");
   }

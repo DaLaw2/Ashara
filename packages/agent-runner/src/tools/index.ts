@@ -222,6 +222,8 @@ const TOOL_RESULT_BUDGETS: Record<string, number> = {
 export interface RegistryConfig {
     readonly commandPolicy?: CommandPolicyConfig;
     readonly extraEnvAllowed?: string[];
+    /** Binaries to remove from the default blocked list (per-task override). */
+    readonly allowedBinaries?: readonly string[];
 }
 
 export function createDefaultRegistry(workingDir?: string, config?: RegistryConfig): ToolRegistry {
@@ -236,6 +238,10 @@ export function createDefaultRegistry(workingDir?: string, config?: RegistryConf
     }
 
     const policyConfig = config?.commandPolicy ?? defaultCommandPolicyConfig();
+    if (config?.allowedBinaries?.length) {
+        const allowed = new Set(config.allowedBinaries);
+        policyConfig.blockedBinaries = policyConfig.blockedBinaries.filter(b => !allowed.has(b));
+    }
     const policy = new CommandPolicy(policyConfig, workingDir);
     const env = buildSanitizedEnv(config?.extraEnvAllowed);
 

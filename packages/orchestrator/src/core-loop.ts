@@ -91,26 +91,40 @@ export class CoreLoop {
         const unlockWeights = graph.computeUnlockWeights();
         batch = PlanningService.select(eligible, deps.config.maxBatchSize, unlockWeights);
 
+        // Pre-check budget for entire batch before dispatching concurrently.
+        // Each task gets its own worktree (workspace.ts creates per-task branches),
+        // so concurrent execution is safe at the process boundary.
+        const budgetedTasks: Array<{ task: WorkItem; capability: string }> = [];
         for (const task of batch) {
           if (this.budget.isExhausted()) {
-            console.warn(`[${task.id}] budget limit reached mid-batch, skipping remaining`);
+            console.warn(`[${task.id}] budget limit reached, skipping remaining`);
             break;
           }
-
           const capability = extractCapability(task);
           const estCost = this.budget.estimateTaskCost(capability);
           console.log(`[${task.id}] pre-dispatch estimate: $${estCost.toFixed(4)} (${capability})`);
+          budgetedTasks.push({ task, capability });
+        }
 
-          try {
-            const { result, costInfo } = await processTask(deps, task, runScope);
+        // Dispatch all concurrently
+        const settled = await Promise.allSettled(
+          budgetedTasks.map(({ task }) => processTask(deps, task, runScope)),
+        );
+
+        // Accumulate costs sequentially (budget is in-memory, not concurrent-safe)
+        for (let i = 0; i < settled.length; i++) {
+          const s = settled[i];
+          const { task, capability } = budgetedTasks[i];
+          if (s.status === "fulfilled") {
+            const { result, costInfo } = s.value;
             this.budget.accumulateCost(costInfo, capability, result.status === "completed");
             await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
-            await this.persistRunCounters();
             results.push(result);
-          } catch (e) {
-            results.push(await handleProcessingError(deps, task, e));
+          } else {
+            results.push(await handleProcessingError(deps, task, s.reason));
           }
         }
+        await this.persistRunCounters();
       }
 
       const completedCount = results.filter((r) => r.status === "completed").length;
@@ -143,19 +157,30 @@ export class CoreLoop {
             const retryWeights = retryGraph.computeUnlockWeights();
             const retryBatch = PlanningService.select(retryEligible, deps.config.maxBatchSize, retryWeights);
 
+            const retryBudgeted: Array<{ task: WorkItem; capability: string }> = [];
             for (const task of retryBatch) {
               if (this.budget.isExhausted()) break;
               const capability = extractCapability(task);
-              try {
-                const { result, costInfo } = await processTask(deps, task, runScope);
+              retryBudgeted.push({ task, capability });
+            }
+
+            const retrySettled = await Promise.allSettled(
+              retryBudgeted.map(({ task }) => processTask(deps, task, runScope)),
+            );
+
+            for (let i = 0; i < retrySettled.length; i++) {
+              const s = retrySettled[i];
+              const { task, capability } = retryBudgeted[i];
+              if (s.status === "fulfilled") {
+                const { result, costInfo } = s.value;
                 this.budget.accumulateCost(costInfo, capability, result.status === "completed");
                 await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
-                await this.persistRunCounters();
                 results.push(result);
-              } catch (e) {
-                results.push(await handleProcessingError(deps, task, e));
+              } else {
+                results.push(await handleProcessingError(deps, task, s.reason));
               }
             }
+            await this.persistRunCounters();
           }
         }
       }
