@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { readVerifyConfig, VerifyConfigParseError } from "./verify-config.js";
+import { readVerifyConfig, VerifyConfigParseError, isVacuousCommand } from "./verify-config.js";
 
 let dir: string;
 
@@ -60,5 +60,25 @@ describe("readVerifyConfig", () => {
     await writeFile(join(dir, "verify.toml"), "[metadata]\nversion = 1\n");
     const config = await readVerifyConfig(dir);
     expect(config.checks).toEqual([]);
+  });
+});
+
+describe("isVacuousCommand", () => {
+  test.each([
+    ["echo 'no build'", true],
+    ["echo", true],
+    ["printf 'hi'", true],
+    ["true", true],
+    [":", true],
+    ["exit 0", true],
+    ["", true],
+    ["   ", true],
+    ["make", false],
+    ["gcc -o main main.c", false],
+    ["npm test", false],
+    ["echo 'building' && make", false],  // has &&, conservatively non-vacuous
+    ["cargo test 2>&1 | grep ok", false],
+  ])("%s → %s", (cmd, expected) => {
+    expect(isVacuousCommand(cmd)).toBe(expected);
   });
 });

@@ -419,7 +419,7 @@ async function main(): Promise<void> {
       const execContainerName = provisioner.activeContainerName();
       if (execContainerName) {
         agentEnv["ASHARA_EXEC_CONTAINER"] = execContainerName;
-        agentEnv["ASHARA_HOST_WORKDIR"] = opts.workDir;
+        agentEnv["ASHARA_HOST_WORKDIR"] = config.coreLoop.workdirBase;
         agentEnv["ASHARA_CONTAINER_MOUNT"] = "/workspace";
       }
 

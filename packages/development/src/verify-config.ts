@@ -98,3 +98,25 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
 
   return { checks };
 }
+
+/**
+ * Detect commands that always exit 0 without testing anything — echo stubs,
+ * `true`, `:`, bare `exit 0`. These bypass the "unverified" safety net
+ * because they are syntactically valid checks that never fail.
+ *
+ * Conservatively non-vacuous when the command contains shell operators
+ * (`&&`, `||`, `;`, `|`) — e.g. `echo 'building' && make` does real work.
+ */
+export function isVacuousCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) return true;
+  // Commands with shell operators are conservatively non-vacuous:
+  // "echo hi && make" does real work after the echo.
+  if (/&&|\|\||[;|]/.test(trimmed)) return false;
+  if (/^\s*echo(\s|$)/.test(trimmed)) return true;
+  if (/^\s*printf\s/.test(trimmed)) return true;
+  if (/^\s*true\s*$/.test(trimmed)) return true;
+  if (/^\s*:\s*$/.test(trimmed)) return true;
+  if (/^\s*exit\s+0\s*$/.test(trimmed)) return true;
+  return false;
+}

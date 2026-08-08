@@ -8,7 +8,7 @@ import {
   runDeterministicChecks,
 } from "./check-runner.js";
 import type { CoreTierResult } from "./check-runner.js";
-import { readVerifyConfig } from "./verify-config.js";
+import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
 
 // ---------------------------------------------------------------------------
 // Shared verify check library (Phase 2, mig-phase-2).
@@ -271,7 +271,17 @@ export async function runVerifyCore(
   }
 
   const verifyConfig = await readVerifyConfig(input.workDir);
-  const configChecks = verifyConfig.checks.map((c) => c.command);
+  const configChecks = verifyConfig.checks
+    .map((c) => c.command)
+    .filter((cmd) => !isVacuousCommand(cmd));
+  const vacuousCount = verifyConfig.checks.length - configChecks.length;
+  if (vacuousCount > 0) {
+    log?.({
+      event: "verify_vacuous_checks_filtered",
+      count: vacuousCount,
+      workDir: input.workDir,
+    });
+  }
   const hasVerifyToml = configChecks.length > 0;
 
   if (hasVerifyToml) {
@@ -295,10 +305,12 @@ export async function runVerifyCore(
   //   2. contractChecks — LLM-derived from knowledge-graph check nodes
   //   3. taskSpec checks (input.checks) — decomposition NL, fill gaps
   //
-  // verify.toml wins because it is what the agent WROTE after observing the
-  // project; the contract is what the LLM INFERRED before seeing it. A check
-  // already present in a higher-priority source is not re-added from a lower
-  // one.
+  // Per-task verification passes empty arrays for contractChecks and
+  // input.checks — those reference project-wide files that may not exist in
+  // a task's worktree. Only verify.toml (written by the agent in the
+  // worktree) is authoritative at per-task scope. Contract and taskSpec
+  // checks are deferred to integration verify, which runs against the full
+  // merged tree.
   const seen = new Set<string>();
   const allChecks: string[] = [];
 

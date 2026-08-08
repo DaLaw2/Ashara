@@ -72,8 +72,6 @@ export async function finalizeSuccess(
   task: TaskDescriptor,
   targetProjectPath: string | null,
   attempt: number,
-  taskChecks: readonly string[],
-  contractChecks: readonly string[],
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
   try {
@@ -134,12 +132,15 @@ export async function finalizeSuccess(
       };
     }
 
+    // Per-task verify uses only verify.toml; contract and taskSpec checks are
+    // deferred to integration verify (they reference project-wide files that
+    // may not exist in this task's worktree).
     const postMergeVerify = await runVerifyCore(
       {
         workDir: targetProjectPath,
         gitRoot: targetProjectPath,
-        checks: [...taskChecks],
-        contractChecks,
+        checks: [],
+        contractChecks: [],
       },
       {
         runCommand: deps.runCommand,
@@ -162,7 +163,7 @@ export async function finalizeSuccess(
         {
           operation: "postMergeVerify",
           gateOutput: postMergeVerify.tiers.deterministic.details,
-          gateContext: { taskId: task.id, attempt, checks: [...taskChecks] },
+          gateContext: { taskId: task.id, attempt },
         },
       );
     }

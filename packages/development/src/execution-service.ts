@@ -21,7 +21,6 @@ import { deriveEndpoints } from "./gates/endpoints.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
-import { extractContractChecks } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
 import { containerizedRunCommand, defaultRunCommand } from "./check-runner.js";
 import { readManifestContext } from "./dispatch-utils.js";
@@ -950,18 +949,16 @@ export class DevelopmentService {
       };
     }
 
-    // POLICY default: empty checks → finalize.ts:161 gates on verdict !== "passed" (fail-closed).
-    const taskChecks = stringArrayOrEmpty(task.taskSpec?.checks);
-    const contractChecksForFinalize = contract
-      ? extractContractChecks(contract.knowledge)
-      : [];
+    // Per-task verify uses only verify.toml; contract and taskSpec checks are
+    // deferred to integration verify (they reference project-wide files that may
+    // not exist in this task's worktree).
     const finalizeWorkDir = targetProjectPath ?? workDir;
     const finalizeImage = this.deps.config.sandboxImage;
     const finalizeDeps = {
       ...this.deps,
       ...this.buildRunners(finalizeWorkDir, finalizeImage, provisionedEnv),
     };
-    const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, taskChecks, contractChecksForFinalize, {
+    const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
@@ -1013,20 +1010,17 @@ export class DevelopmentService {
     workDir: string,
     _output: AgentOutputJson,
     attempt: number,
-    contract: ProjectContract | null,
+    _contract: ProjectContract | null,
     provisionedEnv?: ProvisionedEnv,
   ): Promise<VerifyTaskOutcome> {
-    const taskSpec = task.taskSpec;
-    const contractChecks = contract
-      ? extractContractChecks(contract.knowledge)
-      : [];
-
+    // Per-task verify uses only verify.toml; contract and taskSpec checks are
+    // deferred to integration verify (they reference project-wide files that may
+    // not exist in this task's worktree).
     const verifyRequest = {
       session_id: createSessionId(),
       task_id: task.id,
-      // POLICY default: same downstream as buildBrief — empty checks fail closed via verify-core.ts:320.
-      checks: stringArrayOrEmpty(taskSpec?.checks),
-      contractChecks,
+      checks: [] as string[],
+      contractChecks: [] as string[],
       working_directory: workDir,
       git_root: workDir,
     };
