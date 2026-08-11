@@ -1,7 +1,4 @@
 import { isAbsolute } from "node:path";
-import { z } from "zod";
-import type { ProjectKnowledge } from "@ashara/shared";
-import { nodesByKind } from "@ashara/shared";
 import { prepare, ToolchainError } from "./project-toolchain.js";
 import type { ToolchainDeps, ToolchainResult } from "./project-toolchain.js";
 import {
@@ -19,9 +16,9 @@ import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
 // runner — no shared runtime state.
 //
 // Containment is structural: each caller injects a CommandRunner (required,
-// no fallback). Host-side callers inject containerizedRunCommand (rootless
-// podman, --network=none, one mount). The agent-runner injects
-// defaultRunCommand because it is already inside the ADR-058 container.
+// no fallback). Host-side callers inject a runner built from the Provisioner
+// abstraction (provisionerAsRunner). The agent-runner injects
+// defaultRunCommand because it is already inside the agent container.
 // The absence of a fallback is the mechanism: a caller that forgets to
 // inject a runner gets a compile error, not silent host execution.
 //
@@ -89,8 +86,8 @@ export interface CoreVerifyInput {
 export interface CoreVerifyDeps {
   /**
    * How to execute deterministic check commands (npm test, cargo check, etc.).
-   * Required — no fallback. Host-side callers inject containerizedRunCommand
-   * with --network=none; the in-container agent-runner injects
+   * Required — no fallback. Host-side callers inject a runner built from the
+   * Provisioner abstraction; the in-container agent-runner injects
    * defaultRunCommand explicitly. The absence of a default is the mechanism:
    * a forgotten injection is a compile error, not silent host execution
    * (Discipline A: the identity element is unavailable).
@@ -100,14 +97,12 @@ export interface CoreVerifyDeps {
    * How to execute toolchain preparation commands (npm install, cargo build,
    * go mod download). Required — no fallback. Separate from runCommand
    * because preparation needs network access (to fetch dependencies) while
-   * checks do not. Host-side callers inject containerizedRunCommand with
-   * { network: true }; the agent-runner injects defaultRunCommand (the
+   * checks do not. Host-side callers inject a Provisioner-backed runner
+   * with network enabled; the agent-runner injects defaultRunCommand (the
    * agent container already has network for this purpose).
    *
-   * One mechanism, two configurations: both are containerizedRunCommand,
-   * differing only in the network flag. The split is here rather than
-   * inside containerizedRunCommand because the decision "preparation needs
-   * network" belongs to the caller, not to the runner.
+   * The split is here because the decision "preparation needs network"
+   * belongs to the caller, not to the runner.
    */
   readonly prepareRunCommand: CommandRunner;
   readonly log?: VerifyLogFn;
@@ -191,44 +186,6 @@ async function prepareToolchainForVerify(
       },
     };
   }
-}
-
-// ---------------------------------------------------------------------------
-// Contract check extraction (zero-enum: replaces hardcoded baseline injection)
-// ---------------------------------------------------------------------------
-
-/**
- * Zod schema for the command array inside a knowledge-graph `check` node's
- * `meta.command` field. The node's `meta` is `Record<string, unknown>`, so
- * this is the boundary validation (Discipline A, Zod at every boundary).
- */
-const CheckNodeCommandSchema = z.array(z.string().min(1)).nonempty();
-
-/**
- * Extract executable check commands from the contract's knowledge graph.
- *
- * The decomposition prompt asks the LLM to emit `check` nodes with
- * `meta.command` set to a shell argv array (e.g. `["cargo", "check"]`).
- * This function reads those nodes and joins each argv into a command string
- * suitable for the deterministic check runner.
- *
- * Nodes whose `meta.command` is absent or fails Zod validation are silently
- * skipped — they may carry a human-readable `label` (criterion) but no
- * executable command.
- *
- * Target-generality: no language enumeration. A PHP project emitting
- * `["php", "artisan", "test"]` works with zero code changes.
- */
-export function extractContractChecks(knowledge: ProjectKnowledge): string[] {
-  const checkNodes = nodesByKind(knowledge, "check");
-  const commands: string[] = [];
-  for (const node of checkNodes) {
-    const parsed = CheckNodeCommandSchema.safeParse(node.meta?.command);
-    if (parsed.success) {
-      commands.push(parsed.data.join(" "));
-    }
-  }
-  return commands;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
+import type { ConversationResult, ConversationTurn } from "./conversation.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -27,8 +27,6 @@ export interface AgentOutput {
     readonly status: "done" | "blocked" | "failed";
     readonly summary: string;
     readonly findings: string[];
-    readonly buildLog: string | null;
-    readonly testLog: string | null;
     readonly error: string | null;
     readonly errorDetail: ErrorDetail | null;
     readonly totalTokens: { input: number; output: number };
@@ -56,8 +54,6 @@ function toJson(output: AgentOutput): AgentOutputJson {
         status: output.status,
         summary: output.summary,
         findings: output.findings,
-        build_log: output.buildLog,
-        test_log: output.testLog,
         error: output.error,
         error_detail: output.errorDetail
             ? { model: output.errorDetail.model, turn_count: output.errorDetail.turnCount, last_tool_call: output.errorDetail.lastToolCall, message: output.errorDetail.message }
@@ -74,9 +70,6 @@ function toJson(output: AgentOutput): AgentOutputJson {
 // Constants
 // ---------------------------------------------------------------------------
 
-const BUILD_PATTERNS = ["build", "compile", "cargo build", "bun build", "npm run build"];
-const TEST_PATTERNS = ["test", "cargo test", "bun test", "npm test", "jest", "vitest"];
-
 const FINDING_PREFIXES = ["I found", "I discovered", "Note:", "Warning:", "Issue:"];
 
 // ---------------------------------------------------------------------------
@@ -88,8 +81,6 @@ export class OutputCollector {
 
     async collect(result: ConversationResult): Promise<AgentOutput> {
         const status = this.determineStatus(result);
-        const buildLog = this.extractBuildLog(result.turns);
-        const testLog = this.extractTestLog(result.turns);
         const findings = this.extractFindings(result.turns);
         const turnCount = result.turns.length;
 
@@ -132,8 +123,6 @@ export class OutputCollector {
             status,
             summary,
             findings,
-            buildLog,
-            testLog,
             error: status === "failed" ? result.finalMessage : null,
             errorDetail,
             totalTokens: result.totalTokens,
@@ -174,14 +163,6 @@ export class OutputCollector {
             }
         }
         return last;
-    }
-
-    extractBuildLog(turns: readonly ConversationTurn[]): string | null {
-        return this.extractLogByPatterns(turns, BUILD_PATTERNS);
-    }
-
-    extractTestLog(turns: readonly ConversationTurn[]): string | null {
-        return this.extractLogByPatterns(turns, TEST_PATTERNS);
     }
 
     extractFindings(turns: readonly ConversationTurn[]): string[] {
@@ -239,32 +220,6 @@ export class OutputCollector {
         await writeFile(outputPath, JSON.stringify(json, null, 2) + "\n", "utf-8");
     }
 
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
-    private extractLogByPatterns(turns: readonly ConversationTurn[], patterns: readonly string[]): string | null {
-        const logs: string[] = [];
-
-        for (const turn of turns) {
-            for (const tr of turn.toolResults) {
-                if (!isRunCommandResult(tr, turn)) {
-                    continue;
-                }
-                const command = getCommandFromTurn(tr, turn);
-                if (command === null) {
-                    continue;
-                }
-                const lower = command.toLowerCase();
-                if (patterns.some((p) => lower.includes(p))) {
-                    logs.push(tr.result.output);
-                }
-            }
-        }
-
-        return logs.length > 0 ? logs.join("\n---\n") : null;
-    }
-
 }
 
 
@@ -282,20 +237,3 @@ function extractBlockedText(text: string): string | null {
     return firstLine.length > 0 ? firstLine : null;
 }
 
-function isRunCommandResult(tr: ConversationToolResult, _turn: ConversationTurn): boolean {
-    return tr.toolName === "run_command";
-}
-
-function getCommandFromTurn(tr: ConversationToolResult, turn: ConversationTurn): string | null {
-    // Find the matching tool call to retrieve the command argument
-    for (const tc of turn.toolCalls) {
-        if (tc.id === tr.toolCallId) {
-            // contract-erasing: tool call input has per-tool known fields (e.g. "command")
-            const input = tc.input as Record<string, unknown>;
-            if (typeof input["command"] === "string") {
-                return input["command"];
-            }
-        }
-    }
-    return null;
-}

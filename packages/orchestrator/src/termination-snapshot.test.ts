@@ -127,7 +127,6 @@ describe("path 4: a tier that does not run", () => {
         kind: "booted",
         port: 3000,
         endpoints: [{ method: "GET", path: "/notes", status: 200, detail: "HTTP 200" }],
-        bootOutput: "",
       }),
     });
 
@@ -147,7 +146,6 @@ describe("accepted stays reachable", () => {
         kind: "booted",
         port: 3000,
         endpoints: [{ method: "GET", path: "/notes", status: 200, detail: "HTTP 200" }],
-        bootOutput: "",
       }),
     });
 

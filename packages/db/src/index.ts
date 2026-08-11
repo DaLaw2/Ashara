@@ -1,4 +1,3 @@
-export type { Database } from "./connection.js";
 export { DEFAULT_DATABASE_URL, createDb } from "./connection.js";
 
 export type { PgListener } from "./listener.js";

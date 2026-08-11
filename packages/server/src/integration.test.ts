@@ -6,7 +6,6 @@ import { Hono } from "hono";
 import pg from "pg";
 import {
   DEFAULT_DATABASE_URL,
-  type Database,
   WorkItemRepository,
   EventStoreRepository,
   DevSessionRepository,
@@ -18,6 +17,7 @@ import { initParser } from "@ashara/memory";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import type { Database } from "../../db/src/connection.js";
 import { createDbFromPool } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";

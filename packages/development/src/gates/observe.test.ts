@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { observeProduct } from "./observe.js";
 
 // ---------------------------------------------------------------------------
-// Run 39's Go CLI produced `booted: false, bootOutput: "no package.json"`, and
+// Run 39's Go CLI produced `booted: false` with "no package.json", and
 // acceptance published that as a product defect. Ashara must instead say "I
 // cannot observe this" — a claim about the observer, not about the product.
 // ---------------------------------------------------------------------------

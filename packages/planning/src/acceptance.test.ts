@@ -43,7 +43,7 @@ function booted(
   head: { method: string; path: string; status: number | null; detail: string },
   ...rest: Array<{ method: string; path: string; status: number | null; detail: string }>
 ): ProductObservation {
-  return { kind: "booted", port: 3000, endpoints: [head, ...rest], bootOutput: "started" };
+  return { kind: "booted", port: 3000, endpoints: [head, ...rest] };
 }
 
 describe("boot expectation", () => {

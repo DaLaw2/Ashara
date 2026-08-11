@@ -10,7 +10,6 @@ export interface ServerConfig {
   readonly apiToken: string;
   readonly port: number;
   readonly coreLoop: CoreLoopConfig;
-  readonly workerOfflineSecs: number;
 }
 
 export function loadDatabaseUrl(): string {
@@ -68,11 +67,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     DEFAULT_CONFIG.maxPendingWorkItems,
   );
 
-  const selfUrl = `http://localhost:${port}`;
-  const workerOfflineSecs = parseIntOr(
-    process.env["WORKER_OFFLINE_SECS"],
-    30,
-  );
   // Coverage reconciliation is ENFORCING by default (mig9-t2, ADR-032 §2). The
   // rollback: ASHARA_COVERAGE_ENFORCING=0 (or "false") switches to observe-only —
   // gaps are logged and reported but never block a rollup or completeness.
@@ -92,8 +86,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     budgetLimitUsd,
     brainstormCooldownThreshold,
     maxPendingWorkItems,
-    selfUrl,
-    apiToken,
     coverageEnforcing,
   };
 
@@ -102,7 +94,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     apiToken,
     port,
     coreLoop,
-    workerOfflineSecs,
   };
 }
 

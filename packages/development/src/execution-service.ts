@@ -22,7 +22,7 @@ import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
 import type { CommandRunner } from "./verify-core.js";
-import { containerizedRunCommand, defaultRunCommand } from "./check-runner.js";
+import { defaultRunCommand } from "./check-runner.js";
 import { readManifestContext } from "./dispatch-utils.js";
 import { deriveEnvironmentSpec } from "./env-spec-derivation.js";
 import {
@@ -91,10 +91,11 @@ export interface DevelopmentConfig {
   readonly useRealAgent: boolean;
   /**
    * Full image tag for the check container (e.g. "alpine:3.20").
-   * Used to build the containerizedRunCommand for host-side verification.
-   * The check container runs with --network=none, one mount (the work
-   * directory), zero env vars, and no Ashara checkout — structurally
-   * contained rather than allowlist-filtered.
+   * Used by the Provisioner abstraction to build the contained
+   * CommandRunner for host-side verification. The check container runs
+   * with --network=none, one mount (the work directory), zero env vars,
+   * and no Ashara checkout — structurally contained rather than
+   * allowlist-filtered.
    */
   readonly sandboxImage: string;
 }
@@ -1467,8 +1468,6 @@ function stubAgentOutput(): AgentOutputJson {
     total_cost: 0,
     cost_measured: true,
     findings: [],
-    build_log: null,
-    test_log: null,
     error: null,
     error_detail: null,
     total_tokens: { input: 0, output: 0 },

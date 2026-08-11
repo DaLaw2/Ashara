@@ -3,7 +3,6 @@ export type { ResolvedModel } from "./gateway.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export {
   buildGatewayConfig,
-  loadGatewayConfig,
   loadGatewayConfigFromApi,
   loadGatewayCatalogFromFile,
   parseFormatGroup,

@@ -30,6 +30,7 @@ export function createDb(databaseUrl: string) {
   return drizzle(pool, { schema });
 }
 
+/** @public — consumed by server integration tests via direct import */
 export function createDbFromPool(pool: pg.Pool) {
   return drizzle(pool, { schema });
 }

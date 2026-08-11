@@ -16,8 +16,9 @@
       "ignoreBinaries": ["podman"]
     },
     "packages/development": {
-      "project": ["src/**/*.ts", "test/**/*.ts"],
-      "ignoreBinaries": ["podman"]
+      "entry": ["test/integration.ts"],
+      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+      "vitest": false
     },
     "packages/memory": {
       "ignoreDependencies": [
@@ -32,8 +33,10 @@
       ]
     },
     "packages/server": {
-      "project": ["src/**/*.ts"],
-      "ignoreBinaries": ["podman"]
+      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+      "vitest": false,
+      "ignoreBinaries": ["podman"],
+      "ignoreDependencies": ["pg", "@types/pg"]
     }
   }
 }

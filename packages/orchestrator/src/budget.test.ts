@@ -14,8 +14,6 @@ function measuredOutput(overrides: Partial<AgentOutputJson> = {}): AgentOutputJs
     status: "done",
     summary: "task complete",
     findings: [],
-    build_log: null,
-    test_log: null,
     error: null,
     error_detail: null,
     total_tokens: { input: 5000, output: 2000 },

@@ -37,7 +37,7 @@ import type {
 } from "@ashara/memory";
 import {
     LLMGateway,
-    loadGatewayConfig,
+    buildGatewayConfig,
 } from "@ashara/llm-gateway";
 import type {
     CostSummary,
@@ -232,6 +232,7 @@ async function runStep(
 // Main integration test
 // ---------------------------------------------------------------------------
 
+/** @public — called by integration.test.ts */
 export async function runIntegrationTest(
     config: IntegrationTestConfig,
 ): Promise<IntegrationTestResult> {
@@ -600,7 +601,7 @@ export async function runIntegrationTest(
             return "SKIPPED (useStubs=true)";
         }
 
-        const gatewayConfig = loadGatewayConfig();
+        const gatewayConfig = buildGatewayConfig({}, {}, []);
 
         if (gatewayConfig.providers.length === 0) {
             return "SKIPPED (no providers configured — set API keys or LOCAL_LLM_URL)";

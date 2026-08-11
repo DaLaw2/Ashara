@@ -37,8 +37,6 @@ export interface CoreLoopConfig {
   readonly maxRetries: number;
   readonly useRealAgent: boolean;
   readonly asharaSourceDir: string;
-  readonly selfUrl: string;
-  readonly apiToken: string;
   readonly brainstormCooldownThreshold: number;
   readonly maxPendingWorkItems: number;
   readonly maxBrainstormItems: number;
@@ -74,8 +72,6 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   maxRetries: 1,
   useRealAgent: false,
   asharaSourceDir: ".",
-  selfUrl: "",
-  apiToken: "",
   brainstormCooldownThreshold: 3,
   maxPendingWorkItems: 15,
   maxBrainstormItems: 3,

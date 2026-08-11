@@ -59,7 +59,6 @@ export const ProductObservationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("booted"),
     port: z.number().int().positive(),
     endpoints: z.array(EndpointProbeSchema).nonempty(),
-    bootOutput: z.string().max(4000),
   }).strict(),
 ]);
 export type ProductObservation = z.infer<typeof ProductObservationSchema>;

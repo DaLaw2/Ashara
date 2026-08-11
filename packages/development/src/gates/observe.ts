@@ -430,7 +430,7 @@ export async function observeProduct(request: ObserveRequest): Promise<ProductOb
       rest.push(await probeEndpoint(port, ep.method, ep.path));
     }
 
-    return { kind: "booted", port, endpoints: [head, ...rest], bootOutput: bootOutput() };
+    return { kind: "booted", port, endpoints: [head, ...rest] };
   } finally {
     await killProc();
   }

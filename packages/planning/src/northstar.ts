@@ -17,11 +17,10 @@ export type AlignmentResult =
   | { aligned: true; evidence: string }
   | { aligned: false; driftDescription: string };
 
-export const AlignmentResponseSchema = z.object({
-  aligned: z.boolean(),
-  evidence: z.string().optional(),
-  driftDescription: z.string().optional(),
-});
+export const AlignmentResponseSchema = z.discriminatedUnion("aligned", [
+  z.object({ aligned: z.literal(true), evidence: z.string().min(1) }),
+  z.object({ aligned: z.literal(false), driftDescription: z.string().min(1) }),
+]);
 
 export class NorthStarChecker {
   private readonly llm: NorthStarLLM;
@@ -34,14 +33,10 @@ export class NorthStarChecker {
     const prompt = this.buildPrompt(input);
     const parsed = await this.llm.generateStructured(prompt, AlignmentResponseSchema);
 
-    if (parsed.aligned && typeof parsed.evidence === "string") {
+    if (parsed.aligned) {
       return { aligned: true, evidence: parsed.evidence };
     }
-
-    return {
-      aligned: false,
-      driftDescription: parsed.driftDescription ?? "Alignment check returned non-aligned without description",
-    };
+    return { aligned: false, driftDescription: parsed.driftDescription };
   }
 
   private buildPrompt(input: NorthStarCheckInput): string {

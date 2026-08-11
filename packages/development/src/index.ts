@@ -29,7 +29,7 @@ export type { VerifyLogOptions, VerifyRunners } from "./verify.js";
 export { verify } from "./verify.js";
 export { runVerifyCore } from "./verify-core.js";
 export type { CommandRunner } from "./verify-core.js";
-export { defaultRunCommand, containerizedRunCommand } from "./check-runner.js";
+export { defaultRunCommand } from "./check-runner.js";
 
 export type {
   PackageManager,

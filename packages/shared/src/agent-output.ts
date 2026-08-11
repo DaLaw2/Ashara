@@ -20,8 +20,6 @@ export const agentOutputJsonSchema = z.object({
   status: z.enum(["done", "blocked", "failed"]),
   summary: z.string(),
   findings: z.array(z.string()),
-  build_log: z.string().nullable(),
-  test_log: z.string().nullable(),
   error: z.string().nullable(),
   error_detail: agentErrorDetailSchema.nullable(),
   total_tokens: z.object({ input: z.number(), output: z.number() }),

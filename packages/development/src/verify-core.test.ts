@@ -2,10 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test, expect, vi } from "vitest";
-import type { ProjectKnowledge } from "@ashara/shared";
-import { runVerifyCore, InvalidVerifyPathError, extractContractChecks } from "./verify-core.js";
+import { runVerifyCore, InvalidVerifyPathError } from "./verify-core.js";
 import type { CoreVerifyInput, CoreVerifyDeps, CommandRunner } from "./verify-core.js";
-import { ContainedCheckError } from "./check-runner.js";
 import { ToolchainError } from "./project-toolchain.js";
 import type { ToolchainResult } from "./project-toolchain.js";
 
@@ -429,15 +427,15 @@ describe("runVerifyCore — preparation uses prepareRunCommand, checks use runCo
 });
 
 // ---------------------------------------------------------------------------
-// Container unavailability fails closed — never falls back to host execution
+// Runner errors propagate — never falls back to silent success
 // ---------------------------------------------------------------------------
 
-describe("runVerifyCore — container unavailability fails closed", () => {
-  test("ContainedCheckError from runner propagates as failed verify", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-no-podman-"));
+describe("runVerifyCore — runner errors propagate", () => {
+  test("error from runner propagates as failed verify", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-runner-err-"));
     try {
       const runCommand = vi.fn<CommandRunner>(async () => {
-        throw new ContainedCheckError("spawn", "podman binary not found on PATH");
+        throw new Error("runner unavailable");
       });
       const deps = makeDeps({ runCommand });
 
@@ -448,103 +446,10 @@ describe("runVerifyCore — container unavailability fails closed", () => {
           { checks: ["npm test"], contractChecks: [], workDir: dir, gitRoot: dir },
           deps,
         ),
-      ).rejects.toBeInstanceOf(ContainedCheckError);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("ContainedCheckError for missing image propagates", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-no-image-"));
-    try {
-      const runCommand = vi.fn<CommandRunner>(async () => {
-        throw new ContainedCheckError("image_pull", "image not found: ashara-sandbox:0.1.0");
-      });
-      const deps = makeDeps({ runCommand });
-
-      await expect(
-        runVerifyCore(
-          { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
-          deps,
-        ),
-      ).rejects.toBeInstanceOf(ContainedCheckError);
+      ).rejects.toThrow("runner unavailable");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 });
 
-// ---------------------------------------------------------------------------
-// extractContractChecks — Zod-validated extraction from knowledge graph
-// ---------------------------------------------------------------------------
-
-describe("extractContractChecks", () => {
-  test("extracts commands from check nodes with valid meta.command", () => {
-    const knowledge: ProjectKnowledge = {
-      nodes: [
-        { id: "lang-ts", kind: "language", label: "TypeScript" },
-        { id: "check-tsc", kind: "check", label: "TypeScript compilation", meta: { command: ["npx", "--no-install", "tsc", "--noEmit"] } },
-        { id: "check-test", kind: "check", label: "Run tests", meta: { command: ["npm", "test"] } },
-      ],
-      edges: [],
-    };
-
-    const checks = extractContractChecks(knowledge);
-    expect(checks).toEqual(["npx --no-install tsc --noEmit", "npm test"]);
-  });
-
-  test("skips check nodes without meta.command", () => {
-    const knowledge: ProjectKnowledge = {
-      nodes: [
-        { id: "check-no-cmd", kind: "check", label: "The tests pass" },
-        { id: "check-with-cmd", kind: "check", label: "Lint", meta: { command: ["npm", "run", "lint"] } },
-      ],
-      edges: [],
-    };
-
-    const checks = extractContractChecks(knowledge);
-    expect(checks).toEqual(["npm run lint"]);
-  });
-
-  test("skips check nodes with invalid meta.command (not string array)", () => {
-    const knowledge: ProjectKnowledge = {
-      nodes: [
-        { id: "check-bad", kind: "check", label: "Bad command", meta: { command: "not an array" } },
-        { id: "check-empty", kind: "check", label: "Empty command", meta: { command: [] } },
-        { id: "check-num", kind: "check", label: "Number command", meta: { command: [42] } },
-        { id: "check-good", kind: "check", label: "Good", meta: { command: ["cargo", "test"] } },
-      ],
-      edges: [],
-    };
-
-    const checks = extractContractChecks(knowledge);
-    expect(checks).toEqual(["cargo test"]);
-  });
-
-  test("returns empty for knowledge graph with no check nodes", () => {
-    const knowledge: ProjectKnowledge = {
-      nodes: [
-        { id: "lang-rs", kind: "language", label: "Rust" },
-        { id: "rt-tokio", kind: "runtime", label: "Tokio" },
-      ],
-      edges: [],
-    };
-
-    const checks = extractContractChecks(knowledge);
-    expect(checks).toEqual([]);
-  });
-
-  test("works for any tech stack — PHP, Zig, Elixir (target generality)", () => {
-    const knowledge: ProjectKnowledge = {
-      nodes: [
-        { id: "lang-php", kind: "language", label: "PHP" },
-        { id: "check-php", kind: "check", label: "PHPUnit", meta: { command: ["php", "artisan", "test"] } },
-        { id: "check-lint", kind: "check", label: "PHPStan", meta: { command: ["vendor/bin/phpstan", "analyse"] } },
-      ],
-      edges: [],
-    };
-
-    const checks = extractContractChecks(knowledge);
-    expect(checks).toEqual(["php artisan test", "vendor/bin/phpstan analyse"]);
-  });
-});

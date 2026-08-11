@@ -79,33 +79,6 @@ export function buildGatewayConfig(
   };
 }
 
-/**
- * Legacy convenience wrapper: builds a {@link GatewayConfig} from env-var
- * API keys and TOML routing profiles, with an EMPTY model catalog.
- *
- * After migration 002 the authoritative model catalog lives in the database.
- * This function is retained as a backward-compatible fallback for call sites
- * that cannot reach the DB (agent-runner TOML fallback, CLI standalone).
- * With no models, the resulting config will have zero providers, causing
- * {@link buildGateway} to signal `NoLLMProvidersConfigured` -- which is the
- * correct behavior when the server (and its DB) is unreachable.
- */
-export function loadGatewayConfig(): GatewayConfig {
-  const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-  const keys = loadProviderKeys();
-  const urls = loadProviderBaseUrls();
-  const credentials: ProviderCredential[] = [
-    { name: "anthropic", apiKey: keys.anthropicApiKey },
-    { name: "openai", apiKey: keys.openaiApiKey },
-    { name: "deepseek", apiKey: keys.deepseekApiKey, baseUrl: urls.deepseekBaseUrl },
-    { name: "mistral", apiKey: keys.mistralApiKey, baseUrl: urls.mistralBaseUrl },
-    { name: "xai", apiKey: keys.xaiApiKey, baseUrl: urls.xaiBaseUrl },
-    { name: "google", apiKey: keys.googleApiKey, baseUrl: urls.googleBaseUrl },
-    { name: "local", baseUrl: keys.localLlmUrl },
-  ];
-  return buildGatewayConfig({}, routingProfiles, credentials);
-}
-
 // ---------------------------------------------------------------------------
 // Gateway catalog — one schema, one converter, two transports (file, HTTP)
 // ---------------------------------------------------------------------------

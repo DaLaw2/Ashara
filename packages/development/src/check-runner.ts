@@ -11,124 +11,14 @@ import type { CommandRunner } from "./verify-core.js";
 // out-of-process agent-runner runInlineVerify() adapters — pure functions plus
 // an injected CommandRunner, no shared runtime state.
 //
-// Containment is structural, not enumerative: host-side paths inject
-// containerizedRunCommand which runs each check inside a rootless podman
-// container with --network=none and a single mount (the work directory).
-// The in-container path (agent-runner) injects defaultRunCommand because
-// it is already inside the ADR-058 agent container.
+// Containment is structural, not enumerative: callers inject a CommandRunner
+// built from the Provisioner abstraction (provisionerAsRunner in
+// execution-service.ts). The in-container path (agent-runner) injects
+// defaultRunCommand because it is already inside the agent container.
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_LENGTH = 2000;
 export const CHECK_TIMEOUT_MS = 30_000;
-
-// ---------------------------------------------------------------------------
-// Contained check execution — rootless podman container with no network,
-// one mount (the work directory), zero env vars, no Ashara checkout mount.
-// ---------------------------------------------------------------------------
-
-/**
- * Typed error for when the structural containment mechanism is unavailable —
- * podman binary not found, image missing, or container fails to start.
- * Discipline C: self-diagnosing with operation + cause.
- */
-export class ContainedCheckError extends Error {
-  constructor(
-    public readonly operation: "spawn" | "container_start" | "image_pull",
-    public readonly cause: string,
-  ) {
-    super(`Contained check failed at ${operation}: ${cause}`);
-    this.name = "ContainedCheckError";
-  }
-}
-
-// Podman exits 125 when it cannot start the container at all (image not
-// found, namespace creation failure, SELinux denial on the bind mount).
-const PODMAN_ENGINE_ERROR_EXIT = 125;
-
-export interface ContainerRunOptions {
-  /**
-   * Whether the container has network access. Default: false (--network=none).
-   *
-   * Toolchain preparation (`npm install`, `cargo build`, `go mod download`)
-   * needs network to fetch dependencies. Deterministic checks (`npm test`,
-   * `cargo check`) observe the already-built tree and do not. One mechanism,
-   * two configurations — the only difference is this flag.
-   */
-  readonly network?: boolean;
-}
-
-/**
- * Build a CommandRunner that executes each command inside a short-lived podman
- * container. The container is ephemeral (--rm), rootless (--userns=keep-id),
- * and mounts only the work directory at /workspace. No Ashara checkout, no
- * env vars, no second mount.
- *
- * Network access is off by default (--network=none). Callers that need
- * network (toolchain preparation) pass `{ network: true }`.
- *
- * Fail-closed: if podman is not on PATH, the image is missing, or the
- * container cannot start, throws ContainedCheckError — never falls back to
- * uncontained host execution.
- */
-export function containerizedRunCommand(
-  workDir: string,
-  image: string,
-  opts: ContainerRunOptions = {},
-): CommandRunner {
-  return (command, _cwd, timeout) => {
-    const podmanArgs = [
-      "run", "--rm",
-      "--userns=keep-id",
-      ...(opts.network ? [] : ["--network=none"]),
-      "-v", `${workDir}:/workspace:z`,
-      "-w", "/workspace",
-      "-e", "CARGO_HOME=/workspace/.cargo",
-      "-e", "GOPATH=/workspace/.gopath",
-      "-e", "GOMODCACHE=/workspace/.gomodcache",
-      image,
-      ...command,
-    ];
-    const proc = spawn("podman", podmanArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const timer = setTimeout(() => proc.kill(), timeout);
-
-    return (async () => {
-      try {
-        let stdout = "";
-        let stderr = "";
-        proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-        proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-        const exitCode = await new Promise<number | null>((resolve, reject) => {
-          proc.on("close", resolve);
-          proc.on("error", (err: NodeJS.ErrnoException) => {
-            if (err.code === "ENOENT") {
-              reject(new ContainedCheckError("spawn", "podman binary not found on PATH"));
-            } else {
-              reject(new ContainedCheckError("spawn", `podman spawn error: ${err.message}`));
-            }
-          });
-        });
-
-        // POLICY default: null exit code (process killed by signal) is failure, not unknown.
-        const code = exitCode ?? 1;
-
-        if (code === PODMAN_ENGINE_ERROR_EXIT) {
-          const detail = stderr.trim().slice(0, 500) || "container engine error (exit 125)";
-          const op = detail.toLowerCase().includes("image") ? "image_pull" as const : "container_start" as const;
-          throw new ContainedCheckError(op, detail);
-        }
-
-        const combined = (stdout + stderr).trim();
-        return { exitCode: code, output: truncateOutput(combined) };
-      } finally {
-        clearTimeout(timer);
-      }
-    })();
-  };
-}
 
 // ---------------------------------------------------------------------------
 // HTTP check pattern — recognizes assertions like:
@@ -181,7 +71,7 @@ export const defaultRunCommand: CommandRunner = (command, cwd, timeout) => {
       });
 
       const combined = (stdout + stderr).trim();
-      // POLICY default: same as containerizedRunCommand — null means killed, which is failure.
+      // POLICY default: null exit code (process killed by signal) is failure, not unknown.
       return { exitCode: exitCode ?? 1, output: truncateOutput(combined) };
     } finally {
       clearTimeout(timer);
