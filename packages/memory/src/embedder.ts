@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Embedder, EmbedderConfig } from "./types.js";
 import { EmbeddingError } from "./types.js";
 import { fetchWithTimeout, getEmbedTimeoutMs } from "./fetch-utils.js";
@@ -7,13 +8,13 @@ const EMBED_RETRY_OPTIONS = {
     isNonRetryable: (err: unknown) => err instanceof EmbeddingError && err.kind === "InvalidInputError",
 };
 
-interface VoyageResponse {
-    data: Array<{ embedding: number[] }>;
-}
+const VoyageResponseSchema = z.object({
+    data: z.array(z.object({ embedding: z.array(z.number()) })),
+});
 
-interface OpenAICompatibleResponse {
-    data: Array<{ embedding: number[] }>;
-}
+const OpenAICompatibleResponseSchema = z.object({
+    data: z.array(z.object({ embedding: z.array(z.number()) })),
+});
 
 class VoyageEmbedder implements Embedder {
     private readonly apiKey: string;
@@ -62,7 +63,7 @@ class VoyageEmbedder implements Embedder {
             throw new EmbeddingError("ProviderError", `Voyage API error ${response.status}: ${body}`);
         }
 
-        const data = (await response.json()) as VoyageResponse;
+        const data = VoyageResponseSchema.parse(await response.json());
         return data.data.map((d) => d.embedding);
     }
 }
@@ -112,7 +113,7 @@ class LocalEmbedder implements Embedder {
             throw new EmbeddingError("ProviderError", `Local embedder error ${response.status}: ${body}`);
         }
 
-        const data = (await response.json()) as OpenAICompatibleResponse;
+        const data = OpenAICompatibleResponseSchema.parse(await response.json());
         return data.data.map((d) => d.embedding);
     }
 }

@@ -177,6 +177,8 @@ interface DispatchRecord {
 
 interface VerifyTaskOutcome {
   readonly verdict: "passed" | "failed" | "unverified";
+  readonly details?: string;
+  readonly checks?: ReadonlyArray<{ name: string; passed: boolean; output?: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +939,10 @@ export class DevelopmentService {
       }
       await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
       await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
-      const chain = wrapError("development", "verify", "verification failed", { taskId: task.id });
+      const chain = wrapError("development", "verify", verifyOutcome.details ?? "verification failed", {
+        taskId: task.id,
+        checks: verifyOutcome.checks,
+      });
       return {
         status: "failed",
         detail: "verification failed",
@@ -945,7 +950,7 @@ export class DevelopmentService {
         sessionId,
         filesChanged,
         attempt: 1,
-        errorEnvelope: { outcome: "failed", summary: "verification failed", chain, agentOutput: output },
+        errorEnvelope: { outcome: "failed", summary: verifyOutcome.details ?? "verification failed", chain, agentOutput: output },
         agentInvoked: true,
       };
     }
@@ -1047,7 +1052,11 @@ export class DevelopmentService {
         verdict: response.verdict,
       });
 
-      return { verdict: response.verdict };
+      return {
+        verdict: response.verdict,
+        details: response.tiers.deterministic.details,
+        checks: response.tiers.deterministic.checks?.map(c => ({ name: c.name, passed: c.passed, output: c.output })),
+      };
     } catch (e) {
       // Discipline A: verification unreachable -> false, never true. The agent's
       // own self-reported verify result is not part of the AgentOutputJson contract

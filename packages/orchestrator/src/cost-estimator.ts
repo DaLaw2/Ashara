@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { CostRepository, CapabilityCostEstimate } from "@ashara/db";
 
 // The port load() actually depends on — two queries, no private db handle.
@@ -12,6 +13,13 @@ interface ProviderBalance {
   providerName: string;
   balanceUsd: number | null;
 }
+
+const DeepSeekBalanceSchema = z.object({
+  balance_infos: z.array(z.object({
+    currency: z.string(),
+    total_balance: z.string(),
+  })),
+});
 
 export class CostEstimator {
   private modelPricing: Record<string, { inputPer1m: number; outputPer1m: number }> = {};
@@ -158,15 +166,11 @@ export class CostEstimator {
           console.warn(`Provider balance check failed for ${name}: ${resp.status}`);
           return null;
         }
-        // contract-erasing: DeepSeek balance API has a known response shape
-        const body = await resp.json() as Record<string, unknown>;
-        // contract-erasing: balance_infos entries have known fields (currency, total_balance)
-        const infos = body.balance_infos as Array<Record<string, unknown>> | undefined;
-        if (!Array.isArray(infos)) return null;
-        for (const entry of infos) {
-          const currency = entry.currency as string;
-          if (currency === "USD" || currency === "CNY") {
-            const bal = parseFloat(entry.total_balance as string);
+        const parsed = DeepSeekBalanceSchema.safeParse(await resp.json());
+        if (!parsed.success) return null;
+        for (const entry of parsed.data.balance_infos) {
+          if (entry.currency === "USD" || entry.currency === "CNY") {
+            const bal = parseFloat(entry.total_balance);
             if (!isNaN(bal)) return bal;
           }
         }

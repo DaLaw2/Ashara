@@ -15,6 +15,7 @@
     "@ashara/llm-gateway": "*",
     "@ashara/memory": "*",
     "@ashara/planning": "*",
-    "@ashara/shared": "*"
+    "@ashara/shared": "*",
+    "zod": "4.4.3"
   }
 }

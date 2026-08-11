@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { createInterface } from "node:readline";
+import { z } from "zod";
 import {
     AlignmentEngine,
     createGatewayAlignmentLLM,
@@ -18,6 +19,12 @@ import { loadServerEnv } from "@ashara/shared";
 import { AsharaClient } from "../client.js";
 import type { BulkWorkItem, WorkItemLevel } from "../client.js";
 import { monitorProgress } from "../display.js";
+
+const DeepSeekBalanceSchema = z.object({
+    balance_infos: z.array(z.object({
+        total_balance: z.string(),
+    })),
+});
 
 // --- Error type ---
 
@@ -362,11 +369,13 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
                 headers: { Authorization: `Bearer ${process.env["DEEPSEEK_API_KEY"]}` },
             });
             if (balanceResp.ok) {
-                const data = (await balanceResp.json()) as { balance_infos?: Array<{ total_balance?: string }> };
-                const balance = parseFloat(data.balance_infos?.[0]?.total_balance ?? "0");
-                console.log(`[ashara] DeepSeek balance: $${balance.toFixed(2)}`);
-                if (balance < 1.0) {
-                    console.warn(`[ashara] WARNING: DeepSeek balance is low ($${balance.toFixed(2)})`);
+                const parsed = DeepSeekBalanceSchema.safeParse(await balanceResp.json());
+                if (parsed.success) {
+                    const balance = parseFloat(parsed.data.balance_infos[0]?.total_balance ?? "0");
+                    console.log(`[ashara] DeepSeek balance: $${balance.toFixed(2)}`);
+                    if (balance < 1.0) {
+                        console.warn(`[ashara] WARNING: DeepSeek balance is low ($${balance.toFixed(2)})`);
+                    }
                 }
             }
         } catch (e: unknown) {
