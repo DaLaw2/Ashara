@@ -21,8 +21,8 @@ const stubReranker: Reranker = {
 /**
  * Create a retrieval function wired to graph and BM25 search.
  *
- * Falls back gracefully: if a route fails, returns empty results instead of
- * crashing the dispatch pipeline.
+ * Throws on retrieval error so the caller (brief assembly) can distinguish
+ * "nothing found" from "retrieval crashed" and route through its own fallback.
  */
 export async function createRetrievalFn(graphClient: GraphClient): Promise<RetrieveFn> {
     const config: RetrievalConfig = {
@@ -37,8 +37,8 @@ export async function createRetrievalFn(graphClient: GraphClient): Promise<Retri
         try {
             return await retrieve(config, query, mentionedSymbols);
         } catch (err) {
-            console.warn(`[Retrieval] query failed, returning empty:`, err instanceof Error ? err.message : err);
-            return [];
+            console.warn("[Retrieval] query failed; propagating to brief assembly:", err);
+            throw err;
         }
     };
 }

@@ -263,7 +263,12 @@ export class DevelopmentService {
       model: task.taskSpec?.capability ?? "Strong",
     });
 
-    const contract = await this.loadContract(task.id);
+    let contract: ProjectContract | null = null;
+    try {
+      contract = await this.loadContract(task.id);
+    } catch (e) {
+      console.warn(`[${task.id}] contract load failed; dispatching without contract context:`, e);
+    }
 
     let brief: AgentBrief;
     try {
@@ -511,20 +516,14 @@ export class DevelopmentService {
 
   /**
    * Loads this task's ProjectContract via the injected port. Returns null when no
-   * contract source is wired, the project has no contract, or the load fails — so
-   * both the contract slice and the entry-point resolution below share ONE fetch
-   * and ONE fail-soft path (a port error never blocks dispatch; the contract is
-   * advisory context, not a gate).
+   * contract source is wired or the project has no contract. Throws on load
+   * errors so callers can distinguish "no contract" from "load failed" and route
+   * their own fail-soft policy at the appropriate level.
    */
   private async loadContract(taskId: string): Promise<ProjectContract | null> {
     const source = this.deps.contractSource;
     if (!source) return null;
-    try {
-      return await source.loadForTask(taskId);
-    } catch (e) {
-      console.warn(`[${taskId}] contract load failed; proceeding without it:`, e);
-      return null;
-    }
+    return await source.loadForTask(taskId);
   }
 
   /**

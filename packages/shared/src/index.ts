@@ -92,3 +92,5 @@ export { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC, parseRunScope } from "./run-sc
 export type { ContractRepository } from "./repository-ports.js";
 
 export { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "./workspace-layout.js";
+
+export { TargetPackageJsonSchema } from "./target-package-json.js";

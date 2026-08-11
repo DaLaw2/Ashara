@@ -1,5 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { TargetPackageJsonSchema } from "@ashara/shared";
 
 // ---------------------------------------------------------------------------
 // Shared file-scanning primitives — the import-graph BFS used by both
@@ -91,10 +92,10 @@ export async function findEntryPoint(projectRoot: string, contractEntryPoint: st
   } catch {
     return null;
   }
-  // contract-erasing: package.json has a well-known shape (npm spec)
-  const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
-  // contract-erasing: scripts is Record<string, string>
-  const scripts = pkg.scripts as Record<string, unknown> | undefined;
+  const parsed = TargetPackageJsonSchema.safeParse(JSON.parse(pkgContent));
+  if (!parsed.success) return null;
+  const pkg = parsed.data;
+  const scripts = pkg.scripts;
   if (scripts && typeof scripts.start === "string") {
     const match = scripts.start.match(/(?:node|npx\s+tsx)\s+(\S+)/);
     if (match) {

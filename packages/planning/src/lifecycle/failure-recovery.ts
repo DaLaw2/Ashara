@@ -4,7 +4,7 @@ import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "..
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
 import { classifyFailure, tryParseEnvelope } from "../failure-classifier.js";
 import type { FailureCategory } from "../failure-classifier.js";
-import type { EventPublisher, ModulePathFilter } from "./ports.js";
+import type { EventPublisher } from "./ports.js";
 import { deriveRetryChecks, deriveRetryDeliverables } from "./derive-retry-checks.js";
 
 export interface ContractRegistryLookup {
@@ -16,7 +16,6 @@ export interface FailureRecoveryDeps {
   readonly eventPublisher: EventPublisher;
   readonly failureRouter: FailureRouter;
   readonly contractLookup?: ContractRegistryLookup;
-  readonly selectModulePaths?: ModulePathFilter;
 }
 
 function buildContractKeyMap(contract: ProjectContract): Map<string, string[]> {
@@ -37,22 +36,19 @@ function buildContractKeyMap(contract: ProjectContract): Map<string, string[]> {
 
 function deliverableModuleKeys(
   taskSpec: StoredTaskSpec | undefined,
-  filter?: ModulePathFilter,
 ): string[] {
   const raw = taskSpec?.deliverables;
   if (!Array.isArray(raw)) return [];
   const paths = raw.filter((entry): entry is string => typeof entry === "string");
-  const selected = filter ? filter(paths, null) : paths;
-  return selected.map((path) => `module:${path}`);
+  return paths.map((path) => `module:${path}`);
 }
 
 function registryKeysFor(
   item: { id: string; taskSpec?: StoredTaskSpec },
   contractKeys: Map<string, string[]> | null,
-  filter?: ModulePathFilter,
 ): string[] {
   if (contractKeys === null) return [];
-  return [...new Set([...(contractKeys.get(item.id) ?? []), ...deliverableModuleKeys(item.taskSpec, filter)])];
+  return [...new Set([...(contractKeys.get(item.id) ?? []), ...deliverableModuleKeys(item.taskSpec)])];
 }
 
 async function loadContractKeyMap(
@@ -88,7 +84,7 @@ export async function recoverFailedItem(
         id: sibling.id,
         title: sibling.title,
         status: sibling.status,
-        registryKeys: registryKeysFor(sibling, contractKeys, deps.selectModulePaths),
+        registryKeys: registryKeysFor(sibling, contractKeys),
       }));
 
     // Classify the failure so the router can short-circuit categories that
@@ -104,7 +100,7 @@ export async function recoverFailedItem(
       failure,
       priorAttempts,
       candidates,
-      registryKeysFor(item, contractKeys, deps.selectModulePaths),
+      registryKeysFor(item, contractKeys),
       category,
     );
 

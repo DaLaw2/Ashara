@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile, access } from "node:fs/promises";
 import { createServer } from "node:net";
 import { delimiter, join } from "node:path";
+import { TargetPackageJsonSchema } from "@ashara/shared";
 import type { CommandRunner } from "./verify-core.js";
 
 // ---------------------------------------------------------------------------
@@ -212,10 +213,8 @@ async function bootApp(workDir: string): Promise<AppHandle> {
   }
 
   const pkgContent = await readFile(pkgJsonPath, "utf-8");
-  // contract-erasing: package.json has a well-known shape (npm spec)
-  const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
-  // contract-erasing: scripts is Record<string, string>
-  const scripts = pkg.scripts as Record<string, unknown> | undefined;
+  const pkg = TargetPackageJsonSchema.parse(JSON.parse(pkgContent));
+  const scripts = pkg.scripts;
 
   let startCmd: string | null = null;
   if (scripts && typeof scripts.start === "string") startCmd = scripts.start;

@@ -173,7 +173,23 @@ export async function finalizeSuccess(
     // modifications would persist in the working tree without being committed.
     // But contamination of tracked files signals a check command that modifies
     // source — that is unexpected and should abort rather than proceed.
-    const dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
+    let dirtyFiles: string[];
+    try {
+      dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      return abortAndFail(
+        task.id,
+        targetProjectPath,
+        "post-merge dirty-tree check FAILED — git diff unavailable",
+        `Could not run git diff to verify clean working tree: ${detail}`,
+        {
+          operation: "postMergeDirtyTree",
+          gateOutput: `git diff failed: ${detail}`,
+          gateContext: { taskId: task.id, attempt },
+        },
+      );
+    }
     if (dirtyFiles.length > 0) {
       const fileList = dirtyFiles.slice(0, 20).join(", ");
       return abortAndFail(
@@ -232,9 +248,12 @@ export async function finalizeSuccess(
  * Run `git diff --name-only` against the index to detect tracked files
  * modified during post-merge verification. Build artifacts in .gitignore
  * are invisible to this check; only modifications to tracked files appear.
+ *
+ * Rejects when git is unavailable or exits non-zero (fail-closed): a
+ * dirty-tree check that cannot run is a failed check, not a passed one.
  */
 function detectDirtyTrackedFiles(cwd: string): Promise<string[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const proc = spawn("git", ["diff", "--name-only"], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -243,16 +262,13 @@ function detectDirtyTrackedFiles(cwd: string): Promise<string[]> {
     let stdout = "";
     proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
 
-    proc.on("error", () => {
-      // git not available — fail open on this specific sub-check rather than
-      // blocking the entire finalize. The container boundary is the primary
-      // defense; the dirty-tree check is defense-in-depth.
-      resolve([]);
+    proc.on("error", (err) => {
+      reject(err);
     });
 
     proc.on("close", (code) => {
       if (code !== 0) {
-        resolve([]);
+        reject(new Error(`git diff exited with code ${code}`));
         return;
       }
       const files = stdout

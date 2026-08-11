@@ -31,7 +31,7 @@ export async function attemptLivenessRecovery(deps: CoreLoopDeps, runScope: stri
 
     return created;
   } catch (e) {
-    console.warn("Liveness recovery failed — skipping (fail-closed):", e);
-    return 0;
+    console.warn("Liveness recovery failed; propagating to cycle runner:", e);
+    throw e;
   }
 }

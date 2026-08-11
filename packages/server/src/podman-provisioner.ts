@@ -13,6 +13,7 @@ import type {
   ExecOptions,
 } from "@ashara/development";
 import { ProvisioningError, TeardownError } from "@ashara/development";
+import { validateContainerfileSpec } from "./containerfile-validation.js";
 
 // ---------------------------------------------------------------------------
 // Containerfile generation
@@ -65,6 +66,9 @@ export class PodmanProvisioner implements Provisioner {
   }
 
   async provision(spec: EnvironmentSpec): Promise<ProvisionedEnv> {
+    // Validate LLM-derived content before interpolation (Discipline A: fail-closed)
+    validateContainerfileSpec(spec);
+
     const envId = randomUUID().slice(0, 12);
     const containerName = `ashara-env-${envId}`;
     const imageTag = `ashara-provisioned-${envId}`;

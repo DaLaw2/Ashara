@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentBrief } from "@ashara/shared";
-import { loadSkipDirs } from "@ashara/shared";
+import { loadSkipDirs, TargetPackageJsonSchema } from "@ashara/shared";
 import { createProfileAdapter } from "./acl/development-acl.js";
 import type { ProjectProfilePort } from "./acl/development-acl.js";
 
@@ -141,19 +141,16 @@ export async function extractProjectConventions(projectDir: string): Promise<str
     let entryFromPkg: string | null = null;
     try {
         const raw = await readFile(pkgPath, "utf-8");
-        // contract-erasing: package.json has a well-known shape (npm spec)
-        const pkg = JSON.parse(raw) as Record<string, unknown>;
+        const pkg = TargetPackageJsonSchema.parse(JSON.parse(raw));
 
-        // contract-erasing: dependencies/devDependencies are Record<string, string>
-        const deps = pkg["dependencies"] as Record<string, unknown> | undefined;
-        const devDeps = pkg["devDependencies"] as Record<string, unknown> | undefined; // contract-erasing
+        const deps = pkg.dependencies;
+        const devDeps = pkg.devDependencies;
         if (deps) dependencies.push(...Object.keys(deps));
         if (devDeps) dependencies.push(...Object.keys(devDeps));
 
-        if (typeof pkg["main"] === "string") entryFromPkg = pkg["main"] as string;
+        if (typeof pkg.main === "string") entryFromPkg = pkg.main;
 
-        // contract-erasing: scripts is Record<string, string>
-        const scripts = pkg["scripts"] as Record<string, unknown> | undefined;
+        const scripts = pkg.scripts;
         if (scripts) {
             const scriptNames = Object.keys(scripts).slice(0, 10);
             if (scriptNames.length > 0) {
