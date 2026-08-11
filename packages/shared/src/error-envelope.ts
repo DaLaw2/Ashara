@@ -68,6 +68,7 @@ export function wrapError(
   const message =
     existingLayer != null
       ? existingLayer.message
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       : error instanceof Error
         ? error.message
         : String(error);

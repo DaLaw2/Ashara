@@ -274,6 +274,7 @@ export class AgentConversation {
                 model: lastModel,
             };
         } catch (err) {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const errMsg = err instanceof Error ? err.message : String(err);
             return this.buildErrorResult(turns, turns.length + 1, errMsg, {
                 input: totalInput,
@@ -327,6 +328,7 @@ export class AgentConversation {
                     maxOutputTokens: this.config.maxOutputTokens,
                 });
             } catch (err) {
+                // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
                 const errMsg = err instanceof Error ? err.message : String(err);
                 return this.buildErrorResult(turns, turn + 1, errMsg, {
                     input: totalInput,
@@ -499,6 +501,7 @@ export class AgentConversation {
                 const result = await registered.executor.execute({ path: fw.path, content: fw.content });
                 results.push({ path: fw.path, content: fw.content, result });
             } catch (err) {
+                // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
                 const errMsg = err instanceof Error ? err.message : String(err);
                 results.push({
                     path: fw.path,

@@ -87,6 +87,7 @@ export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
         checkedSources.push(`API ${serverUrl}`);
         console.log(`[Vision] config loaded from API (${serverUrl})`);
     } catch (e) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const msg = e instanceof Error ? e.message : String(e);
         throw new VisionError(
             "llm_unavailable",
@@ -241,6 +242,7 @@ export async function alignVision(visionText: string, llm: AlignmentLLM): Promis
     try {
         return await engine.align({ description: visionText });
     } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         throw new VisionError("alignment_failed", `Alignment failed: ${message}`, { cause: err });
     }
@@ -271,6 +273,7 @@ export async function decomposeVision(
     try {
         return await engine.decompose(input);
     } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         throw new VisionError("decomposition_failed", `Decomposition failed: ${message}`);
     }
@@ -379,6 +382,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
                 }
             }
         } catch (e: unknown) {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             console.warn(`[ashara] Failed to check DeepSeek balance: ${e instanceof Error ? e.message : String(e)}`);
         }
     }
@@ -490,6 +494,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
         });
         console.log("[ashara] Vision document persisted.");
     } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`[ashara] Failed to persist vision (non-fatal): ${message}`);
     }
@@ -506,6 +511,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     try {
         await postWorkItems(client, decomposition);
     } catch (err) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[ashara] Failed to post work items: ${message}`);
         return 1;

@@ -182,6 +182,7 @@ export class PodmanProvisioner implements Provisioner {
     } catch (e) {
       throw new TeardownError({
         envId: env.id,
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         detail: e instanceof Error ? e.message : String(e),
       });
     } finally {

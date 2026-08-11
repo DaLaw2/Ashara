@@ -136,6 +136,7 @@ export class RunCommandExecutor implements ToolExecutor {
                             process.kill(-pid, signal);
                         } catch (e: unknown) {
                             if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+                                // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
                                 console.warn(`[runCommand] Failed to signal process group ${pid}: ${e instanceof Error ? e.message : String(e)}`);
                             }
                         }

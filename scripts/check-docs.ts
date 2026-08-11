@@ -27,6 +27,7 @@ class DocumentReadError extends Error {
   readonly cause_: unknown;
 
   constructor(filePath: string, cause: unknown) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     super(`Cannot read ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "DocumentReadError";
     this.filePath = filePath;
@@ -380,6 +381,7 @@ function main(): void {
   try {
     documents = discoverDocuments(root);
   } catch (err: unknown) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   }
@@ -404,6 +406,7 @@ function main(): void {
         commandLine: 0,
         command: "(read file)",
         expected: "(readable)",
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         actual: err instanceof Error ? err.message : String(err),
         kind: "unreadable",
       });
@@ -430,6 +433,7 @@ function main(): void {
           commandLine: 0,
           command: "(parse)",
           expected: "(valid document)",
+          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
           actual: err instanceof Error ? err.message : String(err),
           kind: "parse-error",
         });

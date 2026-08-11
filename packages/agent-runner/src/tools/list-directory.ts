@@ -68,6 +68,7 @@ export class ListDirectoryExecutor implements ToolExecutor {
             }
             return { success: true, output: entries.join("\n") };
         } catch (err: unknown) {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const msg = err instanceof Error ? err.message : String(err);
             return { success: false, output: "", error: `Failed to list directory: ${msg}` };
         }

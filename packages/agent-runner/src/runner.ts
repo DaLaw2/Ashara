@@ -76,6 +76,7 @@ export class AgentRunner {
             brief = await enrichBrief(baseBrief, this.config.workingDir, this.profiles);
             console.log(`[agent-runner] brief enriched with project context from ${this.config.workingDir}`);
         } catch (err) {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const msg = err instanceof Error ? err.message : String(err);
             console.warn(`[agent-runner] brief enrichment failed, using base brief: ${msg}`);
             brief = baseBrief;
@@ -158,6 +159,7 @@ export class AgentRunner {
                 );
                 console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
             } catch (err) {
+                // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
                 const msg = err instanceof Error ? err.message : String(err);
                 console.error(`[agent-runner] inline verify failed: ${msg}`);
             }
@@ -533,6 +535,7 @@ if (import.meta.main) {
             process.exit(output.status === "done" ? 0 : 1);
         })
         .catch((err: unknown) => {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const msg = err instanceof Error ? err.message : String(err);
             console.error(`[agent-runner] fatal error: ${msg}`);
             process.exit(1);

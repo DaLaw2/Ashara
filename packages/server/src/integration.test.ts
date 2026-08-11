@@ -91,6 +91,7 @@ beforeAll(async () => {
   try {
     await initParser();
   } catch (e: unknown) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[integration.test] initParser failed (tree-sitter may not be available): ${e instanceof Error ? e.message : String(e)}`);
   }
 

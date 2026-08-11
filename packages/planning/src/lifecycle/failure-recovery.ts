@@ -179,6 +179,7 @@ async function abandonFailClosed(
   }
   await applyAbandon(deps, fresh, {
     reason: "failure_router_error",
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     detail: error instanceof Error ? error.message : String(error),
     attempts: priorAttempts,
     lastFailure: failure,

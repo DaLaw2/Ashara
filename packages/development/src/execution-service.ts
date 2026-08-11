@@ -575,6 +575,7 @@ export class DevelopmentService {
         hasFileTree = true;
       }
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -597,6 +598,7 @@ export class DevelopmentService {
         sections.push(depLines.join("\n"));
       }
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to read package.json in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -612,6 +614,7 @@ export class DevelopmentService {
           break;
         } catch (e: unknown) {
           if (e instanceof Error && 'code' in e && e.code === 'ENOENT') continue;
+          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
           console.warn(`[buildContextMap] Failed to read ${manifest} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
@@ -623,6 +626,7 @@ export class DevelopmentService {
         const head = content.split("\n").slice(0, 50).join("\n");
         sections.push(`## Entry Point (${contractEntryPointPath})\n\`\`\`\n${head}\n\`\`\``);
       } catch (e: unknown) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
@@ -637,6 +641,7 @@ export class DevelopmentService {
         sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -644,6 +649,7 @@ export class DevelopmentService {
       const conventions = await this.deps.conventionsExtractor.extract(targetProjectPath);
       if (conventions) sections.push("## Conventions\n" + conventions);
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to extract conventions for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -677,6 +683,7 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -693,6 +700,7 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -1175,6 +1183,7 @@ export async function withSessionLifecycle(
       sessionStore.fail(sessionId, {
         passed: false,
         outcome: "errored",
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         detail: e instanceof Error ? e.message : String(e),
       }),
     );

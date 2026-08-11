@@ -86,6 +86,7 @@ export async function initParser(): Promise<void> {
         } catch (e) {
             // Per-grammar, not all-or-nothing: one missing WASM file degrades
             // coverage, and the degradation is reported rather than pretended away.
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             unavailable.push({ id: spec.id, reason: e instanceof Error ? e.message : String(e) });
         }
     }

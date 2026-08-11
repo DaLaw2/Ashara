@@ -64,6 +64,7 @@ class MigrationError extends Error {
   readonly rollbackFailed: boolean;
 
   constructor(filename: string, cause: unknown, rollbackFailed: boolean) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const baseMessage = cause instanceof Error ? cause.message : String(cause);
     const pg = extractPgDiagnostics(cause);
 
@@ -137,6 +138,7 @@ async function applyMigration(
       await client.query("ROLLBACK");
     } catch (rollbackErr: unknown) {
       rollbackFailed = true;
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       const detail = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
       console.warn(
         `[migrate] WARN: ROLLBACK failed for ${filename}: ${detail}. ` +
@@ -202,6 +204,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+  // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
   console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

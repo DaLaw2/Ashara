@@ -4,12 +4,32 @@ import {
   canTransitionTo,
   InvalidStatusTransition,
   WorkItemNotFound,
+  parseStoredTaskSpec,
+  parseStoredSuccessCriteria,
+  parseStoredBlockedReason,
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { workItems, dependencies } from "../schema.js";
 
+type WorkItemRow = typeof workItems.$inferSelect;
+
 export class WorkItemRepository {
   constructor(private readonly db: DbHandle) {}
+
+  /**
+   * Validates the three jsonb columns on a work_items row at the database
+   * boundary (Discipline A, Zod-at-boundaries). Each parser throws a typed
+   * error on a non-null value that fails its Zod schema — corrupt data is
+   * caught here, at the physical read, not deferred to an adapter or domain
+   * layer. Null/undefined passes through (absent is a policy default for all
+   * three columns).
+   */
+  private validateRow(row: WorkItemRow): WorkItemRow {
+    parseStoredTaskSpec(row.taskSpec);
+    parseStoredSuccessCriteria(row.successCriteria);
+    parseStoredBlockedReason(row.blockedReason);
+    return row;
+  }
 
   /**
    * Runs `fn` inside a single database transaction (ADR-029). The callback
@@ -24,7 +44,7 @@ export class WorkItemRepository {
 
   async create(item: typeof workItems.$inferInsert) {
     const [row] = await this.db.insert(workItems).values(item).returning();
-    return row;
+    return this.validateRow(row);
   }
 
   async findById(id: string) {
@@ -33,14 +53,15 @@ export class WorkItemRepository {
       .from(workItems)
       .where(eq(workItems.id, id))
       .limit(1);
-    return row ?? null;
+    return row ? this.validateRow(row) : null;
   }
 
   async findByStatus(status: string) {
-    return this.db
+    const rows = await this.db
       .select()
       .from(workItems)
       .where(eq(workItems.status, status));
+    return rows.map((row) => this.validateRow(row));
   }
 
   /**
@@ -110,10 +131,11 @@ export class WorkItemRepository {
   }
 
   async listAll() {
-    return this.db
+    const rows = await this.db
       .select()
       .from(workItems)
       .orderBy(asc(workItems.createdAt));
+    return rows.map((row) => this.validateRow(row));
   }
 
   async addDependency(fromId: string, toId: string) {
@@ -132,10 +154,11 @@ export class WorkItemRepository {
   }
 
   async findChildren(parentId: string) {
-    return this.db
+    const rows = await this.db
       .select()
       .from(workItems)
       .where(eq(workItems.parentId, parentId));
+    return rows.map((row) => this.validateRow(row));
   }
 
   async findDuplicate(level: string, title: string, parentId: string | null) {
@@ -158,7 +181,7 @@ export class WorkItemRepository {
       .from(workItems)
       .where(conditions)
       .limit(1);
-    return row ?? null;
+    return row ? this.validateRow(row) : null;
   }
 
   async listAllDependencies() {

@@ -249,6 +249,7 @@ export async function loadGatewayCatalogFromFile(
     raw = await readFile(filePath, "utf-8");
   } catch (err) {
     throw new InvalidGatewayCatalog(filePath, [
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `file not readable: ${err instanceof Error ? err.message : String(err)}`,
     ]);
   }
@@ -258,6 +259,7 @@ export async function loadGatewayCatalogFromFile(
     json = JSON.parse(raw);
   } catch (err) {
     throw new InvalidGatewayCatalog(filePath, [
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
     ]);
   }

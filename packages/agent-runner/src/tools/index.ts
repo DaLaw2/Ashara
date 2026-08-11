@@ -118,6 +118,7 @@ function buildExecuteFn(
         try {
             result = await executor.execute(input);
         } catch (err: unknown) {
+            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             return JSON.stringify({ type: "error", message });
         }

@@ -152,6 +152,7 @@ function toolchainFailureDetails(err: unknown): string {
       excerpt
     );
   }
+  // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
   return `toolchain preparation error: ${err instanceof Error ? err.message : String(err)}`;
 }
 

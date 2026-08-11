@@ -566,7 +566,7 @@ describe("ContextBriefRepository", () => {
       status: "Abandoned",
       parentId: storyId,
       title: "ContextBrief Substitute Abandoned Task",
-      blockedReason: { reason: "duplicate", substitutedBy: storyId },
+      blockedReason: { source: "failure_router", reason: "duplicate", substitutedBy: storyId },
       runScope: "test-run",
     });
     createdWorkItemIds.push(substituteAbandonedTaskId);
@@ -577,7 +577,7 @@ describe("ContextBriefRepository", () => {
       status: "Abandoned",
       parentId: storyId,
       title: "ContextBrief Exhausted Abandoned Task",
-      blockedReason: { reason: "retry_budget_exhausted" },
+      blockedReason: { source: "failure_router", reason: "retry_budget_exhausted" },
       runScope: "test-run",
     });
     createdWorkItemIds.push(exhaustedAbandonedTaskId);

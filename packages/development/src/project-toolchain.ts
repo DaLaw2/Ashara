@@ -230,6 +230,7 @@ async function runStep(
   try {
     result = await run([...command], cwd, timeout);
   } catch (err) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const detail = err instanceof Error ? err.message : String(err);
     throw new ToolchainError(step, { cwd, detail, command });
   }
@@ -355,6 +356,7 @@ async function saveState(targetPath: string, state: ToolchainState, log?: Toolch
   } catch (err) {
     // Non-fatal: a missing skip-state only costs a redundant install/codegen
     // next time (correctness preserved). Log at warn level (Discipline C).
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const detail = err instanceof Error ? err.message : String(err);
     log?.({ event: "toolchain_state_write_failed", level: "warn", path: statePath, detail });
   }
@@ -477,6 +479,7 @@ export async function prepare(targetPath: string, deps: ToolchainDeps): Promise<
       // Non-ENOENT stat error: we cannot confirm the marker is absent, so we
       // must not skip codegen (fail-closed). Surface a typed, self-diagnosing
       // error rather than silently proceeding to an under-generated tree.
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       const detail = err instanceof Error ? err.message : String(err);
       throw new ToolchainError("codegen", {
         cwd: targetPath,

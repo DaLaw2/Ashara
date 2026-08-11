@@ -22,6 +22,7 @@ export class WorkspaceError extends Error {
     public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskId?: string },
     cause?: unknown,
   ) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const causeMsg = cause instanceof Error ? cause.message : String(cause ?? "");
     super(`workspace ${operation} failed: ${causeMsg}`);
     this.name = "WorkspaceError";
@@ -174,6 +175,7 @@ export async function commitPartialWork(
     await execFileAsync("git", ["commit", "-m", message], { cwd: workDir });
     return { committed: true, filesCount: files.length };
   } catch (e: unknown) {
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(`[commitPartialWork] git failure in ${workDir}: ${msg}`);
     return { committed: false, reason: "git-error", message: msg };
@@ -307,6 +309,7 @@ async function resolveAsharaRepoRoot(): Promise<string> {
     // Fail closed: if the repo root can't be determined, refuse rather than
     // proceed as if the target were safe.
     throw new Error(
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `could not determine the Ashara repository root (git rev-parse failed) from "${moduleDir}": ${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -371,6 +374,7 @@ async function canonicalizeAllowingMissing(inputPath: string): Promise<string> {
       const parent = dirname(current);
       if (parent === current) {
         throw new Error(
+          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
           `no existing ancestor could be resolved for "${inputPath}": ${err instanceof Error ? err.message : String(err)}`,
         );
       }
@@ -449,6 +453,7 @@ export async function persistConversationRecord(
     }
     console.warn(
       `[persistConversationRecord] failed to persist conversation record for task ${taskId} ` +
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         `from ${source} to ${dest}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
@@ -461,6 +466,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       targetProjectPath,
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `path could not be canonicalized (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -471,6 +477,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       canonical,
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `could not resolve the Ashara repository root (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -491,6 +498,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       canonical,
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `parent git-worktree inspection failed (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
     );
   }

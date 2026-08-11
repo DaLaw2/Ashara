@@ -140,7 +140,8 @@ async function declaredHttpSurface(
     const derivation = await deriveEndpoints(targetProjectPath, contractEntryPoint);
     for (const ep of derivation.endpoints) add(ep);
   } catch (e: unknown) {
-    return { derivationError: describeError(e) };
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for derivation failure
+    return { derivationError: e instanceof Error ? e.message : String(e) };
   }
 
   return { endpoints: merged };
@@ -184,7 +185,8 @@ async function manifestStartScript(
   try {
     manifest = JSON.parse(content);
   } catch (e: unknown) {
-    declines.push(`${MANIFEST_FILE} is not valid JSON: ${describeError(e)}`);
+    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for decline log
+    declines.push(`${MANIFEST_FILE} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
 
@@ -262,9 +264,6 @@ function toArgv(command: string): readonly [string, ...string[]] | null {
   return head === undefined ? null : [head, ...tail];
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * A single required object rather than positional parameters with defaults: the
@@ -322,7 +321,8 @@ export async function observeProduct(request: ObserveRequest): Promise<ProductOb
     // never charged to the product as a defect.
     const detail = e instanceof ToolchainError
       ? `toolchain failed at "${e.step}": ${e.context.detail}`
-      : `toolchain error: ${describeError(e)}`;
+      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for toolchain error
+      : `toolchain error: ${e instanceof Error ? e.message : String(e)}`;
     return notObservable("toolchain-unprepared", `${targetProjectPath} could not be made runnable — ${detail}`);
   }
 
@@ -350,6 +350,7 @@ export async function observeProduct(request: ObserveRequest): Promise<ProductOb
         return;
       } catch (e: unknown) {
         if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for signal failure
           console.warn(`[observe] Failed to signal process group ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
@@ -358,6 +359,7 @@ export async function observeProduct(request: ObserveRequest): Promise<ProductOb
       proc.kill(signal);
     } catch (e: unknown) {
       if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for signal failure
         console.warn(`[observe] Failed to signal process ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }

@@ -44,6 +44,12 @@ export default tseslint.config(
           message:
             "Empty catch block (Discipline C). A comment is not a handler: log at warn or above with structured context, or let the error propagate. If the throw is genuinely expected and irrelevant, say so in a log line, not in a comment.",
         },
+        {
+          selector:
+            'ConditionalExpression[test.type="BinaryExpression"][test.operator="instanceof"][test.right.name="Error"][consequent.type="MemberExpression"][consequent.property.name="message"][alternate.type="CallExpression"][alternate.callee.name="String"]',
+          message:
+            "Use wrapError() from @ashara/shared for structured error context, or error instanceof Error ? error.message : String(error) for tool-result strings returned to an LLM agent (annotate with // lossy-extraction-ok).",
+        },
       ],
 
       // Import order — CLAUDE.md: node built-ins → external → @ashara/* → relative

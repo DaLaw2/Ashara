@@ -111,13 +111,13 @@ export class CodebaseIndexer {
             try {
                 content = readFileSync(entryPath, "utf-8");
             } catch (e) {
-                failures.push({ filePath: entryPath, reason: `read failed: ${describeError(e)}` });
+                failures.push({ filePath: entryPath, reason: `read failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}` });
                 continue;
             }
             try {
                 if (this.updateFileIndex(entryPath, content)) filesIndexed++;
             } catch (e) {
-                failures.push({ filePath: entryPath, reason: `parse failed: ${describeError(e)}` });
+                failures.push({ filePath: entryPath, reason: `parse failed: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}` });
             }
         }
 
@@ -232,8 +232,4 @@ export class CodebaseIndexer {
             }
         }
     }
-}
-
-function describeError(error: unknown): string {
-    return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
