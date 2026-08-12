@@ -306,6 +306,10 @@ export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
         lines.push(``, `# Prior Knowledge & Lessons`, brief.knowledgeContext);
     }
 
+    if (brief.artifactContext) {
+        lines.push(``, `# Current Project State`, brief.artifactContext);
+    }
+
     if (brief.contractSlice) {
         lines.push(``, brief.contractSlice);
     }
@@ -433,6 +437,10 @@ export function buildDynamicSystemPrompt(brief: AgentBrief): string {
 
     if (brief.knowledgeContext && brief.knowledgeContext.trim().length > 0) {
         sections.push(`## Prior Knowledge & Lessons\n${brief.knowledgeContext}`);
+    }
+
+    if (brief.artifactContext) {
+        sections.push(`## Current Project State\n${brief.artifactContext}`);
     }
 
     if (brief.contractSlice) {

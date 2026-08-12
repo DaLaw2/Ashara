@@ -48,6 +48,12 @@ export const storedTaskSpecSchema = z.object({
   approach: z.string().optional(),
   differentiator: z.string().optional(),
   substitutesFor: z.string().optional(),
+
+  // Artifact context (termination-snapshot.ts gap task creation).
+  // A prose snapshot of the project's current state — working/failed endpoints,
+  // completed tasks, key files — so a gap task's agent brief knows what already
+  // exists on disk rather than re-implementing from scratch.
+  artifactContext: z.string().optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

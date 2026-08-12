@@ -1,6 +1,6 @@
 import { parseProjectId } from "@ashara/shared";
 import type { ProductObservation, ProjectContract, ProjectId, StoredTaskSpec } from "@ashara/shared";
-import type { AcceptanceLLM, EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted } from "./acl/planning-acl.js";
+import type { AcceptanceLLM, EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted, CompletionFigure } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
   evaluate,
@@ -12,6 +12,7 @@ import {
   buildAcceptanceVerdict,
   buildUnverifiedVerdict,
   createPendingWorkItem,
+  computeCompletionFigure,
 } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, TerminationOutcome } from "./types.js";
 
@@ -34,12 +35,19 @@ export async function evaluateRunTermination(
     return { decision, summary: null };
   }
 
+  // Resolve the contract once for both the completion figure and downstream
+  // consumers. Empty evidence is honest: at termination time no probes,
+  // checks, or file-existence queries have been run, so the figure reports
+  // the declared surface size (denominator) with zero verified (numerator).
+  const contract = await resolveFirstContract(deps);
+  const completionFigure = computeCompletionFigure(contract, {});
+
   if (decision.decision === "stop") {
-    const summary = buildRunSummary({ items, endpointGaps, currentRunScope: runScope }, decision);
+    const summary = buildRunSummary({ items, endpointGaps, completionFigure, currentRunScope: runScope }, decision);
     return { decision, summary };
   }
 
-  return handlePlanExhausted(deps, decision, items, endpointGaps, runScope);
+  return handlePlanExhausted(deps, decision, items, endpointGaps, runScope, completionFigure);
 }
 
 async function handlePlanExhausted(
@@ -48,6 +56,7 @@ async function handlePlanExhausted(
   items: Awaited<ReturnType<typeof assembleRunSummaryItems>>,
   endpointGaps: EndpointCoverageGap[],
   runScope: string,
+  completionFigure: CompletionFigure,
 ): Promise<TerminationOutcome> {
   const acceptance = await runAcceptanceCheck(deps, items);
 
@@ -69,7 +78,7 @@ async function handlePlanExhausted(
     abandonedRoots: [] as string[],
   };
 
-  const summary = buildRunSummary({ items, endpointGaps, acceptance, currentRunScope: runScope }, decision);
+  const summary = buildRunSummary({ items, endpointGaps, acceptance, completionFigure, currentRunScope: runScope }, decision);
 
   return { decision: stopDecision, summary };
 }
@@ -241,6 +250,22 @@ async function latestContract(deps: AcceptanceCheckDeps): Promise<ProjectContrac
   const roots = (await deps.workItemRepo.listAll()).filter((i) => i.parentId === undefined);
   for (const root of roots) {
     const contract = await contractRepo.getLatest(parseProjectId(root.id));
+    if (contract) return contract;
+  }
+  return null;
+}
+
+/**
+ * Resolve the first available ProjectContract for the completion figure.
+ * Structurally identical to `latestContract` but accepts CoreLoopDeps so
+ * it can be called outside the acceptance-check scope.
+ */
+async function resolveFirstContract(deps: CoreLoopDeps): Promise<ProjectContract | null> {
+  if (!deps.contractRepo) return null;
+  const items = await deps.workItemRepo.listAll();
+  const roots = items.filter((i) => i.parentId === undefined);
+  for (const root of roots) {
+    const contract = await deps.contractRepo.getLatest(parseProjectId(root.id));
     if (contract) return contract;
   }
   return null;

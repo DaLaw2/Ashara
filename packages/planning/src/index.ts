@@ -119,3 +119,6 @@ export {
   buildRunSummary,
   emitRunSummary,
 } from "./lifecycle/index.js";
+
+export { computeCompletionFigure } from "./completion-figure.js";
+export type { CompletionFigure } from "./completion-figure.js";

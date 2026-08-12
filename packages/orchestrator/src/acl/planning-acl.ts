@@ -23,6 +23,7 @@ export type { CoverageHold } from "@ashara/planning";
 export type { RunSummary } from "@ashara/planning";
 export type { TerminationDecision, TerminationPlanExhausted, StopReason } from "@ashara/planning";
 export type { EndpointCoverageGap } from "@ashara/planning";
+export type { CompletionFigure } from "@ashara/planning";
 
 // Engine / LLM port types
 export type { BrainstormEngine } from "@ashara/planning";
@@ -80,6 +81,9 @@ export { buildRunSummary, emitRunSummary } from "@ashara/planning";
 
 // Acceptance
 export { assessProductObservation, buildVisionGaps, buildAcceptanceVerdict, buildUnverifiedVerdict } from "@ashara/planning";
+
+// Completion figure
+export { computeCompletionFigure } from "@ashara/planning";
 
 // Liveness recovery
 export { recoverFromAbandoned } from "@ashara/planning";

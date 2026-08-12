@@ -1,6 +1,7 @@
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 import type { TerminationReason, TerminationCounts, StalledCause, StopReason } from "./termination.js";
 import type { AcceptanceVerdict } from "./acceptance.js";
+import type { CompletionFigure } from "./completion-figure.js";
 
 /**
  * The migration Phase 7 run-completion report (ADR-029). Every field here is a
@@ -122,6 +123,13 @@ export interface RunSummary {
   readonly abandonedRoots: readonly string[];
   /** Product-level acceptance verdict (ADR-040). Populated when the acceptance loop ran. */
   readonly acceptance?: AcceptanceVerdict;
+  /**
+   * Continuous completion measure derived from the contract's declared surface
+   * and observable evidence. `unknown` when no contract is available or the
+   * contract declares nothing measurable; `measured` otherwise, with fail-closed
+   * treatment of missing evidence (unsatisfied, not ignored).
+   */
+  readonly completionFigure?: CompletionFigure;
   /** One self-sufficient paragraph: why the run stopped and what remains undone. */
   readonly narrative: string;
 }

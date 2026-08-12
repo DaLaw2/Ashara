@@ -87,6 +87,11 @@ export const AgentBriefSchema = z
     // these when it has real content, so an empty string is a malformed brief.
     priorAttemptFailure: z.string().min(1).optional(),
     contractSlice: z.string().min(1).optional(),
+    // Artifact context: a prose snapshot of the project's current state — which
+    // endpoints work/fail, what tasks have been completed, key files on disk — so
+    // the agent knows what already exists before starting. Written by
+    // termination-snapshot when creating gap tasks from acceptance rejection.
+    artifactContext: z.string().min(1).optional(),
     // Per-task binary unblock: the orchestrator can selectively allow binaries
     // that are otherwise in DEFAULT_BLOCKED_BINARIES (e.g. "docker" for a
     // container-provisioning task). The agent-runner filters blockedBinaries

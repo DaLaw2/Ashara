@@ -2,6 +2,7 @@ import { blockedReasonToRecord, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
+import type { CompletionFigure } from "../completion-figure.js";
 import type { TerminationItemSnapshot } from "./termination.js";
 import type { EventSink } from "./ports.js";
 
@@ -18,6 +19,8 @@ export interface RunSummaryInput {
   readonly currentRunScope: string;
   readonly endpointGaps?: readonly EndpointCoverageGap[];
   readonly acceptance?: AcceptanceVerdict;
+  /** Pre-computed completion figure; passed through to the RunSummary. */
+  readonly completionFigure?: CompletionFigure;
 }
 
 function deriveStopReason(decision: TerminationStop | TerminationPlanExhausted, acceptance?: AcceptanceVerdict): StopReason {
@@ -79,6 +82,7 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     endpointGaps,
     abandonedRoots: [...abandonedRoots],
     narrative,
+    ...(input.completionFigure !== undefined ? { completionFigure: input.completionFigure } : {}),
   };
   if (input.acceptance !== undefined) {
     return { ...summary, acceptance: input.acceptance };
@@ -100,6 +104,7 @@ export function emitRunSummary(logger: EventSink, summary: RunSummary): RunSumma
     gaps: summary.gaps,
     endpointGaps: summary.endpointGaps,
     abandonedRoots: summary.abandonedRoots,
+    completionFigure: summary.completionFigure,
     narrative: summary.narrative,
   });
   return summary;

@@ -28,6 +28,7 @@ export { createDomainEvent } from "./types.js";
 
 export type {
   ProjectKnowledge,
+  ProjectKnowledgeNode,
   ContractBody,
   ContractInput,
   ContractDelta,

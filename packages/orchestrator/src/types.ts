@@ -251,6 +251,12 @@ export interface CoreLoopDeps {
    * `accepted` over a verdict that had just listed five open gaps.
    */
   lastAcceptanceVerdict?: AcceptanceVerdict;
+  /**
+   * The last ProductObservation taken during an acceptance check. Stored by
+   * runAcceptanceCheck so handlePlanExhausted can thread it into gap tasks
+   * without re-probing the product. Same pattern as lastAcceptanceVerdict.
+   */
+  lastObservation?: ProductObservation;
   readonly replanLlm?: ReplanLLM;
   replanRounds: number;
   /** Durable home of every per-run cap counter above, plus the budget's spend. */

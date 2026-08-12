@@ -425,6 +425,7 @@ export class DevelopmentService {
 
     const replanContext = extractReplanContext(task.id, task.blockedReason);
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
+    const artifactContext = typeof taskSpec?.artifactContext === "string" ? taskSpec.artifactContext : undefined;
 
     const contractSlice = contract ? await this.renderContractSlice(contract, task.id) : undefined;
 
@@ -505,12 +506,13 @@ export class DevelopmentService {
           contextMap: brief.contextMap,
           ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
           ...(contractSlice !== undefined ? { contractSlice } : {}),
+          ...(artifactContext !== undefined ? { artifactContext } : {}),
         },
         "development:buildBrief",
       );
     } catch (e) {
       console.warn(`[${task.id}] brief assembly failed, falling back to basic brief:`, e);
-      return buildBasicBrief(task, projectFrame, priorAttemptFailure, contractSlice);
+      return buildBasicBrief(task, projectFrame, priorAttemptFailure, contractSlice, artifactContext);
     }
   }
 
@@ -1240,6 +1242,7 @@ function buildBasicBrief(
   projectFrame: ProjectFrame,
   priorAttemptFailure?: string,
   contractSlice?: string,
+  artifactContext?: string,
 ): AgentBrief {
   const spec = task.taskSpec;
   const shortGoal = typeof spec?.goal === "string" ? spec.goal : task.title;
@@ -1269,6 +1272,7 @@ function buildBasicBrief(
       ...(spec !== undefined ? { task_spec: { checks: stringArrayOrEmpty(spec.checks) } } : {}),
       ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
       ...(contractSlice !== undefined ? { contractSlice } : {}),
+      ...(artifactContext !== undefined ? { artifactContext } : {}),
     },
     "development:buildBasicBrief",
   );
