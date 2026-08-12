@@ -1,3 +1,4 @@
+import path from "node:path";
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
@@ -42,9 +43,12 @@ import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "
 // Provisioner → CommandRunner bridge
 // ---------------------------------------------------------------------------
 
-function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv): CommandRunner {
-  return async (command: string[], _cwd: string, timeout: number) => {
-    const result = await provisioner.execute(env, command, { timeout });
+function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv, hostMountRoot: string): CommandRunner {
+  const containerMount = env.spec.projectMount;
+  return async (command: string[], cwd: string, timeout: number) => {
+    const rel = path.relative(hostMountRoot, cwd);
+    const containerCwd = rel && !rel.startsWith("..") ? path.posix.join(containerMount, rel) : containerMount;
+    const result = await provisioner.execute(env, command, { timeout, cwd: containerCwd });
     return { exitCode: result.exitCode ?? 1, output: (result.stdout + result.stderr).trim() };
   };
 }
@@ -239,7 +243,7 @@ export class DevelopmentService {
 
   private buildRunners(workDir: string, image: string, env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
     if (this.deps.provisioner && env) {
-      const runner = provisionerAsRunner(this.deps.provisioner, env);
+      const runner = provisionerAsRunner(this.deps.provisioner, env, this.deps.config.workdirBase);
       return { runCommand: runner, prepareRunCommand: runner };
     }
     return {
