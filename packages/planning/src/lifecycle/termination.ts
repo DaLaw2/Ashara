@@ -23,12 +23,26 @@ function isTerminal(status: WorkItemStatus): boolean {
   return TERMINAL_STATUSES.has(status);
 }
 
+/**
+ * An item is settled when it has reached a resolved state: Completed or Abandoned.
+ * Distinct from isTerminal: Completed now has an outbound edge (-> Pending, for
+ * reopen-on-broken-evidence), so it is no longer terminal, but a Completed item IS
+ * settled for the purpose of deciding whether the run achieved its plan.
+ */
+function isSettled(status: WorkItemStatus): boolean {
+  return status === "Completed" || status === "Abandoned";
+}
+
 export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   const { items, budgetExhausted, openCoverageGaps } = snapshot;
   const parentsWithChildren = collectParents(items);
   const counts = tallyCounts(items, parentsWithChildren);
 
-  if (counts.total > 0 && counts.nonTerminal === 0 && openCoverageGaps === 0) {
+  // Completeness: every item reached Completed or Abandoned. Uses isSettled (not
+  // isTerminal) because Completed is no longer graph-terminal — it has the reopen
+  // edge — but a Completed item still means "work done" for run-termination.
+  const unsettled = counts.pending + counts.inProgress + counts.blocked + counts.failed;
+  if (counts.total > 0 && unsettled === 0 && openCoverageGaps === 0) {
     return { decision: "plan_exhausted", trigger: "completeness", counts, stalled: [] };
   }
 
@@ -36,7 +50,8 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
     return { decision: "stop", reason: "economy", counts, stalled: [], abandonedRoots: [] };
   }
 
-  if (counts.total > 0 && counts.nonTerminal > 0 && !hasAdvanceableItem(items, parentsWithChildren)) {
+  // Liveness: there ARE unsettled items but none can advance — the plan is stuck.
+  if (counts.total > 0 && unsettled > 0 && !hasAdvanceableItem(items, parentsWithChildren)) {
     const { stalled } = classifyStalled(items);
     return { decision: "plan_exhausted", trigger: "liveness", counts, stalled };
   }
@@ -78,7 +93,7 @@ function classifyStalled(items: readonly TerminationItemSnapshot[]): {
   const roots = new Set<string>();
 
   for (const item of items) {
-    if (isTerminal(item.status)) continue;
+    if (isSettled(item.status)) continue;
     const cause = classifyCause(item);
     let blockedBy = item.blockedBy;
 

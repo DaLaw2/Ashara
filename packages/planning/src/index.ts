@@ -45,6 +45,7 @@ export type {
   TaskSpec,
   DecompositionResult,
 } from "./decomposition-types.js";
+export { loadDecompositionConfig } from "./decomposition-types.js";
 export { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 export type { DecompositionLLM } from "./decomposition.js";
 export { deriveCompletionEndpoint, deriveCompletionModule } from "./contract-derivation.js";

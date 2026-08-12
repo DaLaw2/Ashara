@@ -34,7 +34,7 @@ const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = 
   InProgress: ["Completed", "Blocked", "Failed", "Pending", "Abandoned"],
   Blocked: ["Pending", "Abandoned"],
   Failed: ["Pending", "Abandoned"],
-  Completed: [],
+  Completed: ["Pending"],
   Abandoned: [],
 };
 

@@ -1,4 +1,4 @@
-import { blockedReasonToRecord, TERMINAL_STATUSES, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { blockedReasonToRecord, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { TerminationCounts, TerminationStop, StalledCause, StopReason, TerminationPlanExhausted } from "../termination.js";
 import type { RunSummary, ShippedItem, AbandonedItem, AbandonKind, CoverageGap, EndpointCoverageGap } from "../run-summary.js";
 import type { AcceptanceVerdict } from "../acceptance.js";
@@ -219,8 +219,12 @@ function buildGaps(
     }));
   }
 
+  // Filter to unsettled items: items that are NOT Completed or Abandoned.
+  // Uses explicit status checks rather than TERMINAL_STATUSES because Completed
+  // is no longer graph-terminal (it has a reopen edge) but IS settled for the
+  // purpose of identifying budget-cutoff gaps.
   return items
-    .filter((it) => !TERMINAL_STATUSES.has(it.status))
+    .filter((it) => it.status !== "Completed" && it.status !== "Abandoned")
     .map((it) => ({
       id: it.id,
       title: it.title,

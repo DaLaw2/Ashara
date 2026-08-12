@@ -37,6 +37,7 @@ import {
   NorthStarChecker,
   StubNorthStarLLM,
   DecompositionEngine,
+  loadDecompositionConfig,
   FailureRouter,
   createGatewayBrainstormLLM,
   createGatewayNorthStarLLM,
@@ -293,7 +294,8 @@ async function main(): Promise<void> {
   }
   const brainstormEngine = new BrainstormEngine(brainstormLlm);
   const northstarChecker = new NorthStarChecker(northstarLlm);
-  const decompositionEngine = new DecompositionEngine(decompositionLlm);
+  const decompositionOverrides = await loadDecompositionConfig((key: string) => configRepo.getSetting(key));
+  const decompositionEngine = new DecompositionEngine(decompositionLlm, decompositionOverrides);
   const failureRouter = new FailureRouter(3);
 
   const retrieveFn = await createRetrievalFn(inProcessGraphClient);

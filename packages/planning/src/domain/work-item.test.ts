@@ -5,10 +5,12 @@ import {
   createPendingWorkItem,
   canTransitionTo,
   startWorkItem,
+  completeWorkItem,
   failWorkItem,
   blockWorkItem,
   unblockWorkItem,
   replanWorkItem,
+  reopenWorkItem,
   abandonWorkItem,
   requeueWorkItem,
   takeEvents,
@@ -65,7 +67,8 @@ describe("canTransitionTo — Failed recovery transitions", () => {
     expect(canTransitionTo("InProgress", "Completed")).toBe(true);
     expect(canTransitionTo("InProgress", "Failed")).toBe(true);
     expect(canTransitionTo("InProgress", "Blocked")).toBe(true);
-    expect(canTransitionTo("Completed", "Pending")).toBe(false);
+    // Completed -> Pending is now legal (reopen on broken artifact evidence)
+    expect(canTransitionTo("Completed", "Pending")).toBe(true);
     expect(canTransitionTo("Pending", "Completed")).toBe(false);
   });
 });
@@ -251,6 +254,61 @@ describe("abandonWorkItem", () => {
     takeEvents(item);
 
     expect(() => replanWorkItem(item)).toThrow(InvalidStatusTransition);
+  });
+});
+
+describe("reopenWorkItem", () => {
+  function seedCompleted() {
+    const item = createPendingWorkItem("Task", "leaf-task", "test-run");
+    startWorkItem(item);
+    completeWorkItem(item);
+    takeEvents(item);
+    return item;
+  }
+
+  test("transitions Completed -> Pending and emits work_item.reopened", () => {
+    const item = seedCompleted();
+
+    reopenWorkItem(item, "integration test proves the endpoint returns 500");
+    const events = takeEvents(item);
+
+    expect(item.status).toBe("Pending");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.eventType).toBe("work_item.reopened");
+    expect(events[0]?.payload.work_item_id).toBe(item.id);
+  });
+
+  test("sets blockedReason with source='reopen' and the evidence string", () => {
+    const item = seedCompleted();
+    const evidence = "acceptance test failed: auth middleware missing";
+
+    reopenWorkItem(item, evidence);
+
+    expect(item.blockedReason).toEqual({ source: "reopen", evidence });
+  });
+
+  test("throws InvalidStatusTransition on a non-Completed item", () => {
+    const pending = createPendingWorkItem("Task", "leaf-task", "test-run");
+    expect(() => reopenWorkItem(pending, "evidence")).toThrow(InvalidStatusTransition);
+
+    const failed = seedFailed();
+    expect(() => reopenWorkItem(failed, "evidence")).toThrow(InvalidStatusTransition);
+  });
+
+  test("throws on empty evidence (fail-closed)", () => {
+    const item = seedCompleted();
+    expect(() => reopenWorkItem(item, "")).toThrow("evidence is required");
+    expect(() => reopenWorkItem(item, "   ")).toThrow("evidence is required");
+  });
+
+  test("canTransitionTo('Completed', 'Pending') returns true", () => {
+    expect(canTransitionTo("Completed", "Pending")).toBe(true);
+  });
+
+  test("TERMINAL_STATUSES contains only Abandoned, not Completed", () => {
+    expect(TERMINAL_STATUSES.has("Abandoned")).toBe(true);
+    expect(TERMINAL_STATUSES.has("Completed")).toBe(false);
+    expect(TERMINAL_STATUSES.size).toBe(1);
   });
 });
 

@@ -108,9 +108,6 @@ export class KnowledgeDerivationError extends Error {
 }
 
 export interface DecompositionConfig {
-    readonly maxStoriesPerEpic: number;
-    readonly maxFeaturesPerStory: number;
-    readonly maxTasksPerFeature: number;
     readonly maxTasksPerEpic: number;
     readonly maxTasksPerStory: number;
     readonly maxTotalItems: number;
@@ -119,7 +116,7 @@ export interface DecompositionConfig {
      * Story/Feature layers), 3 = Epic -> Stories -> Tasks, 4 = full
      * Epic -> Stories -> Features -> Tasks. Forced to 2 by default (coarse
      * vertical-slice strategy, granularity-debate.md) so a vision produces
-     * 5-8 tasks instead of the 40-item explosion a full 4-layer fan-out
+     * tasks instead of the 40-item explosion a full 4-layer fan-out
      * produces. This is authoritative over any per-vision complexity
      * classification (see DecompositionEngine.decomposeInternal).
      */
@@ -127,14 +124,43 @@ export interface DecompositionConfig {
 }
 
 export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
-    maxStoriesPerEpic: 8,
-    maxFeaturesPerStory: 5,
-    maxTasksPerFeature: 5,
-    maxTasksPerEpic: 5,
-    maxTasksPerStory: 4,
+    maxTasksPerEpic: 15,   // was 5 -- budget is the real limit (economy termination)
+    maxTasksPerStory: 8,   // was 4
     maxTotalItems: 0,
     maxDepth: 2,
 };
+
+/**
+ * Reads decomposition cap overrides from system_settings (key-value store).
+ * Falls back to DEFAULT_DECOMPOSITION_CONFIG for any key absent from the DB.
+ * The `getSetting` dependency mirrors ConfigRepository.getSetting so this
+ * stays free of a db package import (the Planning BC does not depend on @ashara/db).
+ */
+export async function loadDecompositionConfig(
+    getSetting: (key: string) => Promise<string | null>,
+): Promise<Partial<DecompositionConfig>> {
+    const [epicCap, storyCap] = await Promise.all([
+        getSetting("decomposition.maxTasksPerEpic"),
+        getSetting("decomposition.maxTasksPerStory"),
+    ]);
+
+    const result: Record<string, number> = {};
+
+    if (epicCap !== null) {
+        const parsed = Number(epicCap);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            result["maxTasksPerEpic"] = parsed;
+        }
+    }
+    if (storyCap !== null) {
+        const parsed = Number(storyCap);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            result["maxTasksPerStory"] = parsed;
+        }
+    }
+
+    return result;
+}
 
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({
