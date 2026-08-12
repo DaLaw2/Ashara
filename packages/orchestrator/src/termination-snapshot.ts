@@ -1,5 +1,5 @@
-import { parseProjectId } from "@ashara/shared";
-import type { ProductObservation, ProjectContract, ProjectId, StoredTaskSpec } from "@ashara/shared";
+import { parseProjectId, TERMINAL_STATUSES } from "@ashara/shared";
+import type { ProductObservation, ProjectContract, ProjectId, StoredTaskSpec, WorkItemStatus } from "@ashara/shared";
 import type { AcceptanceLLM, EndpointCoverageGap, AcceptanceVerdict, AcceptanceGap, StopReason, TerminationPlanExhausted, CompletionFigure } from "./acl/planning-acl.js";
 import {
   assembleRunSummaryItems,
@@ -110,7 +110,7 @@ export interface AcceptanceCheckDeps {
     getLatest(): Promise<{ readonly visionText: string; readonly projectPath: string | null } | null>;
   };
   readonly workItemRepo: {
-    listAll(): Promise<ReadonlyArray<{ readonly id: string; readonly parentId?: string }>>;
+    listAll(): Promise<ReadonlyArray<{ readonly id: string; readonly parentId?: string; readonly status: WorkItemStatus }>>;
   };
   readonly contractRepo?: { getLatest(projectId: ProjectId): Promise<ProjectContract | null> };
   readonly acceptanceLlm?: AcceptanceLLM;
@@ -253,7 +253,7 @@ export async function runAcceptanceCheck(
 async function latestContract(deps: AcceptanceCheckDeps): Promise<ProjectContract | null> {
   const contractRepo = deps.contractRepo;
   if (!contractRepo) return null;
-  const roots = (await deps.workItemRepo.listAll()).filter((i) => i.parentId === undefined);
+  const roots = (await deps.workItemRepo.listAll()).filter((i) => i.parentId === undefined && !TERMINAL_STATUSES.has(i.status));
   for (const root of roots) {
     const contract = await contractRepo.getLatest(parseProjectId(root.id));
     if (contract) return contract;
@@ -269,7 +269,7 @@ async function latestContract(deps: AcceptanceCheckDeps): Promise<ProjectContrac
 async function resolveFirstContract(deps: CoreLoopDeps): Promise<ProjectContract | null> {
   if (!deps.contractRepo) return null;
   const items = await deps.workItemRepo.listAll();
-  const roots = items.filter((i) => i.parentId === undefined);
+  const roots = items.filter((i) => i.parentId === undefined && !TERMINAL_STATUSES.has(i.status));
   for (const root of roots) {
     const contract = await deps.contractRepo.getLatest(parseProjectId(root.id));
     if (contract) return contract;
@@ -285,7 +285,7 @@ async function createGapTasks(
   if (gaps.length === 0) return;
 
   const allItems = await deps.workItemRepo.listAll();
-  const root = allItems.find((i) => i.parentId === undefined);
+  const root = allItems.find((i) => i.parentId === undefined && !TERMINAL_STATUSES.has(i.status));
   if (!root) return;
 
   const existingTitles = new Set(
@@ -317,7 +317,7 @@ async function createGapTasks(
 async function currentCoverageGaps(deps: CoreLoopDeps): Promise<EndpointCoverageGap[]> {
   if (!deps.contractRepo) return [];
   const items = await deps.workItemRepo.listAll();
-  const roots = items.filter((item) => item.parentId === undefined);
+  const roots = items.filter((item) => item.parentId === undefined && !TERMINAL_STATUSES.has(item.status));
   const gaps: EndpointCoverageGap[] = [];
   for (const root of roots) {
     const contract = await deps.contractRepo.getLatest(parseProjectId(root.id));

@@ -7,7 +7,7 @@ import type {
   WorkItemStatus,
   StoredTaskSpec,
 } from "@ashara/shared";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, TERMINAL_STATUSES } from "@ashara/shared";
 import type { EndpointCoverageGap } from "./run-summary.js";
 import type { WorkItem, WorkItemRepository, ContractRepository, CoverageHold } from "./domain/index.js";
 import {
@@ -346,7 +346,7 @@ export interface CoverageReconciliationDeps {
  */
 export async function reconcileCoverage(deps: CoverageReconciliationDeps): Promise<EndpointCoverageGap[]> {
   const allItems = await deps.workItemRepo.listAll();
-  const roots = allItems.filter((item) => item.parentId === undefined);
+  const roots = allItems.filter((item) => item.parentId === undefined && !TERMINAL_STATUSES.has(item.status));
   const statusById = new Map<string, WorkItemStatus>(allItems.map((w) => [w.id, w.status]));
   const parentById = new Map<string, string | undefined>(allItems.map((w) => [w.id, w.parentId]));
 

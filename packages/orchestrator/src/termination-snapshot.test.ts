@@ -45,7 +45,7 @@ function baseDeps(overrides: Partial<AcceptanceCheckDeps> = {}): AcceptanceCheck
   return {
     config: { maxAcceptanceAttempts: 2 },
     visionRepo: { getLatest: async () => ({ visionText: VISION_TEXT, projectPath: "/tmp/jot" }) },
-    workItemRepo: { listAll: async () => [{ id: ROOT_ID }] },
+    workItemRepo: { listAll: async () => [{ id: ROOT_ID, status: "InProgress" }] },
     contractRepo: { getLatest: async () => CONTRACT },
     acceptanceLlm: llmFinding("jot search"),
     observeProduct: async () => GO_CLI,
