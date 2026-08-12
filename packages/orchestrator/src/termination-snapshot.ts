@@ -29,25 +29,29 @@ export async function evaluateRunTermination(
   const openCoverageGaps = deps.config.coverageEnforcing
     ? endpointGaps.filter(isBlockingCoverageGap).length
     : 0;
-  const decision = evaluate({ items, budgetExhausted, openCoverageGaps });
+
+  // Resolve the contract and compute the completion figure BEFORE evaluate()
+  // so the figure is available at the termination decision point. Empty
+  // evidence is honest: at termination time no probes, checks, or
+  // file-existence queries have been run, so the figure reports the declared
+  // surface size (denominator) with zero verified (numerator).
+  const contract = await resolveFirstContract(deps);
+  const completionFigure = computeCompletionFigure(contract, {});
+
+  const decision = evaluate({ items, budgetExhausted, openCoverageGaps, completionFigure });
 
   if (decision.decision === "continue") {
     return { decision, summary: null };
   }
-
-  // Resolve the contract once for both the completion figure and downstream
-  // consumers. Empty evidence is honest: at termination time no probes,
-  // checks, or file-existence queries have been run, so the figure reports
-  // the declared surface size (denominator) with zero verified (numerator).
-  const contract = await resolveFirstContract(deps);
-  const completionFigure = computeCompletionFigure(contract, {});
 
   if (decision.decision === "stop") {
     const summary = buildRunSummary({ items, endpointGaps, completionFigure, currentRunScope: runScope }, decision);
     return { decision, summary };
   }
 
-  return handlePlanExhausted(deps, decision, items, endpointGaps, runScope, completionFigure);
+  // The figure is now carried on the decision itself; extract it for
+  // downstream consumers (acceptance check, run summary).
+  return handlePlanExhausted(deps, decision, items, endpointGaps, runScope, decision.completionFigure ?? completionFigure);
 }
 
 async function handlePlanExhausted(
@@ -58,7 +62,7 @@ async function handlePlanExhausted(
   runScope: string,
   completionFigure: CompletionFigure,
 ): Promise<TerminationOutcome> {
-  const acceptance = await runAcceptanceCheck(deps, items);
+  const acceptance = await runAcceptanceCheck({ ...deps, completionFigure }, items);
 
   if (acceptance.outcome === "rejected") {
     const maxGapAttempts = deps.config.maxGapAttempts;
@@ -116,6 +120,8 @@ export interface AcceptanceCheckDeps {
   }) => Promise<ProductObservation>;
   acceptanceAttempts: number;
   lastAcceptanceVerdict?: AcceptanceVerdict;
+  /** Pre-computed completion figure; informational context for the acceptance decision. */
+  readonly completionFigure?: CompletionFigure;
 }
 
 export interface AcceptanceCheckItem {

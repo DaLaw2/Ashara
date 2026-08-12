@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { AcceptanceVerdict } from "../acceptance.js";
+import type { CompletionFigure } from "../completion-figure.js";
 import type { TerminationPlanExhausted, TerminationStop } from "../termination.js";
-import { buildRunSummary } from "./run-summary.js";
+import { buildRunSummary, emitRunSummary } from "./run-summary.js";
 import type { RunSummaryItem } from "./run-summary.js";
 
 // ---------------------------------------------------------------------------
@@ -339,5 +340,144 @@ describe("run-scoped narrative counts", () => {
 
     expect(narrative).toContain("board total=5");
     expect(narrative).toContain("nonTerminal=2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Completion figure wiring — the figure is a contract-derived ratio, not a
+// task count, so it is comparable across runs and stacks (C2).
+// ---------------------------------------------------------------------------
+
+describe("completion figure in RunSummary", () => {
+  const measuredFigure: CompletionFigure = {
+    kind: "measured",
+    ratio: 3 / 7,
+    numerator: 3,
+    denominator: 7,
+    basis: [
+      { source: "endpoint", label: "GET /api/items", satisfied: true },
+      { source: "endpoint", label: "POST /api/items", satisfied: true },
+      { source: "endpoint", label: "DELETE /api/items/:id", satisfied: false },
+      { source: "check", label: "lint passes", satisfied: true },
+      { source: "check", label: "tests pass", satisfied: false },
+      { source: "module", label: "src/core.ts", satisfied: false },
+      { source: "module", label: "src/index.ts", satisfied: false },
+    ],
+  };
+
+  const unknownFigure: CompletionFigure = {
+    kind: "unknown",
+    reason: "no contract available",
+  };
+
+  test("buildRunSummary includes completionFigure when provided in input", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const summary = buildRunSummary(
+      { items, currentRunScope: THIS_RUN, completionFigure: measuredFigure },
+      COMPLETENESS_STOP,
+    );
+
+    expect(summary.completionFigure).toBeDefined();
+    expect(summary.completionFigure).toEqual(measuredFigure);
+  });
+
+  test("buildRunSummary omits completionFigure when not provided", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const summary = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      COMPLETENESS_STOP,
+    );
+
+    expect(summary.completionFigure).toBeUndefined();
+  });
+
+  test("narrative mentions measured completion as a percentage with fraction", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const { narrative } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN, completionFigure: measuredFigure },
+      COMPLETENESS_STOP,
+    );
+
+    expect(narrative).toContain("Completion: 43% (3/7 contract items verified)");
+  });
+
+  test("narrative mentions unknown completion with the reason", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const { narrative } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN, completionFigure: unknownFigure },
+      COMPLETENESS_STOP,
+    );
+
+    expect(narrative).toContain("Completion: unknown (no contract available)");
+  });
+
+  test("narrative has no completion mention when figure is absent", () => {
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const { narrative } = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      COMPLETENESS_STOP,
+    );
+
+    expect(narrative).not.toContain("Completion:");
+  });
+
+  test("emitRunSummary includes completionFigure in the event payload", () => {
+    const events: unknown[] = [];
+    const logger: import("./ports.js").EventSink = {
+      emit(event: Record<string, unknown>) { events.push(event); },
+    };
+
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const summary = buildRunSummary(
+      { items, currentRunScope: THIS_RUN, completionFigure: measuredFigure },
+      COMPLETENESS_STOP,
+    );
+
+    emitRunSummary(logger, summary);
+
+    expect(events).toHaveLength(1);
+    const payload = events[0] as Record<string, unknown>;
+    expect(payload["event"]).toBe("run_terminated");
+    expect(payload["completionFigure"]).toEqual(measuredFigure);
+  });
+
+  test("emitRunSummary emits undefined completionFigure when figure is absent", () => {
+    const events: unknown[] = [];
+    const logger: import("./ports.js").EventSink = {
+      emit(event: Record<string, unknown>) { events.push(event); },
+    };
+
+    const items: RunSummaryItem[] = [
+      item({ id: "a", runScope: THIS_RUN, status: "Completed" }),
+    ];
+
+    const summary = buildRunSummary(
+      { items, currentRunScope: THIS_RUN },
+      COMPLETENESS_STOP,
+    );
+
+    emitRunSummary(logger, summary);
+
+    expect(events).toHaveLength(1);
+    const payload = events[0] as Record<string, unknown>;
+    expect(payload["completionFigure"]).toBeUndefined();
   });
 });

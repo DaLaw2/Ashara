@@ -1,6 +1,7 @@
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
 import { TERMINAL_STATUSES } from "@ashara/shared";
 import type { DependencyResolution } from "../domain/index.js";
+import type { CompletionFigure } from "../completion-figure.js";
 import type { TerminationDecision, TerminationCounts, StalledItem, StalledCause, TerminationPlanExhausted } from "../termination.js";
 
 export interface TerminationItemSnapshot {
@@ -17,6 +18,8 @@ export interface TerminationSnapshot {
   readonly items: readonly TerminationItemSnapshot[];
   readonly budgetExhausted: boolean;
   readonly openCoverageGaps: number;
+  /** Pre-computed completion figure; threaded to plan_exhausted for acceptance context. */
+  readonly completionFigure?: CompletionFigure;
 }
 
 function isTerminal(status: WorkItemStatus): boolean {
@@ -34,7 +37,7 @@ function isSettled(status: WorkItemStatus): boolean {
 }
 
 export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
-  const { items, budgetExhausted, openCoverageGaps } = snapshot;
+  const { items, budgetExhausted, openCoverageGaps, completionFigure } = snapshot;
   const parentsWithChildren = collectParents(items);
   const counts = tallyCounts(items, parentsWithChildren);
 
@@ -43,20 +46,34 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   // edge — but a Completed item still means "work done" for run-termination.
   const unsettled = counts.pending + counts.inProgress + counts.blocked + counts.failed;
   if (counts.total > 0 && unsettled === 0 && openCoverageGaps === 0) {
-    return { decision: "plan_exhausted", trigger: "completeness", counts, stalled: [] };
+    logCompletionFigure("completeness", completionFigure);
+    return { decision: "plan_exhausted", trigger: "completeness", counts, stalled: [], completionFigure };
   }
 
   if (budgetExhausted) {
+    logCompletionFigure("economy", completionFigure);
     return { decision: "stop", reason: "economy", counts, stalled: [], abandonedRoots: [] };
   }
 
   // Liveness: there ARE unsettled items but none can advance — the plan is stuck.
   if (counts.total > 0 && unsettled > 0 && !hasAdvanceableItem(items, parentsWithChildren)) {
     const { stalled } = classifyStalled(items);
-    return { decision: "plan_exhausted", trigger: "liveness", counts, stalled };
+    logCompletionFigure("liveness", completionFigure);
+    return { decision: "plan_exhausted", trigger: "liveness", counts, stalled, completionFigure };
   }
 
   return { decision: "continue", counts };
+}
+
+function logCompletionFigure(trigger: string, figure: CompletionFigure | undefined): void {
+  if (figure === undefined) return;
+  if (figure.kind === "measured") {
+    console.log(
+      `[termination] trigger=${trigger} completionFigure: ${figure.numerator}/${figure.denominator} (ratio=${figure.ratio.toFixed(2)})`,
+    );
+  } else {
+    console.log(`[termination] trigger=${trigger} completionFigure: unknown (${figure.reason})`);
+  }
 }
 
 function collectParents(items: readonly TerminationItemSnapshot[]): ReadonlySet<string> {

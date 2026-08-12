@@ -161,6 +161,16 @@ describe("computeCompletionFigure", () => {
     expect(m.basis.find((b) => b.label === "src/shared.ts")).toBeUndefined();
   });
 
+  test("malformed contract (missing endpoints array) throws rather than returning 0 or 100", () => {
+    // A contract that arrives via a boundary with missing fields (e.g. a
+    // deserialization gap) must not silently produce a vacuous 0% or 100%.
+    // computeCompletionFigure is a pure function that trusts its typed input;
+    // the call site (termination-snapshot.ts safeComputeCompletionFigure)
+    // catches the throw and maps it to { kind: 'unknown' }.
+    const broken = { endpoints: null, modules: [], knowledge: { nodes: [], edges: [] } } as unknown as ProjectContract;
+    expect(() => computeCompletionFigure(broken, EMPTY_EVIDENCE)).toThrow();
+  });
+
   test("check nodes without a command array are not counted", () => {
     const contract = makeContract({
       knowledge: {

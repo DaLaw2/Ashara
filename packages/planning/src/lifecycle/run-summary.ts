@@ -6,6 +6,19 @@ import type { CompletionFigure } from "../completion-figure.js";
 import type { TerminationItemSnapshot } from "./termination.js";
 import type { EventSink } from "./ports.js";
 
+/**
+ * Format a CompletionFigure for the narrative. The figure is comparable across
+ * runs and stacks because it is a ratio derived from the contract's declared
+ * surface (endpoints, checks, modules) — not from task counts, which vary by
+ * decomposition strategy.
+ */
+function formatCompletionFigure(figure: CompletionFigure | undefined): string {
+  if (figure === undefined) return "";
+  if (figure.kind === "unknown") return ` Completion: unknown (${figure.reason}).`;
+  const pct = Math.round(figure.ratio * 100);
+  return ` Completion: ${pct}% (${figure.numerator}/${figure.denominator} contract items verified).`;
+}
+
 export interface RunSummaryItem extends TerminationItemSnapshot {
   readonly title: string;
   readonly blockedReason?: import("@ashara/shared").StoredBlockedReason;
@@ -71,6 +84,7 @@ export function buildRunSummary(input: RunSummaryInput, decision: TerminationSto
     endpointGaps,
     outOfScope,
     input.acceptance,
+    input.completionFigure,
   );
 
   const summary: RunSummary = {
@@ -305,6 +319,7 @@ function buildNarrative(
   endpointGaps: readonly EndpointCoverageGap[],
   outOfScope: OutOfScopeCounts,
   acceptance?: AcceptanceVerdict,
+  completionFigure?: CompletionFigure,
 ): string {
   const headlineMap: Record<StopReason, string> = {
     economy: "Run stopped because the budget was exhausted while dispatchable work remained.",
@@ -355,8 +370,9 @@ function buildNarrative(
   // success — the four "shipped" items included three from prior runs, and the
   // sentence did not say so.
   const outOfScopeNote = buildOutOfScopeNote(outOfScope);
+  const completionNote = formatCompletionFigure(completionFigure);
 
-  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote}${acceptanceNote}${outOfScopeNote} (board total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
+  return `${headline} ${shippedNote}${abandonedNote}${gapsNote}${endpointGapsNote}${acceptanceNote}${outOfScopeNote}${completionNote} (board total=${counts.total}, nonTerminal=${counts.nonTerminal}).`;
 }
 
 function buildOutOfScopeNote(outOfScope: OutOfScopeCounts): string {

@@ -1,4 +1,5 @@
 import type { WorkItemLevel, WorkItemStatus } from "@ashara/shared";
+import type { CompletionFigure } from "./completion-figure.js";
 
 /**
  * Why a run stopped (migration Phase 7, ADR-029). The three dimensions are kept
@@ -104,6 +105,8 @@ export interface TerminationPlanExhausted {
   readonly trigger: "completeness" | "liveness";
   readonly counts: TerminationCounts;
   readonly stalled: readonly StalledItem[];
+  /** Pre-computed completion figure at the termination decision point; informs acceptance. */
+  readonly completionFigure?: CompletionFigure;
 }
 
 export type TerminationDecision = TerminationContinue | TerminationStop | TerminationPlanExhausted;
