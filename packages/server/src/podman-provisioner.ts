@@ -270,12 +270,16 @@ function podmanRun(
   // Per-command network control via podman exec is not supported.
   // The container is created with network access for provisioning.
   // Container-level isolation is the boundary; per-phase gating is deferred.
+  const cacheBase = spec.projectMount;
   const args = [
     "run", "-d",
     "--name", containerName,
     "--userns=keep-id",
     "-v", `${resolvedWork}:${spec.projectMount}:z`,
     "-w", spec.projectMount,
+    "-e", `GOPATH=${cacheBase}/.gopath`,
+    "-e", `GOMODCACHE=${cacheBase}/.gomodcache`,
+    "-e", `CARGO_HOME=${cacheBase}/.cargo`,
     imageTag,
     "sleep", "infinity",
   ];
