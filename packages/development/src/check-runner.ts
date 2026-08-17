@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { delimiter, join } from "node:path";
 import { TargetPackageJsonSchema } from "@ashara/shared";
 import type { CommandRunner } from "./verify-core.js";
+import { readVerifyConfig } from "./verify-config.js";
 
 // ---------------------------------------------------------------------------
 // Deterministic check execution (Phase 2, mig-phase-2).
@@ -206,33 +207,50 @@ interface AppHandle {
 }
 
 async function bootApp(workDir: string): Promise<AppHandle> {
-  const pkgJsonPath = join(workDir, "package.json");
-  const hasPkgJson = await access(pkgJsonPath).then(() => true, () => false);
-  if (!hasPkgJson) {
-    throw new AppBootError(workDir, "no package.json found");
+  // Ladder: try verify.toml [start] first, then package.json scripts.start.
+  let startCmd: string | null = null;
+  let envOverrides: Record<string, string> = {};
+
+  // Rung 1: verify.toml [start] section — stack-agnostic
+  const verifyConfig = await readVerifyConfig(workDir);
+  if (verifyConfig.start?.command) {
+    startCmd = verifyConfig.start.command;
+    // No Node-specific env setup — this is a generic start command.
   }
 
-  const pkgContent = await readFile(pkgJsonPath, "utf-8");
-  const pkg = TargetPackageJsonSchema.parse(JSON.parse(pkgContent));
-  const scripts = pkg.scripts;
+  // Rung 2: package.json scripts.start — Node-specific fallback
+  if (startCmd === null) {
+    const pkgJsonPath = join(workDir, "package.json");
+    const hasPkgJson = await access(pkgJsonPath).then(() => true, () => false);
+    if (hasPkgJson) {
+      const pkgContent = await readFile(pkgJsonPath, "utf-8");
+      const pkg = TargetPackageJsonSchema.parse(JSON.parse(pkgContent));
+      if (pkg.scripts && typeof pkg.scripts.start === "string") {
+        startCmd = pkg.scripts.start;
+        const localBin = join(workDir, "node_modules", ".bin");
+        const pathWithLocalBin =
+          process.env.PATH !== undefined && process.env.PATH !== ""
+            ? `${localBin}${delimiter}${process.env.PATH}`
+            : localBin;
+        envOverrides = { PATH: pathWithLocalBin, NODE_ENV: "production" };
+      }
+    }
+  }
 
-  let startCmd: string | null = null;
-  if (scripts && typeof scripts.start === "string") startCmd = scripts.start;
-  if (!startCmd) {
-    throw new AppBootError(workDir, "no start script in package.json");
+  // Both declined
+  if (startCmd === null) {
+    throw new AppBootError(
+      workDir,
+      "no start command: verify.toml has no [start] section, and no package.json scripts.start found",
+    );
   }
 
   const port = await pickFreePort();
   const parts = startCmd.split(" ");
-  const localBin = join(workDir, "node_modules", ".bin");
-  const pathWithLocalBin =
-    process.env.PATH !== undefined && process.env.PATH !== ""
-      ? `${localBin}${delimiter}${process.env.PATH}`
-      : localBin;
 
   const proc = spawn(parts[0], parts.slice(1), {
     cwd: workDir,
-    env: { ...process.env, PATH: pathWithLocalBin, NODE_ENV: "production", PORT: String(port) },
+    env: { ...process.env, ...envOverrides, PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });

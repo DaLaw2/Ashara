@@ -17,7 +17,7 @@ export {
   loadBudgetEnv,
   loadServerEnv,
   loadAgentRunnerEnv,
-  loadDiagnosticsEnabledEnv,
+
   loadModelsConfigPathEnvOverride,
 } from "./env.js";
 

@@ -2,7 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
-import { DiagnosticChecker } from "../diagnostics.js";
+
 
 export const writeFileTool: ToolDefinition = {
     name: "write_file",
@@ -57,13 +57,7 @@ export class WriteFileExecutor implements ToolExecutor {
             await mkdir(dirname(resolved), { recursive: true });
             await writeFile(resolved, content, "utf-8");
             const bytes = Buffer.byteLength(content, "utf-8");
-            let output = `Wrote ${bytes} bytes to ${rawPath}`;
-
-            const checker = new DiagnosticChecker(this.workingDir);
-            const diagnostics = await checker.check(rawPath);
-            if (diagnostics?.hasErrors) {
-                output += `\n\n<diagnostics>\n${diagnostics.diagnostics}\n</diagnostics>`;
-            }
+            const output = `Wrote ${bytes} bytes to ${rawPath}`;
 
             return { success: true, output };
         } catch (err: unknown) {

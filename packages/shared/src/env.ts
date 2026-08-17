@@ -144,7 +144,7 @@ export interface AgentRunnerEnv {
     readonly outputPath: string;
     readonly catalogPath: string;
     readonly capability: CapabilityLevel;
-    readonly diagnosticsEnabled: boolean;
+
     readonly modelsConfigPath?: string;
 }
 
@@ -156,20 +156,9 @@ export function loadAgentRunnerEnv(): AgentRunnerEnv {
         outputPath: ctx.ASHARA_OUTPUT_PATH,
         catalogPath: ctx.ASHARA_CATALOG_PATH,
         capability: parseCapabilityLevel(ctx.AGENT_CAPABILITY),
-        diagnosticsEnabled: loadDiagnosticsEnabledEnv(),
+
         modelsConfigPath: loadModelsConfigPathEnvOverride(),
     };
-}
-
-/**
- * Whether inline diagnostics are enabled (`ASHARA_DIAGNOSTICS`). Read directly
- * rather than through `loadAgentRunnerEnv()` since diagnostic checks run from
- * tool code inside the agent-runner subprocess independent of the required
- * execution-context fields (brief/output/working-dir path) — coupling it to
- * `parseExecutionContext` would make an unrelated read fail-closed too.
- */
-export function loadDiagnosticsEnabledEnv(): boolean {
-    return process.env["ASHARA_DIAGNOSTICS"] !== "false";
 }
 
 /**

@@ -68,17 +68,10 @@ function joinRoutePaths(prefix: string, subpath: string): string {
 export async function deriveEndpoints(
   projectPath: string,
   contractEntryPoint: string | null = null,
-  contractLanguage: string | null = null,
+  _contractLanguage: string | null = null,
 ): Promise<EndpointDerivation> {
   const projectRoot = resolve(projectPath);
   const notes: string[] = [];
-
-  if (contractLanguage !== null) {
-    const lang = contractLanguage.toLowerCase();
-    if (lang !== "typescript" && lang !== "javascript") {
-      return { endpoints: [], notes: [`language "${contractLanguage}" is not JS/TS — endpoint derivation skipped`] };
-    }
-  }
 
   const entryPoint = await findEntryPoint(projectRoot, contractEntryPoint);
   if (entryPoint === null) {

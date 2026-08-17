@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { TargetPackageJsonSchema } from "@ashara/shared";
+import { loadSkipDirs, TargetPackageJsonSchema } from "@ashara/shared";
 
 // ---------------------------------------------------------------------------
 // Shared file-scanning primitives — the import-graph BFS used by both
@@ -32,22 +32,17 @@ export function isSourceFile(name: string): boolean {
   return !NON_SOURCE_EXTENSIONS.has(name.slice(dot).toLowerCase());
 }
 
-// Build-artifact directories by convention — bridge set used when
-// contract.excludePaths is not available. .gitignore-based exclusion is the
-// intended general replacement.
-const BRIDGE_EXCLUDED_DIR_NAMES = new Set(["node_modules", "dist", "build", ".git", "target", "__pycache__", "vendor", "venv", ".venv"]);
-
 /**
  * Recursively collect source files under `dir` (skipping build/dependency
- * directories and `.d.ts` declarations).
+ * directories and `.d.ts` declarations). When `excludeDirs` is omitted the
+ * project's `.gitignore` is read via `loadSkipDirs` — no hardcoded skip-list.
  */
 export async function collectSourceFiles(
   dir: string,
   acc: string[],
   excludeDirs?: ReadonlySet<string>,
 ): Promise<void> {
-  // bridge: when no contract excludePaths, use the hardcoded set
-  const skip = excludeDirs ?? BRIDGE_EXCLUDED_DIR_NAMES;
+  const skip = excludeDirs ?? await loadSkipDirs(dir);
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });

@@ -156,6 +156,9 @@ interface ScriptCommands {
     lint?: string;
 }
 
+// Node-specific by design: package.json scripts are always invoked via npm.
+// The general (stack-agnostic) paths are detectScriptsFromJustfile and
+// detectScriptsFromMakefile above, which work for any language.
 async function detectScriptsFromPackageJson(dir: string): Promise<ScriptCommands> {
     const content = await readFileSafe(join(dir, "package.json"));
     if (!content) return {};

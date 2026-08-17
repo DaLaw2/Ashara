@@ -609,20 +609,17 @@ export class DevelopmentService {
     }
 
     // Target-generality fallback (kl-t2/Q5 gap): package.json is Node-specific.
-    // A Rust/Go/Python target has no dependency manifest visible to the agent at
-    // all otherwise — this reads whichever one is present, raw, the same way the
-    // entry point below is read raw.
+    // readManifestContext reads ALL non-dot, non-binary root-level files —
+    // no hardcoded manifest list (Target Generality).
     if (!hasNodeManifest) {
-      for (const manifest of ["Cargo.toml", "go.mod", "pyproject.toml"]) {
-        try {
-          const content = await readFile(join(targetProjectPath, manifest), "utf-8");
-          sections.push(`## Project Manifest (${manifest})\n\`\`\`\n${content.slice(0, 2000)}\n\`\`\``);
-          break;
-        } catch (e: unknown) {
-          if (e instanceof Error && 'code' in e && e.code === 'ENOENT') continue;
-          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
-          console.warn(`[buildContextMap] Failed to read ${manifest} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
+      try {
+        const manifestContent = await readManifestContext(targetProjectPath);
+        if (manifestContent) {
+          sections.push(`## Project Manifests\n${manifestContent}`);
         }
+      } catch (e: unknown) {
+        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
+        console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

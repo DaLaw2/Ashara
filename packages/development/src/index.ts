@@ -32,7 +32,7 @@ export type { CommandRunner } from "./verify-core.js";
 export { defaultRunCommand } from "./check-runner.js";
 
 export type {
-  PackageManager,
+  NodePackageManager,
   ToolchainStep,
   ToolchainErrorContext,
   ToolchainLogFn,
@@ -70,7 +70,7 @@ export type {
   DevelopmentServiceDeps,
 } from "./execution-service.js";
 
-export type { VerifyCheck, VerifyConfig } from "./verify-config.js";
+export type { VerifyCheck, VerifyConfig, VerifyStartConfig } from "./verify-config.js";
 
 export type { AttributionResult, WorkItemLookup, GitLogRunner } from "./gates/attribution.js";
 export { extractImplicatedFiles, attributeFilesToTasks } from "./gates/attribution.js";

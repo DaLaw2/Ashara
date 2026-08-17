@@ -3,16 +3,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const TSC_DIAGNOSTIC = /^(.+\.(?:tsx|ts))\(\d+,\d+\):/;
-const ROUTE_REACHABILITY = /^\s*-\s+(.+\.(?:tsx|ts))$/;
-const NODE_STACK_TRACE = /at .+ \((.+\.(?:mjs|cjs|ts|js)):\d+:\d+\)/g;
-const GENERIC_FILE_REF = /(?:^|\s)(src\/[^\s:]+\.(?:tsx|jsx|ts|js))/gm;
+const COMPILER_DIAGNOSTIC = /^(.+)\(\d+,\d+\):/;
+const ROUTE_REACHABILITY = /^\s*-\s+(.+\.\w+)$/;
+const STACK_TRACE = /at .+ \((.+\.\w+):\d+:\d+\)/g;
+const GENERIC_FILE_REF = /(?:^|\s)(src\/[^\s:]+\.\w+)/gm;
 
 export function extractImplicatedFiles(gateOutput: string): string[] {
   const files = new Set<string>();
 
   for (const line of gateOutput.split("\n")) {
-    const tscMatch = TSC_DIAGNOSTIC.exec(line);
+    const tscMatch = COMPILER_DIAGNOSTIC.exec(line);
     if (tscMatch) {
       files.add(tscMatch[1]);
       continue;
@@ -27,8 +27,8 @@ export function extractImplicatedFiles(gateOutput: string): string[] {
 
   let match: RegExpExecArray | null;
 
-  NODE_STACK_TRACE.lastIndex = 0;
-  while ((match = NODE_STACK_TRACE.exec(gateOutput)) !== null) {
+  STACK_TRACE.lastIndex = 0;
+  while ((match = STACK_TRACE.exec(gateOutput)) !== null) {
     files.add(match[1]);
   }
 

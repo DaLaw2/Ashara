@@ -41,7 +41,7 @@ const STATE_FILE_RELATIVE = join("node_modules", ".ashara-toolchain.json");
 // Package-manager detection
 // ---------------------------------------------------------------------------
 
-export type PackageManager = "bun" | "npm";
+export type NodePackageManager = "bun" | "npm";
 
 // Precedence: bun BEFORE npm. An explicit bun lockfile is a positive signal
 // the project's build was authored with bun; `npm install` auto-writes a
@@ -49,13 +49,13 @@ export type PackageManager = "bun" | "npm";
 // both are present we therefore trust the bun lockfile. No lockfile at all
 // but a package.json → npm (the lowest-common-denominator manager that ships
 // with Node; we cannot assume bun is installed without a positive signal).
-const LOCKFILE_PRECEDENCE: ReadonlyArray<{ file: string; manager: PackageManager }> = [
+const LOCKFILE_PRECEDENCE: ReadonlyArray<{ file: string; manager: NodePackageManager }> = [
   { file: "bun.lock", manager: "bun" },
   { file: "bun.lockb", manager: "bun" },
   { file: "package-lock.json", manager: "npm" },
 ];
 
-const INSTALL_COMMAND: Readonly<Record<PackageManager, readonly string[]>> = {
+const INSTALL_COMMAND: Readonly<Record<NodePackageManager, readonly string[]>> = {
   bun: ["bun", "install"],
   npm: ["npm", "install"],
 };
@@ -155,7 +155,7 @@ export interface CodegenOutcome {
 }
 
 export interface ToolchainResult {
-  readonly manager: PackageManager | null;
+  readonly manager: NodePackageManager | null;
   readonly installRan: boolean;
   readonly installReason: string;
   readonly codegen: readonly CodegenOutcome[];
@@ -370,7 +370,7 @@ async function pathExists(path: string): Promise<boolean> {
   return access(path).then(() => true, () => false);
 }
 
-async function detectManager(targetPath: string): Promise<PackageManager> {
+async function detectManager(targetPath: string): Promise<NodePackageManager> {
   for (const { file, manager } of LOCKFILE_PRECEDENCE) {
     if (await pathExists(join(targetPath, file))) {
       return manager;

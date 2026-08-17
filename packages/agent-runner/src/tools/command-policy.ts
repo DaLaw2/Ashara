@@ -118,12 +118,14 @@ const SERVER_SCRIPT_NAMES: ReadonlySet<string> = new Set([
     "start", "dev", "serve",
 ]);
 
-const SERVER_FILE_PATTERN = /(?:^|[/\\])(?:server|app)\.[mc]?[jt]sx?$/;
+const SERVER_FILE_PATTERN = /(?:^|[/\\])(?:server|app|main)\.\w+$/;
 
 const SERVER_NPX_TOOLS: ReadonlySet<string> = new Set([
     "serve", "http-server", "live-server",
 ]);
 
+// OPEN domain: add entries as new ecosystems are encountered. This is defense-in-depth
+// against accidental long-running processes, not an exhaustive gate.
 const SERVER_PYTHON_MODULES: ReadonlySet<string> = new Set([
     "flask", "uvicorn", "gunicorn", "http.server",
 ]);

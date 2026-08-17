@@ -32,15 +32,15 @@ describe("classifyFailure", () => {
     expect(classifyFailure(envelope(layer("entryPointRewriteCheck", "check failed")))).toBe("VERIFICATION_GAP");
   });
 
-  test("COMPILATION_ERROR — tsc errors in agent execution", () => {
-    const e = envelope(layer("agentExecution", "TypeScript compilation fails: error TS2345"));
+  test("COMPILATION_ERROR — compilation errors in agent execution", () => {
+    const e = envelope(layer("agentExecution", "compilation fails: error 2345"));
     expect(classifyFailure(e)).toBe("COMPILATION_ERROR");
   });
 
-  test("COMPILATION_ERROR — tsc failed in summary", () => {
+  test("COMPILATION_ERROR — build failed in summary", () => {
     const e = envelope(
       layer("agentExecution", "agent failed"),
-      { summary: "tsc --noEmit failed with 3 errors" },
+      { summary: "build failed with 3 errors" },
     );
     expect(classifyFailure(e)).toBe("COMPILATION_ERROR");
   });
@@ -105,7 +105,7 @@ describe("classifyFailure", () => {
   });
 
   test("COMPILATION_ERROR in cause chain takes precedence over outer unknown", () => {
-    const inner = layer("agentExecution", "error TS2345: type mismatch");
+    const inner = layer("agentExecution", "compilation error: type mismatch");
     const outer = layer("execute", "execution wrapper", undefined, inner);
     expect(classifyFailure(envelope(outer))).toBe("COMPILATION_ERROR");
   });

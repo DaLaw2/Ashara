@@ -73,9 +73,10 @@ function collectSearchableText(layer: ErrorLayer, envelope: ErrorEnvelope): stri
 
 function isCompilationFailure(text: string): boolean {
   return (
-    /error ts\d{4}/.test(text) ||
-    /tsc.*(fail|error)/.test(text) ||
-    text.includes("typescript compilation") ||
+    /\berror\b.*\b\d{4}\b/.test(text) ||
+    /\b(?:compil|build).*(fail|error)/i.test(text) ||
+    text.includes("compilation failed") ||
+    text.includes("build failed") ||
     text.includes("compile error") ||
     text.includes("syntax error")
   );

@@ -156,4 +156,6 @@ export interface Provisioner {
   update(env: ProvisionedEnv, delta: EnvChangeDelta): Promise<ProvisionedEnv>;
   execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult>;
   teardown(env: ProvisionedEnv): Promise<void>;
+  activeContainerName(): string | undefined;
+  activeContainerMount(): string | undefined;
 }

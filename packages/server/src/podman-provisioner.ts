@@ -51,6 +51,7 @@ export function generateContainerfile(spec: EnvironmentSpec): string {
 interface ContainerHandle {
   readonly containerName: string;
   readonly imageTag: string;
+  readonly projectMount: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +85,7 @@ export class PodmanProvisioner implements Provisioner {
     }
 
     await podmanRun(containerName, imageTag, spec, this.hostWorkDir);
-    this.handles.set(envId, { containerName, imageTag });
+    this.handles.set(envId, { containerName, imageTag, projectMount: spec.projectMount });
 
     return {
       id: envId,
@@ -97,6 +98,13 @@ export class PodmanProvisioner implements Provisioner {
   activeContainerName(): string | undefined {
     for (const handle of this.handles.values()) {
       return handle.containerName;
+    }
+    return undefined;
+  }
+
+  activeContainerMount(): string | undefined {
+    for (const handle of this.handles.values()) {
+      return handle.projectMount;
     }
     return undefined;
   }

@@ -183,6 +183,21 @@ export async function extractProjectConventions(projectDir: string): Promise<str
 // for the decomposition LLM; this side reads any text config file it finds.
 const NON_SOURCE_SKIP = new Set(["license", "readme", "changelog", "contributing", "authors"]);
 
+// Blocklist approach mirroring development/gates/internal.ts NON_SOURCE_EXTENSIONS.
+// agent-runner cannot import from development (ACL boundary), so the list is
+// duplicated here. Keep in sync with the canonical definition.
+const NON_SOURCE_EXTENSIONS = new Set([
+    ".json", ".yaml", ".yml", ".toml", ".xml",
+    ".lock", ".sum", ".mod",
+    ".md", ".txt", ".csv", ".log",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".bmp",
+    ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".map", ".min.js", ".min.css",
+    ".pdf", ".zip", ".tar", ".gz", ".tgz", ".bz2",
+    ".wasm", ".so", ".dylib", ".dll", ".exe", ".o", ".a",
+    ".snap", ".bin", ".dat", ".db", ".sqlite",
+]);
+
 async function extractGeneralConventions(projectDir: string, skip: ReadonlySet<string>): Promise<string> {
     const sections: string[] = [];
     let entries: string[];
@@ -247,8 +262,7 @@ async function appendConventionsTail(
                     const dot = e.lastIndexOf(".");
                     if (dot <= 0) return false;
                     const ext = e.slice(dot).toLowerCase();
-                    const nonSource = new Set([".json", ".yaml", ".yml", ".toml", ".xml", ".md", ".txt", ".lock", ".sum"]);
-                    return !nonSource.has(ext) && !e.startsWith(".");
+                    return !NON_SOURCE_EXTENSIONS.has(ext) && !e.startsWith(".");
                 },
             );
             if (exemplarFile) {

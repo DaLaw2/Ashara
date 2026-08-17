@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
-import { DiagnosticChecker } from "../diagnostics.js";
+
 
 export const editFileTool: ToolDefinition = {
     name: "edit_file",
@@ -94,13 +94,7 @@ export class EditFileExecutor implements ToolExecutor {
 
             const oldLines = oldText.split("\n").length;
             const newLines = newText.split("\n").length;
-            let output = `Edited ${rawPath}: replaced ${oldLines} line(s) with ${newLines} line(s).`;
-
-            const checker = new DiagnosticChecker(this.workingDir);
-            const diagnostics = await checker.check(rawPath);
-            if (diagnostics?.hasErrors) {
-                output += `\n\n<diagnostics>\n${diagnostics.diagnostics}\n</diagnostics>`;
-            }
+            const output = `Edited ${rawPath}: replaced ${oldLines} line(s) with ${newLines} line(s).`;
 
             return { success: true, output };
         } catch (err: unknown) {
