@@ -17,9 +17,6 @@ export default tseslint.config(
     },
     languageOptions: {
       parser: tseslint.parser,
-      parserOptions: {
-        projectService: true,
-      },
     },
     rules: {
       // No explicit `any` — CLAUDE.md: "No `any` type."
