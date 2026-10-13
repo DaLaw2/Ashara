@@ -3,7 +3,8 @@ import { execFile } from "node:child_process";
 import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { freshWorktreeRepo, initHostRepo, runHostGit, targetRepo, type HostRepo } from "./host-git.js";
+import { initHostRepo, runHostGit, type HostRepo } from "@ashara/execution-infra";
+import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
 
 const execFileAsync = promisify(execFile);

@@ -2,8 +2,9 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { initHostRepo, runHostGit } from "@ashara/execution-infra";
 import { buildContextMap } from "./context-map.js";
-import { initHostRepo, runHostGit, targetRepo } from "./host-git.js";
+import { targetRepo } from "./host-git.js";
 
 const SECRET = "HOST-ONLY-CONTENT-7f3a";
 

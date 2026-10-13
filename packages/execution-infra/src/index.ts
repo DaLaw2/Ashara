@@ -14,3 +14,13 @@ export {
 } from "./errors.js";
 /** @testseam workplace attempt.test.ts tells a substrate failure from a failing tool with it */
 export { CellExecFailed } from "./errors.js";
+export { initHostRepo, runHostGit } from "./host-git.js";
+export type { HostRepo } from "./host-git.js";
+/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export { environmentVersion, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
+/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export type { EnvironmentDefinition } from "./environment.js";
+/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export { buildEnvironmentImage } from "./environment-build.js";
+/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";

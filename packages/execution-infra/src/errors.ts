@@ -222,3 +222,70 @@ export class BaseCellConfigInvalid extends ExecutionInfraError {
     this.detail = detail;
   }
 }
+
+/**
+ * `environment/environment.toml` is missing, is not TOML, or does not match the definition
+ * schema. `issues` are the schema's own, path-qualified.
+ */
+export class EnvironmentDefinitionInvalid extends ExecutionInfraError {
+  readonly path: string;
+  readonly issues: readonly string[];
+
+  constructor(path: string, issues: readonly string[], options?: ErrorOptions) {
+    super(`Environment definition ${JSON.stringify(path)} is invalid: ${issues.join("; ")}`, options);
+    this.name = "EnvironmentDefinitionInvalid";
+    this.path = path;
+    this.issues = issues;
+  }
+}
+
+/**
+ * The environment version cannot be computed at `commit`: git failed, an owned path matches
+ * nothing, or the owned set holds an entry an image cannot be built from (a submodule, a symlink).
+ */
+export class EnvironmentVersionUnresolved extends ExecutionInfraError {
+  readonly gitDir: string;
+  readonly commit: string;
+  readonly reason: string;
+
+  constructor(gitDir: string, commit: string, reason: string, options?: ErrorOptions) {
+    super(`Environment version of ${JSON.stringify(gitDir)} at ${JSON.stringify(commit)} cannot be resolved: ${reason}`, options);
+    this.name = "EnvironmentVersionUnresolved";
+    this.gitDir = gitDir;
+    this.commit = commit;
+    this.reason = reason;
+  }
+}
+
+/** `podman build` of an environment version did not produce an image. */
+export class EnvironmentBuildFailed extends ExecutionInfraError {
+  readonly projectId: string;
+  readonly version: string;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly logTail: string;
+  readonly detail: string;
+
+  constructor(
+    projectId: string,
+    version: string,
+    exitCode: number | null,
+    timedOut: boolean,
+    logTail: string,
+    detail: string,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `Environment build of project ${projectId} version ${version} failed (exit ${exitCode ?? "none"}` +
+        `${timedOut ? ", timed out" : ""}): ${detail}; log tail: ${logTail.trim() || "(empty)"}`,
+      options,
+    );
+    this.name = "EnvironmentBuildFailed";
+    this.projectId = projectId;
+    this.version = version;
+    this.exitCode = exitCode;
+    this.timedOut = timedOut;
+    this.logTail = logTail;
+    this.detail = detail;
+  }
+}

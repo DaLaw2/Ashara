@@ -9,6 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ashara/shared": "*",
     "smol-toml": "1.7.1",
     "zod": "4.4.3"
   }

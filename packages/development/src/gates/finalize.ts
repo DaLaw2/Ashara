@@ -1,7 +1,8 @@
+import { runHostGit, type HostRepo } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
-import { runHostGit, targetRepo, type HostRepo } from "../host-git.js";
+import { targetRepo } from "../host-git.js";
 import {
   abortMerge,
   buildMergeAgentBrief,

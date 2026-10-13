@@ -1,5 +1,6 @@
+import { runHostGit } from "@ashara/execution-infra";
 import type { TaskDescriptor } from "./execution-service.js";
-import { runHostGit, targetRepo } from "./host-git.js";
+import { targetRepo } from "./host-git.js";
 
 /** execFile's rejection carries the child's stderr as a string; anything else carries none. */
 function stderrOf(e: unknown): string {

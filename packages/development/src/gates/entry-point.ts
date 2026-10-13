@@ -1,4 +1,5 @@
-import { runHostGit, targetRepo } from "../host-git.js";
+import { runHostGit } from "@ashara/execution-infra";
+import { targetRepo } from "../host-git.js";
 import { readTreeFile } from "../tree-read.js";
 import type { GateResult } from "./types.js";
 
