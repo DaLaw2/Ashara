@@ -147,7 +147,8 @@ beforeAll(async () => {
   gateway = buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db), () => new Date()) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+    clock: () => new Date(),
   });
 });
 

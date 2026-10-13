@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   const budgetLedger = new BudgetLedger();
   // Finance's cost ledger (K10): the gateway refuses an unpriced model before
   // the request and writes one llm_calls row per provider request after it.
-  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db), () => new Date());
+  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db));
   let llmGateway: LLMGateway;
   try {
     // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
@@ -174,6 +174,7 @@ async function main(): Promise<void> {
       checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
       ledger: budgetLedger,
       recording: { kind: "recorded", recorder: llmCallLedger },
+      clock: () => new Date(),
     });
     console.log("LLM gateway initialized");
     console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
@@ -427,7 +428,7 @@ async function main(): Promise<void> {
     eventStore,
     costRepo,
     failedApproachRepo,
-    visionRepo,
+    projectRepo,
     developmentService,
     eventLogger,
     failureRouter,

@@ -35,6 +35,7 @@ function build(routingProfiles: RoutingProfiles): ReturnType<typeof buildGateway
     config: makeConfig(routingProfiles),
     checkedSources: ["test"],
     recording: { kind: "unrecorded", reason: "routing-profile boot checks make no call" },
+    clock: () => new Date(),
   });
 }
 

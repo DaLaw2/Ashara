@@ -92,6 +92,7 @@ describe("AgentConversation — native FC path", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
             workingDir: "/workspace",
@@ -119,6 +120,7 @@ describe("AgentConversation — native FC path", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 8,
             workingDir: "/workspace",
@@ -157,6 +159,7 @@ describe("AgentConversation — costMeasured propagation", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, MODEL_CONFIG);
@@ -202,6 +205,7 @@ describe("AgentConversation — costMeasured propagation", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, MODEL_CONFIG);
@@ -234,6 +238,7 @@ describe("AgentConversation — error handling", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, MODEL_CONFIG);
@@ -242,6 +247,34 @@ describe("AgentConversation — error handling", () => {
 
         expect(result.finishReason).toBe("error");
         expect(result.finalMessage).toContain("Provider unavailable");
+        expect(result.costMeasured).toBe(false);
+    });
+
+    test("a request that throws after a priced step leaves the run unmeasured, warned with task, model and step", async () => {
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        let callCount = 0;
+        const model = new MockLanguageModelV4({
+            doGenerate: async () => {
+                callCount++;
+                if (callCount === 1) return toolCallResult("write_file", "tc-1");
+                throw new Error("Provider unavailable");
+            },
+        });
+
+        const result = await new AgentConversation(model, createMockRegistry(), {
+            taskId: "task-7",
+            staticSystemPrompt: "test",
+            maxTurns: 5,
+        }, MODEL_CONFIG).run("Create a project");
+
+        expect(result.finishReason).toBe("error");
+        expect(result.totalCost).toBeGreaterThan(0);
+        expect(result.costMeasured).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringMatching(/cost unmeasured: task=task-7, model=test-model, step=2: the request threw/),
+        );
     });
 
     test("reports error when agent completes without using tools", async () => {
@@ -254,6 +287,7 @@ describe("AgentConversation — error handling", () => {
 
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, MODEL_CONFIG);
@@ -289,6 +323,7 @@ describe("AgentConversation — step pricing", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const result = await new AgentConversation(twoStepModel(), createMockRegistry(), {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, MODEL_CONFIG).run("Create a project");
@@ -303,6 +338,7 @@ describe("AgentConversation — step pricing", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const result = await new AgentConversation(twoStepModel(), createMockRegistry(), {
+            taskId: "task-1",
             staticSystemPrompt: "test",
             maxTurns: 5,
         }, { ...MODEL_CONFIG, cacheReadCostPer1M: null }).run("Create a project");

@@ -10,20 +10,9 @@ export interface WorkItemSpec {
     readonly successCriteria: string[];
     readonly parentId?: string;
     readonly dependsOn: string[];
-    /**
-     * Detailed task metadata the LLM was prompted for (TaskOutputSchema) and
-     * `resolveTasks` carries through unchanged. Absent for the epic and for the
-     * synthetic scaffold task, which has no LLM output — `generateTaskSpec`
-     * falls back to regex derivation in those cases.
-     */
-    readonly goal?: string;
-    readonly endState?: string;
-    readonly scope?: string;
-    readonly deliverables?: string[];
-    readonly checks?: string[];
 }
 
-export type TaskOrigin = NonNullable<import("@ashara/shared").StoredTaskSpec["origin"]>;
+type TaskOrigin = NonNullable<import("@ashara/shared").StoredTaskSpec["origin"]>;
 
 export interface TaskSpec {
     readonly goal: string;
@@ -77,6 +66,28 @@ export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
     maxTasksPerEpic: 15,   // was 5 -- budget is the real limit
 };
 
+/**
+ * The model emitted more tasks than the per-epic cap the prompt states. Raised
+ * instead of truncating, so no task the model planned is silently dropped
+ * (Discipline A). Inside the ladder the same message is a re-ask.
+ */
+export class TaskCapExceededError extends Error {
+    readonly emitted: number;
+    readonly cap: number;
+    readonly parentId: string;
+
+    constructor(context: { readonly emitted: number; readonly cap: number; readonly parentId: string }) {
+        super(
+            `Decomposition of ${context.parentId} emitted ${context.emitted} tasks; the cap is ${context.cap}. ` +
+            `Merge related work so the epic has at most ${context.cap} tasks.`,
+        );
+        this.name = "TaskCapExceededError";
+        this.emitted = context.emitted;
+        this.cap = context.cap;
+        this.parentId = context.parentId;
+    }
+}
+
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({
         /**
@@ -91,9 +102,12 @@ export const TaskOutputSchema = z.object({
         successCriteria: z.array(z.string()).default([]),
         dependsOn: z.array(z.string()).default([]),
         goal: z.string().default(""),
-        endState: z.string().default(""),
-        scope: z.string().default(""),
-        deliverables: z.array(z.string()).default([]),
+        // Required and non-empty: these were once filled by keyword inference over
+        // the title when the model omitted them, which wrote a guessed spec in the
+        // register of the model's own. Omission is now a schema failure the ladder re-asks.
+        endState: z.string().trim().min(1),
+        scope: z.string().trim().min(1),
+        deliverables: z.array(z.string().trim().min(1)).min(1),
         checks: z.array(z.string()).default([]),
     })).min(1),
 });
@@ -117,8 +131,7 @@ export interface UnresolvableDependencyContext {
  * `ref` (primary) nor its exact `title` (legacy fallback), and the referent was
  * never emitted at all. Fails the decomposition closed (Discipline A) instead of
  * silently dropping the edge, which is exactly how prerequisites ran out of order
- * in Run 7/8. A dependency on a sibling that WAS emitted but capped out of the
- * batch is a capacity drop, not this error — see DecompositionEngine.resolveTasks.
+ * in Run 7/8.
  */
 export class UnresolvableDependencyError extends Error {
     readonly context: UnresolvableDependencyContext;

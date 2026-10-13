@@ -105,7 +105,7 @@ function buildDeps(
     publish: async () => {},
   };
   const costRepo = { recordTaskCost: async () => {}, getTaskCostHistory: async () => [] };
-  const visionRepo = { getCurrent: async () => null, getProjectPath: async () => null, setProjectPath: async () => {} };
+  const projectRepo = { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") };
   const failedApproachRepo = { record: async () => {} };
   const runStateStore = { load: async () => null, save: async () => {} };
 
@@ -115,7 +115,7 @@ function buildDeps(
     eventStore,
     costRepo,
     failedApproachRepo,
-    visionRepo,
+    projectRepo,
     developmentService: {},
     runStateStore,
     failureRouter: {},

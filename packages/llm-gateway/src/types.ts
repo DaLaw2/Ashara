@@ -229,6 +229,12 @@ export type LlmCallOutcome =
 
 /** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
 export interface LlmProviderCall {
+  /**
+   * The instant the request was sent. The one instant per call: the gateway's
+   * budget ledger and the cost ledger both price the call at the rates in force
+   * here, so a call that straddles a price-window edge is priced once.
+   */
+  readonly requestedAt: Date;
   readonly context: LlmCallContext;
   readonly provider: string;
   readonly model: ModelConfig;

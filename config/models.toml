@@ -1,7 +1,8 @@
 # Ashara Model Configuration
 #
 # The model catalog is DB-authoritative (seeded by migration 002_seed_models.sql;
-# prices, cache rates and time-of-day windows refreshed by 021).
+# prices, cache rates and time-of-day windows refreshed by 021; the verified
+# models of the 2026-10-13 price investigation added by 026).
 # This file contains only deployment-specific routing profiles.
 #
 # To add/update models, create a new migration or use the model_configs DB table.
@@ -50,6 +51,19 @@
 [routing.profiles."deepseek"]
 # Intentionally empty: a deepseek-only deployment gets pure capability-level
 # routing, byte-identical to pre-routing-profiles behavior.
+
+[routing.profiles."anthropic"]
+# Pins what capability routing resolved to before migration 026 added
+# claude-haiku-5-5 (Light), claude-opus-5-5 and claude-fable-5-1: a Light
+# agent-runner task would otherwise move from Sonnet 5.5 to Haiku 5.5, which
+# the installed @ai-sdk/anthropic does not know (price investigation section
+# 2.2). Changing an Anthropic-only allocation is an owner decision, not a
+# side effect of a catalog refresh.
+"agent-runner" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"decomposition" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"liaison-intake" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"stack-derivation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"escalation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
 # Plan C (owner, provider-budget-cap story): DeepSeek is the agent/planning

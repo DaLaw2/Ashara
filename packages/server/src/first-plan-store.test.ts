@@ -85,8 +85,14 @@ const BOOKING_FORM = "Create the booking form for a class";
 
 const TASKS = {
   tasks: [
-    { ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [] },
-    { ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"] },
+    {
+      ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [],
+      endState: "Both studios' classes are listed", scope: "class listing", deliverables: ["class list"],
+    },
+    {
+      ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"],
+      endState: "A member books a seat", scope: "booking", deliverables: ["booking form"],
+    },
   ],
 };
 
@@ -220,7 +226,8 @@ beforeAll(async () => {
   gateway = buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db), () => new Date()) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+    clock: () => new Date(),
   });
 });
 

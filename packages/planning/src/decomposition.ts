@@ -1,18 +1,18 @@
 import { z, type ZodType } from "zod";
 import type { ProjectKnowledge } from "@ashara/shared";
-import { ProjectKnowledgeSchema, nodeLabels } from "@ashara/shared";
+import { ProjectKnowledgeSchema } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
     DecompositionConfig,
     DecompositionInput,
     DecompositionResult,
     PriorEpicResult,
-    TaskOrigin,
     TaskSpec,
     WorkItemSpec,
 } from "./decomposition-types.js";
 import {
     DEFAULT_DECOMPOSITION_CONFIG,
+    TaskCapExceededError,
     TaskOutputSchema,
     UnresolvableDependencyError,
 } from "./decomposition-types.js";
@@ -47,27 +47,6 @@ const POSITIVE_FRAMING_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     [/\bavoid\s+(.+)/gi, "prefer alternatives to $1"],
 ];
 
-/**
- * SEMANTIC gate on the derived knowledge graph, run inside the reliability
- * ladder's attempt so a barren answer is RE-ASKED instead of accepted (ADR-046).
- * `{"nodes":[],"edges":[]}` parses cleanly against ProjectKnowledgeSchema, so
- * without this the very first attempt was taken as the project's answer — and a
- * graph with no language and no runtime says nothing about what to build, which
- * every downstream reader then fills in from its own prior.
- */
-function validateKnowledgeGraph(graph: ProjectKnowledge): StructuredValidation {
-    const stated = nodeLabels(graph, "language").length > 0 || nodeLabels(graph, "runtime").length > 0;
-    if (stated) return { ok: true };
-    return {
-        ok: false,
-        errors: [
-            `The knowledge graph names neither a "language" nor a "runtime" node ` +
-                `(${graph.nodes.length} node(s): ${graph.nodes.map((n) => `${n.kind}=${n.label}`).join(", ") || "none"}). ` +
-                `The project's implementation language is stated or implied by the vision — emit it.`,
-        ],
-    };
-}
-
 export class DecompositionEngine {
     private readonly llm: DecompositionLLM;
     private readonly config: DecompositionConfig;
@@ -79,20 +58,6 @@ export class DecompositionEngine {
 
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
         return this.decomposeInternal(input);
-    }
-
-    generateTaskSpec(task: WorkItemSpec, origin: TaskOrigin): TaskSpec {
-        return {
-            goal: task.goal || task.description || task.title,
-            endState: task.endState || this.deriveObservableEndState(task),
-            scope: task.scope || this.deriveScope(task),
-            deliverables: task.deliverables && task.deliverables.length > 0
-                ? task.deliverables
-                : this.deriveDeliverables(task),
-            checks: task.checks && task.checks.length > 0 ? task.checks : [],
-            capability: "Strong",
-            origin,
-        };
     }
 
     ensurePositiveFraming(text: string): string {
@@ -123,21 +88,21 @@ export class DecompositionEngine {
             ``,
             contextParts.join("\n\n"),
             ``,
-            `Produce nodes for any of these kinds that apply: language, runtime, framework, database, subsystem, entry_point, check, build_tool.`,
-            `- entry_point nodes MUST have meta.mountKind set to "http", "cli", or "lib"`,
+            `Produce nodes for any of these kinds that the vision or the manifest files state: language, runtime, framework, database, subsystem, entry_point, check, build_tool.`,
+            `- Emit only what is stated. Where they state no implementation stack, emit no language, runtime, framework, database or build_tool node: an empty "nodes" array is a valid answer, and choosing a stack is not your decision here.`,
             `- check nodes MUST have meta.command set to a string array (the shell command to run)`,
             ``,
             `Produce edges between nodes using these relationship types: uses, depends_on, serves, reads_writes, targets.`,
             ``,
-            `Each node needs a unique id (short slug, e.g. "lang-go", "db-sqlite"), a kind, and a human-readable label.`,
+            `Each node needs a unique short slug id, a kind, and a human-readable label.`,
             ``,
             `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
         ].join("\n");
 
-        // The ladder re-asks on a barren graph (validateKnowledgeGraph) and throws
-        // when the attempts are exhausted, so a graph returned here has already
-        // stated a language or a runtime.
-        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
+        // A graph with no stack node is a valid answer: Ashara never picks the
+        // client's stack. Development's ProjectFrame ladder handles that absence
+        // explicitly (its contract-knowledge rung declines and records why).
+        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema);
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
@@ -155,9 +120,8 @@ export class DecompositionEngine {
         const allTasks: Array<WorkItemSpec & { taskSpec: TaskSpec }> = [];
         const dependencyEdges: Array<{ from: string; to: string }> = [];
 
-        // Derive the graph BEFORE the tasks so the task prompt is stack-aware
-        // (buildDecomposePrompt reads input.knowledge) and so a vision whose
-        // language cannot be established costs one LLM call, not a whole plan.
+        // Derive the graph BEFORE the tasks so the task prompt carries whatever
+        // stack the vision states (buildDecomposePrompt reads input.knowledge).
         // An explicitly supplied graph — a re-decomposition against a contract
         // that already states the stack — is authoritative and is not re-derived.
         const knowledge = input.knowledge ?? await this.deriveKnowledge(
@@ -170,8 +134,7 @@ export class DecompositionEngine {
 
         const tasks = await this.decomposeEpicIntoTasks(epic, knownInput);
         for (const task of tasks) {
-            const taskSpec = this.generateTaskSpec(task, "decomposition");
-            allTasks.push({ ...task, taskSpec });
+            allTasks.push(task);
             for (const dep of task.dependsOn) {
                 dependencyEdges.push({ from: task.id, to: dep });
             }
@@ -206,7 +169,9 @@ export class DecompositionEngine {
         if (tasks.length === 0) return;
 
         const scaffoldId = generateId("task");
-        const scaffoldBase: WorkItemSpec = {
+        const description = `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack. Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project. All other tasks depend on this.`;
+        const successCriteria = ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"];
+        const scaffoldTask: WorkItemSpec & { taskSpec: TaskSpec } = {
             id: scaffoldId,
             level: "task",
             title: `Create project scaffold: manifest, entry point, directory structure`,
@@ -214,14 +179,19 @@ export class DecompositionEngine {
             // rendered ahead of the task, so restating it in an LLM-authored
             // description can only duplicate it — or, when derivation was weak,
             // contradict it with the model's default (ADR-045's prescriptive drift).
-            description: `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack. Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project. All other tasks depend on this.`,
-            successCriteria: ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"],
+            description,
+            successCriteria,
             parentId: tasks[0].parentId,
             dependsOn: [],
-        };
-        const scaffoldTask: WorkItemSpec & { taskSpec: TaskSpec } = {
-            ...scaffoldBase,
-            taskSpec: this.generateTaskSpec(scaffoldBase, "scaffold"),
+            taskSpec: {
+                goal: description,
+                endState: successCriteria.join("; "),
+                scope: "The project root: its manifest, entry point, directory structure and verify.toml",
+                deliverables: ["The project manifest", "The entry point", "verify.toml with a [checks] section"],
+                checks: [],
+                capability: "Strong",
+                origin: "scaffold",
+            },
         };
 
         for (const task of tasks) {
@@ -231,50 +201,32 @@ export class DecompositionEngine {
     }
 
     /**
-     * Turns raw LLM tasks into WorkItemSpecs with deterministically resolved,
-     * stable inter-task edges (G3). Each kept task is assigned a synthetic id;
-     * every `dependsOn` entry is resolved to that id by `ref` first (primary),
-     * then exact `title` (legacy fallback). A dependency on a sibling that was
-     * emitted but capped out of `cap` is dropped as a capacity decision (warned);
-     * a dependency on something never emitted fails closed with
-     * {@link UnresolvableDependencyError} rather than being silently discarded.
+     * PURE pre-check (mig-run10) run inside the reliability ladder's attempt, so
+     * an over-cap emission or a phantom `dependsOn` ref is re-asked with this
+     * feedback rather than accepted. It mirrors {@link resolveTasks}'s failure
+     * checks without assigning ids (generateId runs once, after this passes).
      */
-    /**
-     * PURE pre-check (mig-run10) mirroring {@link resolveDependsOn}'s phantom-ref
-     * detection WITHOUT assigning ids — so it can run repeatedly inside the
-     * reliability ladder's retry loop with no side effects (generateId is only
-     * called once, in resolveTasks, after this passes). Returns the same
-     * UnresolvableDependencyError message resolveDependsOn would throw, so the
-     * ladder's re-ask feeds the model the offending dep plus the available
-     * refs/titles. Capped-out siblings (emitted but sliced by `cap`) are NOT
-     * errors here — resolveDependsOn drops those edges as a capacity decision.
-     */
-    validateTaskRefs(rawTasks: readonly RawTask[], cap: number, parentId: string): StructuredValidation {
-        const kept = rawTasks.slice(0, cap);
-        const keptRefs = new Set<string>();
-        const keptTitles = new Set<string>();
-        for (const t of kept) {
-            if (t.ref) keptRefs.add(t.ref);
-            keptTitles.add(t.title);
+    private validateTasks(rawTasks: readonly RawTask[], cap: number, parentId: string): StructuredValidation {
+        if (rawTasks.length > cap) {
+            return { ok: false, errors: [new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId }).message] };
         }
-        const emittedRefs = new Set<string>();
-        const emittedTitles = new Set<string>();
+        const refs = new Set<string>();
+        const titles = new Set<string>();
         for (const t of rawTasks) {
-            if (t.ref) emittedRefs.add(t.ref);
-            emittedTitles.add(t.title);
+            if (t.ref) refs.add(t.ref);
+            titles.add(t.title);
         }
 
         const errors: string[] = [];
-        for (const t of kept) {
+        for (const t of rawTasks) {
             for (const dep of t.dependsOn) {
-                if (keptRefs.has(dep) || keptTitles.has(dep)) continue; // resolvable sibling
-                if (emittedRefs.has(dep) || emittedTitles.has(dep)) continue; // capped sibling (edge dropped)
+                if (refs.has(dep) || titles.has(dep)) continue;
                 errors.push(
                     new UnresolvableDependencyError({
                         dependentTaskTitle: t.title,
                         unresolvedRef: dep,
-                        availableRefs: [...keptRefs],
-                        availableTitles: [...keptTitles],
+                        availableRefs: [...refs],
+                        availableTitles: [...titles],
                         parentId,
                     }).message,
                 );
@@ -283,12 +235,26 @@ export class DecompositionEngine {
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
     }
 
-    private resolveTasks(rawTasks: readonly RawTask[], cap: number, parentId: string): WorkItemSpec[] {
-        const kept = rawTasks.slice(0, cap);
+    /**
+     * Turns raw LLM tasks into task specs with deterministically resolved, stable
+     * inter-task edges (G3). Each task is assigned a synthetic id; every
+     * `dependsOn` entry is resolved to that id by `ref` first (primary), then
+     * exact `title` (legacy fallback). Over-cap output and a dependency on
+     * something never emitted both fail closed, so nothing the model produced is
+     * dropped. This holds even for an LLM that ignores `validate`.
+     */
+    private resolveTasks(
+        rawTasks: readonly RawTask[],
+        cap: number,
+        parentId: string,
+    ): Array<WorkItemSpec & { taskSpec: TaskSpec }> {
+        if (rawTasks.length > cap) {
+            throw new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId });
+        }
 
         const refToId = new Map<string, string>();
         const titleToId = new Map<string, string>();
-        const assigned = kept.map((raw) => {
+        const assigned = rawTasks.map((raw) => {
             const id = generateId("task");
             if (raw.ref) refToId.set(raw.ref, id);
             // First-writer-wins on duplicate titles so an edge resolves to the
@@ -297,15 +263,6 @@ export class DecompositionEngine {
             return { raw, id };
         });
 
-        // Everything the LLM emitted, including tasks capped off above: a
-        // dependency on one of these is a capacity drop, not a phantom ref.
-        const emittedRefs = new Set<string>();
-        const emittedTitles = new Set<string>();
-        for (const t of rawTasks) {
-            if (t.ref) emittedRefs.add(t.ref);
-            emittedTitles.add(t.title);
-        }
-
         return assigned.map(({ raw, id }) => ({
             id,
             level: "task" as const,
@@ -313,12 +270,16 @@ export class DecompositionEngine {
             description: raw.description,
             successCriteria: raw.successCriteria,
             parentId,
-            dependsOn: this.resolveDependsOn(raw, id, refToId, titleToId, emittedRefs, emittedTitles, parentId),
-            goal: raw.goal || undefined,
-            endState: raw.endState || undefined,
-            scope: raw.scope || undefined,
-            deliverables: raw.deliverables.length > 0 ? raw.deliverables : undefined,
-            checks: raw.checks.length > 0 ? raw.checks : undefined,
+            dependsOn: this.resolveDependsOn(raw, id, refToId, titleToId, parentId),
+            taskSpec: {
+                goal: raw.goal || raw.description || raw.title,
+                endState: raw.endState,
+                scope: raw.scope,
+                deliverables: raw.deliverables,
+                checks: raw.checks,
+                capability: "Strong",
+                origin: "decomposition",
+            },
         }));
     }
 
@@ -327,31 +288,22 @@ export class DecompositionEngine {
         selfId: string,
         refToId: ReadonlyMap<string, string>,
         titleToId: ReadonlyMap<string, string>,
-        emittedRefs: ReadonlySet<string>,
-        emittedTitles: ReadonlySet<string>,
         parentId: string,
     ): string[] {
         const resolved: string[] = [];
         for (const dep of raw.dependsOn) {
             const target = refToId.get(dep) ?? titleToId.get(dep);
-            if (target !== undefined) {
-                // Skip a self-reference so a task never depends on itself.
-                if (target !== selfId && !resolved.includes(target)) resolved.push(target);
-                continue;
+            if (target === undefined) {
+                throw new UnresolvableDependencyError({
+                    dependentTaskTitle: raw.title,
+                    unresolvedRef: dep,
+                    availableRefs: [...refToId.keys()],
+                    availableTitles: [...titleToId.keys()],
+                    parentId,
+                });
             }
-            if (emittedRefs.has(dep) || emittedTitles.has(dep)) {
-                console.warn(
-                    `[DecompositionEngine] dependency "${dep}" of "${raw.title}" points to a capped-out sibling; edge dropped`,
-                );
-                continue;
-            }
-            throw new UnresolvableDependencyError({
-                dependentTaskTitle: raw.title,
-                unresolvedRef: dep,
-                availableRefs: [...refToId.keys()],
-                availableTitles: [...titleToId.keys()],
-                parentId,
-            });
+            // Skip a self-reference so a task never depends on itself.
+            if (target !== selfId && !resolved.includes(target)) resolved.push(target);
         }
         return resolved;
     }
@@ -359,7 +311,7 @@ export class DecompositionEngine {
     private async decomposeEpicIntoTasks(
         epic: WorkItemSpec,
         input: DecompositionInput,
-    ): Promise<WorkItemSpec[]> {
+    ): Promise<Array<WorkItemSpec & { taskSpec: TaskSpec }>> {
         const taskCap = this.config.maxTasksPerEpic;
         const priorContext = this.buildPriorContext(input.priorEpicResults);
         const prompt = this.buildDecomposePrompt(
@@ -371,12 +323,13 @@ export class DecompositionEngine {
             priorContext,
             input.epicNorthStar,
             input.manifestContext,
+            taskCap,
         );
 
         const parsed = await this.llm.generateStructured(
             prompt,
             TaskOutputSchema,
-            (value) => this.validateTaskRefs(value.tasks, taskCap, epic.id),
+            (value) => this.validateTasks(value.tasks, taskCap, epic.id),
         );
         return this.resolveTasks(parsed.tasks, taskCap, epic.id);
     }
@@ -407,9 +360,10 @@ export class DecompositionEngine {
         description: string,
         knowledge: ProjectKnowledge | undefined,
         conventions: string[],
-        priorContext?: string,
-        northStar?: string,
-        manifestContext?: string,
+        priorContext: string,
+        northStar: string,
+        manifestContext: string | undefined,
+        taskCap: number,
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
         const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "checks": ["..."]}]}';
@@ -431,6 +385,8 @@ export class DecompositionEngine {
         if (knowledge && knowledge.nodes.length > 0) {
             const labels = knowledge.nodes.map(n => `${n.label} (${n.kind})`).join(", ");
             lines.push(`Project Knowledge: ${labels}`);
+        } else {
+            lines.push(`Project Knowledge: none stated. Plan the work in terms of what the project must do; choose no implementation stack.`);
         }
 
         lines.push(
@@ -446,16 +402,18 @@ export class DecompositionEngine {
         lines.push(
             ``,
             `Task Quality Requirements:`,
+            `- Emit at most ${taskCap} tasks. A response with more is rejected, not truncated: merge related work instead.`,
             `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
             `- Description must name concrete files or modules to create or modify.`,
             `- successCriteria must include at least one executable verification (e.g., ${examples.checksExample}).`,
+            `- endState, scope and deliverables are required for every task; a task missing any of them is rejected.`,
             `- deliverables must list specific file paths (e.g., ${examples.deliverablesExample}) not generic descriptions.`,
             `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
             `- scope must name specific directories or modules (e.g., ${examples.scopeExample}) not "the project".`,
             `- checks must include at least one runnable command to verify completion (e.g., ${examples.checksExample}).`,
             `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id. A "dependsOn" entry that names no "ref" in this response is invalid.`,
             `- Do not create a project scaffold (manifest, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
-            `- Each task must be a complete vertical slice: implement the feature AND wire it into the application's entry point — registering the route, adding the import, calling the initializer, or whatever the project's stack requires to make the feature reachable — in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
+            `- Each task must be a complete vertical slice: implement the feature AND make it reachable from the project's entry point, in whatever way the project's own structure requires, in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
         );
 
         lines.push(
@@ -467,100 +425,6 @@ export class DecompositionEngine {
         return lines.join("\n");
     }
 
-    private deriveObservableEndState(task: WorkItemSpec): string {
-        if (task.successCriteria.length > 0) {
-            return task.successCriteria[0];
-        }
-
-        const lower = `${task.title} ${task.description}`.toLowerCase();
-
-        if (/\bendpoint\b|\broute\b|\bapi\b/.test(lower)) {
-            return "API endpoint responds with correct status codes and response body";
-        }
-        if (/\bpage\b|\bview\b|\bcomponent\b|\bui\b/.test(lower)) {
-            return "Page loads and renders correctly in the browser";
-        }
-        if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            return "Command executes successfully and produces expected output";
-        }
-        if (/\bmigration\b/.test(lower)) {
-            return "Database migration applies cleanly and schema matches expected state";
-        }
-        if (/\btest\b/.test(lower)) {
-            return "All new tests pass and cover the target functionality";
-        }
-        if (/\bconfig\b|\bconfigur/.test(lower)) {
-            return "Configuration is applied and the system starts with new settings";
-        }
-
-        if (task.description) {
-            return task.description;
-        }
-        return `${task.title} is complete and verified`;
-    }
-
-    private deriveDeliverables(task: WorkItemSpec): string[] {
-        const text = `${task.title} ${task.description}`;
-        const deliverables: string[] = [];
-
-        const pathMatches = text.match(/\b(?:[\w@-]+\/)+[\w.-]+\b/g);
-        if (pathMatches) {
-            deliverables.push(...new Set(pathMatches));
-        }
-
-        const endpointMatches = text.match(/\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/[\w/:-]+/gi);
-        if (endpointMatches) {
-            for (const ep of endpointMatches) {
-                deliverables.push(`${ep} endpoint`);
-            }
-        }
-
-        if (deliverables.length > 0) {
-            return [...new Set(deliverables)];
-        }
-
-        const lower = text.toLowerCase();
-        if (/\bpage\b|\bview\b|\bcomponent\b/.test(lower)) {
-            return [`UI source file for ${task.title}`];
-        }
-        if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            return [`CLI command handler for ${task.title}`];
-        }
-
-        return [task.description || task.title];
-    }
-
-    private deriveScope(task: WorkItemSpec): string {
-        const text = `${task.title} ${task.description}`;
-
-        const dirMatches = text.match(/\b(?:[\w@-]+\/)+/g);
-        if (dirMatches && dirMatches.length > 0) {
-            const dirs = [...new Set(dirMatches.map((d) => d.replace(/\/$/, "")))];
-            return `Only modify files in ${dirs.join(", ")}`;
-        }
-
-        const lower = text.toLowerCase();
-        if (/\bendpoint\b|\broute\b|\bapi\b/.test(lower)) {
-            return "Only modify API route handlers and their direct dependencies";
-        }
-        if (/\bpage\b|\bview\b|\bcomponent\b|\bui\b/.test(lower)) {
-            return "Only modify UI-related source files";
-        }
-        if (/\bcommand\b|\bcli\b|\bsubcommand\b/.test(lower)) {
-            return "Only modify CLI command source files";
-        }
-        if (/\bmigration\b|\bschema\b|\bdatabase\b/.test(lower)) {
-            return "Only modify database migration and schema files";
-        }
-        if (/\btest\b/.test(lower)) {
-            return "Only modify test files and test utilities";
-        }
-        if (/\bconfig\b|\bconfigur/.test(lower)) {
-            return "Only modify configuration files";
-        }
-
-        return this.ensurePositiveFraming(`Only modify files related to ${task.title.toLowerCase()}`);
-    }
 
 }
 

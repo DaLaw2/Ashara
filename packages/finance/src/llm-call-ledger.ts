@@ -19,14 +19,14 @@ function assertPriced(provider: string, model: ModelConfig): void {
 }
 
 /**
- * The call's cost in USD at the rates in force at `at`, or `null` when it is
+ * The call's cost in USD at the rates in force when it was sent, or `null` when it is
  * unmeasured. Never 0 for an unknown cost. A request that produced no usage
  * report (it threw) is NULL without a log line: its error is the record. Any
  * other NULL is logged at `warn` with the classes that left it unmeasured.
  */
-function costOf(call: LlmProviderCall, at: Date): number | null {
+function costOf(call: LlmProviderCall): number | null {
   if (call.usage === null) return null;
-  const cost = measureCost(call.usage.reported, call.model, at);
+  const cost = measureCost(call.usage.reported, call.model, call.requestedAt);
   if (cost.measured) return cost.totalCost;
   console.warn(
     `[LlmCallLedger] ${describeUnmeasuredCost(cost, call.provider, call.model.id)}, ` +
@@ -36,8 +36,8 @@ function costOf(call: LlmProviderCall, at: Date): number | null {
   return null;
 }
 
-/** Maps one provider call made at `at` to its llm_calls row. Every unreported count stays `null`. */
-function toLlmCallRow(call: LlmProviderCall, at: Date): NewLlmCall {
+/** Maps one provider call to its llm_calls row. Every unreported count stays `null`. */
+function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
   const outcome =
     call.outcome.kind === "ok"
       ? { outcome: "ok" as const, errorKind: null }
@@ -52,8 +52,8 @@ function toLlmCallRow(call: LlmProviderCall, at: Date): NewLlmCall {
     outputTokens: call.usage?.reported.outputTokens ?? null,
     cacheReadTokens: call.usage?.reported.cacheReadTokens ?? null,
     cacheWriteTokens: call.usage?.reported.cacheWriteTokens ?? null,
-    costUsd: costOf(call, at),
-    createdAt: at,
+    costUsd: costOf(call),
+    createdAt: call.requestedAt,
     ...outcome,
   };
 }
@@ -61,19 +61,17 @@ function toLlmCallRow(call: LlmProviderCall, at: Date): NewLlmCall {
 /**
  * The Finance cost ledger's recorder (architecture K10): the server's gateway
  * calls `assertPriced` before every provider request and `record` after it.
- * `clock` stamps each row: the instant whose rates price a call is its `created_at`.
+ * A row's `created_at` is the instant the gateway sent the request, the same
+ * instant whose rates price it here and in the gateway's budget ledger.
  */
 export class LlmCallLedger implements LlmCallRecorder {
-  constructor(
-    private readonly calls: LlmCallRepository,
-    private readonly clock: () => Date,
-  ) {}
+  constructor(private readonly calls: LlmCallRepository) {}
 
   assertPriced(provider: string, model: ModelConfig): void {
     assertPriced(provider, model);
   }
 
   async record(call: LlmProviderCall): Promise<void> {
-    await this.calls.insert(toLlmCallRow(call, this.clock()));
+    await this.calls.insert(toLlmCallRow(call));
   }
 }

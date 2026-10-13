@@ -43,8 +43,9 @@ class TenderNotOpen extends Error {
 }
 
 /**
- * The client channel's rows (architecture K1, migration 016). The only writer of
- * outbound messages: no HTTP route creates one.
+ * The client channel's rows (architecture K1, migration 016). One of two writers
+ * of outbound messages; the other is postPlanReport in plan-report.ts. No HTTP
+ * route creates one.
  */
 export class ClientMessageRepository {
   constructor(private readonly db: DbHandle) {}

@@ -80,6 +80,7 @@ class AgentRunner {
         const conversationLogPath = join(this.config.workingDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
 
         const conversation = new AgentConversation(resolved.model, registry, {
+            taskId: brief.taskId,
             staticSystemPrompt,
             dynamicSystemPrompt,
             maxTurns: this.config.maxTurns,
@@ -326,6 +327,7 @@ if (import.meta.main) {
                     "agent-runner calls the SDK directly (conversation.ts) and only uses the gateway to " +
                     "resolve a model; its spend moves into the ledger with story s-isolated-worker-m1",
             },
+            clock: () => new Date(),
         });
     } catch (e) {
         if (e instanceof NoLLMProvidersConfigured) {

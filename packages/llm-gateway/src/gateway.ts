@@ -61,16 +61,20 @@ export class LLMGateway implements ContextualLlm {
   private readonly budgetLedger: BudgetLedger;
   private readonly budget: GatewayConfig["budget"];
   private readonly recording: CallRecording;
+  /** Read once per provider request, before it is sent: that instant prices the call everywhere. */
+  private readonly clock: () => Date;
 
   constructor(
     config: GatewayConfig,
     recording: CallRecording,
+    clock: () => Date,
     ledger: BudgetLedger = new BudgetLedger(),
   ) {
     this.registry = new ProviderRegistry(config);
     this.budgetLedger = ledger;
     this.budget = config.budget;
     this.recording = recording;
+    this.clock = clock;
   }
 
   /**
@@ -135,7 +139,7 @@ export class LLMGateway implements ContextualLlm {
   }
 
   /**
-   * Charges a completed call to the in-process budget ledger. An unmeasured
+   * Charges a completed call, priced at `requestedAt`, to the in-process budget ledger. An unmeasured
    * cost charges nothing and is logged at `warn`: the gateway ledger has no
    * pessimistic estimate (that lives in the orchestrator's
    * `BudgetTracker.unknownCostCharge`), and charging $0 would read as free.
@@ -145,8 +149,9 @@ export class LLMGateway implements ContextualLlm {
     resolved: ResolvedProvider,
     site: string,
     operation: LlmCallOperation,
+    requestedAt: Date,
   ): CostMeasurement {
-    const cost = measureCost(extraction.reported, resolved.modelConfig, new Date());
+    const cost = measureCost(extraction.reported, resolved.modelConfig, requestedAt);
     if (!cost.measured) {
       console.warn(
         `[LLMGateway] ${describeUnmeasuredCost(cost, resolved.providerName, resolved.modelConfig.id)}, ` +
@@ -252,21 +257,23 @@ export class LLMGateway implements ContextualLlm {
   }
 
   /**
-   * Sends ONE provider request. The recorder's price check runs first, so a
-   * refused model never reaches the network; a request that throws is
-   * recorded as an error before the throw continues.
+   * Sends ONE provider request and returns its result with the instant it was
+   * sent, which prices it in both ledgers. The recorder's price check runs
+   * first, so a refused model never reaches the network; a request that
+   * throws is recorded as an error before the throw continues.
    */
   private async send<R>(
     scope: CallScope,
     resolved: ResolvedProvider,
     operation: LlmCallOperation,
     request: () => Promise<R>,
-  ): Promise<R> {
+  ): Promise<{ readonly result: R; readonly requestedAt: Date }> {
     scope?.recorder.assertPriced(resolved.providerName, resolved.modelConfig);
+    const requestedAt = this.clock();
     try {
-      return await request();
+      return { result: await request(), requestedAt };
     } catch (error) {
-      await this.record(scope, resolved, operation, usageOfFailedRequest(error), errorOutcome(error), error);
+      await this.record(scope, resolved, operation, requestedAt, usageOfFailedRequest(error), errorOutcome(error), error);
       throw error;
     }
   }
@@ -276,6 +283,7 @@ export class LLMGateway implements ContextualLlm {
     scope: CallScope,
     resolved: ResolvedProvider,
     operation: LlmCallOperation,
+    requestedAt: Date,
     usage: ExtractedUsage | null,
     outcome: LlmCallOutcome,
     providerError?: unknown,
@@ -283,6 +291,7 @@ export class LLMGateway implements ContextualLlm {
     if (!scope) return;
     try {
       await scope.recorder.record({
+        requestedAt,
         context: scope.context,
         provider: resolved.providerName,
         model: resolved.modelConfig,
@@ -319,12 +328,12 @@ export class LLMGateway implements ContextualLlm {
       system: request.systemPrompt,
       maxOutputTokens: request.maxTokens,
     };
-    const result = await this.send(scope, resolved, operation, () => generateObject(params));
+    const { result, requestedAt } = await this.send(scope, resolved, operation, () => generateObject(params));
 
     const extraction = extractUsage(result.usage);
-    const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation);
+    const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation, requestedAt);
 
-    await this.record(scope, resolved, operation, extraction, OK);
+    await this.record(scope, resolved, operation, requestedAt, extraction, OK);
 
     return {
       data: result.object as T,
@@ -365,14 +374,14 @@ export class LLMGateway implements ContextualLlm {
         system: request.systemPrompt,
         maxOutputTokens: request.maxTokens,
       };
-      const result = await this.send(scope, resolved, operation, () => generateText(params));
+      const { result, requestedAt } = await this.send(scope, resolved, operation, () => generateText(params));
       lastRawResponse = result.text;
 
       // `result.usage` sums the steps and drops each step's raw usage; with no
       // tools there is one step, whose usage keeps it.
       const [onlyStep] = result.steps;
       const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
-      const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation);
+      const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation, requestedAt);
 
       const jsonText = extractJson(result.text);
       let parsed: unknown;
@@ -380,13 +389,13 @@ export class LLMGateway implements ContextualLlm {
         parsed = JSON.parse(jsonText);
       } catch {
         lastErrors = [`Invalid JSON: ${jsonText.slice(0, 100)}`];
-        await this.record(scope, resolved, operation, extraction, { kind: "error", errorKind: "InvalidJson" });
+        await this.record(scope, resolved, operation, requestedAt, extraction, { kind: "error", errorKind: "InvalidJson" });
         continue;
       }
 
       const validation = request.schema.safeParse(parsed);
       if (validation.success) {
-        await this.record(scope, resolved, operation, extraction, OK);
+        await this.record(scope, resolved, operation, requestedAt, extraction, OK);
         return {
           data: validation.data,
           usage: extraction.usage,
@@ -399,7 +408,7 @@ export class LLMGateway implements ContextualLlm {
       lastErrors = validation.error.issues.map(
         (issue) => `${issue.path.join(".")}: ${issue.message}`,
       );
-      await this.record(scope, resolved, operation, extraction, { kind: "error", errorKind: "SchemaMismatch" });
+      await this.record(scope, resolved, operation, requestedAt, extraction, { kind: "error", errorKind: "SchemaMismatch" });
     }
 
     throw new SchemaValidationError(

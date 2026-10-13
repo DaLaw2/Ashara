@@ -5,66 +5,49 @@ import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
 import { assertValidTargetProjectPath } from "./acl/development-acl.js";
 
-// Narrow structural view of the vision persistence needed to mint, validate,
-// and persist a target project path. VisionRepository satisfies this; the
-// segregated interface keeps the minting/persist logic unit-testable without a
-// live database.
-export interface ProjectPathStore {
-  getCurrent(projectId: ProjectId): Promise<{ id: string } | null>;
-  getProjectPath(visionId: string): Promise<string | null>;
-  setProjectPath(visionId: string, path: string): Promise<void>;
+// The slice of the Project Record that minting a workspace needs; ProjectRepository
+// satisfies it. The vision is Engagement's record and is neither read nor written here.
+export interface WorkspacePathStore {
+  get(projectId: ProjectId): Promise<{ readonly workspacePath: string | null } | null>;
+  recordWorkspacePath(projectId: ProjectId, path: string): Promise<string>;
 }
 
-/** Reads the path off the project's current vision (migration 014), never a global latest. */
+/**
+ * The project's target workspace (migration 024): the stored path, or one minted
+ * under `workdirBase`, validated and recorded before it is returned. Null, with a
+ * warning, when the project is missing or any step fails.
+ */
 export async function resolveTargetProjectPath(
-  visionRepo: ProjectPathStore,
+  store: WorkspacePathStore,
   projectId: ProjectId,
   workdirBase: string,
 ): Promise<string | null> {
   try {
-    const vision = await visionRepo.getCurrent(projectId);
-    if (!vision) {
-      console.warn(`[project ${projectId}] no vision recorded; target project path unresolved`);
+    const project = await store.get(projectId);
+    if (!project) {
+      console.warn(`[project ${projectId}] no project record; target project path unresolved`);
       return null;
     }
 
-    const dbPath = await visionRepo.getProjectPath(vision.id);
-    if (dbPath) {
+    if (project.workspacePath) {
       // The DB is a trust boundary: a stale/poisoned row (e.g. a path inside
       // the Ashara repo left over from earlier runs) must be rejected and
       // fail closed, never reused for destructive git sync/reset.
-      await assertValidTargetProjectPath(dbPath);
-      return dbPath;
+      await assertValidTargetProjectPath(project.workspacePath);
+      return project.workspacePath;
     }
 
-    const defaultPath = join(workdirBase, "projects", vision.id);
-    await assertValidTargetProjectPath(defaultPath);
-    // Persist at minting time (owner ruling: the target path is minted once,
-    // validated, and persisted as the source of truth reused thereafter). This
-    // closes the gap where the path was only stored after the first COMPLETED
-    // task: a workdirBase change across a restart before any completion would
-    // otherwise re-mint a divergent path. no-overwrite semantics preserved.
-    await persistProjectPath(visionRepo, vision.id, defaultPath);
-    return defaultPath;
+    const minted = join(workdirBase, "projects", projectId);
+    await assertValidTargetProjectPath(minted);
+    // Recorded at minting time, so a workdirBase change across a restart cannot
+    // re-mint a divergent path. A racing dispatch that recorded first wins.
+    const stored = await store.recordWorkspacePath(projectId, minted);
+    if (stored !== minted) await assertValidTargetProjectPath(stored);
+    console.log(`[project ${projectId}] target workspace path: ${stored}`);
+    return stored;
   } catch (e) {
     console.warn(`[project ${projectId}] failed to resolve target project path:`, e);
     return null;
-  }
-}
-
-async function persistProjectPath(
-  visionRepo: ProjectPathStore,
-  visionId: string,
-  targetProjectPath: string,
-): Promise<void> {
-  try {
-    const existing = await visionRepo.getProjectPath(visionId);
-    if (!existing) {
-      await visionRepo.setProjectPath(visionId, targetProjectPath);
-      console.log(`Stored target project path for vision ${visionId}: ${targetProjectPath}`);
-    }
-  } catch (e) {
-    console.warn("Failed to persist target project path:", e);
   }
 }
 

@@ -1,7 +1,7 @@
 import type {
   EventStoreRepository,
   FailedApproachRepository,
-  VisionRepository,
+  ProjectRepository,
   CostRepository,
 } from "@ashara/db";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -126,7 +126,8 @@ export interface CoreLoopDeps {
   readonly eventStore: EventStoreRepository;
   readonly costRepo: CostRepository;
   readonly failedApproachRepo: FailedApproachRepository;
-  readonly visionRepo: VisionRepository;
+  /** Holds each project's target workspace path (migration 024). */
+  readonly projectRepo: ProjectRepository;
   readonly developmentService: DevelopmentService;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRouter;

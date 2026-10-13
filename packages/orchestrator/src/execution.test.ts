@@ -110,10 +110,9 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   // mocking without instantiation; the `unknown` widening below is the
   // standard test workaround for class-typed dependency slots.
   const eventStore = { publish: async () => {} };
-  const visionRepo = {
-    getCurrent: async () => null,
-    getProjectPath: async () => null,
-    setProjectPath: async () => {},
+  const projectRepo = {
+    get: async () => null,
+    recordWorkspacePath: notExercised("recordWorkspacePath"),
   };
   const failedApproachRepo = { record: async () => {} };
   const runStateStore = { load: async () => null, save: async () => {} };
@@ -136,7 +135,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     eventStore,
     costRepo: { recordTaskCost: async () => {} },
     failedApproachRepo,
-    visionRepo,
+    projectRepo,
     developmentService,
     runStateStore,
   } as unknown as CoreLoopDeps;

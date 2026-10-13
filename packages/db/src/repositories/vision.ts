@@ -35,20 +35,4 @@ export class VisionRepository {
       .limit(1);
     return row ?? null;
   }
-
-  async getProjectPath(visionId: string): Promise<string | null> {
-    const [row] = await this.db
-      .select({ projectPath: visionDocuments.projectPath })
-      .from(visionDocuments)
-      .where(eq(visionDocuments.id, visionId))
-      .limit(1);
-    return row?.projectPath ?? null;
-  }
-
-  async setProjectPath(visionId: string, path: string): Promise<void> {
-    await this.db
-      .update(visionDocuments)
-      .set({ projectPath: path })
-      .where(eq(visionDocuments.id, visionId));
-  }
 }

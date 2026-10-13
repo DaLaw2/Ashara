@@ -13,6 +13,8 @@ import type { ToolResult } from "./tools/types.js";
 // ---------------------------------------------------------------------------
 
 export interface ConversationConfig {
+    /** The brief's task, named in every warning this conversation logs. */
+    readonly taskId: string;
     readonly maxTurns: number;
     readonly staticSystemPrompt: string;
     readonly dynamicSystemPrompt: string;
@@ -78,12 +80,13 @@ export class AgentConversation {
     constructor(
         model: LanguageModel,
         toolRegistry: ToolRegistry,
-        config: Partial<ConversationConfig> & Pick<ConversationConfig, "staticSystemPrompt">,
+        config: Partial<ConversationConfig> & Pick<ConversationConfig, "staticSystemPrompt" | "taskId">,
         modelConfig: ModelConfig,
     ) {
         this.model = model;
         this.toolRegistry = toolRegistry;
         this.config = {
+            taskId: config.taskId,
             maxTurns: config.maxTurns ?? DEFAULT_MAX_TURNS,
             staticSystemPrompt: config.staticSystemPrompt,
             dynamicSystemPrompt: config.dynamicSystemPrompt ?? "",
@@ -235,11 +238,18 @@ export class AgentConversation {
             };
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            return this.buildErrorResult(turns, turns.length + 1, errMsg, {
+            // A throw from generateText may follow a request the provider billed
+            // and never reported (a failed step reaches no onStepEnd), so the
+            // sum so far is a lower bound, never the run's cost.
+            const step = turns.length + 1;
+            console.warn(
+                `[AgentConversation] cost unmeasured: task=${this.config.taskId}, model=${this.modelConfig.id}, ` +
+                    `step=${step}: the request threw (${errMsg}); the run's cost is reported as unmeasured`,
+            );
+            return this.buildErrorResult(turns, step, errMsg, {
                 input: totalInput,
                 output: totalOutput,
                 cost: totalCost,
-                measured: allCostsMeasured,
             }, lastModel);
         }
     }
@@ -258,7 +268,7 @@ export class AgentConversation {
         if (!cost.measured) {
             console.warn(
                 `[AgentConversation] ${describeUnmeasuredCost(cost, provider, this.modelConfig.id)}, ` +
-                    `step=${stepNumber + 1}; the run's cost is reported as unmeasured`,
+                    `task=${this.config.taskId}, step=${stepNumber + 1}; the run's cost is reported as unmeasured`,
             );
         }
         return { usage: extraction.usage, cost };
@@ -272,7 +282,7 @@ export class AgentConversation {
         turns: ConversationTurn[],
         turnNumber: number,
         errMsg: string,
-        totals: { input: number; output: number; cost: number; measured: boolean },
+        totals: { input: number; output: number; cost: number },
         model: string | null,
     ): ConversationResult {
         turns.push({
@@ -288,7 +298,7 @@ export class AgentConversation {
             finishReason: "error",
             totalTokens: { input: totals.input, output: totals.output },
             totalCost: totals.cost,
-            costMeasured: totals.measured,
+            costMeasured: false,
             model,
         };
     }

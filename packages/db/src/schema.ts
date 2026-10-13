@@ -53,6 +53,9 @@ export const projects = pgTable("projects", {
   planLastError: text("plan_last_error"),
   firstPlannedAt: timestamptz("first_planned_at"),
   planStoppedAt: timestamptz("plan_stopped_at"),
+  // Migration 024: the target workspace Delivery works in. Minted once on first
+  // dispatch, then never rewritten.
+  workspacePath: text("workspace_path"),
 });
 
 // ---------------------------------------------------------------------------
@@ -179,7 +182,6 @@ export const visionDocuments = pgTable(
     userAnswers: jsonb("user_answers").notNull().default(sql`'[]'`),
     openQuestions: jsonb("open_questions").notNull().default(sql`'[]'`),
     changeReason: text("change_reason"),
-    projectPath: text("project_path"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => ({

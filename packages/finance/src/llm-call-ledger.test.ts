@@ -69,7 +69,8 @@ function gateway(
   return buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls, clock) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(calls) },
+    clock,
   });
 }
 
@@ -210,6 +211,43 @@ describe("one llm_calls row per provider call", () => {
 
     expect(await costAt(PEAK)).toBeCloseTo((600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000, 9);
     expect(await costAt(OFF_PEAK)).toBeCloseTo((600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000, 9);
+  });
+
+  test("the budget ledger and the row price a call at the one instant it was sent", async () => {
+    await clearRows();
+    stubModel({
+      doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 100 }, {
+        prompt_cache_hit_tokens: 400,
+        prompt_cache_miss_tokens: 600,
+      }),
+    });
+    const deepseek = model({
+      id: "deepseek-straddling",
+      inputCostPer1M: 0.3,
+      outputCostPer1M: 1.2,
+      cacheReadCostPer1M: 0.006,
+      cacheWriteCostPer1M: null,
+      priceWindows: [{
+        isoWeekday: 3,
+        utcStartMinute: 600,
+        utcEndMinute: 1440,
+        rates: { inputCostPer1M: 0.15, outputCostPer1M: 0.6, cacheReadCostPer1M: 0.003, cacheWriteCostPer1M: null },
+      }],
+    });
+    // Sent in the peak; any later read of the clock falls in the off-peak window.
+    let reads = 0;
+    const clock = (): Date => (reads++ === 0 ? PEAK : OFF_PEAK);
+
+    const straddling = gateway("deepseek", deepseek, clock);
+    await straddling
+      .forCall({ projectId, taskId: null, callSite: "decomposition" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+
+    const peakCost = (600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000;
+    expect(straddling.getCostSummary().totalCost).toBeCloseTo(peakCost, 12);
+    const [row] = await rowsOfThisProject();
+    expect(row?.costUsd).toBeCloseTo(peakCost, 12);
+    expect(row?.createdAt.toISOString()).toBe(PEAK.toISOString());
   });
 
   test("reported cache tokens of a class the model has no rate for give a NULL cost, logged at warn", async () => {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
-import type { ProjectId } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
 import { ClientRepository } from "./client.js";
 import { ProjectRepository } from "./project.js";
@@ -114,6 +114,39 @@ describe("project_id is required", () => {
       ),
     );
     expect(message).toMatch(/null value in column "project_id"/);
+  });
+});
+
+describe("Project workspace path (migration 024)", () => {
+  test("a new project has no workspace path; the first recorded path wins and is never rewritten", async () => {
+    const p = await projects.create(`project-test-${NONCE}-ws`, clientId);
+    expect(p.workspacePath).toBeNull();
+    expect(await projects.recordWorkspacePath(p.id, "/srv/first")).toBe("/srv/first");
+    expect(await projects.recordWorkspacePath(p.id, "/srv/second")).toBe("/srv/first");
+    expect((await projects.get(p.id))?.workspacePath).toBe("/srv/first");
+  });
+
+  test("two racing writers agree on one stored path", async () => {
+    const p = await projects.create(`project-test-${NONCE}-ws-race`, clientId);
+    const [x, y] = await Promise.all([
+      projects.recordWorkspacePath(p.id, "/srv/x"),
+      projects.recordWorkspacePath(p.id, "/srv/y"),
+    ]);
+    expect(x).toBe(y);
+    expect((await projects.get(p.id))?.workspacePath).toBe(x);
+  });
+
+  test("recording on a missing project throws", async () => {
+    const missing = parseProjectId(randomUUID());
+    const message = await failureOf(() => projects.recordWorkspacePath(missing, "/srv/none"));
+    expect(message).toMatch(/does not exist/);
+  });
+
+  test("vision_documents no longer carries a project path", async () => {
+    const rows = await db.execute(
+      sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'vision_documents' AND column_name = 'project_path'`,
+    );
+    expect(rows.rows).toHaveLength(0);
   });
 });
 

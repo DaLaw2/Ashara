@@ -106,6 +106,12 @@ export interface BuildGatewayOptions {
    * that does not record says why, at its own construction site.
    */
   readonly recording: CallRecording;
+  /**
+   * Read once per provider request, before it is sent; that instant prices the
+   * call in the budget ledger and in the recorder's row. Required: the rate
+   * of a time-windowed model depends on it.
+   */
+  readonly clock: () => Date;
 }
 
 /**
@@ -129,5 +135,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
 
   assertRoutingProfileComplete(config);
   assertRoutingProfileModelsPresent(config);
-  return new LLMGateway(config, options.recording, options.ledger);
+  return new LLMGateway(config, options.recording, options.clock, options.ledger);
 }

@@ -7,8 +7,8 @@ type ZodSchema<T> = ZodType<T>;
 
 /**
  * Re-ask suffix for decomposition retries (mig-run10). The `errors` are the
- * decomposer's own UnresolvableDependencyError messages (offending dep + the
- * available refs/titles), so the model is told exactly what to fix.
+ * schema issues or the decomposer's own UnresolvableDependencyError and
+ * TaskCapExceededError messages, so the model is told exactly what to fix.
  */
 function decompositionReask(ctx: { readonly errors: readonly string[] }): string {
   return (

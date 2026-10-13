@@ -236,7 +236,7 @@ export async function processTask(
     await deps.eventStore.publish(event);
   }
 
-  const targetProjectPath = await resolveTargetProjectPath(deps.visionRepo, workItem.projectId, deps.config.workdirBase);
+  const targetProjectPath = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
     eventStore: deps.eventStore,
@@ -266,10 +266,8 @@ export async function processTask(
   );
   const costInfo = costFromOutput(output, attempt, agentInvoked);
 
-  // The target project path is now minted, validated, and persisted as the
-  // source of truth inside resolveTargetProjectPath (single persist point).
-  // The former completion-gated persist here was a redundant duplicate
-  // writer against the same DB row and has been removed.
+  // The target project path is minted, validated, and recorded on the project
+  // inside resolveTargetProjectPath, its single writer.
 
   // Salvage check for completed results: when the agent succeeded but the item
   // was preempted to Abandoned (by HTTP PATCH) during
