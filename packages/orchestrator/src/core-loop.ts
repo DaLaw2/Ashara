@@ -4,7 +4,6 @@ import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
-import { evaluateRunTermination } from "./termination-snapshot.js";
 import { reconcileCoverageGaps } from "./post-cycle.js";
 import { openRun, persistRun } from "./run-state.js";
 
@@ -12,6 +11,7 @@ export class CoreLoop {
   private readonly deps: CoreLoopDeps;
   private readonly budget: BudgetTracker;
   private runState: RunState | null = null;
+  private budgetExhaustionReported = false;
 
   constructor(deps: CoreLoopDeps) {
     this.deps = deps;
@@ -46,11 +46,12 @@ export class CoreLoop {
     let batch: WorkItem[] = [];
     const results: TaskResult[] = [];
 
-    // When the budget is exhausted, skip reconciliation and dispatch for this cycle but
-    // DO fall through to the termination evaluation below, so the run stops with the
-    // `economy` reason instead of idling forever (the Run-8 failure mode). Read live on
-    // every cycle: dispatch spends, so it must not run past the cap.
-    if (!this.budget.isExhausted()) {
+    // When the budget is exhausted, skip reconciliation and dispatch: the runner idles
+    // at the cap. Read live on every cycle: dispatch spends, so it must not run past
+    // the cap.
+    if (this.budget.isExhausted()) {
+      this.reportBudgetExhaustion();
+    } else {
       // Plan reconciliation (mig9-t2, ADR-032 §2) runs BEFORE the gate, so any
       // proposed coverage task is eligible for dispatch this same cycle. ENFORCING
       // proposes tasks for uncovered declared endpoints; observe-only just logs.
@@ -110,24 +111,28 @@ export class CoreLoop {
       }
     }
 
-    // QUIESCENT POINT (Option A quiescence, mig7-t1): reconciliation and dispatch have
-    // settled this cycle. Assemble a FRESH snapshot and evaluate termination against
-    // it, so the snapshot already reflects any work those steps created — the liveness
-    // verdict cannot race work about to appear. Completeness (all-terminal) and economy
-    // (budget) are monotone-enough not to need this care; liveness is the one that does.
-    const termination = await evaluateRunTermination(deps, this.budget.isExhausted(), runScope);
-
-    // AFTER the termination evaluation: acceptanceAttempts is incremented inside
-    // it, so persisting earlier would lose the very increment that bounds it.
     await this.persistRunCounters();
 
-    return { tasksProcessed: batch.length, results, termination };
+    return { tasksProcessed: batch.length, results };
   }
 
   /**
-   * Adopts the durable run record on the first cycle: budget spend and acceptance
-   * attempts both resume where a killed process left them
-   * (Discipline B). Runs once per process — after that the in-memory counters are
+   * Warns once, on the first cycle that finds the cap spent. The runner keeps
+   * cycling at the cap, so a per-cycle warn would repeat every idle interval.
+   */
+  private reportBudgetExhaustion(): void {
+    if (this.budgetExhaustionReported) return;
+    this.budgetExhaustionReported = true;
+    console.warn(
+      `[budget] limit $${this.deps.config.budgetLimitUsd.toFixed(2)} reached at ` +
+        `$${this.budget.totalCostUsd.toFixed(4)} spent; dispatch is paused. Raise ` +
+        `ASHARA_BUDGET_LIMIT_USD and restart to resume.`,
+    );
+  }
+
+  /**
+   * Adopts the durable run record on the first cycle: budget spend resumes where
+   * the previous process left it (Discipline B). Runs once per process — after that the in-memory counters are
    * authoritative and are written back by persistRunCounters.
    *
    * Throws through on a store failure: a cycle that cannot read the run's spend
@@ -139,14 +144,12 @@ export class CoreLoop {
     const state = await openRun(this.deps.runStateStore);
     this.runState = state;
     this.budget.adoptSpend(state.spendUsd);
-    this.deps.acceptanceAttempts = state.acceptanceAttempts;
   }
 
   private async persistRunCounters(): Promise<void> {
     if (this.runState === null) return;
     this.runState = await persistRun(this.deps.runStateStore, this.runState, {
       spendUsd: this.budget.totalCostUsd,
-      acceptanceAttempts: this.deps.acceptanceAttempts,
     });
   }
 }

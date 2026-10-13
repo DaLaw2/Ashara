@@ -238,7 +238,7 @@ export interface TemperatureNotHonoredContext {
  * parameter and sampled however it liked.
  *
  * Discipline A names `temperature: 0` as the mechanism for deterministic
- * operations (decomposition, classification, acceptance, stack derivation).
+ * operations (decomposition, classification, stack derivation).
  * Sending the parameter is not the guarantee; the provider HONORING it is.
  * Anthropic models with `rejectsSamplingParameters` and OpenAI reasoning
  * models silently ignore it, so without this check the determinism guarantee

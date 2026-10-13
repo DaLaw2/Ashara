@@ -1,24 +1,19 @@
 import { z } from "zod";
 
 /**
- * Published Language: the durable per-run record. Every field is a cap counter
- * that lives in process memory during a cycle and MUST survive a crash-restart
- * of the run it bounds — Discipline B, "a counter that lives only in process
- * memory is not a cap". Persistence (db) and the loop that enforces the caps
- * (orchestrator) both validate against this one schema; neither imports the
- * other (ADR-044).
+ * Published Language: the durable run record. `spendUsd` is the budget's cap
+ * counter; it lives in process memory during a cycle and MUST survive a restart —
+ * Discipline B, "a counter that lives only in process memory is not a cap".
+ * Persistence (db) and the loop that enforces the cap (orchestrator) both validate
+ * against this one schema; neither imports the other (ADR-044).
  *
- * `closed` is what keeps per-run semantics intact. A run that stopped on its own
- * termination verdict closes the record, so the next process starts fresh at
- * zero. A run whose process was killed leaves it OPEN, so the next process
- * adopts its spend instead of being handed the same budget a second time.
+ * There is one record per database and nothing closes it, so the spend is a
+ * lifetime total (ADR-073 addendum 3, interim until story c-cost-ledger).
  */
 export const runStateSchema = z.object({
   runId: z.string().min(1),
   openedAt: z.string().min(1),
-  closed: z.boolean(),
   spendUsd: z.number().nonnegative(),
-  acceptanceAttempts: z.number().int().nonnegative(),
 });
 
 export type RunState = z.infer<typeof runStateSchema>;

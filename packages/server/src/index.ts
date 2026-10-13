@@ -23,14 +23,11 @@ import {
   ContinuousRunner,
   EventLogger,
   reconcileOnStartup,
-  terminalizeOnRunEnd,
-  closeRun,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import type { ContractRegistryLookup } from "@ashara/planning";
 import {
   FailureRouter,
-  createGatewayAcceptanceLLM,
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
@@ -38,11 +35,7 @@ import {
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
-import {
-  DevelopmentService,
-  observeProduct,
-  defaultRunCommand,
-} from "@ashara/development";
+import { DevelopmentService } from "@ashara/development";
 import type {
   SessionStore,
   KnowledgeSink,
@@ -69,7 +62,7 @@ import {
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
 import type { WorkItemId, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, HttpMethodSchema, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -200,12 +193,6 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  // Route ALL structured planning calls through the shared reliability ladder
-  // (Phase 4 t1, ADR-030 G5): temperature 0, validated attempt on the requested
-  // model, escalate ONE capability tier on persistent schema failure, then a
-  // typed StructuredOutputExhausted — never silently accept a drifted enum.
-  const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
-  const acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
   const failureRouter = new FailureRouter(3);
 
   const sessionStore: SessionStore = {
@@ -570,47 +557,12 @@ async function main(): Promise<void> {
     // work-item half is re-adapted to the domain shape the same way the
     // top-level workItemRepo is (adaptWorkItemRepo).
     withPlanningTransaction: planningTransaction,
-    acceptanceLlm,
-    // The entry point lives in the knowledge graph since ADR-038, not as a
-    // top-level contract field.
-    // Host execution is deliberate and explicit, not a fallback — it replaced a
-    // `?? defaultRunCommand` that hid it (accepted pending story
-    // `observe-runs-on-the-host`). BOTH halves run on the host: toolchain
-    // preparation here via `defaultRunCommand`, AND the product launch itself
-    // (observe.ts spawns the product directly via child_process.spawn, outside
-    // CommandRunner entirely). The accepted risk is that package-manager install
-    // steps execute arbitrary third-party lifecycle scripts as the host user
-    // with full network access, whereas the verify path runs the same class of
-    // commands in a container.
-    observeProduct: ({ targetPath, contract }) =>
-      observeProduct({
-        targetProjectPath: targetPath,
-        contractEntryPoint: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
-        contractEndpoints: contract?.endpoints ?? null,
-        deps: { toolchainRunner: defaultRunCommand },
-      }),
-    // Seeded to 0 and immediately overwritten by CoreLoop from the durable run
-    // record on the first cycle (a resumed run keeps its spent attempts).
-    acceptanceAttempts: 0,
     runStateStore: runStateRepo,
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
 
-  // Run-termination detection is ON by default (mig-phase-7, ADR-029). The rollback
-  // clause: set ASHARA_TERMINATION_ENABLED=0 (or "false") to revert to the legacy
-  // infinite idle with a loud per-cycle log of the stop that WOULD have fired.
-  const terminationDisabled =
-    process.env["ASHARA_TERMINATION_ENABLED"] === "0" ||
-    process.env["ASHARA_TERMINATION_ENABLED"]?.toLowerCase() === "false";
-  const runner = new ContinuousRunner(
-    coreLoop,
-    {
-      databaseUrl: config.databaseUrl,
-      terminationEnabled: !terminationDisabled,
-    },
-    eventLogger,
-  );
+  const runner = new ContinuousRunner(coreLoop, { databaseUrl: config.databaseUrl });
 
   const appDeps: AppDeps = {
     workItemRepo: dbWorkItemRepo,
@@ -646,7 +598,6 @@ async function main(): Promise<void> {
       failureRouter,
       devSessionStore: devSessionRepo,
       workdirBase: config.coreLoop.workdirBase,
-      runStateStore: runStateRepo,
     });
   } catch (e) {
     console.warn("Startup reconciliation failed; starting runner anyway:", e);
@@ -678,42 +629,6 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown());
 
   await runnerPromise;
-  // The runner returning WITHOUT a shutdown signal means it stopped on its own
-  // termination verdict: the run is over, so close the durable record and let the
-  // next process start a fresh per-run budget. A SIGTERM/SIGINT exit deliberately
-  // leaves it OPEN — that process was killed mid-run, and a restart must resume
-  // the same cap rather than being handed the whole budget again.
-  if (!shuttingDown) {
-    // Terminalize this run's Pending and InProgress work items so the next run
-    // starts from a clean board. The sweep is scoped to the ending run — ad-hoc,
-    // pre-scoping, and other-run items are excluded (fail-closed: a run should
-    // not destroy work it did not create). Blocked (owner-parked) and Failed
-    // (startup-reconciler routes them) are also excluded by status.
-    //
-    // SIGTERM leaves items as-is: this block is behind `!shuttingDown`, so a
-    // killed process never sweeps. The startup reconciler handles InProgress
-    // (requeue) and Failed (FailureRouter) but NOT Pending — no reconciler
-    // reclaims Pending crash-orphans from a killed run. The dispatch gate
-    // will eventually pick them up (it selects all Pending Tasks regardless
-    // of scope), but undispatched ones persist. Run-scoping widened this gap:
-    // before, the next run's whole-board sweep cleaned them accidentally; now
-    // the scoped sweep skips them (different scope).
-    // Tracked as t-startup-reconciler-pending.
-    try {
-      const runState = await runStateRepo.load();
-      if (runState && !runState.closed) {
-        await terminalizeOnRunEnd({ workItemRepo, eventStore }, runState.runId);
-      } else {
-        console.warn(
-          "[shutdown] skipping run-end sweep: no open run state found " +
-            "(the runner may have errored before opening a run)",
-        );
-      }
-    } catch (e) {
-      console.warn("Shutdown work-item terminalization failed:", e);
-    }
-    await closeRun(runStateRepo);
-  }
   console.log("Server and continuous runner stopped");
 }
 

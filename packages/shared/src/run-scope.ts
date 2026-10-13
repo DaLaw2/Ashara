@@ -4,30 +4,27 @@ import { z } from "zod";
  * Published Language: the run-scope association on a work item.
  *
  * Every work item carries a run scope that says which run created it. The
- * value is either a runId (UUID from openRun), RUN_SCOPE_PRE_SCOPING for
- * rows that existed before the column was added, or RUN_SCOPE_AD_HOC for
- * items created outside any orchestrator run (HTTP API).
+ * value is either a runId (UUID from openRun), RUN_SCOPE_AD_HOC for items
+ * created outside any orchestrator run (HTTP API), or the migration backfill
+ * value "pre-scoping" on rows that existed before the column was added.
  *
  * No default: every insert site must supply the value explicitly (Discipline A).
  * The DB column is NOT NULL for exactly this reason — an undefined appearing
  * on the read side would be a contradiction.
  */
 
-export const RUN_SCOPE_PRE_SCOPING = "pre-scoping" as const;
-
 /**
  * Sentinel for work items created outside any orchestrator run — HTTP API
  * calls (POST /work-items, POST /work-items/bulk) that do not pass through the
- * core loop. Distinct from RUN_SCOPE_PRE_SCOPING (which marks migration
- * backfill) so the run summary can tell "historical data" from "someone poked
- * the API while no run was open." See Discipline A: two different epistemic
- * states must not collapse to one value.
+ * core loop. Distinct from the "pre-scoping" migration backfill value so
+ * "historical data" and "someone poked the API while no run was open" stay two
+ * different epistemic states (Discipline A).
  */
 export const RUN_SCOPE_AD_HOC = "ad-hoc" as const;
 
 /**
  * Schema for the run_scope column. A non-empty string: either a runId (UUID),
- * RUN_SCOPE_PRE_SCOPING, or RUN_SCOPE_AD_HOC. The set is open on the runId
+ * "pre-scoping", or RUN_SCOPE_AD_HOC. The set is open on the runId
  * side (new UUIDs appear every run) so this validates shape, not membership.
  */
 export const runScopeSchema = z.string().min(1);

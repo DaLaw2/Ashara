@@ -146,17 +146,6 @@ export class FailureRouter {
     this.maxReplanAttempts = maxReplanAttempts;
   }
 
-  /**
-   * The replan bound this router enforces (`priorAttempts < replanBound` ⇒ replan).
-   * Exposed so the termination seam can share the SAME bound value the router was
-   * constructed with (mig7-t3): isRecoverableFailed reads it to decide whether a
-   * parked Failed item still has a route out, so the two never drift from a
-   * separately hardcoded constant.
-   */
-  get replanBound(): number {
-    return this.maxReplanAttempts;
-  }
-
   route(input: FailureRouteInput): FailureDecision {
     const parsed = rawFailureContextSchema.safeParse(input.failure);
     if (!parsed.success) {

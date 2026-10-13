@@ -255,10 +255,10 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
         case "Abandoned": {
           const callerReason =
             Object.keys(reason).length > 0 ? reason : { note: "abandoned via API" };
-          // Tag the source so run-summary.ts's classifyAbandon can tell this
-          // caller-supplied payload apart from FailureRouter's structured
-          // exhausted/substitute shapes instead of duck-typing on field names
-          // that happen to collide (e.g. a caller-supplied "reason" string).
+          // Tag the source so a reader can tell this caller-supplied payload
+          // apart from FailureRouter's structured shapes instead of duck-typing
+          // on field names that happen to collide (e.g. a caller-supplied
+          // "reason" string).
           const abandonReason: StoredBlockedReason = { ...callerReason, source: "api" };
           abandonWorkItem(item, abandonReason);
           break;

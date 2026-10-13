@@ -25,7 +25,7 @@ export interface WorkItem {
   blockedReason?: StoredBlockedReason;
   /**
    * Which run created this item: either a runId (UUID from openRun),
-   * RUN_SCOPE_PRE_SCOPING (migration backfill), or RUN_SCOPE_AD_HOC
+   * "pre-scoping" (migration backfill), or RUN_SCOPE_AD_HOC
    * (created outside any run, e.g. via the HTTP API). Every insert site
    * must supply this explicitly — there is no default (Discipline A).
    */
@@ -181,8 +181,8 @@ export function replanWorkItem(item: WorkItem): void {
  * Abandoned is governed solely by `canTransitionTo` and the transition table
  * in `@ashara/shared/transitions.ts` — this function delegates to it and
  * adds no further guard. Callers include the FailureRouter (Failed →
- * Abandoned, ADR-029), the HTTP PATCH give-up path (Blocked → Abandoned),
- * and the shutdown reconciler (Pending/InProgress → Abandoned on run end).
+ * Abandoned, ADR-029) and the HTTP PATCH /work-items/:id/status route, which
+ * is the only caller that takes Blocked, Pending or InProgress to Abandoned.
  */
 export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
   if (!canTransitionTo(item.status, "Abandoned")) {

@@ -9,7 +9,6 @@ import type {
   ContractRepository,
 } from "@ashara/shared";
 import { parseProjectId, TERMINAL_STATUSES } from "@ashara/shared";
-import type { EndpointCoverageGap } from "./run-summary.js";
 import type { WorkItem, WorkItemRepository, CoverageHold } from "./domain/index.js";
 import {
   PlanningService,
@@ -22,6 +21,30 @@ import {
   endpointHasGroupingPrefix,
 } from "./contract-derivation.js";
 import { amendContractWithRetry } from "./contract-retry.js";
+
+/**
+ * A CONTRACT-declared endpoint the plan does not yet cover (mig9-t2, ADR-032 §2).
+ * Deterministically derived from the persisted contract (no LLM), so reading it
+ * alone names the missing endpoint and why it is still open.
+ */
+export interface EndpointCoverageGap {
+  /** The contract endpoint's stable logical ref (see contract.ts identity rules). */
+  readonly ref: string;
+  readonly method: string;
+  readonly path: string;
+  readonly purpose: string;
+  /**
+   * `unplanned` — no work item declares it (declaredBy unset): the reconciler
+   * proposes a task for it. `planned-unbuilt` — a task declares it but has not
+   * completed, so the endpoint is not yet produced. Both are BLOCKING (they hold
+   * parent rollup). `out-of-scope` — a spec-derivation invention absent from vision
+   * and plan (r12-t1): INFORMATIONAL only, never auto-tasked, so it can neither
+   * burn dispatch budget nor freeze rollup.
+   */
+  readonly kind: "unplanned" | "planned-unbuilt" | "out-of-scope";
+  /** Human-readable WHY, always derivable from the fields alongside it. */
+  readonly reason: string;
+}
 
 /**
  * Plan reconciliation (mig9-t2, ADR-032 §2, register-gap closer half 2). A
@@ -67,8 +90,8 @@ import { amendContractWithRetry } from "./contract-retry.js";
  *    and NOT counted as a blocking gap, so it can neither burn budget as a dispatched
  *    duplicate nor deadlock the run as a never-closing hole. `needsMarker` is true
  *    when this verdict was freshly derived from the corpus and must be PERSISTED onto
- *    the contract endpoint (`outOfScope: true`), so the corpus-less readers — the
- *    rollup guard and the termination completeness check — can honor it without
+ *    the contract endpoint (`outOfScope: true`), so the corpus-less reader — the
+ *    rollup guard — can honor it without
  *    re-deriving scope they cannot compute.
  */
 type EndpointDisposition =
@@ -135,7 +158,7 @@ function pickCanonicalTwin(bucket: readonly Endpoint[]): Endpoint {
  * Classifies every contract endpoint in one pass (Run-11 schism + out-of-scope
  * fix). Pure and total. `scopeTokens` is the vision+plan corpus used to decide
  * whether a GROUPED spec-derivation endpoint is out-of-scope; `undefined` means
- * "cannot judge scope" (the read-only termination/rollup path), under which no
+ * "cannot judge scope" (the read-only rollup path), under which no
  * endpoint is ever demoted to out-of-scope — genuine unplanned endpoints stay
  * blocking gaps, exactly as before this change.
  */
@@ -206,7 +229,7 @@ function classifyEndpoints(
     }
     const resource = deriveEndpointResourceKey(e.path);
     // A DURABLE verdict already persisted on the endpoint is honored directly, so the
-    // corpus-less readers (rollup guard, termination) agree with reconciliation
+    // corpus-less reader (the rollup guard) agrees with reconciliation
     // without recomputing scope. Otherwise the verdict is derived FRESH from the
     // corpus (criterion 2): only when we can judge scope (scopeTokens present) AND the
     // endpoint is a spec-derivation invention under a grouping prefix (the /api/auth/*
@@ -257,11 +280,9 @@ function classifyEndpoints(
 /**
  * Whether a coverage gap BLOCKS the run — keeps it from completing and holds parent
  * rollup. `unplanned` and `planned-unbuilt` block; `out-of-scope` is informational
- * (owner-visible but never counted). The single definition of "blocking", shared by
- * the rollup guard here and the orchestrator's completeness check, so the two can
- * never disagree.
+ * (owner-visible but never counted).
  */
-export function isBlockingCoverageGap(gap: EndpointCoverageGap): boolean {
+function isBlockingCoverageGap(gap: EndpointCoverageGap): boolean {
   return gap.kind !== "out-of-scope";
 }
 
@@ -275,7 +296,7 @@ export function isBlockingCoverageGap(gap: EndpointCoverageGap): boolean {
  * only honors the DURABLE `outOfScope` marker reconciliation already persisted; an
  * unmarked unplanned endpoint stays a blocking gap exactly as before.
  */
-export function computeCoverageGaps(
+function computeCoverageGaps(
   contract: ProjectContract | null,
   workItems: readonly Pick<WorkItem, "id" | "status">[],
 ): EndpointCoverageGap[] {
@@ -325,7 +346,7 @@ export interface CoverageReconciliationDeps {
    * Shares one transaction between the coverage-task creation and the contract
    * amend that links it (declaredBy), so a proposal never persists without its
    * link. Absent (or observe-only) ⇒ no proposals are created; gaps are still
-   * computed and returned for logging + the run summary.
+   * computed and returned for logging.
    */
   readonly withPlanningTransaction?: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
@@ -342,7 +363,7 @@ export interface CoverageReconciliationDeps {
  * and amends the contract to link that task via `declaredBy` — the same
  * seed-once-then-amend protocol decomposition uses, and idempotent because a
  * linked endpoint is no longer unplanned. Returns every open gap found (both
- * modes) so the caller can log them and surface them in the run summary. Zero
+ * modes) so the caller can log them. Zero
  * LLM calls.
  */
 export async function reconcileCoverage(deps: CoverageReconciliationDeps): Promise<EndpointCoverageGap[]> {
@@ -373,8 +394,8 @@ export async function reconcileCoverage(deps: CoverageReconciliationDeps): Promi
     for (const endpoint of contract.endpoints) {
       const disposition = dispositions.get(endpoint.ref);
       if (!disposition) continue;
-      // Surface blocking gaps AND out-of-scope inventions to the caller (the owner-
-      // visible run summary + reconciliation log) — out-of-scope endpoints are
+      // Surface blocking gaps AND out-of-scope inventions to the caller (the
+      // reconciliation log) — out-of-scope endpoints are
       // recorded here rather than silently minted as tasks (criterion 2).
       if (
         disposition.kind === "planned-unbuilt" ||
@@ -390,9 +411,9 @@ export async function reconcileCoverage(deps: CoverageReconciliationDeps): Promi
     if (!deps.enforcing || !deps.withPlanningTransaction) continue; // observe-only: report, do not create
 
     // Persist the freshly-derived out-of-scope verdict onto the contract FIRST, so the
-    // corpus-less rollup guard + termination check honor it this very cycle — the
+    // corpus-less rollup guard honors it this very cycle — the
     // durable fix for the deadlock (an out-of-scope endpoint that is neither tasked
-    // nor demotable would otherwise block completeness forever).
+    // nor demotable would otherwise hold its parent's rollup forever).
     for (const endpoint of toMarkOutOfScope) {
       await markEndpointOutOfScope(deps, projectId, endpoint);
     }

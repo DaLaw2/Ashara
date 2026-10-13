@@ -4,14 +4,10 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { ContractRepository, ProductObservation, ProjectContract } from "@ashara/shared";
+import type { ContractRepository } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
-  RunSummary,
-  TerminationDecision,
   WorkItemRepository,
-  AcceptanceLLM,
-  AcceptanceVerdict,
   FailureRouter,
   ContractRegistryLookup,
 } from "./acl/planning-acl.js";
@@ -31,13 +27,10 @@ export interface CoreLoopConfig {
   readonly verifyTimeoutMs: number;
   /**
    * Coverage reconciliation mode (mig9-t2, ADR-032 §2). `true` (default) ENFORCES:
-   * uncovered declared endpoints are proposed as tasks, the rollup holds over open
-   * gaps, and completeness cannot fire with a gap open. `false` is the observe-only
-   * rollback: gaps are logged and reported in the run summary but never block.
+   * uncovered declared endpoints are proposed as tasks and the rollup holds over open
+   * gaps. `false` is the observe-only rollback: gaps are logged but never block.
    */
   readonly coverageEnforcing: boolean;
-  readonly maxAcceptanceAttempts: number;
-  readonly maxGapAttempts: number;
 }
 
 /**
@@ -57,32 +50,11 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
   coverageEnforcing: true,
-  maxAcceptanceAttempts: 2,
-  maxGapAttempts: 2,
 };
 
 export interface CycleResult {
   readonly tasksProcessed: number;
   readonly results: TaskResult[];
-  /**
-   * The run-termination verdict computed at this cycle's quiescent point (mig-phase-7).
-   * Always set by CoreLoop.runCycle; optional on the type so lighter CycleResult
-   * literals (and the runner's structural double) need not fabricate one — the runner
-   * treats an absent verdict as "keep cycling".
-   */
-  readonly termination?: TerminationOutcome;
-}
-
-/**
- * The terminate-or-continue decision for a cycle, plus the human/machine-readable
- * RunSummary the runner emits when it actually stops (built only on a `stop`
- * decision — a summary presupposes a stop reason). Kept together so the runner
- * consumes one object: the decision drives the flag/wake-race logic; the summary
- * is what `emitRunSummary` publishes and prints.
- */
-export interface TerminationOutcome {
-  readonly decision: TerminationDecision;
-  readonly summary: RunSummary | null;
 }
 
 export interface TaskResult {
@@ -184,44 +156,11 @@ export interface CoreLoopDeps {
   readonly contractLookup?: ContractRegistryLookup;
   /**
    * The ProjectContract repository (read + amend), for coverage reconciliation
-   * (mig9-t2): computing open coverage gaps, proposing coverage tasks, holding
-   * rollups over open gaps, and counting gaps for the termination summary.
+   * (mig9-t2): computing open coverage gaps, proposing coverage tasks, and holding
+   * rollups over open gaps.
    * Optional — absent, reconciliation is skipped (no contract to reconcile).
    */
   readonly contractRepo?: ContractRepository;
-  readonly acceptanceLlm?: AcceptanceLLM;
-  /**
-   * The contract is a required part of the request, not an optional extra: it is
-   * what names the endpoints to probe and the entry point to launch. A defaulted
-   * positional made `observeProduct(path)` typecheck while observing nothing, so
-   * the caller must state the contract even when it is `null`.
-   */
-  readonly observeProduct?: (input: {
-    readonly targetPath: string;
-    readonly contract: ProjectContract | null;
-  }) => Promise<ProductObservation>;
-  /**
-   * Per-run cap counter. Mutated in-process by termination-snapshot, which
-   * enforces it, and written through to the durable
-   * run record by CoreLoop after every accrual — a cap that only exists in
-   * process memory is not a cap (Discipline B), which is what let this one and
-   * the budget reset to zero on every restart.
-   */
-  acceptanceAttempts: number;
-  /**
-   * The last acceptance evaluation that actually ran this process. Loop-internal
-   * memo written by termination-snapshot, not a wired dependency: a termination can
-   * be superseded by a NOTIFY and re-entered (runner.ts), and the re-entry may find
-   * the attempt cap spent. Run 39 recomputed from scratch there and published
-   * `accepted` over a verdict that had just listed five open gaps.
-   */
-  lastAcceptanceVerdict?: AcceptanceVerdict;
-  /**
-   * The last ProductObservation taken during an acceptance check. Stored by
-   * runAcceptanceCheck so handlePlanExhausted can thread it into gap tasks
-   * without re-probing the product. Same pattern as lastAcceptanceVerdict.
-   */
-  lastObservation?: ProductObservation;
-  /** Durable home of every per-run cap counter above, plus the budget's spend. */
+  /** Durable home of the budget's spend. */
   readonly runStateStore: RunStateStore;
 }

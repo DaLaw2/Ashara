@@ -43,7 +43,7 @@ describe("parseStoredTaskSpec", () => {
       checks: ["POST /api/register returns 201 with valid body"],
       priorWorkPointers: ["task-scaffold"],
       capability: "Strong",
-      origin: "acceptance-gap",
+      origin: "coverage-reconciliation",
     };
 
     const result = parseStoredTaskSpec(input);

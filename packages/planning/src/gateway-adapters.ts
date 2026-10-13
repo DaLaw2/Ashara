@@ -1,20 +1,9 @@
 import type { ZodType } from "zod";
-import type { CapabilityLevel } from "@ashara/shared";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
 import type { DecompositionLLM } from "./decomposition.js";
 
 type ZodSchema<T> = ZodType<T>;
-
-export interface StructuredLLMProvider {
-  generateStructured<T>(request: {
-    capability: CapabilityLevel;
-    prompt: string;
-    schema: ZodSchema<T>;
-    maxTokens?: number;
-    temperature?: number;
-  }): Promise<{ data: T }>;
-}
 
 /**
  * Re-ask suffix for decomposition retries (mig-run10). The `errors` are the

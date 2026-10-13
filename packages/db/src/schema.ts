@@ -36,7 +36,7 @@ export const workItems = pgTable("work_items", {
   successCriteria: jsonb("success_criteria"),
   blockedReason: jsonb("blocked_reason"),
   // Run-scope association (migration 003). Either a runId (UUID from openRun),
-  // RUN_SCOPE_PRE_SCOPING for rows that existed before this column, or
+  // "pre-scoping" for rows that existed before this column, or
   // RUN_SCOPE_AD_HOC for items created outside any orchestrator run (HTTP API).
   // No default: every insert site must supply the value explicitly.
   runScope: varchar("run_scope", { length: 50 }).notNull(),

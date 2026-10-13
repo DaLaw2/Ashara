@@ -20,23 +20,11 @@ export const storedTaskSpecSchema = z.object({
   priorWorkPointers: z.array(z.string()).optional(),
   capability: z.string().optional(),
 
-  // Origin marker — open string, NOT an enum. Known values as of writing:
-  // "acceptance-gap", "coverage-reconciliation". New origins appear without
-  // code changes; this field is read by dispatch selection (TaskSelector),
-  // not by a switch that needs exhaustiveness.
+  // Origin marker — open string, NOT an enum. Known value as of writing:
+  // "coverage-reconciliation". New origins appear without code changes; this
+  // field is read by dispatch selection (TaskSelector), not by a switch that
+  // needs exhaustiveness.
   origin: z.string().optional(),
-
-  // Acceptance-gap lifecycle (termination-snapshot.ts via acceptance.ts).
-  // Written by termination-snapshot, read by nothing today — story unwired-surface.
-  lesson: z.string().optional(),
-  suggestedApproach: z.string().optional(),
-  supersedes: z.string().optional(),
-
-  // Artifact context (termination-snapshot.ts gap task creation).
-  // A prose snapshot of the project's current state — working/failed endpoints,
-  // completed tasks, key files — so a gap task's agent brief knows what already
-  // exists on disk rather than re-implementing from scratch.
-  artifactContext: z.string().optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

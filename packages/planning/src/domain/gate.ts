@@ -20,40 +20,6 @@ export class GateKeeper {
   }
 }
 
-/**
- * Items absent from the dependency graph have no edges — "no dependencies"
- * genuinely resolves to "met". Shared by the resolver function so each
- * lookup returns the same frozen instance rather than allocating.
- */
-const NO_DEPENDENCIES: DependencyResolutionResult = Object.freeze({
-  resolution: "met",
-  blockedBy: [],
-});
-
-/**
- * Resolves every item's dependency state in one pass, reusing the SAME machinery
- * the gate uses to decide eligibility (buildDependencyContext + resolveDependencies).
- * Returns the items exactly as `listAll()` yields them alongside a TOTAL resolver
- * function — every id returns a DependencyResolutionResult, never undefined.
- * Items absent from the dependency graph (no edges) resolve to "met" inside the
- * function rather than at each call site, so consumers need no ?? fallback and
- * absence is unrepresentable in the return type (Discipline A).
- *
- * Reads the repository fresh, so callers get a post-mutation view.
- */
-export async function resolvePlanDependencies(
-  repo: WorkItemRepository,
-): Promise<{ items: WorkItem[]; resolveItem: (id: string) => DependencyResolutionResult }> {
-  const items = await repo.listAll();
-  const graph = await DependencyGraph.load(repo);
-  const resolution = graph.resolveDependencies(buildDependencyContext(items));
-  return {
-    items,
-    resolveItem: (id: string): DependencyResolutionResult =>
-      resolution.get(id) ?? NO_DEPENDENCIES,
-  };
-}
-
 /** Absent from the map ⇒ no dependencies ⇒ met. */
 function isMet(resolution: Map<string, DependencyResolutionResult>, id: string): boolean {
   const result = resolution.get(id);

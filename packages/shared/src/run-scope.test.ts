@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { parseRunScope, RunScopeCorrupt, RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC } from "./run-scope.js";
+import { parseRunScope, RunScopeCorrupt, RUN_SCOPE_AD_HOC } from "./run-scope.js";
 
 describe("parseRunScope", () => {
   test("null throws RunScopeCorrupt (NOT NULL column)", () => {
@@ -25,10 +25,6 @@ describe("parseRunScope", () => {
 
   test("number throws RunScopeCorrupt (not a string)", () => {
     expect(() => parseRunScope(42)).toThrow(RunScopeCorrupt);
-  });
-
-  test("RUN_SCOPE_PRE_SCOPING round-trips", () => {
-    expect(parseRunScope(RUN_SCOPE_PRE_SCOPING)).toBe("pre-scoping");
   });
 
   test("RUN_SCOPE_AD_HOC round-trips", () => {

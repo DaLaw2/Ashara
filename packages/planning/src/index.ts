@@ -4,7 +4,6 @@ export type {
   CoverageHold,
 } from "./domain/index.js";
 export {
-  createPendingWorkItem,
   startWorkItem,
   completeWorkItem,
   failWorkItem,
@@ -17,17 +16,6 @@ export {
   DependencyGraph,
   PlanningService,
 } from "./domain/index.js";
-
-export type {
-  StopReason,
-  TerminationPlanExhausted,
-  TerminationDecision,
-} from "./termination.js";
-
-export type {
-  EndpointCoverageGap,
-  RunSummary,
-} from "./run-summary.js";
 
 export type {
   WorkItemSpec,
@@ -43,27 +31,12 @@ export type { RawFailureContext } from "./failure-router.js";
 export { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 export {
-  computeCoverageGaps,
   reconcileCoverage,
   createCoverageRollupGuard,
-  isBlockingCoverageGap,
 } from "./coverage-reconciliation.js";
 
 export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
 export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "./bulk-plan.js";
-
-export {
-  assessProductObservation,
-  buildVisionGaps,
-  buildAcceptanceVerdict,
-  buildUnverifiedVerdict,
-  createGatewayAcceptanceLLM,
-} from "./acceptance.js";
-export type {
-  AcceptanceGap,
-  AcceptanceVerdict,
-  AcceptanceLLM,
-} from "./acceptance.js";
 
 export {
   classifyFailure,
@@ -75,13 +48,4 @@ export type {
   ContractRegistryLookup,
   FailureRecoveryDeps,
 } from "./lifecycle/index.js";
-export {
-  recoverFailedItem,
-  evaluate,
-  assembleRunSummaryItems,
-  buildRunSummary,
-  emitRunSummary,
-} from "./lifecycle/index.js";
-
-export { computeCompletionFigure } from "./completion-figure.js";
-export type { CompletionFigure } from "./completion-figure.js";
+export { recoverFailedItem } from "./lifecycle/index.js";

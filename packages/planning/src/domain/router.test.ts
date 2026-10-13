@@ -54,7 +54,7 @@ describe("LifecycleRouter cascade-completion with salvaged results", () => {
       title: "child-b",
       parentId,
       blockedReason: withSalvagedResult(
-        { source: "shutdown-reconciler", reason: "run terminated", previousStatus: "InProgress" },
+        { source: "api", note: "abandoned via API" },
         "completed",
         "task completed and verified successfully",
       ),
@@ -90,7 +90,7 @@ describe("LifecycleRouter cascade-completion with salvaged results", () => {
       status: "Abandoned",
       title: "child-b",
       parentId,
-      blockedReason: { source: "shutdown-reconciler", reason: "run terminated", previousStatus: "InProgress" },
+      blockedReason: { source: "api", note: "abandoned via API" },
     });
 
     const repo = buildInMemoryRepo([parent, childA, childB]);
@@ -120,7 +120,7 @@ describe("LifecycleRouter cascade-completion with salvaged results", () => {
       title: "child-b",
       parentId,
       blockedReason: withSalvagedResult(
-        { source: "shutdown-reconciler", reason: "run terminated", previousStatus: "InProgress" },
+        { source: "api", note: "abandoned via API" },
         "failed",
         "agent hit turn limit",
       ),

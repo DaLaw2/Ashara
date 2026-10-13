@@ -77,7 +77,6 @@ export interface GatewayConfig {
 export const KNOWN_LLM_SITES = [
   "agent-runner",
   "decomposition",
-  "acceptance",
   "stack-derivation",
   "alignment",
   "escalation",

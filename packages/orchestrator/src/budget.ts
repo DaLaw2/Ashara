@@ -18,8 +18,10 @@ export class BudgetTracker {
   }
 
   /**
-   * Seeds the counter from the durable run record at startup. A run whose
-   * process was killed mid-flight resumes its cap here; a fresh run adopts 0.
+   * Seeds the counter from the durable run record at startup. Nothing closes that
+   * record, so every restart resumes the recorded spend and only a database with
+   * no record adopts 0 — the cap is a lifetime total per database (ADR-073
+   * addendum 3).
    * Without this the counter started at 0 on every process start, so a crash
    * loop handed out the same budget once per restart.
    */
@@ -28,7 +30,7 @@ export class BudgetTracker {
     if (spendUsd > 0) {
       console.warn(
         `Budget resumed from the durable run record: $${spendUsd.toFixed(4)} of ` +
-          `$${this.config.budgetLimitUsd} already spent by this run`,
+          `$${this.config.budgetLimitUsd} already spent against this database's cap`,
       );
     }
   }
@@ -44,13 +46,13 @@ export class BudgetTracker {
   }
 
   /**
-   * Charges one dispatch against the run's cap. An UNKNOWN cost (`costUsd ===
+   * Charges one dispatch against the cap. An UNKNOWN cost (`costUsd ===
    * null` — the agent ran and its output never carried a total) is charged, not
    * skipped: the whole job of this counter is to stop a runaway, and a runaway
    * is exactly the shape that loses its own cost report. The charge is the best
    * available upper-bound estimate for the capability; when even that is zero we
-   * have no bound at all, so the run is charged out to the cap and stops rather
-   * than continuing to spend against a number known to be wrong.
+   * have no bound at all, so the counter is charged out to the cap and dispatch
+   * pauses rather than continuing to spend against a number known to be wrong.
    */
   accumulateCost(costInfo: TaskCostInfo, capability: string, completed: boolean): void {
     if (completed) this.completedTaskCount += 1;
@@ -81,7 +83,7 @@ export class BudgetTracker {
     const remaining = Math.max(0, this.config.budgetLimitUsd - this.cumulativeCostUsd);
     console.warn(
       `Agent run reported no cost (capability=${capability}) and no estimate exists to bound it; ` +
-        `charging the full remaining $${remaining.toFixed(4)} so the run stops instead of ` +
+        `charging the full remaining $${remaining.toFixed(4)} so dispatch pauses instead of ` +
         `spending against an unknown`,
     );
     return remaining;

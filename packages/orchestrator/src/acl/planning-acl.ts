@@ -18,15 +18,6 @@ export type { WorkItem } from "@ashara/planning";
 export type { WorkItemRepository } from "@ashara/planning";
 export type { CoverageHold } from "@ashara/planning";
 
-// Termination & run-summary types
-export type { RunSummary } from "@ashara/planning";
-export type { TerminationDecision, TerminationPlanExhausted, StopReason } from "@ashara/planning";
-export type { EndpointCoverageGap } from "@ashara/planning";
-export type { CompletionFigure } from "@ashara/planning";
-
-// Engine / LLM port types
-export type { AcceptanceLLM, AcceptanceVerdict, AcceptanceGap } from "@ashara/planning";
-
 // Failure / recovery types
 export type { FailureRouter, RawFailureContext } from "@ashara/planning";
 export type { ContractRegistryLookup, FailureRecoveryDeps } from "@ashara/planning";
@@ -38,27 +29,14 @@ export { PlanningService, DependencyGraph } from "@ashara/planning";
 
 // Work-item domain methods
 export {
-  createPendingWorkItem,
   startWorkItem,
   failWorkItem,
-  abandonWorkItem,
   requeueWorkItem,
   takeEvents,
 } from "@ashara/planning";
 
 // Coverage reconciliation
 export { createCoverageRollupGuard, reconcileCoverage } from "@ashara/planning";
-export { computeCoverageGaps, isBlockingCoverageGap } from "@ashara/planning";
 
 // Failure recovery
 export { recoverFailedItem } from "@ashara/planning";
-
-// Termination snapshot & evaluation
-export { assembleRunSummaryItems, evaluate } from "@ashara/planning";
-export { buildRunSummary, emitRunSummary } from "@ashara/planning";
-
-// Acceptance
-export { assessProductObservation, buildVisionGaps, buildAcceptanceVerdict, buildUnverifiedVerdict } from "@ashara/planning";
-
-// Completion figure
-export { computeCompletionFigure } from "@ashara/planning";

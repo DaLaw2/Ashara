@@ -2,7 +2,7 @@ import { describe, expect, test, vi, afterEach } from "vitest";
 import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseStoredBlockedReason } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import { createPendingWorkItem, startWorkItem, takeEvents } from "./acl/planning-acl.js";
+import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps } from "./types.js";
@@ -15,9 +15,18 @@ const RUN_SCOPE = "run-test-preemption";
 const ITEM_ID: WorkItemId = createWorkItemId();
 
 function freshPendingItem(): WorkItem {
-  const item = createPendingWorkItem("Task", "test-preempted-task", RUN_SCOPE);
-  item.id = ITEM_ID;
-  return item;
+  const now = new Date();
+  return {
+    id: ITEM_ID,
+    level: "Task",
+    status: "Pending",
+    title: "test-preempted-task",
+    runScope: RUN_SCOPE,
+    dispatchCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    events: [],
+  };
 }
 
 function freshAbandonedItem(opts?: { omitBlockedReason?: boolean }): WorkItem {
@@ -127,7 +136,6 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     failedApproachRepo,
     visionRepo,
     developmentService,
-    acceptanceAttempts: 0,
     runStateStore,
   } as unknown as CoreLoopDeps;
 

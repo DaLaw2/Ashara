@@ -7,9 +7,9 @@ import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 const TEST_DB_URL = "postgres://localhost:5432/test";
 const TEST_TOKEN = "test-token";
 
-// Finding (a), E2E Run 11: the enforcing per-run cap must reach
-// CoreLoopConfig.budgetLimitUsd from the owner's env, and the economy stop must
-// trip at that value. These tests pin both the plumbing (which env var wins) and
+// Finding (a), E2E Run 11: the enforcing spend cap must reach
+// CoreLoopConfig.budgetLimitUsd from the owner's env, and budget exhaustion must
+// register at that value (dispatch pauses at the cap). These tests pin both the plumbing (which env var wins) and
 // the downstream behavior (BudgetTracker.isExhausted at the env cap).
 describe("loadServerConfig — budget cap plumbing (finding a)", () => {
   const saved: Record<string, string | undefined> = {};
@@ -61,17 +61,17 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/not a positive finite number/);
   });
 
-  test("the economy stop trips at the env cap (ASHARA_BUDGET_TOTAL=1)", () => {
+  test("the budget is exhausted at the env cap (ASHARA_BUDGET_TOTAL=1)", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
     expect(config.coreLoop.budgetLimitUsd).toBe(1);
 
     const budget = new BudgetTracker(config.coreLoop);
-    // Below the cap: economy stop must NOT trip.
+    // Below the cap: the budget must NOT be exhausted.
     budget.accumulateCost(measured(0.9293), "Strong", true);
     expect(budget.isExhausted()).toBe(false);
 
-    // The Run-11 over-run shape: crossing $1 must trip the economy stop.
+    // The Run-11 over-run shape: crossing $1 must exhaust the budget.
     budget.accumulateCost(measured(0.1512), "Strong", true);
     expect(budget.totalCostUsd).toBeCloseTo(1.0805);
     expect(budget.isExhausted()).toBe(true);
@@ -90,7 +90,7 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     expect(budget.totalCostUsd).toBeGreaterThan(0);
   });
 
-  test("repeated unknown costs still reach the cap and stop the run", () => {
+  test("repeated unknown costs still reach the cap and exhaust the budget", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const budget = new BudgetTracker(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop);
 

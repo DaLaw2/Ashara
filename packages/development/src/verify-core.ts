@@ -37,8 +37,7 @@ import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
 /**
  * Three-state verification outcome. `"unverified"` is the honest result when
  * zero executable checks existed — neither pass nor fail, because nothing was
- * tested. The concept aligns with the acceptance system's existing `unverified`
- * verdict (AcceptanceOutcome in planning/acceptance.ts).
+ * tested.
  */
 export type VerifyVerdict = "passed" | "failed" | "unverified";
 

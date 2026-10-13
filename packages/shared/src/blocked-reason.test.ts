@@ -97,34 +97,6 @@ describe("source variant round-trips", () => {
     }
   });
 
-  test("shutdown-reconciler variant round-trips", () => {
-    const input = {
-      source: "shutdown-reconciler",
-      reason: "run terminated",
-      previousStatus: "InProgress",
-    };
-    const result = parseStoredBlockedReason(input);
-    expect(result).toBeDefined();
-    expect(result!.source).toBe("shutdown-reconciler");
-    if (result!.source === "shutdown-reconciler") {
-      expect(result!.previousStatus).toBe("InProgress");
-    }
-  });
-
-  test("startup-reconciler variant round-trips", () => {
-    const input = {
-      source: "startup-reconciler",
-      reason: "orphaned by a previous run",
-      previousScope: "run-dead-beef",
-    };
-    const result = parseStoredBlockedReason(input);
-    expect(result).toBeDefined();
-    expect(result!.source).toBe("startup-reconciler");
-    if (result!.source === "startup-reconciler") {
-      expect(result!.previousScope).toBe("run-dead-beef");
-    }
-  });
-
   test("api variant round-trips and preserves user-supplied fields via passthrough", () => {
     const input = {
       source: "api",
@@ -157,12 +129,11 @@ describe("substitutedBy on all variants", () => {
 describe("withSalvagedResult helper", () => {
   test("augments a variant with salvaged fields, preserving source", () => {
     const original: StoredBlockedReason = {
-      source: "shutdown-reconciler",
-      reason: "run terminated",
-      previousStatus: "InProgress",
+      source: "orchestrator_error",
+      reason: "lifecycle route threw",
     };
     const augmented = withSalvagedResult(original, "completed", "task completed");
-    expect(augmented.source).toBe("shutdown-reconciler");
+    expect(augmented.source).toBe("orchestrator_error");
     expect(augmented.salvagedOutcome).toBe("completed");
     expect(augmented.salvagedDetail).toBe("task completed");
     expect(typeof augmented.salvagedAt).toBe("string");
@@ -199,22 +170,6 @@ describe("withSalvagedResult helper", () => {
 describe("storedBlockedReasonSchema", () => {
   test("replan variant rejects missing replanContext", () => {
     const result = storedBlockedReasonSchema.safeParse({ source: "replan" });
-    expect(result.success).toBe(false);
-  });
-
-  test("shutdown-reconciler rejects missing previousStatus", () => {
-    const result = storedBlockedReasonSchema.safeParse({
-      source: "shutdown-reconciler",
-      reason: "run terminated",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  test("startup-reconciler rejects missing previousScope", () => {
-    const result = storedBlockedReasonSchema.safeParse({
-      source: "startup-reconciler",
-      reason: "orphaned",
-    });
     expect(result.success).toBe(false);
   });
 });

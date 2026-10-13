@@ -72,7 +72,7 @@ export interface DecompositionConfig {
 }
 
 export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
-    maxTasksPerEpic: 15,   // was 5 -- budget is the real limit (economy termination)
+    maxTasksPerEpic: 15,   // was 5 -- budget is the real limit
 };
 
 export const TaskOutputSchema = z.object({

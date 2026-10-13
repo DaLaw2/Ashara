@@ -3,28 +3,22 @@ import type { RunStateRepository } from "@ashara/db";
 import type { RunState } from "@ashara/shared";
 
 /**
- * The durable half of every per-run cap counter (Discipline B). Spend and
- * acceptance attempts are the same kind of thing — a bound
- * that only means something if it survives a crash-restart of the run it bounds
- * — so they share ONE record and ONE open/close protocol rather than each
- * growing its own persistence.
+ * The durable half of the budget's cap counter (Discipline B): a bound only means
+ * something if it survives a crash-restart of the process it bounds.
  */
 export type RunStateStore = Pick<RunStateRepository, "load" | "save">;
 
 export interface RunCounters {
   readonly spendUsd: number;
-  readonly acceptanceAttempts: number;
 }
 
 /**
- * Adopts the in-flight run, or starts a new one.
+ * Adopts the existing run record, or starts one when the database has none.
  *
- * A run ends when the runner stops on its own termination verdict, and that
- * closes the record — so a *relaunch* after a finished run correctly starts at
- * zero, which is the per-run semantic the owner's ledger-archive decision
- * encodes. An OPEN record means the previous process died mid-run: its spend is
- * adopted, because handing the same $1 out again is how a "per-run cap" becomes
- * unbounded across a crash loop.
+ * Nothing closes a run, so a restart always adopts the recorded spend: the cap is
+ * a lifetime total per database (ADR-073 addendum 3, interim until story
+ * c-cost-ledger). The owner unblocks a spent cap by raising
+ * `ASHARA_BUDGET_LIMIT_USD`.
  *
  * Deliberately NOT fail-soft: a store error propagates. Dispatching against an
  * unknown budget baseline is dispatching with no cap at all, so the cycle fails
@@ -33,11 +27,10 @@ export interface RunCounters {
 export async function openRun(store: RunStateStore): Promise<RunState> {
   const existing = await store.load();
 
-  if (existing && !existing.closed) {
+  if (existing) {
     console.warn(
       `[run-state] resuming run ${existing.runId} opened at ${existing.openedAt}: ` +
-        `$${existing.spendUsd.toFixed(4)} already spent, acceptanceAttempts=${existing.acceptanceAttempts}. ` +
-        `The previous process did not close this run.`,
+        `$${existing.spendUsd.toFixed(4)} already spent.`,
     );
     return existing;
   }
@@ -45,12 +38,10 @@ export async function openRun(store: RunStateStore): Promise<RunState> {
   const opened: RunState = {
     runId: randomUUID(),
     openedAt: new Date().toISOString(),
-    closed: false,
     spendUsd: 0,
-    acceptanceAttempts: 0,
   };
   await store.save(opened);
-  console.log(`[run-state] opened run ${opened.runId}; per-run counters start at zero`);
+  console.log(`[run-state] opened run ${opened.runId}; spend starts at zero`);
   return opened;
 }
 
@@ -77,25 +68,4 @@ export async function persistRun(
     );
   }
   return next;
-}
-
-/**
- * Closes the run so the next process starts fresh. Called ONLY when the runner
- * stopped on its own termination verdict — an operator SIGTERM leaves the record
- * open on purpose, so a restart resumes the same cap.
- */
-export async function closeRun(store: RunStateStore): Promise<void> {
-  try {
-    const state = await store.load();
-    if (!state || state.closed) return;
-    await store.save({ ...state, closed: true });
-    console.log(
-      `[run-state] closed run ${state.runId} at $${state.spendUsd.toFixed(4)}; the next run starts at zero`,
-    );
-  } catch (e) {
-    console.warn(
-      "[run-state] failed to close the run record; the next process will resume this run's counters instead of starting fresh:",
-      e,
-    );
-  }
 }

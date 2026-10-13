@@ -21,13 +21,11 @@ import { WORK_ITEM_STATUSES } from "./enums.js";
  * parks and then decides against can never leave the machine (HTTP PATCH to
  * Abandoned threw InvalidStatusTransition).
  *
- * `Pending -> Abandoned` and `InProgress -> Abandoned` exist so that a run
- * termination can move EVERY non-terminal item to a terminal status in one hop.
- * Without them, Pending had no path to any terminal status at all, and
- * InProgress required two hops (-> Failed -> Abandoned). Runs 39, 40 and 41
- * each terminated leaving non-terminal items behind because the machine had no
- * edge to close them on; the manual cleanup that followed is the symptom this
- * fixes.
+ * `Pending -> Abandoned` and `InProgress -> Abandoned` give every non-terminal
+ * status a one-hop path to a terminal one. Without them, Pending had no path to
+ * any terminal status at all, and InProgress required two hops (-> Failed ->
+ * Abandoned). Their first traverser, the run-end sweep, was deleted by
+ * t-cut-w7; the owner's PATCH /work-items/:id/status route remains one.
  *
  * `Completed -> Pending` has no traverser: its only one, reopenWorkItem, was
  * removed, and unblock/replan/requeue each pin a different from-status. The edge

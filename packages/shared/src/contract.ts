@@ -49,9 +49,9 @@ const EndpointSchema = z
      * A DURABLE scope verdict (ADR-032 §2, r12-t1). Set true when coverage
      * reconciliation — the only pass that holds the vision+plan corpus — judged this
      * a spec-derivation invention absent from vision and plan (Run-11's
-     * logout/refresh/me class). Persisting it lets the corpus-LESS readers (the
-     * rollup guard, the termination completeness check) treat the endpoint as
-     * informational-not-blocking WITHOUT re-deriving scope they cannot compute.
+     * logout/refresh/me class). Persisting it lets the corpus-LESS reader (the
+     * rollup guard) treat the endpoint as informational-not-blocking WITHOUT
+     * re-deriving scope it cannot compute.
      * Optional and backward-compatible: absent on every pre-r12 row, which parses as
      * "not yet judged" (still a blocking gap until reconciliation marks it).
      */

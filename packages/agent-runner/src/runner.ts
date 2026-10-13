@@ -265,10 +265,6 @@ export function buildDynamicSystemPrompt(brief: AgentBrief): string {
         sections.push(`## Prior Knowledge & Lessons\n${brief.knowledgeContext}`);
     }
 
-    if (brief.artifactContext) {
-        sections.push(`## Current Project State\n${brief.artifactContext}`);
-    }
-
     if (brief.contractSlice) {
         sections.push(brief.contractSlice);
     }

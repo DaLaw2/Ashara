@@ -153,7 +153,7 @@ export interface ExecutionResult {
    * Whether the agent subprocess was actually launched for this dispatch. The
    * budget reads it to tell "no agent ran, therefore $0" apart from "an agent ran
    * and we cannot tell what it cost" — the second must never be charged as $0
-   * (Discipline A: an evidence default in a number that gates a stop reason).
+   * (Discipline A: an evidence default in a number that gates dispatch).
    */
   readonly agentInvoked: boolean;
 }
@@ -406,7 +406,6 @@ export class DevelopmentService {
 
     const replanContext = extractReplanContext(task.id, task.blockedReason);
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
-    const artifactContext = typeof taskSpec?.artifactContext === "string" ? taskSpec.artifactContext : undefined;
 
     const contractSlice = contract ? await this.renderContractSlice(contract, task.id) : undefined;
 
@@ -452,7 +451,6 @@ export class DevelopmentService {
         contextMap,
         ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
         ...(contractSlice !== undefined ? { contractSlice } : {}),
-        ...(artifactContext !== undefined ? { artifactContext } : {}),
       },
       "development:buildBrief",
     );

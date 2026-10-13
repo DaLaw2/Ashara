@@ -26,7 +26,6 @@ export { createDomainEvent } from "./types.js";
 
 export type {
   ProjectKnowledge,
-  ProjectKnowledgeNode,
   ContractBody,
   ContractInput,
   ContractDelta,
@@ -55,7 +54,6 @@ export { createAgentBrief, parseAgentBrief } from "./agent-brief.js";
 
 export { loadSkipDirs } from "./gitignore.js";
 
-export type { EndpointProbe, ProductObservation } from "./observation.js";
 
 export type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
 export {
@@ -86,7 +84,7 @@ export { blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } f
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 export { parseStoredSuccessCriteria } from "./success-criteria.js";
 
-export { RUN_SCOPE_PRE_SCOPING, RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
+export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 
 export type { ContractRepository } from "./repository-ports.js";
 

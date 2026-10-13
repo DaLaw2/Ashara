@@ -38,8 +38,9 @@ export interface DependencyResolutionResult {
   readonly resolution: DependencyResolution;
   /**
    * Root-cause Abandoned dependency ids that make this item unsatisfiable (direct or
-   * transitive). Empty unless `resolution === "blocked"`. This is the derivable signal
-   * mig-phase-7 consumes to detect "transitively blocked by an Abandoned dependency".
+   * transitive). Empty unless `resolution === "blocked"`. It carries the "blocked"
+   * resolution up the dependency chain: a dependent inherits its unsatisfiable
+   * dependency's root causes, so the resolution stays "blocked" transitively.
    */
   readonly blockedBy: readonly string[];
 }
@@ -93,9 +94,8 @@ export class DependencyGraph {
   /**
    * Resolves every node's dependency state in one memoized pass. The returned map
    * contains entries only for items that appear in at least one dependency edge —
-   * items with no edges are absent. `resolvePlanDependencies` (gate.ts) wraps this
-   * in a total resolver function that returns `NO_DEPENDENCIES` for absent items;
-   * direct callers (e.g. `isMet`) must handle absence themselves. Traversal is safe
+   * items with no edges are absent, so callers (e.g. `isMet`) must handle absence
+   * themselves. Traversal is safe
    * because addEdge rejects cycles.
    */
   resolveDependencies(ctx: DependencyContext): Map<string, DependencyResolutionResult> {

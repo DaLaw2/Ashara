@@ -17,9 +17,9 @@ class InvalidBudgetLimit extends Error {
     super(
       raw === undefined
         ? "neither ASHARA_BUDGET_LIMIT_USD nor ASHARA_BUDGET_TOTAL is set; every run dispatches paid agents, " +
-            "so the per-run cap in USD must be set explicitly"
+            "so the spend cap in USD must be set explicitly"
         : `ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL="${raw}" is not a positive finite number; ` +
-            "set it to the per-run cap in USD",
+            "set it to the spend cap in USD",
     );
     this.name = "InvalidBudgetLimit";
   }
@@ -49,11 +49,11 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const asharaSourceDir = process.env["ASHARA_SOURCE_DIR"] ?? ".";
   const maxBatchSize = parseIntOr(process.env["MAX_BATCH_SIZE"], 2);
   // Finding (a), E2E Run 11: the orchestrator's reactive budget is the only
-  // ENFORCING per-run cap, but it read ASHARA_BUDGET_LIMIT_USD only — a var the
+  // ENFORCING spend cap, but it read ASHARA_BUDGET_LIMIT_USD only — a var the
   // run never set — so it silently defaulted to $5 while the owner's $1 cap
   // lived in ASHARA_BUDGET_TOTAL (the gateway's blind per-call cap). The run
   // over-ran to $1.08. Fall back to ASHARA_BUDGET_TOTAL so a single owner-set
-  // per-run number reaches CoreLoopConfig.budgetLimitUsd, with the dedicated
+  // cap reaches CoreLoopConfig.budgetLimitUsd, with the dedicated
   // ASHARA_BUDGET_LIMIT_USD still winning when both are set. Blank values are
   // treated as unset so an empty override never masks the fallback.
   const rawBudgetLimit = nonEmptyEnv("ASHARA_BUDGET_LIMIT_USD") ?? nonEmptyEnv("ASHARA_BUDGET_TOTAL");
@@ -62,7 +62,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
 
   // Coverage reconciliation is ENFORCING by default (mig9-t2, ADR-032 §2). The
   // rollback: ASHARA_COVERAGE_ENFORCING=0 (or "false") switches to observe-only —
-  // gaps are logged and reported but never block a rollup or completeness.
+  // gaps are logged and reported but never block a rollup.
   const coverageEnforcing = !(
     process.env["ASHARA_COVERAGE_ENFORCING"] === "0" ||
     process.env["ASHARA_COVERAGE_ENFORCING"]?.toLowerCase() === "false"

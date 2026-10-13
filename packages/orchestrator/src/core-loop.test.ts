@@ -1,7 +1,6 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId } from "@ashara/shared";
-import { createPendingWorkItem } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
@@ -10,7 +9,7 @@ import { CoreLoop } from "./core-loop.js";
 // ---------------------------------------------------------------------------
 // Mock heavy orchestrator modules that CoreLoop.runCycle exercises. We replace
 // them with stubs so the test drives only the batch-dispatch parallelism, not
-// the full decomposition/termination pipeline.
+// reconciliation or the planning gate.
 // ---------------------------------------------------------------------------
 
 const mockProcessTask = vi.fn<(
@@ -43,13 +42,6 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./termination-snapshot.js", () => ({
-  evaluateRunTermination: async () => ({
-    decision: { action: "continue" as const },
-    summary: null,
-  }),
-}));
-
 vi.mock("./post-cycle.js", () => ({
   reconcileCoverageGaps: async () => {},
 }));
@@ -58,7 +50,6 @@ vi.mock("./run-state.js", () => ({
   openRun: async () => ({
     runId: "run-parallel-test",
     spendUsd: 0,
-    acceptanceAttempts: 0,
   }),
   persistRun: async (_store: unknown, state: unknown) => state,
 }));
@@ -69,12 +60,23 @@ vi.mock("./run-state.js", () => ({
 
 const TASK_IDS: [WorkItemId, WorkItemId] = [createWorkItemId(), createWorkItemId()];
 
+function pendingTask(id: WorkItemId, title: string): WorkItem {
+  const now = new Date();
+  return {
+    id,
+    level: "Task",
+    status: "Pending",
+    title,
+    runScope: "run-parallel-test",
+    dispatchCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    events: [],
+  };
+}
+
 function twoTasks(): WorkItem[] {
-  const a = createPendingWorkItem("Task", "task-alpha", "run-parallel-test");
-  a.id = TASK_IDS[0];
-  const b = createPendingWorkItem("Task", "task-beta", "run-parallel-test");
-  b.id = TASK_IDS[1];
-  return [a, b];
+  return [pendingTask(TASK_IDS[0], "task-alpha"), pendingTask(TASK_IDS[1], "task-beta")];
 }
 
 function notExercised(label: string): () => never {
@@ -112,7 +114,6 @@ function buildDeps(): CoreLoopDeps {
     failedApproachRepo,
     visionRepo,
     developmentService: {},
-    acceptanceAttempts: 0,
     runStateStore,
     withPlanningTransaction: async (fn: (repos: unknown) => Promise<unknown>) => fn({}),
     failureRouter: {},

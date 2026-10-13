@@ -63,22 +63,6 @@ const failureRouterSchema = z.object({
   ...augmentationFields,
 });
 
-/** Shutdown-reconciler run-end sweep (shutdown-reconciler.ts). */
-const shutdownReconcilerSchema = z.object({
-  source: z.literal("shutdown-reconciler"),
-  reason: z.string(),
-  previousStatus: z.string(),
-  ...augmentationFields,
-});
-
-/** Startup-reconciler orphan cleanup (startup-reconciler.ts). */
-const startupReconcilerSchema = z.object({
-  source: z.literal("startup-reconciler"),
-  reason: z.string(),
-  previousScope: z.string(),
-  ...augmentationFields,
-});
-
 /**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
@@ -95,8 +79,6 @@ export const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   orchestratorErrorSchema,
   replanSchema,
   failureRouterSchema,
-  shutdownReconcilerSchema,
-  startupReconcilerSchema,
   apiSchema,
 ]);
 
@@ -137,8 +119,8 @@ export function withSalvagedResult(
 
 /**
  * Deliberately widens a typed StoredBlockedReason to Record<string, unknown>.
- * The original shape IS known (StoredBlockedReason), but three consumers need
- * the wide form (AbandonedItem.raw, RawFailureContext.raw). The exhaustive
+ * The original shape IS known (StoredBlockedReason), but RawFailureContext.raw
+ * needs the wide form. The exhaustive
  * switch ensures a new `source` variant is a compile error HERE, not a silent
  * pass-through.
  */
@@ -148,8 +130,6 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "orchestrator_error":
     case "replan":
     case "failure_router":
-    case "shutdown-reconciler":
-    case "startup-reconciler":
     case "api":
       return { ...reason };
   }

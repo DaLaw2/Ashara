@@ -70,7 +70,7 @@ export async function executeTask(
       await routeAsSuccess(deps, task);
     } catch (e) {
       // The item's status changed while the agent was executing (e.g., preempted
-      // to Abandoned by the shutdown reconciler or HTTP PATCH). The agent's work
+      // to Abandoned by HTTP PATCH). The agent's work
       // succeeded; processTask reloads the item and salvages the result based on
       // its actual status. Any non-preemption error must still propagate.
       if (!(e instanceof InvalidStatusTransition)) throw e;
@@ -256,8 +256,8 @@ export async function processTask(
   // crashes, its output is discarded, or any downstream step throws — the exact
   // Run-9 hole where a discarded output left the retry bound reading zero forever.
   // This is the ONE place a dispatch is counted; every retry-bound consumer
-  // (FailureRouter recovery, startup reconciler, termination snapshot) reads the
-  // resulting dispatch_count off the reloaded WorkItem.
+  // (FailureRouter recovery, startup reconciler) reads the resulting
+  // dispatch_count off the reloaded WorkItem.
   await deps.workItemRepo.incrementDispatchCount(task.id);
 
   const {
@@ -280,7 +280,7 @@ export async function processTask(
   // writer against the same DB row and has been removed.
 
   // Salvage check for completed results: when the agent succeeded but the item
-  // was preempted to Abandoned (by the shutdown reconciler or HTTP PATCH) during
+  // was preempted to Abandoned (by HTTP PATCH) during
   // execution, executeTask catches the InvalidStatusTransition from routeAsSuccess
   // and returns a completed result. The result's value — "the work is done" — must
   // be durably recorded on the Abandoned item so cascade-completion (isSettled)

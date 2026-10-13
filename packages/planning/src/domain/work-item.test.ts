@@ -3,7 +3,6 @@ import type { StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import {
   TERMINAL_STATUSES,
   RUN_SCOPE_AD_HOC,
-  RUN_SCOPE_PRE_SCOPING,
   canTransitionTo,
   InvalidStatusTransition,
 } from "@ashara/shared";
@@ -35,7 +34,7 @@ const ALL_STATUSES = Object.values(STATUS_BY_NAME);
 const FAIL_REASON: StoredBlockedReason = { source: "task_failed", reason: "task_failed" };
 const BLOCK_REASON: StoredBlockedReason = { source: "api", reason: "waiting on dependency" };
 const ABANDON_REASON: StoredBlockedReason = { source: "failure_router", reason: "unrecoverable" };
-const SHUTDOWN_REASON: StoredBlockedReason = { source: "shutdown-reconciler", reason: "run terminated", previousStatus: "Pending" };
+const OWNER_ABANDON_REASON: StoredBlockedReason = { source: "api", note: "abandoned via API" };
 
 function seedFailed() {
   const item = createPendingWorkItem("Task", "leaf-task", "test-run");
@@ -64,11 +63,11 @@ describe("canTransitionTo — Failed recovery transitions", () => {
     expect(canTransitionTo("InProgress", "Pending")).toBe(true);
   });
 
-  test("Pending -> Abandoned is legal (run-end terminalization)", () => {
+  test("Pending -> Abandoned is legal (owner abandon via API)", () => {
     expect(canTransitionTo("Pending", "Abandoned")).toBe(true);
   });
 
-  test("InProgress -> Abandoned is legal (run-end terminalization)", () => {
+  test("InProgress -> Abandoned is legal (owner abandon via API)", () => {
     expect(canTransitionTo("InProgress", "Abandoned")).toBe(true);
   });
 
@@ -221,10 +220,10 @@ describe("abandonWorkItem", () => {
     expect(events[0]?.payload.work_item_id).toBe(item.id);
   });
 
-  test("moves a Pending item directly to Abandoned (run-end terminalization)", () => {
+  test("moves a Pending item directly to Abandoned (owner abandon via API)", () => {
     const item = createPendingWorkItem("Task", "leaf-task", "test-run");
 
-    abandonWorkItem(item, SHUTDOWN_REASON);
+    abandonWorkItem(item, OWNER_ABANDON_REASON);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Abandoned");
@@ -232,12 +231,12 @@ describe("abandonWorkItem", () => {
     expect(events[0]?.eventType).toBe("work_item.abandoned");
   });
 
-  test("moves an InProgress item directly to Abandoned (run-end terminalization)", () => {
+  test("moves an InProgress item directly to Abandoned (owner abandon via API)", () => {
     const item = createPendingWorkItem("Task", "leaf-task", "test-run");
     startWorkItem(item);
     takeEvents(item);
 
-    abandonWorkItem(item, SHUTDOWN_REASON);
+    abandonWorkItem(item, OWNER_ABANDON_REASON);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Abandoned");
@@ -292,6 +291,5 @@ describe("createPendingWorkItem stamps the caller-supplied runScope", () => {
   test("ad-hoc scope is preserved, not collapsed to pre-scoping", () => {
     const item = createPendingWorkItem("Task", "api-created", RUN_SCOPE_AD_HOC);
     expect(item.runScope).toBe(RUN_SCOPE_AD_HOC);
-    expect(item.runScope).not.toBe(RUN_SCOPE_PRE_SCOPING);
   });
 });
