@@ -21,6 +21,7 @@ export { latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from
 export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
+export { listOpenAnswers, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
@@ -35,6 +36,7 @@ export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { NewLlmCall } from "./repositories/llm-call.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
+export { CheckDisputeRepository } from "./repositories/check-dispute.js";
 export {
   MIGRATIONS_DIR,
   MigrationDriftError,

@@ -10,7 +10,7 @@ import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
-import type { CheckDefinition, CheckDefinitionPort } from "./check-definition.js";
+import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
 import type { CheckRunReport, TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
@@ -507,16 +507,25 @@ describe("build_environment", () => {
 });
 
 describe("define_check", () => {
-  function recorder() {
+  /** Z0's side as a fake: last definition of a name wins; every red run reports `redRun`'s result. */
+  function recorder(redRun: (check: CheckDefinition) => CheckRedRunPreview = (check) => ({
+    kind: "ran",
+    run: { name: check.name, command: check.command, exitCode: 1, timedOut: false, output: "no greeting" },
+    timeoutSeconds: 60,
+    rejection: null,
+  })) {
     const defined: CheckDefinition[] = [];
+    const timeouts: number[] = [];
     const checks: CheckDefinitionPort = {
-      define(check) {
-        if (defined.some((d) => d.name === check.name)) return { kind: "refused", reason: `a check named ${check.name} is already defined` };
-        defined.push(check);
-        return { kind: "recorded", defined: defined.length };
+      async define(check, timeoutSeconds) {
+        timeouts.push(timeoutSeconds);
+        const earlier = defined.findIndex((d) => d.name === check.name);
+        if (earlier !== -1) defined[earlier] = check;
+        else defined.push(check);
+        return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check) };
       },
     };
-    return { checks, defined };
+    return { checks, defined, timeouts };
   }
 
   it("is offered to check work only; implementation and environment attempts never see it", async () => {
@@ -533,22 +542,78 @@ describe("define_check", () => {
     }
   });
 
-  it("records each check of a check attempt and tells the model a duplicate name is refused", async () => {
+  it("red-runs each check at once and shows its output; a redefinition replaces the check of that name", async () => {
     const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "greets", command: "names=(a b); grep -q hello greet.txt" } }]),
       () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt && cat greet.txt" } }]),
-      () => turn([{ name: "define_check", input: { name: "greets", command: "true" } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "One check." } }]),
     ]);
-    const { checks, defined } = recorder();
+    const { checks, defined, timeouts } = recorder((check) =>
+      check.command.includes("(")
+        ? {
+            kind: "ran",
+            run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: 'sh: 1: Syntax error: "(" unexpected' },
+            timeoutSeconds: 60,
+            rejection: null,
+          }
+        : {
+            kind: "ran",
+            run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: "grep: greet.txt: No such file or directory" },
+            timeoutSeconds: 60,
+            rejection: null,
+          },
+    );
 
-    const outcome = await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    const outcome = await runAttempt({ ...assignment({ perCommandTimeoutSeconds: 60 }), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
 
     expect(outcome).toMatchObject({ kind: "finished", status: "done" });
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("define_check");
     expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("build_environment");
     expect(requests[0]?.system).toContain("Every check must FAIL on the project as it is now");
+    expect(timeouts).toEqual([60, 60]);
+    const [first] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(first).toMatchObject({ value: expect.stringContaining('Defined check "greets" (1 defined so far)') });
+    expect(first).toMatchObject({ value: expect.stringContaining('exit code: 2') });
+    expect(first).toMatchObject({ value: expect.stringContaining('Syntax error: "(" unexpected') });
+    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({ value: expect.stringContaining('Replaced check "greets" (1 defined so far)') });
     expect(defined).toEqual([{ name: "greets", command: "grep -q hello greet.txt && cat greet.txt" }]);
-    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("already defined") });
+  });
+
+  it("tells the author when the red run at finish would reject the check, as a tool error", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "vacuous", command: "echo fine" } }]),
+      () => turn([{ name: "define_check", input: { name: "placed", command: "sh checks/a.sh" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Two checks." } }]),
+    ]);
+    const { checks } = recorder((check) =>
+      check.name === "vacuous"
+        ? {
+            kind: "ran",
+            run: { name: check.name, command: check.command, exitCode: 0, timedOut: false, output: "fine" },
+            timeoutSeconds: 60,
+            rejection: "it already passes on main",
+          }
+        : { kind: "files_refused", detail: "check files overlap the environment's owned paths [environment]: environment/x" },
+    );
+
+    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({
+      type: "error-text",
+      value: expect.stringContaining("WOULD BE REJECTED at finish: it already passes on main"),
+    });
+    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({
+      type: "error-text",
+      value: expect.stringContaining("It could not be red-run: check files overlap"),
+    });
+  });
+
+  it("states the runner exactly to the check author: sh -c from the repository root, in the environment image", () => {
+    const prompt = buildSystemPrompt(assignment().brief, "check");
+    expect(prompt).toContain("`sh -c '<command>'`: POSIX sh, not bash");
+    expect(prompt).toContain("from the repository root of a fresh copy of the project, inside the project environment's image, with no network");
+    expect(prompt).toContain("A check's files must be");
+    expect(prompt).toContain("define it again under the same name");
   });
 
   it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {
@@ -563,6 +628,7 @@ describe("run_checks", () => {
   function taskChecks(report: CheckRunReport) {
     const timeouts: number[] = [];
     const port: TaskCheckRunPort = {
+      checkNames: report.kind === "ran" ? report.runs.map((run) => run.name) : [],
       run: async (timeoutSeconds) => {
         timeouts.push(timeoutSeconds);
         return report;
@@ -612,7 +678,7 @@ describe("run_checks", () => {
     expect(passing.timeouts).toEqual([]);
     expect(toolResultsOf(second.requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("Invalid arguments for run_checks") });
 
-    const checks: CheckDefinitionPort = { define: () => ({ kind: "recorded", defined: 1 }) };
+    const checks: CheckDefinitionPort = { define: async () => ({ kind: "refused", reason: "unused" }) };
     await expect(
       runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
@@ -621,6 +687,38 @@ describe("run_checks", () => {
     await expect(
       runAttempt({ ...assignment(), workKind: "environment" }, deps(scriptedLlm([]).llm, fakeCell().cell, { environment, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
+  });
+
+  it("dispute_check ends the attempt as disputed with the reason and the last run_checks output", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "dispute_check", input: { name: "nope", reason: "x" } }]),
+      () => turn([{ name: "run_checks", input: {} }]),
+      () => turn([{ name: "dispute_check", input: { name: "lists", reason: "the check uses bash syntax under sh" } }]),
+    ]);
+    const { port } = taskChecks({
+      kind: "ran",
+      runs: [{ name: "lists", command: "[[ -f x ]]", exitCode: 2, timedOut: false, output: "sh: [[: not found" }],
+    });
+    const { deps: d, records } = deps(llm, fakeCell().cell, { taskChecks: port });
+
+    const outcome = await runAttempt(assignment(), d);
+
+    expect(Object.keys(requests[0]?.tools ?? {})).toContain("dispute_check");
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Its checks are: "lists"') });
+    expect(outcome).toMatchObject({ kind: "disputed", checkName: "lists", reason: "the check uses bash syntax under sh", turnsUsed: 3 });
+    expect(outcome.kind === "disputed" ? outcome.evidence : null).toContain("sh: [[: not found");
+    expect(records.at(-1)).toMatchObject({ kind: "outcome", outcome: { kind: "disputed", checkName: "lists" } });
+  });
+
+  it("dispute_check is offered only to implementation work that runs stored checks", async () => {
+    const { llm, requests } = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done." } }])]);
+    await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+    expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("dispute_check");
+
+    const { port } = taskChecks({ kind: "ran", runs: [] });
+    const legacy = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done." } }])]);
+    await runAttempt({ ...assignment(), workKind: null }, deps(legacy.llm, fakeCell().cell, { taskChecks: port }).deps);
+    expect(Object.keys(legacy.requests[0]?.tools ?? {})).not.toContain("dispute_check");
   });
 });
 

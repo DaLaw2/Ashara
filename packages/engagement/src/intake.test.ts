@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
@@ -46,6 +47,45 @@ describe("TenderIntake failure accounting", () => {
     expect(outcome?.kind).toBe("failed");
     expect(recorded).toHaveLength(1);
     expect(recorded[0]).toMatch(/non-Error thrown: Object \(not serializable: .*circular/i);
+  });
+
+  test("a model that never validates is asked 2 times per tier on 2 tiers before the tender attempt fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const capabilities: string[] = [];
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          capabilities.push(request.capability);
+          throw new SchemaValidationError(["scripted failure"]);
+        },
+      }),
+    };
+    const store: IntakeStore = {
+      openTenders: async () => [
+        {
+          id: "tender-ladder",
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000004"),
+          body: "A booking page.",
+          intakeAttempts: 0,
+          intakeLastError: null,
+        },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake: async () => {
+        throw new Error("recordIntake must not be reached");
+      },
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => 1,
+      closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
+    };
+
+    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+
+    expect(outcome?.kind).toBe("failed");
+    expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
   });
 });
 

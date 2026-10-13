@@ -122,10 +122,13 @@ function buildDeps(
     failureRouter: { route: notExercised("route") },
     clientStops,
     liaisonIntake,
+    liaisonAnswers: { runPending: async () => [] },
     rosterDerivation,
     firstPlanning,
     planReports,
     stackChoices,
+    checkDisputes: { record: notExercised("checkDisputes") },
+    disputeReports: { blockOnDisputes: notExercised("disputeReports") },
   };
 }
 

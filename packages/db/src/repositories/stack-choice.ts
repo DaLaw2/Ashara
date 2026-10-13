@@ -129,7 +129,6 @@ export async function recordStackChoice(db: Database, write: StackChoiceWrite): 
       inferences: write.inferences,
       scopeBoundaries: current.scopeBoundaries,
       confirmedDirections: current.confirmedDirections,
-      userAnswers: current.userAnswers,
       openQuestions: current.openQuestions,
       changeReason: write.changeReason,
     });

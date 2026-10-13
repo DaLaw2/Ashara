@@ -239,7 +239,6 @@ describe("VisionRepository", () => {
       inferences: { key: "val" },
       scopeBoundaries: ["boundary1"],
       confirmedDirections: ["direction1"],
-      userAnswers: [{ q: "question", a: "answer" }],
       openQuestions: ["what else?"],
       changeReason: "initial test creation",
     };

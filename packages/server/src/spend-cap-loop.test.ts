@@ -110,9 +110,12 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     clientStops: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },
+    liaisonAnswers: { runPending: async () => [] },
     rosterDerivation: { runPending: async () => [] },
     firstPlanning: { runPending: async () => [] },
     planReports: { runPending: async () => [] },
+    checkDisputes: { record: notExercised("checkDisputes") },
+    disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     ...parts,
   };
 }

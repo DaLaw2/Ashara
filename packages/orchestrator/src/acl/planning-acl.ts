@@ -37,6 +37,7 @@ export {
   requeueWorkItem,
   takeEvents,
   exitStaleChecks,
+  exitDisputedCheck,
 } from "@ashara/planning";
 
 // Failure recovery

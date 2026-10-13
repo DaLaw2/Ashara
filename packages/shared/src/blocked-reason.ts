@@ -127,6 +127,20 @@ const checksRewriteBoundSchema = z.object({
 });
 
 /**
+ * The task's implementer disputed one of its stored checks (dispute_check, ADR-074 addendum 2 d65
+ * c), and the check task named by `checkTaskId` cannot be reopened to answer the dispute (it is no
+ * longer a Completed check task). Written only then; a reopenable check task is reopened instead and
+ * the task waits on it at Pending. `reason` carries the dispute and why no reopen was possible.
+ */
+const checkDisputedSchema = z.object({
+  source: z.literal("check_disputed"),
+  checkTaskId: z.string().min(1),
+  checkName: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task cannot be staffed: it has no owner role, or its owner is not a role of the project's
  * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
  * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
@@ -173,6 +187,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   environmentChangeNeededSchema,
   ownerUnresolvedSchema,
   checksRewriteBoundSchema,
+  checkDisputedSchema,
   dependencyUnsatisfiableSchema,
   apiSchema,
 ]);
@@ -233,6 +248,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "environment_change_needed":
     case "owner_unresolved":
     case "checks_rewrite_bound":
+    case "check_disputed":
     case "dependency_unsatisfiable":
     case "api":
       return { ...reason };

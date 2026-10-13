@@ -42,6 +42,19 @@ export type Outcome =
       readonly statement: string | null;
     })
   | (OutcomeBase & {
+      /**
+       * The implementer called dispute_check: it holds that a stored check cannot pass on correct
+       * work (ADR-074 addendum 2 d65 c). Not a failure of the task: the caller routes it to the
+       * check's author, never to the failure router.
+       */
+      readonly kind: "disputed";
+      /** The disputed check, one of the task's stored check names. */
+      readonly checkName: string;
+      readonly reason: string;
+      /** The output of the attempt's last run_checks, or null when it never ran them. */
+      readonly evidence: string | null;
+    })
+  | (OutcomeBase & {
       readonly kind: "model_stopped_without_finish";
       readonly finishReason: string;
       readonly rawFinishReason: string | null;

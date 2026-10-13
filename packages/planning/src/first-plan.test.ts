@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
@@ -25,7 +26,6 @@ function awaiting(projectId: ProjectId, planLastError: string | null, planAttemp
     summary: "A booking page.",
     scopeBoundaries: [],
     inferences: [],
-    userAnswers: [],
     planAttempts,
     planLastError,
     rosterRows,
@@ -85,5 +85,27 @@ describe("FirstPlanner per-project failure", () => {
     expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
     expect(blocked[0]?.cause.errorClass).toBe("RosterUnreadable");
     expect(blocked[0]?.cause.reason).toMatch(/"write-source".*several roles \("Implementer", "Second"\)/);
+  });
+});
+
+describe("FirstPlanner decomposition ladder", () => {
+  test("a model that never validates is asked 2 times per tier on 2 tiers before the plan attempt fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const capabilities: string[] = [];
+    const failing: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          capabilities.push(request.capability);
+          throw new SchemaValidationError(["scripted failure"]);
+        },
+      }),
+    };
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000023");
+    const store: FirstPlanStore = { ...storeWith([awaiting(projectId, null, 0)], []), recordFailedAttempt: async () => 1 };
+
+    const outcomes = await new FirstPlanner({ llm: failing, store }).runPending();
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
+    expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
   });
 });

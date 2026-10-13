@@ -36,9 +36,6 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 
 const RAW_EXCERPT_LENGTH = 400;
 
-/** See `StructuredLadderOptions.attempts`. */
-const DEFAULT_ATTEMPTS_PER_TIER = 3;
-
 const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong", "Frontier"];
 
 /**
@@ -289,13 +286,15 @@ export interface StructuredProvider {
 
 export interface StructuredLadderOptions {
   /**
-   * Validated attempts PER capability tier. Default 3. One attempt is one
-   * provider request: the gateway sends no retry of its own (no text fallback
-   * after generateObject, no re-ask loop, SDK `maxRetries: 0`), so these are
-   * the only same-model retries, each reported through `onAttempt`. 3 keeps
-   * the per-tier request count the gateway's own 1 + 2 retries used to give.
+   * Validated attempts PER capability tier, decided by each caller against
+   * the retries it already has around the ladder: there is no default. One
+   * attempt is one provider request: the gateway sends no retry of its own
+   * (no text fallback after generateObject, no re-ask loop, SDK
+   * `maxRetries: 0`), so these are the only same-model retries, each
+   * reported through `onAttempt`. A truncated response
+   * (`StructuredOutputTruncated`) is a failed attempt like any other.
    */
-  readonly attempts?: number;
+  readonly attempts: number;
   /**
    * Routing site every call this wrapper makes is tagged with. REQUIRED: a
    * ladder with no site routes by capability alone, which is a routing hole
@@ -326,7 +325,7 @@ export function withStructuredLadder(
   provider: StructuredProvider,
   options: StructuredLadderOptions,
 ): StructuredProvider {
-  const attempts = options.attempts ?? DEFAULT_ATTEMPTS_PER_TIER;
+  const { attempts } = options;
   return {
     async generateStructured<T>(request: StructuredProviderRequest<T>): Promise<StructuredProviderResult<T>> {
       const { validate, ...providerRequest } = request;

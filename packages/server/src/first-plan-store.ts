@@ -40,7 +40,6 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
         summary: row.vision.summary,
         scopeBoundaries: row.vision.scopeBoundaries,
         inferences: row.vision.inferences,
-        userAnswers: row.vision.userAnswers,
         planAttempts: row.planAttempts,
         planLastError: row.planLastError,
         rosterRows: await latestRosterRoles(db, row.projectId),

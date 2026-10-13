@@ -31,10 +31,8 @@ interface ProjectAwaitingPlan {
   readonly summary: string;
   /** vision_documents.scope_boundaries as stored; parsed here. */
   readonly scopeBoundaries: unknown;
-  /** vision_documents.inferences as stored; parsed here. */
+  /** vision_documents.inferences as stored, the client's answers in its Stated assumptions; parsed here. */
   readonly inferences: unknown;
-  /** vision_documents.user_answers as stored; parsed here. */
-  readonly userAnswers: unknown;
   readonly planAttempts: number;
   readonly planLastError: string | null;
   /** The rows of the project's latest roster revision as stored; parsed by Organization. */
@@ -123,18 +121,24 @@ class VisionUnreadable extends Error {
 
 const ScopeBoundariesSchema = z.array(z.string().min(1));
 
-// Intake (migration 019 onward) writes assumptions as Inferred records; rows the
-// deleted CLI path (POST /vision) wrote hold a map of direction category to
-// inference and are still in the database. Both are read; anything
-// else stops the attempt rather than planning without the assumptions.
+// The answer a Stated assumption carries (migration 038): the Liaison writes it when
+// the client answers the question that named the assumption.
+const ClientAnswerSchema = z.object({ question: z.string().min(1), answer: z.string().min(1) });
+
+// Intake (migration 019 onward) writes assumptions as Inferred records, and the
+// Liaison makes one Stated, with the client's answer, when the client answers; rows
+// the deleted CLI path (POST /vision) wrote hold a map of direction category to
+// inference and are still in the database. Both are read; a Stated record without
+// its answer, or anything else, stops the attempt rather than planning without them.
 const InferencesSchema = z.union([
-  z.array(z.object({ statement: z.string().min(1), status: z.string().min(1) })),
+  z.array(
+    z.union([
+      z.object({ statement: z.string().min(1), status: z.literal("Stated"), clientAnswer: ClientAnswerSchema }),
+      z.object({ statement: z.string().min(1), status: z.string().min(1).refine((s) => s !== "Stated") }),
+    ]),
+  ),
   z.record(z.string(), z.string()),
 ]);
-
-// The client's answers to alignment questions (rows the deleted CLI path wrote
-// hold them; the column defaults to an empty array).
-const UserAnswersSchema = z.array(z.object({ question: z.string().min(1), answer: z.string().min(1) }));
 
 function parseField<T>(schema: z.ZodType<T>, value: unknown, project: ProjectAwaitingPlan, field: string): T {
   const parsed = schema.safeParse(value);
@@ -152,15 +156,19 @@ function parseField<T>(schema: z.ZodType<T>, value: unknown, project: ProjectAwa
 function northStarOf(project: ProjectAwaitingPlan): string {
   const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
   const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
+  const records = Array.isArray(inferences) ? inferences : [];
+  const answers = records.flatMap((a) => ("clientAnswer" in a ? [{ ...a.clientAnswer, decision: a.statement }] : []));
   const assumptions = Array.isArray(inferences)
-    ? inferences.map((a) => `${a.statement} (${a.status})`)
+    ? inferences.flatMap((a) => ("clientAnswer" in a ? [] : [`${a.statement} (${a.status})`]))
     : Object.entries(inferences).map(([category, inference]) => `${category}: ${inference}`);
-  const answers = parseField(UserAnswersSchema, project.userAnswers, project, "userAnswers");
 
   const sections = [project.summary];
   if (scope.length > 0) sections.push(`Scope:\n${scope.map((s) => `- ${s}`).join("\n")}`);
   if (answers.length > 0) {
-    sections.push(`Client clarifications:\n${answers.map((a) => `- ${a.question} -> ${a.answer}`).join("\n")}`);
+    sections.push(
+      `Client clarifications (Stated by the client; these override any assumption):\n` +
+        answers.map((a) => `- ${a.question} -> ${a.answer} (decision: ${a.decision})`).join("\n"),
+    );
   }
   if (assumptions.length > 0) {
     sections.push(`Assumptions work proceeds on until the client says otherwise:\n${assumptions.map((a) => `- ${a}`).join("\n")}`);

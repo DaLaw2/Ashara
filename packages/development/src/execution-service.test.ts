@@ -121,6 +121,21 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "refused", chain: wrapError("development", "agentAttempt", refusal) },
     };
   }
+  if (status === "disputed") {
+    return {
+      status,
+      checkTaskId: "check-task",
+      revision: 1,
+      check: { name: "greets", command: "cat greet.txt" },
+      reason: "the check cannot pass",
+      evidence: null,
+      detail: `${status} detail`,
+      output: toAgentOutput({ ...base, kind: "disputed", checkName: "greets", reason: "the check cannot pass", evidence: null }, "m", { input: 0, output: 0 }),
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "disputed", chain: wrapError("development", "agentAttempt", "disputed") },
+    };
+  }
   if (status === "owner_unresolved") {
     return {
       status,
@@ -1009,6 +1024,8 @@ function terminal(kind: FailedKind): Outcome {
       return { ...base, kind, source: "cell", error: new Error("podman exec failed") };
     case "refused":
       return { ...base, kind, error: new PreCallRefusal("budget_cap: refused") };
+    case "disputed":
+      return { ...base, kind, checkName: "greets", reason: "the check cannot pass", evidence: null };
   }
 }
 
@@ -1035,10 +1052,10 @@ describe("toAgentOutput", () => {
     },
   );
 
-  test("refused is blocked, never failed or done, and names the terminal", () => {
-    const output = toAgentOutput(terminal("refused"), "m", { input: 0, output: 0 });
+  test.each(["refused", "disputed"] as const)("%s is blocked, never failed or done, and names the terminal", (kind) => {
+    const output = toAgentOutput(terminal(kind), "m", { input: 0, output: 0 });
     expect(output.status).toBe("blocked");
-    expect(output.summary).toContain("refused");
+    expect(output.summary).toContain(kind);
   });
 
   test("an unmeasured attempt reports only the lower bound and says so", () => {

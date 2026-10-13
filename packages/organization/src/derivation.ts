@@ -222,7 +222,13 @@ export class RosterDerivation implements RosterDerivationStep {
   private async ask(vision: VisionAwaitingRoster): Promise<DerivationResponse> {
     const provider = withStructuredLadder(
       this.deps.llm.forCall({ projectId: vision.projectId, taskId: null, callSite: "roster" }),
-      { site: "roster", onAttempt: this.deps.onAttempt, reask },
+      {
+        site: "roster",
+        // 3: nothing retries around this ladder; its exhaustion blocks the project.
+        attempts: 3,
+        onAttempt: this.deps.onAttempt,
+        reask,
+      },
     );
     // Ids are minted only for a valid roster; positional ones suffice to validate it.
     const validate = (value: DerivationResponse): StructuredValidation => {

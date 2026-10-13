@@ -73,6 +73,12 @@ const awaitingPlan = () =>
     sql`EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = projects.id)`,
   );
 
+// An answer the Liaison has yet to read may change the vision: the project is
+// planned once its answers are in (migration 038).
+const noOpenAnswer = () =>
+  sql`NOT EXISTS (SELECT 1 FROM client_messages a WHERE a.project_id = projects.id
+    AND a.direction = 'inbound' AND a.kind = 'answer' AND a.consumed_at IS NULL)`;
+
 /**
  * Projects awaiting their first plan, oldest first, each with its current vision.
  * A project with a stop awaiting the Liaison is not listed; a plan already in
@@ -97,7 +103,7 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
         sql`${visionDocuments.version} = (SELECT MAX(v.version) FROM vision_documents v WHERE v.project_id = projects.id)`,
       ),
     )
-    .where(and(awaitingPlan(), noOpenStop(projects.id)))
+    .where(and(awaitingPlan(), noOpenStop(projects.id), noOpenAnswer()))
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
   return rows.map((row) => ({

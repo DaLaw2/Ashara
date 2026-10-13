@@ -644,4 +644,62 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     expect(rows).toHaveLength(attempts.length);
     expect(rows.every((row) => row.errorKind === "InvalidJson" && row.finishReason === "stop")).toBe(true);
   });
+
+  test("text cut off at length is never closed into acceptance: every ladder attempt is a truncated row", async () => {
+    await clearRows();
+    // Closing the brace would make this valid against GreetingSchema.
+    const mock = stubModel({ doGenerate: result('{"greeting":"hi"', "length", 512, DEEPSEEK_RAW) });
+    const attempts: LadderAttemptEvent[] = [];
+    const gw = gateway("deepseek", model({ id: "ds-cut", capabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
+    const laddered = withStructuredLadder(gw.forCall({ projectId, taskId: null, callSite: "decomposition" }), {
+      site: "decomposition",
+      attempts: 2,
+      onAttempt: (event) => attempts.push(event),
+    });
+
+    await expect(
+      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+    ).rejects.toThrow(/Structured output exhausted.*output truncated/);
+
+    expect(attempts.map((a) => `${a.capability}:${a.outcome}`)).toEqual([
+      "Strong:invalid",
+      "Strong:invalid",
+      "Frontier:invalid",
+      "Frontier:invalid",
+    ]);
+    expect(mock.doGenerateCalls).toHaveLength(4);
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(4);
+    expect(rows.every((row) => row.errorKind === "truncated" && row.finishReason === "length")).toBe(true);
+  });
+
+  test("a generateObject response at length is truncated even when its text parses", async () => {
+    await clearRows();
+    const anthropicRaw = { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    stubModel({ doGenerate: result('{"greeting":"hi"}', "length", 512, anthropicRaw) });
+
+    await expect(
+      gateway("anthropic", model({ id: "sonnet-cut" }))
+        .forCall({ projectId, taskId: null, callSite: "decomposition" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
+    ).rejects.toMatchObject({ name: "StructuredOutputTruncated" });
+
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: "error", errorKind: "truncated", finishReason: "length" });
+  });
+
+  test("a fenced, complete JSON response still parses into one ok row", async () => {
+    await clearRows();
+    stubModel({ doGenerate: result('```json\n{"greeting":"hi"}\n```', "stop", 10, DEEPSEEK_RAW) });
+
+    const response = await gateway("deepseek", model({ id: "ds-fenced", cacheWriteCostPer1M: null }))
+      .forCall({ projectId, taskId: null, callSite: "decomposition" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+
+    expect(response.data).toEqual({ greeting: "hi" });
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: "ok", finishReason: "stop" });
+  });
 });

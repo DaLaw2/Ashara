@@ -3,7 +3,8 @@ import { dirname } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
 import { ownedPathsCover, runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import type { CheckDefinition, CheckDefinitionPort, CheckDefinitionResult, CheckRun, CheckRunReport } from "@ashara/workplace";
+import { CHECK_RUNNER } from "@ashara/workplace";
+import type { CheckDefinition, CheckRedRunPreview, CheckRun, CheckRunReport } from "@ashara/workplace";
 import { targetRepo } from "./host-git.js";
 import { TreePathRefused, readTreeFile, writeTreeFile } from "./tree-read.js";
 import { cleanupWorkdir } from "./workspace.js";
@@ -85,17 +86,27 @@ export interface TaskCheckStore {
   latest(taskId: WorkItemId): Promise<TaskChecks | null>;
 }
 
-/** define_check's port: keeps each definition of one attempt for Z0 to harvest. */
-export class CheckRecorder implements CheckDefinitionPort {
+/** What recording one definition did: refused, or kept as the last definition of its name. */
+type CheckRecording =
+  | { readonly kind: "recorded"; readonly defined: number; readonly replaced: boolean }
+  | { readonly kind: "refused"; readonly reason: string };
+
+/**
+ * define_check's record: keeps each definition of one attempt for Z0 to harvest. A definition
+ * with the name of an earlier one replaces it in place (the last definition of a name wins).
+ */
+export class CheckRecorder {
   private readonly defined: CheckDefinition[] = [];
 
-  define(check: CheckDefinition): CheckDefinitionResult {
-    if (this.defined.some((d) => d.name === check.name)) {
-      return { kind: "refused", reason: `a check named ${JSON.stringify(check.name)} is already defined; give each check its own name` };
+  record(check: CheckDefinition): CheckRecording {
+    const earlier = this.defined.findIndex((d) => d.name === check.name);
+    if (earlier !== -1) {
+      this.defined[earlier] = check;
+      return { kind: "recorded", defined: this.defined.length, replaced: true };
     }
     if (this.defined.length >= MAX_CHECKS) return { kind: "refused", reason: `a task has at most ${MAX_CHECKS} checks` };
     this.defined.push(check);
-    return { kind: "recorded", defined: this.defined.length };
+    return { kind: "recorded", defined: this.defined.length, replaced: false };
   }
 
   checks(): readonly CheckDefinition[] {
@@ -217,9 +228,9 @@ export function tentativeMergeCommit(targetProjectPath: string, taskId: string):
  * reachable from no ref: the implementer's current work, for run_checks to check out elsewhere.
  * The worktree's files are not touched; only its index is.
  */
-export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string): Promise<string> {
+export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string, purpose: "run_checks" | "define_check"): Promise<string> {
   await runHostGit(repo, ["add", "-A"]);
-  return commitIndex(repo, taskId, `ashara: current work of task ${taskId}, for run_checks`);
+  return commitIndex(repo, taskId, `ashara: current work of task ${taskId}, for ${purpose}`);
 }
 
 export type CheckHarvest =
@@ -239,10 +250,35 @@ export async function harvestCheckFiles(
   startCommit: string,
   owned: readonly string[],
 ): Promise<CheckHarvest> {
-  const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
   await runHostGit(repo, ["add", "-A"]);
   await runHostGit(repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${taskId}`]);
-  const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, "HEAD"]);
+  return collectCheckFiles(repo, startCommit, "HEAD", owned);
+}
+
+/**
+ * The files a check attempt has added or changed so far, by the harvest's own rules, without
+ * touching its branch: a snapshot of the worktree (reachable from no ref) is diffed instead of a
+ * commit. What define_check red-runs one check with, so the author meets the harvest's verdict early.
+ */
+export async function previewCheckFiles(
+  repo: HostRepo,
+  taskId: string,
+  startCommit: string,
+  owned: readonly string[],
+): Promise<CheckHarvest> {
+  const snapshot = await worktreeSnapshotCommit(repo, taskId, "define_check");
+  return collectCheckFiles(repo, startCommit, snapshot, owned);
+}
+
+/** The harvest's rules on the diff from `startCommit` to `endCommit`, each file read from the worktree. */
+async function collectCheckFiles(
+  repo: HostRepo,
+  startCommit: string,
+  endCommit: string,
+  owned: readonly string[],
+): Promise<CheckHarvest> {
+  const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
+  const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, endCommit]);
   const fields = stdout.split("\0").filter((field) => field !== "");
   const changed: Array<{ readonly status: string; readonly path: string }> = [];
   for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ status: fields[i] ?? "", path: fields[i + 1] ?? "" });
@@ -399,18 +435,60 @@ export function redRunProblem(run: CheckRun): string | null {
   return null;
 }
 
+/** define_check's red run of its one check, as the author is shown it, judged by the red-run rule. */
+export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string): CheckRedRunPreview {
+  if (report.kind === "files_refused") return { kind: "files_refused", detail: `the check files cannot be placed on main: ${report.detail}` };
+  const [run] = report.runs;
+  if (run === undefined) throw new SuiteRunMissing(checkoutDir);
+  return { kind: "ran", run, timeoutSeconds, rejection: redRunProblem(run) };
+}
+
 /** The checks as the implementation task's brief states them: what decides the task. */
 export function formatChecksForBrief(stored: TaskChecks): string {
   const lines = [
     `## Checks that decide this task`,
     `Another team member wrote these checks before this task started. The task is done only when every one of them`,
-    `exits 0 and prints output, run from the project root on your merged work. Their files are put back as written`,
-    `whenever they run, so changing them changes nothing. Call run_checks to run them on your current work before`,
-    `you finish: it reports each check's exit code and output exactly as verification would.`,
+    `exits 0 and prints output on your merged work. ${CHECK_RUNNER}`,
+    `Call run_checks to run them on your current work before you finish: it reports each check's exit code and output`,
+    `exactly as verification would.`,
     `Verification on the merge also runs the environment's test and the checks of every task already merged:`,
     `if your work breaks any of them, this task fails as a regression and nothing is merged.`,
     ...stored.checks.map((check) => `- ${check.name}: \`${check.command}\``),
   ];
-  if (stored.files.length > 0) lines.push(`Check files: ${stored.files.map((file) => file.path).join(", ")}`);
+  if (stored.files.length > 0) lines.push("", checkFilesForBrief(stored.files));
+  return lines.join("\n");
+}
+
+/** Longest part of one check file the implementer's brief shows, and of all of them together. */
+const MAX_BRIEF_CHECK_FILE_CHARS = 8000;
+const MAX_BRIEF_CHECK_FILES_CHARS = 24000;
+
+/**
+ * The stored check files, read-only: the implementer must see what the checks read to satisfy them
+ * (second run D10: one that could not see them recreated one, which the ownership gate refuses).
+ * A cut is always marked, never silent.
+ */
+function checkFilesForBrief(files: readonly CheckFile[]): string {
+  const lines = [
+    `### Check files (read-only)`,
+    `These files are the checks' own and are not in your workspace; run_checks puts them in place for its run. At`,
+    `verification they are written over the merge exactly as stored, whatever`,
+    `is at their paths. Do not create, change or delete a file at any of these paths: the ownership gate refuses work`,
+    `that touches one, and the task fails.`,
+  ];
+  let budget = MAX_BRIEF_CHECK_FILES_CHARS;
+  for (const file of files) {
+    const limit = Math.min(MAX_BRIEF_CHECK_FILE_CHARS, budget);
+    if (limit <= 0) {
+      lines.push(`#### ${file.path} (${file.content.length} characters)`, `[not shown: the check files exceed ${MAX_BRIEF_CHECK_FILES_CHARS} characters together; it is not in your workspace]`);
+      continue;
+    }
+    const shown = file.content.length <= limit ? file.content : file.content.slice(0, limit);
+    budget -= shown.length;
+    lines.push(`#### ${file.path} (${file.content.length} characters)`, "````", shown, "````");
+    if (shown.length < file.content.length) {
+      lines.push(`[truncated: ${file.content.length - shown.length} of ${file.content.length} characters not shown]`);
+    }
+  }
   return lines.join("\n");
 }

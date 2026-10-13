@@ -2,7 +2,14 @@ import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db"
 import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
-import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
+import type {
+  LiaisonAnswers,
+  LiaisonCheckDisputes,
+  LiaisonClientStops,
+  LiaisonIntake,
+  LiaisonPlanReports,
+  LiaisonStackChoices,
+} from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
 
@@ -117,6 +124,11 @@ export interface CoreLoopDeps {
   readonly clientStops: LiaisonClientStops;
   /** The Liaison's tender intake, run each cycle before work-item gating. */
   readonly liaisonIntake: LiaisonIntake;
+  /**
+   * The Liaison's reading of the client's answers, run after intake and before planning, so
+   * an answer read before the first plan is planned on.
+   */
+  readonly liaisonAnswers: LiaisonAnswers;
   /** Organization's roster for each project with vision v1 and none, run after intake. */
   readonly rosterDerivation: RosterDerivationStep;
   /** Delivery's first plan of each project awaiting one (and holding a roster), run after the roster step. */
@@ -128,4 +140,24 @@ export interface CoreLoopDeps {
    * version and reported to the client once; run every cycle, at the budget cap too (no LLM call).
    */
   readonly stackChoices: LiaisonStackChoices;
+  /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
+  readonly checkDisputes: CheckDisputeRecord;
+  /** The Liaison's block of a project whose check disputes passed their bound, with its one report. */
+  readonly disputeReports: LiaisonCheckDisputes;
+}
+
+/** One dispute of a stored check, as an implementer's attempt ended with it. */
+interface CheckDisputeEntry {
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly checkTaskId: string;
+  readonly revision: number;
+  readonly checkName: string;
+  readonly reason: string;
+  readonly evidence: string | null;
+}
+
+/** Appends a dispute; resolves to the disputes its check task has drawn, this one included. */
+interface CheckDisputeRecord {
+  record(dispute: CheckDisputeEntry): Promise<number>;
 }

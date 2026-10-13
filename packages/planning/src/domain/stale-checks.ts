@@ -28,26 +28,25 @@ type StaleChecksExit =
   | { readonly kind: "unreopenable"; readonly why: string };
 
 /**
- * Reopens a Completed check task so it writes the checks of the task it decides again, on the
- * environment current when it is next dispatched. Pinned to a Completed item of work kind
- * "check": a reopened implementation task would merge its work twice. The reason it is reopened
- * is left as the next attempt's context, the way a replan leaves it.
+ * Reopens a Completed check task so it writes the checks of the task it decides again. Pinned to a
+ * Completed item of work kind "check": a reopened implementation task would merge its work twice.
+ * Why it is reopened (`detail`) is left as the next attempt's context, the way a replan leaves it.
  */
-function reopenCheckTask(item: WorkItem, checkedTaskId: string, stale: StaleChecks): void {
+function reopenCheckTask(
+  item: WorkItem,
+  checkedTaskId: string,
+  detail: string,
+  raw: Record<string, unknown>,
+  // open-by-design: the event names why the check task was reopened, per cause
+  why: Record<string, unknown>,
+): void {
   if (item.status !== "Completed" || item.workKind !== "check" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
   item.status = "Pending";
   item.blockedReason = {
     source: "replan",
-    replanContext: {
-      attempt: item.dispatchCount,
-      detail:
-        `the checks this task recorded for task ${checkedTaskId} (revision ${stale.revision}) no longer all fail on main ` +
-        `on the project's current environment, so they cannot decide that task; define them again so that each fails on ` +
-        `main on the current environment. The red run that rejected them:\n${stale.detail}`,
-      raw: { checkedTaskId, staleRevision: stale.revision },
-    },
+    replanContext: { attempt: item.dispatchCount, detail, raw: { checkedTaskId, ...raw } },
   };
   item.updatedAt = new Date();
   item.events.push(
@@ -55,7 +54,7 @@ function reopenCheckTask(item: WorkItem, checkedTaskId: string, stale: StaleChec
       work_item_id: item.id,
       level: item.level,
       checked_task_id: checkedTaskId,
-      stale_revision: stale.revision,
+      ...why,
     }),
   );
 }
@@ -67,7 +66,12 @@ function reopenCheckTask(item: WorkItem, checkedTaskId: string, stale: StaleChec
  * this task at Blocked with a dependency_unsatisfiable reason naming it. Not a requeue (nothing crashed) and not a replan
  * (nothing failed): it has its own event.
  */
-function awaitRewrittenChecks(item: WorkItem, stale: StaleChecks): void {
+function awaitRewrittenChecks(
+  item: WorkItem,
+  checkTaskId: string,
+  // open-by-design: the event names why the checks are written again, per cause
+  why: Record<string, unknown>,
+): void {
   if (item.status !== "InProgress" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
@@ -78,8 +82,8 @@ function awaitRewrittenChecks(item: WorkItem, stale: StaleChecks): void {
     createDomainEvent("work_item.awaiting_checks", "planning", {
       work_item_id: item.id,
       level: item.level,
-      check_task_id: stale.checkTaskId,
-      stale_revision: stale.revision,
+      check_task_id: checkTaskId,
+      ...why,
     }),
   );
 }
@@ -115,8 +119,92 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
     return { kind: "unreopenable", why: reopenable.why };
   }
   if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, "Pending");
-  reopenCheckTask(reopenable.item, task.id, stale);
-  awaitRewrittenChecks(task, stale);
+  reopenCheckTask(
+    reopenable.item,
+    task.id,
+    `the checks this task recorded for task ${task.id} (revision ${stale.revision}) no longer all fail on main ` +
+      `on the project's current environment, so they cannot decide that task; define them again so that each fails on ` +
+      `main on the current environment. The red run that rejected them:\n${stale.detail}`,
+    { staleRevision: stale.revision },
+    { stale_revision: stale.revision },
+  );
+  awaitRewrittenChecks(task, stale.checkTaskId, { stale_revision: stale.revision });
+  return { kind: "rewrite" };
+}
+
+/**
+ * How many times an implementer may dispute the checks of one check task (ADR-074 addendum 2 d65
+ * c). A dispute past it blocks the project for its owner: the implementer and the check author
+ * have disagreed that often and nothing in the team settles it.
+ */
+const CHECK_DISPUTE_BOUND = 2;
+
+/** An implementer's dispute of one stored check (dispute_check). */
+interface CheckDispute {
+  readonly checkTaskId: string;
+  /** The revision of the task's checks the disputed check belongs to. */
+  readonly revision: number;
+  /** The disputed check as stored. */
+  readonly check: { readonly name: string; readonly command: string };
+  readonly reason: string;
+  /** The output of the implementer's last run_checks; null when it never ran them. */
+  readonly evidence: string | null;
+  /** How many disputes the check task has drawn, this one included (Quality's durable record). */
+  readonly disputes: number;
+}
+
+type DisputeExit =
+  /** The check task is reopened (Completed -> Pending) with the dispute; the task waits on it at Pending. */
+  | { readonly kind: "rewrite" }
+  /** Past the bound: nothing is mutated; the caller blocks the project and returns the task to Pending. */
+  | { readonly kind: "bound"; readonly bound: number }
+  /** The named check task cannot be reopened; the task is parked at Blocked with a check_disputed reason. */
+  | { readonly kind: "unreopenable"; readonly why: string };
+
+/** The dispute as the check author reads it in the reopened task's brief. */
+function disputeBrief(taskId: string, dispute: CheckDispute): string {
+  return [
+    `The implementer of task ${taskId} disputes check ${JSON.stringify(dispute.check.name)} of the checks this task ` +
+      `recorded for it (revision ${dispute.revision}): it holds that the check cannot pass on correct work. Weigh the ` +
+      `dispute and define the task's checks again: fix the check if the dispute is right, or keep it if it is wrong, ` +
+      `so that each check fails on main and can pass on correct work.`,
+    `The disputed check: ${JSON.stringify(dispute.check.name)}, command: ${dispute.check.command}`,
+    `The implementer's reason:\n${dispute.reason}`,
+    dispute.evidence === null
+      ? `The implementer did not run the checks before disputing.`
+      : `The implementer's last run of the checks:\n${dispute.evidence}`,
+  ].join("\n\n");
+}
+
+/**
+ * The exit of an InProgress implementation task whose implementer disputed one of its stored
+ * checks. Not the task's failure: within the bound the check task that wrote the check is reopened
+ * with the dispute in its brief and the task waits on it, as for stale checks; past the bound the
+ * caller blocks the project; a check task that cannot be reopened parks the task at Blocked. Mutates
+ * `task` and, on "rewrite", `checkTask`; the caller saves the check task first.
+ */
+export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, dispute: CheckDispute): DisputeExit {
+  if (dispute.disputes > CHECK_DISPUTE_BOUND) return { kind: "bound", bound: CHECK_DISPUTE_BOUND };
+  const reopenable = reopenableCheckTask(checkTask, dispute.checkTaskId);
+  if (reopenable.kind === "refused") {
+    blockWorkItem(task, {
+      source: "check_disputed",
+      checkTaskId: dispute.checkTaskId,
+      checkName: dispute.check.name,
+      reason: `${dispute.reason}\nThe check task cannot be reopened: ${reopenable.why}`,
+    });
+    return { kind: "unreopenable", why: reopenable.why };
+  }
+  if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, "Pending");
+  const why = { disputed_check: dispute.check.name, disputed_revision: dispute.revision, dispute: dispute.disputes };
+  reopenCheckTask(
+    reopenable.item,
+    task.id,
+    disputeBrief(task.id, dispute),
+    { disputedCheck: dispute.check.name, disputedRevision: dispute.revision, dispute: dispute.disputes },
+    why,
+  );
+  awaitRewrittenChecks(task, dispute.checkTaskId, why);
   return { kind: "rewrite" };
 }
 

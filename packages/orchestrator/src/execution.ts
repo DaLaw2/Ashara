@@ -21,6 +21,7 @@ import {
   startWorkItem,
   recoverFailedItem,
   exitStaleChecks,
+  exitDisputedCheck,
 } from "./acl/planning-acl.js";
 import type { TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
@@ -29,12 +30,30 @@ import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRout
 
 type ParkedReason = Extract<
   StoredBlockedReason,
-  { source: "environment_unavailable" | "environment_undefined" | "checks_stale" | "environment_change_needed" | "owner_unresolved" }
+  {
+    source:
+      | "environment_unavailable"
+      | "environment_undefined"
+      | "checks_stale"
+      | "check_disputed"
+      | "environment_change_needed"
+      | "owner_unresolved";
+  }
 >;
 
 interface StaleChecksResult {
   readonly checkTaskId: string;
   readonly revision: number;
+  readonly detail: string;
+}
+
+/** An implementer's dispute of one stored check, as development returned it. */
+interface DisputedCheckResult {
+  readonly checkTaskId: string;
+  readonly revision: number;
+  readonly check: { readonly name: string; readonly command: string };
+  readonly reason: string;
+  readonly evidence: string | null;
   readonly detail: string;
 }
 
@@ -44,6 +63,8 @@ interface ExecutionRoutingDeps {
   readonly spendCap: CoreLoopDeps["spendCap"];
   /** Blocks a project whose configuration refused a model call. */
   readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
+  readonly checkDisputes: CoreLoopDeps["checkDisputes"];
+  readonly disputeReports: CoreLoopDeps["disputeReports"];
 }
 
 async function executeTask(
@@ -106,6 +127,19 @@ async function executeTask(
     // Not a task failure (a replan keeps the item id, so it would meet the same checks): the
     // check task is reopened to write them again and the item waits on it, within a bound.
     await routeAsStaleChecks(deps, task.id, execResult);
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "disputed") {
+    // Not a task failure and no lesson (ADR-074 addendum 2 d65 c): the check is its author's to
+    // answer, so the check task is reopened with the dispute and the item waits on it, within a
+    // bound of disputes per check task; past it the project is blocked for its owner.
+    await routeAsDisputed(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -284,6 +318,8 @@ async function routeAsParked(
       ? `${reason.unavailable} unavailable`
       : reason.source === "checks_stale"
         ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
+        : reason.source === "check_disputed"
+        ? `check ${JSON.stringify(reason.checkName)} disputed and check task ${reason.checkTaskId} cannot be reopened`
         : reason.source === "owner_unresolved"
           ? `no roster role can work it (owner ${reason.ownerRoleId ?? "none"})`
           : "no environment defined";
@@ -371,6 +407,97 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       console.warn(`[${taskId}] blocked, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`);
       return;
   }
+}
+
+/**
+ * The exit of an item whose implementer disputed one of its stored checks (planning's
+ * exitDisputedCheck). The dispute is recorded first, durably: its count per check task is the
+ * bound. Within it the check task is reopened with the dispute in its brief and saved first, then
+ * the item is back at Pending waiting on it, its dispatch given back; past it the Liaison blocks the
+ * project with one report and the item returns to Pending, its dispatch given back, where the gate
+ * skips it until the owner returns the project to work; a check task that cannot be reopened parks
+ * the item at Blocked with a check_disputed reason.
+ */
+async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispute: DisputedCheckResult): Promise<void> {
+  const disputes = await deps.checkDisputes.record({
+    projectId: task.projectId,
+    taskId: task.id,
+    checkTaskId: dispute.checkTaskId,
+    revision: dispute.revision,
+    checkName: dispute.check.name,
+    reason: dispute.reason,
+    evidence: dispute.evidence,
+  });
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
+  if (!item) {
+    console.warn(`[${task.id}] work item vanished before its check dispute could be routed (${dispute.detail})`);
+    return;
+  }
+  const checkTask = await findCheckTask(deps.workItemRepo, dispute.checkTaskId);
+  const previousStatus = item.status;
+  const checkTaskPrevious = checkTask?.status;
+  let exit: ReturnType<typeof exitDisputedCheck>;
+  try {
+    exit = exitDisputedCheck(item, checkTask, { ...dispute, disputes });
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${task.id}] check-dispute exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${dispute.detail})`);
+    return;
+  }
+
+  if (exit.kind === "bound") {
+    const blocked = await deps.disputeReports.blockOnDisputes({
+      projectId: task.projectId,
+      taskTitle: task.title,
+      checkTaskId: dispute.checkTaskId,
+      checkName: dispute.check.name,
+      reason: dispute.reason,
+      disputes,
+      bound: exit.bound,
+    });
+    await requeueAndRefund(
+      deps,
+      task.id,
+      `dispute ${disputes} of check task ${dispute.checkTaskId}, past the bound of ${exit.bound} (project ${task.projectId} ${blocked})`,
+      "execution.routeAsDisputed",
+    );
+    return;
+  }
+
+  if (exit.kind === "rewrite" && checkTask !== null && checkTaskPrevious !== undefined) {
+    try {
+      await PlanningService.saveWorkItem(deps.workItemRepo, checkTask, checkTaskPrevious);
+    } catch (e) {
+      if (!(e instanceof InvalidStatusTransition)) throw e;
+      await routeAsParked(deps, task.id, {
+        source: "check_disputed",
+        checkTaskId: dispute.checkTaskId,
+        checkName: dispute.check.name,
+        reason: `${dispute.reason}\nThe check task cannot be reopened: it moved to ${e.from} while it was being reopened`,
+      });
+      return;
+    }
+    await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
+  }
+
+  try {
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${task.id}] check-dispute exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`);
+    return;
+  }
+  await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsDisputed");
+
+  if (exit.kind === "rewrite") {
+    const dispatchCount = await refundBestEffort(deps, task.id, "a check dispute");
+    console.warn(
+      `[${task.id}] check ${JSON.stringify(dispute.check.name)} disputed (dispute ${disputes} of its check task); check task ` +
+        `${dispute.checkTaskId} reopened with the dispute, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+    );
+    return;
+  }
+  console.warn(`[${task.id}] blocked, check ${JSON.stringify(dispute.check.name)} disputed and check task ${dispute.checkTaskId} cannot be reopened: ${exit.why}`);
 }
 
 /** The check task a stale revision names; null when the stored id is no work item's. */
@@ -520,6 +647,8 @@ export async function processTask(
     eventStore: deps.eventStore,
     spendCap: deps.spendCap,
     projects: deps.projectRepo,
+    checkDisputes: deps.checkDisputes,
+    disputeReports: deps.disputeReports,
   };
   const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
   if (workspace.kind === "rejected") {

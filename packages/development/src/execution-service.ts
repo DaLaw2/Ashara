@@ -6,7 +6,7 @@ import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/l
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AssignmentRole, AttemptCellImage, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
+import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRunPreview, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import {
   checkPassed,
   checkVerdict,
@@ -32,7 +32,7 @@ import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
-import { checkBranchOwnership } from "./gates/ownership.js";
+import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
   StoredChecksStale,
@@ -43,6 +43,8 @@ import {
   harvestCheckFiles,
   headCommit,
   mainCommit,
+  previewCheckFiles,
+  redRunPreview,
   redRunProblem,
   runChecksOnCheckout,
   runSuitesOnCheckout,
@@ -93,6 +95,7 @@ type EnvironmentStage =
   | "createCell"
   | "agentAttempt"
   | "commitWork"
+  | "branchWork"
   | "substrateGate"
   | "checkRedRun"
   | "ownershipGate"
@@ -633,6 +636,31 @@ interface ChecksStaleResult {
 }
 
 /**
+ * The implementer disputed one of the task's stored checks with dispute_check (ADR-074 addendum 2
+ * d65 c): it holds that the check cannot pass on correct work. Not the task's failure and no
+ * lesson: the orchestrator reopens the check task that wrote it, with the dispute in its brief, and
+ * the item waits on it (bounded per check task), never routing it through the FailureRouter. The
+ * partial work is committed on the task branch for the next dispatch.
+ */
+interface DisputedResult {
+  readonly status: "disputed";
+  /** The check task that wrote the disputed check: the one to reopen. */
+  readonly checkTaskId: string;
+  /** The revision of the task's checks the disputed check belongs to. */
+  readonly revision: number;
+  /** The disputed check as stored. */
+  readonly check: { readonly name: string; readonly command: string };
+  readonly reason: string;
+  /** The output of the attempt's last run_checks; null when it never ran them. */
+  readonly evidence: string | null;
+  readonly detail: string;
+  readonly output: AgentOutputJson;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
  * The implementer's finished work changed environment-owned paths and nothing else the ownership
  * gate refuses: it needs an environment change no implementer may make (ADR-074 addendum 2 d63).
  * Nothing was merged; the branch is kept. The orchestrator parks the item at Blocked naming the
@@ -669,6 +697,7 @@ export type ExecutionResult =
   | EnvironmentUndefinedResult
   | RefusedResult
   | ChecksStaleResult
+  | DisputedResult
   | EnvironmentChangeNeededResult
   | OwnerUnresolvedResult
   | InterruptedResult;
@@ -1025,8 +1054,15 @@ export class DevelopmentService {
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
       // touching its many return sites. A refused call, stale stored checks (the check task's to
-      // rewrite, no model ran) and a shutdown are no lesson about the task.
-      if (result.status !== "completed" && result.status !== "refused" && result.status !== "checks_stale" && result.status !== "interrupted") {
+      // rewrite, no model ran), a disputed check (the check author's to answer) and a shutdown are
+      // no lesson about the task.
+      if (
+        result.status !== "completed" &&
+        result.status !== "refused" &&
+        result.status !== "checks_stale" &&
+        result.status !== "disputed" &&
+        result.status !== "interrupted"
+      ) {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       }
       return result;
@@ -1128,7 +1164,7 @@ export class DevelopmentService {
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
   private checkoutDir(
     d: Dispatch,
-    purpose: "red-run" | "verify" | `run-checks-${number}` | "environment-check" | "substrate-gate",
+    purpose: "red-run" | "verify" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
   ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
@@ -1284,7 +1320,7 @@ export class DevelopmentService {
         records: d.records,
         signal: this.deps.shutdownSignal,
         environment: task.workKind === "environment" ? environmentCheckPort(this.environmentScope(d)) : null,
-        checks: d.work.kind === "check-authoring" ? d.work.recorder : null,
+        checks: d.work.kind === "check-authoring" ? this.checkDefinitionPort(d, d.work) : null,
         taskChecks: d.work.kind === "stored-checks" ? this.taskCheckRunPort(d, d.work.stored) : null,
       },
     );
@@ -1311,30 +1347,33 @@ export class DevelopmentService {
     // A check may need no file of its own, so a check task is judged by its checks, not its diff.
     if (d.work.kind === "check-authoring") return this.keepChecks(d, d.work, output);
 
+    // "No changes" is judged on the task branch against main (ADR-074 addendum 2 d65 d), not on this
+    // attempt's own edits: a re-dispatch may find its work already committed there by an earlier
+    // dispatch (endWithoutDone's partial-work commit) and rightly finish done without editing.
+    let workChanged: readonly string[] = filesChanged;
     if (filesChanged.length === 0) {
-      eventSink?.emit({
-        event: "task_failed",
-        taskId: task.id,
-        attempt: task.attempt,
-        reason: "agent produced no file changes",
-      });
-      await cleanupWorkdir(workDir, targetProjectPath);
-      const chain = wrapError("development", "agentExecution", "agent produced no file changes", {
-        taskId: task.id,
-        turnCount: outcome.turnsUsed,
-      });
-      return {
-        status: "failed",
-        detail: "agent produced no file changes",
-        output,
-        sessionId,
-        attempt: task.attempt,
-        errorEnvelope: { outcome: "failed", summary: "agent produced no file changes", chain, agentOutput: output },
-      };
+      const onBranch = await this.branchWork(d, output);
+      if (onBranch.kind === "ended") return onBranch.result;
+      workChanged = onBranch.paths;
+      if (workChanged.length === 0) {
+        const reason = "agent produced no file changes: the task branch holds no change against main";
+        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
+        await cleanupWorkdir(workDir, targetProjectPath);
+        const chain = wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount: outcome.turnsUsed });
+        return {
+          status: "failed",
+          detail: reason,
+          output,
+          sessionId,
+          attempt: task.attempt,
+          errorEnvelope: { outcome: "failed", summary: reason, chain, agentOutput: output },
+        };
+      }
+      eventSink?.emit({ event: "branch_work_found", taskId: task.id, attempt: task.attempt, paths: workChanged });
+    } else {
+      const uncommitted = await this.commitWork(d, output);
+      if (uncommitted !== null) return uncommitted;
     }
-
-    const uncommitted = await this.commitWork(d, output);
-    if (uncommitted !== null) return uncommitted;
 
     if (d.work.kind === "stored-checks") {
       const refused = await this.ownershipGate(d, output);
@@ -1431,7 +1470,7 @@ export class DevelopmentService {
       console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
     }
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
-    await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
+    await storeKnowledge(this.deps.knowledgeSink, task, output, workChanged);
     return {
       status: "completed",
       detail: "task completed and verified successfully",
@@ -1495,6 +1534,48 @@ export class DevelopmentService {
       };
       this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: envelope.summary });
       return { status: "failed", detail: envelope.summary, output, sessionId, attempt: task.attempt, errorEnvelope: envelope };
+    }
+  }
+
+  /**
+   * The paths the task branch changed since it left main, read through the target's hardened host
+   * git, for an attempt that finished done with nothing uncommitted. Z0's git failing blocks for
+   * the operator: an unreadable branch is never read as "no changes", nor as work to merge.
+   */
+  private async branchWork(
+    d: Dispatch,
+    output: AgentOutputJson,
+  ): Promise<{ readonly kind: "paths"; readonly paths: readonly string[] } | { readonly kind: "ended"; readonly result: ExecutionResult }> {
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    try {
+      return { kind: "paths", paths: await branchChangedPaths(targetProjectPath, task.id, taskBranchName(task.id)) };
+    } catch (e) {
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task branch could not be compared with main");
+      const environmentFailure = environmentErrorOf(e);
+      if (environmentFailure !== null) {
+        return {
+          kind: "ended",
+          result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { output, agentWork: "kept" }, this.deps.eventSink),
+        };
+      }
+      const fault = new VerificationInfrastructureFault(task.id, "task branch diff against main", { cause: e });
+      return {
+        kind: "ended",
+        result: environmentBlocked(
+          {
+            task,
+            sessionId,
+            stage: "branchWork",
+            errorClass: fault.name,
+            message: fault.message,
+            chain: wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name }),
+            unavailable: `verification infrastructure (${fault.step})`,
+            output,
+            agentWork: "kept",
+          },
+          this.deps.eventSink,
+        ),
+      };
     }
   }
 
@@ -1728,11 +1809,12 @@ export class DevelopmentService {
   private taskCheckRunPort(d: Dispatch, stored: TaskChecks): TaskCheckRunPort {
     let runs = 0;
     return {
+      checkNames: stored.checks.map((check) => check.name),
       run: async (timeoutSeconds) => {
         runs += 1;
         let report: CheckRunReport;
         try {
-          const commit = await worktreeSnapshotCommit(d.repo, d.task.id);
+          const commit = await worktreeSnapshotCommit(d.repo, d.task.id, "run_checks");
           report = await runChecksOnCheckout(
             { ...this.checkCells(d), timeoutSeconds },
             RED_RUN_ROLE,
@@ -1755,6 +1837,62 @@ export class DevelopmentService {
           ...(report.kind === "ran" ? { passed: report.runs.filter(checkPassed).map((run) => run.name) } : { refused: report.detail }),
         });
         return report;
+      },
+    };
+  }
+
+  /**
+   * define_check's port (ADR-074 addendum 2 d65 a): records the definition, the last of a name
+   * winning, then red-runs that one check at once by the harvest's own machinery: the files the
+   * attempt has changed so far (a snapshot of its throwaway worktree, by the harvest's rules) are
+   * written over a fresh checkout of the current main, and the check runs in a CI cell from the
+   * environment image. The author is shown its exit code and output and whether the red run at
+   * finish would reject it; that red run still decides, unchanged. A substrate failure throws as it
+   * is; a failure of Z0's own machinery throws as a VerificationInfrastructureFault.
+   */
+  private checkDefinitionPort(d: Dispatch, work: CheckAuthoring): CheckDefinitionPort {
+    let runs = 0;
+    return {
+      define: async (check, timeoutSeconds) => {
+        const recording = work.recorder.record(check);
+        if (recording.kind === "refused") return recording;
+        runs += 1;
+        let redRun: CheckRedRunPreview;
+        try {
+          const harvest = await previewCheckFiles(d.repo, d.task.id, work.startCommit, work.environment.owned);
+          if (harvest.kind === "rejected") {
+            redRun = { kind: "files_refused", detail: harvest.reason };
+          } else {
+            const main = await mainCommit(d.targetProjectPath, d.task.id);
+            const dir = this.checkoutDir(d, `define-check-${runs}`);
+            const report = await runChecksOnCheckout(
+              { ...this.checkCells(d), timeoutSeconds },
+              RED_RUN_ROLE,
+              work.environment.imageId,
+              main,
+              dir,
+              [check],
+              harvest.files,
+            );
+            redRun = redRunPreview(report, timeoutSeconds, dir);
+          }
+        } catch (e) {
+          if (environmentErrorOf(e) !== null) throw e;
+          throw new VerificationInfrastructureFault(d.task.id, "define_check red run", { cause: e });
+        }
+        this.deps.eventSink?.emit({
+          event: "check_defined",
+          taskId: d.task.id,
+          attempt: d.task.attempt,
+          name: check.name,
+          command: check.command,
+          replaced: recording.replaced,
+          defined: recording.defined,
+          ...(redRun.kind === "ran"
+            ? { exitCode: redRun.run.exitCode, timedOut: redRun.run.timedOut, rejection: redRun.rejection }
+            : { filesRefused: redRun.detail }),
+        });
+        return { ...recording, redRun };
       },
     };
   }
@@ -2012,6 +2150,47 @@ export class DevelopmentService {
           outcome: "blocked",
           summary,
           chain: wrapError("development", "agentAttempt", outcome.reason, context),
+          agentOutput: output,
+        },
+      };
+    }
+
+    // Workplace offers dispute_check only to implementation work with stored checks and only for
+    // their names; a dispute that names no stored check falls through to failed below.
+    const disputed =
+      outcome.kind === "disputed" && d.work.kind === "stored-checks"
+        ? d.work.stored.checks.find((check) => check.name === outcome.checkName)
+        : undefined;
+    if (outcome.kind === "disputed" && d.work.kind === "stored-checks" && disputed !== undefined) {
+      const { stored } = d.work;
+      const summary =
+        `check ${JSON.stringify(disputed.name)} (revision ${stored.revision}, check task ${stored.checkTaskId}) disputed ` +
+        `after ${outcome.turnsUsed} turn(s): ${outcome.reason}; ${describeAgentWork(agentWorkOf(d.work))}`;
+      console.warn(`[${task.id}] ${summary}`);
+      this.deps.eventSink?.emit({
+        event: "check_disputed",
+        taskId: task.id,
+        attempt: task.attempt,
+        checkTaskId: stored.checkTaskId,
+        revision: stored.revision,
+        check: disputed.name,
+        reason: outcome.reason,
+      });
+      return {
+        status: "disputed",
+        checkTaskId: stored.checkTaskId,
+        revision: stored.revision,
+        check: { name: disputed.name, command: disputed.command },
+        reason: outcome.reason,
+        evidence: outcome.evidence,
+        detail: summary,
+        output,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: {
+          outcome: "blocked",
+          summary,
+          chain: wrapError("development", "agentAttempt", outcome.reason, { ...context, checkTaskId: stored.checkTaskId, check: disputed.name }),
           agentOutput: output,
         },
       };

@@ -69,10 +69,13 @@ function coreLoopDeps(
     spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
     clientStops: { runPending: notExercised("clientStops") },
     liaisonIntake: { runPending: notExercised("liaisonIntake") },
+    liaisonAnswers: { runPending: notExercised("liaisonAnswers") },
     rosterDerivation: { runPending: notExercised("rosterDerivation") },
     firstPlanning: { runPending: notExercised("firstPlanning") },
     planReports: { runPending: notExercised("planReports") },
     stackChoices: { runPending: notExercised("stackChoices") },
+    checkDisputes: { record: notExercised("checkDisputes") },
+    disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     ...parts,
   };
 }
@@ -637,6 +640,132 @@ describe("stored checks stale: the check task is reopened and the item waits on 
     expect(item().blockedReason).toMatchObject({ source: "checks_stale", reason: expect.stringContaining("moved to Abandoned") });
   });
 
+});
+
+// docs/investigations/second-run-2026-10-14.md N2: an implementer's correct "these checks cannot pass"
+// was routed as the task's own failure and abandoned after 3, stranding its dependents.
+describe("a disputed check: the check task is reopened with the dispute and the item waits on it", () => {
+  const CHECK_ID: WorkItemId = createWorkItemId();
+  const reason = "the check uses [[ ]], which the runner's sh rejects with exit 2 on any work";
+  const evidence = 'Check "lists": FAILED: exited 2\n  output: sh: [[: not found';
+
+  function buildDisputeDeps(priorDisputes: number) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rows = new Map<string, WorkItem>([
+      [ITEM_ID, freshPendingItem()],
+      [CHECK_ID, { ...freshPendingItem(), id: CHECK_ID, title: "write the checks", workKind: "check", status: "Completed", dispatchCount: 1 }],
+    ]);
+    const disputes: Array<{ readonly checkTaskId: string; readonly checkName: string; readonly evidence: string | null }> = [];
+    const reports: Array<{ readonly disputes: number; readonly bound: number; readonly checkName: string }> = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const rowOf = (id: string): WorkItem => {
+      const row = rows.get(id);
+      if (row === undefined) throw new Error(`no row ${id}`);
+      return row;
+    };
+    const workItemRepo: WorkItemRepository = {
+      findById: async (id) => {
+        const row = rows.get(id);
+        return row === undefined ? null : copy(row);
+      },
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        const row = rowOf(item.id);
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        rows.set(item.id, { ...copy(item), dispatchCount: row.dispatchCount });
+      },
+      incrementDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
+        return row.dispatchCount + 1;
+      },
+      refundDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+        return row.dispatchCount - 1;
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listAllDependencies: notExercised("listAllDependencies"),
+      withTransaction: notExercised("withTransaction"),
+    };
+    const deps = coreLoopDeps({
+      workItemRepo,
+      developmentService: {
+        execute: async () => ({
+          status: "disputed",
+          checkTaskId: CHECK_ID,
+          revision: 1,
+          check: { name: "lists", command: "[[ -f out.txt ]] && cat out.txt" },
+          reason,
+          evidence,
+          detail: `check "lists" disputed: ${reason}`,
+          output: { status: "blocked", summary: "disputed", findings: [], error: null, error_detail: null, total_tokens: { input: 0, output: 0 }, total_cost: 0, cost_measured: true, turn_count: 2, finish_reason: "error" },
+          sessionId: "test-session",
+          attempt: 1,
+          errorEnvelope: {
+            outcome: "blocked",
+            summary: reason,
+            chain: { boundary: "development", operation: "agentAttempt", message: reason, timestamp: new Date().toISOString() },
+          },
+        }),
+      },
+      checkDisputes: {
+        record: async (dispute) => {
+          disputes.push(dispute);
+          return priorDisputes + disputes.filter((entry) => entry.checkTaskId === dispute.checkTaskId).length;
+        },
+      },
+      disputeReports: {
+        blockOnDisputes: async (bound) => {
+          reports.push(bound);
+          return "blocked";
+        },
+      },
+      failedApproachRepo: { record: async () => { approaches++; } },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+    });
+    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, reports, routed: () => routed, approaches: () => approaches };
+  }
+
+  test("a dispute: the check task back at Pending with the dispute and the current check in its brief, the item waiting, no failure counted", async () => {
+    const { deps, item, check, disputes, reports, routed, approaches } = buildDisputeDeps(0);
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(disputes).toEqual([expect.objectContaining({ checkTaskId: CHECK_ID, checkName: "lists", evidence })]);
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: undefined });
+    expect(check().status).toBe("Pending");
+    const context = check().blockedReason;
+    expect(context?.source).toBe("replan");
+    if (context?.source !== "replan") return;
+    expect(context.replanContext.detail).toContain(reason);
+    expect(context.replanContext.detail).toContain("[[ -f out.txt ]] && cat out.txt");
+    expect(context.replanContext.detail).toContain("sh: [[: not found");
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+    expect(reports).toEqual([]);
+  });
+
+  test("the third dispute of a check task: the project blocked with one report, the item back at Pending, the check task left Completed", async () => {
+    const { deps, item, check, reports, routed, approaches } = buildDisputeDeps(2);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(reports).toEqual([expect.objectContaining({ disputes: 3, bound: 2, checkName: "lists" })]);
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(check().status).toBe("Completed");
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
 });
 
 // The 509bbbc5 review: a turn refused at a spend cap reached the FailureRouter as a failed attempt.

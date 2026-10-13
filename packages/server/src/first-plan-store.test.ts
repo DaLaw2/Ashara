@@ -186,16 +186,17 @@ function rosterStep(): RosterDerivation {
   return new RosterDerivation({ llm: gateway, store: ours });
 }
 
+const NO_ACCOUNT = { statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" };
+
 /** A project with vision v1 and, unless told otherwise, a roster recorded without a model call. */
-async function projectWithVision(userAnswers: unknown[] = [], withRoster = true): Promise<ProjectId> {
+async function projectWithVision(withRoster = true, inferences: unknown[] = [NO_ACCOUNT]): Promise<ProjectId> {
   const project = await new ProjectRepository(db).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
   ourProjects.add(project.id);
   await new VisionRepository(db).create(project.id, {
     visionText: "Booking page for my two pottery studios.",
     summary: "A booking page for two pottery studios.",
     scopeBoundaries: ["In: class booking", "Out: payments"],
-    inferences: [{ statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" }],
-    userAnswers,
+    inferences,
   });
   if (withRoster) {
     const [first, ...rest] = ROSTER.roles.map((role) => ({
@@ -465,7 +466,7 @@ describe("first plan", () => {
 
   test("a project with a vision and no roster is not planned", async () => {
     const mock = decompositionModel();
-    const projectId = await projectWithVision([], false);
+    const projectId = await projectWithVision(false);
 
     expect(await planner().runPending()).toEqual([]);
     expect(mock.doGenerateCalls).toHaveLength(0);
@@ -483,15 +484,25 @@ describe("first plan", () => {
     expect(await workItemsOf(projectId)).toHaveLength(6);
   });
 
-  test("the client's answers reach decomposition and the knowledge graph reaches the persisted contract", async () => {
+  test("the client's answers in the vision's Stated assumptions reach decomposition, and the knowledge graph the contract", async () => {
     const mock = decompositionModel();
-    const projectId = await projectWithVision([
-      { question: "Which studio opens first?", answer: "The harbour studio", answeredAt: "2026-10-13T00:00:00Z" },
+    const projectId = await projectWithVision(true, [
+      NO_ACCOUNT,
+      {
+        key: "A2",
+        statement: "The harbour studio opens first.",
+        rationale: "The client confirmed this.",
+        status: "Stated",
+        clientAnswer: { messageId: randomUUID(), questionMessageId: randomUUID(), question: "Which studio opens first?", answer: "The harbour studio" },
+      },
     ]);
 
     expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 5 }]);
 
-    expect(mock.doGenerateCalls.some((call) => JSON.stringify(call.prompt).includes("The harbour studio"))).toBe(true);
+    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    expect(prompts.some((p) => p.includes("Client clarifications") && p.includes("Which studio opens first? -> The harbour studio"))).toBe(true);
+    // A Stated assumption is a clarification, not an assumption awaiting the client.
+    expect(prompts.some((p) => p.includes("The harbour studio opens first. (Stated)"))).toBe(false);
     const contract = await db.execute(
       sql`SELECT contract FROM project_contracts WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`,
     );
@@ -557,7 +568,7 @@ describe("first plan", () => {
 describe("roster", () => {
   test("a valid roster from vision v1 is recorded with its four capability holders", async () => {
     stubModel({ doGenerate: jsonResult(ROSTER) });
-    const projectId = await projectWithVision([], false);
+    const projectId = await projectWithVision(false);
 
     const outcomes = await rosterStep().runPending();
 
@@ -580,7 +591,7 @@ describe("roster", () => {
   test("a roster that breaks a rule is re-asked with the violation named, and the valid one recorded", async () => {
     let calls = 0;
     const mock = stubModel({ doGenerate: async () => jsonResult(calls++ === 0 ? SELF_JUDGING_ROSTER : ROSTER) });
-    const projectId = await projectWithVision([], false);
+    const projectId = await projectWithVision(false);
 
     expect((await rosterStep().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
 
@@ -593,7 +604,7 @@ describe("roster", () => {
 
   test("a model that never gives a valid roster blocks the project with the violations, and nothing is planned", async () => {
     stubModel({ doGenerate: jsonResult(SELF_JUDGING_ROSTER) });
-    const projectId = await projectWithVision([], false);
+    const projectId = await projectWithVision(false);
 
     const outcomes = await rosterStep().runPending();
 

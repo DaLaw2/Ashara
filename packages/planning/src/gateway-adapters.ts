@@ -35,6 +35,9 @@ export function createGatewayDecompositionLLM(
 ): DecompositionLLM {
   const laddered = withStructuredLadder(gateway, {
     site: "decomposition",
+    // 2, not 3: the re-ask corrects one malformed emission, escalation covers a
+    // model that keeps failing, and FirstPlanner retries the whole decomposition
+    // up to MAX_PLAN_ATTEMPTS times around this ladder.
     attempts: 2,
     reask: decompositionReask,
     onAttempt,

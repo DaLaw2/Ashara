@@ -1,4 +1,4 @@
-import type { IntakeOutcome } from "./acl/engagement-acl.js";
+import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
@@ -11,6 +11,17 @@ function logIntake(outcome: IntakeOutcome): void {
     console.log(
       `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
         `${outcome.questions} question(s) posted`,
+    );
+  }
+}
+
+/** Failures, a blocked project and an answer that answers nothing are logged at warn by the Liaison itself. */
+function logAnswer(outcome: AnswerOutcome): void {
+  if (outcome.kind === "stated") {
+    const replan = outcome.replanRequested ? "; the plan relied on it, so the project awaits replanning and is not dispatched" : "";
+    console.log(
+      `[liaison-answer] answer ${outcome.answerId}: ${outcome.verdict} assumption ${outcome.assumptionKey} of project ` +
+        `${outcome.projectId}, now Stated in vision v${outcome.visionVersion}${replan}`,
     );
   }
 }
@@ -72,6 +83,14 @@ export class CoreLoop {
     const intake = await this.step("liaison-intake", () => deps.liaisonIntake.runPending());
     if (intake.kind === "stop") return stopped(intake.stop);
     for (const outcome of intake.outcomes) logIntake(outcome);
+
+    // Then the client's answers, before planning: one read now appends the vision version
+    // the first plan is made from. One that changes an assumption an existing plan was
+    // built on sets the project's replanning flag, and the gate below does not dispatch
+    // a flagged project's tasks (ProjectRepository.listActiveIds).
+    const answers = await this.step("liaison-answers", () => deps.liaisonAnswers.runPending());
+    if (answers.kind === "stop") return stopped(answers.stop);
+    for (const outcome of answers.outcomes) logAnswer(outcome);
 
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.

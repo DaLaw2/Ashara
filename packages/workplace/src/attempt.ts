@@ -103,6 +103,8 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
   const costs = new CostTally();
   let turnsUsed = 0;
   let lastToolCall: LastToolCall | null = null;
+  /** A dispute's evidence: what the checks printed the last time the implementer ran them. */
+  let lastCheckRun: string | null = null;
 
   async function record(entry: AttemptRecord): Promise<RecordWriteFailed | null> {
     try {
@@ -284,6 +286,15 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
           detail: `turn ${turn}: the model called finish with status ${args.status}`,
         });
       }
+      if (execution.kind === "dispute") {
+        return conclude({
+          kind: "disputed",
+          checkName: execution.checkName,
+          reason: execution.reason,
+          evidence: lastCheckRun,
+          detail: `turn ${turn}: the model disputed check ${JSON.stringify(execution.checkName)}: ${execution.reason}`,
+        });
+      }
       if (execution.kind === "environment_failure") {
         return conclude({
           kind: "environment_failure",
@@ -303,6 +314,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         output: execution.output,
       });
       if (resultRecorded !== null) return recordsFailed(resultRecorded);
+      if (call.kind === "valid" && call.toolName === "run_checks") lastCheckRun = execution.output;
       toolResults.push({
         type: "tool-result",
         toolCallId: call.toolCallId,

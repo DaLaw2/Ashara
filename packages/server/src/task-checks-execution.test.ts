@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  CheckDisputeRepository,
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
@@ -20,6 +21,7 @@ import {
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import type { TaskDescriptor } from "@ashara/development";
+import { CheckDisputeReports } from "@ashara/engagement";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -229,6 +231,8 @@ afterAll(async () => {
   const images = [...new Set(stdout.split("\n").filter((id) => id !== ""))];
   if (images.length > 0) await run("podman", ["rmi", "-f", ...images]);
   await db.execute(sql`DELETE FROM task_checks WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM check_disputes WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM environment_builds WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id = ${projectId}`);
@@ -275,6 +279,36 @@ describe("independent verification", () => {
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
 
+  // Second run N1/N5: checks in bash-only syntax failed on main with a dash syntax error, which the
+  // red run accepts, and the author could not replace them.
+  it("define_check red-runs the check at once and shows why it fails; a redefinition replaces it", async () => {
+    const greeting = await plannedPair("Write hi.txt");
+
+    const { result, mock, events } = await runTask(greeting.check, [
+      toolCallTurn("define_check", { name: "says hi", command: "words=(hi); grep -q hi hi.txt && cat hi.txt" }),
+      toolCallTurn("write_file", { path: "checks/hi.sh", content: "grep hi hi.txt\n" }),
+      toolCallTurn("define_check", { name: "says hi", command: "sh checks/hi.sh" }),
+      toolCallTurn("finish", { status: "done", summary: "One check: hi.txt says hi." }),
+    ]);
+
+    expect(result.status, result.detail).toBe("completed");
+    const afterFirst = JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null);
+    expect(afterFirst).toContain('Defined check \\"says hi\\"');
+    expect(afterFirst).toContain("exit code: 2");
+    expect(afterFirst).toMatch(/Syntax error|unexpected/);
+    const afterRedefine = JSON.stringify(mock.doGenerateCalls[3]?.prompt ?? null);
+    expect(afterRedefine).toContain('Replaced check \\"says hi\\" (1 defined so far)');
+    expect(afterRedefine).toContain("hi.txt: No such file");
+    expect(events.filter((e) => e.event === "check_defined")).toMatchObject([
+      { name: "says hi", replaced: false, exitCode: 2, rejection: null },
+      { name: "says hi", replaced: true, exitCode: 2, rejection: null },
+    ]);
+    expect(await checkRowsOf(greeting.implementation.id)).toEqual([
+      expect.objectContaining({ name: "says hi", command: "sh checks/hi.sh", files: [{ path: "checks/hi.sh", content: "grep hi hi.txt\n" }] }),
+    ]);
+    expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
+  }, 300_000);
+
   it("a vacuous check, one that already passes on main, is rejected and nothing is stored", async () => {
     const vacuous = await plannedPair("Write a page");
 
@@ -312,6 +346,8 @@ describe("independent verification", () => {
     expect(toolNames(mock)).not.toContain("define_check");
     expect(promptText(mock)).toContain("Checks that decide this task");
     expect(promptText(mock)).toContain("sh checks/hello.sh");
+    expect(promptText(mock)).toContain("#### checks/hello.sh");
+    expect(promptText(mock)).toContain(HELLO_CHECK.trim());
     expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({
       verdict: "passed",
       revision: 1,
@@ -475,4 +511,78 @@ describe("post-merge regression suite", () => {
     expect(verify?.["regressionTasks"]).not.toContain(legacy.implementation.id);
     expect(verify?.["details"]).toContain(`Not re-run, no check is stored for them (completed before checks existed): ${legacy.implementation.id}`);
   }, 300_000);
+
+  // docs/investigations/second-run-2026-10-14.md N2 (no exit from a wrong check) and N3 (a retry judged
+  // only on its own uncommitted diff).
+  it("a disputed check ends the attempt as disputed with the work kept; a re-dispatch that finds it done on the branch runs the gates", async () => {
+    const reef = await checkedPair("Write reef.txt", { name: "reefs", command: "grep reef reef.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const first = await runTask(reef.implementation, [
+      toolCallTurn("write_file", { path: "reef.txt", content: "reef\n" }),
+      toolCallTurn("run_checks", {}),
+      toolCallTurn("dispute_check", { name: "reefs", reason: "the check reads the wrong file" }),
+    ]);
+
+    expect(toolNames(first.mock)).toContain("dispute_check");
+    expect(first.result.status, first.result.detail).toBe("disputed");
+    if (first.result.status !== "disputed") return;
+    expect(first.result).toMatchObject({
+      checkTaskId: reef.check.id,
+      revision: 1,
+      check: { name: "reefs", command: "grep reef reef.txt" },
+      reason: "the check reads the wrong file",
+    });
+    expect(first.result.evidence).toContain('Check "reefs"');
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+    expect(await git("log", "-1", "--format=%s", `task/${reef.implementation.id}`)).toContain("partial work for retry");
+
+    const second = await runTask({ ...reef.implementation, attempt: 2, dispatchCount: 1 }, [
+      toolCallTurn("finish", { status: "done", summary: "reef.txt is already on the task branch." }),
+    ]);
+
+    expect(second.result.status, second.result.detail).toBe("completed");
+    expect(second.events.find((e) => e.event === "branch_work_found")).toMatchObject({ paths: ["reef.txt"] });
+    expect(second.events.find((e) => e.event === "post_merge_verify")).toMatchObject({
+      verdict: "passed",
+      details: expect.stringContaining('Check "reefs": PASSED'),
+    });
+    expect(await readFile(join(target, "reef.txt"), "utf8")).toBe("reef\n");
+  }, 300_000);
+
+  it("a re-dispatch whose branch holds no change against main and that edits nothing still fails as no changes", async () => {
+    const empty = await checkedPair("Write empty.txt", { name: "empties", command: "grep empty empty.txt" });
+
+    const { result } = await runTask(empty.implementation, [toolCallTurn("finish", { status: "done", summary: "Nothing to do." })]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("the task branch holds no change against main");
+  }, 300_000);
+});
+
+// Quality's dispute record and the Liaison's block (migration 039): the count survives in the
+// table, and a project is blocked with exactly one report.
+describe("check disputes on record", () => {
+  it("counts each check task's disputes, and blocks the project with one report however often it is asked", async () => {
+    const pair = await plannedPair("Write disputed.txt");
+    const other = await plannedPair("Write undisputed.txt");
+    const disputes = new CheckDisputeRepository(db);
+    const dispute = { projectId, taskId: pair.implementation.id, checkTaskId: pair.check.id, revision: 1, checkName: "c", reason: "r", evidence: null };
+
+    expect(await disputes.record(dispute)).toBe(1);
+    expect(await disputes.record({ ...dispute, evidence: "the last run" })).toBe(2);
+    expect(await disputes.record({ ...dispute, taskId: other.implementation.id, checkTaskId: other.check.id })).toBe(1);
+    expect(await disputes.record(dispute)).toBe(3);
+
+    const reports = new CheckDisputeReports(disputes);
+    const bound = { projectId, taskTitle: "Write disputed.txt", checkTaskId: pair.check.id, checkName: "c", reason: "r", disputes: 3, bound: 2 };
+    expect(await reports.blockOnDisputes(bound)).toBe("blocked");
+    expect(await reports.blockOnDisputes(bound)).toBe("already-blocked");
+
+    const project = await db.execute(sql`SELECT status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
+    expect(project.rows).toEqual([{ status: "blocked", errorClass: "CheckDisputeBoundReached" }]);
+    const posted = await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND kind = 'report'`);
+    expect(posted.rows).toHaveLength(1);
+    expect(JSON.stringify(posted.rows[0])).toContain("Work on this project is paused");
+  });
 });

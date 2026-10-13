@@ -70,8 +70,13 @@ export function toAgentOutput(outcome: Outcome, modelId: string, tokens: TokenTa
   const totalCost = cost.measured ? cost.totalUsd : cost.measuredUsd;
   const lastToolCall = outcome.lastToolCall?.toolName ?? null;
   const done = outcome.kind === "finished" && outcome.status === "done";
-  // A refused call stopped the attempt from outside; the agent's approach did not fail.
-  const status: AgentOutputJson["status"] = done ? "done" : outcome.kind === "finished" || outcome.kind === "refused" ? "blocked" : "failed";
+  // A refused call stopped the attempt from outside, and a disputed check is the check author's to
+  // answer: in neither did the agent's approach fail.
+  const status: AgentOutputJson["status"] = done
+    ? "done"
+    : outcome.kind === "finished" || outcome.kind === "refused" || outcome.kind === "disputed"
+      ? "blocked"
+      : "failed";
   const summary =
     outcome.kind === "finished"
       ? outcome.status === "blocked"

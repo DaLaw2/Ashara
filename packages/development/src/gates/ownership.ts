@@ -32,7 +32,7 @@ type OwnershipVerdict =
  * The paths the task branch added, changed or deleted since it left main (the merge base), from
  * the target's own git (hardened host git, no renames: a rename is a deletion and an addition).
  */
-async function branchChangedPaths(targetProjectPath: string, taskId: string, branch: string): Promise<readonly string[]> {
+export async function branchChangedPaths(targetProjectPath: string, taskId: string, branch: string): Promise<readonly string[]> {
   const repo = targetRepo(targetProjectPath);
   const { stdout: baseOut } = await runHostGit(repo, ["merge-base", "--end-of-options", "refs/heads/main", `refs/heads/${branch}`]);
   const base = baseOut.trim();

@@ -1,6 +1,7 @@
 import { environmentDefinitionRules } from "@ashara/execution-infra";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
+import { CHECK_RUNNER } from "./check-definition.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
@@ -99,15 +100,23 @@ const CHECK_PROMPT = [
   `# Writing checks`,
   `You write the checks that decide whether another task is done. That task has not started: what it`,
   `describes does not exist in the project yet.`,
-  `- Define each check with define_check: a shell command run from the workspace root in the project environment.`,
+  `- Define each check with define_check: a name and a shell command. ${CHECK_RUNNER}`,
   `  A check passes when its command exits 0 and prints output, and fails otherwise.`,
   `- Each check states observable behaviour from the task's deliverables and acceptance, never how it is built.`,
-  `- Every check must FAIL on the project as it is now. A check that already passes is rejected.`,
-  `- Write any files your checks need (test files, fixtures, scripts) in the workspace. Only the files you add or`,
-  `  change are kept with the checks; nothing of this workspace is merged into the project. They are kept as text,`,
-  `  without their permissions: run a script through its interpreter rather than directly.`,
+  `- Name the files and entry points the project already has (its file tree is in the Project Context Map below),`,
+  `  or the ones the task names; do not invent other names for them.`,
+  `- Every check must FAIL on the project as it is now, for the reason the task's work is missing. A check that`,
+  `  already passes, times out, or whose command cannot be found or run is rejected. One that fails only on a`,
+  `  syntax error or a missing file of its own can never pass: it is worse than none.`,
+  `- define_check red-runs the check at once on the project as it is now, with your files so far written over it,`,
+  `  and shows you its exit code and output. Read them. To fix a check, define it again under the same name: the`,
+  `  last definition of a name is the one kept.`,
+  `- Write any files your checks need (test files, fixtures, scripts) in the workspace. A check's files must be`,
+  `  files you add or change in this workspace: only those are kept with the checks and written over the project`,
+  `  whenever they run; nothing of this workspace is merged into the project. They are kept as text, without their`,
+  `  permissions: run a script through its interpreter rather than directly.`,
   `- Do not change the project environment's own files.`,
-  `- Use run_command to confirm each check fails now, then finish with status "done".`,
+  `- When every check fails now for the right reason, finish with status "done": they are all red-run again then.`,
 ].join("\n");
 
 /**

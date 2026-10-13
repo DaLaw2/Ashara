@@ -436,8 +436,24 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
 
     const extraction = extractUsage(result.usage);
     const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
+    const finishReason = recordedFinishReason(result.finishReason);
 
-    await this.record(admitted, requestedAt, extraction, recordedFinishReason(result.finishReason), OK);
+    // An object the SDK parsed from output cut off at maxTokens is still cut
+    // off: the text happened to close, the model did not finish.
+    if (finishReason === "length") {
+      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      throw new StructuredOutputTruncated({
+        provider: resolved.providerName,
+        model: resolved.modelConfig.id,
+        maxTokens: request.maxTokens,
+        outputTokens: extraction.reported.outputTokens,
+        reasoningTokens: extraction.reasoningTokens,
+        // generateObject keeps no raw text on success; this is the parsed object re-serialized.
+        text: JSON.stringify(result.object) ?? "",
+      });
+    }
+
+    await this.record(admitted, requestedAt, extraction, finishReason, OK);
 
     return {
       data: result.object as T,
@@ -481,6 +497,20 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const finishReason = recordedFinishReason(result.finishReason);
     const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
 
+    // Checked before any parse: a value cut off at maxTokens is never parsed,
+    // even when the text that arrived happens to be valid JSON.
+    if (finishReason === "length") {
+      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      throw new StructuredOutputTruncated({
+        provider: resolved.providerName,
+        model: resolved.modelConfig.id,
+        maxTokens: request.maxTokens,
+        outputTokens: extraction.reported.outputTokens,
+        reasoningTokens: extraction.reasoningTokens,
+        text: result.text,
+      });
+    }
+
     const parsed = parseStructuredText(result.text, request.schema);
     if (parsed.ok) {
       await this.record(admitted, requestedAt, extraction, finishReason, OK);
@@ -493,17 +523,6 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       };
     }
 
-    if (finishReason === "length") {
-      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
-      throw new StructuredOutputTruncated({
-        provider: resolved.providerName,
-        model: resolved.modelConfig.id,
-        maxTokens: request.maxTokens,
-        outputTokens: extraction.reported.outputTokens,
-        reasoningTokens: extraction.reasoningTokens,
-        text: result.text,
-      });
-    }
     await this.record(admitted, requestedAt, extraction, finishReason, {
       kind: "error",
       errorKind: parsed.errorKind,

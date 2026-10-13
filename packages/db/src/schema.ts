@@ -61,6 +61,9 @@ export const projects = pgTable("projects", {
   // instead of failing every project's cycle. Recorded together, on blocked rows only.
   blockedErrorClass: text("blocked_error_class"),
   blockedReason: text("blocked_reason"),
+  // Migration 038: the answer that contradicted an assumption the first plan was
+  // built on; while set, none of the project's tasks is dispatched.
+  replanRequestedBy: uuid("replan_requested_by").references((): AnyPgColumn => clientMessages.id),
 });
 
 // ---------------------------------------------------------------------------
@@ -197,7 +200,6 @@ export const visionDocuments = pgTable(
     inferences: jsonb().notNull().default({}),
     scopeBoundaries: jsonb("scope_boundaries").notNull().default(sql`'[]'`),
     confirmedDirections: jsonb("confirmed_directions").notNull().default(sql`'[]'`),
-    userAnswers: jsonb("user_answers").notNull().default(sql`'[]'`),
     openQuestions: jsonb("open_questions").notNull().default(sql`'[]'`),
     changeReason: text("change_reason"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
@@ -526,3 +528,27 @@ export const taskChecks = pgTable(
     uniqueName: unique("task_checks_unique_name").on(t.taskId, t.revision, t.name),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// check_disputes (migration 039, Quality): an implementer's disputes of its task's
+// stored checks, one row per dispute, append-only. Their count per check task
+// bounds how often that check task is reopened to answer one.
+// ---------------------------------------------------------------------------
+
+export const checkDisputes = pgTable("check_disputes", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => workItems.id),
+  checkTaskId: uuid("check_task_id")
+    .notNull()
+    .references(() => workItems.id),
+  revision: integer().notNull(),
+  checkName: text("check_name").notNull(),
+  reason: text().notNull(),
+  evidence: text(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});

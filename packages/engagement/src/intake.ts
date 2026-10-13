@@ -337,7 +337,15 @@ export class TenderIntake implements LiaisonIntake {
   private async read(tender: OpenTender): Promise<IntakeResponse> {
     const provider = withStructuredLadder(
       this.deps.llm.forCall({ projectId: tender.projectId, taskId: null, callSite: "liaison-intake" }),
-      { site: "liaison-intake", onAttempt: this.deps.onAttempt, reask: intakeReask },
+      {
+        site: "liaison-intake",
+        // 2, not 3: the re-ask corrects one malformed emission, escalation covers
+        // a model that keeps failing, and a failed tender is retried up to
+        // MAX_INTAKE_ATTEMPTS times around this ladder.
+        attempts: 2,
+        onAttempt: this.deps.onAttempt,
+        reask: intakeReask,
+      },
     );
     const response = await provider.generateStructured({
       capability: "Strong",

@@ -106,15 +106,17 @@ export class ProjectRepository {
   }
 
   /**
-   * The projects whose work may be dispatched: status 'active' and no stop
-   * awaiting the Liaison, oldest first. This read is the dispatch decision: a
-   * stop committed after it is ordered after the dispatch it gated.
+   * The projects whose work may be dispatched: status 'active', no stop
+   * awaiting the Liaison and no replanning requested (migration 038: a client
+   * answer contradicted an assumption the plan was built on), oldest first.
+   * This read is the dispatch decision: a stop committed after it is ordered
+   * after the dispatch it gated.
    */
   async listActiveIds(): Promise<ProjectId[]> {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(eq(projects.status, "active"), noOpenStop(projects.id)))
+      .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy)))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id));
   }

@@ -18,6 +18,7 @@ import {
   ClientRepository,
   ClientLoginFailureRepository,
   EnvironmentBuildRepository,
+  CheckDisputeRepository,
   createProjectWithTender,
   latestRosterRoles,
   assertMigrationsCurrent,
@@ -39,7 +40,7 @@ import {
   tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
-import { ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
+import { CheckDisputeReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation } from "@ashara/organization";
 import type {
   AgentStaffing,
@@ -78,6 +79,7 @@ import {
   resolveProviderCredentials,
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
+import { createAnswerStore } from "./answer-store.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
@@ -337,6 +339,7 @@ async function main(): Promise<void> {
     shutdownSignal: abortController.signal,
   });
 
+  const checkDisputes = new CheckDisputeRepository(db);
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
     workItemRepo,
@@ -353,6 +356,11 @@ async function main(): Promise<void> {
       store: createIntakeStore(db),
       onAttempt: ladderAttemptSink,
     }),
+    liaisonAnswers: new ClientAnswers({
+      llm: llmGateway,
+      store: createAnswerStore(db),
+      onAttempt: ladderAttemptSink,
+    }),
     rosterDerivation: new RosterDerivation({
       llm: llmGateway,
       store: createRosterStore(db),
@@ -365,6 +373,8 @@ async function main(): Promise<void> {
     }),
     planReports: new PlanReports(createPlanReportStore(db)),
     stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
+    checkDisputes,
+    disputeReports: new CheckDisputeReports(checkDisputes),
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);

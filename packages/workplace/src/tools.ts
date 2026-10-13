@@ -3,7 +3,8 @@ import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace } from "@ashar
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
 import type { WorkKind } from "@ashara/shared";
-import type { CheckDefinitionPort } from "./check-definition.js";
+import { CHECK_RUNNER } from "./check-definition.js";
+import type { CheckDefinitionPort, CheckDefinitionResult } from "./check-definition.js";
 import { checkPassed, formatCheckRunReport } from "./check-run.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
@@ -29,6 +30,13 @@ const buildEnvironmentArgs = z.object({}).strict();
 const runChecksArgs = z.object({}).strict();
 const defineCheckArgs = z
   .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
+  .strict();
+const MAX_DISPUTE_REASON_CHARS = 4000;
+const disputeCheckArgs = z
+  .object({
+    name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"),
+    reason: nonBlank.pipe(z.string().max(MAX_DISPUTE_REASON_CHARS)),
+  })
   .strict();
 const MAX_STATEMENT_CHARS = 1500;
 const blockedFinish = z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict();
@@ -172,9 +180,14 @@ const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
 /** Only the check author defines checks (the work kind needing "author-checks"). */
 const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
   description:
-    "Define one check of the task: a shell command run from the workspace root in the project environment. The " +
-    "check passes when the command exits 0 and prints output. Every check must FAIL on the project as it is now. " +
-    "The files you add or change in this workspace are kept with the checks and put back in place whenever they run.",
+    "Define one check of the task. " +
+    CHECK_RUNNER +
+    " The check passes when the command exits 0 and prints output. Every check must FAIL on the project as it is " +
+    "now, by a non-zero exit within its time limit, for the reason the task's work is missing. Any file a check needs " +
+    "must be one you add or change in this workspace: only those are kept with the checks and written over the " +
+    "project whenever they run. The check is red-run at once on the project as it is now, with your files so far " +
+    "written over it; the result shows its exit code and output and whether it would be rejected. Defining a check " +
+    "with the name of one already defined replaces it.",
   inputSchema: {
     type: "object",
     properties: {
@@ -195,9 +208,32 @@ const RUN_CHECKS_SCHEMA: TurnToolSchema = {
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
 
+/** Only implementation work decided by stored checks may dispute one (ADR-074 addendum 2 d65 c). */
+const DISPUTE_CHECK_SCHEMA: TurnToolSchema = {
+  description:
+    "End the attempt by disputing one of the task's checks: use it only when that check cannot pass on correct " +
+    "work (for example the check itself is broken or contradicts the task), never because your work does not pass " +
+    "it yet. The check goes back to its author with your reason and the output of your last run_checks; this task " +
+    "waits until the checks are written again. Your work so far is kept for the next attempt.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", maxLength: MAX_CHECK_NAME, description: "The disputed check's name, exactly as run_checks reports it." },
+      reason: {
+        type: "string",
+        maxLength: MAX_DISPUTE_REASON_CHARS,
+        description: "Why the check cannot pass on correct work, with the evidence you found.",
+      },
+    },
+    required: ["name", "reason"],
+    additionalProperties: false,
+  },
+};
+
 /**
  * The tools an attempt offers the model: build_environment only for environment work, define_check
- * only for check work, run_checks only when the task's stored checks can be run.
+ * only for check work, run_checks only when the task's stored checks can be run, and dispute_check
+ * only for implementation work that runs them.
  */
 export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): ToolSchemas {
   const offered = runChecks ? { ...TOOL_SCHEMAS, run_checks: RUN_CHECKS_SCHEMA } : TOOL_SCHEMAS;
@@ -207,6 +243,7 @@ export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): T
     case "check":
       return { ...offered, define_check: DEFINE_CHECK_SCHEMA };
     case "implementation":
+      return runChecks ? { ...offered, dispute_check: DISPUTE_CHECK_SCHEMA } : offered;
     case null:
       return offered;
   }
@@ -215,6 +252,7 @@ export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): T
 export type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
+  | { readonly kind: "dispute"; readonly checkName: string; readonly reason: string }
   | { readonly kind: "environment_failure"; readonly error: unknown; readonly toolName: string };
 
 export interface ToolContext {
@@ -265,6 +303,27 @@ function formatRun(result: ExecResult, timeoutSeconds: number): ToolExecution {
   if (result.stdout !== "") parts.push(`STDOUT:\n${withCellMarker(result.stdout, result.stdoutTruncated)}`);
   if (result.stderr !== "") parts.push(`STDERR:\n${withCellMarker(result.stderr, result.stderrTruncated)}`);
   return { kind: "result", output: parts.join("\n"), isError: result.timedOut || result.exitCode !== 0 };
+}
+
+/** define_check's answer: what was recorded and how its immediate red run on main went. */
+function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult, { readonly kind: "recorded" }>): ToolExecution {
+  const recorded = `${result.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${result.defined} defined so far).`;
+  const { redRun } = result;
+  if (redRun.kind === "files_refused") {
+    return toolError(`${recorded}\nIt could not be red-run: ${redRun.detail}\nAt finish this rejects every check of the task.`);
+  }
+  const { run } = redRun;
+  const lines = [
+    recorded,
+    `Red run on the project as it is now (limit ${redRun.timeoutSeconds}s):`,
+    `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
+    `  output: ${run.output === "" ? "(empty)" : run.output}`,
+    redRun.rejection === null
+      ? `It fails now, as it must. Make sure it fails for the reason the task's work is missing, not because of a ` +
+        `syntax error or a file that does not exist: such a check can never pass.`
+      : `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`,
+  ];
+  return { kind: "result", output: lines.join("\n"), isError: redRun.rejection !== null };
 }
 
 function countOccurrences(text: string, needle: string): { readonly count: number; readonly first: number } {
@@ -351,9 +410,10 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = defineCheckArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       if (context.checks === null) return toolError(`define_check is not available in this attempt.`);
-      const result = context.checks.define({ name: args.data.name.trim(), command: args.data.command });
+      const name = args.data.name.trim();
+      const result = await context.checks.define({ name, command: args.data.command }, context.commandTimeoutSeconds);
       if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
-      return ok(`Defined check ${JSON.stringify(args.data.name.trim())} (${result.defined} defined so far).`);
+      return formatDefinedCheck(name, result);
     }
     case "run_checks": {
       const args = runChecksArgs.safeParse(input);
@@ -362,6 +422,17 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const report = await context.taskChecks.run(context.commandTimeoutSeconds);
       const allPass = report.kind === "ran" && report.runs.length > 0 && report.runs.every(checkPassed);
       return { kind: "result", output: formatCheckRunReport(report), isError: !allPass };
+    }
+    case "dispute_check": {
+      const args = disputeCheckArgs.safeParse(input);
+      if (!args.success) return argsError(toolName, args.error);
+      if (context.taskChecks === null) return toolError(`dispute_check is not available in this attempt.`);
+      const name = args.data.name.trim();
+      if (!context.taskChecks.checkNames.includes(name)) {
+        const known = context.taskChecks.checkNames.map((check) => JSON.stringify(check)).join(", ");
+        return toolError(`dispute_check: no check of this task is named ${JSON.stringify(name)}. Its checks are: ${known}.`);
+      }
+      return { kind: "dispute", checkName: name, reason: args.data.reason.trim() };
     }
     case "finish": {
       // The finish parsed is the finish offered: environment work's carries the statement.

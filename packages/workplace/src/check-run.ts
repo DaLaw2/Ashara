@@ -22,6 +22,8 @@ export type CheckRunReport =
  * cannot run them throws.
  */
 export interface TaskCheckRunPort {
+  /** The stored checks' names: the only checks dispute_check may name. */
+  readonly checkNames: readonly string[];
   run(timeoutSeconds: number): Promise<CheckRunReport>;
 }
 
