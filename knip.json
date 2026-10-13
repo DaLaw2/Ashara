@@ -18,11 +18,6 @@
       "vitest": false,
       "ignoreBinaries": ["podman"]
     },
-    "packages/development": {
-      "entry": ["test/integration.ts"],
-      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
-      "vitest": false
-    },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,

@@ -118,19 +118,6 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
 });
 
 // ---------------------------------------------------------------------------
-// brainstorm_log
-// ---------------------------------------------------------------------------
-
-export const brainstormLog = pgTable("brainstorm_log", {
-  id: uuid().primaryKey(),
-  triggerReason: text("trigger_reason").notNull(),
-  triggerLevel: text("trigger_level").notNull(),
-  itemsCreated: integer("items_created").notNull().default(0),
-  itemsProposed: integer("items_proposed").notNull().default(0),
-  createdAt: timestamptz("created_at").notNull().defaultNow(),
-});
-
-// ---------------------------------------------------------------------------
 // vision_documents
 // ---------------------------------------------------------------------------
 

@@ -9,7 +9,6 @@ export {
   parseWorkItemStatus,
 } from "./enums.js";
 
-export type { AgentRunnerEnv } from "./env.js";
 export {
   loadProviderKeys,
   loadProviderBaseUrls,

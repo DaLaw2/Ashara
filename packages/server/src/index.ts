@@ -13,9 +13,7 @@ import {
   ConfigRepository,
   CostRepository,
   KnowledgeRepository,
-  BrainstormLogRepository,
   FailedApproachRepository,
-  ContextBriefRepository,
   ContractRepository,
   RunStateRepository,
   withPlanningTransaction,
@@ -31,15 +29,9 @@ import {
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import type { ContractRegistryLookup } from "@ashara/planning";
 import {
-  BrainstormEngine,
-  StubBrainstormLLM,
-  NorthStarChecker,
-  StubNorthStarLLM,
   DecompositionEngine,
   loadDecompositionConfig,
   FailureRouter,
-  createGatewayBrainstormLLM,
-  createGatewayNorthStarLLM,
   createGatewayDecompositionLLM,
   createGatewayAcceptanceLLM,
   createGatewayReplanLLM,
@@ -50,7 +42,6 @@ import {
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
-import type { BrainstormLLM, NorthStarLLM, DecompositionLLM, AcceptanceLLM, ReplanLLM, FailureCategory } from "@ashara/planning";
 import {
   createRetrievalFn,
   DevelopmentService,
@@ -74,6 +65,7 @@ import type {
 import { buildSanitizedEnv, extractProjectConventions } from "@ashara/agent-runner";
 import {
   BudgetLedger,
+  buildGateway,
   buildGatewayConfig,
   loadRoutingProfilesFromToml,
   resolveModelsConfigPath,
@@ -82,11 +74,11 @@ import {
   withStructuredLadder,
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
-import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memory";
+import { createInProcessGraphClient } from "@ashara/memory";
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
-import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
+import type { WorkItemId, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { PlanningService } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -101,7 +93,6 @@ import {
   SANDBOX_TAG,
   ContainerSpawnError,
 } from "./container-spawn.js";
-import { wireLlmGateway } from "./gateway-wiring.js";
 import { PodmanProvisioner } from "./podman-provisioner.js";
 
 async function main(): Promise<void> {
@@ -117,9 +108,7 @@ async function main(): Promise<void> {
   const costRepo = new CostRepository(db);
   const runStateRepo = new RunStateRepository(db);
   const knowledgeRepo = new KnowledgeRepository(db);
-  const brainstormLogRepo = new BrainstormLogRepository(db);
   const failedApproachRepo = new FailedApproachRepository(db);
-  const contextBriefRepo = new ContextBriefRepository(db);
   const contractRepo = new ContractRepository(db);
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
@@ -142,10 +131,9 @@ async function main(): Promise<void> {
   const config = loadServerConfig(databaseUrl, apiToken);
 
   // Single composition-root call for the LLM gateway (ADR-030). There is no
-  // silent fallback here: providers configured -> real gateway; zero
-  // providers + ASHARA_TEST_STUB_LLM=1 -> explicit stub mode; zero providers
-  // and no test flag -> NoLLMProvidersConfigured propagates out of this
-  // block and the server refuses to start (see catch below).
+  // silent fallback here: zero providers -> NoLLMProvidersConfigured
+  // propagates out of this block and the server refuses to start (see catch
+  // below).
   //
   // budgetLedger is the ONE in-memory, per-run budget gate for this process
   // (structural simplification: replaces the file-based CostTracker). Its
@@ -166,7 +154,7 @@ async function main(): Promise<void> {
   };
 
   const budgetLedger = new BudgetLedger();
-  let llmGateway: LLMGateway | null;
+  let llmGateway: LLMGateway;
   try {
     // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
     // Load from DB, convert to the llm-gateway ModelConfig shape, and build the
@@ -202,22 +190,14 @@ async function main(): Promise<void> {
       maxCostTotal: config.coreLoop.budgetLimitUsd,
       maxCostPerProvider: gwConfig.budget?.maxCostPerProvider,
     };
-    const wired = await wireLlmGateway(
-      gwConfig,
-      budgetLedger,
-      llmLogSink,
-    );
-    llmGateway = wired.llmGateway;
-
-    if (wired.mode === "real") {
-      console.log("LLM gateway initialized");
-      console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
-    } else {
-      console.warn(
-        "STUB MODE ACTIVE (ASHARA_TEST_STUB_LLM=1): no real LLM provider is configured. " +
-          "Planning LLMs will run on Stub* implementations -- this must never happen in production.",
-      );
-    }
+    llmGateway = buildGateway({
+      config: gwConfig,
+      checkedSources: ["provider_configs.api_key (database)"],
+      ledger: budgetLedger,
+      logSink: llmLogSink,
+    });
+    console.log("LLM gateway initialized");
+    console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
   } catch (err) {
     if (err instanceof NoLLMProvidersConfigured) {
       console.error("FATAL: LLM gateway refused to start (ADR-030) -- server will not boot.");
@@ -242,54 +222,25 @@ async function main(): Promise<void> {
   // In-process GraphClient: avoids HTTP round-trips for server-side retrieval.
   const inProcessGraphClient: GraphClient = createInProcessGraphClient(indexer);
 
-  let brainstormLlm: BrainstormLLM;
-  let northstarLlm: NorthStarLLM;
-  let decompositionLlm: DecompositionLLM | null = null;
-  let acceptanceLlm: AcceptanceLLM | null = null;
-  let replanLlm: ReplanLLM | null = null;
-  if (llmGateway) {
-    // Route ALL structured planning calls (brainstorm, northstar, decomposition)
-    // through the shared reliability ladder (Phase 4 t1, ADR-030 G5): temperature
-    // 0, validated attempt on the requested model, escalate ONE capability tier
-    // on persistent schema failure, then a typed StructuredOutputExhausted —
-    // never silently accept a drifted enum. The wrapper is a drop-in for the
-    // gateway's generateStructured, so the planning adapters are unchanged.
-    //
-    // Separate ladder instances (distinct "brainstorm"/"northstar" sites,
-    // rather than one shared "planning" site) so the routing-profiles story
-    // can route each independently — a shared site would have collapsed both
-    // under one playbook entry.
-    const brainstormLadder = withStructuredLadder(llmGateway, { site: "brainstorm", onAttempt: ladderAttemptSink });
-    const northstarLadder = withStructuredLadder(llmGateway, { site: "northstar", onAttempt: ladderAttemptSink });
-    brainstormLlm = createGatewayBrainstormLLM(brainstormLadder);
-    northstarLlm = createGatewayNorthStarLLM(northstarLadder);
-    // Decomposition gets its OWN ladder (createGatewayDecompositionLLM): it runs a
-    // SEMANTIC phantom-dependsOn-ref validation inside each attempt and re-asks with
-    // the feedback on retry, so a single malformed emission is corrected instead of
-    // exploding the run (mig-run10, the Run-10 "task-0017" phantom-ref blocker).
-    decompositionLlm = createGatewayDecompositionLLM(llmGateway, ladderAttemptSink);
-    const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
-    acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
-    const replanLadder = withStructuredLadder(llmGateway, { site: "replan", onAttempt: ladderAttemptSink });
-    replanLlm = createGatewayReplanLLM(replanLadder);
-    console.log("Planning LLMs: gateway-backed (brainstorm, northstar, decomposition, acceptance, replan)");
-  } else {
-    brainstormLlm = new StubBrainstormLLM();
-    northstarLlm = new StubNorthStarLLM();
-    console.warn("Planning LLMs: STUB MODE (ASHARA_TEST_STUB_LLM=1) -- no real LLM calls");
-  }
-  const brainstormEngine = new BrainstormEngine(brainstormLlm);
-  const northstarChecker = new NorthStarChecker(northstarLlm);
+  // Route ALL structured planning calls through the shared reliability ladder
+  // (Phase 4 t1, ADR-030 G5): temperature 0, validated attempt on the requested
+  // model, escalate ONE capability tier on persistent schema failure, then a
+  // typed StructuredOutputExhausted — never silently accept a drifted enum.
+  //
+  // Decomposition gets its OWN ladder (createGatewayDecompositionLLM): it runs a
+  // SEMANTIC phantom-dependsOn-ref validation inside each attempt and re-asks with
+  // the feedback on retry, so a single malformed emission is corrected instead of
+  // exploding the run (mig-run10, the Run-10 "task-0017" phantom-ref blocker).
+  const decompositionLlm = createGatewayDecompositionLLM(llmGateway, ladderAttemptSink);
+  const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
+  const acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
+  const replanLadder = withStructuredLadder(llmGateway, { site: "replan", onAttempt: ladderAttemptSink });
+  const replanLlm = createGatewayReplanLLM(replanLadder);
   const decompositionOverrides = await loadDecompositionConfig((key: string) => configRepo.getSetting(key));
   const decompositionEngine = new DecompositionEngine(decompositionLlm, decompositionOverrides);
   const failureRouter = new FailureRouter(3);
 
   const retrieveFn = await createRetrievalFn(inProcessGraphClient);
-
-  const proposalEmbedder = createEmbedderFromEnv();
-  if (proposalEmbedder === null) {
-    console.log("No embedder configured; brainstorm proposal dedup will use lexical similarity only");
-  }
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief) => devSessionRepo.insert(sid, tid, brief),
@@ -518,43 +469,40 @@ async function main(): Promise<void> {
   // project, not once per task. Temperature 0 (Discipline A: deterministic) and
   // laddered like every other structured planning call, with a validate that
   // rejects an empty answer so the ladder re-asks instead of returning nothing.
-  let stackDeriver: StackDeriver | undefined;
-  if (llmGateway) {
-    const stackLadder = withStructuredLadder(llmGateway, {
-      site: "stack-derivation",
-      onAttempt: ladderAttemptSink,
-    });
-    const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
-    stackDeriver = {
-      async deriveStack(intent: string): Promise<readonly string[]> {
-        const response = await stackLadder.generateStructured({
-          capability: "Strong",
-          prompt: [
-            `Read this project vision and state the implementation stack it targets.`,
-            ``,
-            `Vision:`,
-            intent,
-            ``,
-            `Return LABELS ONLY — the names of the language, runtime, framework, database and`,
-            `build tool the vision calls for (e.g. "Go", "SQLite", "Cobra"). Never return a`,
-            `command, a file name, a version number, or an explanation.`,
-            `State only what the vision supports. If it names a language, that language is first.`,
-            ``,
-            `IMPORTANT: Respond with ONLY valid JSON, no markdown, no code fences.`,
-            `Use exactly this format: {"stack": ["...", "..."]}`,
-          ].join("\n"),
-          schema: stackSchema,
-          maxTokens: 512,
-          temperature: 0,
-          validate: (value) =>
-            value.stack.length > 0
-              ? { ok: true }
-              : { ok: false, errors: ["The stack array is empty; name at least the implementation language."] },
-        });
-        return response.data.stack;
-      },
-    };
-  }
+  const stackLadder = withStructuredLadder(llmGateway, {
+    site: "stack-derivation",
+    onAttempt: ladderAttemptSink,
+  });
+  const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
+  const stackDeriver: StackDeriver = {
+    async deriveStack(intent: string): Promise<readonly string[]> {
+      const response = await stackLadder.generateStructured({
+        capability: "Strong",
+        prompt: [
+          `Read this project vision and state the implementation stack it targets.`,
+          ``,
+          `Vision:`,
+          intent,
+          ``,
+          `Return LABELS ONLY — the names of the language, runtime, framework, database and`,
+          `build tool the vision calls for (e.g. "Go", "SQLite", "Cobra"). Never return a`,
+          `command, a file name, a version number, or an explanation.`,
+          `State only what the vision supports. If it names a language, that language is first.`,
+          ``,
+          `IMPORTANT: Respond with ONLY valid JSON, no markdown, no code fences.`,
+          `Use exactly this format: {"stack": ["...", "..."]}`,
+        ].join("\n"),
+        schema: stackSchema,
+        maxTokens: 512,
+        temperature: 0,
+        validate: (value) =>
+          value.stack.length > 0
+            ? { ok: true }
+            : { ok: false, errors: ["The stack array is empty; name at least the implementation language."] },
+      });
+      return response.data.stack;
+    },
+  };
 
   // FailureRouter substitution (mig9-t4): the contract read that lets recovery find
   // a substitute by the module/endpoint registry, not just by title.
@@ -653,16 +601,11 @@ async function main(): Promise<void> {
     workItemRepo,
     eventStore,
     costRepo,
-    brainstormLogRepo,
     failedApproachRepo,
-    contextBriefRepo,
     visionRepo,
-    brainstormEngine,
-    northstarChecker,
     decompositionEngine,
     contractRepo,
     developmentService,
-    embedder: proposalEmbedder,
     eventLogger,
     failureRouter,
     contractLookup,
@@ -671,7 +614,7 @@ async function main(): Promise<void> {
     // work-item half is re-adapted to the domain shape the same way the
     // top-level workItemRepo is (adaptWorkItemRepo).
     withPlanningTransaction: planningTransaction,
-    acceptanceLlm: acceptanceLlm ?? undefined,
+    acceptanceLlm,
     // The entry point lives in the knowledge graph since ADR-038, not as a
     // top-level contract field.
     // Host execution is deliberate and explicit, not a fallback — it replaced a
@@ -693,7 +636,7 @@ async function main(): Promise<void> {
     // Seeded to 0 and immediately overwritten by CoreLoop from the durable run
     // record on the first cycle (a resumed run keeps its spent attempts).
     acceptanceAttempts: 0,
-    replanLlm: replanLlm ?? undefined,
+    replanLlm,
     replanRounds: 0,
     runStateStore: runStateRepo,
   };

@@ -13,7 +13,6 @@ import type {
 } from "./decomposition-types.js";
 import {
     DEFAULT_DECOMPOSITION_CONFIG,
-    KnowledgeDerivationError,
     TaskOutputSchema,
     UnresolvableDependencyError,
 } from "./decomposition-types.js";
@@ -24,7 +23,7 @@ export interface DecompositionLLM {
      * the reliability ladder attempt: a `false` verdict (e.g. a phantom
      * `dependsOn` ref) is a retryable failure whose feedback is re-asked and
      * escalated, so one malformed emission is corrected on retry rather than
-     * exploding the whole decomposition. A stub/unladdered LLM may ignore it.
+     * exploding the whole decomposition. An unladdered LLM may ignore it.
      */
     generateStructured<T>(
         prompt: string,
@@ -70,37 +69,16 @@ function validateKnowledgeGraph(graph: ProjectKnowledge): StructuredValidation {
 }
 
 export class DecompositionEngine {
-    private readonly llm: DecompositionLLM | null;
+    private readonly llm: DecompositionLLM;
     private readonly config: DecompositionConfig;
 
-    constructor(llm: DecompositionLLM | null, config?: Partial<DecompositionConfig>) {
+    constructor(llm: DecompositionLLM, config?: Partial<DecompositionConfig>) {
         this.llm = llm;
         this.config = { ...DEFAULT_DECOMPOSITION_CONFIG, ...config };
     }
 
-    /**
-     * Refuses rather than degrades when no LLM is configured. The previous
-     * behavior returned `emptyResult` — an epic with zero tasks and, once
-     * DecompositionResult carried a knowledge graph, no honest value to put in
-     * it. A zero-task plan is indistinguishable from a successfully planned
-     * project with nothing to do, so stub mode got a silent no-op where it
-     * should get a refusal. This matches the convention agent-runner already
-     * follows (runner.ts:560): a component with no stub execution path refuses
-     * to start under ASHARA_TEST_STUB_LLM rather than pretending to run.
-     */
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
-        if (!this.llm) {
-            throw new KnowledgeDerivationError(
-                input.epicTitle,
-                "no LLM is configured, and decomposition has no stub execution path",
-            );
-        }
         return this.decomposeInternal(input);
-    }
-
-    private get requiredLlm(): DecompositionLLM {
-        if (!this.llm) throw new Error("DecompositionEngine: LLM required but not configured");
-        return this.llm;
     }
 
     generateTaskSpec(task: WorkItemSpec, context: DecompositionInput): TaskSpec {
@@ -164,7 +142,7 @@ export class DecompositionEngine {
         // The ladder re-asks on a barren graph (validateKnowledgeGraph) and throws
         // when the attempts are exhausted, so a graph returned here has already
         // stated a language or a runtime.
-        return this.requiredLlm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
+        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema, validateKnowledgeGraph);
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
@@ -413,7 +391,7 @@ export class DecompositionEngine {
             input.manifestContext,
         );
 
-        const parsed = await this.requiredLlm.generateStructured(
+        const parsed = await this.llm.generateStructured(
             prompt,
             TaskOutputSchema,
             (value) => this.validateTaskRefs(value.tasks, taskCap, epic.id),
@@ -426,10 +404,6 @@ export class DecompositionEngine {
         input: DecompositionInput,
         existingItems: ReadonlyArray<ExistingWorkItemSummary> = [],
     ): Promise<WorkItemSpec[]> {
-        if (!this.llm) {
-            console.warn("[DecompositionEngine] No LLM configured — skipping story decomposition");
-            return [];
-        }
         const prompt = this.buildDecomposePrompt(
             "decompose this story into tasks",
             story.title,
@@ -442,7 +416,7 @@ export class DecompositionEngine {
             input.manifestContext,
         );
 
-        const parsed = await this.requiredLlm.generateStructured(
+        const parsed = await this.llm.generateStructured(
             prompt,
             TaskOutputSchema,
             (value) => this.validateTaskRefs(value.tasks, this.config.maxTasksPerStory, story.id),

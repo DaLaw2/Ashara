@@ -1,14 +1,10 @@
-export { createEmbedderFromEnv } from "./embedder.js";
-
-export type { GraphClient, GraphTraversalResult, KeywordResult } from "./graph-client.js";
+export type { GraphClient } from "./graph-client.js";
 
 export { createInProcessGraphClient } from "./in-process-graph-client.js";
 
 export type {
     RetrievalConfig,
     RetrievalResult,
-    KnowledgeStore,
-    KnowledgeResult,
     RankedResult,
     Reranker,
 } from "./retrieval.js";

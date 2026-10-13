@@ -5,7 +5,6 @@ import { tryCreateLLM, VisionError, runVision } from "./vision.js";
 // Saved and restored around each test so the suite is isolated from
 // whatever the host machine or CI has configured.
 const LLM_ENV_KEYS = [
-    "ASHARA_TEST_STUB_LLM",
     "ASHARA_SERVER_URL",
     "ASHARA_API_TOKEN",
     "ANTHROPIC_API_KEY",
@@ -17,7 +16,7 @@ const LLM_ENV_KEYS = [
     "LOCAL_LLM_URL",
 ] as const;
 
-describe("tryCreateLLM fail-closed (stub mode rejected)", () => {
+describe("tryCreateLLM fail-closed (no LLM configuration)", () => {
     const savedEnv: Record<string, string | undefined> = {};
 
     beforeEach(() => {
@@ -38,8 +37,6 @@ describe("tryCreateLLM fail-closed (stub mode rejected)", () => {
     });
 
     test("throws VisionError of kind llm_unavailable with diagnostic context", async () => {
-        process.env["ASHARA_TEST_STUB_LLM"] = "1";
-
         const error = await tryCreateLLM().catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(VisionError);
@@ -52,8 +49,6 @@ describe("tryCreateLLM fail-closed (stub mode rejected)", () => {
     });
 
     test("full pipeline stops before alignment on a non-web-app vision", async () => {
-        process.env["ASHARA_TEST_STUB_LLM"] = "1";
-
         // Embedded firmware — the old constant would have answered this vision
         // as platform="web application", persistence="relational database",
         // stack="TypeScript". A returning constant is visibly wrong here:

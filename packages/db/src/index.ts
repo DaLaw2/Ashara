@@ -10,8 +10,6 @@ export { EventStoreRepository } from "./repositories/event-store.js";
 export { CostRepository } from "./repositories/cost.js";
 export type { CapabilityCostEstimate } from "./repositories/cost.js";
 export { KnowledgeRepository } from "./repositories/knowledge.js";
-export { ContextBriefRepository } from "./repositories/context-brief.js";
-export { BrainstormLogRepository } from "./repositories/brainstorm-log.js";
 export { FailedApproachRepository } from "./repositories/failed-approach.js";
 export { ConfigRepository } from "./repositories/config.js";
 export { RunStateRepository } from "./repositories/run-state.js";

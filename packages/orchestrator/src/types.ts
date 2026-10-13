@@ -1,8 +1,6 @@
 import type {
   EventStoreRepository,
-  BrainstormLogRepository,
   FailedApproachRepository,
-  ContextBriefRepository,
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
@@ -13,10 +11,7 @@ import type {
   TerminationDecision,
   ReplanLLM,
   WorkItemRepository,
-  BrainstormEngine,
-  NorthStarChecker,
   DecompositionEngine,
-  ProposalEmbedder,
   AcceptanceLLM,
   AcceptanceVerdict,
   FailureRouter,
@@ -35,11 +30,6 @@ export interface CoreLoopConfig {
   readonly agentTimeoutMs: number;
   readonly maxRetries: number;
   readonly asharaSourceDir: string;
-  readonly brainstormCooldownThreshold: number;
-  readonly maxPendingWorkItems: number;
-  readonly maxBrainstormItems: number;
-  readonly brainstormTimeoutMs: number;
-  readonly northstarTimeoutMs: number;
   readonly decompositionTimeoutMs: number;
   readonly verifyTimeoutMs: number;
   /**
@@ -69,11 +59,6 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   agentTimeoutMs: 300_000,
   maxRetries: 1,
   asharaSourceDir: ".",
-  brainstormCooldownThreshold: 3,
-  maxPendingWorkItems: 15,
-  maxBrainstormItems: 3,
-  brainstormTimeoutMs: 120_000,
-  northstarTimeoutMs: 60_000,
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
   coverageEnforcing: true,
@@ -185,15 +170,10 @@ export interface CoreLoopDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: EventStoreRepository;
   readonly costRepo: CostRepository;
-  readonly brainstormLogRepo: BrainstormLogRepository;
   readonly failedApproachRepo: FailedApproachRepository;
-  readonly contextBriefRepo: ContextBriefRepository;
   readonly visionRepo: VisionRepository;
-  readonly brainstormEngine: BrainstormEngine;
-  readonly northstarChecker: NorthStarChecker;
   readonly decompositionEngine: DecompositionEngine;
   readonly developmentService: DevelopmentService;
-  readonly embedder?: ProposalEmbedder | null;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRouter;
   /**

@@ -3,10 +3,9 @@ import { z } from "zod";
 /**
  * Published Language: the persisted success_criteria array on work items.
  * Every element is a string — decomposition engines produce string criteria,
- * and every consumer (northstar-orchestrator, story-decomposer) reads them
- * as strings. The domain type was `unknown[]` historically; this schema
- * catches non-string elements at the boundary rather than letting them
- * silently survive to a consumer cast.
+ * and every consumer reads them as strings. The domain type was `unknown[]`
+ * historically; this schema catches non-string elements at the boundary
+ * rather than letting them silently survive to a consumer cast.
  */
 export const storedSuccessCriteriaSchema = z.array(z.string());
 

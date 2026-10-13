@@ -62,10 +62,6 @@ export class PlanningService {
     return repo.create(item);
   }
 
-  static async findByStatus(repo: WorkItemRepository, status: WorkItemStatus): Promise<WorkItem[]> {
-    return repo.findByStatus(status);
-  }
-
   static async findStoriesNeedingDecomposition(repo: WorkItemRepository): Promise<WorkItem[]> {
     return GateKeeper.findStoriesNeedingDecomposition(repo);
   }

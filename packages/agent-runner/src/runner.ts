@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { CapabilityLevel, AgentRunnerEnv, AgentBrief } from "@ashara/shared";
+import type { CapabilityLevel, AgentBrief } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, loadAgentRunnerEnv, parseAgentBrief } from "@ashara/shared";
 import {
     LLMGateway,
@@ -397,20 +397,10 @@ if (import.meta.main) {
     console.log(`[agent-runner] config loaded from catalog file (${env.catalogPath})`);
 
     // Single composition-root factory for the gateway (ADR-030) -- no inline
-    // refuse-to-start guard duplicated here. Agent-runner has no stub
-    // execution path (it always needs a real model to write code), so a
-    // "stub" result is also fatal here, matching the prior behavior where
-    // zero providers refused to start regardless of ASHARA_TEST_STUB_LLM.
+    // refuse-to-start guard duplicated here.
     let gateway: LLMGateway;
     try {
-        const built = buildGateway({ config: gatewayConfig, checkedSources });
-        if (built.kind === "stub") {
-            console.error(
-                "[agent-runner] fatal: ASHARA_TEST_STUB_LLM=1 is set, but agent-runner has no stub execution path -- refusing to start.",
-            );
-            process.exit(1);
-        }
-        gateway = built.gateway;
+        gateway = buildGateway({ config: gatewayConfig, checkedSources });
     } catch (e) {
         if (e instanceof NoLLMProvidersConfigured) {
             console.error("[agent-runner] fatal: no LLM providers configured (ADR-030) -- refusing to start.");

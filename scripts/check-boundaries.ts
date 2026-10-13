@@ -173,7 +173,7 @@ function collectTsFiles(dir: string): string[] {
       const fullPath = path.join(current, entry.name);
 
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "__stubs__") continue;
+        if (entry.name === "node_modules") continue;
         walk(fullPath);
       } else if (entry.isFile()) {
         if (

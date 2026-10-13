@@ -127,8 +127,7 @@ export class SchemaValidationError extends GatewayError {
 }
 
 /**
- * Thrown by `buildGateway` when zero LLM providers are configured and the
- * explicit `ASHARA_TEST_STUB_LLM=1` test escape hatch is not set.
+ * Thrown by `buildGateway` when zero LLM providers are configured.
  *
  * Per ADR-030 (docs/decisions.md), this is the structural fix for the
  * "run silently executes on stubs" failure class — a mis-set provider

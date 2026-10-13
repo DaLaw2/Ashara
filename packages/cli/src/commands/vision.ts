@@ -51,14 +51,9 @@ function createLLMFromGateway(gateway: LLMGateway): AlignmentLLM & Decomposition
     };
 }
 
-// Composition-root LLM acquisition (ADR-030). Config acquisition keeps its
-// API-then-TOML fallback chain, but the *result* always goes through
-// buildGateway: providers configured -> real gateway; zero providers with no
-// test flag -> NoLLMProvidersConfigured propagates. Zero providers +
-// ASHARA_TEST_STUB_LLM=1 is now ALSO a failure: alignment requires a real
-// LLM and cannot proceed on a stub (Discipline A). The error names the
-// actual cause — which config sources were checked and what each yielded —
-// rather than a blanket "STUB MODE" that ends the investigation.
+// Composition-root LLM acquisition (ADR-030). The acquired config always goes
+// through buildGateway: providers configured -> real gateway; zero providers
+// -> NoLLMProvidersConfigured propagates, naming the config sources checked.
 export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
     const serverUrl = process.env.ASHARA_SERVER_URL;
     const apiToken = process.env.ASHARA_API_TOKEN;
@@ -87,19 +82,7 @@ export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
         );
     }
 
-    const result = buildGateway({ config, checkedSources });
-    if (result.kind === "stub") {
-        throw new VisionError(
-            "llm_unavailable",
-            `Alignment requires a real LLM but no providers are configured ` +
-            `(checked: ${checkedSources.join(", ") || "none"}). ` +
-            `ASHARA_TEST_STUB_LLM=1 permits stub mode for other subsystems, ` +
-            `but alignment cannot proceed without a provider — configure at ` +
-            `least one (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, ` +
-            `MISTRAL_API_KEY, XAI_API_KEY, GOOGLE_API_KEY, or LOCAL_LLM_URL).`,
-        );
-    }
-    return createLLMFromGateway(result.gateway);
+    return createLLMFromGateway(buildGateway({ config, checkedSources }));
 }
 
 // --- CLI input ---
@@ -197,10 +180,10 @@ export async function alignVision(visionText: string, llm: AlignmentLLM): Promis
 export async function decomposeVision(
     visionText: string,
     alignment: AlignmentResult,
-    llm?: DecompositionLLM,
+    llm: DecompositionLLM,
     answers?: UserAnswer[],
 ): Promise<DecompositionResult> {
-    const engine = new DecompositionEngine(llm ?? null);
+    const engine = new DecompositionEngine(llm);
 
     resetIdCounter();
 
@@ -300,9 +283,8 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     const { serverUrl } = loadServerEnv();
     const client = new AsharaClient(serverUrl);
 
-    // 0. Real LLM gateway — required. tryCreateLLM throws on both
-    // NoLLMProvidersConfigured (no providers, no test flag) and stub mode
-    // (ASHARA_TEST_STUB_LLM=1 but no providers): alignment requires a real
+    // 0. Real LLM gateway — required. tryCreateLLM throws on a missing server
+    // configuration and on NoLLMProvidersConfigured: alignment requires a real
     // LLM and cannot proceed on a constant answer (Discipline A).
     const llm = await tryCreateLLM();
     console.log("[ashara] Using real LLM gateway for alignment and decomposition");

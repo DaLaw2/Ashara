@@ -20,7 +20,7 @@
 # "escalation" is not a call site of its own: the reliability ladder stamps
 # it on any attempt run at an ESCALATED capability tier, regardless of which
 # site the base attempt used, so every escalated retry (decomposition,
-# brainstorm, northstar, stack-derivation, alignment, ...) can be sent to one
+# stack-derivation, alignment, ...) can be sent to one
 # deliberately-chosen reliable model.
 #
 # A site's value is either a bare model id (applied regardless of the
@@ -60,8 +60,6 @@
 # cheaper than Sonnet ($1.74/$3.48 vs $3/$15). Frontier stays on Pro (no-op).
 "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
 "decomposition" = "deepseek-v4-flash"
-"brainstorm" = "deepseek-v4-flash"
-"northstar" = "deepseek-v4-flash"
 "alignment" = "deepseek-v4-flash"
 # Stack derivation (ADR-046) is a once-per-project, temperature-0 label
 # extraction -- cheap and deterministic, and keeping it on DeepSeek preserves

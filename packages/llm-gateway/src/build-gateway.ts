@@ -6,13 +6,9 @@ import { computeProviderCombo } from "./routing-profiles.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { GatewayConfig, LLMCallRecord } from "./types.js";
 
-const TEST_STUB_ENV_VAR = "ASHARA_TEST_STUB_LLM";
-const TEST_STUB_ENV_VALUE = "1";
-
 const HOW_TO_FIX =
   "Set an api_key in the provider_configs table for at least one provider " +
-  "(e.g. UPDATE provider_configs SET api_key = '...' WHERE name = 'anthropic'), " +
-  "or set ASHARA_TEST_STUB_LLM=1 to explicitly permit stub-mode for tests/local dev.";
+  "(e.g. UPDATE provider_configs SET api_key = '...' WHERE name = 'anthropic').";
 
 const ROUTING_PROFILE_HOW_TO_FIX =
   "Map the missing site(s) in this combo's [routing.profiles] table, or empty " +
@@ -54,15 +50,6 @@ function assertRoutingProfileComplete(config: GatewayConfig): void {
   });
 }
 
-/**
- * Discriminated result of {@link buildGateway}: either a real, provider-backed
- * gateway or an explicit stub-mode permission. There is no third "silently
- * proceed with nothing configured" case — that path throws instead (ADR-030).
- */
-export type GatewayBuildResult =
-  | { readonly kind: "real"; readonly gateway: LLMGateway }
-  | { readonly kind: "stub" };
-
 export interface BuildGatewayOptions {
   /**
    * Already-resolved gateway config. Acquisition (TOML/env for the server,
@@ -77,12 +64,6 @@ export interface BuildGatewayOptions {
    */
   readonly checkedSources: readonly string[];
   /**
-   * Test-only override for the `ASHARA_TEST_STUB_LLM` env var. Defaults to
-   * reading `process.env.ASHARA_TEST_STUB_LLM`. This is the single place
-   * the flag is checked — no other call site may inline stub construction.
-   */
-  readonly testStubEnvOverride?: string | undefined;
-  /**
    * The process-wide in-memory budget gate to wire into the constructed
    * gateway. Defaults to a fresh `BudgetLedger` when omitted — callers that
    * want one ledger shared across the gateway (e.g. the server composition
@@ -96,26 +77,19 @@ export interface BuildGatewayOptions {
  * Single composition-root factory for constructing an `LLMGateway`.
  *
  * Refuse-to-start invariants:
- * - ADR-030: zero configured providers and no explicit test flag is never a
- *   silent success — it throws {@link NoLLMProvidersConfigured}. Stub-mode is
- *   reachable only when `ASHARA_TEST_STUB_LLM=1` is explicitly set, never as a
- *   fallback default.
+ * - ADR-030: zero configured providers is never a silent success — it throws
+ *   {@link NoLLMProvidersConfigured}.
  * - A non-empty routing profile for this deployment's enabled-provider combo
  *   must map every known LLM site — it throws {@link RoutingProfileIncomplete}
  *   otherwise. See {@link assertRoutingProfileComplete}.
  */
-export function buildGateway(options: BuildGatewayOptions): GatewayBuildResult {
+export function buildGateway(options: BuildGatewayOptions): LLMGateway {
   const { config, checkedSources } = options;
 
-  if (config.providers.length > 0) {
-    assertRoutingProfileComplete(config);
-    return { kind: "real", gateway: new LLMGateway(config, options.ledger, options.logSink) };
+  if (config.providers.length === 0) {
+    throw new NoLLMProvidersConfigured(checkedSources, HOW_TO_FIX);
   }
 
-  const stubFlag = options.testStubEnvOverride ?? process.env[TEST_STUB_ENV_VAR];
-  if (stubFlag === TEST_STUB_ENV_VALUE) {
-    return { kind: "stub" };
-  }
-
-  throw new NoLLMProvidersConfigured(checkedSources, HOW_TO_FIX);
+  assertRoutingProfileComplete(config);
+  return new LLMGateway(config, options.ledger, options.logSink);
 }

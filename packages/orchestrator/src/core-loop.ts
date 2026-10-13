@@ -6,7 +6,7 @@ import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { evaluateRunTermination } from "./termination-snapshot.js";
-import { runPostCycleChecks, reconcileCoverageGaps } from "./post-cycle.js";
+import { reconcileCoverageGaps } from "./post-cycle.js";
 import { attemptLivenessRecovery } from "./liveness-handler.js";
 import { openRun, persistRun } from "./run-state.js";
 
@@ -51,7 +51,7 @@ export class CoreLoop {
     // When the budget is exhausted, skip decomposition and dispatch for this cycle but
     // DO fall through to the termination evaluation below, so the run stops with the
     // `economy` reason instead of idling forever — the Run-8 failure mode. When budget
-    // remains, run the full decompose → gate → dispatch → post-cycle flow so the
+    // remains, run the full decompose → gate → dispatch flow so the
     // termination snapshot is taken at a quiescent point. Read live on every cycle:
     // decomposition itself spends, so it must not run past the cap.
     if (!this.budget.isExhausted()) {
@@ -126,14 +126,6 @@ export class CoreLoop {
         });
       }
 
-      // Post-cycle checks run even on an IDLE cycle (empty batch). Run 8's bug was
-      // returning here before the planner ran, so the runner idled forever. Brainstorm
-      // and NorthStar triggers can still create work on their own cooldown logic, and
-      // the quiescence contract (mig7-t1) requires they get their chance BEFORE the
-      // termination snapshot is taken below — otherwise a liveness verdict could race
-      // items about to appear this cycle.
-      await runPostCycleChecks(deps, batch, { tasksProcessed: batch.length, results }, completedCount, runScope);
-
       if (batch.length === 0) {
         const recovered = await attemptLivenessRecovery(deps, runScope);
         if (recovered > 0) {
@@ -172,21 +164,12 @@ export class CoreLoop {
       }
     }
 
-    // QUIESCENT POINT (Option A quiescence, mig7-t1): decomposition, dispatch, and the
-    // post-cycle brainstorm/northstar mutations have all settled this cycle. Assemble a
+    // QUIESCENT POINT (Option A quiescence, mig7-t1): decomposition, dispatch and
+    // liveness recovery have all settled this cycle. Assemble a
     // FRESH snapshot and evaluate termination against it, so the snapshot already
     // reflects any work those steps created — the liveness verdict cannot race work
     // about to appear. Completeness (all-terminal) and economy (budget) are
     // monotone-enough not to need this care; liveness is the one that does.
-    //
-    // TRIPWIRE: this liveness-race closure DEPENDS on brainstorm's cooldown being
-    // COMPLETION-counted (planning/brainstorm-orchestrator.ts checkBrainstormGate gates
-    // on tasks-since-last, not elapsed time). Because no task completes on a frozen
-    // plan, the counter is static, so brainstorm either fires THIS cycle (its items land
-    // in the snapshot below) or is deterministically dormant — a frozen plan cannot
-    // sprout work on a later idle cycle that this snapshot fails to see. If that gate
-    // ever becomes WALL-CLOCK-based, that guarantee breaks and the race reopens; re-add a
-    // next-cycle re-verification before acting on a liveness stop.
     const termination = await evaluateRunTermination(deps, this.budget.isExhausted(), runScope);
 
     // AFTER the termination evaluation: acceptanceAttempts is incremented inside

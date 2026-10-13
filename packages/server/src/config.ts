@@ -60,15 +60,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // No default: every run dispatches paid agents, so the cap is the owner's explicit consent to spend.
   const budgetLimitUsd = parseBudgetLimit(rawBudgetLimit);
 
-  const brainstormCooldownThreshold = parseIntOr(
-    process.env["BRAINSTORM_COOLDOWN_THRESHOLD"],
-    DEFAULT_CONFIG.brainstormCooldownThreshold,
-  );
-  const maxPendingWorkItems = parseIntOr(
-    process.env["MAX_PENDING_WORK_ITEMS"],
-    DEFAULT_CONFIG.maxPendingWorkItems,
-  );
-
   // Coverage reconciliation is ENFORCING by default (mig9-t2, ADR-032 §2). The
   // rollback: ASHARA_COVERAGE_ENFORCING=0 (or "false") switches to observe-only —
   // gaps are logged and reported but never block a rollup or completeness.
@@ -85,8 +76,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     asharaSourceDir,
     maxBatchSize,
     budgetLimitUsd,
-    brainstormCooldownThreshold,
-    maxPendingWorkItems,
     coverageEnforcing,
   };
 

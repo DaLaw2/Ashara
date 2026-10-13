@@ -1,6 +1,11 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { DecompositionInput, WorkItemSpec } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
+import type { DecompositionLLM } from "./decomposition.js";
+
+const unreachableLlm: DecompositionLLM = {
+    generateStructured: () => Promise.reject(new Error("derive* heuristics must not call the LLM")),
+};
 
 function createTestInput(overrides?: Partial<DecompositionInput>): DecompositionInput {
     return {
@@ -17,7 +22,7 @@ describe("derive* heuristics for frontend and CLI patterns", () => {
 
     beforeEach(() => {
         resetIdCounter();
-        engine = new DecompositionEngine(null);
+        engine = new DecompositionEngine(unreachableLlm);
     });
 
     test("deriveObservableEndState: page/view/component triggers frontend fallback", () => {

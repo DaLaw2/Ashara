@@ -4,10 +4,7 @@
  * The semantic (embedding) and in-`retrieve()` knowledge routes were removed —
  * the semantic route's backing embedding table is never written (nothing
  * populates it), and the knowledge route duplicated a channel (the db-repo-
- * based `knowledgeContext`) that already works independently. `KnowledgeStore`/
- * `KnowledgeResult` stay exported: they're a general-purpose contract used
- * outside this fusion pipeline (e.g. integration testing against the working
- * db-repo channel's shape), not solely the deleted route's plumbing.
+ * based `knowledgeContext`) that already works independently.
  */
 
 import type { GraphClient, GraphTraversalResult, KeywordResult } from "./graph-client.js";
@@ -19,18 +16,6 @@ export interface RetrievalResult {
     readonly content: string;
     readonly source: "graph" | "semantic" | "keyword" | "knowledge";
     readonly score: number;
-}
-
-export interface KnowledgeStore {
-    query(query: string, topK: number): Promise<KnowledgeResult[]>;
-}
-
-export interface KnowledgeResult {
-    readonly filePath: string;
-    readonly startLine: number;
-    readonly endLine: number;
-    readonly content: string;
-    readonly relevance: number;
 }
 
 export interface RankedResult {

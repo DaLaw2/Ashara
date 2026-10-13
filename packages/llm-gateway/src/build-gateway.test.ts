@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { buildGateway } from "./build-gateway.js";
 import { RoutingProfileIncomplete } from "./errors.js";
+import { LLMGateway } from "./gateway.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { GatewayConfig, ModelConfig, RoutingProfiles } from "./types.js";
 
@@ -53,14 +54,14 @@ describe("buildGateway routing-profile completeness", () => {
   });
 
   test("boots when the profile maps every known site", () => {
-    expect(build({ deepseek: completeProfile() }).kind).toBe("real");
+    expect(build({ deepseek: completeProfile() })).toBeInstanceOf(LLMGateway);
   });
 
   test("boots when the profile is explicitly empty (capability routing for every site)", () => {
-    expect(build({ deepseek: {} }).kind).toBe("real");
+    expect(build({ deepseek: {} })).toBeInstanceOf(LLMGateway);
   });
 
   test("boots when no profile exists for the enabled-provider combo", () => {
-    expect(build({ "anthropic+openai": completeProfile() }).kind).toBe("real");
+    expect(build({ "anthropic+openai": completeProfile() })).toBeInstanceOf(LLMGateway);
   });
 });

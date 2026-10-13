@@ -25,19 +25,13 @@ export type { EndpointCoverageGap } from "@ashara/planning";
 export type { CompletionFigure } from "@ashara/planning";
 
 // Engine / LLM port types
-export type { BrainstormEngine } from "@ashara/planning";
-export type { NorthStarChecker } from "@ashara/planning";
 export type { DecompositionEngine } from "@ashara/planning";
-export type { ProposalEmbedder } from "@ashara/planning";
 export type { AcceptanceLLM, AcceptanceVerdict, AcceptanceGap } from "@ashara/planning";
 export type { ReplanLLM } from "@ashara/planning";
 
 // Failure / recovery types
 export type { FailureRouter, RawFailureContext } from "@ashara/planning";
 export type { ContractRegistryLookup, FailureRecoveryDeps } from "@ashara/planning";
-
-// Brainstorm orchestration types
-export type { BrainstormOrchestrationDeps } from "@ashara/planning";
 
 // --- Values (re-exported) ---
 
@@ -63,14 +57,6 @@ export { computeCoverageGaps, isBlockingCoverageGap } from "@ashara/planning";
 
 // Failure recovery
 export { recoverFailedItem } from "@ashara/planning";
-
-// Brainstorm & NorthStar orchestration
-export {
-  checkNorthStarAlignment,
-  checkBrainstormTriggers,
-  executeBrainstorm,
-  executeGatedBrainstorm,
-} from "@ashara/planning";
 
 // Termination snapshot & evaluation
 export { assembleRunSummaryItems, evaluate } from "@ashara/planning";

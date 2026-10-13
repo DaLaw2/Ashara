@@ -52,7 +52,6 @@ vi.mock("./termination-snapshot.js", () => ({
 }));
 
 vi.mock("./post-cycle.js", () => ({
-  runPostCycleChecks: async () => {},
   reconcileCoverageGaps: async () => {},
 }));
 
@@ -116,9 +115,7 @@ function buildDeps(): CoreLoopDeps {
     workItemRepo,
     eventStore,
     costRepo,
-    brainstormLogRepo: {},
     failedApproachRepo,
-    contextBriefRepo: {},
     visionRepo,
     developmentService: {},
     acceptanceAttempts: 0,

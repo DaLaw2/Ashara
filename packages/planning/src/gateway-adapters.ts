@@ -2,8 +2,6 @@ import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
-import type { BrainstormLLM } from "./brainstorm-types.js";
-import type { NorthStarLLM } from "./northstar.js";
 import type { DecompositionLLM } from "./decomposition.js";
 
 type ZodSchema<T> = ZodType<T>;
@@ -16,36 +14,6 @@ export interface StructuredLLMProvider {
     maxTokens?: number;
     temperature?: number;
   }): Promise<{ data: T }>;
-}
-
-export function createGatewayBrainstormLLM(provider: StructuredLLMProvider): BrainstormLLM {
-  return {
-    async generateStructured<T>(prompt: string, schema: ZodSchema<T>): Promise<T> {
-      const response = await provider.generateStructured({
-        capability: "Strong",
-        prompt,
-        schema,
-        maxTokens: 4096,
-        temperature: 0,
-      });
-      return response.data;
-    },
-  };
-}
-
-export function createGatewayNorthStarLLM(provider: StructuredLLMProvider): NorthStarLLM {
-  return {
-    async generateStructured<T>(prompt: string, schema: ZodSchema<T>): Promise<T> {
-      const response = await provider.generateStructured({
-        capability: "Strong",
-        prompt,
-        schema,
-        maxTokens: 2048,
-        temperature: 0,
-      });
-      return response.data;
-    },
-  };
 }
 
 /**
@@ -65,7 +33,7 @@ function decompositionReask(ctx: { readonly errors: readonly string[] }): string
 /**
  * Decomposition LLM wired through its OWN reliability ladder (mig-run10, ADR-030):
  * temperature 0, two validated attempts per tier, escalate one capability tier,
- * then `StructuredOutputExhausted`. Unlike brainstorm/northstar it runs a SEMANTIC
+ * then `StructuredOutputExhausted`. It runs a SEMANTIC
  * `validate` (phantom `dependsOn` ref detection) inside each attempt and re-asks
  * with the failure feedback, so one malformed emission is corrected on retry
  * instead of exploding the run. Distinct `site` so its exhaustion is attributable.

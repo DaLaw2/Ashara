@@ -9,15 +9,12 @@ import { VisionRepository } from "./repositories/vision.js";
 import { ConfigRepository } from "./repositories/config.js";
 import { KnowledgeRepository } from "./repositories/knowledge.js";
 import { CostRepository } from "./repositories/cost.js";
-import { BrainstormLogRepository } from "./repositories/brainstorm-log.js";
 import { FailedApproachRepository } from "./repositories/failed-approach.js";
-import { ContextBriefRepository } from "./repositories/context-brief.js";
 import {
   devSessions,
   domainEvents,
   knowledgeEntries,
   taskCostHistory,
-  brainstormLog,
   failedApproaches,
   modelConfigs,
   providerConfigs,
@@ -43,7 +40,6 @@ const createdModelIds: string[] = [];
 const createdSettingKeys: string[] = [];
 const createdKnowledgeIds: string[] = [];
 const createdCostIds: string[] = [];
-const createdBrainstormLogIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -66,9 +62,6 @@ async function cleanupAll() {
   }
   for (const id of createdKnowledgeIds) {
     await db.execute(sql`DELETE FROM knowledge_entries WHERE id = ${id}`);
-  }
-  for (const id of createdBrainstormLogIds) {
-    await db.execute(sql`DELETE FROM brainstorm_log WHERE id = ${id}`);
   }
   for (const id of createdCostIds) {
     await db.execute(sql`DELETE FROM task_cost_history WHERE id = ${id}`);
@@ -406,37 +399,7 @@ describe("CostRepository", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. BrainstormLogRepository
-// ---------------------------------------------------------------------------
-
-describe("BrainstormLogRepository", () => {
-  let repo: BrainstormLogRepository;
-  const logId = randomUUID();
-
-  beforeAll(() => {
-    repo = new BrainstormLogRepository(db);
-  });
-
-  test("insert creates a log entry and it can be read back", async () => {
-    await repo.insert(logId, "scheduled", "Epic", 3, 5);
-    createdBrainstormLogIds.push(logId);
-
-    const [row] = await db
-      .select()
-      .from(brainstormLog)
-      .where(sql`${brainstormLog.id} = ${logId}`)
-      .limit(1);
-
-    expect(row).toBeDefined();
-    expect(row.triggerReason).toBe("scheduled");
-    expect(row.triggerLevel).toBe("Epic");
-    expect(row.itemsCreated).toBe(3);
-    expect(row.itemsProposed).toBe(5);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 9. FailedApproachRepository
+// 8. FailedApproachRepository
 // ---------------------------------------------------------------------------
 
 describe("FailedApproachRepository", () => {
@@ -493,77 +456,5 @@ describe("FailedApproachRepository", () => {
     expect(row.failureReason).toBe("Over-engineering, latency issues");
     expect(row.learned).toBe("Keep it simple for solo projects");
     expect(row.affectedArea).toBe("architecture");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 10. ContextBriefRepository
-// ---------------------------------------------------------------------------
-
-describe("ContextBriefRepository", () => {
-  let repo: ContextBriefRepository;
-  const epicId = randomUUID();
-  const storyId = randomUUID();
-  const substituteAbandonedTaskId = randomUUID();
-  const exhaustedAbandonedTaskId = randomUUID();
-
-  beforeAll(async () => {
-    repo = new ContextBriefRepository(db);
-
-    const wiRepo = new WorkItemRepository(db);
-    await wiRepo.create({
-      id: epicId,
-      level: "Epic",
-      status: "InProgress",
-      title: "ContextBrief Test Epic",
-      runScope: "test-run",
-    });
-    createdWorkItemIds.push(epicId);
-
-    await wiRepo.create({
-      id: storyId,
-      level: "Story",
-      status: "InProgress",
-      parentId: epicId,
-      title: "ContextBrief Test Story",
-      runScope: "test-run",
-    });
-    createdWorkItemIds.push(storyId);
-
-    // Run-9 redteam D2: a substitute-abandon item (its twin already delivers the
-    // work) must still be suppressed from re-proposal; an exhausted-abandon item
-    // (no substitute -- the work was never delivered) must not be.
-    await wiRepo.create({
-      id: substituteAbandonedTaskId,
-      level: "Task",
-      status: "Abandoned",
-      parentId: storyId,
-      title: "ContextBrief Substitute Abandoned Task",
-      blockedReason: { source: "failure_router", reason: "duplicate", substitutedBy: storyId },
-      runScope: "test-run",
-    });
-    createdWorkItemIds.push(substituteAbandonedTaskId);
-
-    await wiRepo.create({
-      id: exhaustedAbandonedTaskId,
-      level: "Task",
-      status: "Abandoned",
-      parentId: storyId,
-      title: "ContextBrief Exhausted Abandoned Task",
-      blockedReason: { source: "failure_router", reason: "retry_budget_exhausted" },
-      runScope: "test-run",
-    });
-    createdWorkItemIds.push(exhaustedAbandonedTaskId);
-  });
-
-  test("getExistingItems excludes exhausted-abandon but keeps substitute-abandon (Run-9 redteam D2)", async () => {
-    const items = await repo.getExistingItems();
-
-    const substituteAbandoned = items.find((i) => i.id === substituteAbandonedTaskId);
-    expect(substituteAbandoned).toBeDefined();
-    expect(substituteAbandoned!.status).toBe("Abandoned");
-
-    const exhaustedAbandoned = items.find((i) => i.id === exhaustedAbandonedTaskId);
-    expect(exhaustedAbandoned).toBeUndefined();
   });
 });
