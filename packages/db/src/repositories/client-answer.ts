@@ -89,7 +89,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
       .limit(1);
     open.push({
       id: row.id,
-      projectId: parseProjectId(row.projectId),
+      projectId: parseProjectId(row.projectId, "client_messages.project_id"),
       body: row.body,
       questionId: row.questionId,
       intakeAttempts: row.intakeAttempts,

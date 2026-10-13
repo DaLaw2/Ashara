@@ -44,7 +44,7 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
       ),
     )
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
-  return rows.map((row) => ({ id: row.id, projectId: parseProjectId(row.projectId) }));
+  return rows.map((row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }));
 }
 
 /**

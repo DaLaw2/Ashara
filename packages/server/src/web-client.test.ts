@@ -192,7 +192,7 @@ async function postTender(token: string, projectName: string, body: string): Pro
   });
   expect(response.status).toBe(201);
   const created = z.object({ projectId: z.uuid() }).parse(await response.json());
-  return parseProjectId(created.projectId);
+  return parseProjectId(created.projectId, "test");
 }
 
 function memoryReader(entries: Record<string, string>): SecretReader {
@@ -587,7 +587,7 @@ describe("client scoping", () => {
     expect(owner.rows).toEqual([{ client_id: alice.id }]);
 
     const question = await new ClientMessageRepository(db).insertOutbound({
-      projectId: parseProjectId(aliceProject),
+      projectId: parseProjectId(aliceProject, "test"),
       kind: "question",
       body: "Which colour?",
       inReplyTo: null,
@@ -638,7 +638,7 @@ describe("client scoping", () => {
     const token = await loggedIn(alice);
     const projectId = await postTender(token, `web-client-answer-twice-${randomUUID()}`, "build it");
     const question = await new ClientMessageRepository(db).insertOutbound({
-      projectId: parseProjectId(projectId),
+      projectId: parseProjectId(projectId, "test"),
       kind: "question",
       body: "Which encoding?",
       inReplyTo: null,

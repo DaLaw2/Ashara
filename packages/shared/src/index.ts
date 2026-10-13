@@ -1,5 +1,5 @@
 export type { ProjectId, WorkItemId } from "./ids.js";
-export { parseProjectId, parseWorkItemId, InvalidWorkItemId, createWorkItemId, createSessionId } from "./ids.js";
+export { parseProjectId, parseWorkItemId, InvalidId, createWorkItemId, createSessionId } from "./ids.js";
 
 export type { WorkItemLevel, WorkItemStatus, CapabilityLevel } from "./enums.js";
 export {

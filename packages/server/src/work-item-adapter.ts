@@ -1,5 +1,4 @@
 import { WorkItemRepository as DbWorkItemRepository } from "@ashara/db";
-import type { WorkItemId } from "@ashara/shared";
 import {
   parseWorkItemLevel,
   parseWorkItemStatus,
@@ -24,10 +23,10 @@ type DbRow = Awaited<ReturnType<DbWorkItemRepository["findById"]>>;
 export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
   const jsonb = parseWorkItemJsonb(row);
   return {
-    id: row.id as WorkItemId,
+    id: parseWorkItemId(row.id, "work_items.id"),
     level: parseWorkItemLevel(row.level),
     status: parseWorkItemStatus(row.status),
-    parentId: (row.parentId as WorkItemId) ?? undefined,
+    parentId: row.parentId === null ? undefined : parseWorkItemId(row.parentId, "work_items.parent_id"),
     title: row.title,
     description: row.description ?? undefined,
     taskSpec: jsonb.taskSpec,
@@ -35,7 +34,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     successCriteria: jsonb.successCriteria,
     blockedReason: jsonb.blockedReason,
     runScope: parseRunScope(row.runScope),
-    projectId: parseProjectId(row.projectId),
+    projectId: parseProjectId(row.projectId, "work_items.project_id"),
     dispatchCount: row.dispatchCount,
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
     ...(row.ownerRoleId !== null ? { ownerRoleId: row.ownerRoleId } : {}),
@@ -80,11 +79,11 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     },
     async projectIdsWithStatus(status) {
       const ids = await db.projectIdsWithStatus(status);
-      return ids.map(parseProjectId);
+      return ids.map((id) => parseProjectId(id, "work_items.project_id"));
     },
     async listIdsByStatus(statuses) {
       const ids = await db.listIdsByStatus(statuses);
-      return ids as WorkItemId[];
+      return ids.map((id) => parseWorkItemId(id, "work_items.id"));
     },
     async save(item, expectedPreviousStatus) {
       await db.save(
@@ -111,7 +110,7 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     },
     async getDependencies(itemId) {
       const ids = await db.getDependencies(itemId);
-      return ids as WorkItemId[];
+      return ids.map((id) => parseWorkItemId(id, "dependencies.to_id"));
     },
     async findChildren(parentId) {
       const rows = await db.findChildren(parentId);
@@ -119,7 +118,7 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     },
     async listDependenciesByProject(projectId) {
       const rows = await db.listDependenciesByProject(projectId);
-      return rows.map((row) => ({ fromId: parseWorkItemId(row.fromId), toId: parseWorkItemId(row.toId) }));
+      return rows.map((row) => ({ fromId: parseWorkItemId(row.fromId, "dependencies.from_id"), toId: parseWorkItemId(row.toId, "dependencies.to_id") }));
     },
     async withTransaction(fn) {
       return db.withTransaction((txDb) => fn(adaptWorkItemRepo(txDb)));

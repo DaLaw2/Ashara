@@ -5,7 +5,7 @@ import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import type { ParkedExitChecks } from "./parked-exits.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 
-const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1");
+const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 
 function blocked(reason: StoredBlockedReason): WorkItem {
   return {

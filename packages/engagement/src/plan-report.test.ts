@@ -4,7 +4,7 @@ import type { ProjectBlockCause } from "@ashara/shared";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 
-const projectId = parseProjectId("00000000-0000-4000-8000-000000000010");
+const projectId = parseProjectId("00000000-0000-4000-8000-000000000010", "test");
 
 type Dropped = { kind: "recorded"; count: number } | { kind: "unrecorded" };
 

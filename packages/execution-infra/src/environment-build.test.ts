@@ -8,7 +8,7 @@ import { PodmanSubstrate } from "./podman.js";
 // version and every image a container uses, and touches nothing without Ashara's labels. podman is
 // a fake process runner here: the argv each call sends is the observation.
 
-const projectId = parseProjectId("33333333-3333-4333-8333-333333333333");
+const projectId = parseProjectId("33333333-3333-4333-8333-333333333333", "test");
 const id = (c: string) => c.repeat(64);
 const CURRENT = "c".repeat(64);
 

@@ -20,7 +20,7 @@ describe("TenderIntake failure accounting", () => {
     const recorded: string[] = [];
     const tender = {
       id: "tender-1",
-      projectId: parseProjectId("00000000-0000-4000-8000-000000000001"),
+      projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"),
       body: "A booking page.",
       intakeAttempts: 0,
       intakeLastError: null,
@@ -64,7 +64,7 @@ describe("TenderIntake failure accounting", () => {
       openTenders: async () => [
         {
           id: "tender-ladder",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000004"),
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000004", "test"),
           body: "A booking page.",
           intakeAttempts: 0,
           intakeLastError: null,
@@ -94,12 +94,12 @@ describe("TenderIntake per-project failure", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const lying = {
       id: "tender-lying",
-      projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
+      projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
       body: "A booking page.",
       intakeAttempts: 3,
       intakeLastError: null,
     };
-    const next = { ...lying, id: "tender-next", projectId: parseProjectId("00000000-0000-4000-8000-000000000003"), intakeAttempts: 0 };
+    const next = { ...lying, id: "tender-next", projectId: parseProjectId("00000000-0000-4000-8000-000000000003", "test"), intakeAttempts: 0 };
     const blocked: Array<{ projectId: string; category: string; errorClass: string; reason: string }> = [];
     const store: IntakeStore = {
       openTenders: async () => [lying, next],
@@ -163,7 +163,7 @@ describe("TenderIntake response schema", () => {
       openTenders: async () => [
         {
           id: "tender-2",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
           body: "A booking page.",
           intakeAttempts: 0,
           intakeLastError: null,
@@ -216,7 +216,7 @@ describe("TenderIntake assumption label", () => {
       openTenders: async () => [
         {
           id: "tender-3",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000003"),
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000003", "test"),
           body: "A tool.",
           intakeAttempts: 0,
           intakeLastError: null,
@@ -270,7 +270,7 @@ describe("TenderIntake assumption label", () => {
       openTenders: async () => [
         {
           id: "tender-4",
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000004"),
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000004", "test"),
           body: "A tool.",
           intakeAttempts: 0,
           intakeLastError: null,

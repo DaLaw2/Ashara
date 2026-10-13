@@ -44,7 +44,7 @@ class BulkReferenceError extends Error {
 }
 
 export interface BulkPlanResult {
-  readonly tempIdToId: Record<string, string>;
+  readonly tempIdToId: Record<string, WorkItemId>;
   readonly created: number;
 }
 
@@ -118,7 +118,7 @@ export async function createBulkPlanWithContract(
 
     await deriveAndWriteContract(contractRepo, deps.projectId, knowledge);
 
-    const tempIdToIdRecord: Record<string, string> = {};
+    const tempIdToIdRecord: Record<string, WorkItemId> = {};
     for (const [tempId, id] of tempIdToId) tempIdToIdRecord[tempId] = id;
     return { tempIdToId: tempIdToIdRecord, created: tempIdToId.size };
   });

@@ -18,7 +18,7 @@ type ProjectRow = typeof projects.$inferSelect;
 
 function toRecord(row: ProjectRow): ProjectRecord {
   return {
-    id: parseProjectId(row.id),
+    id: parseProjectId(row.id, "projects.id"),
     name: row.name,
     status: row.status,
     clientId: row.clientId,
@@ -118,7 +118,7 @@ export class ProjectRepository {
       .from(projects)
       .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy)))
       .orderBy(asc(projects.createdAt), asc(projects.id));
-    return rows.map((row) => parseProjectId(row.id));
+    return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }
 
   /** Every project with a target workspace, whatever its status: what startup prunes environment images of. */
@@ -130,7 +130,7 @@ export class ProjectRepository {
       .orderBy(asc(projects.createdAt), asc(projects.id));
     const listed: Array<{ readonly id: ProjectId; readonly workspacePath: string }> = [];
     for (const row of rows) {
-      if (row.workspacePath !== null) listed.push({ id: parseProjectId(row.id), workspacePath: row.workspacePath });
+      if (row.workspacePath !== null) listed.push({ id: parseProjectId(row.id, "projects.id"), workspacePath: row.workspacePath });
     }
     return listed;
   }

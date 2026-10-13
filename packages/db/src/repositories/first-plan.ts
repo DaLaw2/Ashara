@@ -107,7 +107,7 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
   return rows.map((row) => ({
-    projectId: parseProjectId(row.id),
+    projectId: parseProjectId(row.id, "projects.id"),
     projectName: row.name,
     planAttempts: row.planAttempts,
     planLastError: row.planLastError,

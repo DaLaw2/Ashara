@@ -5,8 +5,8 @@ import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
 
-const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000002");
-const OTHER_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000003");
+const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000002", "test");
+const OTHER_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000003", "test");
 
 /** Reads are per project, as the database's: a project's items, and the edges its items depend by. */
 function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: WorkItemId }>) {

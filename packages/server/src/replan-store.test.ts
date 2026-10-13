@@ -218,7 +218,7 @@ async function itemsOf(projectId: ProjectId) {
 /** Starts a task as dispatch does: the task and every Pending ancestor, its Epic, go InProgress. */
 async function startTask(id: string): Promise<void> {
   const repo = adaptWorkItemRepo(new WorkItemRepository(db));
-  const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id));
+  const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
   if (task === null) throw new Error(`task ${id} not found`);
   startWorkItem(task);
   await PlanningService.saveWorkItem(repo, task, "Pending");
@@ -227,7 +227,7 @@ async function startTask(id: string): Promise<void> {
 
 /** Completes a started task as its routed success does, settling its Epic when every child is done. */
 async function completeTask(id: string): Promise<void> {
-  await PlanningService.route(adaptWorkItemRepo(new WorkItemRepository(db)), parseWorkItemId(id), true);
+  await PlanningService.route(adaptWorkItemRepo(new WorkItemRepository(db)), parseWorkItemId(id, "test"), true);
 }
 
 async function dependenciesOf(id: string): Promise<string[]> {

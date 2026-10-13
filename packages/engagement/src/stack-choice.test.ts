@@ -3,7 +3,7 @@ import { parseProjectId } from "@ashara/shared";
 import { StackChoiceReports } from "./stack-choice.js";
 import type { StackChoiceStore } from "./stack-choice.js";
 
-const projectId = parseProjectId("00000000-0000-4000-8000-000000000011");
+const projectId = parseProjectId("00000000-0000-4000-8000-000000000011", "test");
 const STATEMENT = "A Debian image with the language's standard toolchain, chosen because the tender names no stack.";
 
 describe("stack-choice report", () => {

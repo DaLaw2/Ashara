@@ -120,7 +120,7 @@ const model: ResolvedModel = {
 
 function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
   return {
-    projectId: parseProjectId("00000000-0000-4000-8000-000000000001"),
+    projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"),
     taskId: createWorkItemId(),
     role: { id: "worker", name: "Worker" },
     workKind: "implementation",

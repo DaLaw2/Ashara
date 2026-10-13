@@ -423,7 +423,7 @@ async function commitEnvironment(target: string, ownedFiles: Readonly<Record<str
 
 const someTask = () => ({
   id: createWorkItemId(),
-  projectId: parseProjectId("22222222-2222-4222-8222-222222222222"),
+  projectId: parseProjectId("22222222-2222-4222-8222-222222222222", "test"),
   title: "t",
   dispatchCount: 0,
   attempt: 1,

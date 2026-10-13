@@ -78,7 +78,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<ProjectA
     const counts = CountsSchema.parse({ revisionsSinceReview: row.revisionsSinceReview, nextRevision: row.nextRevision });
     return [
       {
-        projectId: parseProjectId(row.id),
+        projectId: parseProjectId(row.id, "projects.id"),
         projectName: row.name,
         requestedBy: row.requestedBy,
         replanAttempts: row.replanAttempts,
@@ -254,7 +254,7 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<DuePlanR
     .orderBy(asc(planRevisions.createdAt), asc(planRevisions.id));
   return rows.map((row) => ({
     revisionId: row.id,
-    projectId: parseProjectId(row.projectId),
+    projectId: parseProjectId(row.projectId, "plan_revisions.project_id"),
     revision: row.revision,
     summary: row.summary,
   }));

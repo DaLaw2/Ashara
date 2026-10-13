@@ -12,7 +12,7 @@ const implementer = role("implementer", "write-source");
 const checkAuthor = role("check-author", "author-checks");
 
 function roster(...roles: [Role, ...Role[]]): Roster {
-  return { projectId: parseProjectId("00000000-0000-4000-8000-000000000001"), visionVersion: 1, revision: 1, roles };
+  return { projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"), visionVersion: 1, revision: 1, roles };
 }
 
 describe("validateRoster", () => {

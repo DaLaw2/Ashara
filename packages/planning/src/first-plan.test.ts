@@ -58,8 +58,8 @@ const llm: ContextualLlm = { forCall: () => ({ generateStructured: notReached })
 describe("FirstPlanner per-project failure", () => {
   test("a project at its cap with no recorded error is blocked and the next project is still stopped", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const lying = parseProjectId("00000000-0000-4000-8000-000000000020");
-    const capped = parseProjectId("00000000-0000-4000-8000-000000000021");
+    const lying = parseProjectId("00000000-0000-4000-8000-000000000020", "test");
+    const capped = parseProjectId("00000000-0000-4000-8000-000000000021", "test");
     const blocked: Blocked = [];
     const stopped: ProjectId[] = [];
     const store = storeWith([awaiting(lying, null), awaiting(capped, "Error: decomposition failed")], blocked, stopped);
@@ -75,7 +75,7 @@ describe("FirstPlanner per-project failure", () => {
 
   test("a roster that gives implementation work two owners blocks the project before any model call", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const projectId = parseProjectId("00000000-0000-4000-8000-000000000022");
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000022", "test");
     const twoImplementers = [...ROSTER_ROWS, roleRow("00000000-0000-4000-8000-0000000000a5", "Second", ["write-source"])];
     const blocked: Blocked = [];
     const store = storeWith([awaiting(projectId, null, 0, twoImplementers)], blocked);
@@ -100,7 +100,7 @@ describe("FirstPlanner decomposition ladder", () => {
         },
       }),
     };
-    const projectId = parseProjectId("00000000-0000-4000-8000-000000000023");
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000023", "test");
     const store: FirstPlanStore = { ...storeWith([awaiting(projectId, null, 0)], []), recordFailedAttempt: async () => 1 };
 
     const outcomes = await new FirstPlanner({ llm: failing, store }).runPending();

@@ -1,48 +1,55 @@
+import { z } from "zod";
+
 export type ProjectId = string & { readonly __brand: "ProjectId" };
 export type WorkItemId = string & { readonly __brand: "WorkItemId" };
 export type SessionId = string & { readonly __brand: "SessionId" };
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+type IdBrand = "ProjectId" | "WorkItemId" | "SessionId";
 
-class InvalidProjectId extends Error {
-  constructor(readonly raw: string) {
-    super(`Invalid ProjectId "${raw}": expected a UUID`);
-    this.name = "InvalidProjectId";
+// All three are uuid columns (projects.id, work_items.id, dev_sessions.id) or
+// crypto.randomUUID(). z.guid() is the 8-4-4-4-12 hex shape without RFC 9562
+// version bits: Postgres stores any such value in a uuid column.
+const UuidSchema = z.guid();
+
+/**
+ * A value that was to become a branded id and is not one. `field` names where
+ * it came from (a column, a route param, a CLI flag, a model output field), so
+ * the message alone locates the bad input.
+ */
+export class InvalidId extends Error {
+  constructor(
+    readonly brand: IdBrand,
+    readonly field: string,
+    readonly raw: unknown,
+  ) {
+    super(`Invalid ${brand} in ${field}: expected a UUID, got ${JSON.stringify(raw) ?? String(raw)}`);
+    this.name = "InvalidId";
   }
+}
+
+function parseUuid(brand: IdBrand, raw: unknown, field: string): string {
+  const parsed = UuidSchema.safeParse(raw);
+  if (!parsed.success) throw new InvalidId(brand, field, raw);
+  return parsed.data;
 }
 
 /**
- * Validated narrowing of an external string into a branded `ProjectId` — a
- * projects.id (migration 014), the key of a project's visions, work items and
- * contract. Rejects anything that is not a UUID so the brand is never assumed
- * without validation. Mirrors the parse* helpers in enums.ts.
+ * The one way an external value becomes a `ProjectId` — a projects.id
+ * (migration 014), the key of a project's visions, work items and contract.
  */
-export function parseProjectId(raw: string): ProjectId {
-  if (!UUID_PATTERN.test(raw)) {
-    throw new InvalidProjectId(raw);
-  }
-  return raw as ProjectId;
+export function parseProjectId(raw: unknown, field: string): ProjectId {
+  return parseUuid("ProjectId", raw, field) as ProjectId;
 }
 
-export class InvalidWorkItemId extends Error {
-  constructor(readonly raw: string) {
-    super(`Invalid WorkItemId "${raw}": expected a UUID`);
-    this.name = "InvalidWorkItemId";
-  }
-}
-
-/** Validated narrowing of a stored work_items.id reference (e.g. a check task's id) into a `WorkItemId`. */
-export function parseWorkItemId(raw: string): WorkItemId {
-  if (!UUID_PATTERN.test(raw)) {
-    throw new InvalidWorkItemId(raw);
-  }
-  return raw as WorkItemId;
+/** The one way an external value becomes a `WorkItemId` — a work_items.id or a stored reference to one. */
+export function parseWorkItemId(raw: unknown, field: string): WorkItemId {
+  return parseUuid("WorkItemId", raw, field) as WorkItemId;
 }
 
 export function createWorkItemId(): WorkItemId {
-  return crypto.randomUUID() as WorkItemId;
+  return parseWorkItemId(crypto.randomUUID(), "crypto.randomUUID()");
 }
 
 export function createSessionId(): SessionId {
-  return crypto.randomUUID() as SessionId;
+  return parseUuid("SessionId", crypto.randomUUID(), "crypto.randomUUID()") as SessionId;
 }

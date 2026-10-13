@@ -79,7 +79,7 @@ function toRecord(row: LlmCallRow): LlmCallRecord {
   const outcome = OutcomeColumnsSchema.parse({ outcome: row.outcome, errorKind: row.errorKind });
   return {
     id: row.id,
-    projectId: parseProjectId(row.projectId),
+    projectId: parseProjectId(row.projectId, "llm_calls.project_id"),
     taskId: row.taskId,
     callSite: row.callSite,
     provider: row.provider,

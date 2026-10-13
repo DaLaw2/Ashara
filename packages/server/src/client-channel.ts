@@ -135,7 +135,7 @@ export async function postClientMessage(
   if (!idParsed.success) {
     return { status: 400, body: { error: "projectId must be a UUID", issues: idParsed.error.issues } };
   }
-  const projectId = parseProjectId(idParsed.data);
+  const projectId = parseProjectId(idParsed.data, "projectId route param");
 
   if (!json.ok) return notJson("post client message", json);
   const parsed = ClientPostSchema.safeParse(json.value);
@@ -180,7 +180,7 @@ export async function listClientMessages(
   if (!idParsed.success) {
     return { status: 400, body: { error: "projectId must be a UUID", issues: idParsed.error.issues } };
   }
-  const projectId = parseProjectId(idParsed.data);
+  const projectId = parseProjectId(idParsed.data, "projectId route param");
   const query = MessagesQuerySchema.safeParse(rawQuery);
   if (!query.success) {
     return { status: 400, body: { error: "invalid query", issues: query.error.issues } };

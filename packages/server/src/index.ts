@@ -68,7 +68,8 @@ import {
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
-import type { CapabilityLevel, ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
+import type { CapabilityLevel, ProjectId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
+import { parseWorkItemId } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
@@ -291,7 +292,7 @@ async function main(): Promise<void> {
   // null and blocks the dispatch — handing an agent some other project's
   // contract or intent would be worse than stopping.
   const findTaskProjectId = async (taskId: string): Promise<ProjectId | null> => {
-    const task = await workItemRepo.findById(taskId as WorkItemId);
+    const task = await workItemRepo.findById(parseWorkItemId(taskId, "taskId"));
     return task ? task.projectId : null;
   };
 

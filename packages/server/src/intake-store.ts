@@ -19,7 +19,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
       const rows = await messages.listUnconsumedTenders();
       return rows.map((row) => ({
         id: row.id,
-        projectId: parseProjectId(row.projectId),
+        projectId: parseProjectId(row.projectId, "client_messages.project_id"),
         body: row.body,
         intakeAttempts: row.intakeAttempts,
         intakeLastError: row.intakeLastError,

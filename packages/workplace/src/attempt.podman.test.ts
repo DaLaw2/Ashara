@@ -94,7 +94,7 @@ describe("runAttempt on a real cell", () => {
     try {
       const outcome = await runAttempt(
         {
-          projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
           taskId,
           role: { id: "worker", name: "Worker" },
           workKind: "implementation",

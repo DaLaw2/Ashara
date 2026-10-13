@@ -55,7 +55,7 @@ describe("resolveTargetProjectPath", () => {
   });
 
   test("an unknown project is rejected and records nothing", async () => {
-    const missing = parseProjectId(randomUUID());
+    const missing = parseProjectId(randomUUID(), "test");
     expect(await resolveTargetProjectPath(projects, missing, workdirBase)).toMatchObject({ kind: "rejected" });
     expect(await projects.get(missing)).toBeNull();
   });

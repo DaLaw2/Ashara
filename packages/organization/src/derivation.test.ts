@@ -6,7 +6,7 @@ import { RosterDerivation } from "./derivation.js";
 import type { RosterStore } from "./derivation.js";
 import type { Roster } from "./roster.js";
 
-const PROJECT = parseProjectId("00000000-0000-4000-8000-000000000031");
+const PROJECT = parseProjectId("00000000-0000-4000-8000-000000000031", "test");
 
 const VALID = {
   roles: [

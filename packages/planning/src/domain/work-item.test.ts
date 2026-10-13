@@ -20,7 +20,7 @@ import {
   takeEvents,
 } from "./work-item.js";
 
-const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 
 // A Record keyed by the union: a status added to WorkItemStatus fails to
 // compile here until it is listed, so no sweep below silently skips it.

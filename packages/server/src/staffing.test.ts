@@ -4,7 +4,7 @@ import type { ResolvedModel } from "@ashara/llm-gateway";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { createAgentStaffing } from "./staffing.js";
 
-const projectId = parseProjectId("22222222-2222-4222-8222-222222222222");
+const projectId = parseProjectId("22222222-2222-4222-8222-222222222222", "test");
 const DEVELOPER = "44444444-4444-4444-8444-444444444444";
 const LIAISON = "55555555-5555-4555-8555-555555555555";
 

@@ -4,7 +4,7 @@ import {
   describeErrorChain,
   wrapError,
   InvalidStatusTransition,
-  InvalidWorkItemId,
+  InvalidId,
   withSalvagedResult,
   canTransitionTo,
   projectBlockCause,
@@ -421,7 +421,7 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
     console.warn(`[${taskId}] work item vanished before its stale checks could be routed (${stale.detail})`);
     return;
   }
-  const checkTask = await findCheckTask(deps.workItemRepo, stale.checkTaskId);
+  const checkTask = await findCheckTask(deps.workItemRepo, stale.checkTaskId, "stale checks checkTaskId");
   const previousStatus = item.status;
   const checkTaskPrevious = checkTask?.status;
   let exit: ReturnType<typeof exitStaleChecks>;
@@ -501,7 +501,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     console.warn(`[${task.id}] work item vanished before its check dispute could be routed (${dispute.detail})`);
     return;
   }
-  const checkTask = await findCheckTask(deps.workItemRepo, dispute.checkTaskId);
+  const checkTask = await findCheckTask(deps.workItemRepo, dispute.checkTaskId, "check dispute checkTaskId");
   const previousStatus = item.status;
   const checkTaskPrevious = checkTask?.status;
   let exit: ReturnType<typeof exitDisputedCheck>;
@@ -643,12 +643,12 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
 }
 
 /** The check task a stale revision names; null when the stored id is no work item's. */
-async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: string): Promise<WorkItem | null> {
+async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: string, field: string): Promise<WorkItem | null> {
   let id: WorkItem["id"];
   try {
-    id = parseWorkItemId(checkTaskId);
+    id = parseWorkItemId(checkTaskId, field);
   } catch (e) {
-    if (!(e instanceof InvalidWorkItemId)) throw e;
+    if (!(e instanceof InvalidId)) throw e;
     console.warn(`[stale-checks] the stored check task id names no work item: ${e.message}`);
     return null;
   }

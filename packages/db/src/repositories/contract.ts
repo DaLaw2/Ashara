@@ -98,6 +98,6 @@ export class ContractRepository implements ContractRepositoryPort {
 
   private hydrate(projectId: string, version: number, contract: unknown): ProjectContract {
     const body = ContractBodySchema.parse(contract);
-    return { projectId: parseProjectId(projectId), version, ...body };
+    return { projectId: parseProjectId(projectId, "project_contracts.project_id"), version, ...body };
   }
 }

@@ -4,7 +4,7 @@ import type { ProjectBlockCause, StoredBlockedReason } from "@ashara/shared";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 
-const projectId = parseProjectId("00000000-0000-4000-8000-000000000020");
+const projectId = parseProjectId("00000000-0000-4000-8000-000000000020", "test");
 
 type Due = Awaited<ReturnType<BlockReportStore["dueReports"]>>[number];
 

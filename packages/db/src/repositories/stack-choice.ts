@@ -68,7 +68,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
       .orderBy(desc(visionDocuments.version))
       .limit(1);
     due.push({
-      projectId: parseProjectId(candidate.id),
+      projectId: parseProjectId(candidate.id, "projects.id"),
       taskId: task.id,
       statement: task.statement,
       vision: vision === undefined ? null : { version: vision.version, inferences: vision.inferences },

@@ -271,7 +271,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: "projectId must be a UUID", issues: parsed.error.issues }, 400);
     }
-    const current = await visionRepo.getCurrent(parseProjectId(parsed.data));
+    const current = await visionRepo.getCurrent(parseProjectId(parsed.data, "projectId route param"));
     if (!current) return c.json({ error: `no vision for project ${parsed.data}` }, 404);
     return c.json(current);
   });

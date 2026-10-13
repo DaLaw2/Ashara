@@ -137,7 +137,7 @@ describe("Project workspace path (migration 024)", () => {
   });
 
   test("recording on a missing project throws", async () => {
-    const missing = parseProjectId(randomUUID());
+    const missing = parseProjectId(randomUUID(), "test");
     const message = await failureOf(() => projects.recordWorkspacePath(missing, "/srv/none"));
     expect(message).toMatch(/does not exist/);
   });

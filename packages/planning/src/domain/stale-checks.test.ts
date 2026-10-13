@@ -4,7 +4,7 @@ import { exitStaleChecks } from "./stale-checks.js";
 import { createPendingWorkItem, startWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";
 
-const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000bb");
+const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000bb", "test");
 
 function implementation(): WorkItem {
   const item = { ...createPendingWorkItem("Task", "write hello.txt", "run", PROJECT), workKind: "implementation" as const };

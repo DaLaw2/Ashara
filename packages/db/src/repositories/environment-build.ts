@@ -43,7 +43,7 @@ const ColumnsSchema = z.object({
 });
 
 function baseOf(row: EnvironmentBuildRow): RecordBase {
-  return { id: row.id, projectId: parseProjectId(row.projectId), createdAt: row.createdAt, ...ColumnsSchema.parse(row) };
+  return { id: row.id, projectId: parseProjectId(row.projectId, "environment_builds.project_id"), createdAt: row.createdAt, ...ColumnsSchema.parse(row) };
 }
 
 function outcomeColumns(row: EnvironmentBuildRow): { status: string; imageId: string | null; error: string | null } {

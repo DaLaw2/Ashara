@@ -307,7 +307,9 @@ describe("Vision", () => {
 
   test("GET /projects/:id/vision is 404 for a project with no vision and 400 for a non-UUID", async () => {
     expect((await req("GET", `/projects/${randomUUID()}/vision`)).status).toBe(404);
-    expect((await req("GET", "/projects/not-a-uuid/vision")).status).toBe(400);
+    const malformed = await req("GET", "/projects/not-a-uuid/vision");
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ error: "projectId must be a UUID" });
   });
 });
 
@@ -468,7 +470,7 @@ describe("Client channel", () => {
 
   test("an answer must reply to a question of the same project", async () => {
     const question = await new ClientMessageRepository(db).insertOutbound({
-      projectId: parseProjectId(projectId),
+      projectId: parseProjectId(projectId, "test"),
       kind: "question",
       body: "Which currency?",
       inReplyTo: null,

@@ -87,7 +87,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           for (const edge of write.existingEdges) {
             const from = plan.tempIdToId[edge.from];
             if (from === undefined) throw new RevisionItemNotPlanned(write.projectId, edge.from, "edge");
-            await domainRepo.addDependency(parseWorkItemId(from), parseWorkItemId(edge.to));
+            await domainRepo.addDependency(from, parseWorkItemId(edge.to, "replan existingEdges[].to"));
           }
           for (const owner of write.plan.owners) {
             const id = plan.tempIdToId[owner.tempId];

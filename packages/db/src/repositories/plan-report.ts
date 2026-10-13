@@ -107,7 +107,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       .from(workItems)
       .where(eq(workItems.projectId, row.id))
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
-    const projectId = parseProjectId(row.id);
+    const projectId = parseProjectId(row.id, "projects.id");
     let origins: Array<string | undefined>;
     let dropped: DroppedOrderingHints;
     try {
@@ -142,7 +142,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of stopped) {
-    due.push({ subject: "planning-stopped", projectId: parseProjectId(row.id), attempts: row.attempts });
+    due.push({ subject: "planning-stopped", projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts });
   }
   return due;
 }

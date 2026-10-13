@@ -32,7 +32,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
   };
 }
 
-const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 
 function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkItemStatus; title: string }): WorkItem {
   return {

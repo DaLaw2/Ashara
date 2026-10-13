@@ -13,7 +13,7 @@
 
 import { userInfo } from "node:os";
 import { createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
-import { parseProjectId } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
 
 class ProjectCliUsageError extends Error {
   constructor(detail: string) {
@@ -23,7 +23,7 @@ class ProjectCliUsageError extends Error {
 }
 
 interface UnblockArgs {
-  readonly projectId: string;
+  readonly projectId: ProjectId;
   readonly reason: string;
   readonly by: string;
 }
@@ -43,7 +43,7 @@ function parseUnblockArgs(args: readonly string[]): UnblockArgs {
   }
   const reason = flags.get("--reason");
   if (reason === undefined) throw new ProjectCliUsageError("unblock needs --reason: why the cause is cleared.");
-  return { projectId, reason, by: flags.get("--by") ?? userInfo().username };
+  return { projectId: parseProjectId(projectId, "unblock <project-id> argument"), reason, by: flags.get("--by") ?? userInfo().username };
 }
 
 async function main(): Promise<void> {
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
 
   const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   try {
-    const { episodeId } = await new ProjectRepository(db).unblock(parseProjectId(projectId), by, reason);
+    const { episodeId } = await new ProjectRepository(db).unblock(projectId, by, reason);
     console.log(`project ${projectId}: unblocked by ${by} (block episode ${episodeId}); the client is told on the next cycle`);
   } finally {
     await db.$client.end();

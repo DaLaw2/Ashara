@@ -74,7 +74,7 @@ export async function listProjectsAwaitingRoster(db: DbHandle): Promise<ProjectA
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  return rows.map((row) => ({ projectId: parseProjectId(row.id), vision: row.vision }));
+  return rows.map((row) => ({ projectId: parseProjectId(row.id, "projects.id"), vision: row.vision }));
 }
 
 /**

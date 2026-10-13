@@ -48,7 +48,7 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 const TASK_IDS: [WorkItemId, WorkItemId] = [createWorkItemId(), createWorkItemId()];
 
 function pendingTask(id: WorkItemId, title: string): WorkItem {

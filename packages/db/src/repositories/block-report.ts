@@ -130,7 +130,7 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
     )
     .orderBy(asc(projectBlocks.endedAt), asc(projectBlocks.id));
   for (const row of resumed) {
-    due.push({ subject: "project-resumed", episodeId: row.id, projectId: parseProjectId(row.projectId) });
+    due.push({ subject: "project-resumed", episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id") });
   }
 
   const blocked = await db
@@ -150,7 +150,7 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
   for (const row of blocked) {
     const kind = ProjectBlockKindSchema.safeParse(row.kind);
     if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
-    const projectId = parseProjectId(row.projectId);
+    const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
     if (kind.data === "check_dispute") {
       const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute });
@@ -185,7 +185,7 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
   const unreadable = new Set<string>();
   for (const row of tasks) {
     if (unreadable.has(row.projectId)) continue;
-    const projectId = parseProjectId(row.projectId);
+    const projectId = parseProjectId(row.projectId, "work_items.project_id");
     let reason: StoredBlockedReason | undefined;
     try {
       reason = parseWorkItemJsonb(row).blockedReason;

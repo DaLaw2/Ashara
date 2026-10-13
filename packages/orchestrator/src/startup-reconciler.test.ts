@@ -119,7 +119,7 @@ describe("reconcileOnStartup — dev_session crash orphans", () => {
 // The review of t-shutdown-cancel-not-failure: a hard kill left the dispatch counted, so a task
 // the operator's kill stopped was one attempt nearer its abandon bound.
 describe("reconcileOnStartup — the dispatch a dead process counted", () => {
-  const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa");
+  const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa", "test");
 
   function orphanDeps(evidence: { readonly latestPhase: string | null; readonly orphanedBefore: number }) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
