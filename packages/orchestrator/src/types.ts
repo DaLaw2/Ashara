@@ -43,7 +43,7 @@ export interface CycleResult {
 }
 
 /** A spend cap refusing an LLM call, as the loop routes it. */
-export type SpendRefusal =
+type SpendRefusal =
   | { readonly kind: "project"; readonly projectId: string; readonly reason: string }
   | { readonly kind: "deployment"; readonly reason: string };
 
@@ -57,13 +57,28 @@ interface SpendCapPort {
   refusalOf(error: unknown): SpendRefusal | null;
 }
 
+/**
+ * A model call refused before it was sent by anything but a spend cap (an unpriced model, a cost
+ * that cannot be estimated): a configuration fault the owner fixes, so the project is blocked
+ * with the refusal's class. A re-dispatch would meet the same configuration.
+ */
+interface ConfigurationRefusal {
+  readonly kind: "configuration";
+  readonly projectId: string;
+  readonly errorClass: string;
+  readonly reason: string;
+}
+
+export type TaskRefusal = SpendRefusal | ConfigurationRefusal;
+
 export type TaskResult =
   | { readonly taskId: string; readonly status: "completed" | "failed" | "blocked"; readonly detail: string }
   /**
-   * A model call of the dispatch was refused at a spend cap: the item is back at Pending with its
-   * dispatch refunded. A deployment refusal stops the loop with its reason.
+   * A model call of the dispatch was refused before it was sent: the item is back at Pending with
+   * its dispatch refunded, no lesson and no failure router. A deployment refusal stops the loop with
+   * its reason; a configuration refusal has blocked the project.
    */
-  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: SpendRefusal };
+  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: TaskRefusal };
 
 export function completedResult(taskId: string): TaskResult {
   return { taskId, status: "completed", detail: "task completed and verified successfully" };

@@ -1,4 +1,5 @@
 import { CellExecFailed, CellStartFailed, PodmanCommandFailed, SubstrateUnavailable } from "@ashara/execution-infra";
+import { WorktreeCommitFailed } from "./workspace.js";
 
 /**
  * execution-infra's MountPathRejected, recognised by its own name and typed fields because the
@@ -15,9 +16,16 @@ interface MountRefusal extends Error {
  * A failure of the substrate a stage ran on, never of the work under it: the operator's to fix,
  * so the item is Blocked with `environment_unavailable` and never reaches the failure classifier.
  * CellTeardownFailed is not one: no stage ends on it (execution-service's teardownCell logs it and
- * leaves the cell to teardownAll and reconcileOrphans).
+ * leaves the cell to teardownAll and reconcileOrphans). WorktreeCommitFailed is Z0's own git
+ * refusing to record the work on the host, which a re-dispatch would meet again.
  */
-export type EnvironmentError = SubstrateUnavailable | CellStartFailed | CellExecFailed | PodmanCommandFailed | MountRefusal;
+export type EnvironmentError =
+  | SubstrateUnavailable
+  | CellStartFailed
+  | CellExecFailed
+  | PodmanCommandFailed
+  | MountRefusal
+  | WorktreeCommitFailed;
 
 function isMountRefusal(e: Error): e is MountRefusal {
   return (
@@ -34,7 +42,8 @@ export function environmentErrorOf(e: unknown): EnvironmentError | null {
     e instanceof SubstrateUnavailable ||
     e instanceof CellStartFailed ||
     e instanceof CellExecFailed ||
-    e instanceof PodmanCommandFailed
+    e instanceof PodmanCommandFailed ||
+    e instanceof WorktreeCommitFailed
   ) {
     return e;
   }
@@ -47,5 +56,6 @@ export function unavailableOf(e: EnvironmentError, cell: string): string {
   if (e instanceof SubstrateUnavailable) return `container substrate (${e.binary})`;
   if (e instanceof PodmanCommandFailed) return `container substrate (podman ${e.operation})`;
   if (e instanceof CellStartFailed || e instanceof CellExecFailed) return cell;
+  if (e instanceof WorktreeCommitFailed) return `host git (${e.step} of the task worktree)`;
   return `${cell} mount (${e.hostPath})`;
 }

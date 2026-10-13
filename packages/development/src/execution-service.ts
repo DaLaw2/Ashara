@@ -6,11 +6,14 @@ import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/l
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AttemptCellImage, Outcome } from "@ashara/workplace";
+import type { AttemptCellImage, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import {
+  checkPassed,
+  checkVerdict,
   environmentCheckPassed,
   environmentTestPassed,
   formatEnvironmentCheck,
+  formatCheckRuns,
   formatEnvironmentTest,
   runAttempt,
 } from "@ashara/workplace";
@@ -27,15 +30,14 @@ import { targetRepo } from "./host-git.js";
 import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
 import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
-import { finalizeSuccess } from "./gates/finalize.js";
+import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
 import {
   CheckRecorder,
+  StoredChecksStale,
   checkBranchName,
-  checkPassed,
   discardCheckWorkdir,
   dropCheckBranch,
-  formatCheckRuns,
   formatChecksForBrief,
   harvestCheckFiles,
   headCommit,
@@ -43,8 +45,9 @@ import {
   redRunProblem,
   runChecksOnCheckout,
   tentativeMergeCommit,
+  worktreeSnapshotCommit,
 } from "./task-checks.js";
-import type { CheckCells, CheckoutOutcome, TaskCheckStore, TaskChecks } from "./task-checks.js";
+import type { CheckCells, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
   commitAllChanges,
@@ -52,6 +55,7 @@ import {
   createWorkdir,
   createWorkdirForRetry,
   getChangedFiles,
+  WorktreeCommitIncomplete,
 } from "./workspace.js";
 import type { WorkdirInfo } from "./workspace.js";
 import { branchExists, taskBranchName } from "./merge.js";
@@ -76,9 +80,19 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
 /**
  * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
  * the attempt itself, the substrate gate, the red run of a check task's checks on main, and the
- * post-merge verifier cell.
+ * post-merge verifier cell; and postMergeCheckRun, where Z0's own machinery around the stored
+ * checks (a worktree, a commit, a check file) failed and no check ran.
  */
-type EnvironmentStage = "probeSubstrate" | "resolveEnvironment" | "createCell" | "agentAttempt" | "substrateGate" | "checkRedRun" | "postMergeVerify";
+type EnvironmentStage =
+  | "probeSubstrate"
+  | "resolveEnvironment"
+  | "createCell"
+  | "agentAttempt"
+  | "commitWork"
+  | "substrateGate"
+  | "checkRedRun"
+  | "postMergeVerify"
+  | "postMergeCheckRun";
 
 interface AgentPart {
   readonly output: AgentOutputJson | null;
@@ -148,6 +162,38 @@ function substrateBlocked(
       errorClass: e.name,
       message: e.message,
       chain: chain ?? wrapError("development", stage, e, { taskId, unavailable, errorClass: e.name }),
+      unavailable,
+      ...agent,
+    },
+    eventSink,
+  );
+}
+
+/**
+ * A red run of checks on main that threw before any verdict: a substrate failure blocks under
+ * checkRedRun with the cell named; anything else is Z0's own machinery (main's commit, the
+ * checkout's worktree or directory) and blocks as a VerificationInfrastructureFault. Neither
+ * says anything about the checks or the task, so neither is ever a failure to route.
+ */
+function redRunBlocked(
+  taskId: WorkItemId,
+  sessionId: string,
+  e: unknown,
+  agent: AgentPart,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const environmentFailure = environmentErrorOf(e);
+  if (environmentFailure !== null) return substrateBlocked(taskId, sessionId, "checkRedRun", environmentFailure, "CI cell", agent, eventSink);
+  const fault = new VerificationInfrastructureFault(taskId, "red run on main", { cause: e });
+  const unavailable = `verification infrastructure (${fault.step})`;
+  return environmentBlocked(
+    {
+      taskId,
+      sessionId,
+      stage: "checkRedRun",
+      errorClass: fault.name,
+      message: fault.message,
+      chain: wrapError("development", "checkRedRun", fault, { taskId, unavailable, errorClass: fault.name }),
       unavailable,
       ...agent,
     },
@@ -400,9 +446,11 @@ interface EnvironmentUndefinedResult {
 
 /**
  * A turn's model call was refused before it was sent (Finance's spend cap or price list), so the
- * attempt stopped there. Not a task failure and not a lesson: the orchestrator routes it by the
- * refusal (a spend-cap refusal returns the item to Pending without consuming its dispatch). The
- * agent's partial work is committed on the task branch for the next dispatch.
+ * attempt stopped there. Not a task failure and never a lesson, whatever refused it: a spend cap,
+ * or a configuration fault (an unpriced model, a call whose cost cannot be estimated). The
+ * orchestrator returns the item to Pending without consuming its dispatch and, for a
+ * configuration fault, blocks the project with the refusal's class; no failure router either way.
+ * The agent's partial work is committed on the task branch for the next dispatch.
  */
 interface RefusedResult {
   readonly status: "refused";
@@ -414,7 +462,23 @@ interface RefusedResult {
   readonly errorEnvelope: ErrorEnvelope;
 }
 
-export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult | RefusedResult;
+/**
+ * The task's stored checks were red-run on another environment version and no longer all fail on
+ * main on the dispatch's: they cannot decide its work. Not the implementer's failure (no model ran)
+ * and no lesson: the orchestrator parks the item at Blocked naming the check task that must write
+ * them again, never routes it through the FailureRouter, whose replan would meet the same checks.
+ */
+interface ChecksStaleResult {
+  readonly status: "checks_stale";
+  readonly checkTaskId: string;
+  readonly detail: string;
+  readonly output: null;
+  readonly sessionId: string;
+  readonly attempt: 1;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult | RefusedResult | ChecksStaleResult;
 
 interface AgentExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
@@ -523,10 +587,12 @@ export class DevelopmentService {
     this.deps = deps;
   }
 
-  async execute(
-    task: TaskDescriptor,
-    targetProjectPath: string | null,
-  ): Promise<ExecutionResult> {
+  /**
+   * `targetProjectPath` is the project's validated target checkout: a project without one is
+   * blocked by the caller before dispatch, since only that checkout gives the worktree a git dir
+   * Z0 owns (host-git.ts) and the merge a place to land.
+   */
+  async execute(task: TaskDescriptor, targetProjectPath: string): Promise<ExecutionResult> {
     const { config, eventSink, cells } = this.deps;
     const sessionId = createSessionId();
     const base = config.workdirBase;
@@ -546,22 +612,6 @@ export class DevelopmentService {
     } catch (e) {
       if (!(e instanceof SubstrateUnavailable)) throw e;
       return substrateBlocked(task.id, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
-    }
-
-    // Z0's git never discovers a repository from a tree a cell writes (host-git.ts),
-    // and only a target checkout gives the worktree a git dir Z0 owns. Without one
-    // nothing could be merged either, so the dispatch ends before any model call.
-    if (targetProjectPath === null) {
-      const result = failedBeforeAgent(
-        task.id,
-        sessionId,
-        "resolveTargetWorkspace",
-        "target project path unresolved; nothing could be merged",
-        `no target workspace for ${task.id}`,
-      );
-      eventSink?.emit({ event: "error", location: "DevelopmentService:resolveTargetWorkspace", taskId: task.id, attempt: 1, error: result.detail });
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
     }
 
     // Only the environment role's work is checked by the substrate: any other task so marked
@@ -779,8 +829,9 @@ export class DevelopmentService {
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
-      // touching its many return sites. A refused call is no lesson about the task.
-      if (result.status !== "completed" && result.status !== "refused") {
+      // touching its many return sites. A refused call, and stale stored checks (the check
+      // task's to rewrite, no model ran), are no lesson about the task.
+      if (result.status !== "completed" && result.status !== "refused" && result.status !== "checks_stale") {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       }
       return result;
@@ -871,13 +922,13 @@ export class DevelopmentService {
   }
 
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
-  private checkoutDir(d: Dispatch, purpose: "red-run" | "verify"): string {
+  private checkoutDir(d: Dispatch, purpose: "red-run" | "verify" | `run-checks-${number}`): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
 
   private async buildBrief(
     task: TaskDescriptor,
-    targetProjectPath: string | null,
+    targetProjectPath: string,
     contract: ProjectContract | null,
     environment: DispatchEnvironment,
     plan: WorkPlan,
@@ -988,6 +1039,13 @@ export class DevelopmentService {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, brief, staff, workDir, targetProjectPath, sessionId } = d;
 
+    // The checks were red-run on the environment of their check task; on any other version they
+    // are trusted only once they fail on main there too, before the model is called at all.
+    if (d.work.kind === "stored-checks") {
+      const stale = await this.revalidateChecks(d, d.work.stored);
+      if (stale !== null) return stale;
+    }
+
     eventSink?.emit({
       event: "agent_launched",
       taskId: task.id,
@@ -1019,6 +1077,7 @@ export class DevelopmentService {
         signal: this.deps.shutdownSignal,
         environment: task.workKind === "environment" ? environmentCheckPort(this.environmentScope(d)) : null,
         checks: d.work.kind === "check-authoring" ? d.work.recorder : null,
+        taskChecks: d.work.kind === "stored-checks" ? this.taskCheckRunPort(d, d.work.stored) : null,
       },
     );
     const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
@@ -1066,6 +1125,9 @@ export class DevelopmentService {
       };
     }
 
+    const uncommitted = await this.commitWork(d, output);
+    if (uncommitted !== null) return uncommitted;
+
     let finalizeDeps: FinalizeDeps;
     if (d.work.kind === "substrate") {
       const gate = await this.substrateGate(d, outcome.summary, output);
@@ -1084,8 +1146,7 @@ export class DevelopmentService {
       };
     }
 
-
-    const finalizeResult = await finalizeSuccess(finalizeDeps, d.repo, task, targetProjectPath, 1, {
+    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, 1, {
       entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
@@ -1101,6 +1162,26 @@ export class DevelopmentService {
         { output, agentInvoked: true },
         eventSink,
         finalizeResult.errorLayer,
+      );
+    }
+    if (!finalizeResult.success && finalizeResult.infrastructureFault !== null) {
+      // No check ran, so nothing is known of the task's work: blocked for the operator, the
+      // merge aborted and the branch kept, never a failure the task is replanned against.
+      const fault = finalizeResult.infrastructureFault;
+      await cleanupWorkdir(workDir, targetProjectPath);
+      return environmentBlocked(
+        {
+          taskId: task.id,
+          sessionId,
+          stage: "postMergeCheckRun",
+          errorClass: fault.name,
+          message: fault.message,
+          chain: finalizeResult.errorLayer,
+          unavailable: `verification infrastructure (${fault.step})`,
+          output,
+          agentInvoked: true,
+        },
+        eventSink,
       );
     }
     if (!finalizeResult.success) {
@@ -1172,8 +1253,38 @@ export class DevelopmentService {
   }
 
   /**
-   * The Sprint 0 gate (task_spec.checkedBy "substrate"), in place of per-task verify: the agent's
-   * work is committed to the task branch, then its environment definition must parse, its image
+   * Records the agent's work on the task branch, the only commit of a finished attempt: every gate
+   * and the merge read the branch, so work it does not hold is never merged as if it were there.
+   * Null when the commit holds all of it. A host git that refuses the commit blocks the task for
+   * the operator; changes the commit left behind fail it.
+   */
+  private async commitWork(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    try {
+      await commitAllChanges(d.repo, `ashara: agent output for task ${task.id}`);
+      return null;
+    } catch (e) {
+      const environmentFailure = environmentErrorOf(e);
+      if (environmentFailure === null && !(e instanceof WorktreeCommitIncomplete)) throw e;
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
+      if (environmentFailure !== null) {
+        return substrateBlocked(task.id, sessionId, "commitWork", environmentFailure, "host git", { output, agentInvoked: true }, this.deps.eventSink);
+      }
+      const chain = wrapError("development", "commitWork", e, { taskId: task.id });
+      const envelope: ErrorEnvelope = {
+        outcome: "failed",
+        summary: `the agent's work on ${task.id} was committed only in part, nothing merged: ${chain.message}`,
+        chain,
+        agentOutput: output,
+      };
+      this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: envelope.summary });
+      return { status: "failed", detail: envelope.summary, output, sessionId, attempt: 1, errorEnvelope: envelope };
+    }
+  }
+
+  /**
+   * The Sprint 0 gate (task_spec.checkedBy "substrate"), in place of per-task verify: on the agent's
+   * work as committed to the task branch (commitWork), its environment definition must parse, its image
    * build and its `test` pass in a fresh CI cell. A failed gate is a task failure (the definition
    * is the environment role's work), never environment_unavailable; a substrate that cannot run
    * the gate blocks the task. On a pass the finish statement is kept on the work item.
@@ -1182,7 +1293,6 @@ export class DevelopmentService {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
     eventSink?.emit({ event: "substrate_gate_started", taskId: task.id, attempt: 1, workDir });
-    await commitAllChanges(d.repo, `ashara: agent output for task ${task.id}`);
 
     let run: SubstrateGateRun;
     try {
@@ -1244,16 +1354,22 @@ export class DevelopmentService {
    */
   private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks): Promise<PostMergeVerdict> {
     const { task } = d;
-    const commit = await tentativeMergeCommit(targetProjectPath, task.id);
-    const outcome: CheckoutOutcome = await runChecksOnCheckout(
-      this.checkCells(d),
-      POST_MERGE_VERIFIER_ROLE,
-      cellImageOf(d.environment),
-      commit,
-      this.checkoutDir(d, "verify"),
-      stored.checks,
-      stored.files,
-    );
+    let outcome: CheckRunReport;
+    try {
+      const commit = await tentativeMergeCommit(targetProjectPath, task.id);
+      outcome = await runChecksOnCheckout(
+        this.checkCells(d),
+        POST_MERGE_VERIFIER_ROLE,
+        cellImageOf(d.environment),
+        commit,
+        this.checkoutDir(d, "verify"),
+        stored.checks,
+        stored.files,
+      );
+    } catch (e) {
+      if (environmentErrorOf(e) !== null) throw e;
+      throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
+    }
     let passed: boolean;
     let details: string;
     if (outcome.kind === "files_refused") {
@@ -1261,12 +1377,116 @@ export class DevelopmentService {
       details = `the stored check files (revision ${stored.revision}) could not be written over the merged work: ${outcome.detail}`;
     } else {
       passed = outcome.runs.length === stored.checks.length && outcome.runs.length > 0 && outcome.runs.every(checkPassed);
-      details = `checks revision ${stored.revision} from check task ${stored.checkTaskId}:\n${formatCheckRuns(outcome.runs, (run) =>
-        checkPassed(run) ? "PASSED" : run.timedOut ? "FAILED: timed out" : run.exitCode !== 0 ? `FAILED: exited ${run.exitCode}` : "FAILED: printed nothing",
-      )}`;
+      details = `checks revision ${stored.revision} from check task ${stored.checkTaskId}:\n${formatCheckRuns(outcome.runs, checkVerdict)}`;
     }
     this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: 1, verdict: passed ? "passed" : "failed", revision: stored.revision, details });
     return { passed, details };
+  }
+
+  /**
+   * run_checks' port: the stored checks, with their stored files written over a throwaway checkout
+   * of a snapshot of the implementer's current worktree, run in a fresh CI cell from the dispatch's
+   * image. The implementer's worktree itself is never written. A substrate failure throws, which
+   * the attempt reads as its environment failing.
+   */
+  private taskCheckRunPort(d: Dispatch, stored: TaskChecks): TaskCheckRunPort {
+    let runs = 0;
+    return {
+      run: async (timeoutSeconds) => {
+        runs += 1;
+        const commit = await worktreeSnapshotCommit(d.repo, d.task.id);
+        const report = await runChecksOnCheckout(
+          { ...this.checkCells(d), timeoutSeconds },
+          RED_RUN_ROLE,
+          cellImageOf(d.environment),
+          commit,
+          this.checkoutDir(d, `run-checks-${runs}`),
+          stored.checks,
+          stored.files,
+        );
+        this.deps.eventSink?.emit({
+          event: "task_checks_run",
+          taskId: d.task.id,
+          attempt: 1,
+          run: runs,
+          revision: stored.revision,
+          ...(report.kind === "ran" ? { passed: report.runs.filter(checkPassed).map((run) => run.name) } : { refused: report.detail }),
+        });
+        return report;
+      },
+    };
+  }
+
+  /**
+   * Stored checks were red-run on their check task's environment version. On a dispatch from another
+   * version they are red-run again on main in a CI cell from this dispatch's image: if every check
+   * still fails there decisively they are trusted; otherwise the task is checks_stale before the
+   * model is called, naming both versions and the check task, since a check that no longer fails on
+   * main cannot tell the task's work from its absence, and the implementer could not answer for it.
+   * A red run that could not run at all is environment-blocked. null when the checks may be trusted.
+   */
+  private async revalidateChecks(d: Dispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
+    const { eventSink } = this.deps;
+    const { task, sessionId, workDir, targetProjectPath } = d;
+    const current = sessionEnvironmentVersion(d.environment);
+    if (current === stored.environmentVersion) return null;
+
+    let redRun: CheckRunReport;
+    try {
+      const main = await mainCommit(targetProjectPath, task.id);
+      redRun = await runChecksOnCheckout(
+        this.checkCells(d),
+        RED_RUN_ROLE,
+        cellImageOf(d.environment),
+        main,
+        this.checkoutDir(d, "red-run"),
+        stored.checks,
+        stored.files,
+      );
+    } catch (e) {
+      await cleanupWorkdir(workDir, targetProjectPath);
+      return redRunBlocked(task.id, sessionId, e, NO_AGENT, eventSink);
+    }
+    const problem =
+      redRun.kind === "files_refused"
+        ? `the check files cannot be placed on main: ${redRun.detail}`
+        : redRun.runs.some((run) => redRunProblem(run) !== null)
+          ? formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`)
+          : null;
+    eventSink?.emit({
+      event: "checks_revalidated",
+      taskId: task.id,
+      attempt: 1,
+      revision: stored.revision,
+      storedVersion: stored.environmentVersion,
+      currentVersion: current,
+      trusted: problem === null,
+    });
+    if (problem === null) return null;
+
+    await cleanupWorkdir(workDir, targetProjectPath);
+    const stale = new StoredChecksStale(task.id, stored, current, problem);
+    console.warn(`[${task.id}] ${stale.message}`);
+    eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: 1, stage: "revalidateTaskChecks", errorClass: stale.name, reason: stale.message });
+    return {
+      status: "checks_stale",
+      checkTaskId: stored.checkTaskId,
+      detail: stale.message,
+      output: null,
+      sessionId,
+      attempt: 1,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary: stale.message,
+        chain: wrapError("development", "revalidateTaskChecks", stale, {
+          taskId: task.id,
+          checkTaskId: stored.checkTaskId,
+          revision: stored.revision,
+          storedVersion: stored.environmentVersion,
+          currentVersion: current,
+        }),
+      },
+    };
   }
 
   /** A check task's work that cannot be kept: failed with the reason, nothing stored, nothing merged. */
@@ -1301,7 +1521,7 @@ export class DevelopmentService {
       const harvest = await harvestCheckFiles(d.repo, task.id, work.startCommit, work.environment.owned);
       if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason);
 
-      let redRun: CheckoutOutcome;
+      let redRun: CheckRunReport;
       try {
         const main = await mainCommit(targetProjectPath, task.id);
         redRun = await runChecksOnCheckout(
@@ -1314,9 +1534,7 @@ export class DevelopmentService {
           harvest.files,
         );
       } catch (e) {
-        const environmentFailure = environmentErrorOf(e);
-        if (environmentFailure === null) throw e;
-        return substrateBlocked(task.id, sessionId, "checkRedRun", environmentFailure, "CI cell", { output, agentInvoked: true }, eventSink);
+        return redRunBlocked(task.id, sessionId, e, { output, agentInvoked: true }, eventSink);
       }
       if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
       const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);

@@ -39,23 +39,24 @@ afterAll(async () => {
 describe("resolveTargetProjectPath", () => {
   test("mints a path under workdirBase, records it on the project, and reuses it after workdirBase changes", async () => {
     const p = await projects.create(`${PREFIX}-mint`, clientId);
-    const minted = await resolveTargetProjectPath(projects, p.id, workdirBase);
-    expect(minted).toBe(join(workdirBase, "projects", p.id));
+    const minted = join(workdirBase, "projects", p.id);
+    expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toEqual({ kind: "resolved", path: minted });
     expect((await projects.get(p.id))?.workspacePath).toBe(minted);
 
     const elsewhere = join(workdirBase, "moved");
-    expect(await resolveTargetProjectPath(projects, p.id, elsewhere)).toBe(minted);
+    expect(await resolveTargetProjectPath(projects, p.id, elsewhere)).toEqual({ kind: "resolved", path: minted });
   });
 
   test("a stored path inside the Ashara repository is refused, never reused", async () => {
     const p = await projects.create(`${PREFIX}-poisoned`, clientId);
     await projects.recordWorkspacePath(p.id, join(process.cwd(), "poisoned-target"));
-    expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toBeNull();
+    const resolved = await resolveTargetProjectPath(projects, p.id, workdirBase);
+    expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("Ashara repository root") });
   });
 
-  test("an unknown project resolves to null and records nothing", async () => {
+  test("an unknown project is rejected and records nothing", async () => {
     const missing = parseProjectId(randomUUID());
-    expect(await resolveTargetProjectPath(projects, missing, workdirBase)).toBeNull();
+    expect(await resolveTargetProjectPath(projects, missing, workdirBase)).toMatchObject({ kind: "rejected" });
     expect(await projects.get(missing)).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
 import { runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import type { CheckDefinition, CheckDefinitionPort, CheckDefinitionResult } from "@ashara/workplace";
+import type { CheckDefinition, CheckDefinitionPort, CheckDefinitionResult, CheckRun, CheckRunReport } from "@ashara/workplace";
 import { targetRepo } from "./host-git.js";
 import { TreePathRefused, readTreeFile, writeTreeFile } from "./tree-read.js";
 import { cleanupWorkdir } from "./workspace.js";
@@ -74,6 +74,37 @@ export class CheckRecorder implements CheckDefinitionPort {
   }
 }
 
+/**
+ * A task's stored checks were red-run on another environment version than the dispatch's, and on
+ * the dispatch's they no longer all fail on main: they cannot decide the task until the check task
+ * writes them again on the current environment.
+ */
+export class StoredChecksStale extends Error {
+  readonly checkTaskId: string;
+  readonly revision: number;
+  readonly storedVersion: string;
+
+  constructor(
+    readonly taskId: string,
+    stored: TaskChecks,
+    /** The dispatch's environment version; null on the BaseCell. */
+    readonly currentVersion: string | null,
+    /** Why the red run on the current version rejects them. */
+    readonly redRun: string,
+  ) {
+    super(
+      `the checks of task ${taskId} (revision ${stored.revision}, check task ${stored.checkTaskId}) were red-run on ` +
+        `environment version ${stored.environmentVersion}, but this dispatch runs on ` +
+        `${currentVersion === null ? "the BaseCell" : `environment version ${currentVersion}`}, where they no longer ` +
+        `all fail on main; the check task must write them again on the current environment:\n${redRun}`,
+    );
+    this.name = "StoredChecksStale";
+    this.checkTaskId = stored.checkTaskId;
+    this.revision = stored.revision;
+    this.storedVersion = stored.environmentVersion;
+  }
+}
+
 /** A git step of the check flow printed something that is not what it must print. */
 class CheckGitStepFailed extends Error {
   constructor(
@@ -125,19 +156,33 @@ export function mainCommit(targetProjectPath: string, taskId: string): Promise<s
   return commitOf(targetRepo(targetProjectPath), taskId, "rev-parse main", ["rev-parse", "--verify", "--end-of-options", "main^{commit}"]);
 }
 
-/**
- * A commit of the target index holding the tentative merge (no conflict is left in it), parented
- * on HEAD, reachable from no ref: what the stored checks are checked out on.
- */
-export async function tentativeMergeCommit(targetProjectPath: string, taskId: string): Promise<string> {
-  const repo = targetRepo(targetProjectPath);
+/** A commit of `repo`'s index, parented on its HEAD and reachable from no ref. */
+async function commitIndex(repo: HostRepo, taskId: string, message: string): Promise<string> {
   const { stdout } = await runHostGit(repo, ["write-tree"]);
   const tree = stdout.trim();
   if (!COMMIT_HASH.test(tree)) throw new CheckGitStepFailed(taskId, "write-tree", `printed ${JSON.stringify(stdout)}`);
   return commitOf(repo, taskId, "commit-tree", [
     "-c", "user.name=Ashara Agent", "-c", "user.email=ashara-agent@local",
-    "commit-tree", tree, "-p", "HEAD", "-m", `ashara: tentative merge of task ${taskId}, for its checks`,
+    "commit-tree", tree, "-p", "HEAD", "-m", message,
   ]);
+}
+
+/**
+ * A commit of the target index holding the tentative merge (no conflict is left in it), parented
+ * on HEAD, reachable from no ref: what the stored checks are checked out on.
+ */
+export function tentativeMergeCommit(targetProjectPath: string, taskId: string): Promise<string> {
+  return commitIndex(targetRepo(targetProjectPath), taskId, `ashara: tentative merge of task ${taskId}, for its checks`);
+}
+
+/**
+ * A commit of everything in a worktree now (what `git add -A` stages), parented on its HEAD and
+ * reachable from no ref: the implementer's current work, for run_checks to check out elsewhere.
+ * The worktree's files are not touched; only its index is.
+ */
+export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string): Promise<string> {
+  await runHostGit(repo, ["add", "-A"]);
+  return commitIndex(repo, taskId, `ashara: current work of task ${taskId}, for run_checks`);
 }
 
 /** True when the owned entry `owned` contains `path` (itself, or anything under it). */
@@ -200,17 +245,6 @@ export async function harvestCheckFiles(
   return { kind: "harvested", files };
 }
 
-/** One check run in a cell. */
-export interface CheckRun {
-  readonly name: string;
-  readonly command: string;
-  /** null when the host had to kill the podman client; timedOut is then true. */
-  readonly exitCode: number | null;
-  readonly timedOut: boolean;
-  /** The end of stdout and stderr together. */
-  readonly output: string;
-}
-
 function tailOf(text: string): string {
   return text.length <= MAX_CHECK_OUTPUT_CHARS ? text : text.slice(-MAX_CHECK_OUTPUT_CHARS);
 }
@@ -222,11 +256,6 @@ export interface CheckCells {
   readonly teardownCell: (cell: Cell) => Promise<void>;
   readonly timeoutSeconds: number;
 }
-
-/** A stored check file could not be written into the checkout: the checks cannot run there. */
-export type CheckoutOutcome =
-  | { readonly kind: "ran"; readonly runs: readonly CheckRun[] }
-  | { readonly kind: "files_refused"; readonly detail: string };
 
 /**
  * Checks `commit` out into `dir` (a detached worktree of the target that no cell has mounted),
@@ -241,7 +270,7 @@ export async function runChecksOnCheckout(
   dir: string,
   checks: readonly CheckDefinition[],
   files: readonly CheckFile[],
-): Promise<CheckoutOutcome> {
+): Promise<CheckRunReport> {
   await mkdir(dirname(dir), { recursive: true });
   await runHostGit(targetRepo(cells.targetProjectPath), ["worktree", "add", "--detach", dir, commit]);
   try {
@@ -275,34 +304,21 @@ export async function runChecksOnCheckout(
   }
 }
 
-/** A check passes: it exited 0 within its time and printed something (an empty pass proves nothing). */
-export function checkPassed(run: CheckRun): boolean {
-  return run.exitCode === 0 && !run.timedOut && run.output.trim() !== "";
-}
-
 /**
- * The red-run rule on a check's run on main: it must fail there, and its command must be one the
- * environment can run. null when it holds.
+ * The red-run rule on a check's run on main: it must fail there decisively, by a non-zero exit
+ * within its time limit, and its command must be one the environment can run. A timeout proves
+ * nothing about main: the same check could time out on the task's work too. null when it holds.
  */
 export function redRunProblem(run: CheckRun): string | null {
-  if (run.exitCode === 0 && !run.timedOut) return "it already passes on main, so it cannot tell the task's work from its absence";
-  if (run.exitCode !== null && COMMAND_UNRUNNABLE.has(run.exitCode)) {
+  if (run.timedOut) {
+    return "it timed out on main instead of failing there; a check must fail on main by a non-zero exit within its time limit";
+  }
+  if (run.exitCode === null) return "it was killed on main without an exit code, so it did not fail there decisively";
+  if (run.exitCode === 0) return "it already passes on main, so it cannot tell the task's work from its absence";
+  if (COMMAND_UNRUNNABLE.has(run.exitCode)) {
     return `its command cannot be run in the project environment (exit ${run.exitCode})`;
   }
   return null;
-}
-
-export function formatCheckRuns(runs: readonly CheckRun[], verdictOf: (run: CheckRun) => string): string {
-  return runs
-    .map((run) =>
-      [
-        `Check ${JSON.stringify(run.name)}: ${verdictOf(run)}`,
-        `  command: ${run.command}`,
-        `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
-        `  output: ${run.output === "" ? "(empty)" : run.output}`,
-      ].join("\n"),
-    )
-    .join("\n");
 }
 
 /** The checks as the implementation task's brief states them: what decides the task. */
@@ -311,7 +327,8 @@ export function formatChecksForBrief(stored: TaskChecks): string {
     `## Checks that decide this task`,
     `Another team member wrote these checks before this task started. The task is done only when every one of them`,
     `exits 0 and prints output, run from the project root on your merged work. Their files are put back as written`,
-    `whenever they run, so changing them changes nothing.`,
+    `whenever they run, so changing them changes nothing. Call run_checks to run them on your current work before`,
+    `you finish: it reports each check's exit code and output exactly as verification would.`,
     ...stored.checks.map((check) => `- ${check.name}: \`${check.command}\``),
   ];
   if (stored.files.length > 0) lines.push(`Check files: ${stored.files.map((file) => file.path).join(", ")}`);

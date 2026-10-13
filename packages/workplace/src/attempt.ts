@@ -5,6 +5,7 @@ import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { Assignment } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
 import type { CheckDefinitionPort } from "./check-definition.js";
+import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { CostTally } from "./outcome.js";
@@ -41,6 +42,11 @@ export interface AttemptDeps {
   readonly environment: EnvironmentCheckPort | null;
   /** Z0's check recorder behind define_check: required for a check assignment and refused for any other. */
   readonly checks: CheckDefinitionPort | null;
+  /**
+   * Z0's run of the task's stored checks behind run_checks: offered exactly when supplied (a task
+   * decided by stored checks), and refused for a check assignment, whose checks do not exist yet.
+   */
+  readonly taskChecks: TaskCheckRunPort | null;
 }
 
 /** The pre-call refusal `error` is, or carries as a cause; null for any other failure. */
@@ -81,7 +87,10 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         : `checks: only a check assignment may be given Z0's check recorder (work kind ${assignment.workKind ?? "none"})`,
     ]);
   }
-  const tools = toolSchemasFor(assignment.workKind);
+  if (isCheckWork && deps.taskChecks !== null) {
+    throw new InvalidAssignment(assignment.taskId, ["taskChecks: a check assignment writes checks; it has no stored checks to run"]);
+  }
+  const tools = toolSchemasFor(assignment.workKind, deps.taskChecks !== null);
   const { clock, signal } = deps;
   const startedAt = clock.now();
   const deadline = startedAt + limits.wallClockMs;
@@ -258,6 +267,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
               tools,
               environment: deps.environment,
               checks: deps.checks,
+              taskChecks: deps.taskChecks,
             });
 
       if (execution.kind === "finish") {

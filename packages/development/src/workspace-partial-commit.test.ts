@@ -11,7 +11,9 @@ import {
   createWorkdir,
   createWorkdirForRetry,
   ensureTargetGitInit,
+  WorktreeCommitFailed,
 } from "./workspace.js";
+import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -148,5 +150,34 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     if (!outcome.committed) {
       expect(outcome.reason).toBe("git-error");
     }
+  });
+});
+
+describe("commitAllChanges fails closed", () => {
+  test("a git refusal throws WorktreeCommitFailed, an environment failure, and the branch gains no commit", async () => {
+    const base = await makeDir("ashara-commit-refused-");
+    const target = join(base, "project");
+    await ensureTargetGitInit(target);
+    const branch = "task/test-commit-refused";
+    const { workDir, repo } = await createWorkdir(join(base, "work"), target, branch);
+    await writeFile(join(workDir, "work.ts"), "export const w = 1;", "utf-8");
+    const before = await git(workDir, "rev-parse", "HEAD");
+    // A held index lock is a host git that cannot record anything, whatever the work is.
+    await writeFile(join(repo.gitDir, "index.lock"), "", "utf-8");
+
+    const thrown = await commitAllChanges(repo, "ashara: agent output for task x").catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(WorktreeCommitFailed);
+    if (!(thrown instanceof WorktreeCommitFailed)) return;
+    expect(thrown.step).toBe("add");
+    expect(thrown.detail).toContain("index.lock");
+    const environmentFailure = environmentErrorOf(thrown);
+    expect(environmentFailure).toBe(thrown);
+    if (environmentFailure === null) return;
+    expect(unavailableOf(environmentFailure, "host git")).toBe("host git (add of the task worktree)");
+    expect(await git(workDir, "rev-parse", "HEAD")).toBe(before);
+
+    await rm(join(repo.gitDir, "index.lock"));
+    await cleanupWorkdir(workDir, target, branch);
   });
 });

@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, StoredBlockedReason } from "@ashara/shared";
-import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo } from "@ashara/shared";
+import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo, projectBlockCause } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, RawFailureContext } from "./acl/planning-acl.js";
@@ -14,29 +14,31 @@ import {
   recoverFailedItem,
 } from "./acl/planning-acl.js";
 import type { TaskDescriptor } from "./acl/development-acl.js";
-import type { TaskResult, CoreLoopDeps, SpendRefusal } from "./types.js";
+import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
-type EnvironmentBlockedReason = Extract<StoredBlockedReason, { source: "environment_unavailable" | "environment_undefined" }>;
+type ParkedReason = Extract<StoredBlockedReason, { source: "environment_unavailable" | "environment_undefined" | "checks_stale" }>;
 
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly spendCap: CoreLoopDeps["spendCap"];
+  /** Blocks a project whose configuration refused a model call. */
+  readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
 }
 
 async function executeTask(
   deps: ExecutionRoutingDeps,
   developmentService: CoreLoopDeps["developmentService"],
   task: WorkItem,
-  targetProjectPath: string | null,
+  targetProjectPath: string,
 ): Promise<{
   result: TaskResult;
   output: AgentOutputJson | null;
   errorEnvelope?: ErrorEnvelope;
   /**
-   * The item was routed here, parked at Blocked (environment unavailable or undefined)
+   * The item was routed here, parked at Blocked (environment unavailable or undefined, checks stale)
    * or returned to Pending (a spend-cap refusal), so processTask must not run the
    * failed/blocked recovery ladder on it.
    */
@@ -67,16 +69,19 @@ async function executeTask(
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
-  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined") {
+  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined" || execResult.status === "checks_stale") {
     // Not a task failure: re-dispatching cannot make the substrate or the
-    // project's environment appear, so the item is parked at Blocked for the
-    // operator, never routed to Failed.
-    await routeAsEnvironmentBlocked(
+    // project's environment appear, nor rewrite the checks a check task stored
+    // (a replan keeps the item id, so it meets the same checks), so the item is
+    // parked at Blocked for the operator, never routed to Failed.
+    await routeAsParked(
       deps,
       task.id,
       execResult.status === "environment_blocked"
         ? { source: "environment_unavailable", unavailable: execResult.unavailable, reason: execResult.detail }
-        : { source: "environment_undefined", reason: execResult.detail },
+        : execResult.status === "checks_stale"
+          ? { source: "checks_stale", checkTaskId: execResult.checkTaskId, reason: execResult.detail }
+          : { source: "environment_undefined", reason: execResult.detail },
     );
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -87,18 +92,25 @@ async function executeTask(
   }
 
   if (execResult.status === "refused") {
-    const refusal = deps.spendCap.refusalOf(execResult.refusal);
-    if (refusal !== null) {
-      await routeAsRefused(deps, task.id, refusal);
-      return {
-        result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
-        output: execResult.output,
-        errorEnvelope: execResult.errorEnvelope,
-        routedHere: true,
-      };
+    // One rule for every refusal: no lesson, no failure router, the dispatch given back. A
+    // refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
+    // fault a re-dispatch would meet again, so the project is blocked until the owner fixes it.
+    const refusal: TaskRefusal = deps.spendCap.refusalOf(execResult.refusal) ?? {
+      kind: "configuration",
+      projectId: task.projectId,
+      ...projectBlockCause(execResult.refusal),
+    };
+    if (refusal.kind === "configuration") {
+      const blocked = await deps.projects.block(task.projectId, { errorClass: refusal.errorClass, reason: refusal.reason });
+      console.warn(`[${task.id}] project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`);
     }
-    // A refusal no spend cap made (an unpriced model): a re-dispatch meets the same price
-    // list, so it takes the failure route below, which replans or abandons the item.
+    await routeAsRefused(deps, task.id, refusal);
+    return {
+      result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
   }
 
   if (execResult.status === "completed") {
@@ -142,13 +154,19 @@ async function executeTask(
 }
 
 /**
- * A spend cap refused a model call of this dispatch: no failed approach, so the item
- * goes back to Pending and the dispatch the seam counted is given back. Finance has
- * already blocked the project at a project refusal, so the gate skips the item until
- * the owner returns the project to work; a deployment refusal stops the loop.
+ * A model call of this dispatch was refused before it was sent: no failed approach, so the
+ * item goes back to Pending and the dispatch the seam counted is given back. The project is
+ * blocked already at a project-cap or configuration refusal (by Finance, or by executeTask),
+ * so the gate skips the item until the owner returns the project to work; a deployment
+ * refusal stops the loop.
  */
-async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], refusal: SpendRefusal): Promise<void> {
-  const cap = refusal.kind === "project" ? `project ${refusal.projectId}'s spend cap` : "the deployment's spend cap";
+async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], refusal: TaskRefusal): Promise<void> {
+  const cap =
+    refusal.kind === "project"
+      ? `project ${refusal.projectId}'s spend cap`
+      : refusal.kind === "deployment"
+        ? "the deployment's spend cap"
+        : `a configuration fault (${refusal.errorClass})`;
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
     console.warn(`[${taskId}] work item vanished before it could be returned to Pending after a refusal at ${cap}: ${refusal.reason}`);
@@ -181,10 +199,10 @@ async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
  * InProgress (moved by the owner during dispatch) is left where it is: no
  * agent ran, so there is no result to salvage.
  */
-async function routeAsEnvironmentBlocked(
+async function routeAsParked(
   deps: ExecutionRoutingDeps,
   taskId: WorkItem["id"],
-  reason: EnvironmentBlockedReason,
+  reason: ParkedReason,
 ): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
@@ -196,13 +214,18 @@ async function routeAsEnvironmentBlocked(
     blockWorkItem(item, reason);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] environment block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`);
+    console.warn(`[${taskId}] ${reason.source} block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`);
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  const what = reason.source === "environment_unavailable" ? `${reason.unavailable} unavailable` : "no environment defined";
+  const what =
+    reason.source === "environment_unavailable"
+      ? `${reason.unavailable} unavailable`
+      : reason.source === "checks_stale"
+        ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
+        : "no environment defined";
   console.warn(`[${taskId}] blocked, ${what}: ${reason.reason}`);
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsEnvironmentBlocked");
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
@@ -334,12 +357,24 @@ export async function processTask(
     await deps.eventStore.publish(event);
   }
 
-  const targetProjectPath = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
     eventStore: deps.eventStore,
     spendCap: deps.spendCap,
+    projects: deps.projectRepo,
   };
+  const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
+  if (workspace.kind === "rejected") {
+    // Before the dispatch is counted, any model call or any cell: without a valid target checkout
+    // the work has nowhere to be done or merged, and a re-dispatch meets the same project record.
+    await routeAsParked(routingDeps, task.id, {
+      source: "environment_unavailable",
+      unavailable: "target workspace",
+      reason: workspace.reason,
+    });
+    return blockedResult(task.id, workspace.reason);
+  }
+  const targetProjectPath = workspace.path;
 
   // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
   // is about to be handed to the agent. Bump the dispatch counter with a single

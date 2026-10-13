@@ -4,6 +4,8 @@ import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
 import type { WorkKind } from "@ashara/shared";
 import type { CheckDefinitionPort } from "./check-definition.js";
+import { checkPassed, formatCheckRunReport } from "./check-run.js";
+import type { TaskCheckRunPort } from "./check-run.js";
 import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { truncateText } from "./records.js";
@@ -24,6 +26,7 @@ const listDirectoryArgs = z
 const searchArgs = z.object({ pattern: nonEmpty, path: nonEmpty.optional() }).strict();
 const runCommandArgs = z.object({ command: nonEmpty, timeout_seconds: z.number().int().positive().optional() }).strict();
 const buildEnvironmentArgs = z.object({}).strict();
+const runChecksArgs = z.object({}).strict();
 const defineCheckArgs = z
   .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
   .strict();
@@ -153,16 +156,29 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
   },
 };
 
-/** The tools an attempt offers the model: build_environment only for environment work, define_check only for check work. */
-export function toolSchemasFor(workKind: WorkKind | null): ToolSchemas {
+/** Only a task decided by stored checks runs them (Z0 supplies the port exactly then). */
+const RUN_CHECKS_SCHEMA: TurnToolSchema = {
+  description:
+    "Run the checks that decide this task on your current work, as verification will: their stored files are " +
+    "written over a copy of the workspace and each check runs from its root in a fresh workspace of the project " +
+    "environment. Returns each check's verdict, exit code and the end of its output. Your workspace is not changed.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+/**
+ * The tools an attempt offers the model: build_environment only for environment work, define_check
+ * only for check work, run_checks only when the task's stored checks can be run.
+ */
+export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): ToolSchemas {
+  const offered = runChecks ? { ...TOOL_SCHEMAS, run_checks: RUN_CHECKS_SCHEMA } : TOOL_SCHEMAS;
   switch (workKind) {
     case "environment":
-      return { ...TOOL_SCHEMAS, build_environment: BUILD_ENVIRONMENT_SCHEMA };
+      return { ...offered, build_environment: BUILD_ENVIRONMENT_SCHEMA };
     case "check":
-      return { ...TOOL_SCHEMAS, define_check: DEFINE_CHECK_SCHEMA };
+      return { ...offered, define_check: DEFINE_CHECK_SCHEMA };
     case "implementation":
     case null:
-      return TOOL_SCHEMAS;
+      return offered;
   }
 }
 
@@ -181,6 +197,8 @@ export interface ToolContext {
   readonly environment: EnvironmentCheckPort | null;
   /** Z0's check recorder; non-null exactly when the tools include define_check. */
   readonly checks: CheckDefinitionPort | null;
+  /** Z0's run of the stored checks; non-null exactly when the tools include run_checks. */
+  readonly taskChecks: TaskCheckRunPort | null;
 }
 
 function toolError(message: string): ToolExecution {
@@ -306,6 +324,14 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const result = context.checks.define({ name: args.data.name.trim(), command: args.data.command });
       if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
       return ok(`Defined check ${JSON.stringify(args.data.name.trim())} (${result.defined} defined so far).`);
+    }
+    case "run_checks": {
+      const args = runChecksArgs.safeParse(input);
+      if (!args.success) return argsError(toolName, args.error);
+      if (context.taskChecks === null) return toolError(`run_checks is not available in this attempt.`);
+      const report = await context.taskChecks.run(context.commandTimeoutSeconds);
+      const allPass = report.kind === "ran" && report.runs.length > 0 && report.runs.every(checkPassed);
+      return { kind: "result", output: formatCheckRunReport(report), isError: !allPass };
     }
     case "finish": {
       const args = finishArgs.safeParse(input);

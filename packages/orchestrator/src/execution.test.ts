@@ -60,7 +60,7 @@ function coreLoopDeps(
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
     projectRepo: {
-      get: async () => null,
+      get: async () => ({ workspacePath: "/tmp/ashara-execution-test-target" }),
       recordWorkspacePath: notExercised("recordWorkspacePath"),
       listActiveIds: notExercised("listActiveIds"),
       block: notExercised("block"),
@@ -418,10 +418,41 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
     ).not.toThrow();
   });
+
+  // The 30fb60d5 review (c): stale checks were classified VERIFICATION_GAP, replanned and lessoned against the implementer.
+  test("stored checks stale: Blocked naming the check task, never Failed, no failed approach, no failure router", async () => {
+    const detail = "the checks of task t (revision 1, check task c) were red-run on environment version e, but ...";
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+      status: "checks_stale",
+      checkTaskId: "c",
+      detail,
+      output: null,
+      sessionId: "test-session",
+      attempt: 1,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary: detail,
+        chain: { boundary: "development", operation: "revalidateTaskChecks", message: detail, timestamp: new Date().toISOString() },
+      },
+    });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+    const reason = stored().blockedReason;
+    expect(reason).toMatchObject({ source: "checks_stale", checkTaskId: "c", reason: detail });
+    expect(() =>
+      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
+    ).not.toThrow();
+  });
 });
 
 // The 509bbbc5 review: a turn refused at a spend cap reached the FailureRouter as a failed attempt.
-describe("a dispatch refused at a spend cap is no failed approach", () => {
+// The 30fb60d5 review (e): a refusal no cap made took the failure route; one rule now holds for both.
+describe("a dispatch refused before its call was sent is no failed approach", () => {
   class StubCapRefusal extends Error {
     constructor(readonly scope: "project" | "deployment") {
       super(`budget_cap: the spend cap of ${scope === "project" ? `project ${TEST_PROJECT_ID}` : "the deployment"} would be crossed`);
@@ -442,14 +473,23 @@ describe("a dispatch refused at a spend cap is no failed approach", () => {
     finish_reason: "error",
   };
 
-  function buildRefusalDeps(scope: "project" | "deployment") {
+  /** Stands for Finance's UnpricedModel: a refusal no spend cap made. */
+  class StubUnpricedModel extends Error {
+    constructor() {
+      super('Model "m" (provider "p") is unpriced: input_cost_per_1m=0, output_cost_per_1m=0. The request was not sent.');
+      this.name = "UnpricedModel";
+    }
+  }
+
+  function buildRefusalDeps(scope: "project" | "deployment" | "configuration") {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let row = freshPendingItem();
     const statusesWritten: string[] = [];
     let routed = 0;
     let approaches = 0;
+    const blocks: Array<{ readonly projectId: string; readonly errorClass: string; readonly reason: string }> = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
-    const refusal = new StubCapRefusal(scope);
+    const refusal = scope === "configuration" ? new StubUnpricedModel() : new StubCapRefusal(scope);
 
     const workItemRepo: WorkItemRepository = {
       findById: async () => copy(row),
@@ -500,6 +540,15 @@ describe("a dispatch refused at a spend cap is no failed approach", () => {
       },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+      projectRepo: {
+        get: async () => ({ workspacePath: "/tmp/ashara-execution-test-target" }),
+        recordWorkspacePath: notExercised("recordWorkspacePath"),
+        listActiveIds: notExercised("listActiveIds"),
+        block: async (projectId, cause) => {
+          blocks.push({ projectId, ...cause });
+          return "blocked";
+        },
+      },
       spendCap: {
         deploymentStop: notExercised("deploymentStop"),
         refusalOf: (error) =>
@@ -510,7 +559,7 @@ describe("a dispatch refused at a spend cap is no failed approach", () => {
             : null,
       },
     });
-    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches };
+    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, blocks };
   }
 
   test.each(["project", "deployment"] as const)(
@@ -531,4 +580,19 @@ describe("a dispatch refused at a spend cap is no failed approach", () => {
       expect(failedApproaches()).toBe(0);
     },
   );
+
+  test("refused by an unpriced model: the project blocked with the class, back to Pending, no lesson, no failure router", async () => {
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches, blocks } = buildRefusalDeps("configuration");
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("refused");
+    if (result.status !== "refused") return;
+    expect(result.refusal).toMatchObject({ kind: "configuration", projectId: TEST_PROJECT_ID, errorClass: "UnpricedModel" });
+    expect(blocks).toEqual([{ projectId: TEST_PROJECT_ID, errorClass: "UnpricedModel", reason: expect.stringContaining("is unpriced") }]);
+    expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+    expect(stored().dispatchCount).toBe(0);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+  });
 });

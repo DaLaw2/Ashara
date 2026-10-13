@@ -84,6 +84,19 @@ const environmentUndefinedSchema = z.object({
 });
 
 /**
+ * The checks stored for a task were red-run on another environment version than the dispatch's,
+ * and no longer all fail on main there: they cannot decide the task's work. Not the task's
+ * failure: the check task named by `checkTaskId` must write them again on the current
+ * environment. No model was called. `reason` carries the red run, for the operator.
+ */
+const checksStaleSchema = z.object({
+  source: z.literal("checks_stale"),
+  checkTaskId: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
  */
@@ -101,6 +114,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   failureRouterSchema,
   environmentUnavailableSchema,
   environmentUndefinedSchema,
+  checksStaleSchema,
   apiSchema,
 ]);
 
@@ -156,6 +170,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "failure_router":
     case "environment_unavailable":
     case "environment_undefined":
+    case "checks_stale":
     case "api":
       return { ...reason };
   }

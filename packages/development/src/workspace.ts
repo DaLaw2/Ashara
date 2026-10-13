@@ -132,9 +132,60 @@ async function ensureGitInitialized(targetProjectPath: string): Promise<void> {
   }
 }
 
+/**
+ * Z0's git refused to record the agent's work on the task branch: the host's git, not the work,
+ * failed, so the task is blocked for the operator rather than merged without that work.
+ */
+export class WorktreeCommitFailed extends Error {
+  constructor(
+    public readonly workTree: string,
+    public readonly step: "add" | "commit",
+    public readonly detail: string,
+  ) {
+    super(`git ${step} of the task worktree ${workTree} failed: ${detail}`);
+    this.name = "WorktreeCommitFailed";
+  }
+}
+
+/**
+ * The commit succeeded but the worktree still holds changes it did not record, so the task branch
+ * holds only part of the agent's work and must not be merged as if it held all of it.
+ */
+export class WorktreeCommitIncomplete extends Error {
+  constructor(
+    public readonly workTree: string,
+    public readonly residue: readonly string[],
+  ) {
+    super(`the task worktree ${workTree} still has uncommitted changes after the commit: ${residue.join(", ")}`);
+    this.name = "WorktreeCommitIncomplete";
+  }
+}
+
+function gitFailureDetail(e: unknown): string {
+  if (e instanceof Error) {
+    const stderr = "stderr" in e && typeof e.stderr === "string" ? e.stderr.trim() : "";
+    return stderr.length > 0 ? `${e.message.split("\n")[0]}; stderr: ${stderr}` : e.message;
+  }
+  return String(e);
+}
+
+/**
+ * Commits every change in the worktree to the task branch. Throws WorktreeCommitFailed when git
+ * rejects the add or the commit, and WorktreeCommitIncomplete when changes remain after it.
+ */
 export async function commitAllChanges(repo: HostRepo, message: string): Promise<void> {
-  await runHostGit(repo, ["add", "-A"]);
-  await runHostGit(repo, ["commit", "-m", message, "--allow-empty-message"]);
+  for (const [step, args] of [
+    ["add", ["add", "-A"]],
+    ["commit", ["commit", "-m", message, "--allow-empty-message"]],
+  ] as const) {
+    try {
+      await runHostGit(repo, args);
+    } catch (e) {
+      throw new WorktreeCommitFailed(repo.workTree, step, gitFailureDetail(e));
+    }
+  }
+  const residue = await getChangedFiles(repo);
+  if (residue.length > 0) throw new WorktreeCommitIncomplete(repo.workTree, residue);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +367,7 @@ function describeAsharaRootViolation(canonical: string, asharaRoot: string): str
 // time, before any init.
 // ---------------------------------------------------------------------------
 
-/** @testseam workspace-target-path.test.ts asserts the typed rejection */
+/** A refused target workspace: the orchestrator blocks the project's item on it before dispatch. */
 export class InvalidTargetProjectPath extends Error {
   constructor(
     public readonly path: string,

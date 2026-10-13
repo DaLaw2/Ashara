@@ -11,6 +11,7 @@ import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
 import type { CheckDefinition, CheckDefinitionPort } from "./check-definition.js";
+import type { CheckRunReport, TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort, EnvironmentCheckReport } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -146,6 +147,7 @@ function deps(llm: ContextualTurnLlm, cell: CellBackend, overrides: Partial<Atte
     signal: new AbortController().signal,
     environment: null,
     checks: null,
+    taskChecks: null,
     ...overrides,
   };
   return { deps: full, records };
@@ -516,6 +518,66 @@ describe("define_check", () => {
     const { checks } = recorder();
     await expect(runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
     await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { checks }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+  });
+});
+
+describe("run_checks", () => {
+  function taskChecks(report: CheckRunReport) {
+    const timeouts: number[] = [];
+    const port: TaskCheckRunPort = {
+      run: async (timeoutSeconds) => {
+        timeouts.push(timeoutSeconds);
+        return report;
+      },
+    };
+    return { port, timeouts };
+  }
+
+  it("runs the stored checks through Z0's port and reports each verdict; a failing check is a tool error", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "run_checks", input: {} }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+    ]);
+    const { port, timeouts } = taskChecks({
+      kind: "ran",
+      runs: [
+        { name: "greets", command: "cat greet.txt", exitCode: 0, timedOut: false, output: "hello" },
+        { name: "lists", command: "ls missing", exitCode: 2, timedOut: false, output: "No such file" },
+      ],
+    });
+
+    await runAttempt(assignment({ perCommandTimeoutSeconds: 45 }), deps(llm, fakeCell().cell, { taskChecks: port }).deps);
+
+    expect(Object.keys(requests[0]?.tools ?? {})).toContain("run_checks");
+    expect(timeouts).toEqual([45]);
+    const [result] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(result).toMatchObject({ type: "error-text", value: expect.stringContaining("1 of 2 check(s) pass") });
+    expect(result).toMatchObject({ value: expect.stringContaining('Check "greets": PASSED') });
+    expect(result).toMatchObject({ value: expect.stringContaining('Check "lists": FAILED: exited 2') });
+  });
+
+  it("is offered only with Z0's port, takes no arguments, and is refused to check work", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "run_checks", input: {} }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+    ]);
+    await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+    expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("run_checks");
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Unknown tool "run_checks"') });
+
+    const passing = taskChecks({ kind: "ran", runs: [{ name: "a", command: "true", exitCode: 0, timedOut: false, output: "ok" }] });
+    const second = scriptedLlm([
+      () => turn([{ name: "run_checks", input: { command: "true" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+    ]);
+    await runAttempt(assignment(), deps(second.llm, fakeCell().cell, { taskChecks: passing.port }).deps);
+    expect(passing.timeouts).toEqual([]);
+    expect(toolResultsOf(second.requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("Invalid arguments for run_checks") });
+
+    const checks: CheckDefinitionPort = { define: () => ({ kind: "recorded", defined: 1 }) };
+    await expect(
+      runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
+    ).rejects.toBeInstanceOf(InvalidAssignment);
   });
 });
 

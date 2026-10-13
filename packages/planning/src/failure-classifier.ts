@@ -42,10 +42,6 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
 
     // The stored checks are the task's only verdict: a failure is the task's work, not the tree.
     case "postMergeTaskChecks":
-    case "smokeTest":
-    case "smokeFailed":
-    case "integrationGate":
-    case "integrationGateFailed":
     case "entryPointRewriteCheck":
       return "VERIFICATION_GAP";
   }

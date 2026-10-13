@@ -1,4 +1,4 @@
-import { runHostGit, type HostRepo } from "@ashara/execution-infra";
+import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import { environmentErrorOf } from "../environment-failure.js";
@@ -15,8 +15,29 @@ import {
   taskBranchName,
   tentativeMerge,
 } from "../merge.js";
-import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
+import { ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
+
+/**
+ * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
+ * into the checkout), after the merge or in a red run on main; not the substrate and not a check:
+ * no verdict exists, so the failure belongs to no party the task could answer for.
+ */
+export class VerificationInfrastructureFault extends Error {
+  constructor(
+    readonly taskId: string,
+    /** What Z0 was doing when it failed, e.g. "stored-check run". */
+    readonly step: string,
+    options: { readonly cause: unknown },
+  ) {
+    const cause = options.cause instanceof Error ? `${options.cause.name}: ${options.cause.message}` : String(options.cause);
+    super(`verification of task ${taskId} could not run: ${step} failed: ${cause}`, { cause: options.cause });
+    this.name = "VerificationInfrastructureFault";
+  }
+}
+
+/** The operation an infrastructure fault of the post-merge check is recorded under. */
+const POST_MERGE_CHECK_RUN = "postMergeCheckRun";
 
 export type FinalizeResult =
   | { readonly success: true }
@@ -29,6 +50,11 @@ export type FinalizeResult =
        * the environment instead of routing a failure against a tree no check ever ran on.
        */
       readonly environmentFailure: EnvironmentError | null;
+      /**
+       * Set when Z0's own verification machinery failed (recorded under postMergeCheckRun): the
+       * caller blocks the task for the operator, never routes a failure against the task.
+       */
+      readonly infrastructureFault: VerificationInfrastructureFault | null;
     };
 
 export interface FinalizeContractInfo {
@@ -73,6 +99,7 @@ async function abortAndFail(
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
   errorLayerInfo: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
   environmentFailure: EnvironmentError | null = null,
+  infrastructureFault: VerificationInfrastructureFault | null = null,
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
 
@@ -89,23 +116,20 @@ async function abortAndFail(
     ...(abortError ? { abortError } : {}),
   });
 
-  return { success: false, gateFailureContext, errorLayer, environmentFailure };
+  return { success: false, gateFailureContext, errorLayer, environmentFailure, infrastructureFault };
 }
 
+/**
+ * Merges the task branch, which the caller has already committed the agent's work to (a commit
+ * that failed ended the dispatch before this point), and checks the merge.
+ */
 export async function finalizeSuccess(
   deps: FinalizeDeps,
-  worktree: HostRepo,
   task: TaskDescriptor,
   targetProjectPath: string,
   attempt: number,
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
-  try {
-    await commitAllChanges(worktree, `ashara: agent output for task ${task.id}`);
-  } catch (e: unknown) {
-    console.warn(`[finalize] commitAllChanges failed for task ${task.id}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
   await recoverOrphanedMerge(targetProjectPath);
   await ensureTargetGitInit(targetProjectPath);
 
@@ -124,6 +148,7 @@ export async function finalizeSuccess(
         attempt,
       }),
       environmentFailure: null,
+      infrastructureFault: null,
     };
   }
 
@@ -143,6 +168,7 @@ export async function finalizeSuccess(
         conflictFiles: mergeResult.files,
       }),
       environmentFailure: null,
+      infrastructureFault: null,
     };
   }
 
@@ -157,6 +183,7 @@ export async function finalizeSuccess(
         attempt,
       }),
       environmentFailure: null,
+      infrastructureFault: null,
     };
   }
 
@@ -165,25 +192,31 @@ export async function finalizeSuccess(
     postMergeVerify = await deps.postMergeVerify(targetProjectPath);
   } catch (e) {
     // The verifier cell could not be created or the checks could not run: the
-    // merge is unverified, so it is aborted (Discipline A). A substrate failure
-    // says nothing about the merged tree, so it is carried out typed for the
+    // merge is unverified, so it is aborted (Discipline A). No check ran, so a
+    // throw says nothing about the task or the merged tree: a substrate failure
+    // and a fault of Z0's own machinery are each carried out typed for the
     // caller to block on, never reported as a failed post-merge verify.
     const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     const environmentFailure = environmentErrorOf(e);
+    if (environmentFailure !== null) {
+      return abortAndFail(
+        task.id,
+        targetProjectPath,
+        `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
+        `Post-merge verify could not run: ${detail}`,
+        { operation: "postMergeVerify", gateOutput: detail, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
+        environmentFailure,
+      );
+    }
+    const fault = e instanceof VerificationInfrastructureFault ? e : new VerificationInfrastructureFault(task.id, "post-merge verification", { cause: e });
     return abortAndFail(
       task.id,
       targetProjectPath,
-      environmentFailure !== null
-        ? `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`
-        : "post-merge verification could not run — aborting tentative merge",
-      `Post-merge verify could not run: ${detail}`,
-      {
-        // A substrate failure is blocked under its stage, never routed; only a check failure says what the operation does.
-        operation: environmentFailure !== null ? "postMergeVerify" : deps.postMergeOperation,
-        gateOutput: detail,
-        gateContext: { taskId: task.id, attempt, ...(environmentFailure !== null ? { errorClass: environmentFailure.name } : {}) },
-      },
-      environmentFailure,
+      `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
+      `Post-merge verify could not run: ${fault.message}`,
+      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault.message, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      null,
+      fault,
     );
   }
 

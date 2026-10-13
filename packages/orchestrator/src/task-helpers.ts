@@ -3,7 +3,7 @@ import type { ProjectId } from "@ashara/shared";
 import type { FailedApproachRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
-import { assertValidTargetProjectPath } from "./acl/development-acl.js";
+import { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./acl/development-acl.js";
 
 // The slice of the Project Record that minting a workspace needs; ProjectRepository
 // satisfies it. The vision is Engagement's record and is neither read nor written here.
@@ -13,28 +13,35 @@ export interface WorkspacePathStore {
 }
 
 /**
+ * A project's target workspace, or why it has none: no project record, or a path the
+ * validation refused. A refused workspace is never replaced by another directory.
+ */
+type TargetWorkspace =
+  | { readonly kind: "resolved"; readonly path: string }
+  | { readonly kind: "rejected"; readonly reason: string };
+
+/**
  * The project's target workspace (migration 024): the stored path, or one minted
- * under `workdirBase`, validated and recorded before it is returned. Null, with a
- * warning, when the project is missing or any step fails.
+ * under `workdirBase`, validated and recorded before it is returned. Any failure
+ * other than a missing record or a refused path (a database error) is thrown.
  */
 export async function resolveTargetProjectPath(
   store: WorkspacePathStore,
   projectId: ProjectId,
   workdirBase: string,
-): Promise<string | null> {
-  try {
-    const project = await store.get(projectId);
-    if (!project) {
-      console.warn(`[project ${projectId}] no project record; target project path unresolved`);
-      return null;
-    }
+): Promise<TargetWorkspace> {
+  const project = await store.get(projectId);
+  if (!project) {
+    return { kind: "rejected", reason: `project ${projectId} has no project record, so no target workspace` };
+  }
 
+  try {
     if (project.workspacePath) {
       // The DB is a trust boundary: a stale/poisoned row (e.g. a path inside
       // the Ashara repo left over from earlier runs) must be rejected and
       // fail closed, never reused for destructive git sync/reset.
       await assertValidTargetProjectPath(project.workspacePath);
-      return project.workspacePath;
+      return { kind: "resolved", path: project.workspacePath };
     }
 
     const minted = join(workdirBase, "projects", projectId);
@@ -44,10 +51,10 @@ export async function resolveTargetProjectPath(
     const stored = await store.recordWorkspacePath(projectId, minted);
     if (stored !== minted) await assertValidTargetProjectPath(stored);
     console.log(`[project ${projectId}] target workspace path: ${stored}`);
-    return stored;
+    return { kind: "resolved", path: stored };
   } catch (e) {
-    console.warn(`[project ${projectId}] failed to resolve target project path:`, e);
-    return null;
+    if (!(e instanceof InvalidTargetProjectPath)) throw e;
+    return { kind: "rejected", reason: e.message };
   }
 }
 

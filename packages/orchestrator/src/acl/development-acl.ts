@@ -13,4 +13,4 @@
 export type { DevelopmentService, TaskDescriptor } from "@ashara/development";
 
 // --- Values (re-exported) ---
-export { assertValidTargetProjectPath } from "@ashara/development";
+export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "@ashara/development";

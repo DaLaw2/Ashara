@@ -12,14 +12,6 @@ function envelope(chain: ErrorLayer, overrides: Partial<ErrorEnvelope> = {}): Er
 }
 
 describe("classifyFailure", () => {
-  test("VERIFICATION_GAP — smokeTest operation", () => {
-    expect(classifyFailure(envelope(layer("smokeTest", "smoke test failed")))).toBe("VERIFICATION_GAP");
-  });
-
-  test("VERIFICATION_GAP — integrationGate operation", () => {
-    expect(classifyFailure(envelope(layer("integrationGate", "gate failed")))).toBe("VERIFICATION_GAP");
-  });
-
   test("TREE_REGRESSION — postMergeVerify operation", () => {
     expect(classifyFailure(envelope(layer("postMergeVerify", "verify failed")))).toBe("TREE_REGRESSION");
   });
@@ -107,9 +99,9 @@ describe("classifyFailure", () => {
   });
 
   test("classifies via nested cause chain", () => {
-    const inner = layer("smokeTest", "smoke failed");
+    const inner = layer("postMergeVerify", "verify failed");
     const outer = layer("execute", "execution failed", undefined, inner);
-    expect(classifyFailure(envelope(outer))).toBe("VERIFICATION_GAP");
+    expect(classifyFailure(envelope(outer))).toBe("TREE_REGRESSION");
   });
 
   test("COMPILATION_ERROR in cause chain takes precedence over outer unknown", () => {
@@ -164,14 +156,14 @@ describe("tryParseEnvelope", () => {
       summary: "test failure",
       chain: {
         boundary: "development",
-        operation: "smokeTest",
-        message: "smoke failed",
+        operation: "postMergeTaskChecks",
+        message: "check exited 1",
         timestamp: new Date().toISOString(),
       },
     };
     const result = tryParseEnvelope(raw);
     expect(result).not.toBeNull();
-    expect(result!.chain.operation).toBe("smokeTest");
+    expect(result!.chain.operation).toBe("postMergeTaskChecks");
   });
 
   test("returns null for invalid input", () => {

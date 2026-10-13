@@ -117,6 +117,7 @@ describe("runAttempt on a real cell", () => {
           signal: new AbortController().signal,
           environment: null,
           checks: null,
+          taskChecks: null,
         },
       );
 

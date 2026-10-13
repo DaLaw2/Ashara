@@ -201,7 +201,10 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
           return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
         case "run":
           return ok(`${"a".repeat(64)}\n`);
+        // Every command exits 1: the stored check, red-run again on the BaseCell (its version differs
+        // from the check's), still fails on main, so the dispatch reaches the model.
         case "exec":
+          return { ...ok(), exitCode: 1 };
         case "rm":
           return ok();
         default:

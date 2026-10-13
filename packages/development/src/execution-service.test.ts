@@ -83,6 +83,17 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "cell failed", chain: wrapError("development", "agentAttempt", "cell failed") },
     };
   }
+  if (status === "checks_stale") {
+    return {
+      status,
+      checkTaskId: "check-task",
+      detail: `${status} detail`,
+      output: null,
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "stale", chain: wrapError("development", "revalidateTaskChecks", "stale") },
+    };
+  }
   if (status === "refused") {
     const refusal = new PreCallRefusal("budget_cap: refused");
     return {
@@ -198,6 +209,10 @@ interface Probe {
   builds: number;
   /** Failure lessons written through the knowledge sink. */
   findings: number;
+  /** The environment version the last build reported. */
+  version: string | null;
+  /** Every model request, as sent. */
+  readonly requests: unknown[];
 }
 
 /** The checks a check author stored for the task: one that reads the greeting file the agent writes. */
@@ -223,9 +238,9 @@ function serviceOn(
   substrate: PodmanSubstrate,
   workdirBase: string,
   turns?: (probe: Probe) => TurnResult,
-  checks: TaskCheckStore = checkStore(STORED_CHECKS),
+  checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
-  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0 };
+  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [] };
   const events: Array<Record<string, unknown>> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
@@ -240,8 +255,9 @@ function serviceOn(
     eventSink: { emit: (event) => void events.push(event) },
     llm: {
       forCall: () => ({
-        generateTurn: async () => {
+        generateTurn: async (request) => {
           probe.modelCalls++;
+          probe.requests.push(request);
           if (turns === undefined) throw new Error("no model may be called");
           return turns(probe);
         },
@@ -261,6 +277,7 @@ function serviceOn(
         build: async (request) => {
           probe.builds++;
           const { version, commit } = await environmentVersion(request.repoGitDir, request.commit, request.definition);
+          probe.version = version;
           return {
             projectId: request.projectId,
             version,
@@ -279,7 +296,7 @@ function serviceOn(
         current: async () => STATEMENT,
       },
     },
-    checks,
+    checks: typeof checks === "function" ? checks(probe) : checks,
     shutdownSignal: new AbortController().signal,
   });
   return { service, probe, events };
@@ -346,32 +363,6 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(existsSync(join(target, ".git"))).toBe(false);
     expect(existsSync(workdirBase)).toBe(false);
     expect(await readdir(root)).toEqual(["target"]);
-  });
-
-  // Without a target checkout there is no git dir Z0 owns, so nothing it could run git against.
-  test("no target workspace: failed before the agent, with no workdir", async () => {
-    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-notarget-")));
-    scratch.push(root);
-    const workdirBase = join(root, "work");
-    const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
-    const substrate = new PodmanSubstrate({
-      podmanPath: "podman",
-      mountRoot: root,
-      runner: async (request) => {
-        if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
-      },
-    });
-    const { service, probe } = serviceOn(substrate, workdirBase);
-
-    const result = await service.execute(someTask(), null);
-
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") return;
-    expect(result.errorEnvelope?.chain.operation).toBe("resolveTargetWorkspace");
-    expect(probe.staffed).toBe(0);
-    expect(probe.modelCalls).toBe(0);
-    expect(existsSync(workdirBase)).toBe(false);
   });
 
   // s-platform-role-m1 C2: a task after Sprint 0 never falls back to the BaseCell.
@@ -474,7 +465,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  type Role = "developer" | "verifier";
+  type Role = "developer" | "verifier" | "ci";
 
   interface Faults {
     /** Where the substrate's mount root sits, relative to the scratch root. */
@@ -486,13 +477,24 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly agentRunsCommand?: boolean;
     /** The recorder refuses the second turn's call before it is sent, after the first wrote greet.txt. */
     readonly refusesSecondTurn?: PreCallRefusal;
+    /** The environment version the stored checks were red-run on; the dispatch's own when absent. */
+    readonly storedVersion?: string;
+    /** The stored checks' files. */
+    readonly storedFiles?: TaskChecks["files"];
+    /** The exit code of every check run in a CI cell (a red run or run_checks); 0 when absent. */
+    readonly ciExit?: number;
+    /** The first turn writes greet.txt and calls run_checks; the second finishes. */
+    readonly agentRunsChecks?: boolean;
+    /** A file sits where the throwaway checkouts' directory must be: Z0 cannot make a checkout. */
+    readonly checkoutsBlocked?: boolean;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "") => ({
     exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null,
   });
-  const ids: Record<Role, string> = { developer: "a".repeat(64), verifier: "b".repeat(64) };
-  const roleOf = (id: string | undefined): Role | undefined => (id === ids.developer ? "developer" : id === ids.verifier ? "verifier" : undefined);
+  const ids: Record<Role, string> = { developer: "a".repeat(64), verifier: "b".repeat(64), ci: "d".repeat(64) };
+  const roleOf = (id: string | undefined): Role | undefined =>
+    id === ids.developer ? "developer" : id === ids.verifier ? "verifier" : id === ids.ci ? "ci" : undefined;
 
   function turn(name: string, input: unknown): TurnResult {
     return {
@@ -532,12 +534,15 @@ describe("a substrate failure at any stage blocks the task on the environment", 
           case "info":
             return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
           case "run": {
-            const role: Role = args.includes("ashara.role=verifier") ? "verifier" : "developer";
+            const role: Role = args.includes("ashara.role=verifier") ? "verifier" : args.includes("ashara.role=ci") ? "ci" : "developer";
             started.push({ role, image: args.find((arg) => arg.startsWith("sha256:") || arg.includes("@sha256:")) });
             return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
           }
-          case "exec":
-            return faults.execFails !== undefined && faults.execFails === roleOf(args[4]) ? ok("", 125, "Error: OCI runtime error") : ok("hello\n");
+          case "exec": {
+            const role = roleOf(args[4]);
+            if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error");
+            return role === "ci" ? ok("hello\n", faults.ciExit ?? 0) : ok("hello\n");
+          }
           case "rm":
             return faults.teardownFails === true ? ok("", 1, "Error: container is busy") : ok();
           default:
@@ -545,9 +550,25 @@ describe("a substrate failure at any stage blocks the task on the environment", 
         }
       },
     });
+    if (faults.checkoutsBlocked === true) {
+      await mkdir(workdirBase, { recursive: true });
+      await writeFile(join(workdirBase, "checkouts"), "not a directory\n");
+    }
     const task = someTask();
     const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
+    // Read when the dispatch plans its work, after the environment's build reported its version.
+    const stored = (probe: Probe): TaskCheckStore => ({
+      ...checkStore(null),
+      latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", files: faults.storedFiles ?? [] }),
+    });
     const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
+      if (faults.agentRunsChecks === true) {
+        if (probe.modelCalls === 1) {
+          writeFileSync(join(workDir, "greet.txt"), "hello\n");
+          return turn("run_checks", {});
+        }
+        return turn("finish", { status: "done", summary: `check files in the worktree: ${(faults.storedFiles ?? []).filter((f) => existsSync(join(workDir, f.path))).length}` });
+      }
       if (faults.refusesSecondTurn !== undefined) {
         if (probe.modelCalls === 2) throw faults.refusesSecondTurn;
         writeFileSync(join(workDir, "greet.txt"), "hello\n");
@@ -556,7 +577,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
       if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
-    });
+    }, stored);
 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
@@ -642,6 +663,77 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_failed" || e.event === "task_blocked" || e.event === "task_completed")).toBe(false);
     expect(mainAfter).toBe(mainBefore);
     expect(branchKept).toBe(true);
+  });
+
+  // The 30fb60d5 review (a): a git step around the stored checks blamed the task as a verification gap.
+  test("Z0 cannot make the checks' checkout: blocked under postMergeCheckRun, never a failure of the task", async () => {
+    const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ checkoutsBlocked: true });
+
+    expect(result.status, result.detail).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.errorEnvelope.chain.operation).toBe("postMergeCheckRun");
+    expect(result.detail).toContain("stage postMergeCheckRun (VerificationInfrastructureFault)");
+    expect(result.unavailable).toBe("verification infrastructure (stored-check run)");
+    expect(started.map((s) => s.role)).toEqual(["developer"]);
+    expect(events.some((e) => e.event === "gate_failed" || e.event === "task_failed" || e.event === "task_completed")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(true);
+  });
+
+  // (c): checks red-run on another environment version are red-run again on this one before the model.
+  test("checks from another environment version that still fail on main are trusted, then decide the task", async () => {
+    const { result, events, started } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 1 });
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
+    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ storedVersion: "e".repeat(64), trusted: true });
+  });
+
+  // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.
+  test("checks from another environment version that pass on main: checks_stale before the model, naming the check task and both versions", async () => {
+    const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0 });
+
+    expect(result.status, result.detail).toBe("checks_stale");
+    if (result.status !== "checks_stale") return;
+    expect(result.checkTaskId).toBe(STORED_CHECKS.checkTaskId);
+    expect(result.detail).toContain(`check task ${STORED_CHECKS.checkTaskId}`);
+    expect(result.errorEnvelope.outcome).toBe("blocked");
+    expect(result.errorEnvelope.chain.operation).toBe("revalidateTaskChecks");
+    expect(probe.findings).toBe(0);
+    expect(events.some((e) => e.event === "task_failed")).toBe(false);
+    expect(result.detail).toContain(`environment version ${"e".repeat(64)}`);
+    expect(result.detail).toContain(`environment version ${String(probe.version)}`);
+    expect(result.detail).toContain("already passes on main");
+    expect(probe.modelCalls).toBe(0);
+    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: false });
+    expect(events.some((e) => e.event === "agent_launched")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+  });
+
+  // The (c) review: a git or checkout step of the revalidating red run was rethrown into processTask.
+  test("Z0 cannot make the revalidating red run's checkout: blocked under checkRedRun before the model, never a failure", async () => {
+    const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), checkoutsBlocked: true });
+
+    expect(result.status, result.detail).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.errorEnvelope.chain.operation).toBe("checkRedRun");
+    expect(result.detail).toContain("stage checkRedRun (VerificationInfrastructureFault)");
+    expect(result.unavailable).toBe("verification infrastructure (red run on main)");
+    expect(probe.modelCalls).toBe(0);
+    expect(events.some((e) => e.event === "task_failed" || e.event === "agent_launched")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+  });
+
+  // (d): the implementer sees the bar before finishing, on a copy; its worktree never gets the check files.
+  test("run_checks runs the stored checks on a copy of the current work in a CI cell; the worktree is untouched", async () => {
+    const storedFiles = [{ path: "checks/greet.sh", content: "cat greet.txt\n" }];
+    const { result, events, started, probe } = await dispatch({ agentRunsChecks: true, storedFiles });
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
+    expect(events.filter((e) => e.event === "task_checks_run")).toEqual([expect.objectContaining({ run: 1, passed: ["greets"] })]);
+    expect(JSON.stringify(probe.requests[1])).toContain('Check \\"greets\\": PASSED');
+    expect(result.output?.summary).toBe("check files in the worktree: 0");
   });
 });
 
