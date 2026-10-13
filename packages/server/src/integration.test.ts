@@ -152,8 +152,8 @@ beforeAll(async () => {
   const testModelId = `intg-model-${randomUUID().slice(0, 8)}`;
   createdModelIds.push(testModelId);
   await pool.query(
-    "INSERT INTO model_configs (model_id, provider_name, api_model_id, capability, input_cost_per_1m, output_cost_per_1m, max_context_tokens, supports_caching) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    [testModelId, testProviderName, "test-model-v1", "Strong", 1.0, 5.0, 128000, false],
+    "INSERT INTO model_configs (model_id, provider_name, api_model_id, capability, input_cost_per_1m, output_cost_per_1m, max_context_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    [testModelId, testProviderName, "test-model-v1", "Strong", 1.0, 5.0, 128000],
   );
 });
 

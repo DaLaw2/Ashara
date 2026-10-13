@@ -20,11 +20,12 @@ export type NewLlmCall = {
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
   readonly costUsd: number | null;
+  /** The instant the call was made; its rates priced `costUsd`. */
+  readonly createdAt: Date;
 } & LlmCallOutcomeColumns;
 
 type LlmCallRecord = NewLlmCall & {
   readonly id: string;
-  readonly createdAt: Date;
 };
 
 type LlmCallRow = typeof llmCalls.$inferSelect;
@@ -73,6 +74,7 @@ export class LlmCallRepository {
         costUsd: call.costUsd,
         outcome: call.outcome,
         errorKind: call.errorKind,
+        createdAt: call.createdAt,
       })
       .returning();
     return toRecord(row);

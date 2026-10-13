@@ -51,7 +51,9 @@ function model(id: string, capabilityLevel: ModelConfig["capabilityLevel"]): Mod
     inputCostPer1M: 1,
     outputCostPer1M: 2,
     maxContextTokens: 100_000,
-    supportsCaching: false,
+    cacheReadCostPer1M: null,
+    cacheWriteCostPer1M: null,
+    priceWindows: [],
   };
 }
 
@@ -205,7 +207,7 @@ beforeAll(async () => {
   gateway = buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db), () => new Date()) },
   });
 });
 

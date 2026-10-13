@@ -216,66 +216,40 @@ export class RoutingProfileIncomplete extends GatewayError {
   }
 }
 
-export interface TemperatureNotHonoredContext {
-  /** Temperature the caller explicitly asked for — the promise that was broken. */
-  readonly requestedTemperature: number;
-  /** Catalog model id the request resolved to. */
-  readonly model: string;
-  /** Provider that served the call. */
-  readonly provider: string;
-  /** `KNOWN_LLM_SITES` tag of the call, or "unknown" when the caller sent none. */
-  readonly site: string;
-  /** SDK entry point that produced the warning (generateText/streamText/generateObject/...). */
-  readonly operation: string;
-  /** The provider's own explanation, copied verbatim from the SDK warning. */
-  readonly details: string | undefined;
-  readonly howToFix: string;
+export interface RoutingProfileModelMissingContext {
+  /** Enabled-provider combo whose profile names the models. */
+  readonly combo: string;
+  /** `"<site>" -> "<model>"` for every mapping whose model no enabled provider offers. */
+  readonly missing: readonly string[];
+  /** Enabled providers searched. */
+  readonly providers: readonly string[];
+  /** models.toml path the profile was loaded from. */
+  readonly configPath: string;
 }
 
 /**
- * Thrown when a call explicitly requested a temperature and the provider
- * reported — via the AI SDK's structured `warnings` — that it dropped the
- * parameter and sampled however it liked.
- *
- * Discipline A names `temperature: 0` as the mechanism for deterministic
- * operations (decomposition, classification, stack derivation).
- * Sending the parameter is not the guarantee; the provider HONORING it is.
- * Anthropic models with `rejectsSamplingParameters` and OpenAI reasoning
- * models silently ignore it, so without this check the determinism guarantee
- * evaporates into an SDK log line and a non-deterministic result is accepted
- * as if it were deterministic — the exact "continue as if success" shape
- * Discipline A forbids.
- *
- * Deliberately NOT a per-model catalog flag: Anthropic also drops temperature
- * whenever extended thinking is enabled, a per-CALL runtime condition no
- * static capability table can predict. The warning is the only signal that
- * reflects what actually happened.
+ * Thrown by `buildGateway` when the deployment's routing profile names a model
+ * no enabled provider offers: a model removed from model_configs, renamed, or
+ * misspelled. Every request routed to it would fail; this fails the boot instead.
  */
-export class TemperatureNotHonored extends GatewayError {
-  readonly requestedTemperature: number;
-  readonly model: string;
-  readonly provider: string;
-  readonly site: string;
-  readonly operation: string;
-  readonly details: string | undefined;
-  readonly howToFix: string;
+export class RoutingProfileModelMissing extends GatewayError {
+  readonly combo: string;
+  readonly missing: readonly string[];
+  readonly providers: readonly string[];
+  readonly configPath: string;
 
-  constructor(context: TemperatureNotHonoredContext) {
+  constructor(context: RoutingProfileModelMissingContext) {
     super(
-      `Temperature not honored: requested temperature=${context.requestedTemperature} for model ` +
-        `"${context.model}" (provider="${context.provider}", site="${context.site}", ` +
-        `operation="${context.operation}"), but the provider reported it unsupported and ignored it ` +
-        `— the result is NOT deterministic. Provider detail: ${context.details ?? "none reported"}. ` +
-        context.howToFix,
+      `Routing profile "${context.combo}" names model(s) no enabled provider offers: ` +
+        `${context.missing.join(", ")}. Providers searched: ${quoteList(context.providers)}. ` +
+        `Config: ${context.configPath}. Map the site(s) to a model present in model_configs, ` +
+        "or add the model to model_configs in a migration.",
     );
-    this.name = "TemperatureNotHonored";
-    this.requestedTemperature = context.requestedTemperature;
-    this.model = context.model;
-    this.provider = context.provider;
-    this.site = context.site;
-    this.operation = context.operation;
-    this.details = context.details;
-    this.howToFix = context.howToFix;
+    this.name = "RoutingProfileModelMissing";
+    this.combo = context.combo;
+    this.missing = context.missing;
+    this.providers = context.providers;
+    this.configPath = context.configPath;
   }
 }
 

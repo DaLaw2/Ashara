@@ -5,6 +5,7 @@ export {
   buildGatewayConfig,
   loadGatewayConfigFromApi,
   loadGatewayCatalogFromFile,
+  toModelConfig,
 } from "./config.js";
 export type { GatewayCatalog, ProviderCredential } from "./config.js";
 export { calculateCost, resolveModelsConfigPath } from "./pricing.js";

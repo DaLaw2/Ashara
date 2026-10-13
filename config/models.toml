@@ -1,6 +1,7 @@
 # Ashara Model Configuration
 #
-# The model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
+# The model catalog is DB-authoritative (seeded by migration 002_seed_models.sql;
+# prices, cache rates and time-of-day windows refreshed by 021).
 # This file contains only deployment-specific routing profiles.
 #
 # To add/update models, create a new migration or use the model_configs DB table.
@@ -38,9 +39,12 @@
 # silently escape to capability routing, which is how stack-derivation once
 # reached Anthropic despite the reserve below.
 #
-# Within a table, a request whose capability has no entry AND no "default",
-# or whose mapped model no searched provider offers, fails the call
-# (RoutingProfileUnresolved) -- only the SITE dimension is boot-enforced.
+# Within a table, a request whose capability has no entry AND no "default"
+# fails the call (RoutingProfileUnresolved). Boot-enforced for the deployment's
+# own combo: every site is mapped, and every model the table names is offered by
+# an enabled provider (RoutingProfileModelMissing). Every model named in ANY
+# table must be a priced model_configs row: the server's model-catalog test
+# checks this file against the migrated catalog.
 # =============================================================================
 
 [routing.profiles."deepseek"]
@@ -54,18 +58,21 @@
 # judge tier that used to hold the third Anthropic slot was removed in
 # ADR-034, taking claude-opus-4-8 out of routing with it.
 # Frontier-classified agent tasks stay on DeepSeek's own Frontier model
-# (v4-pro) rather than downgrading to v4-flash or escaping to Anthropic.
-# Agent default upgraded to V4 Pro: Flash can't produce compiling TypeScript+Hono
-# code (Runs 30-32: every attempt failed tsc baseline). Pro is 12x Flash but still
-# cheaper than Sonnet ($1.74/$3.48 vs $3/$15). Frontier stays on Pro (no-op).
+# (v4-pro) rather than downgrading to Flash or escaping to Anthropic.
+# Agent default upgraded to V4 Pro: deepseek-v4-flash, since retired and aliased
+# to V4.1-Flash, could not produce compiling TypeScript+Hono code (Runs 30-32:
+# every attempt failed tsc baseline). Prices are model_configs' (migration 021):
+# Pro is 3.3-4.4x Flash and below Sonnet 5.5 ($1.32/$3.96 at DeepSeek's peak vs
+# $2/$10). Frontier stays on Pro (no-op).
 "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
-"decomposition" = "deepseek-v4-flash"
-"alignment" = "deepseek-v4-flash"
+"decomposition" = "deepseek-flash"
+"alignment" = "deepseek-flash"
 # The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
 # the CLI's alignment call, kept on the same model.
-"liaison-intake" = "deepseek-v4-flash"
-# Stack derivation (ADR-046) is a once-per-project, temperature-0 label
-# extraction -- cheap and deterministic, and keeping it on DeepSeek preserves
+"liaison-intake" = "deepseek-flash"
+# Stack derivation (ADR-046) is a once-per-project label extraction -- cheap,
+# and keeping it on DeepSeek preserves
 # the Anthropic reserve stated above.
-"stack-derivation" = "deepseek-v4-flash"
-"escalation" = "claude-sonnet-4-6"
+"stack-derivation" = "deepseek-flash"
+# Sonnet 5.5 replaces Sonnet 4.6 (Decided: owner 2026-10-13, ADR-077).
+"escalation" = "claude-sonnet-5-5"

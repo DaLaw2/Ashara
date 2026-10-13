@@ -252,7 +252,6 @@ export class TenderIntake implements LiaisonIntake {
       prompt: buildIntakePrompt(tender.body),
       schema: IntakeResponseSchema,
       maxTokens: 4096,
-      temperature: 0,
     });
     return response.data;
   }

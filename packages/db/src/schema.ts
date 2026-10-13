@@ -7,6 +7,7 @@ import {
   timestamp,
   boolean,
   integer,
+  smallint,
   bigint,
   doublePrecision,
   numeric,
@@ -236,10 +237,32 @@ export const modelConfigs = pgTable("model_configs", {
   inputCostPer1m: doublePrecision("input_cost_per_1m").notNull().default(0),
   outputCostPer1m: doublePrecision("output_cost_per_1m").notNull().default(0),
   maxContextTokens: integer("max_context_tokens").notNull().default(128000),
-  supportsCaching: boolean("supports_caching").notNull().default(false),
+  cacheReadCostPer1m: doublePrecision("cache_read_cost_per_1m"),
+  cacheWriteCostPer1m: doublePrecision("cache_write_cost_per_1m"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// model_price_windows (migration 021): time-of-day rates replacing a model's base rates
+// ---------------------------------------------------------------------------
+
+export const modelPriceWindows = pgTable("model_price_windows", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  modelId: text("model_id")
+    .notNull()
+    .references(() => modelConfigs.modelId, { onDelete: "cascade", onUpdate: "cascade" }),
+  isoWeekday: smallint("iso_weekday").notNull(),
+  utcStartMinute: smallint("utc_start_minute").notNull(),
+  utcEndMinute: smallint("utc_end_minute").notNull(),
+  inputCostPer1m: doublePrecision("input_cost_per_1m").notNull(),
+  outputCostPer1m: doublePrecision("output_cost_per_1m").notNull(),
+  cacheReadCostPer1m: doublePrecision("cache_read_cost_per_1m"),
+  cacheWriteCostPer1m: doublePrecision("cache_write_cost_per_1m"),
+}, (t) => ({
+  modelWeekdayStartUnique: unique("model_price_windows_model_id_iso_weekday_utc_start_minute_key")
+    .on(t.modelId, t.isoWeekday, t.utcStartMinute),
+}));
 
 // ---------------------------------------------------------------------------
 // system_settings
@@ -336,7 +359,7 @@ export const llmCalls = pgTable(
     outputTokens: integer("output_tokens"),
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
-    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    costUsd: numeric("cost_usd", { precision: 20, scale: 12, mode: "number" }),
     outcome: text().notNull(),
     errorKind: text("error_kind"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),

@@ -8,7 +8,7 @@ import {
 import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 import { InvalidGatewayCatalog } from "./errors.js";
-import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
+import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles, TokenRates } from "./types.js";
 
 /**
  * A provider's credentials for gateway configuration. Decoupled from the
@@ -79,6 +79,19 @@ export function buildGatewayConfig(
 // Gateway catalog — one schema, one converter, two transports (file, HTTP)
 // ---------------------------------------------------------------------------
 
+const RateSchema = z.number().nonnegative();
+const CacheRateSchema = RateSchema.nullable();
+
+const CatalogPriceWindowSchema = z.object({
+  isoWeekday: z.number().int().min(1).max(7),
+  utcStartMinute: z.number().int().min(0).max(1439),
+  utcEndMinute: z.number().int().min(1).max(1440),
+  inputCostPer1m: RateSchema,
+  outputCostPer1m: RateSchema,
+  cacheReadCostPer1m: CacheRateSchema,
+  cacheWriteCostPer1m: CacheRateSchema,
+});
+
 const CatalogModelSchema = z.object({
   modelId: z.string().min(1),
   providerName: z.string().min(1),
@@ -86,9 +99,14 @@ const CatalogModelSchema = z.object({
   capability: z.string().min(1),
   inputCostPer1m: z.number(),
   outputCostPer1m: z.number(),
+  cacheReadCostPer1m: CacheRateSchema,
+  cacheWriteCostPer1m: CacheRateSchema,
   maxContextTokens: z.number().int().positive(),
-  supportsCaching: z.boolean(),
+  priceWindows: z.array(CatalogPriceWindowSchema),
 });
+
+type CatalogModel = z.infer<typeof CatalogModelSchema>;
+type CatalogPriceWindow = z.infer<typeof CatalogPriceWindowSchema>;
 
 const CatalogProviderSchema = z.object({
   name: z.string().min(1),
@@ -104,24 +122,75 @@ const GatewayCatalogSchema = z.object({
 export type GatewayCatalog = z.infer<typeof GatewayCatalogSchema>;
 
 /**
+ * Why a model's price windows cannot be applied: two windows of one weekday
+ * overlap (the rate at an instant would be ambiguous), or a window bills a
+ * cache class the base rates do not, or the reverse.
+ */
+function priceWindowIssues(model: CatalogModel): string[] {
+  const issues: string[] = [];
+  const windows = model.priceWindows;
+  for (const [i, w] of windows.entries()) {
+    const where = `${model.modelId}.priceWindows[${i}]`;
+    if (w.utcStartMinute >= w.utcEndMinute) issues.push(`${where}: start ${w.utcStartMinute} >= end ${w.utcEndMinute}`);
+    if ((w.cacheReadCostPer1m === null) !== (model.cacheReadCostPer1m === null)) {
+      issues.push(`${where}: cache read rate ${w.cacheReadCostPer1m} vs base ${model.cacheReadCostPer1m}`);
+    }
+    if ((w.cacheWriteCostPer1m === null) !== (model.cacheWriteCostPer1m === null)) {
+      issues.push(`${where}: cache write rate ${w.cacheWriteCostPer1m} vs base ${model.cacheWriteCostPer1m}`);
+    }
+    for (const [j, other] of windows.entries()) {
+      if (j <= i || other.isoWeekday !== w.isoWeekday) continue;
+      if (w.utcStartMinute < other.utcEndMinute && other.utcStartMinute < w.utcEndMinute) {
+        issues.push(`${where} overlaps priceWindows[${j}] on ISO weekday ${w.isoWeekday}`);
+      }
+    }
+  }
+  return issues;
+}
+
+function toTokenRates(rates: CatalogPriceWindow | CatalogModel): TokenRates {
+  return {
+    inputCostPer1M: rates.inputCostPer1m,
+    outputCostPer1M: rates.outputCostPer1m,
+    cacheReadCostPer1M: rates.cacheReadCostPer1m,
+    cacheWriteCostPer1M: rates.cacheWriteCostPer1m,
+  };
+}
+
+/**
+ * One catalog model (a model_configs row with its model_price_windows) as the
+ * gateway's {@link ModelConfig}. Throws {@link InvalidGatewayCatalog} naming
+ * `source` when its price windows cannot be applied unambiguously.
+ */
+export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
+  const issues = priceWindowIssues(m);
+  if (issues.length > 0) throw new InvalidGatewayCatalog(source, issues);
+  return {
+    id: m.modelId,
+    apiModelId: m.apiModelId ?? m.modelId,
+    provider: m.providerName,
+    capabilityLevel: parseCapabilityLevel(m.capability),
+    maxContextTokens: m.maxContextTokens,
+    ...toTokenRates(m),
+    priceWindows: m.priceWindows.map((w) => ({
+      isoWeekday: w.isoWeekday,
+      utcStartMinute: w.utcStartMinute,
+      utcEndMinute: w.utcEndMinute,
+      rates: toTokenRates(w),
+    })),
+  };
+}
+
+/**
  * Shared converter: turns a validated {@link GatewayCatalog} into a
  * {@link GatewayConfig}. Both transports (file and HTTP) call this after
  * schema validation. API keys and budget come from the process's own
  * environment, routing profiles from the local TOML.
  */
-function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
+function buildConfigFromCatalog(source: string, catalog: GatewayCatalog): GatewayConfig {
   const modelsByProvider = new Map<string, ModelConfig[]>();
   for (const m of catalog.models) {
-    const model: ModelConfig = {
-      id: m.modelId,
-      apiModelId: m.apiModelId ?? m.modelId,
-      provider: m.providerName,
-      capabilityLevel: parseCapabilityLevel(m.capability),
-      inputCostPer1M: m.inputCostPer1m,
-      outputCostPer1M: m.outputCostPer1m,
-      maxContextTokens: m.maxContextTokens,
-      supportsCaching: m.supportsCaching,
-    };
+    const model = toModelConfig(source, m);
     const list = modelsByProvider.get(m.providerName);
     if (list) list.push(model);
     else modelsByProvider.set(m.providerName, [model]);
@@ -219,7 +288,7 @@ export async function loadGatewayCatalogFromFile(
     ]);
   }
 
-  return buildConfigFromCatalog(validateCatalog(filePath, json));
+  return buildConfigFromCatalog(filePath, validateCatalog(filePath, json));
 }
 
 /**
@@ -255,5 +324,5 @@ export async function loadGatewayConfigFromApi(
     providers: await providersResp.json(),
   };
 
-  return buildConfigFromCatalog(validateCatalog(serverUrl, rawCatalog));
+  return buildConfigFromCatalog(serverUrl, validateCatalog(serverUrl, rawCatalog));
 }

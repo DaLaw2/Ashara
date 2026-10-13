@@ -7,7 +7,6 @@
  * seen works with zero code changes — the prompt contains ZERO hardcoded
  * toolchain names.
  *
- * Temperature 0 (Discipline A: deterministic operations).
  * Fail-closed: invalid LLM output throws via the structured provider's
  * schema validation — never returns a default or empty spec.
  */
@@ -101,7 +100,6 @@ export async function deriveEnvironmentSpec(
     prompt: buildDerivationPrompt(manifestContent),
     schema: LlmEnvironmentSpecSchema,
     maxTokens: 1024,
-    temperature: 0,
     validate: validateToolchainsPresent,
   });
   return toCanonicalSpec(response.data);

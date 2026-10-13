@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { buildGateway, calculateCost } from "@ashara/llm-gateway";
+import { buildGateway } from "@ashara/llm-gateway";
 import type { GatewayConfig, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
@@ -37,12 +37,22 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     inputCostPer1M: 3,
     outputCostPer1M: 15,
     maxContextTokens: 100_000,
-    supportsCaching: true,
+    cacheReadCostPer1M: 0.3,
+    cacheWriteCostPer1M: 3.75,
+    priceWindows: [],
     ...overrides,
   };
 }
 
-function gateway(providerName: "anthropic" | "deepseek", modelConfig: ModelConfig): LLMGateway {
+// A Wednesday. 02:30 UTC is inside DeepSeek's 01:00-04:00 peak; 12:00 UTC is off-peak.
+const PEAK = new Date("2026-10-14T02:30:00Z");
+const OFF_PEAK = new Date("2026-10-14T12:00:00Z");
+
+function gateway(
+  providerName: "anthropic" | "deepseek",
+  modelConfig: ModelConfig,
+  clock: () => Date = () => PEAK,
+): LLMGateway {
   const config: GatewayConfig = {
     providers: [
       {
@@ -58,7 +68,7 @@ function gateway(providerName: "anthropic" | "deepseek", modelConfig: ModelConfi
   return buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(calls, clock) },
   });
 }
 
@@ -96,6 +106,7 @@ const LlmCallRowSchema = z.object({
   cacheReadTokens: z.number().int().nullable(),
   cacheWriteTokens: z.number().int().nullable(),
   costUsd: z.number().nullable(),
+  createdAt: z.coerce.date(),
   outcome: z.string(),
   errorKind: z.string().nullable(),
 });
@@ -105,7 +116,7 @@ async function rowsOfThisProject(): Promise<z.infer<typeof LlmCallRowSchema>[]> 
     SELECT project_id AS "projectId", task_id AS "taskId", call_site AS "callSite", provider, model,
            input_tokens AS "inputTokens", output_tokens AS "outputTokens",
            cache_read_tokens AS "cacheReadTokens", cache_write_tokens AS "cacheWriteTokens",
-           cost_usd::float8 AS "costUsd", outcome, error_kind AS "errorKind"
+           cost_usd::float8 AS "costUsd", created_at AS "createdAt", outcome, error_kind AS "errorKind"
     FROM llm_calls WHERE project_id = ${projectId}
     ORDER BY created_at, id`);
   return z.array(LlmCallRowSchema).parse(result.rows);
@@ -162,8 +173,58 @@ describe("one llm_calls row per provider call", () => {
     expect(row.cacheWriteTokens).toBe(100);
     expect(row.outcome).toBe("ok");
     expect(row.errorKind).toBeNull();
-    const expected = calculateCost(1200, 80, 900, 100, priced).totalCost;
-    expect(row.costUsd).toBeCloseTo(expected, 6);
+    // 200 plain input at 3, 900 cache read at 0.30, 100 cache write at 3.75, 80 output at 15.
+    expect(row.costUsd).toBeCloseTo((200 * 3 + 900 * 0.3 + 100 * 3.75 + 80 * 15) / 1_000_000, 6);
+    expect(row.createdAt.toISOString()).toBe(PEAK.toISOString());
+  });
+
+  test("a call's cost uses the rate of the window its instant falls in", async () => {
+    const deepseek = model({
+      id: "deepseek-windowed",
+      inputCostPer1M: 0.3,
+      outputCostPer1M: 1.2,
+      cacheReadCostPer1M: 0.006,
+      cacheWriteCostPer1M: null,
+      priceWindows: [{
+        isoWeekday: 3,
+        utcStartMinute: 600,
+        utcEndMinute: 1440,
+        rates: { inputCostPer1M: 0.15, outputCostPer1M: 0.6, cacheReadCostPer1M: 0.003, cacheWriteCostPer1M: null },
+      }],
+    });
+    const costAt = async (instant: Date): Promise<number | null> => {
+      await clearRows();
+      stubModel({
+        doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 100 }, {
+          deepseek: { promptCacheHitTokens: 400, promptCacheMissTokens: 600 },
+        }),
+      });
+      await gateway("deepseek", deepseek, () => instant)
+        .forCall({ projectId, taskId: null, callSite: "decomposition" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      const [row] = await rowsOfThisProject();
+      return row?.costUsd ?? null;
+    };
+
+    expect(await costAt(PEAK)).toBeCloseTo((600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000, 9);
+    expect(await costAt(OFF_PEAK)).toBeCloseTo((600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000, 9);
+  });
+
+  test("reported cache tokens of a class the model has no rate for give a NULL cost", async () => {
+    await clearRows();
+    stubModel({
+      doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 40 }, {
+        deepseek: { promptCacheHitTokens: 700, promptCacheMissTokens: 300 },
+      }),
+    });
+
+    await gateway("deepseek", model({ id: "no-cache-rate", cacheReadCostPer1M: null, cacheWriteCostPer1M: null }))
+      .forCall({ projectId, taskId: null, callSite: "decomposition" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+
+    const [row] = await rowsOfThisProject();
+    expect(row?.cacheReadTokens).toBe(700);
+    expect(row?.costUsd).toBeNull();
   });
 
   test("DeepSeek cache hits are measured from its provider metadata", async () => {
@@ -174,7 +235,7 @@ describe("one llm_calls row per provider call", () => {
       }),
     });
 
-    await gateway("deepseek", model({ id: "deepseek-priced" }))
+    await gateway("deepseek", model({ id: "deepseek-priced", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
       .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
 

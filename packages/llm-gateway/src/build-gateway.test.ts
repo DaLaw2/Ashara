@@ -1,19 +1,21 @@
 import { describe, expect, test } from "vitest";
 import { buildGateway } from "./build-gateway.js";
-import { RoutingProfileIncomplete } from "./errors.js";
+import { RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { GatewayConfig, ModelConfig, RoutingProfiles } from "./types.js";
 
 const MODEL: ModelConfig = {
-  id: "deepseek-v4-flash",
+  id: "deepseek-flash",
   apiModelId: "deepseek-chat",
   provider: "deepseek",
   capabilityLevel: "Strong",
   inputCostPer1M: 1,
   outputCostPer1M: 2,
   maxContextTokens: 100_000,
-  supportsCaching: false,
+  cacheReadCostPer1M: null,
+  cacheWriteCostPer1M: null,
+  priceWindows: [],
 };
 
 function makeConfig(routingProfiles: RoutingProfiles): GatewayConfig {
@@ -63,6 +65,13 @@ describe("buildGateway routing-profile completeness", () => {
 
   test("boots when the profile is explicitly empty (capability routing for every site)", () => {
     expect(build({ deepseek: {} })).toBeInstanceOf(LLMGateway);
+  });
+
+  test("refuses to start when the profile names a model no enabled provider offers", () => {
+    const profile = { ...completeProfile(), "agent-runner": { Frontier: "deepseek-v4-flash", default: MODEL.id } };
+
+    expect(() => build({ deepseek: profile })).toThrow(RoutingProfileModelMissing);
+    expect(() => build({ deepseek: profile })).toThrow(/"agent-runner" -> "deepseek-v4-flash"/);
   });
 
   test("boots when no profile exists for the enabled-provider combo", () => {

@@ -21,7 +21,7 @@ function decompositionReask(ctx: { readonly errors: readonly string[] }): string
 
 /**
  * Decomposition LLM wired through its OWN reliability ladder (mig-run10, ADR-030):
- * temperature 0, two validated attempts per tier, escalate one capability tier,
+ * two validated attempts per tier, escalate one capability tier,
  * then `StructuredOutputExhausted`. It runs a SEMANTIC
  * `validate` (phantom `dependsOn` ref detection) inside each attempt and re-asks
  * with the failure feedback, so one malformed emission is corrected on retry
@@ -49,7 +49,6 @@ export function createGatewayDecompositionLLM(
         schema,
         validate,
         maxTokens: 4096,
-        temperature: 0,
       });
       return response.data;
     },

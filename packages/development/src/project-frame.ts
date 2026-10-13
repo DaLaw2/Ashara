@@ -27,8 +27,7 @@ export interface ProjectIntentSource {
 }
 
 /**
- * Port: last-resort stack derivation from prose. Implementations MUST use
- * temperature 0 (Discipline A: deterministic operation).
+ * Port: last-resort stack derivation from prose.
  */
 export interface StackDeriver {
   /** `scope` names the project and task the derivation call is charged to. */

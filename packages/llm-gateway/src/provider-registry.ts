@@ -146,7 +146,7 @@ export class ProviderRegistry {
    * (`RoutingProfileIncomplete`).
    *
    * Deliberately does NOT enforce "the mapped model must meet or exceed
-   * `capability`" — a flat string entry (e.g. escalation -> claude-sonnet-4-6)
+   * `capability`" — a flat string entry (e.g. escalation -> claude-sonnet-5-5)
    * is an intentional PINNED override that wins regardless of the nominal
    * capability the caller asked for; only a table entry consults `capability`
    * at all, and only to pick WHICH pinned model applies.

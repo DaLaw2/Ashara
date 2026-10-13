@@ -1,6 +1,6 @@
 import { LLMGateway } from "./gateway.js";
 import { BudgetLedger } from "./budget-ledger.js";
-import { NoLLMProvidersConfigured, RoutingProfileIncomplete } from "./errors.js";
+import { NoLLMProvidersConfigured, RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { resolveModelsConfigPath } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import { KNOWN_LLM_SITES } from "./types.js";
@@ -52,6 +52,35 @@ function assertRoutingProfileComplete(config: GatewayConfig): void {
   });
 }
 
+/**
+ * Refuse-to-start guard: every model the deployment's own routing profile
+ * names is offered by an enabled provider. Otherwise each request routed to it
+ * would throw RoutingProfileUnresolved, after the gateway had started.
+ */
+function assertRoutingProfileModelsPresent(config: GatewayConfig): void {
+  const enabled = config.providers.filter((p) => p.enabled);
+  const combo = computeProviderCombo(enabled.map((p) => p.name));
+  const profile = config.routingProfiles?.[combo];
+  if (!profile) return;
+
+  const offered = new Set(enabled.flatMap((p) => p.models.map((m) => m.id)));
+  const missing: string[] = [];
+  for (const [site, entry] of Object.entries(profile)) {
+    const modelIds = typeof entry === "string" ? [entry] : Object.values(entry);
+    for (const modelId of modelIds) {
+      if (modelId !== undefined && !offered.has(modelId)) missing.push(`"${site}" -> "${modelId}"`);
+    }
+  }
+  if (missing.length === 0) return;
+
+  throw new RoutingProfileModelMissing({
+    combo,
+    missing,
+    providers: enabled.map((p) => p.name),
+    configPath: resolveModelsConfigPath(),
+  });
+}
+
 export interface BuildGatewayOptions {
   /**
    * Already-resolved gateway config. Acquisition (TOML/env for the server,
@@ -88,6 +117,8 @@ export interface BuildGatewayOptions {
  * - A non-empty routing profile for this deployment's enabled-provider combo
  *   must map every known LLM site — it throws {@link RoutingProfileIncomplete}
  *   otherwise. See {@link assertRoutingProfileComplete}.
+ * - Every model that profile names must be offered by an enabled provider —
+ *   it throws {@link RoutingProfileModelMissing} otherwise.
  */
 export function buildGateway(options: BuildGatewayOptions): LLMGateway {
   const { config, checkedSources } = options;
@@ -97,5 +128,6 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
   }
 
   assertRoutingProfileComplete(config);
+  assertRoutingProfileModelsPresent(config);
   return new LLMGateway(config, options.recording, options.ledger);
 }

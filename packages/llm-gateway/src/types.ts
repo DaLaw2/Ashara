@@ -93,15 +93,35 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
-export interface ModelConfig {
+/**
+ * USD per million tokens. A `null` cache rate means the model bills no such
+ * class: cache tokens of that class, when reported, cannot be priced.
+ */
+export interface TokenRates {
+  readonly inputCostPer1M: number;
+  readonly outputCostPer1M: number;
+  readonly cacheReadCostPer1M: number | null;
+  readonly cacheWriteCostPer1M: number | null;
+}
+
+/**
+ * Rates that replace the model's base rates for a call made on `isoWeekday`
+ * (UTC, 1 = Monday) at a UTC minute of day in [utcStartMinute, utcEndMinute).
+ */
+interface PriceWindow {
+  readonly isoWeekday: number;
+  readonly utcStartMinute: number;
+  readonly utcEndMinute: number;
+  readonly rates: TokenRates;
+}
+
+export interface ModelConfig extends TokenRates {
   id: string;
   apiModelId: string;
   provider: string;
   capabilityLevel: CapabilityLevel;
-  inputCostPer1M: number;
-  outputCostPer1M: number;
   maxContextTokens: number;
-  supportsCaching: boolean;
+  readonly priceWindows: readonly PriceWindow[];
 }
 
 export interface TokenUsage {
@@ -193,7 +213,6 @@ export interface StructuredRequest<T> {
   prompt: string;
   schema: ZodType<T>;
   systemPrompt?: string;
-  temperature?: number;
   maxTokens?: number;
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;

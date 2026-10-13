@@ -1,5 +1,5 @@
 import { NoObjectGeneratedError, generateObject, generateText } from "ai";
-import type { CallWarning, LanguageModel } from "ai";
+import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
@@ -12,7 +12,6 @@ import {
   PreCallRefusal,
   ProviderError,
   SchemaValidationError,
-  TemperatureNotHonored,
 } from "./errors.js";
 import { calculateCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
@@ -153,7 +152,11 @@ export class LLMGateway implements ContextualLlm {
       extraction.usage.cacheReadTokens,
       extraction.usage.cacheWriteTokens,
       model,
+      new Date(),
     );
+    if (cost === null) {
+      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false };
+    }
     this.budgetLedger.record(cost.totalCost, provider);
     return { ...cost, measured: true };
   }
@@ -189,10 +192,7 @@ export class LLMGateway implements ContextualLlm {
    * one fallback provider and retry once, or throw a typed ProviderError if
    * none is available. `shouldRethrow` lets a caller opt an error class out of
    * the fallback retry and propagate it immediately instead —
-   * SchemaValidationError, TemperatureNotHonored (the next model may drop the
-   * parameter just as silently; the fallback is resolved by capability, which
-   * knows nothing about sampling-parameter support), a pre-call refusal and a
-   * failed ledger write.
+   * SchemaValidationError, a pre-call refusal and a failed ledger write.
    */
   private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
     request: TRequest,
@@ -255,7 +255,7 @@ export class LLMGateway implements ContextualLlm {
       (req, r) => this.executeStructuredCall(req, r, scope),
       "structured request",
       (error) =>
-        error instanceof SchemaValidationError || isTemperatureViolation(error) || isNeverRetried(error),
+        error instanceof SchemaValidationError || isNeverRetried(error),
     );
   }
 
@@ -268,10 +268,7 @@ export class LLMGateway implements ContextualLlm {
       try {
         return await this.executeGenerateObject(request, resolved, scope);
       } catch (err) {
-        // The text fallback exists for models whose STRUCTURED-OUTPUT mode is
-        // unusable; it retries the same model, so it cannot recover a dropped
-        // temperature and would only buy a second identical violation.
-        if (err instanceof TemperatureNotHonored || isNeverRetried(err)) throw err;
+        if (isNeverRetried(err)) throw err;
         console.warn(`[LLMGateway] generateObject failed, falling back to text extraction:`, err instanceof Error ? err.message : err);
       }
     }
@@ -350,26 +347,13 @@ export class LLMGateway implements ContextualLlm {
       system: request.systemPrompt,
       maxOutputTokens: request.maxTokens,
     };
-    if (request.temperature !== undefined) {
-      params.temperature = request.temperature;
-    }
-
     const result = await this.send(scope, resolved, operation, () => generateObject(params));
 
     const extraction = extractUsage(result.usage, result.providerMetadata);
     this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", operation);
     const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
 
-    const violation = temperatureViolation({
-      requestedTemperature: request.temperature,
-      warnings: result.warnings,
-      provider: resolved.providerName,
-      model: resolved.modelConfig.id,
-      site: request.site,
-      operation,
-    });
-    await this.record(scope, resolved, operation, extraction, violation ? errorOutcome(violation) : OK, violation);
-    if (violation) throw violation;
+    await this.record(scope, resolved, operation, extraction, OK);
 
     return {
       data: result.object as T,
@@ -410,33 +394,12 @@ export class LLMGateway implements ContextualLlm {
         system: request.systemPrompt,
         maxOutputTokens: request.maxTokens,
       };
-      if (request.temperature !== undefined) {
-        params.temperature = request.temperature;
-      }
-
       const result = await this.send(scope, resolved, operation, () => generateText(params));
       lastRawResponse = result.text;
 
       const extraction = extractUsage(result.usage, result.providerMetadata);
       this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", operation);
       const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
-
-      // Throws OUT of the retry loop rather than `continue`-ing: a dropped
-      // temperature is a property of the model, not a transient malformation,
-      // so every remaining attempt would violate determinism identically while
-      // burning the retry budget reserved for recoverable JSON failures.
-      const violation = temperatureViolation({
-        requestedTemperature: request.temperature,
-        warnings: result.warnings,
-        provider: resolved.providerName,
-        model: resolved.modelConfig.id,
-        site: request.site,
-        operation,
-      });
-      if (violation) {
-        await this.record(scope, resolved, operation, extraction, errorOutcome(violation), violation);
-        throw violation;
-      }
 
       const jsonText = extractJson(result.text);
       let parsed: unknown;
@@ -490,10 +453,6 @@ export class LLMGateway implements ContextualLlm {
   }
 }
 
-function isTemperatureViolation(error: unknown): boolean {
-  return error instanceof TemperatureNotHonored;
-}
-
 /** A pre-call refusal or a failed ledger write: a fallback model would hit the same wall. */
 function isNeverRetried(error: unknown): boolean {
   return error instanceof PreCallRefusal || error instanceof LlmCallNotRecorded;
@@ -506,61 +465,6 @@ function usageOfFailedRequest(error: unknown): ExtractedUsage | null {
   }
   return null;
 }
-
-function isTemperatureUnsupportedWarning(
-  warning: CallWarning,
-): warning is Extract<CallWarning, { type: "unsupported" }> {
-  return warning.type === "unsupported" && warning.feature === "temperature";
-}
-
-interface TemperatureHonoredCheck {
-  /** `undefined` means the caller never asked for a temperature — nothing to honor. */
-  readonly requestedTemperature: number | undefined;
-  /** Structured provider warnings for the completed call; `undefined` when the SDK reported none. */
-  readonly warnings: readonly CallWarning[] | undefined;
-  readonly provider: string;
-  readonly model: string;
-  readonly site: KnownLLMSite | undefined;
-  readonly operation: string;
-}
-
-/**
- * Fail-closed determinism gate shared by every SDK entry point (Discipline A).
- * Returns the violation instead of throwing it, so the caller can record the
- * provider call before failing it.
- *
- * Matches on the provider-spec-level warning shape (`type: "unsupported"`,
- * `feature: "temperature"`) rather than on model or provider names: Anthropic
- * `rejectsSamplingParameters` models, Anthropic with thinking enabled, OpenAI
- * reasoning models and OpenAI search-preview models all emit exactly this
- * warning, and a name list would have to be re-derived every catalog change.
- *
- * Any requested temperature counts, not just 0 — "I asked for X and silently
- * got something else" is the violation regardless of X.
- * @testseam gateway.test.ts exercises the verdict without a provider
- */
-export function temperatureViolation(check: TemperatureHonoredCheck): TemperatureNotHonored | null {
-  if (check.requestedTemperature === undefined) return null;
-
-  const violation = check.warnings?.find(isTemperatureUnsupportedWarning);
-  if (!violation) return null;
-
-  return new TemperatureNotHonored({
-    requestedTemperature: check.requestedTemperature,
-    model: check.model,
-    provider: check.provider,
-    site: check.site ?? "unknown",
-    operation: check.operation,
-    details: violation.details,
-    howToFix: TEMPERATURE_HOW_TO_FIX,
-  });
-}
-
-const TEMPERATURE_HOW_TO_FIX =
-  "Route this site to a model that honors sampling parameters (see [routing.profiles] in " +
-  "config/models.toml), or stop requesting a temperature for this call if it does not need " +
-  "determinism. Do not suppress this check — an ignored temperature makes a call the system " +
-  "treats as deterministic silently non-deterministic.";
 
 // Raw Anthropic usage, as @ai-sdk/anthropic 4.0.72 copies it into
 // providerMetadata.anthropic.usage (dist/index.js, the `anthropicMetadata`

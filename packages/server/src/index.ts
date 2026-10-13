@@ -60,6 +60,7 @@ import {
   buildGatewayConfig,
   loadRoutingProfilesFromToml,
   resolveModelsConfigPath,
+  toModelConfig,
   LLMGateway,
   NoLLMProvidersConfigured,
   withStructuredLadder,
@@ -68,7 +69,7 @@ import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/ll
 import { LlmCallLedger } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -147,7 +148,7 @@ async function main(): Promise<void> {
   const budgetLedger = new BudgetLedger();
   // Finance's cost ledger (K10): the gateway refuses an unpriced model before
   // the request and writes one llm_calls row per provider request after it.
-  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db));
+  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db), () => new Date());
   let llmGateway: LLMGateway;
   try {
     // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
@@ -156,16 +157,7 @@ async function main(): Promise<void> {
     const dbModelRows = await configRepo.listModelConfigs();
     const models: Record<string, ModelConfig> = {};
     for (const row of dbModelRows) {
-      models[row.modelId] = {
-        id: row.modelId,
-        apiModelId: row.apiModelId ?? row.modelId,
-        provider: row.providerName,
-        capabilityLevel: parseCapabilityLevel(row.capability),
-        inputCostPer1M: row.inputCostPer1m,
-        outputCostPer1M: row.outputCostPer1m,
-        maxContextTokens: row.maxContextTokens,
-        supportsCaching: row.supportsCaching,
-      };
+      models[row.modelId] = toModelConfig("model_configs", row);
     }
     // Provider keys from the secret store, one per provider_configs row
     // (ADR-075 C2). The agent-runner subprocess still reads keys from its own
@@ -234,8 +226,10 @@ async function main(): Promise<void> {
         capability: row.capability,
         inputCostPer1m: row.inputCostPer1m,
         outputCostPer1m: row.outputCostPer1m,
+        cacheReadCostPer1m: row.cacheReadCostPer1m,
+        cacheWriteCostPer1m: row.cacheWriteCostPer1m,
         maxContextTokens: row.maxContextTokens,
-        supportsCaching: row.supportsCaching,
+        priceWindows: row.priceWindows,
       })),
       providers: providerRows.map((row) => ({
         name: row.name,
@@ -375,8 +369,8 @@ async function main(): Promise<void> {
 
   // Project frame — last-resort stack derivation (ADR-046). Runs only until the
   // project has a scaffold or a knowledge graph to read instead, so it is once per
-  // project, not once per task. Temperature 0 (Discipline A: deterministic) and
-  // laddered like every other structured planning call, with a validate that
+  // project, not once per task. Laddered like every other structured planning
+  // call, with a validate that
   // rejects an empty answer so the ladder re-asks instead of returning nothing.
   const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
   const stackDeriver: StackDeriver = {
@@ -403,7 +397,6 @@ async function main(): Promise<void> {
         ].join("\n"),
         schema: stackSchema,
         maxTokens: 512,
-        temperature: 0,
         validate: (value) =>
           value.stack.length > 0
             ? { ok: true }

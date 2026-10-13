@@ -16,8 +16,8 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 // reliability" / ADR-032 §3).
 //
 // One shared control-flow combinator behind EVERY structured/verdict LLM call:
-//   temperature 0 → N validated attempts against the current model → escalate
-//   ONE capability tier → N more validated attempts → typed terminal failure.
+//   N validated attempts against the current model → escalate ONE capability
+//   tier → N more validated attempts → typed terminal failure.
 //
 // History it must respect (ADR-025): free-text judge parsing and text-fallback
 // structured parsing were chosen deliberately because generateObject failed
@@ -263,7 +263,6 @@ interface StructuredProviderRequest<T> {
   readonly schema: ZodType<T>;
   readonly systemPrompt?: string;
   readonly maxTokens?: number;
-  readonly temperature?: number;
   /** Routing site override for this call (rarely set directly — see `StructuredLadderOptions.site`, which sets it for every call this wrapper makes). */
   readonly site?: KnownLLMSite;
   /**
@@ -312,7 +311,7 @@ export interface StructuredLadderOptions {
 
 /**
  * Wrap a structured provider so every `generateStructured` call runs through
- * the ladder: temperature 0, attempts on the requested model, escalate one
+ * the ladder: attempts on the requested model, escalate one
  * capability tier on persistent schema failure, then throw
  * `StructuredOutputExhausted`. Replaces per-site ad-hoc enum-drift tolerance
  * (G5) with the shared retry+escalate contract. The wrapped provider's own
@@ -351,7 +350,6 @@ export function withStructuredLadder(
                 ...providerRequest,
                 prompt,
                 capability,
-                temperature: 0,
                 site: capability === request.capability ? baseSite : ESCALATION_SITE,
               });
               if (validate) {

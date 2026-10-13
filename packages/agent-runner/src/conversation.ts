@@ -266,7 +266,14 @@ export class AgentConversation {
             extraction.usage.cacheReadTokens,
             extraction.usage.cacheWriteTokens,
             this.modelConfig,
+            new Date(),
         );
+        if (cost === null) {
+            return {
+                usage: extraction.usage,
+                cost: { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false },
+            };
+        }
         return {
             usage: extraction.usage,
             cost: { ...cost, measured: true },

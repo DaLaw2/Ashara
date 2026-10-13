@@ -10,7 +10,7 @@ import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";
 // keyed by the deployment's enabled-provider combo, e.g.
 //
 //   [routing.profiles."anthropic+deepseek"]
-//   "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-flash" }
+//   "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-flash" }
 //   "decomposition" = "claude-opus-4-8"
 //
 // Deliberately a TEMPLATE table, not a learned/scored mechanism (DA-09 stays

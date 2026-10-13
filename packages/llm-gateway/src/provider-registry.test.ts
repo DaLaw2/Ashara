@@ -11,7 +11,9 @@ const MODEL: ModelConfig = {
   inputCostPer1M: 2,
   outputCostPer1M: 6,
   maxContextTokens: 128_000,
-  supportsCaching: false,
+  cacheReadCostPer1M: null,
+  cacheWriteCostPer1M: null,
+  priceWindows: [],
 };
 
 describe("ProviderRegistry base_url guard", () => {

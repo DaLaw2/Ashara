@@ -65,7 +65,6 @@ export function createGatewayAlignmentLLM(provider: StructuredProvider): Alignme
         prompt,
         schema: AlignmentInferenceResponseSchema,
         maxTokens: 2048,
-        temperature: 0,
         validate: validateNoDualCategoryAssignment,
       });
       return response.data;
