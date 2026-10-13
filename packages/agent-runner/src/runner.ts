@@ -7,7 +7,6 @@ import {
     loadGatewayCatalogFromFile,
     buildGateway,
     NoLLMProvidersConfigured,
-    InvalidGatewayCatalog,
 } from "@ashara/llm-gateway";
 import type { ResolvedModel } from "@ashara/llm-gateway";
 import { AgentConversation } from "./conversation.js";
@@ -94,7 +93,7 @@ export class AgentRunner {
         const result = await conversation.run(brief.goal);
 
         // 5. Collect and write output
-        const collector = new OutputCollector(this.config.workingDir);
+        const collector = new OutputCollector();
         const output = await collector.collect(result);
         await collector.writeOutput(output, resolve(this.config.outputPath));
 

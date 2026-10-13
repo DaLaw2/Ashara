@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import type { FailedApproachRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";

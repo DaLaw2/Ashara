@@ -96,6 +96,20 @@ describe("ProviderRegistry base_url guard", () => {
     expect(resolved.providerName).toBe("mistral");
     expect(resolved.modelConfig.id).toBe("mistral-large");
   });
+
+  test("deepseek resolves through the official provider, not the openai-compatible path", () => {
+    const deepseekModel: ModelConfig = { ...MODEL, id: "deepseek-v4-flash", apiModelId: "deepseek-chat", provider: "deepseek" };
+    const registry = new ProviderRegistry({
+      providers: [
+        { name: "deepseek", apiKey: "k", baseUrl: "https://api.deepseek.com/v1", models: [deepseekModel], enabled: true },
+      ],
+      defaultProvider: "deepseek",
+    });
+    const { provider } = registry.resolve("Strong");
+    if (typeof provider === "string") throw new Error("expected a model instance, got a gateway id");
+    expect(provider.provider).toBe("deepseek.chat");
+    expect(provider.modelId).toBe("deepseek-chat");
+  });
 });
 
 describe("ProviderRegistry fails closed instead of substituting a model", () => {

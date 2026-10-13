@@ -1,17 +1,4 @@
 // ---------------------------------------------------------------------------
-// Sandbox container configuration (p0-isolation)
-//
-// The image name+tag are the sole source of truth for which container image
-// agent-runner processes execute in. With the provisioner active, project-
-// specific images are built dynamically from EnvironmentSpec (ADR-071).
-// This is the baseline for scaffold tasks and the host-spawn path.
-// ---------------------------------------------------------------------------
-
-// Fallback image for agent containers when no provisioner is active.
-export const SANDBOX_IMAGE = "alpine";
-export const SANDBOX_TAG = "3.20";
-
-// ---------------------------------------------------------------------------
 // Typed error (Discipline C: self-diagnosing, structured context)
 // ---------------------------------------------------------------------------
 

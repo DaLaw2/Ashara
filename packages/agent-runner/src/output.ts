@@ -77,8 +77,6 @@ const FINDING_PREFIXES = ["I found", "I discovered", "Note:", "Warning:", "Issue
 // ---------------------------------------------------------------------------
 
 export class OutputCollector {
-    constructor(private readonly workingDir: string) {}
-
     async collect(result: ConversationResult): Promise<AgentOutput> {
         const status = this.determineStatus(result);
         const findings = this.extractFindings(result.turns);

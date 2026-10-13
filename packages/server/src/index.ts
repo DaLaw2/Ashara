@@ -70,11 +70,7 @@ import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
 import { resolveAgentOutput } from "./agent-output.js";
-import {
-  SANDBOX_IMAGE,
-  SANDBOX_TAG,
-  ContainerSpawnError,
-} from "./container-spawn.js";
+import { ContainerSpawnError } from "./container-spawn.js";
 import { PodmanProvisioner } from "./podman-provisioner.js";
 import {
   ServerStartupRefused,
@@ -405,7 +401,6 @@ async function main(): Promise<void> {
   const developmentService = new DevelopmentService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
-      sandboxImage: `${SANDBOX_IMAGE}:${SANDBOX_TAG}`,
     },
     sessionStore,
     knowledgeSink,

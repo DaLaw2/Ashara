@@ -1,6 +1,5 @@
 import { describe, test, expect } from "vitest";
 import { parseStoredTaskSpec, TaskSpecCorrupt, storedTaskSpecSchema } from "./task-spec.js";
-import type { StoredTaskSpec } from "./task-spec.js";
 
 describe("parseStoredTaskSpec", () => {
   test("null returns undefined (policy default: absent spec is deliberate delegation)", () => {

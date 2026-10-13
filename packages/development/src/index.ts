@@ -21,4 +21,3 @@ export type {
   Provisioner,
 } from "./provisioner.js";
 
-export { deriveEnvironmentSpec } from "./env-spec-derivation.js";

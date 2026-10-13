@@ -25,7 +25,6 @@ export class ContinuousRunner {
   private readonly coreLoop: CycleRunner;
   private readonly config: RunnerConfig;
   private abortController: AbortController | null = null;
-  private pgListener: PgListener | null = null;
   private wakeResolve: (() => void) | null = null;
   // Set by wake() on any NOTIFY, armed to false at the top of each cycle. A NOTIFY
   // that lands while a cycle is running has no wait to resolve; without this flag
@@ -48,7 +47,6 @@ export class ContinuousRunner {
       pgListener = await listenForEvents(this.config.databaseUrl, () => {
         this.wake();
       });
-      this.pgListener = pgListener;
       console.log("PG listener connected");
     }
 
@@ -95,7 +93,6 @@ export class ContinuousRunner {
       if (pgListener) {
         pgListener.stop();
       }
-      this.pgListener = null;
     }
 
     console.log("Continuous runner stopped");

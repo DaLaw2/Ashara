@@ -12,7 +12,7 @@ export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { buildGateway } from "./build-gateway.js";
 export { withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
-export { NoLLMProvidersConfigured, InvalidGatewayCatalog } from "./errors.js";
+export { NoLLMProvidersConfigured } from "./errors.js";
 export type {
   GatewayConfig,
   LLMCallRecord,

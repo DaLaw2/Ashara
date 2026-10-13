@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   loadProviderKeys,
-  loadProviderBaseUrls,
   loadBudgetEnv,
   parseCapabilityLevel,
 } from "@ashara/shared";

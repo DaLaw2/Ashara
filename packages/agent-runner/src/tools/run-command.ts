@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { resolve, relative, join } from "node:path";
+import { relative, join } from "node:path";
 import type { ToolDefinition, ToolExecutor, ToolResult } from "./types.js";
 import { validatePath } from "./path-validation.js";
 import type { CommandPolicy } from "./command-policy.js";

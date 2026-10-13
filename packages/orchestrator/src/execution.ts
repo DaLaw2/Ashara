@@ -11,8 +11,7 @@ import {
   startWorkItem,
   recoverFailedItem,
 } from "./acl/planning-acl.js";
-import type { DevelopmentService, TaskDescriptor, ProvisionedEnv } from "./acl/development-acl.js";
-import { deriveEnvironmentSpec } from "./acl/development-acl.js";
+import type { DevelopmentService, TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";

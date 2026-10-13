@@ -9,10 +9,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "4.0.21",
-    "@ai-sdk/openai": "4.0.20",
+    "@ai-sdk/anthropic": "4.0.72",
+    "@ai-sdk/deepseek": "3.0.59",
+    "@ai-sdk/openai": "4.0.84",
     "@ashara/shared": "*",
-    "ai": "7.0.37",
+    "ai": "7.0.128",
     "smol-toml": "1.7.1",
     "zod": "4.4.3"
   }

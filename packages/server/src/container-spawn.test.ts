@@ -1,19 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  SANDBOX_IMAGE,
-  SANDBOX_TAG,
-  ContainerSpawnError,
-} from "./container-spawn.js";
-
-describe("SANDBOX_IMAGE and SANDBOX_TAG", () => {
-  test("SANDBOX_IMAGE is a non-empty string", () => {
-    expect(SANDBOX_IMAGE).toBe("alpine");
-  });
-
-  test("SANDBOX_TAG is a non-empty string", () => {
-    expect(SANDBOX_TAG).toBe("3.20");
-  });
-});
+import { ContainerSpawnError } from "./container-spawn.js";
 
 describe("ContainerSpawnError", () => {
   const ctx = {

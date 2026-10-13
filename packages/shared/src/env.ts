@@ -29,26 +29,6 @@ export function loadProviderKeys(): ProviderKeys {
 }
 
 // ---------------------------------------------------------------------------
-// Provider base URLs — override endpoints for OAI-compatible providers
-// ---------------------------------------------------------------------------
-
-export interface ProviderBaseUrls {
-    readonly deepseekBaseUrl: string;
-    readonly mistralBaseUrl: string;
-    readonly xaiBaseUrl: string;
-    readonly googleBaseUrl: string;
-}
-
-export function loadProviderBaseUrls(): ProviderBaseUrls {
-    return {
-        deepseekBaseUrl: process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1",
-        mistralBaseUrl: process.env["MISTRAL_BASE_URL"] ?? "https://api.mistral.ai/v1",
-        xaiBaseUrl: process.env["XAI_BASE_URL"] ?? "https://api.x.ai/v1",
-        googleBaseUrl: process.env["GOOGLE_BASE_URL"] ?? "https://generativelanguage.googleapis.com/v1beta",
-    };
-}
-
-// ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
 

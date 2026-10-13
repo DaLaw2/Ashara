@@ -58,7 +58,7 @@ function conversationResult(overrides: Partial<ConversationResult> = {}): Conver
 // ---------------------------------------------------------------------------
 
 describe("OutputCollector.collect — blocked diagnostic enrichment", () => {
-    const collector = new OutputCollector("/tmp/fake-workdir");
+    const collector = new OutputCollector();
 
     test("Run 40 shape: turn-limit blocked with empty finalMessage and tool-call-only last turn", async () => {
         // Reproduce Run 40 exactly: 25 turns, last turn is run_command
@@ -263,7 +263,7 @@ describe("OutputCollector.collect — Run 41 regression (container git crash)", 
         // /workspace where git worktree paths are host-absolute and
         // unreachable. The fix: output collection no longer calls git at
         // all — filesChanged is computed by the host, not the agent.
-        const collector = new OutputCollector("/nonexistent-dir-not-a-git-repo");
+        const collector = new OutputCollector();
         const result = conversationResult({
             turns: [
                 turn(1, {
@@ -290,7 +290,7 @@ describe("OutputCollector.collect — Run 41 regression (container git crash)", 
     test("output JSON serialization has no files_changed field", async () => {
         // The host computes filesChanged; the agent's output.json must not
         // carry a stale or fabricated copy.
-        const collector = new OutputCollector("/tmp/fake");
+        const collector = new OutputCollector();
         const result = conversationResult({
             turns: [turn(1)],
             finalMessage: "done",

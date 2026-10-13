@@ -30,7 +30,6 @@ export const ProjectKnowledgeSchema = z.object({
 }).strict();
 
 export type ProjectKnowledgeNode = z.infer<typeof ProjectKnowledgeNodeSchema>;
-type ProjectKnowledgeEdge = z.infer<typeof ProjectKnowledgeEdgeSchema>;
 export type ProjectKnowledge = z.infer<typeof ProjectKnowledgeSchema>;
 
 export function nodeByKind(graph: ProjectKnowledge, kind: string): ProjectKnowledgeNode | undefined {

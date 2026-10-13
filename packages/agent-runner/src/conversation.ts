@@ -210,7 +210,6 @@ export class AgentConversation {
             });
 
             const hitTurnLimit = result.steps.length >= maxTurns;
-            const lastStep = result.steps[result.steps.length - 1];
             const anyToolCalls = turns.some((t) => t.toolCalls.length > 0);
             const noToolsUsed = !anyToolCalls && Object.keys(tools).length > 0;
 

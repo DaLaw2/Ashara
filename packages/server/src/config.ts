@@ -37,7 +37,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const repoPath = path.resolve(repoPathRaw);
 
   const workdirBaseRaw = process.env["WORKDIR_BASE"]
-    ?? process.env["WORKTREE_BASE"]
     ?? path.join(os.tmpdir(), "ashara-work");
   const workdirBase = path.isAbsolute(workdirBaseRaw)
     ? workdirBaseRaw

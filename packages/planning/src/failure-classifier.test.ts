@@ -1,7 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { classifyFailure, shouldEscalate, tryParseEnvelope } from "./failure-classifier.js";
-import type { FailureCategory } from "./failure-classifier.js";
 
 function layer(operation: string, message = "error", context?: Record<string, unknown>, cause?: ErrorLayer): ErrorLayer {
   return { boundary: "development", operation, message, context, cause, timestamp: new Date().toISOString() };

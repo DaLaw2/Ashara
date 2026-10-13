@@ -1,7 +1,7 @@
 import path from "node:path";
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
+import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
@@ -78,15 +78,6 @@ export interface ExecutionEventSink {
 
 export interface DevelopmentConfig {
   readonly workdirBase: string;
-  /**
-   * Full image tag for the check container (e.g. "alpine:3.20").
-   * Used by the Provisioner abstraction to build the contained
-   * CommandRunner for host-side verification. The check container runs
-   * with --network=none, one mount (the work directory), zero env vars,
-   * and no Ashara checkout — structurally contained rather than
-   * allowlist-filtered.
-   */
-  readonly sandboxImage: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +210,7 @@ export class DevelopmentService {
     this.deps = deps;
   }
 
-  private buildRunners(workDir: string, image: string, env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
+  private buildRunners(env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
     if (this.deps.provisioner && env) {
       const runner = provisionerAsRunner(this.deps.provisioner, env, this.deps.config.workdirBase);
       return { runCommand: runner, prepareRunCommand: runner };
@@ -825,11 +816,9 @@ export class DevelopmentService {
     // Per-task verify uses only verify.toml; contract and taskSpec checks are
     // deferred to integration verify (they reference project-wide files that may
     // not exist in this task's worktree).
-    const finalizeWorkDir = targetProjectPath ?? workDir;
-    const finalizeImage = this.deps.config.sandboxImage;
     const finalizeDeps = {
       ...this.deps,
-      ...this.buildRunners(finalizeWorkDir, finalizeImage, provisionedEnv),
+      ...this.buildRunners(provisionedEnv),
     };
     const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, {
       entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
@@ -887,8 +876,7 @@ export class DevelopmentService {
     // deferred to integration verify (they reference project-wide files that may
     // not exist in this task's worktree).
     try {
-      const image = this.deps.config.sandboxImage;
-      const { runCommand, prepareRunCommand } = this.buildRunners(workDir, image, provisionedEnv);
+      const { runCommand, prepareRunCommand } = this.buildRunners(provisionedEnv);
       const response = await runVerifyCore(
         { workDir, gitRoot: workDir, checks: [], contractChecks: [] },
         {

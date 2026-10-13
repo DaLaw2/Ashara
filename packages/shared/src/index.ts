@@ -11,7 +11,6 @@ export {
 
 export {
   loadProviderKeys,
-  loadProviderBaseUrls,
   loadBudgetEnv,
   loadServerEnv,
   loadAgentRunnerEnv,

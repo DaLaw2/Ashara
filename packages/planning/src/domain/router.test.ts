@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import type { WorkItemId, WorkItemStatus, StoredBlockedReason, DomainEvent } from "@ashara/shared";
+import type { WorkItemId, WorkItemStatus, DomainEvent } from "@ashara/shared";
 import { createWorkItemId, parseProjectId, withSalvagedResult } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";

@@ -1,4 +1,5 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { CapabilityLevel } from "@ashara/shared";
@@ -25,6 +26,16 @@ function createLanguageModel(
     case "openai": {
       const openai = createOpenAI({ apiKey: providerConfig.apiKey });
       return openai(modelConfig.apiModelId);
+    }
+    case "deepseek": {
+      if (!providerConfig.baseUrl) {
+        throw new ProviderMissingBaseUrl(providerConfig.name);
+      }
+      const deepseek = createDeepSeek({
+        baseURL: providerConfig.baseUrl,
+        apiKey: providerConfig.apiKey,
+      });
+      return deepseek(modelConfig.apiModelId);
     }
     case "local": {
       if (!providerConfig.baseUrl) {
