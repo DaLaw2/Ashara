@@ -10,7 +10,7 @@ import type { BlockedExit, ProjectBlockCause, ProjectId, StoredBlockedReason } f
 // (ADR-074 addendum 2 d65 c) is one of these blocks: its report names the disputed check.
 
 /** What paused a project, as recorded on its block episode; a check dispute's block carries its own. */
-type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped";
+type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound";
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it. */
 interface BlockingDispute {
@@ -123,6 +123,13 @@ function projectBlockedReport(kind: ProjectBlockKind): string {
         "Ashara again could not turn this project's vision into a plan, so work on this project has stopped.",
         "The team has to look into it before planning is tried again. " + NO_MORE_WORK,
       ].join("\n\n");
+    case "replan_bound":
+      return [
+        "Work on this project is paused: you changed what is built again, and the plan has already been revised for " +
+          "your changes as many times as the team revises it before its operator looks over the project.",
+        "Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. " +
+          NO_MORE_WORK,
+      ].join("\n\n");
   }
 }
 
@@ -161,8 +168,12 @@ function taskCause(reason: StoredBlockedReason | undefined): string {
       return "no member of the project team can take it on";
     case "dependency_unsatisfiable":
       return "it depends on work that was given up, or on work that in turn waits on it";
+    case "merge_unrecorded":
+      return "its work is built and in place, but the team's record of it could not be saved";
     case "api":
       return "the team paused it by hand";
+    case "superseded":
+      return "a change you asked for replaced it";
     case "task_failed":
     case "orchestrator_error":
     case "replan":
@@ -178,6 +189,8 @@ function taskExit(exit: BlockedExit): string {
       return "It resumes by itself once the project's build and test environment is ready.";
     case "roster-revision":
       return "It resumes by itself once the project team is changed.";
+    case "merge-recorded":
+      return "It is marked done by itself once that record is saved; nothing has to be redone.";
     case "operator":
       return "The team is waiting on its operator to resolve this.";
   }

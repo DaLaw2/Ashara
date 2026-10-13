@@ -2,7 +2,7 @@ import type { WorkItemId, DomainEvent } from "@ashara/shared";
 import { WorkItemNotFound } from "@ashara/shared";
 import type { WorkItemRepository } from "./repository.js";
 import type { WorkItem } from "./work-item.js";
-import { completeWorkItem, failWorkItem, startWorkItem, takeEvents } from "./work-item.js";
+import { completeRecordedMerge, completeWorkItem, failWorkItem, startWorkItem, takeEvents } from "./work-item.js";
 
 export class LifecycleRouter {
   static async route(
@@ -30,6 +30,20 @@ export class LifecycleRouter {
       events.push(...takeEvents(item));
     }
 
+    return events;
+  }
+
+  /**
+   * Completes `item`, Blocked as merge_unrecorded, once its merge record is written, and rolls
+   * the completion up to its ancestors as a completed attempt does. Saved against `Blocked`: an
+   * item that moved concurrently is InvalidStatusTransition.
+   */
+  static async completeRecordedMerge(repo: WorkItemRepository, item: WorkItem): Promise<DomainEvent[]> {
+    const events: DomainEvent[] = [];
+    completeRecordedMerge(item);
+    await repo.save(item, "Blocked");
+    events.push(...takeEvents(item));
+    if (item.parentId) await this.cascadeCompletion(repo, item.parentId, events);
     return events;
   }
 

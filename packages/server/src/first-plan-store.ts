@@ -2,8 +2,10 @@ import {
   ProjectRepository,
   latestRosterRoles,
   listDuePlanReports,
+  listDuePlanRevisionReports,
   listProjectsAwaitingFirstPlan,
   postPlanReport,
+  postPlanRevisionReport,
   recordFirstPlanFailure,
   stopFirstPlanning,
   withFirstPlanTransaction,
@@ -83,12 +85,14 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
   };
 }
 
-/** Engagement's planning-report store over projects, work_items and client_messages. */
+/** Engagement's planning-report store over projects, work_items, plan_revisions and client_messages. */
 export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransaction): PlanReportStore {
   const projects = new ProjectRepository(db);
   return {
     dueReports: () => listDuePlanReports(db),
     postReport: (projectId, subject, body) => postPlanReport(db, projectId, subject, body),
+    dueRevisionReports: () => listDuePlanRevisionReports(db),
+    postRevisionReport: (revisionId, body) => postPlanRevisionReport(db, revisionId, body),
     blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

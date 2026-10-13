@@ -236,6 +236,17 @@ describe("Work Items", () => {
     expect(await statusOf(task.id)).toBe("Blocked");
   });
 
+  test("a merged task whose merge record is missing is never unblocked to Pending: that would re-dispatch merged work", async () => {
+    const mergeCommit = "0123456789abcdef0123456789abcdef01234567";
+    const task = await blockedTask({ source: "merge_unrecorded", mergeCommit, reason: "connection reset" });
+
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain(mergeCommit);
+    expect(await statusOf(task.id)).toBe("Blocked");
+  });
+
   test("unblocking any other block keeps the task's branch", async () => {
     const task = await blockedTask({ source: "api", note: "held by hand" });
     discardedBranches.length = 0;

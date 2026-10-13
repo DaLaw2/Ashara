@@ -19,7 +19,7 @@ import { noOpenStop } from "./project.js";
 // against that episode in the same transaction, so a retried or concurrent post tells the client
 // once.
 
-const ProjectBlockKindSchema = z.enum(["budget_cap", "configuration", "fault", "planning_stopped", "check_dispute"]);
+const ProjectBlockKindSchema = z.enum(["budget_cap", "configuration", "fault", "planning_stopped", "check_dispute", "replan_bound"]);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute">;
 
 /** The dispute a check_dispute block was written on: the last one recorded before the block. */

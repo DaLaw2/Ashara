@@ -167,6 +167,7 @@ describe("a project whose workspace path is refused", () => {
       liaisonAnswers: { runPending: async () => [] },
       rosterDerivation: { runPending: async () => [] },
       firstPlanning: { runPending: async () => [] },
+      replanning: { runPending: async () => [] },
       planReports: { runPending: async () => [] },
       checkDisputes: { record: notExercised("checkDisputes") },
       disputeReports: { blockOnDisputes: notExercised("disputeReports") },

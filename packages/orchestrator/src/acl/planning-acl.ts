@@ -24,6 +24,9 @@ export type { FailureRecoveryDeps } from "@ashara/planning";
 // First plan of a project (Delivery, story s-liaison-intake-m1)
 export type { FirstPlanOutcome, FirstPlanning } from "@ashara/planning";
 
+// Revision of a plan under way for a client's change (Delivery, t-replan-on-change)
+export type { ReplanOutcome, Replanning } from "@ashara/planning";
+
 // --- Values (re-exported) ---
 
 // Domain service

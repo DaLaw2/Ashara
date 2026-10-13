@@ -76,11 +76,15 @@ function nextAssumptionKey(inferences: readonly { readonly key?: string | undefi
   return `A${highest + 1}`;
 }
 
-/** Plain words: what the team chose and why, in its own statement, and how to say it does not fit. */
+/**
+ * Plain words: what the team chose and why, in its own statement; what the environment's test covers,
+ * stated here rather than trusted to the statement (t-env-test-scope); and how to say it does not fit.
+ */
 function stackChoiceReport(statement: string): string {
   return [
     `The team has set up this project's environment and chose how the project is built and tested:`,
     statement,
+    `The environment's own test proves only that the toolchain builds and runs; it does not test the product. What each planned task delivers is verified by checks written for it before that task starts.`,
     `Work on the project now proceeds on this choice. If it does not fit what you need, send a change saying what should be different.`,
   ].join("\n\n");
 }

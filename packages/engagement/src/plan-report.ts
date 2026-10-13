@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
@@ -5,7 +6,8 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 // ADR-075): Delivery records the planning outcome on the project, and the
 // Liaison, the only writer to the client, tells the client about it. Reports are
 // read from recorded outcomes, not handed over in memory, so one written before a
-// crash is still reported after the restart; the store posts each at most once.
+// crash is still reported after the restart; the store posts each at most once. A revision
+// of the plan for a client's change (migration 042) is reported the same way, once each.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
 
@@ -35,6 +37,14 @@ type DuePlanReport =
   /** A first plan the store could not read back (a work item that does not parse). */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
+/** A revision of the plan the client has not been told about; `summary` as Delivery recorded it, parsed here. */
+interface DuePlanRevisionReport {
+  readonly revisionId: string;
+  readonly projectId: ProjectId;
+  readonly revision: number;
+  readonly summary: unknown;
+}
+
 type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unreadable" }>;
 
 /** Engagement's persistence port for planning reports. */
@@ -42,6 +52,9 @@ export interface PlanReportStore {
   dueReports(): Promise<readonly DuePlanReport[]>;
   /** Posts the report unless one on this subject already exists for the project. */
   postReport(projectId: ProjectId, subject: PlanReportSubject, body: string): Promise<"posted" | "already-posted">;
+  dueRevisionReports(): Promise<readonly DuePlanRevisionReport[]>;
+  /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
+  postRevisionReport(revisionId: string, body: string): Promise<"posted" | "already-posted">;
   /**
    * Blocks the project and records why (migration 025); a project already
    * blocked keeps its first cause. A blocked project's first plan is not due.
@@ -50,7 +63,11 @@ export interface PlanReportStore {
 }
 
 type PlanReportOutcome =
-  | { readonly kind: "posted" | "already-posted"; readonly projectId: ProjectId; readonly subject: PlanReportSubject }
+  | {
+      readonly kind: "posted" | "already-posted";
+      readonly projectId: ProjectId;
+      readonly subject: PlanReportSubject | "plan-revision";
+    }
   /** The project's record cannot be reported truthfully: nothing is posted and the project is blocked. */
   | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
@@ -84,6 +101,32 @@ class PlanReportUnfounded extends Error {
   }
 }
 
+// What a revision did, as Delivery records it on plan_revisions.summary (planning replan.ts).
+const PlanRevisionSummarySchema = z.object({
+  answer: z.string().min(1),
+  decision: z.string().min(1),
+  newTasks: z.array(z.string().min(1)).min(1),
+  newCheckTasks: z.number().int().min(0),
+  newEnvironmentTask: z.boolean(),
+  supersededTasks: z.array(z.string().min(1)),
+  supersededOther: z.number().int().min(0),
+  keptCompleted: z.number().int().min(0),
+});
+
+type PlanRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
+
+/** A revision's recorded summary does not say what it did, so it cannot be reported truthfully. */
+class PlanRevisionSummaryUnreadable extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly revisionId: string,
+    readonly issues: string,
+  ) {
+    super(`project ${projectId}: plan revision ${revisionId}'s summary does not parse: ${issues}; no report is posted`);
+    this.name = "PlanRevisionSummaryUnreadable";
+  }
+}
+
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
@@ -110,6 +153,38 @@ function firstPlanReport(epicTitles: readonly string[], goalTasks: number, check
     );
   }
   paragraphs.push(`When the plan was made, none of its tasks had been started.`);
+  return paragraphs.join("\n\n");
+}
+
+function quotedList(titles: readonly string[]): string {
+  return titles.map((title) => `- ${title}`).join("\n");
+}
+
+/** Plain words: what the client said, what the team now does, what was set aside and what stays done. */
+function planRevisionReport(summary: PlanRevisionSummary): string {
+  const paragraphs = [
+    `Because you said "${summary.answer}", the team has revised the plan for this project. Work now proceeds on: ${summary.decision}`,
+  ];
+  if (summary.newEnvironmentTask) {
+    paragraphs.push(`This change affects how the project is built and tested, so the team first sets up the project environment again.`);
+  }
+  paragraphs.push(
+    `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
+    `Before each of them starts, a team member who does not do it writes the checks that decide whether it is done ` +
+      `(${plural(summary.newCheckTasks, "check task")}).`,
+  );
+  const setAside = summary.supersededTasks.length + summary.supersededOther;
+  paragraphs.push(
+    summary.supersededTasks.length > 0
+      ? `Work planned earlier and not finished is set aside and will not be done as planned:\n${quotedList(summary.supersededTasks)}` +
+          (summary.supersededOther > 0 ? `\nwith ${plural(summary.supersededOther, "related check or setup task")}.` : "")
+      : setAside > 0
+        ? `${plural(setAside, "check or setup task")} planned earlier and not finished ${setAside === 1 ? "is" : "are"} set aside.`
+        : `Nothing planned earlier was set aside.`,
+    summary.keptCompleted > 0
+      ? `${plural(summary.keptCompleted, "task")} already finished ${summary.keptCompleted === 1 ? "stays" : "stay"} done, and the new work builds on ${summary.keptCompleted === 1 ? "it" : "them"}.`
+      : `No work had been finished yet.`,
+  );
   return paragraphs.join("\n\n");
 }
 
@@ -149,6 +224,16 @@ export class PlanReports implements LiaisonPlanReports {
       }
       const kind = await this.store.postReport(due.projectId, due.subject, body);
       outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
+    }
+    for (const due of await this.store.dueRevisionReports()) {
+      const parsed = PlanRevisionSummarySchema.safeParse(due.summary);
+      if (!parsed.success) {
+        const err = new PlanRevisionSummaryUnreadable(due.projectId, due.revisionId, z.prettifyError(parsed.error));
+        outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
+        continue;
+      }
+      const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(parsed.data));
+      outcomes.push({ kind, projectId: due.projectId, subject: "plan-revision" });
     }
     return outcomes;
   }

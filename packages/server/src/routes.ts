@@ -127,6 +127,16 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           // reality.
           if (previousStatus === "Failed") {
             replanWorkItem(item);
+          } else if (item.blockedReason?.source === "merge_unrecorded") {
+            return c.json(
+              {
+                error:
+                  `cannot unblock ${item.id}: its work is merged on main as ${item.blockedReason.mergeCommit} and only the ` +
+                  "merge record is missing, so Pending would re-dispatch merged work. The loop writes the record each " +
+                  "cycle and then completes it; fix what fails that write (the stored reason names it)",
+              },
+              409,
+            );
           } else {
             // An item refused for environment edits restarts from main, never on the branch that
             // holds them (discardTaskBranch). The branch goes first: a failure leaves it Blocked.

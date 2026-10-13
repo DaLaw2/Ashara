@@ -1,6 +1,6 @@
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
-import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
+import type { FirstPlanOutcome, ReplanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
@@ -19,7 +19,9 @@ function logIntake(outcome: IntakeOutcome): void {
 /** Failures, a blocked project and an answer that answers nothing are logged at warn by the Liaison itself. */
 function logAnswer(outcome: AnswerOutcome): void {
   if (outcome.kind === "stated") {
-    const replan = outcome.replanRequested ? "; the plan relied on it, so the project awaits replanning and is not dispatched" : "";
+    const replan = outcome.replanRequested
+      ? "; the plan relied on it, so the project is not dispatched until its plan is revised"
+      : "";
     console.log(
       `[liaison-answer] answer ${outcome.answerId}: ${outcome.verdict} assumption ${outcome.assumptionKey} of project ` +
         `${outcome.projectId}, now Stated in vision v${outcome.visionVersion}${replan}`,
@@ -42,6 +44,16 @@ function logFirstPlan(outcome: FirstPlanOutcome): void {
   if (outcome.kind === "planned") {
     console.log(
       `[first-plan] project ${outcome.projectId}: first plan written, ${outcome.epics} epic(s), ${outcome.tasks} task(s)`,
+    );
+  }
+}
+
+/** A revision is logged by the replanner; failures and blocks at warn there, with their attempt count. */
+function logReplan(outcome: ReplanOutcome): void {
+  if (outcome.kind === "revised") {
+    console.log(
+      `[replan] project ${outcome.projectId}: plan revision ${outcome.revision}, ${outcome.tasks} new task(s), ` +
+        `${outcome.superseded} superseded${outcome.newEnvironment ? ", environment set up again" : ""}`,
     );
   }
 }
@@ -97,7 +109,8 @@ export class CoreLoop {
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
     // built on sets the project's replanning flag, and the gate below does not dispatch
-    // a flagged project's tasks (ProjectRepository.listActiveIds).
+    // a flagged project's tasks (ProjectRepository.listActiveIds) until the replanning
+    // step revises its plan.
     const answers = await this.step("liaison-answers", () => deps.liaisonAnswers.runPending());
     if (answers.kind === "stop") return stopped(answers.stop);
     for (const outcome of answers.outcomes) logAnswer(outcome);
@@ -116,6 +129,13 @@ export class CoreLoop {
     const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
     if (plans.kind === "stop") return stopped(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
+    // Then a revision of each flagged plan whose project has no task in progress: the previous
+    // cycle awaited every task it dispatched, so in-flight work has finished before its plan is
+    // revised. Only Tasks count: the plan's Epic stays InProgress while any child is open, and the
+    // revision supersedes it with the open tasks. The Liaison's report on the revision follows with the other planning reports.
+    const replans = await this.step("replan", () => deps.replanning.runPending());
+    if (replans.kind === "stop") return stopped(replans.stop);
+    for (const outcome of replans.outcomes) logReplan(outcome);
     for (const report of await deps.planReports.runPending()) {
       if (report.kind !== "project-blocked") {
         console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);

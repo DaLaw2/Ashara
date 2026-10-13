@@ -12,8 +12,8 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 // message id as its provenance. Delivery plans from the current version, so an answer
 // read before the first plan is planned on. One read after it that changes an
 // assumption the plan was built on flags the project for replanning, which stops its
-// dispatch, and is reported to the client once. Revising the plan is backlog story
-// c-change-handling.
+// dispatch, and is reported to the client once. Delivery revises the plan once the work
+// in progress has finished (planning replan.ts), and the Liaison reports the revision.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 const MAX_ANSWER_ATTEMPTS = 3;
@@ -177,8 +177,8 @@ function replanReport(context: AnswerContext, statement: string): string {
     `Your answer to "${context.question.text}" changes an assumption the current plan was built on.`,
     `The plan assumed: ${context.assumption.statement}`,
     `Work now proceeds on: ${statement}`,
-    `The plan has to be revised for this change. Revising a plan that is already under way is not yet automatic, ` +
-      `so no new work on this project starts until it is revised; work already running finishes.`,
+    `The plan has to be revised for this change. No new work on this project starts until it is: work already ` +
+      `running finishes first, then the team revises the plan, and you will be told what changes.`,
   ].join("\n\n");
 }
 

@@ -62,9 +62,14 @@ export const projects = pgTable("projects", {
   // instead of failing every project's cycle. Recorded together, on blocked rows only.
   blockedErrorClass: text("blocked_error_class"),
   blockedReason: text("blocked_reason"),
-  // Migration 038: the answer that contradicted an assumption the first plan was
-  // built on; while set, none of the project's tasks is dispatched.
+  // Migration 038: the answer that contradicted an assumption the plan was built on;
+  // while set, none of the project's tasks is dispatched. A plan revision clears it
+  // (migration 042).
   replanRequestedBy: uuid("replan_requested_by").references((): AnyPgColumn => clientMessages.id),
+  // Migration 042: failed attempts to revise the plan for the current request, with the
+  // last error; reset by a written revision and by the operator's unblock.
+  replanAttempts: integer("replan_attempts").notNull().default(0),
+  replanLastError: text("replan_last_error"),
   // Migration 040: the cause's category, which the Liaison's plain report is chosen by.
   blockedCategory: text("blocked_category"),
 });
@@ -582,6 +587,32 @@ export const projectBlocks = pgTable("project_blocks", {
   unblockReason: text("unblock_reason"),
   resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
 });
+
+// ---------------------------------------------------------------------------
+// plan_revisions (migration 042): one row per revision of a project's plan after
+// the first, with what it did and the Liaison's one report on it.
+// ---------------------------------------------------------------------------
+
+export const planRevisions = pgTable(
+  "plan_revisions",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    revision: integer().notNull(),
+    visionVersion: integer("vision_version").notNull(),
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    summary: jsonb().notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+    reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
+  },
+  (t) => ({
+    oneNumber: unique("plan_revisions_one_per_number").on(t.projectId, t.revision),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // blocked_task_reports (migration 040): the Liaison's one report per time a task

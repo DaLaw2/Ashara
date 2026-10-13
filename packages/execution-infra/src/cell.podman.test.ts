@@ -21,6 +21,8 @@ async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
   return psSchema.parse(JSON.parse(stdout));
 }
 
+/** A busybox image, pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */
+const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
 const instance = `test-${randomUUID()}`;
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];
@@ -180,6 +182,48 @@ describe("cell on real podman", () => {
       if (!(removed instanceof CellExecFailed)) return;
       expect(removed.cellId).toBe(cell.id);
       expect(removed.argv).toEqual(["sleep", "20"]);
+    } finally {
+      await cell.teardown();
+    }
+  }, 60_000);
+
+  // t-exec-timeout-orphans: busybox's timeout signals only its direct child, so before the sweep
+  // `sh -c "sleep 30; echo after"` timed out on alpine while sleep stayed in the cell.
+  it.each([
+    ["alpine (busybox timeout)", ALPINE_IMAGE],
+    ["debian (GNU timeout)", "base"],
+  ])("on %s a timed-out multi-process command leaves no process in the cell, and the cell stays usable", async (_name, image) => {
+    const cell = await substrate.createCell({
+      image: image === "base" ? (await loadBaseCell()).image : image,
+      project: "proj-cell-test",
+      task: `${task}-orphans`,
+      role: "worker",
+      instance,
+      mount: { hostPath: workspace },
+    });
+    try {
+      const left = async (): Promise<string[]> => {
+        // podman top reads the cell's /proc from the host: no tool of the image is involved.
+        const { stdout } = await run("podman", ["top", cell.id, "pid", "args"]);
+        return stdout
+          .split("\n")
+          .slice(1)
+          .map((line) => line.trim().replace(/\s+/g, " "))
+          .filter((line) => line !== "" && !line.startsWith("1 ") && !/^\d+ sleep infinity$/.test(line));
+      };
+      const command = "sleep 30 & setsid sleep 40 & trap '' TERM; sleep 31; echo after";
+      const timed = await cell.exec(["sh", "-c", command], { timeoutSeconds: 1 });
+      expect(timed.timedOut).toBe(true);
+      expect(timed.stdout).not.toContain("after");
+      expect(await left()).toEqual([]);
+
+      // A command that ends by itself and leaves a background process behind leaves nothing either.
+      const background = await cell.exec(["sh", "-c", "sleep 45 & echo started"], { timeoutSeconds: 10 });
+      expect(background).toMatchObject({ exitCode: 0, stdout: "started\n", timedOut: false });
+      expect(await left()).toEqual([]);
+
+      const after = await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 });
+      expect(after).toMatchObject({ exitCode: 0, stdout: "usable\n", timedOut: false });
     } finally {
       await cell.teardown();
     }

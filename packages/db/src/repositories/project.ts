@@ -149,7 +149,8 @@ export class ProjectRepository {
    * The operator's way out of 'blocked' (migration 040), after the cause is cleared: in one
    * transaction with the project row locked, the open block episode is ended with who and why,
    * and the project returns to 'active' with its cause cleared. A project whose first planning
-   * gave up has its planning record reset, so first planning runs again from no attempts. The
+   * gave up has its planning record reset, so first planning runs again from no attempts; a
+   * plan revision's failed attempts are reset likewise (migration 042). The
    * Liaison then tells the client, once, that work resumed. Only a blocked project is unblocked:
    * any other status throws ProjectNotBlocked, and nothing is written.
    */
@@ -171,9 +172,18 @@ export class ProjectRepository {
       if (!episode) throw new BlockEpisodeMissing(id);
 
       const planningReset = locked.planStoppedAt === null ? {} : { planStoppedAt: null, planAttempts: 0, planLastError: null };
+      // A revision that gave up is tried again from no attempts (migration 042).
       await tx
         .update(projects)
-        .set({ status: "active", blockedCategory: null, blockedErrorClass: null, blockedReason: null, ...planningReset })
+        .set({
+          status: "active",
+          blockedCategory: null,
+          blockedErrorClass: null,
+          blockedReason: null,
+          replanAttempts: 0,
+          replanLastError: null,
+          ...planningReset,
+        })
         .where(eq(projects.id, id));
       return { episodeId: episode.id };
     });

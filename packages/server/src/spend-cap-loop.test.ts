@@ -114,6 +114,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     liaisonAnswers: { runPending: async () => [] },
     rosterDerivation: { runPending: async () => [] },
     firstPlanning: { runPending: async () => [] },
+    replanning: { runPending: async () => [] },
     planReports: { runPending: async () => [] },
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
@@ -171,6 +172,7 @@ describe("the deployment spend cap stops the loop", () => {
       liaisonIntake: { runPending: intake },
       rosterDerivation: { runPending: roster },
       firstPlanning: { runPending: notExercised("firstPlanning") },
+      replanning: { runPending: notExercised("replanning") },
       planReports: { runPending: notExercised("planReports") },
       spendCap: {
         deploymentStop: async () => {

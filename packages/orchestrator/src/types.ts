@@ -1,5 +1,5 @@
 import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db";
-import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService } from "./acl/planning-acl.js";
+import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService, Replanning } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type {
@@ -135,7 +135,12 @@ export interface CoreLoopDeps {
   readonly rosterDerivation: RosterDerivationStep;
   /** Delivery's first plan of each project awaiting one (and holding a roster), run after the roster step. */
   readonly firstPlanning: FirstPlanning;
-  /** The Liaison's reports on recorded planning outcomes, run after planning. */
+  /**
+   * Delivery's revision of each plan a client's answer flagged, once none of the project's
+   * tasks is in progress; run after the first plans, before the planning reports.
+   */
+  readonly replanning: Replanning;
+  /** The Liaison's reports on recorded planning outcomes and plan revisions, run after planning. */
   readonly planReports: LiaisonPlanReports;
   /**
    * The stack each merged Sprint 0 task chose, made an Inferred assumption in a new vision

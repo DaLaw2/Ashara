@@ -468,6 +468,20 @@ describe("build_environment", () => {
     expect(system).toContain("Only owned paths may be added, changed or deleted");
     expect(system).toContain("must be ignored by a committed .gitignore");
     expect(system).toContain("do not write the product");
+    // t-env-test-scope: the test is a toolchain smoke test, the gate's output rule is explicit, no extension is promised.
+    expect(system).toContain("- test: shell command that proves the toolchain builds and runs;");
+    expect(system).toContain("Product behaviour is verified by the check author's checks, never by this command");
+    expect(system).toContain("test exits 0 within its time limit with non-empty output");
+    expect(system).toContain("Never promise that later tasks extend the test");
+  });
+
+  it("the environment finish's statement field says what the test covers and forbids promising its extension", async () => {
+    const { llm, requests } = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done.", statement: STATEMENT } }])]);
+    const { environment } = port(tested);
+    await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    const finishSchema = JSON.stringify(requests[0]?.tools?.["finish"]?.inputSchema);
+    expect(finishSchema).toContain("it proves the toolchain builds and runs, and product behaviour is verified by the check author's checks");
+    expect(finishSchema).toContain("Do not promise that later tasks extend the test");
   });
 
   it("a test that prints nothing, a dirty checkout, out-of-scope work or a failed build is a tool error the model can act on", async () => {

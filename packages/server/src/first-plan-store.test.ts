@@ -154,6 +154,7 @@ function reports(): PlanReports {
   const ours: PlanReportStore = {
     ...store,
     dueReports: async () => (await store.dueReports()).filter((r) => ourProjects.has(r.projectId)),
+    dueRevisionReports: async () => (await store.dueRevisionReports()).filter((r) => ourProjects.has(r.projectId)),
   };
   return new PlanReports(ours);
 }

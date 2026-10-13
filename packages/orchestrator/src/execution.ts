@@ -1,6 +1,7 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, StoredBlockedReason } from "@ashara/shared";
 import {
+  describeErrorChain,
   wrapError,
   InvalidStatusTransition,
   InvalidWorkItemId,
@@ -37,9 +38,38 @@ type ParkedReason = Extract<
       | "checks_stale"
       | "check_disputed"
       | "environment_change_needed"
-      | "owner_unresolved";
+      | "owner_unresolved"
+      | "merge_unrecorded";
   }
 >;
+
+/** Policy: the waits between attempts at the merge record; three attempts in all. */
+const MERGE_RECORD_BACKOFF_MS: readonly number[] = [250, 1000];
+
+/**
+ * Writes the task's merge record, retrying with bounded backoff. Null once it is written; the
+ * last attempt's error, described, when every attempt failed.
+ */
+async function recordMergeWithRetry(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], mergeCommit: string): Promise<string | null> {
+  let last = "";
+  for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1; attempt++) {
+    try {
+      await deps.workItemRepo.recordMergeCommit(taskId, mergeCommit);
+      if (attempt > 1) console.warn(`[${taskId}] merge record for ${mergeCommit} written on attempt ${attempt}`);
+      return null;
+    } catch (e) {
+      last = describeErrorChain(e);
+      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
+      console.warn(
+        `[${taskId}] merge record for ${mergeCommit} failed on attempt ${attempt} of ${MERGE_RECORD_BACKOFF_MS.length + 1}` +
+          `${wait === undefined ? "; giving up" : `; retrying in ${wait}ms`}:`,
+        e,
+      );
+      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  return last;
+}
 
 interface StaleChecksResult {
   readonly checkTaskId: string;
@@ -232,8 +262,16 @@ async function executeTask(
   if (execResult.status === "completed") {
     if (execResult.delivered.kind === "merged") {
       // The merge record first, whatever the item's status now (a preempted item merged all the
-      // same): a write that throws leaves the task not Completed (Discipline A).
-      await deps.workItemRepo.recordMergeCommit(task.id, execResult.delivered.mergeCommit);
+      // same): the task is never Completed without it (Discipline A). The merge is on main, so a
+      // record that cannot be written parks the item rather than leaving it InProgress, which the
+      // startup reconciler would requeue and so re-dispatch merged work.
+      const mergeCommit = execResult.delivered.mergeCommit;
+      const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit);
+      if (unrecorded !== null) {
+        const detail = `merged on main as ${mergeCommit}, but the merge record could not be written: ${unrecorded}`;
+        await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, reason: detail });
+        return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
+      }
     }
     try {
       await routeAsSuccess(deps, task);
@@ -342,7 +380,9 @@ async function routeAsParked(
         ? `check ${JSON.stringify(reason.checkName)} disputed and check task ${reason.checkTaskId} cannot be reopened`
         : reason.source === "owner_unresolved"
           ? `no roster role can work it (owner ${reason.ownerRoleId ?? "none"})`
-          : "no environment defined";
+          : reason.source === "merge_unrecorded"
+            ? `merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle`
+            : "no environment defined";
   console.warn(`[${taskId}] blocked, ${what}: ${reason.reason}`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
 }

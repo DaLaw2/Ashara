@@ -97,11 +97,34 @@ export function startWorkItem(item: WorkItem): void {
   );
 }
 
+/**
+ * Completes work that ran. Pinned to InProgress: the `Blocked -> Completed` edge belongs to
+ * completeRecordedMerge alone.
+ */
 export function completeWorkItem(item: WorkItem): void {
-  if (!canTransitionTo(item.status, "Completed")) {
+  if (item.status !== "InProgress" || !canTransitionTo(item.status, "Completed")) {
     throw new InvalidStatusTransition(item.id, item.status, "Completed");
   }
   item.status = "Completed";
+  item.updatedAt = new Date();
+  item.events.push(
+    createDomainEvent("work_item.completed", "planning", {
+      work_item_id: item.id,
+      level: item.level,
+    }),
+  );
+}
+
+/**
+ * Completes an item Blocked as `merge_unrecorded` once the record of its merge is written: its
+ * work is on main already, so it never goes back to Pending. Clears the block's reason.
+ */
+export function completeRecordedMerge(item: WorkItem): void {
+  if (item.status !== "Blocked" || item.blockedReason?.source !== "merge_unrecorded" || !canTransitionTo(item.status, "Completed")) {
+    throw new InvalidStatusTransition(item.id, item.status, "Completed");
+  }
+  item.status = "Completed";
+  item.blockedReason = undefined;
   item.updatedAt = new Date();
   item.events.push(
     createDomainEvent("work_item.completed", "planning", {
@@ -151,7 +174,8 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
  * through unblock. See "Aggregates own their invariants" (CLAUDE.md DDD).
  */
 export function unblockWorkItem(item: WorkItem): void {
-  if (item.status !== "Blocked" || !canTransitionTo(item.status, "Pending")) {
+  // A merge_unrecorded item's work is merged: Pending would re-dispatch it (completeRecordedMerge is its exit).
+  if (item.status !== "Blocked" || item.blockedReason?.source === "merge_unrecorded" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
   item.status = "Pending";
@@ -207,6 +231,37 @@ export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): vo
     createDomainEvent("work_item.abandoned", "planning", {
       work_item_id: item.id,
       level: item.level,
+    }),
+  );
+}
+
+/**
+ * Supersedes open work a revision of the plan replaced (migration 042): a Pending, Blocked or
+ * Failed item goes to the terminal Abandoned with a `superseded` reason. Pinned to those
+ * from-statuses: an InProgress task has a live attempt the revision waits for, and a Completed
+ * item is merged work the revision keeps. An InProgress Epic is open too: it has no attempt of
+ * its own, and once its open tasks are superseded no child completion can ever settle it.
+ */
+export function supersedeWorkItem(
+  item: WorkItem,
+  reason: Extract<StoredBlockedReason, { readonly source: "superseded" }>,
+): void {
+  const open =
+    item.status === "Pending" ||
+    item.status === "Blocked" ||
+    item.status === "Failed" ||
+    (item.level === "Epic" && item.status === "InProgress");
+  if (!open || !canTransitionTo(item.status, "Abandoned")) {
+    throw new InvalidStatusTransition(item.id, item.status, "Abandoned");
+  }
+  item.status = "Abandoned";
+  item.blockedReason = reason;
+  item.updatedAt = new Date();
+  item.events.push(
+    createDomainEvent("work_item.superseded", "planning", {
+      work_item_id: item.id,
+      level: item.level,
+      plan_revision: reason.planRevision,
     }),
   );
 }

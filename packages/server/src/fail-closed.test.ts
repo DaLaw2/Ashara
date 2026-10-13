@@ -56,6 +56,23 @@ void Promise.reject(new Error("outer failure", { cause: new Error("inner root ca
     expect(lines.join("\n")).toContain("did not finish within 1000ms");
   });
 
+  test("main() rejecting after boot runs the same shutdown and exits non-zero; a refused start says so", async () => {
+    const exit = vi.fn<(code: number) => void>();
+    const lines: string[] = [];
+    const shutdown = vi.fn(async () => {});
+    const fatal = createFatalExit({ deadlineMs: 1000, exit, log: (l) => lines.push(l) });
+    fatal.setShutdown(shutdown);
+    const main = async (): Promise<void> => {
+      throw new ServerStartupRefused("the loop could not start", "work items", "fix the database", { cause: new Error("root") });
+    };
+    await main().catch((e: unknown) => fatal.onFatal("main", e));
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(lines.join("\n")).toContain("FATAL: server refused to start. the loop could not start");
+    expect(lines.join("\n")).toContain("FATAL: main;");
+    expect(lines.join("\n")).toContain("root");
+  });
+
   test("before the shutdown exists the exit is immediate", () => {
     const exit = vi.fn<(code: number) => void>();
     createFatalExit({ deadlineMs: 1000, exit, log: () => {} }).onFatal("uncaughtException", new Error("during boot"));

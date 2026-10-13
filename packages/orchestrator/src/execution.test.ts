@@ -85,6 +85,7 @@ function coreLoopDeps(
     liaisonAnswers: { runPending: notExercised("liaisonAnswers") },
     rosterDerivation: { runPending: notExercised("rosterDerivation") },
     firstPlanning: { runPending: notExercised("firstPlanning") },
+    replanning: { runPending: notExercised("replanning") },
     planReports: { runPending: notExercised("planReports") },
     stackChoices: { runPending: notExercised("stackChoices") },
     checkDisputes: { record: notExercised("checkDisputes") },
@@ -1027,15 +1028,43 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(stored().status).toBe("Completed");
   });
 
-  test("a failed merge-record write fails closed: the task is not Completed", async () => {
+  test("a merge-record write that fails transiently is retried, then the task is Completed", async () => {
+    let attempts = 0;
     const { deps, stored, writes } = buildMergeDeps(merged, async () => {
+      attempts++;
+      if (attempts < 3) throw new Error("connection reset while writing merge_commit");
+    });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(attempts).toBe(3);
+    expect(writes).toEqual(["InProgress", `merge ${MERGE_COMMIT}`, "Completed"]);
+    expect(stored().status).toBe("Completed");
+  });
+
+  // t-exec-timeout-orphans: the write used to throw out of processTask and leave the item
+  // InProgress, which the startup reconciler requeues: merged work dispatched again.
+  test("a merge-record write that keeps failing: not Completed, not InProgress, Blocked naming the merge commit", async () => {
+    let attempts = 0;
+    const { deps, stored, writes } = buildMergeDeps(merged, async () => {
+      attempts++;
       throw new Error("connection reset while writing merge_commit");
     });
 
-    await expect(processTask(deps, freshPendingItem())).rejects.toThrow("connection reset while writing merge_commit");
+    const result = await processTask(deps, freshPendingItem());
 
-    expect(writes).toEqual(["InProgress"]);
-    expect(stored().status).toBe("InProgress");
+    expect(result.status).toBe("blocked");
+    expect(attempts).toBe(3);
+    expect(writes).toEqual(["InProgress", "Blocked"]);
+    const reason = stored().blockedReason;
+    expect(reason?.source).toBe("merge_unrecorded");
+    if (reason?.source !== "merge_unrecorded") return;
+    expect(reason.mergeCommit).toBe(MERGE_COMMIT);
+    expect(reason.reason).toContain("connection reset while writing merge_commit");
+    expect(() =>
+      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
+    ).not.toThrow();
   });
 
   test("a check task merges nothing, so no merge is recorded for it", async () => {

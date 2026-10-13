@@ -39,29 +39,93 @@ const PODMAN_ADMIN_TIMEOUT_MS = 120_000;
 const TIMEOUT_EXITS: ReadonlySet<number> = new Set([124, 137, 143]);
 
 /**
+ * Shell functions every exec wrapper and the standalone sweep share. They use only the POSIX
+ * shell's builtins (read, set, case, kill, globbing) and the cell's /proc, never a tool the image
+ * might lack. `ashara_stat DIR` reads DIR/stat into ashara_state and ashara_sid (the comm field may
+ * hold ") ", so the longest prefix through ") " is dropped). `ashara_sweep` SIGKILLs every live
+ * process outside the session of the cell's init (the init and its keepalive), except the
+ * sweeping shell itself, round after round until none is left; it fails after 50 rounds.
+ */
+const SWEEP_FUNCTIONS = [
+  'ashara_stat() { ashara_l=; read -r ashara_l 2>/dev/null < "$1/stat" || return 1; set -- ${ashara_l##*) }; ashara_state=$1; ashara_sid=$4; }',
+  "ashara_sweep() {",
+  "  ashara_stat /proc/1 || return 1; ashara_keep=$ashara_sid; ashara_round=0",
+  '  while [ "$ashara_round" -lt 50 ]; do',
+  "    ashara_live=0",
+  "    for ashara_d in /proc/[0-9]*; do",
+  '      [ "$ashara_d" = "/proc/$$" ] && continue',
+  '      ashara_stat "$ashara_d" || continue',
+  "      case $ashara_state in Z|X|x) continue;; esac",
+  '      [ "$ashara_sid" = "$ashara_keep" ] && continue',
+  "      ashara_live=1",
+  '      kill -9 "${ashara_d#/proc/}" 2>/dev/null',
+  "    done",
+  '    [ "$ashara_live" = 0 ] && return 0',
+  "    ashara_round=$((ashara_round + 1))",
+  "  done",
+  "  return 1",
+  "}",
+];
+
+/**
+ * The runtime starts every exec in a session of its own (observed with crun under podman 5.8.2:
+ * an exec's first process has session id = its pid), apart from the init's. The sweep relies on
+ * that, so the wrapper checks it before running anything and fails closed otherwise.
+ */
+const ISOLATION_CHECK = 'ashara_stat "/proc/$$" && [ "$ashara_sid" = "$$" ] && [ "$$" != 1 ]';
+
+/**
  * Every exec runs `sh -c EXEC_WRAPPER ashara-exec <grace> <seconds> <argv...>` with podman's
  * --preserve-fds=1, so the host's fourth pipe is fd 3 in the cell. The wrapper runs
- * `timeout -k <grace> <seconds> argv` with fd 3 closed, then writes its exit status to fd 3. A
- * command's own status therefore arrives on a channel closed to the command and beyond the output
- * caps, and an exit with no report is podman's or the wrapper's own failure: exit codes alone
- * cannot tell them apart, since 125 is both podman exec's own failure and a status any command
- * may return.
+ * `timeout -k <grace> <seconds> argv` with fd 3 closed, sweeps the cell, then writes the
+ * command's exit status to fd 3. A command's own status therefore arrives on a channel closed to
+ * the command and beyond the output caps, and an exit with no report is podman's or the wrapper's
+ * own failure: exit codes alone cannot tell them apart, since 125 is both podman exec's own
+ * failure and a status any command may return.
  *
- * timeout(1) sits inside the wrapper, never around it: busybox's timeout signals only its own
- * child, so with the wrapper as that child the signal ended the wrapper and left argv running in
- * the cell after the exec reported a timeout. Here timeout's child is argv itself (an external
- * program found on PATH, never a shell builtin), as with timeout alone, and the wrapper outlives
- * it to report 124, 137 or 143. A missing timeout(1) exits without a report.
+ * timeout(1) sits inside the wrapper, never around it, and its child is argv itself. timeout(1)
+ * does not end what argv started: busybox's (alpine:3.20) signals only its direct child and
+ * leaves its own watcher, in a session of its own, waiting out the grace; GNU's signals argv's
+ * process group, which a command can leave. So once argv ends, by itself or by timeout, the
+ * wrapper sweeps the cell: every process outside the init's session is killed, whatever session
+ * or group it moved to. A cell's execs are serialized (PodmanCell.exec), so nothing a sweep
+ * kills belongs to another live exec: the cell holds only what runs now. A sweep that leaves a
+ * process alive reports `unswept <status>`; an exec that is not its own session reports
+ * `unisolated` and runs nothing. A missing timeout(1) exits without a report.
  */
-const EXEC_WRAPPER =
-  "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }; " +
-  'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; s=$?; printf \'%s\\n\' "$s" >&3; exit "$s"';
+const EXEC_WRAPPER = [
+  ...SWEEP_FUNCTIONS,
+  `${ISOLATION_CHECK} || { echo "ashara-exec: the exec is not a session of its own in the cell" >&2; printf 'unisolated\\n' >&3; exit 125; }`,
+  "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }",
+  'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?',
+  "ashara_sweep || { printf 'unswept %s\\n' \"$ashara_s\" >&3; exit \"$ashara_s\"; }",
+  "printf '%s\\n' \"$ashara_s\" >&3; exit \"$ashara_s\"",
+].join("\n");
+
+/** Run on its own when the wrapper could not sweep: exit 0 only once nothing but the init's session is left. */
+const SWEEP_SCRIPT = [...SWEEP_FUNCTIONS, `${ISOLATION_CHECK} || exit 125`, "ashara_sweep"].join("\n");
 const EXEC_WRAPPER_NAME = "ashara-exec";
-const statusReportSchema = z
+const exitStatusSchema = z
   .string()
-  .regex(/^(0|[1-9][0-9]{0,2})\n$/)
+  .regex(/^(0|[1-9][0-9]{0,2})$/)
   .transform(Number)
   .refine((status) => status <= 255);
+
+type StatusReport =
+  | { readonly kind: "exited"; readonly status: number }
+  | { readonly kind: "unswept"; readonly status: number }
+  | { readonly kind: "unisolated" };
+
+/** The wrapper's one line on fd 3; null when it is none of the three the wrapper writes. */
+function parseStatusReport(report: string | null): StatusReport | null {
+  if (report === null) return null;
+  if (report === "unisolated\n") return { kind: "unisolated" };
+  const match = /^(unswept )?([^\n]*)\n$/.exec(report);
+  if (match === null) return null;
+  const status = exitStatusSchema.safeParse(match[2]);
+  if (!status.success) return null;
+  return match[1] === undefined ? { kind: "exited", status: status.data } : { kind: "unswept", status: status.data };
+}
 
 const labelValue = z
   .string()
@@ -239,6 +303,7 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, masks: rea
 
 class PodmanCell implements Cell {
   private tornDown = false;
+  private lane: Promise<void> = Promise.resolve();
 
   constructor(
     readonly id: string,
@@ -254,6 +319,18 @@ class PodmanCell implements Cell {
       issues.push(`timeoutSeconds must be a positive integer, got ${options.timeoutSeconds}`);
     }
     if (issues.length > 0) throw new InvalidCellRequest("exec", issues);
+    // One exec at a time: each one's sweep kills every process in the cell outside the init's
+    // session, which would include a concurrent exec's. The lane only orders; each caller gets its
+    // own exec's outcome from `run`.
+    const run = this.lane.then(() => this.execAlone(argv, options));
+    this.lane = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async execAlone(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
     if (this.tornDown) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
@@ -276,6 +353,9 @@ class PodmanCell implements Cell {
     const elapsedMs = Date.now() - startedAt;
 
     if (result.killedByHost) {
+      // The podman client hung past every in-cell bound, so the wrapper may never have swept:
+      // the cell is swept from a fresh exec before the timeout is reported.
+      await this.sweep(argv);
       return { ...streams(result), exitCode: null, timedOut: true };
     }
     if (result.exitCode === null) {
@@ -297,8 +377,8 @@ class PodmanCell implements Cell {
           "podman exec, the wrapper's sh or its timeout(1) failed before or while running it",
       );
     }
-    const report = statusReportSchema.safeParse(result.statusReport);
-    if (!report.success) {
+    const report = parseStatusReport(result.statusReport);
+    if (report === null) {
       throw new CellExecFailed(
         this.id,
         argv,
@@ -307,19 +387,57 @@ class PodmanCell implements Cell {
         `the in-cell wrapper's status report is malformed: ${JSON.stringify(result.statusReport)}`,
       );
     }
-    if (report.data !== exitCode) {
+    if (report.kind === "unisolated") {
       throw new CellExecFailed(
         this.id,
         argv,
         exitCode,
         result.stderr,
-        `the command exited ${report.data} in the cell but podman exec exited ${exitCode}`,
+        "the exec is not a session of its own in the cell, so what the command would start could not be told " +
+          "from the cell's own processes; the command was not run",
+      );
+    }
+    if (report.kind === "unswept") {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        exitCode,
+        result.stderr,
+        `the command exited ${report.status}, but processes it left in the cell were still alive after the wrapper's sweep`,
+      );
+    }
+    if (report.status !== exitCode) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        exitCode,
+        result.stderr,
+        `the command exited ${report.status} in the cell but podman exec exited ${exitCode}`,
       );
     }
     if (TIMEOUT_EXITS.has(exitCode) && elapsedMs >= options.timeoutSeconds * 1000) {
       return { ...streams(result), exitCode, timedOut: true };
     }
     return { ...streams(result), exitCode, timedOut: false };
+  }
+
+  /** Kills every process outside the init's session from an exec of its own; throws unless none is left. */
+  private async sweep(argv: readonly string[]): Promise<void> {
+    let result: ProcessResult;
+    try {
+      result = await this.substrate.run(["exec", this.id, "sh", "-c", SWEEP_SCRIPT, "ashara-sweep"]);
+    } catch (err) {
+      throw new CellExecFailed(this.id, argv, null, "", "the host backstop ended the exec and the cell could not be swept", { cause: err });
+    }
+    if (result.exitCode !== 0) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        result.exitCode,
+        result.stderr,
+        "the host backstop ended the exec and sweeping the cell afterwards failed: what the command started may still run",
+      );
+    }
   }
 
   async teardown(): Promise<void> {

@@ -36,6 +36,7 @@ import type { CoreLoopDeps } from "@ashara/orchestrator";
 import {
   FailureRouter,
   FirstPlanner,
+  Replanner,
   classifyFailure,
   shouldEscalate,
   tryParseEnvelope,
@@ -84,10 +85,11 @@ import { createAnswerStore } from "./answer-store.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
+import { createReplanStore } from "./replan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
-import { createFatalExit, describeErrorChain, reconcileOrRefuse } from "./fail-closed.js";
+import { createFatalExit, reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
 import { createAgentStaffing } from "./staffing.js";
 
@@ -377,6 +379,11 @@ async function main(): Promise<void> {
       store: createFirstPlanStore(db),
       onAttempt: ladderAttemptSink,
     }),
+    replanning: new Replanner({
+      llm: llmGateway,
+      store: createReplanStore(db),
+      onAttempt: ladderAttemptSink,
+    }),
     planReports: new PlanReports(createPlanReportStore(db)),
     stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
     checkDisputes: new CheckDisputeRepository(db),
@@ -547,12 +554,6 @@ const fatalExit = createFatalExit({
 process.on("uncaughtException", (err: Error) => fatalExit.onFatal("uncaughtException", err));
 process.on("unhandledRejection", (err: unknown) => fatalExit.onFatal("unhandledRejection", err));
 
-main().catch((e: unknown) => {
-  if (e instanceof ServerStartupRefused) {
-    const cause = e.cause === undefined ? "" : `\n  caused by: ${describeErrorChain(e.cause)}`;
-    console.error(`FATAL: server refused to start. ${e.message}${cause}`);
-  } else {
-    console.error(`Fatal error:\n${describeErrorChain(e)}`);
-  }
-  process.exit(1);
-});
+// main() rejecting once the shutdown exists drains the runner, removes the cells and closes the
+// pool like any other fatal error; during boot there is nothing to drain and the exit is immediate.
+main().catch((e: unknown) => fatalExit.onFatal("main", e));

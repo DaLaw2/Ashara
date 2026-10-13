@@ -71,7 +71,10 @@ const DEFINITION_FIELD_RULES: Readonly<Record<keyof typeof definitionFields, str
     `directory can be owned: an entry that is a directory in the committed tree is refused.`,
   containerfile: "path of the container build file, inside an owned path; the image is built from the owned files only.",
   build: "shell command that builds the project; it must exit 0.",
-  test: "shell command that runs the project's tests; it must exit 0 and print output.",
+  test:
+    "shell command that proves the toolchain builds and runs; it must exit 0 within its time limit and print " +
+    "non-empty output. Product behaviour is verified by the check author's checks, never by this command: it is " +
+    "an owned path's, so no later task can extend it.",
 };
 
 const definitionSchema = z
@@ -99,6 +102,8 @@ export function environmentDefinitionRules(): string {
     `- build, then test, run on a fresh checkout of the committed work, in a cell from the built image. Afterwards the`,
     `  checkout must be unchanged: every file build or test writes must be ignored by a committed .gitignore (then an`,
     `  owned file). Any untracked or modified file left behind is listed and refused.`,
+    `- The gate passes only when build exits 0 and test exits 0 within its time limit with non-empty output: stdout`,
+    `  and stderr together must hold more than whitespace. A test that exits 0 and prints nothing fails.`,
   ].join("\n");
 }
 

@@ -39,6 +39,15 @@ interface ProjectAwaitingPlan {
   readonly rosterRows: unknown;
 }
 
+/** The parts of a stored vision decomposition plans toward, as the store reads them. */
+interface StoredVisionReading {
+  readonly projectId: ProjectId;
+  readonly visionVersion: number;
+  readonly summary: string;
+  readonly scopeBoundaries: unknown;
+  readonly inferences: unknown;
+}
+
 /** Who owns a planned task: its kind of work and the roster role holding the capability that kind needs. */
 interface TaskOwnership {
   readonly tempId: string;
@@ -46,7 +55,7 @@ interface TaskOwnership {
   readonly ownerRoleId: string;
 }
 
-interface FirstPlanWrite {
+export interface FirstPlanWrite {
   readonly projectId: ProjectId;
   readonly items: readonly BulkPlanItem[];
   readonly edges: readonly BulkPlanEdge[];
@@ -140,7 +149,7 @@ const InferencesSchema = z.union([
   z.record(z.string(), z.string()),
 ]);
 
-function parseField<T>(schema: z.ZodType<T>, value: unknown, project: ProjectAwaitingPlan, field: string): T {
+function parseField<T>(schema: z.ZodType<T>, value: unknown, project: StoredVisionReading, field: string): T {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     throw new VisionUnreadable(project.projectId, project.visionVersion, field, z.prettifyError(parsed.error));
@@ -153,7 +162,7 @@ function parseField<T>(schema: z.ZodType<T>, value: unknown, project: ProjectAwa
  * the assumptions work proceeds on. The decomposition prompt itself stays in
  * DecompositionEngine; this is only its input.
  */
-function northStarOf(project: ProjectAwaitingPlan): string {
+export function northStarOf(project: StoredVisionReading): string {
   const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
   const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
   const records = Array.isArray(inferences) ? inferences : [];
@@ -185,8 +194,21 @@ function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
   }
 }
 
-/** The kinds of work a first plan holds, each with the role that owns it. */
+/** The kinds of work a plan holds, each with the role that owns it. */
 type PlanOwners = Readonly<Record<WorkKind, { readonly id: string }>>;
+
+/**
+ * The owner of each kind of work from the project's latest roster, resolved before any LLM call:
+ * a plan nobody can own is not attempted. Throws RosterUnreadable or WorkKindOwnerUnresolved.
+ */
+export function planOwners(projectId: ProjectId, rosterRows: unknown): PlanOwners {
+  const roster = parseStoredRoster(projectId, rosterRows);
+  return {
+    environment: ownerOf(roster, "environment"),
+    implementation: ownerOf(roster, "implementation"),
+    check: ownerOf(roster, "check"),
+  };
+}
 
 /**
  * The kind of work a planned task is. Sprint 0 defines the project environment,
@@ -205,7 +227,7 @@ function workKindOf(origin: TaskSpec["origin"]): WorkKind {
 }
 
 /** The decomposition as one bulk plan: the epic first, its tasks after, edges by temp id. */
-function toWrite(projectId: ProjectId, result: DecompositionResult, owners: PlanOwners): FirstPlanWrite {
+export function toWrite(projectId: ProjectId, result: DecompositionResult, owners: PlanOwners): FirstPlanWrite {
   const items: BulkPlanItem[] = [
     {
       tempId: result.epic.id,
@@ -291,13 +313,7 @@ export class FirstPlanner implements FirstPlanning {
       return { kind: "stopped", projectId, attempts: project.planAttempts };
     }
 
-    // Owners are resolved before any LLM call: a plan nobody can own is not attempted.
-    const roster = parseStoredRoster(projectId, project.rosterRows);
-    const owners: PlanOwners = {
-      environment: ownerOf(roster, "environment"),
-      implementation: ownerOf(roster, "implementation"),
-      check: ownerOf(roster, "check"),
-    };
+    const owners = planOwners(projectId, project.rosterRows);
 
     let write: FirstPlanWrite;
     let commit: FirstPlanCommit;
@@ -328,6 +344,7 @@ export class FirstPlanner implements FirstPlanning {
       epicNorthStar: northStarOf(project),
       epicDescription: project.visionText,
       conventions: [],
+      environment: { kind: "new" },
     };
     return new DecompositionEngine(llm).decompose(input);
   }

@@ -30,11 +30,15 @@ import type { WorkItemStatus } from "./enums.js";
  * Completed check task whose stored checks went stale, pinned to work kind
  * "check" (unblock/replan/requeue each pin a different from-status). Reopening
  * other items is story c-change-handling.
+ *
+ * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
+ * `merge_unrecorded` block, for work already merged on main whose merge record is written late.
+ * Unblocking such an item to Pending would re-dispatch merged work.
  */
 const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
   Pending: ["InProgress", "Blocked", "Abandoned"],
   InProgress: ["Completed", "Blocked", "Failed", "Pending", "Abandoned"],
-  Blocked: ["Pending", "Abandoned"],
+  Blocked: ["Pending", "Abandoned", "Completed"],
   Failed: ["Pending", "Abandoned"],
   Completed: ["Pending"],
   Abandoned: [],

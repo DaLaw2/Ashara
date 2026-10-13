@@ -170,6 +170,34 @@ const dependencyUnsatisfiableSchema = z.object({
 });
 
 /**
+ * The task's work is merged on the target's main as `mergeCommit`, but the record of that merge
+ * (work_items.merge_commit) could not be written, even after bounded retries. Never re-dispatched:
+ * the work is done, and a new attempt would redo merged work. Its exit is automatic: the loop
+ * writes the record again each cycle, and once it holds, the task is Completed. `reason` carries
+ * the last write's error, for the operator.
+ */
+const mergeUnrecordedSchema = z.object({
+  source: z.literal("merge_unrecorded"),
+  mergeCommit: z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The task was open (not started, Blocked or Failed) when the client changed what is built, and a
+ * revision of the plan (migration 042) replaced it: it is Abandoned and never dispatched. Written
+ * only on Abandoned items. `planRevision` is the revision that replaced it, `requestedBy` the
+ * client answer that asked for it.
+ */
+const supersededSchema = z.object({
+  source: z.literal("superseded"),
+  planRevision: z.number().int().min(2),
+  requestedBy: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
  */
@@ -193,6 +221,8 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   checksRewriteBoundSchema,
   checkDisputedSchema,
   dependencyUnsatisfiableSchema,
+  mergeUnrecordedSchema,
+  supersededSchema,
   apiSchema,
 ]);
 
@@ -254,6 +284,8 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "checks_rewrite_bound":
     case "check_disputed":
     case "dependency_unsatisfiable":
+    case "merge_unrecorded":
+    case "superseded":
     case "api":
       return { ...reason };
   }
@@ -266,16 +298,18 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * `roster-revision`: by itself, once the project stores a roster revision newer than the one the
  * block was decided against. `environment-built`: by itself, once the project's current
  * environment version (on the target's main) has a recorded statement and a succeeded build.
+ * `merge-recorded`: by itself, to Completed (not Pending), once the record of `mergeCommit` is written.
  * `operator`: only an operator's unblock (PATCH /work-items/:id/status to Pending) moves it.
  */
 export type BlockedExit =
   | { readonly kind: "roster-revision"; readonly decidedAgainst: number | null }
   | { readonly kind: "environment-built" }
+  | { readonly kind: "merge-recorded"; readonly mergeCommit: string }
   | { readonly kind: "operator" };
 
 /**
  * The exit of a Blocked item's stored reason. The sources written only on Failed, Abandoned or
- * Pending items (task_failed, orchestrator_error, replan, failure_router) and a Blocked item with
+ * Pending items (task_failed, orchestrator_error, replan, failure_router, superseded) and a Blocked item with
  * no reason have no cause that clears by itself: the operator decides.
  */
 export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedExit {
@@ -285,6 +319,8 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
       return { kind: "roster-revision", decidedAgainst: reason.rosterRevision };
     case "environment_undefined":
       return { kind: "environment-built" };
+    case "merge_unrecorded":
+      return { kind: "merge-recorded", mergeCommit: reason.mergeCommit };
     case "environment_unavailable":
     case "checks_stale":
     case "environment_change_needed":
@@ -296,6 +332,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "orchestrator_error":
     case "replan":
     case "failure_router":
+    case "superseded":
       return { kind: "operator" };
   }
   const _: never = reason;

@@ -9,6 +9,7 @@ export {
   replanWorkItem,
   abandonWorkItem,
   requeueWorkItem,
+  supersedeWorkItem,
   takeEvents,
 } from "./work-item.js";
 

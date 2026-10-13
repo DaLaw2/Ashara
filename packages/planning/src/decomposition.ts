@@ -5,6 +5,7 @@ import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
     DecompositionConfig,
     DecompositionInput,
+    EnvironmentPlanning,
     DecompositionResult,
     DroppedDependency,
     PriorEpicResult,
@@ -142,8 +143,12 @@ export class DecompositionEngine {
         }
 
         // decomposeEpicIntoTasks never returns an empty list (TaskOutputSchema
-        // requires one task), so every plan carries its Sprint 0.
-        const sprint0Id = this.ensureSprint0Task(epic.id, allTasks, dependencyEdges);
+        // requires one task), so every plan carries its Sprint 0, or depends on the
+        // one already done.
+        const sprint0Id =
+            input.environment.kind === "new"
+                ? this.ensureSprint0Task(epic.id, allTasks, dependencyEdges)
+                : dependOnEnvironment(input.environment.taskId, allTasks, dependencyEdges);
         const plannedTasks = addCheckTasks(epic.id, sprint0Id, allTasks, dependencyEdges);
 
         return {
@@ -319,6 +324,7 @@ export class DecompositionEngine {
             input.epicNorthStar,
             input.manifestContext,
             taskCap,
+            input.environment,
         );
 
         // Every unresolvable edge a rejected attempt carried. The re-ask tells the
@@ -375,6 +381,7 @@ export class DecompositionEngine {
         northStar: string,
         manifestContext: string | undefined,
         taskCap: number,
+        environment: EnvironmentPlanning,
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
         const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."]}]}';
@@ -422,7 +429,9 @@ export class DecompositionEngine {
             `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
             `- scope names the part of the product the task covers (e.g., ${examples.scopeExample}) not "the project".`,
             `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id. A "dependsOn" entry that names no "ref" in this response is invalid.`,
-            `- The project environment, including its technology choices, is set up once by a separate first task before these, outside this decomposition. Plan only the product's behavior here.`,
+            environment.kind === "new"
+                ? `- The project environment, including its technology choices, is set up once by a separate first task before these, outside this decomposition. Plan only the product's behavior here.`
+                : `- The project environment, including its technology choices, is already set up and stays as it is. Plan only the product's behavior here.`,
             `- Each task must be a complete vertical slice: build the behavior AND make it reachable by the product's users in the same task. Do not create a separate "wiring" or "integration" task. Example: "${examples.verticalSliceExample}"`,
         );
 
@@ -510,6 +519,16 @@ function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): Pla
             origin: "check",
         },
     };
+}
+
+/** Every planned task depends on the environment task already done; returns its id. */
+function dependOnEnvironment(
+    environmentTaskId: string,
+    tasks: readonly PlannedTask[],
+    dependencyEdges: Array<{ from: string; to: string }>,
+): string {
+    for (const task of tasks) dependencyEdges.push({ from: task.id, to: environmentTaskId });
+    return environmentTaskId;
 }
 
 /**

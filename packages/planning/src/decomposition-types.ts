@@ -42,6 +42,16 @@ export interface DroppedDependency {
     readonly unresolvedRef: string;
 }
 
+/**
+ * Where the plan's environment comes from. `new`: the plan carries its own Sprint 0 task, as a
+ * first plan does and as a revision does when the change is an environment change. `existing`: a
+ * revision builds on the environment task already done (its work item id), which every planned
+ * task depends on instead.
+ */
+export type EnvironmentPlanning =
+    | { readonly kind: "new" }
+    | { readonly kind: "existing"; readonly taskId: string };
+
 export interface DecompositionInput {
     readonly epicTitle: string;
     readonly epicNorthStar: string;
@@ -50,6 +60,7 @@ export interface DecompositionInput {
     readonly priorEpicResults?: PriorEpicResult[];
     readonly conventions: string[];
     readonly manifestContext?: string;
+    readonly environment: EnvironmentPlanning;
 }
 
 export interface PriorEpicResult {

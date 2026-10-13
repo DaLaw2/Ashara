@@ -103,6 +103,10 @@ jobs:
           image="$(sed -n 's/^image = "\(.*\)"$/\1/p' config/base-cell.toml)"
           test -n "$image"
           podman pull "$image"
+          # The busybox cell cell.podman.test.ts runs beside the BaseCell, by the reference it names.
+          alpine="$(sed -n 's/^const ALPINE_IMAGE = "\(.*\)";$/\1/p' packages/execution-infra/src/cell.podman.test.ts)"
+          test -n "$alpine"
+          podman pull "$alpine"
 
       - name: Run migrations
         run: npx tsx scripts/migrate.ts

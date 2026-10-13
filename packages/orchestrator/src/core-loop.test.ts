@@ -124,6 +124,7 @@ function buildDeps(
     liaisonAnswers: { runPending: async () => [] },
     rosterDerivation,
     firstPlanning,
+    replanning: { runPending: async () => [] },
     planReports,
     stackChoices,
     checkDisputes: { record: notExercised("checkDisputes") },

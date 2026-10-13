@@ -22,6 +22,10 @@ function reportsFor(
       posted.push(body);
       return "posted";
     },
+    dueRevisionReports: async () => [],
+    postRevisionReport: async () => {
+      throw new Error("no revision is due");
+    },
     blockProject: async (_projectId, cause) => {
       blocked.push(cause);
       return "blocked";
@@ -65,5 +69,61 @@ describe("first-plan report", () => {
     expect(blocked).toEqual([{ category: "fault", errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) }]);
     expect(outcomes).toEqual([{ kind: "project-blocked", projectId, cause: blocked[0] }]);
     expect(posted).toHaveLength(0);
+  });
+});
+
+describe("plan revision report", () => {
+  function revisionReports(summary: unknown) {
+    const posted: Array<{ revisionId: string; body: string }> = [];
+    const blocked: ProjectBlockCause[] = [];
+    const store: PlanReportStore = {
+      dueReports: async () => [],
+      postReport: async () => {
+        throw new Error("no first-plan report is due");
+      },
+      dueRevisionReports: async () => [{ revisionId: "rev-2", projectId, revision: 2, summary }],
+      postRevisionReport: async (revisionId, body) => {
+        posted.push({ revisionId, body });
+        return "posted";
+      },
+      blockProject: async (_projectId, cause) => {
+        blocked.push(cause);
+        return "blocked";
+      },
+    };
+    return { reports: new PlanReports(store), posted, blocked };
+  }
+
+  test("says what the client said, what the team now does, what is set aside and what stays done", async () => {
+    const { reports, posted } = revisionReports({
+      answer: "The hill studio opens first.",
+      decision: "The hill studio opens first.",
+      newTasks: ["Open hill studio bookings"],
+      newCheckTasks: 1,
+      newEnvironmentTask: false,
+      supersededTasks: ["Open harbour studio bookings"],
+      supersededOther: 1,
+      keptCompleted: 1,
+    });
+
+    expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+
+    expect(posted).toHaveLength(1);
+    const body = posted[0]?.body ?? "";
+    expect(body).toMatch(/^Because you said "The hill studio opens first\.", the team has revised the plan/);
+    expect(body).toContain("The team will now do 1 task:\n- Open hill studio bookings");
+    expect(body).toContain("set aside and will not be done as planned:\n- Open harbour studio bookings");
+    expect(body).toContain("1 task already finished stays done");
+    expect(body).not.toContain("sets up the project environment again");
+  });
+
+  test("a summary that does not parse is not reported and blocks the project", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, blocked } = revisionReports({ answer: "Hill first." });
+
+    await reports.runPending();
+
+    expect(posted).toHaveLength(0);
+    expect(blocked.map((cause) => cause.errorClass)).toEqual(["PlanRevisionSummaryUnreadable"]);
   });
 });

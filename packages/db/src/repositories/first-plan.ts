@@ -37,7 +37,7 @@ class FirstPlanTaskUnowned extends Error {
 }
 
 /** The project's tasks whose owner is missing or not a role of its latest roster revision. */
-async function tasksWithoutRosterOwner(db: DbHandle, projectId: ProjectId): Promise<string[]> {
+export async function tasksWithoutRosterOwner(db: DbHandle, projectId: ProjectId): Promise<string[]> {
   const rows = await db
     .select({ id: workItems.id })
     .from(workItems)
@@ -75,7 +75,7 @@ const awaitingPlan = () =>
 
 // An answer the Liaison has yet to read may change the vision: the project is
 // planned once its answers are in (migration 038).
-const noOpenAnswer = () =>
+export const noOpenAnswer = () =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages a WHERE a.project_id = projects.id
     AND a.direction = 'inbound' AND a.kind = 'answer' AND a.consumed_at IS NULL)`;
 

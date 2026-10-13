@@ -9,6 +9,8 @@ import {
 import {
   createPendingWorkItem,
   startWorkItem,
+  completeWorkItem,
+  completeRecordedMerge,
   failWorkItem,
   blockWorkItem,
   unblockWorkItem,
@@ -100,6 +102,24 @@ describe("state-machine totality", () => {
   test("Blocked can be given up on, not only unblocked", () => {
     expect(canTransitionTo("Blocked", "Pending")).toBe(true);
     expect(canTransitionTo("Blocked", "Abandoned")).toBe(true);
+  });
+
+  test("Blocked -> Completed is merge_unrecorded's alone; such an item never goes back to Pending", () => {
+    const merged: StoredBlockedReason = { source: "merge_unrecorded", mergeCommit: "a".repeat(40), reason: "db down" };
+    const item = createPendingWorkItem("Task", "merged-task", "test-run", TEST_PROJECT_ID);
+    blockWorkItem(item, merged);
+    takeEvents(item);
+    expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
+    expect(() => completeWorkItem(item)).toThrow(InvalidStatusTransition);
+    completeRecordedMerge(item);
+    expect(item.status).toBe("Completed");
+    expect(item.blockedReason).toBeUndefined();
+    expect(takeEvents(item).map((e) => e.eventType)).toEqual(["work_item.completed"]);
+
+    const other = createPendingWorkItem("Task", "parked-task", "test-run", TEST_PROJECT_ID);
+    blockWorkItem(other, BLOCK_REASON);
+    expect(() => completeRecordedMerge(other)).toThrow(InvalidStatusTransition);
+    expect(() => completeWorkItem(other)).toThrow(InvalidStatusTransition);
   });
 
   test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {

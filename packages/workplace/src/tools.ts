@@ -168,7 +168,9 @@ const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
         maxLength: MAX_STATEMENT_CHARS,
         description:
           'Required when status is "done": one paragraph stating the stack you chose (language, toolchain, base ' +
-          "image) and why. It is shown to the client: no file list, no list of changes.",
+          "image) and why, and what the environment's test covers: it proves the toolchain builds and runs, and " +
+          "product behaviour is verified by the check author's checks. Do not promise that later tasks extend the " +
+          "test: they cannot change the environment's files. It is shown to the client: no file list, no list of changes.",
       },
       blockedReason: { type: "string", description: 'Required when status is "blocked".' },
     },

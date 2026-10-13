@@ -330,7 +330,7 @@ describe("the client's answers", () => {
     expect(reports[0]?.inReplyTo).toBe(answerId);
     expect(reports[0]?.body).toContain("The plan assumed: The harbour studio opens first.");
     expect(reports[0]?.body).toContain("Work now proceeds on: The hill studio opens first.");
-    expect(reports[0]?.body).toContain("not yet automatic");
+    expect(reports[0]?.body).toContain("you will be told what changes");
     expect(await answers().runPending()).toEqual([]);
   });
 

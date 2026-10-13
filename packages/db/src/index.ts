@@ -19,6 +19,13 @@ export {
 } from "./repositories/first-plan.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
 export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
+export {
+  listDuePlanRevisionReports,
+  listProjectsAwaitingReplan,
+  postPlanRevisionReport,
+  recordReplanFailure,
+  withPlanRevisionTransaction,
+} from "./repositories/replan.js";
 export { listDueBlockReports, postProjectBlockReport, postTaskBlockedReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";

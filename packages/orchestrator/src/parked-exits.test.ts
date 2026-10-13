@@ -30,7 +30,12 @@ function notExercised(label: string): () => never {
   };
 }
 
-function run(items: WorkItem[], checks: ParkedExitChecks, saveRefused = false) {
+function run(
+  items: WorkItem[],
+  checks: ParkedExitChecks,
+  saveRefused = false,
+  recordMergeCommit: WorkItemRepository["recordMergeCommit"] = notExercised("recordMergeCommit"),
+) {
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: DomainEvent[] = [];
   const workItemRepo: WorkItemRepository = {
@@ -46,7 +51,7 @@ function run(items: WorkItem[], checks: ParkedExitChecks, saveRefused = false) {
     },
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     refundDispatchCount: notExercised("refundDispatchCount"),
-    recordMergeCommit: notExercised("recordMergeCommit"),
+    recordMergeCommit,
     addDependency: notExercised("addDependency"),
     getDependencies: notExercised("getDependencies"),
     findChildren: notExercised("findChildren"),
@@ -133,6 +138,35 @@ describe("environment_undefined leaves Blocked when the current version is built
       environmentBuilt: async () => {
         throw new Error("git unreadable");
       },
+    });
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+  });
+});
+
+describe("merge_unrecorded leaves Blocked to Completed once its merge record is written", () => {
+  const MERGE = "0123456789abcdef0123456789abcdef01234567";
+  const unrecorded: StoredBlockedReason = { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" };
+  const noChecks: ParkedExitChecks = {
+    latestRosterRevision: notExercised("latestRosterRevision"),
+    environmentBuilt: notExercised("environmentBuilt"),
+  };
+
+  test("the record is written again and the item is Completed, never Pending", async () => {
+    const item = blocked(unrecorded);
+    const records: string[] = [];
+    const { released, saves, published } = run([item], noChecks, false, async (id, commit) => void records.push(`${id}:${commit}`));
+
+    expect(await released).toBe(1);
+    expect(records).toEqual([`${item.id}:${MERGE}`]);
+    expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Completed", reason: undefined }]);
+    expect(published.map((e) => e.eventType)).toEqual(["work_item.completed"]);
+  });
+
+  test("a record that still fails leaves it Blocked for the next cycle", async () => {
+    const { released, saves } = run([blocked(unrecorded)], noChecks, false, async () => {
+      throw new Error("connection lost");
     });
 
     expect(await released).toBe(0);

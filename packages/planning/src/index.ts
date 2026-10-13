@@ -25,6 +25,9 @@ export { createBulkPlanWithContract } from "./bulk-plan.js";
 export { FirstPlanner } from "./first-plan.js";
 export type { FirstPlanOutcome, FirstPlanStore, FirstPlanning } from "./first-plan.js";
 
+export { Replanner } from "./replan.js";
+export type { ReplanOutcome, ReplanStore, Replanning } from "./replan.js";
+
 export {
   classifyFailure,
   shouldEscalate,

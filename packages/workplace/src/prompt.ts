@@ -88,6 +88,8 @@ const ENVIRONMENT_PROMPT = [
     `- Use build_environment to build the environment you defined and run its build and test commands. Call it again`,
     `  after each change; finish with status "done" only after it reports PASSED on the files as they are.`,
     `- Finish with a statement: one paragraph on the stack you chose and why. The client reads it; it lists no files.`,
+    `  Say what the environment's test covers: it proves the toolchain builds and runs; product behaviour is verified`,
+    `  by the check author's checks. Never promise that later tasks extend the test: they cannot change its files.`,
   ].join("\n"),
   environmentDefinitionRules(),
 ].join("\n\n");

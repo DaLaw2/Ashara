@@ -169,14 +169,11 @@ describe("PodmanSubstrate argv", () => {
     const { requests, substrate } = recorder([ok(ID), ran("out"), ran("", 124)]);
     const cell = await substrate.createCell(spec);
     const result = await cell.exec(["cat", "--", "./a"], { timeoutSeconds: 30, stdin: "in", cwd: "src" });
-    expect(requests[1]?.args).toEqual([
-      "exec", "-i", "--preserve-fds=1", "-w", "/workspace/src", ID,
-      "sh", "-c",
-      "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }; " +
-        'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; s=$?; printf \'%s\\n\' "$s" >&3; exit "$s"',
-      "ashara-exec", "5", "30",
-      "cat", "--", "./a",
-    ]);
+    const args = requests[1]?.args ?? [];
+    expect(args.slice(0, 8)).toEqual(["exec", "-i", "--preserve-fds=1", "-w", "/workspace/src", ID, "sh", "-c"]);
+    expect(args.slice(9)).toEqual(["ashara-exec", "5", "30", "cat", "--", "./a"]);
+    // The wrapper runs argv under timeout(1), then sweeps the cell before it reports.
+    expect(args[8]).toContain('timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?\nashara_sweep ||');
     expect(requests[1]?.statusChannel).toBe(true);
     expect(requests[1]?.stdin).toBe("in");
     expect(result).toMatchObject({ exitCode: 0, stdout: "out", timedOut: false });
@@ -204,6 +201,47 @@ describe("PodmanSubstrate argv", () => {
 
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+  });
+
+  it("a sweep that left a process alive, or an exec without a session of its own, is CellExecFailed", async () => {
+    const { substrate } = recorder([
+      ok(ID),
+      { ...ran("", 0), statusReport: "unswept 0\n" },
+      { ...ran("", 125), statusReport: "unisolated\n" },
+      { ...ran("", 0), statusReport: "unswept zero\n" },
+    ]);
+    const cell = await substrate.createCell(spec);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/still alive after the wrapper's sweep/);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/not a session of its own.*not run/);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+  });
+
+  it("sweeps the cell from a fresh exec after the host backstop, and fails closed when that sweep fails", async () => {
+    const hung: ProcessResult = { ...ok("", null), killedByHost: true, statusReport: "" };
+    const { requests, substrate } = recorder([ok(ID), hung, ok("", 0), hung, ok("", 1)]);
+    const cell = await substrate.createCell(spec);
+    expect(await cell.exec(["sleep", "99"], { timeoutSeconds: 1 })).toMatchObject({ exitCode: null, timedOut: true });
+    expect(requests[2]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
+    expect(requests[2]?.args[4]).toContain("ashara_sweep");
+    await expect(cell.exec(["sleep", "99"], { timeoutSeconds: 1 })).rejects.toThrow(/sweeping the cell afterwards failed/);
+  });
+
+  it("runs a cell's execs one at a time", async () => {
+    let active = 0;
+    let most = 0;
+    const runner = async (request: ProcessRequest): Promise<ProcessResult> => {
+      if (request.args[0] === "run") return ok(ID);
+      active++;
+      most = Math.max(most, active);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return ran("", 0);
+    };
+    const substrate = new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner });
+    const cell = await substrate.createCell(spec);
+    const results = await Promise.all([1, 2, 3].map(() => cell.exec(["true"], { timeoutSeconds: 1 })));
+    expect(results.map((r) => r.exitCode)).toEqual([0, 0, 0]);
+    expect(most).toBe(1);
   });
 
   it("refuses a malformed exec request before podman runs", async () => {

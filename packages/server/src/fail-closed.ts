@@ -1,10 +1,11 @@
 import { inspect } from "node:util";
 import { ServerStartupRefused } from "./secrets.js";
 
-type FatalOrigin = "uncaughtException" | "unhandledRejection";
+/** `main`: main() itself rejected, the same corrupted process reached through the boot's own await chain. */
+type FatalOrigin = "uncaughtException" | "unhandledRejection" | "main";
 
 /** The error, its stack, its own fields and every `cause` beneath it, as one log line set. */
-export function describeErrorChain(err: unknown): string {
+function describeErrorChain(err: unknown): string {
   return inspect(err, { depth: 12, breakLength: 120 });
 }
 
@@ -23,8 +24,8 @@ interface FatalExit {
 }
 
 /**
- * Discipline A at the process boundary. An uncaught exception or unhandled rejection means
- * some invariant no longer holds, so the process logs the whole cause chain, runs the graceful
+ * Discipline A at the process boundary. An uncaught exception, an unhandled rejection or main()
+ * rejecting means some invariant no longer holds, so the process logs the whole cause chain, runs the graceful
  * shutdown under a hard deadline and exits non-zero. Before the shutdown exists (during boot)
  * there is nothing to drain and the exit is immediate.
  */
@@ -44,6 +45,7 @@ export function createFatalExit(deps: FatalExitDeps): FatalExit {
       shutdown = fn;
     },
     onFatal(origin, err) {
+      if (err instanceof ServerStartupRefused) deps.log(`FATAL: server refused to start. ${err.message}`);
       deps.log(`FATAL: ${origin}; the process stops and exits non-zero.\n${describeErrorChain(err)}`);
       if (stopping) {
         deps.log("FATAL: a further error arrived while the fatal shutdown runs; it continues under its deadline.");

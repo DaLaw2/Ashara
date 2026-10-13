@@ -11,6 +11,7 @@ const INPUT: DecompositionInput = {
     epicNorthStar: "Members can book a seat in a class.",
     epicDescription: "Two studios merge their class schedules; members book seats in either.",
     conventions: [],
+    environment: { kind: "new" },
 };
 
 function task(ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> {

@@ -68,9 +68,10 @@ export function parseWorkItemJsonb(row: WorkItemJsonbRow): ParsedWorkItemJsonb {
  * `configuration`: a model call was refused by anything but a spend cap (an unpriced model, a cost
  * that cannot be estimated). `fault`: one of Ashara's own records or steps for the project failed.
  * `check_dispute`: a task's implementer kept disputing one of its checks past the bound of disputes
- * (migration 039), which nothing in the team settles.
+ * (migration 039), which nothing in the team settles. `replan_bound`: the client's changes revised the
+ * plan as many times as Delivery revises it before the operator reviews the project (migration 042).
  */
-type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute";
+type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute" | "replan_bound";
 
 /** Why a project was blocked (migration 025): the cause's category, the error's class and its full chain. */
 export interface ProjectBlockCause {
