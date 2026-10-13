@@ -5,6 +5,7 @@ import { projects, visionDocuments, workItems } from "../schema.js";
 import type { PlanningTransactionRepos } from "./planning-transaction.js";
 import { ContractRepository } from "./contract.js";
 import { WorkItemRepository } from "./work-item.js";
+import { noOpenStop } from "./project.js";
 
 // Delivery's first plan of a project (migration 020). A project awaits its first
 // plan while it is active, has a vision, has no work items and has no planning
@@ -40,6 +41,8 @@ const awaitingPlan = () =>
 
 /**
  * Projects awaiting their first plan, oldest first, each with its current vision.
+ * A project with a stop awaiting the Liaison is not listed; a plan already in
+ * progress when the stop lands is still written, and is never dispatched.
  * One statement, so a project and the vision it is listed with are read from the
  * same snapshot.
  */
@@ -60,7 +63,7 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
         sql`${visionDocuments.version} = (SELECT MAX(v.version) FROM vision_documents v WHERE v.project_id = projects.id)`,
       ),
     )
-    .where(awaitingPlan())
+    .where(and(awaitingPlan(), noOpenStop(projects.id)))
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
   return rows.map((row) => ({

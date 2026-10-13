@@ -46,11 +46,12 @@
 
     <section id="project" hidden>
       <h2 id="project-name"></h2>
+      <p id="project-state" hidden></p>
       <ol id="timeline"></ol>
       <div class="stop">
         <button id="stop-open" type="button">Stop this project</button>
         <div id="stop-confirm" hidden>
-          <p>Stopping tells Ashara to halt work on this project. Say why (optional), then confirm.</p>
+          <p>Stopping tells Ashara to halt work on this project: it starts nothing further, a task already running finishes first, and what was merged stays merged. Say why (optional), then confirm.</p>
           <label for="stop-reason">Reason</label>
           <textarea id="stop-reason" rows="2"></textarea>
           <button id="stop-confirm-button" type="button" class="danger">Confirm stop</button>

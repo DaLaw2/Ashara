@@ -10,6 +10,8 @@ export interface ServerConfig {
   readonly apiToken: string;
   readonly port: number;
   readonly coreLoop: CoreLoopConfig;
+  /** The podman executable the provisioner runs and probes (ASHARA_PODMAN_BINARY). */
+  readonly podmanBinary: string;
 }
 
 class InvalidBudgetLimit extends Error {
@@ -68,11 +70,16 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     budgetLimitUsd,
   };
 
+  // Policy default: unset means "podman on PATH". Pointing it at a missing
+  // binary is how an unavailable substrate is observed without uninstalling.
+  const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
+
   return {
     databaseUrl,
     apiToken,
     port,
     coreLoop,
+    podmanBinary,
   };
 }
 

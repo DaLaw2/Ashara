@@ -7,6 +7,7 @@ import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { LlmCallNotRecorded, PreCallRefusal } from "@ashara/llm-gateway";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
+import { SubstrateUnavailable } from "./provisioner.js";
 import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 import { resolveProjectFrame } from "./project-frame.js";
@@ -51,6 +52,40 @@ async function cleanupWorkdirBeforeRethrow(taskId: string, workDir: string, targ
   } catch (cleanupError) {
     console.warn(`[${taskId}] workdir cleanup failed before rethrowing a ledger failure (${workDir}):`, cleanupError);
   }
+}
+
+async function cleanupWorkdirBeforeBlock(taskId: string, workDir: string, targetProjectPath: string | null): Promise<void> {
+  try {
+    await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+  } catch (cleanupError) {
+    console.warn(`[${taskId}] workdir cleanup failed before blocking on an unavailable substrate (${workDir}):`, cleanupError);
+  }
+}
+
+function environmentBlocked(
+  taskId: WorkItemId,
+  sessionId: string,
+  e: SubstrateUnavailable,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const chain = wrapError("development", e.context.operation, e, { taskId, ...e.context });
+  const envelope: ErrorEnvelope = {
+    outcome: "blocked",
+    summary: `${e.message}; task ${taskId} blocked, no agent ran and nothing executed`,
+    chain,
+  };
+  console.warn(`[${taskId}] ${envelope.summary}`);
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, reason: envelope.summary });
+  return {
+    status: "environment_blocked",
+    unavailable: e.context.substrate,
+    detail: envelope.summary,
+    output: null,
+    sessionId,
+    attempt: 1,
+    errorEnvelope: envelope,
+    agentInvoked: false,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +167,28 @@ export interface TaskDescriptor {
 // Execution result
 // ---------------------------------------------------------------------------
 
-export interface ExecutionResult {
+/**
+ * The outcome of a dispatch the execution substrate could not host: no agent
+ * ran and nothing executed, on the host or anywhere else. It is not a task
+ * failure (re-dispatching the same task cannot make the substrate appear), so
+ * the orchestrator parks the item at Blocked with an `environment_unavailable`
+ * reason instead of routing it through the FailureRouter.
+ */
+interface EnvironmentBlockedResult {
+  readonly status: "environment_blocked";
+  /** What was unavailable, named for the operator (e.g. "podman"). */
+  readonly unavailable: string;
+  readonly detail: string;
+  readonly output: null;
+  readonly sessionId: string;
+  readonly attempt: 1;
+  readonly errorEnvelope: ErrorEnvelope;
+  readonly agentInvoked: false;
+}
+
+export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult;
+
+interface AgentExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
   readonly detail: string;
   readonly output: AgentOutputJson | null;
@@ -210,7 +266,11 @@ export interface DevelopmentServiceDeps {
    * result) means the project has no contract.
    */
   readonly contractSource?: ContractSource;
-  readonly provisioner?: Provisioner;
+  /**
+   * Required: execute() probes it before anything else, so there is no
+   * configuration in which an unavailable substrate means "run on the host".
+   */
+  readonly provisioner: Provisioner;
   readonly provisionedEnv?: ProvisionedEnv;
 }
 
@@ -222,7 +282,7 @@ export class DevelopmentService {
   }
 
   private buildRunners(env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
-    if (this.deps.provisioner && env) {
+    if (env) {
       const runner = provisionerAsRunner(this.deps.provisioner, env, this.deps.config.workdirBase);
       return { runCommand: runner, prepareRunCommand: runner };
     }
@@ -247,6 +307,16 @@ export class DevelopmentService {
       model: task.taskSpec?.capability ?? "Strong",
     });
 
+    // First, before the contract, the brief (which may call an LLM) or the
+    // worktree: a substrate that cannot host the task blocks it here, so no
+    // later path can fall through to host execution.
+    try {
+      await this.deps.provisioner.probe();
+    } catch (e) {
+      if (!(e instanceof SubstrateUnavailable)) throw e;
+      return environmentBlocked(task.id, sessionId, e, eventSink);
+    }
+
     let contract: ProjectContract | null = null;
     try {
       contract = await this.loadContract(task.id);
@@ -259,9 +329,11 @@ export class DevelopmentService {
       brief = await this.buildBrief(task, targetProjectPath, contract);
     } catch (e) {
       // A missing ProjectFrame is a PLANNING-INPUT gap, not an agent failure
-      // (ADR-046): nothing about re-dispatching the same task makes the vision
-      // reachable, so routing it as a retryable failure would loop forever.
-      // Blocked parks it for the owner with the full derivation trace intact.
+      // (ADR-046), so the result is `blocked` with the full derivation trace.
+      // The orchestrator nevertheless routes a `blocked` result like `failed`:
+      // the item goes to Failed and through the FailureRouter (executeTask in
+      // orchestrator/src/execution.ts). Only `environment_blocked` parks an
+      // item at Blocked.
       if (!(e instanceof ProjectFrameUnresolvable)) throw e;
       const chain = wrapError("development", "resolveProjectFrame", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -331,7 +403,7 @@ export class DevelopmentService {
 
     let localEnv: ProvisionedEnv | undefined;
     const preSuppliedEnv = this.deps.provisionedEnv;
-    if (!preSuppliedEnv && this.deps.provisioner && this.deps.llmGateway && targetProjectPath) {
+    if (!preSuppliedEnv && this.deps.llmGateway && targetProjectPath) {
       try {
         const manifestContent = await readManifestContext(targetProjectPath);
         if (manifestContent) {
@@ -348,7 +420,13 @@ export class DevelopmentService {
           await cleanupWorkdirBeforeRethrow(task.id, workDir, targetProjectPath);
           throw e;
         }
-        console.warn(`[${task.id}] environment provisioning failed, falling back to containerized execution:`, e);
+        // The substrate vanished between the probe and provisioning: still a
+        // block, never a fall-through to host execution.
+        if (e instanceof SubstrateUnavailable) {
+          await cleanupWorkdirBeforeBlock(task.id, workDir, targetProjectPath);
+          return environmentBlocked(task.id, sessionId, e, eventSink);
+        }
+        console.warn(`[${task.id}] environment provisioning failed, falling back to HOST execution (no container):`, e);
       }
     }
     const envForRunners = preSuppliedEnv ?? localEnv;
@@ -395,7 +473,7 @@ export class DevelopmentService {
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     } finally {
-      if (localEnv && this.deps.provisioner) {
+      if (localEnv) {
         try {
           await this.deps.provisioner.teardown(localEnv);
         } catch (e) {
@@ -617,7 +695,7 @@ export class DevelopmentService {
     contract: ProjectContract | null,
     dispatch: DispatchRecord,
     provisionedEnv?: ProvisionedEnv,
-  ): Promise<ExecutionResult> {
+  ): Promise<AgentExecutionResult> {
     const { config, eventSink, agentInvoker } = this.deps;
     const recordsBase = config.workdirBase;
 
@@ -972,11 +1050,11 @@ export async function withSessionLifecycle(
   sessionId: string,
   taskId: string,
   brief: AgentBrief,
-  body: () => Promise<ExecutionResult>,
-): Promise<ExecutionResult> {
+  body: () => Promise<AgentExecutionResult>,
+): Promise<AgentExecutionResult> {
   await sessionStore.insert(sessionId, taskId, brief);
 
-  let outcome: ExecutionResult;
+  let outcome: AgentExecutionResult;
   try {
     outcome = await body();
   } catch (e) {

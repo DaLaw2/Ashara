@@ -29,10 +29,12 @@ import {
   VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
+import { ClientStops } from "@ashara/engagement";
 import { clientAccessCodeSecretName, generateKeyFileContent, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { buildApp } from "./app.js";
+import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import type { AppDeps } from "./routes.js";
 import type { SecretReader } from "./secrets.js";
@@ -767,7 +769,31 @@ describe("recorded web-client session", () => {
       await page.fill("#stop-reason", stopReason);
       await page.click("#stop-confirm-button");
       await page.locator("#timeline li.kind-stop .msg-body", { hasText: stopReason }).waitFor();
-      step("pressed Stop, confirmed in-page; the stop appears in the timeline");
+      await page.locator("#project-state", { hasText: "Stop requested" }).waitFor();
+      expect(await page.locator("#stop-open").isHidden()).toBe(true);
+      step("pressed Stop, confirmed in-page; the stop appears in the timeline, shown as requested, Stop no longer offered");
+
+      // The Liaison's production stop step, narrowed to this project so no other suite's stop is consumed.
+      const stopStore = createClientStopStore(db);
+      const stops = await new ClientStops({
+        ...stopStore,
+        openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === project.id),
+      }).runPending();
+      expect(stops).toMatchObject([{ kind: "stopped", reported: true, merged: 0, projectId: project.id }]);
+      const stoppedState = page.locator('#project-state[data-status="stopped"]');
+      await stoppedState.waitFor({ timeout: 15_000 });
+      expect(await stoppedState.textContent()).toContain("Stopped at your request");
+      expect(await page.locator("#stop-open").isHidden()).toBe(true);
+      expect(await page.locator(`#projects button[data-project-id="${project.id}"]`).textContent()).toBe(
+        `${projectName} (stopped)`,
+      );
+      const stopReportItem = page.locator("#timeline li.kind-report", { hasText: "stopped at your request" });
+      await stopReportItem.waitFor({ timeout: 15_000 });
+      expect(await stopReportItem.locator(".msg-body").textContent()).toContain("No merged work is on record for this project.");
+      step(
+        `the Liaison consumed the stop; the page shows "${await stoppedState.textContent()}", no Stop button, ` +
+          `and the report "${(await stopReportItem.locator(".msg-body").innerText()).replace(/\s+/g, " ")}"`,
+      );
 
       await page.screenshot({ path: path.join(recordDir, "session.png"), fullPage: true });
 
@@ -784,7 +810,9 @@ describe("recorded web-client session", () => {
         { direction: "inbound", kind: "answer", projectId: project.id, inReplyTo: question.id },
         { direction: "outbound", kind: "report", projectId: project.id, inReplyTo: tender.id },
         { direction: "inbound", kind: "stop", projectId: project.id, inReplyTo: null },
+        { direction: "outbound", kind: "report", projectId: project.id, inReplyTo: expect.any(String) },
       ]);
+      expect((await new ProjectRepository(db).get(project.id))?.status).toBe("stopped");
       step(`Postgres rows for project ${project.id}: ${JSON.stringify(summary)}`);
 
       expect(pageErrors).toEqual([]);

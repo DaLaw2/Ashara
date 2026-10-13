@@ -11,7 +11,7 @@ import type {
   ExecResult,
   ExecOptions,
 } from "@ashara/development";
-import { ProvisioningError, TeardownError } from "@ashara/development";
+import { ProvisioningError, SubstrateUnavailable, TeardownError } from "@ashara/development";
 import { validateContainerfileSpec } from "./containerfile-validation.js";
 
 // ---------------------------------------------------------------------------
@@ -58,12 +58,47 @@ interface ContainerHandle {
 // PodmanProvisioner
 // ---------------------------------------------------------------------------
 
+const PROBE_TIMEOUT_MS = 30_000;
+
 export class PodmanProvisioner implements Provisioner {
   private readonly hostWorkDir: string;
+  private readonly podmanBinary: string;
   private readonly handles = new Map<string, ContainerHandle>();
 
-  constructor(hostWorkDir: string) {
+  /**
+   * @param podmanBinary the podman executable (a bare name resolved on PATH, or
+   *   a path). Configurable so an unavailable substrate can be observed by
+   *   pointing it at a missing binary instead of uninstalling podman.
+   */
+  constructor(hostWorkDir: string, podmanBinary: string) {
     this.hostWorkDir = hostWorkDir;
+    this.podmanBinary = podmanBinary;
+  }
+
+  probe(): Promise<void> {
+    const binary = this.podmanBinary;
+    const unavailable = (detail: string): SubstrateUnavailable =>
+      new SubstrateUnavailable({ substrate: "podman", operation: "probe", target: binary, detail });
+    return new Promise<void>((resolve, reject) => {
+      const proc = spawn(binary, ["info", "--format", "{{.Host.Arch}}"], { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      const timer = setTimeout(() => {
+        proc.kill();
+        reject(unavailable(`"podman info" did not answer within ${PROBE_TIMEOUT_MS}ms`));
+      }, PROBE_TIMEOUT_MS);
+      proc.on("error", (err: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        reject(unavailable(
+          err.code === "ENOENT" ? "podman binary not found" : `podman could not be started: ${err.code ?? ""} ${err.message}`,
+        ));
+      });
+      proc.on("close", (exitCode) => {
+        clearTimeout(timer);
+        if (exitCode === 0) resolve();
+        else reject(unavailable(`"podman info" exited ${exitCode}: ${stderr.trim().slice(0, 500)}`));
+      });
+    });
   }
 
   async provision(spec: EnvironmentSpec): Promise<ProvisionedEnv> {
@@ -79,12 +114,12 @@ export class PodmanProvisioner implements Provisioner {
     try {
       const containerfilePath = join(buildDir, "Containerfile");
       await writeFile(containerfilePath, containerfile);
-      await podmanBuild(imageTag, containerfilePath, buildDir, spec);
+      await podmanBuild(this.podmanBinary, imageTag, containerfilePath, buildDir, spec);
     } finally {
       await rm(buildDir, { recursive: true, force: true });
     }
 
-    await podmanRun(containerName, imageTag, spec, this.hostWorkDir);
+    await podmanRun(this.podmanBinary, containerName, imageTag, spec, this.hostWorkDir);
     this.handles.set(envId, { containerName, imageTag, projectMount: spec.projectMount });
 
     return {
@@ -132,7 +167,7 @@ export class PodmanProvisioner implements Provisioner {
     execArgs.push(handle.containerName, ...command);
 
     return new Promise<ExecResult>((resolve, reject) => {
-      const proc = spawn("podman", execArgs, {
+      const proc = spawn(this.podmanBinary, execArgs, {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -146,10 +181,11 @@ export class PodmanProvisioner implements Provisioner {
       proc.on("error", (err: NodeJS.ErrnoException) => {
         clearTimeout(timer);
         if (err.code === "ENOENT") {
-          reject(new ProvisioningError({
+          reject(new SubstrateUnavailable({
+            substrate: "podman",
             operation: "exec",
-            spec: env.spec,
-            detail: "podman binary not found on PATH",
+            target: this.podmanBinary,
+            detail: "podman binary not found",
           }));
         } else {
           reject(new ProvisioningError({
@@ -177,9 +213,9 @@ export class PodmanProvisioner implements Provisioner {
     if (!handle) return;
 
     try {
-      await podmanExecSimple(["stop", "--time", "5", handle.containerName]);
-      await podmanExecSimple(["rm", "-f", handle.containerName]);
-      await podmanExecSimple(["rmi", "-f", handle.imageTag]);
+      await podmanExecSimple(this.podmanBinary, ["stop", "--time", "5", handle.containerName]);
+      await podmanExecSimple(this.podmanBinary, ["rm", "-f", handle.containerName]);
+      await podmanExecSimple(this.podmanBinary, ["rmi", "-f", handle.imageTag]);
     } catch (e) {
       throw new TeardownError({
         envId: env.id,
@@ -196,13 +232,14 @@ export class PodmanProvisioner implements Provisioner {
 // ---------------------------------------------------------------------------
 
 function podmanBuild(
+  binary: string,
   tag: string,
   containerfilePath: string,
   contextDir: string,
   spec: EnvironmentSpec,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const proc = spawn("podman", [
+    const proc = spawn(binary, [
       "build",
       "-t", tag,
       "-f", containerfilePath,
@@ -214,10 +251,11 @@ function podmanBuild(
 
     proc.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
-        reject(new ProvisioningError({
+        reject(new SubstrateUnavailable({
+          substrate: "podman",
           operation: "build",
-          spec,
-          detail: "podman binary not found on PATH",
+          target: binary,
+          detail: "podman binary not found",
         }));
       } else {
         reject(new ProvisioningError({
@@ -243,6 +281,7 @@ function podmanBuild(
 }
 
 function podmanRun(
+  binary: string,
   containerName: string,
   imageTag: string,
   spec: EnvironmentSpec,
@@ -263,17 +302,18 @@ function podmanRun(
   ];
 
   return new Promise<void>((resolve, reject) => {
-    const proc = spawn("podman", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
 
     let stderr = "";
     proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
     proc.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") {
-        reject(new ProvisioningError({
+        reject(new SubstrateUnavailable({
+          substrate: "podman",
           operation: "start",
-          spec,
-          detail: "podman binary not found on PATH",
+          target: binary,
+          detail: "podman binary not found",
         }));
       } else {
         reject(new ProvisioningError({
@@ -298,9 +338,9 @@ function podmanRun(
   });
 }
 
-function podmanExecSimple(args: string[]): Promise<void> {
+function podmanExecSimple(binary: string, args: string[]): Promise<void> {
   return new Promise<void>((resolve) => {
-    const proc = spawn("podman", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
     proc.on("error", () => resolve());
     proc.on("close", () => resolve());
   });

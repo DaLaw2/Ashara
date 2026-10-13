@@ -105,6 +105,31 @@ export class ProvisioningError extends Error {
   }
 }
 
+export interface SubstrateUnavailableContext {
+  /** What is unavailable, named for the operator (e.g. "podman"). */
+  readonly substrate: string;
+  /** Where it was found missing: "probe", "build", "start", "exec". */
+  readonly operation: string;
+  /** The binary or endpoint that was tried. */
+  readonly target: string;
+  readonly detail: string;
+}
+
+/**
+ * The substrate itself cannot host anything (its binary is missing, or it
+ * does not answer its own health query), as opposed to a provisioning step
+ * that ran and failed. The distinction routes the task: a missing substrate
+ * blocks it for the operator; it is not a task failure to retry.
+ */
+export class SubstrateUnavailable extends Error {
+  constructor(public readonly context: SubstrateUnavailableContext) {
+    super(
+      `execution substrate "${context.substrate}" unavailable at ${context.operation} (${context.target}): ${context.detail}`,
+    );
+    this.name = "SubstrateUnavailable";
+  }
+}
+
 export interface TeardownErrorContext {
   readonly envId: string;
   readonly detail: string;
@@ -122,6 +147,12 @@ export class TeardownError extends Error {
 // ---------------------------------------------------------------------------
 
 export interface Provisioner {
+  /**
+   * Resolves only when the substrate can host an environment right now;
+   * throws SubstrateUnavailable otherwise. Called before any worktree exists,
+   * so an unavailable substrate never reaches a code path that runs on the host.
+   */
+  probe(): Promise<void>;
   provision(spec: EnvironmentSpec): Promise<ProvisionedEnv>;
   execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult>;
   teardown(env: ProvisionedEnv): Promise<void>;

@@ -256,3 +256,93 @@ describe("processTask post-agent status ladder", () => {
     expect(vanishedWarn).toContain("agent spend unrecoverable");
   });
 });
+
+describe("an environment-blocked dispatch parks the item at Blocked", () => {
+  function buildEnvironmentBlockedDeps(): {
+    deps: CoreLoopDeps;
+    stored: () => WorkItem;
+    statusesWritten: string[];
+    failureRoutes: () => number;
+    failedApproaches: () => number;
+  } {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let row = freshPendingItem();
+    const statusesWritten: string[] = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+
+    const workItemRepo: WorkItemRepository = {
+      findById: async () => copy(row),
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        if (row.status !== expectedPreviousStatus) {
+          throw new Error(`pre-image mismatch: stored ${row.status}, expected ${expectedPreviousStatus}`);
+        }
+        statusesWritten.push(item.status);
+        row = copy(item);
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      incrementDispatchCount: async () => 1,
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listAllDependencies: notExercised("listAllDependencies"),
+      withTransaction: notExercised("withTransaction"),
+    };
+
+    const developmentService = {
+      execute: async () => ({
+        status: "environment_blocked" as const,
+        unavailable: "podman",
+        detail: "execution substrate \"podman\" unavailable; no agent ran: podman binary not found on PATH",
+        output: null,
+        sessionId: "test-session",
+        attempt: 1 as const,
+        errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
+        agentInvoked: false as const,
+      }),
+    };
+
+    const deps = {
+      config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
+      workItemRepo,
+      eventStore: { publish: async () => {} },
+      costRepo: { recordTaskCost: async () => {} },
+      failedApproachRepo: { record: async () => { approaches++; } },
+      projectRepo: { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") },
+      developmentService,
+      runStateStore: { load: async () => null, save: async () => {} },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+    } as unknown as CoreLoopDeps;
+
+    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches };
+  }
+
+  test("the item becomes Blocked with an environment_unavailable reason, never Failed, and the failure router is not called", async () => {
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps();
+
+    const { result, costInfo } = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(costInfo.costUsd).toBe(0);
+    expect(stored().status).toBe("Blocked");
+    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(statusesWritten).not.toContain("Failed");
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+
+    const reason = stored().blockedReason;
+    expect(reason?.source).toBe("environment_unavailable");
+    if (reason?.source !== "environment_unavailable") return;
+    expect(reason.unavailable).toBe("podman");
+    expect(reason.reason).toContain("podman binary not found");
+    // The persisted reason must survive the jsonb read-back schema.
+    expect(() =>
+      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
+    ).not.toThrow();
+  });
+});

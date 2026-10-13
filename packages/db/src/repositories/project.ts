@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { parseProjectId, type ProjectBlockCause, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { projects } from "../schema.js";
@@ -28,6 +28,17 @@ function toRecord(row: ProjectRow): ProjectRecord {
 }
 
 /** A workspace path could not be recorded on the project. */
+/**
+ * True while the project has no inbound stop the Liaison has yet to consume
+ * (migration 028). The Liaison consumes stops once per cycle, at its top; a stop
+ * the client sends later in the cycle must already hold, so every reader that
+ * admits only active projects to take in, plan, report on or dispatch also
+ * requires this. A stop committed before such a read is honoured by it.
+ */
+export const noOpenStop = (projectId: AnyColumn) =>
+  sql`NOT EXISTS (SELECT 1 FROM client_messages s WHERE s.project_id = ${projectId}
+    AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
+
 class WorkspacePathNotRecorded extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -94,12 +105,16 @@ export class ProjectRepository {
     return existing.workspacePath;
   }
 
-  /** The projects whose work may be dispatched: status 'active', oldest first. */
+  /**
+   * The projects whose work may be dispatched: status 'active' and no stop
+   * awaiting the Liaison, oldest first. This read is the dispatch decision: a
+   * stop committed after it is ordered after the dispatch it gated.
+   */
   async listActiveIds(): Promise<ProjectId[]> {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(eq(projects.status, "active"))
+      .where(and(eq(projects.status, "active"), noOpenStop(projects.id)))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id));
   }

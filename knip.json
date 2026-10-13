@@ -20,8 +20,7 @@
     },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
-      "vitest": false,
-      "ignoreBinaries": ["podman"]
+      "vitest": false
     }
   }
 }

@@ -33,6 +33,7 @@ export { PlanningService, DependencyGraph } from "@ashara/planning";
 export {
   startWorkItem,
   failWorkItem,
+  blockWorkItem,
   requeueWorkItem,
   takeEvents,
 } from "@ashara/planning";

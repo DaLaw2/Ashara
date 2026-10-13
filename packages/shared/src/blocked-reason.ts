@@ -59,6 +59,18 @@ const failureRouterSchema = z.object({
 });
 
 /**
+ * The execution substrate a task needs was not available, so no agent ran and
+ * nothing executed. `unavailable` names what was missing (e.g. "podman");
+ * `reason` carries the probe's own diagnostic text for the operator.
+ */
+const environmentUnavailableSchema = z.object({
+  source: z.literal("environment_unavailable"),
+  unavailable: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
  */
@@ -74,6 +86,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   orchestratorErrorSchema,
   replanSchema,
   failureRouterSchema,
+  environmentUnavailableSchema,
   apiSchema,
 ]);
 
@@ -127,6 +140,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "orchestrator_error":
     case "replan":
     case "failure_router":
+    case "environment_unavailable":
     case "api":
       return { ...reason };
   }

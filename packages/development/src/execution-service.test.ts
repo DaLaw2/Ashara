@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,7 @@ import { createAgentBrief, createWorkItemId, parseProjectId } from "@ashara/shar
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
 import type { EnvironmentSpec, ProvisionedEnv, Provisioner } from "./provisioner.js";
+import { SubstrateUnavailable } from "./provisioner.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -52,7 +54,11 @@ function brief(): AgentBrief {
   );
 }
 
-function result(status: ExecutionResult["status"]): ExecutionResult {
+// environment_blocked is returned before a session opens, so it never passes
+// through withSessionLifecycle.
+type SessionBodyResult = Exclude<ExecutionResult, { status: "environment_blocked" }>;
+
+function result(status: SessionBodyResult["status"]): SessionBodyResult {
   return {
     status,
     detail: `${status} detail`,
@@ -71,7 +77,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked"];
+  const ALL_STATUSES: ReadonlyArray<SessionBodyResult["status"]> = ["completed", "failed", "blocked"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -162,6 +168,7 @@ function throwingGateway(error: Error): ContextualLlm {
 
 class RecordingProvisioner implements Provisioner {
   readonly provisioned: EnvironmentSpec[] = [];
+  async probe(): Promise<void> {}
   async provision(spec: EnvironmentSpec): Promise<ProvisionedEnv> {
     this.provisioned.push(spec);
     return { id: "env", version: 1, spec, status: "ready" };
@@ -234,6 +241,128 @@ describe("environment-spec derivation does not swallow ledger failures", () => {
       expect(provisioner.provisioned).toHaveLength(0);
       const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: target });
       expect(stdout.match(/^worktree /gm)).toHaveLength(1);
+    });
+  }
+});
+
+function missingPodman(operation: string): SubstrateUnavailable {
+  return new SubstrateUnavailable({
+    substrate: "podman",
+    operation,
+    target: "/nonexistent/podman",
+    detail: "podman binary not found",
+  });
+}
+
+class SubstrateMissingProvisioner extends RecordingProvisioner {
+  override async probe(): Promise<void> {
+    throw missingPodman("probe");
+  }
+}
+
+// The substrate answered the probe, then disappeared before provisioning.
+class SubstrateVanishingProvisioner extends RecordingProvisioner {
+  override async provision(): Promise<ProvisionedEnv> {
+    throw missingPodman("build");
+  }
+}
+
+function specGateway(): ContextualLlm {
+  return {
+    forCall: () => ({
+      generateStructured: async (request) => ({
+        data: request.schema.parse({
+          baseImage: "img",
+          toolchains: [{ name: "make", installMethod: "system" }],
+          systemPackages: [],
+          envVars: {},
+          networkPolicy: [],
+          projectMount: "/work",
+        }),
+      }),
+    }),
+  };
+}
+
+describe("an unavailable execution substrate blocks the task before anything runs", () => {
+  const scratch: string[] = [];
+  afterEach(async () => {
+    for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  // Each case is a route that reached host execution before the probe: a
+  // greenfield target (no manifest, provisioning skipped), no LLM gateway
+  // (spec derivation skipped), a manifest target, and the substrate vanishing
+  // between the probe and provisioning.
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly manifest: boolean;
+    readonly gateway: boolean;
+    readonly provisioner: () => RecordingProvisioner;
+    readonly operation: "probe" | "build";
+  }> = [
+    { name: "greenfield target", manifest: false, gateway: true, provisioner: () => new SubstrateMissingProvisioner(), operation: "probe" },
+    { name: "no LLM gateway", manifest: true, gateway: false, provisioner: () => new SubstrateMissingProvisioner(), operation: "probe" },
+    { name: "manifest target", manifest: true, gateway: true, provisioner: () => new SubstrateMissingProvisioner(), operation: "probe" },
+    { name: "substrate vanishes after the probe", manifest: true, gateway: true, provisioner: () => new SubstrateVanishingProvisioner(), operation: "build" },
+  ];
+
+  for (const c of cases) {
+    test(`${c.name}: environment_blocked at ${c.operation}; no agent, no session, no worktree left`, async () => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-envblk-")));
+      scratch.push(root);
+      const target = join(root, "target");
+      const workdirBase = join(root, "work");
+      await mkdir(target);
+      if (c.manifest) await writeFile(join(target, "Makefile"), "build:\n\techo built\n");
+
+      const sessions = new RecordingSessionStore();
+      const provisioner = c.provisioner();
+      let spawned = 0;
+      const service = new DevelopmentService({
+        config: { workdirBase },
+        sessionStore: sessions,
+        knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+        agentInvoker: {
+          spawn: async () => {
+            spawned++;
+            throw new Error("agent must not be spawned");
+          },
+        },
+        llmGateway: c.gateway ? specGateway() : null,
+        intentSource: { loadIntent: async () => "build the thing" },
+        stackDeriver: { deriveStack: async () => ["C"] },
+        provisioner,
+      });
+
+      const result = await service.execute(
+        {
+          id: createWorkItemId(),
+          projectId: parseProjectId("22222222-2222-4222-8222-222222222222"),
+          title: "t",
+          dispatchCount: 0,
+          successCriteria: [],
+        },
+        target,
+      );
+
+      expect(result.status).toBe("environment_blocked");
+      if (result.status !== "environment_blocked") return;
+      expect(result.unavailable).toBe("podman");
+      expect(result.agentInvoked).toBe(false);
+      expect(result.detail).toContain("/nonexistent/podman");
+      expect(result.errorEnvelope.chain.operation).toBe(c.operation);
+      expect(spawned).toBe(0);
+      expect(provisioner.provisioned).toHaveLength(0);
+      expect(sessions.phases.size).toBe(0);
+      if (c.operation === "probe") {
+        // Blocked before the worktree: the target and workdir base are untouched.
+        expect(existsSync(join(target, ".git"))).toBe(false);
+        expect(existsSync(workdirBase)).toBe(false);
+      } else {
+        const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: target });
+        expect(stdout.match(/^worktree /gm)).toHaveLength(1);
+      }
     });
   }
 });

@@ -42,7 +42,7 @@ import {
   tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
-import { PlanReports, TenderIntake } from "@ashara/engagement";
+import { ClientStops, PlanReports, TenderIntake } from "@ashara/engagement";
 import type {
   StackDerivationScope,
   SessionStore,
@@ -89,6 +89,7 @@ import {
   resolveProviderCredentials,
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
+import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 
@@ -276,7 +277,7 @@ async function main(): Promise<void> {
     return { catalog, providerKeyEnv };
   }
 
-  const provisioner = new PodmanProvisioner(config.coreLoop.workdirBase);
+  const provisioner = new PodmanProvisioner(config.coreLoop.workdirBase, config.podmanBinary);
 
   const agentInvoker: AgentInvoker = {
     async spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson> {
@@ -465,6 +466,7 @@ async function main(): Promise<void> {
     eventLogger,
     failureRouter,
     runStateStore: runStateRepo,
+    clientStops: new ClientStops(createClientStopStore(db)),
     liaisonIntake: new TenderIntake({
       llm: llmGateway,
       store: createIntakeStore(db),

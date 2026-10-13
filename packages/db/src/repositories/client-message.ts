@@ -2,7 +2,7 @@ import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { clientMessages } from "../schema.js";
-import { ProjectRepository, type ProjectRecord } from "./project.js";
+import { noOpenStop, ProjectRepository, type ProjectRecord } from "./project.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
 
@@ -109,7 +109,7 @@ export class ClientMessageRepository {
   /**
    * Inbound tenders not yet consumed, of active projects, oldest first: the
    * Liaison's intake queue. A blocked project's tender stays unconsumed and is
-   * not taken in.
+   * not taken in, and so does one whose project has a stop awaiting the Liaison.
    */
   async listUnconsumedTenders(): Promise<ClientMessageRow[]> {
     return this.db
@@ -121,6 +121,7 @@ export class ClientMessageRepository {
           eq(clientMessages.kind, "tender"),
           isNull(clientMessages.consumedAt),
           sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${clientMessages.projectId} AND p.status = 'active')`,
+          noOpenStop(clientMessages.projectId),
         ),
       )
       .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));

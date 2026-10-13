@@ -46,6 +46,14 @@ export class CoreLoop {
     let batch: WorkItem[] = [];
     const results: TaskResult[] = [];
 
+    // The client's stops first, even at the budget cap (no LLM call): a project
+    // stopped here is not active, so no step below takes it in, plans it,
+    // reports on it or dispatches its tasks. Nothing of this process is running
+    // for it now: the previous cycle awaited every task it dispatched.
+    for (const stop of await deps.clientStops.runPending()) {
+      console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
+    }
+
     // When the budget is exhausted, skip dispatch: the runner idles
     // at the cap. Read live on every cycle: dispatch spends, so it must not run past
     // the cap.

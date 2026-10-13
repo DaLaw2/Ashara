@@ -12,7 +12,7 @@ export type {
   TaskDescriptor,
 } from "./execution-service.js";
 
-export { ProvisioningError, TeardownError } from "./provisioner.js";
+export { ProvisioningError, SubstrateUnavailable, TeardownError } from "./provisioner.js";
 export type {
   EnvironmentSpec,
   ExecResult,

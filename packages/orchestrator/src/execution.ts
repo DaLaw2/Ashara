@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent } from "@ashara/shared";
+import type { DomainEvent, StoredBlockedReason } from "@ashara/shared";
 import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -7,6 +7,7 @@ import type { WorkItem, WorkItemRepository, RawFailureContext } from "./acl/plan
 import {
   PlanningService,
   failWorkItem,
+  blockWorkItem,
   takeEvents,
   startWorkItem,
   recoverFailedItem,
@@ -15,6 +16,8 @@ import type { DevelopmentService, TaskDescriptor } from "./acl/development-acl.j
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
+
+type EnvironmentUnavailableReason = Extract<StoredBlockedReason, { source: "environment_unavailable" }>;
 
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -33,6 +36,11 @@ async function executeTask(
   errorEnvelope?: ErrorEnvelope;
   /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
   agentInvoked: boolean;
+  /**
+   * The item was parked at Blocked here (environment unavailable), so
+   * processTask must not run the failed/blocked recovery ladder on it.
+   */
+  parkedAtBlocked: boolean;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -58,6 +66,24 @@ async function executeTask(
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
+  if (execResult.status === "environment_blocked") {
+    // Not a task failure: re-dispatching cannot make the substrate appear, so
+    // the item is parked at Blocked for the operator, never routed to Failed.
+    await routeAsEnvironmentBlocked(deps, task.id, {
+      source: "environment_unavailable",
+      unavailable: execResult.unavailable,
+      reason: execResult.detail,
+    });
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      attempt: execResult.attempt,
+      errorEnvelope: execResult.errorEnvelope,
+      agentInvoked: execResult.agentInvoked,
+      parkedAtBlocked: true,
+    };
+  }
+
   if (execResult.status === "completed") {
     try {
       await routeAsSuccess(deps, task);
@@ -77,6 +103,7 @@ async function executeTask(
       output: execResult.output,
       attempt: execResult.attempt,
       agentInvoked: execResult.agentInvoked,
+      parkedAtBlocked: false,
     };
   }
 
@@ -89,6 +116,7 @@ async function executeTask(
       attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
       agentInvoked: execResult.agentInvoked,
+      parkedAtBlocked: false,
     };
   }
 
@@ -98,7 +126,36 @@ async function executeTask(
     attempt: execResult.attempt,
     errorEnvelope: execResult.errorEnvelope,
     agentInvoked: execResult.agentInvoked,
+    parkedAtBlocked: false,
   };
+}
+
+/**
+ * Parks the item at Blocked with the stated reason. An item that is no longer
+ * InProgress (moved by the owner during dispatch) is left where it is: no
+ * agent ran, so there is no result to salvage.
+ */
+async function routeAsEnvironmentBlocked(
+  deps: ExecutionRoutingDeps,
+  taskId: WorkItem["id"],
+  reason: EnvironmentUnavailableReason,
+): Promise<void> {
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
+  if (!item) {
+    console.warn(`[${taskId}] work item vanished before it could be blocked (${reason.reason})`);
+    return;
+  }
+  const previousStatus = item.status;
+  try {
+    blockWorkItem(item, reason);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${taskId}] environment block rejected (${e.from} -> Blocked); item left at ${e.from} (${reason.reason})`);
+    return;
+  }
+  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  console.warn(`[${taskId}] blocked, ${reason.unavailable} unavailable: ${reason.reason}`);
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsEnvironmentBlocked");
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
@@ -258,6 +315,7 @@ export async function processTask(
     attempt,
     errorEnvelope: execEnvelope,
     agentInvoked,
+    parkedAtBlocked,
   } = await executeTask(
     routingDeps,
     deps.developmentService,
@@ -282,6 +340,12 @@ export async function processTask(
     }
   }
 
+  // An environment-blocked item is already parked at Blocked (or was left where
+  // an owner moved it); no agent ran, so there is nothing to route or salvage.
+  if (parkedAtBlocked) {
+    return { result, costInfo };
+  }
+
   if (result.status === "failed" || result.status === "blocked") {
     let current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (current && current.status === "InProgress") {
@@ -290,10 +354,11 @@ export async function processTask(
     }
     // Exhaustive over WorkItemStatus: adding a status without a case here is
     // a compile error, not a new silent fall-through. executeTask commits the
-    // WorkItem to Failed for BOTH failed and blocked TaskResults (a "blocked"
-    // result is a routine agent outcome — a BLOCKED: marker or turn-limit —
-    // not a dependency wait; dependency Blocked status is only reachable via
-    // the HTTP PATCH path). Any item that landed at Failed is routed through
+    // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
+    // dispatch (a "blocked" result is a routine agent outcome — a BLOCKED:
+    // marker or turn-limit — not a dependency wait). Blocked status is reached
+    // only via the HTTP PATCH path and an environment-blocked dispatch, which
+    // returned above. Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates
     // (abandon) rather than sitting in Failed and deadlocking its
     // dependents (Run-8 C2, migration Phase 6).

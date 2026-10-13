@@ -27,6 +27,7 @@
     projects: el("projects"),
     project: el("project"),
     projectName: el("project-name"),
+    projectState: el("project-state"),
     timeline: el("timeline"),
     stopOpen: el("stop-open"),
     stopConfirm: el("stop-confirm"),
@@ -39,6 +40,10 @@
     projectId: null,
     rendered: new Map(),
     pollTimer: null,
+    // Project id -> status, as the last project listing returned it.
+    statuses: new Map(),
+    // Whether the selected project's timeline holds a stop the client sent.
+    stopSent: false,
   };
 
   class Unauthorized extends Error {}
@@ -117,13 +122,15 @@
 
   async function loadProjects() {
     const projects = await api("GET", "/client/api/projects");
+    state.statuses = new Map(projects.map((project) => [project.id, project.status]));
     ui.projects.replaceChildren();
     for (const project of projects) {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.projectId = project.id;
-      button.textContent = project.name;
+      button.dataset.status = project.status;
+      button.textContent = project.status === "stopped" ? `${project.name} (stopped)` : project.name;
       if (project.id === state.projectId) button.setAttribute("aria-current", "true");
       button.addEventListener("click", () => {
         selectProject(project.id, project.name).catch(handleError);
@@ -139,8 +146,9 @@
     state.rendered = new Map();
     ui.timeline.replaceChildren();
     ui.projectName.textContent = name;
+    state.stopSent = false;
     ui.stopConfirm.hidden = true;
-    ui.stopOpen.hidden = false;
+    renderProjectState();
     ui.project.hidden = false;
     for (const button of ui.projects.querySelectorAll("button")) {
       if (button.dataset.projectId === projectId) button.setAttribute("aria-current", "true");
@@ -150,6 +158,23 @@
     state.pollTimer = setInterval(() => {
       refreshMessages().catch(handleError);
     }, POLL_INTERVAL_MS);
+  }
+
+  // Stop is offered only while the project is neither stopped nor already asked
+  // to stop. "Stopped" comes from the server's status, never from the click.
+  function renderProjectState() {
+    const status = state.statuses.get(state.projectId);
+    let text = "";
+    if (status === "stopped") {
+      text = "Stopped at your request. Ashara does no further work on this project.";
+    } else if (state.stopSent) {
+      text = "Stop requested. Ashara halts work on this project at its next cycle.";
+    }
+    ui.projectState.textContent = text;
+    ui.projectState.hidden = text === "";
+    ui.projectState.dataset.status = status === undefined ? "" : status;
+    if (text !== "") ui.stopConfirm.hidden = true;
+    ui.stopOpen.hidden = text !== "" || !ui.stopConfirm.hidden;
   }
 
   function describe(message) {
@@ -239,6 +264,15 @@
     for (const message of messages) {
       if (message.kind === "answer" && message.inReplyTo !== null) markAnswered(message.inReplyTo);
     }
+    if (messages.some((message) => message.direction === "inbound" && message.kind === "stop")) {
+      state.stopSent = true;
+    }
+    // A sent stop takes effect when Ashara consumes it; re-read the status until then.
+    if (state.stopSent && state.statuses.get(projectId) !== "stopped") {
+      await loadProjects();
+      if (projectId !== state.projectId) return;
+    }
+    renderProjectState();
   }
 
   ui.loginForm.addEventListener("submit", (event) => {
@@ -291,7 +325,8 @@
       .then(() => {
         ui.stopReason.value = "";
         ui.stopConfirm.hidden = true;
-        ui.stopOpen.hidden = false;
+        state.stopSent = true;
+        renderProjectState();
         return refreshMessages();
       })
       .catch(handleError);

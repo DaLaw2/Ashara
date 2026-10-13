@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { ProvisioningError } from "@ashara/development";
+import { ProvisioningError, SubstrateUnavailable } from "@ashara/development";
 import type { EnvironmentSpec } from "@ashara/development";
 import { generateContainerfile, PodmanProvisioner } from "./podman-provisioner.js";
 
@@ -117,7 +117,7 @@ describe("generateContainerfile", () => {
 
 describe("ExecResult mapping", () => {
   test("execute returns all ExecResult fields", async () => {
-    const provisioner = new PodmanProvisioner("/tmp/test");
+    const provisioner = new PodmanProvisioner("/tmp/test", "podman");
     const fakeEnv = {
       id: "test-id",
       version: 1,
@@ -181,7 +181,7 @@ describe("ProvisioningError", () => {
 
 describe("PodmanProvisioner.teardown", () => {
   test("teardown is idempotent: does not throw on unknown env id", async () => {
-    const provisioner = new PodmanProvisioner("/tmp/test");
+    const provisioner = new PodmanProvisioner("/tmp/test", "podman");
     const fakeEnv = {
       id: "nonexistent-id",
       version: 1,
@@ -198,5 +198,17 @@ describe("PodmanProvisioner.teardown", () => {
 
     // No handle registered — teardown returns immediately
     await expect(provisioner.teardown(fakeEnv)).resolves.toBeUndefined();
+  });
+});
+
+describe("PodmanProvisioner.probe", () => {
+  test("a missing podman binary is SubstrateUnavailable at probe, naming the binary tried", async () => {
+    const missing = "/nonexistent/ashara-probe/podman";
+    const provisioner = new PodmanProvisioner("/tmp/test", missing);
+    const probe = provisioner.probe();
+    await expect(probe).rejects.toBeInstanceOf(SubstrateUnavailable);
+    await expect(probe).rejects.toMatchObject({
+      context: { substrate: "podman", operation: "probe", target: missing, detail: "podman binary not found" },
+    });
   });
 });

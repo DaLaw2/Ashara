@@ -9,6 +9,7 @@ import {
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
+import { noOpenStop } from "./project.js";
 
 // The Liaison's reports on planning outcomes (migration 020). A report is due
 // while the outcome is stamped on the project and no report on it exists.
@@ -43,7 +44,10 @@ const unreported = (subject: PlanReportSubject) =>
  * Planning outcomes the client has not been told about, oldest project first.
  * A first plan is summarised from the project's work items as they are now; the
  * report is normally posted in the cycle that wrote the plan. Only an active
- * project's first plan is due: a blocked one is not reported on. A work item
+ * project's first plan is due: a blocked one is not reported on. Planning that
+ * stopped is due only while the project is blocked: a project the client has
+ * stopped (migration 028), or has a stop awaiting the Liaison, gets the stop
+ * report and nothing more. A work item
  * whose jsonb does not parse is that one project's bad record, so it is
  * returned as that project's row instead of failing the listing for every
  * project (story s-loop-never-stop-m1).
@@ -54,7 +58,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   const planned = await db
     .select({ id: projects.id })
     .from(projects)
-    .where(and(eq(projects.status, "active"), isNotNull(projects.firstPlannedAt), unreported("first-plan")))
+    .where(and(eq(projects.status, "active"), isNotNull(projects.firstPlannedAt), unreported("first-plan"), noOpenStop(projects.id)))
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of planned) {
     const items = await db
@@ -96,7 +100,9 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   const stopped = await db
     .select({ id: projects.id, attempts: projects.planAttempts })
     .from(projects)
-    .where(and(isNotNull(projects.planStoppedAt), unreported("planning-stopped")))
+    .where(
+      and(eq(projects.status, "blocked"), isNotNull(projects.planStoppedAt), unreported("planning-stopped"), noOpenStop(projects.id)),
+    )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of stopped) {
     due.push({ subject: "planning-stopped", projectId: parseProjectId(row.id), attempts: row.attempts });
