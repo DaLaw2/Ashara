@@ -10,8 +10,23 @@ const DEFAULT_WALL_CLOCK_MS = 20 * 60 * 1000;
 /** The task instruction: the fields of today's agent brief that describe the work, not the old host sandbox. */
 export type AssignmentBrief = Pick<
   AgentBrief,
-  "goal" | "intent" | "projectEnvironment" | "context" | "deliverables" | "knowledgeContext" | "contextMap" | "priorAttemptFailure"
+  | "goal"
+  | "intent"
+  | "visionVersion"
+  | "assumptions"
+  | "projectEnvironment"
+  | "context"
+  | "deliverables"
+  | "knowledgeContext"
+  | "contextMap"
+  | "priorAttemptFailure"
 >;
+
+/** The roster role an attempt works as: the task's owner, by its roster id and name. */
+export interface AssignmentRole {
+  readonly id: string;
+  readonly name: string;
+}
 
 interface AttemptLimits {
   readonly maxTurns: number;
@@ -24,7 +39,7 @@ interface AttemptLimits {
 export interface Assignment {
   readonly projectId: ProjectId;
   readonly taskId: WorkItemId;
-  readonly role: string;
+  readonly role: AssignmentRole;
   /** The kind of work the task is; it decides the tools offered (build_environment for environment work only). */
   readonly workKind: WorkKind | null;
   readonly brief: AssignmentBrief;
@@ -57,7 +72,8 @@ export function resolveLimits(assignment: Assignment): ResolvedLimits {
   if (!limits.success) {
     issues.push(...limits.error.issues.map((issue) => `limits.${issue.path.join(".")}: ${issue.message}`));
   }
-  if (assignment.role.trim() === "") issues.push("role: must not be empty");
+  if (assignment.role.id.trim() === "") issues.push("role.id: must not be empty");
+  if (assignment.role.name.trim() === "") issues.push("role.name: must not be empty");
   if (assignment.model.modelId.trim() === "") issues.push("model.modelId: must not be empty");
   if (!limits.success || issues.length > 0) throw new InvalidAssignment(assignment.taskId, issues);
   return {

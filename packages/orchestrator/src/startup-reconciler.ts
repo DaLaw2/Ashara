@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DomainEvent, ProjectId, WorkItemStatus } from "@ashara/shared";
-import { blockedReasonToRecord, projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
+import { blockedReasonToRecord, projectBlockCause, TERMINAL_SESSION_PHASES, WorkItemRowCorrupt } from "@ashara/shared";
 import type { DevSessionRepository, EventStoreRepository, ProjectRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
 import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
@@ -18,7 +18,7 @@ export interface StartupReconcilerDeps {
    * exists to close. An optional dependency here would just be the leak with a
    * question mark on it.
    */
-  readonly devSessionStore: Pick<DevSessionRepository, "failStale">;
+  readonly devSessionStore: Pick<DevSessionRepository, "failStale" | "dispatchEvidence">;
   readonly workdirBase: string;
 }
 
@@ -151,7 +151,7 @@ async function terminalizeOrphanedSessions(deps: StartupReconcilerDeps): Promise
       passed: false,
       outcome: "abandoned",
       detail: "session was still non-terminal at process start; its agent did not survive the previous process",
-      resolvedBy: "startup-reconciler",
+      resolvedBy: RESOLVED_BY,
       resolvedAt: new Date().toISOString(),
     });
     if (count > 0) {
@@ -169,11 +169,58 @@ async function terminalizeOrphanedSessions(deps: StartupReconcilerDeps): Promise
   }
 }
 
+/** The name failStale records as `resolvedBy`; dispatchEvidence counts earlier orphans by it. */
+const RESOLVED_BY = "startup-reconciler";
+
+/**
+ * Crash-orphaned dispatches of one task given back before a further one is left counted: a task
+ * whose dispatch keeps dying with the process may be what kills it, and a refund every time would
+ * re-dispatch it forever without its retry bound moving.
+ */
+const MAX_ORPHAN_REFUNDS = 1;
+
+/**
+ * Requeues an InProgress item left by a previous process, and gives back the dispatch that
+ * process counted when the evidence says the dispatch never finished: the item is InProgress and
+ * its latest dev_session is still non-terminal. withSessionLifecycle owns every terminal write of
+ * a session, so a session that never got one is a dispatch whose execute never returned (a hard
+ * kill, a power loss), not an attempt tried and found wanting. Left counted, the conservative
+ * direction, when the latest session is terminal (the dispatch finished and only its routing was
+ * lost), when there is none (the process died before the dispatch opened its session, which no
+ * record tells apart from a session of an earlier dispatch), and past MAX_ORPHAN_REFUNDS.
+ */
 async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<void> {
+  const evidence = await deps.devSessionStore.dispatchEvidence(orphan.id, RESOLVED_BY);
   const previousStatus = orphan.status;
   requeueWorkItem(orphan);
   await deps.workItemRepo.save(orphan, previousStatus);
   await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
+
+  const unfinished = evidence.latestPhase !== null && !isTerminalSessionPhase(evidence.latestPhase);
+  if (!unfinished) {
+    console.warn(
+      `[startup-reconciler] requeued ${orphan.id}; its dispatch stays counted (latest session ${evidence.latestPhase ?? "none"}, ` +
+        `so no record shows a dispatch that never finished)`,
+    );
+    return;
+  }
+  if (evidence.orphanedBefore >= MAX_ORPHAN_REFUNDS) {
+    console.warn(
+      `[startup-reconciler] requeued ${orphan.id}; its unfinished dispatch stays counted: ${evidence.orphanedBefore} earlier ` +
+        `dispatch(es) of it were already orphaned by a dead process (bound ${MAX_ORPHAN_REFUNDS})`,
+    );
+    return;
+  }
+  try {
+    const dispatchCount = await deps.workItemRepo.refundDispatchCount(orphan.id);
+    console.warn(`[startup-reconciler] requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded (dispatch count ${dispatchCount})`);
+  } catch (error) {
+    console.warn(`[startup-reconciler] requeued ${orphan.id}; the refund of its unfinished dispatch failed, it stays counted:`, error);
+  }
+}
+
+function isTerminalSessionPhase(phase: string): boolean {
+  return TERMINAL_SESSION_PHASES.some((terminal) => terminal === phase);
 }
 
 function reconstructFailure(item: WorkItem): RawFailureContext {

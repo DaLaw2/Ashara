@@ -4,7 +4,7 @@ import type { AssignmentBrief } from "./assignment.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
- * instruction uses git (the worktree's .git points at a host path the cell does not mount; Z0
+ * instruction uses git (the cell sees the worktree's .git as an empty read-only file; Z0
  * commits), no stack literal, the cell's isolation is stated, and the attempt ends only through
  * the finish tool.
  */
@@ -132,13 +132,32 @@ function environmentSection(environment: AssignmentBrief["projectEnvironment"]):
   ].join("\n");
 }
 
+/** The assumptions the client agreed work proceeds on, by id, so the agent never contradicts one. */
+function assumptionsSection(brief: AssignmentBrief): string {
+  const header = [
+    `## Assumptions work proceeds on (vision version ${brief.visionVersion})`,
+    `The client agreed the work proceeds on these until they say otherwise. Do not contradict any of them. If the`,
+    `task cannot be done without contradicting one, finish as blocked and name the assumption by its id.`,
+  ];
+  if (brief.assumptions.length === 0) return [...header, `None are recorded.`].join("\n");
+  return [...header, ...brief.assumptions.map((a) => `- ${a.key} (${a.status}): ${a.statement}`)].join("\n");
+}
+
 /**
  * The project first: an agent that reads the task first has committed to a stack before it
  * learns what the project is and what it is built with.
  */
 function buildTaskPrompt(brief: AssignmentBrief): string {
   const sections = [
-    [`# Project`, `## Owner's intent (verbatim)`, brief.intent, ``, environmentSection(brief.projectEnvironment)].join("\n"),
+    [
+      `# Project`,
+      `## Owner's intent (verbatim)`,
+      brief.intent,
+      ``,
+      assumptionsSection(brief),
+      ``,
+      environmentSection(brief.projectEnvironment),
+    ].join("\n"),
     `# Task\n## Goal\n${brief.goal}`,
   ];
   if (brief.priorAttemptFailure !== undefined) sections.push(`## Prior Attempt Failure\n${brief.priorAttemptFailure}`);

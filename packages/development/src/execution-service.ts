@@ -6,7 +6,7 @@ import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/l
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AttemptCellImage, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
+import type { AssignmentRole, AttemptCellImage, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import {
   checkPassed,
   checkVerdict,
@@ -32,6 +32,7 @@ import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
+import { checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
   StoredChecksStale,
@@ -81,8 +82,10 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
 /**
  * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
  * the attempt itself, the substrate gate, the red run of a check task's checks on main, and the
- * post-merge verifier cell; and postMergeCheckRun, where Z0's own machinery around the stored
- * checks (a worktree, a commit, a check file) failed and no check ran.
+ * post-merge verifier cell; and postMergeCheckRun, where Z0's own machinery around the post-merge
+ * check (a worktree, the tentative merge's commit, a check file) failed and no check ran: around
+ * the stored checks and the earlier tasks' checks, or around a substrate-checked task's run of the
+ * environment's build and test (finalize labels the latter step "post-merge verification").
  */
 type EnvironmentStage =
   | "probeSubstrate"
@@ -92,15 +95,39 @@ type EnvironmentStage =
   | "commitWork"
   | "substrateGate"
   | "checkRedRun"
+  | "ownershipGate"
   | "postMergeVerify"
   | "postMergeCheckRun";
 
+/**
+ * What became of the agent's work when a dispatch ended without done: no agent ran; it is
+ * committed on the task branch for the next dispatch; or, for a check task, discarded (nothing of a
+ * check task is kept, its next attempt starts again from main).
+ */
+type AgentWork = "none" | "kept" | "discarded";
+
 interface AgentPart {
   readonly output: AgentOutputJson | null;
-  readonly agentInvoked: boolean;
+  readonly agentWork: AgentWork;
 }
 
-const NO_AGENT: AgentPart = { output: null, agentInvoked: false };
+const NO_AGENT: AgentPart = { output: null, agentWork: "none" };
+
+/** The agent's work as a dispatch that ran it leaves it, stated by its kind of work. */
+function agentWorkOf(work: DispatchWork): Exclude<AgentWork, "none"> {
+  return work.kind === "check-authoring" ? "discarded" : "kept";
+}
+
+function describeAgentWork(work: AgentWork): string {
+  switch (work) {
+    case "none":
+      return "no agent ran and nothing executed";
+    case "kept":
+      return "the agent's work is kept on the task branch";
+    case "discarded":
+      return "the check task's partial work is discarded; its next attempt starts again from main";
+  }
+}
 
 /** The dispatch a result or event belongs to: its task and the item's real dispatch ordinal. */
 type DispatchRef = Pick<TaskDescriptor, "id" | "attempt">;
@@ -125,9 +152,7 @@ interface EnvironmentBlock extends AgentPart {
 function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
   const { task, stage, errorClass } = block;
   const taskId = task.id;
-  const kept = block.agentInvoked
-    ? "the agent's work is kept on the task branch"
-    : "no agent ran and nothing executed";
+  const kept = describeAgentWork(block.agentWork);
   const envelope: ErrorEnvelope = {
     outcome: "blocked",
     summary: `environment failed at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,
@@ -207,10 +232,13 @@ function redRunBlocked(
   );
 }
 
-/** A task decided by stored checks reached its post-merge run without an environment to take its test from. */
+/**
+ * A task decided by stored checks reached its ownership gate or its post-merge run without an
+ * environment: no owned set to hold its branch to, no test to run on its merge.
+ */
 class PostMergeEnvironmentMissing extends Error {
   constructor(readonly taskId: string) {
-    super(`task ${taskId} is decided by stored checks but was dispatched on the BaseCell: no environment test exists to run on its merge`);
+    super(`task ${taskId} is decided by stored checks but was dispatched on the BaseCell: no environment exists to check its work against`);
     this.name = "PostMergeEnvironmentMissing";
   }
 }
@@ -356,6 +384,33 @@ function environmentUndefined(
   };
 }
 
+/**
+ * No roster role can work the task: Blocked with `owner_unresolved` before any worktree or cell
+ * exists. No default role is substituted (s-team-roster-m1).
+ */
+function ownerUnresolved(
+  task: DispatchRef,
+  sessionId: string,
+  unresolved: OwnerUnresolved,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const taskId = task.id;
+  const chain = wrapError("development", "assignAgent", unresolved.reason, { taskId, ownerRoleId: unresolved.ownerRoleId });
+  const summary = `no roster role can work task ${taskId}: ${unresolved.reason}; no agent ran and nothing executed`;
+  console.warn(`[${taskId}] ${summary}`);
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "assignAgent", reason: summary });
+  return {
+    status: "owner_unresolved",
+    ownerRoleId: unresolved.ownerRoleId,
+    reason: unresolved.reason,
+    detail: summary,
+    output: null,
+    sessionId,
+    attempt: task.attempt,
+    errorEnvelope: { outcome: "blocked", summary, chain },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Injected dependency interfaces
 // ---------------------------------------------------------------------------
@@ -387,18 +442,32 @@ interface ExecutionCells {
   readonly instance: string;
 }
 
-/** Who works a task and on which model. */
+/** Who works a task and on which model: the task's owner role, as the project's roster names it. */
 interface AgentStaff {
-  readonly role: string;
+  readonly role: AssignmentRole;
   readonly model: ResolvedModel;
 }
 
 /**
- * Builds the agent half of a task's Assignment: its role and its model, resolved once per
- * attempt and never inside it (ADR-074 d44). The composition root supplies it.
+ * A task no role of the roster can work: it has no owner, or its owner is not in the project's
+ * latest roster. The dispatch blocks; no default role stands in for the owner.
+ */
+interface OwnerUnresolved {
+  readonly kind: "owner-unresolved";
+  /** The work item's stored owner_role_id; null when it has none. */
+  readonly ownerRoleId: string | null;
+  readonly reason: string;
+}
+
+type Staffing = { readonly kind: "staffed"; readonly staff: AgentStaff } | OwnerUnresolved;
+
+/**
+ * Builds the agent half of a task's Assignment: its owner role and its model, resolved once per
+ * attempt and never inside it (ADR-074 d44). The composition root supplies it. A model that
+ * cannot be resolved throws and fails the dispatch.
  */
 export interface AgentStaffing {
-  staff(task: TaskDescriptor): AgentStaff;
+  staff(task: TaskDescriptor): Promise<Staffing>;
 }
 
 /** The limits of one attempt; the wall clock is the attempt's own (ADR-074 d56, 20 minutes). */
@@ -515,7 +584,8 @@ interface EnvironmentUndefinedResult {
  * or a configuration fault (an unpriced model, a call whose cost cannot be estimated). The
  * orchestrator returns the item to Pending without consuming its dispatch and, for a
  * configuration fault, blocks the project with the refusal's class; no failure router either way.
- * The agent's partial work is committed on the task branch for the next dispatch.
+ * The agent's partial work is committed on the task branch for the next dispatch, except a check
+ * task's, which is discarded (its next attempt starts from main); `detail` says which.
  */
 interface RefusedResult {
   readonly status: "refused";
@@ -530,7 +600,8 @@ interface RefusedResult {
 /**
  * The process's shutdown signal cancelled the attempt mid-flight. Not a task failure and not a
  * lesson: the work was stopped, not tried and found wanting. The orchestrator returns the item to
- * Pending and refunds the dispatch; the partial work is committed on the task branch. A wall-clock
+ * Pending and refunds the dispatch; the partial work is committed on the task branch, or for a
+ * check task discarded, and `detail` says which. A wall-clock
  * exhaustion is not this: it is the attempt's own limit and stays a failure.
  */
 interface InterruptedResult {
@@ -545,12 +616,46 @@ interface InterruptedResult {
 /**
  * The task's stored checks were red-run on another environment version and no longer all fail on
  * main on the dispatch's: they cannot decide its work. Not the implementer's failure (no model ran)
- * and no lesson: the orchestrator parks the item at Blocked naming the check task that must write
- * them again, never routes it through the FailureRouter, whose replan would meet the same checks.
+ * and no lesson: the orchestrator reopens the check task that must write them again and the item
+ * waits on it (planning's exitStaleChecks, bounded by `revision`), never routes it through the
+ * FailureRouter, whose replan would meet the same checks.
  */
 interface ChecksStaleResult {
   readonly status: "checks_stale";
   readonly checkTaskId: string;
+  /** The stale revision of the task's checks: how many times they were written. */
+  readonly revision: number;
+  readonly detail: string;
+  readonly output: null;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
+ * The implementer's finished work changed environment-owned paths and nothing else the ownership
+ * gate refuses: it needs an environment change no implementer may make (ADR-074 addendum 2 d63).
+ * Nothing was merged; the branch is kept. The orchestrator parks the item at Blocked naming the
+ * paths, never routes it through the FailureRouter, whose replan would meet the same refusal.
+ */
+interface EnvironmentChangeNeededResult {
+  readonly status: "environment_change_needed";
+  readonly paths: readonly string[];
+  readonly detail: string;
+  readonly output: AgentOutputJson;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
+ * The task has no owner role, or its owner is not in the project's latest roster. Nothing ran;
+ * the orchestrator parks the item at Blocked with an `owner_unresolved` reason.
+ */
+interface OwnerUnresolvedResult {
+  readonly status: "owner_unresolved";
+  readonly ownerRoleId: string | null;
+  readonly reason: string;
   readonly detail: string;
   readonly output: null;
   readonly sessionId: string;
@@ -564,6 +669,8 @@ export type ExecutionResult =
   | EnvironmentUndefinedResult
   | RefusedResult
   | ChecksStaleResult
+  | EnvironmentChangeNeededResult
+  | OwnerUnresolvedResult
   | InterruptedResult;
 
 interface AgentExecutionResult {
@@ -819,7 +926,9 @@ export class DevelopmentService {
     let staff: AgentStaff;
     let records: DispatchRecords;
     try {
-      staff = this.deps.staffing.staff(task);
+      const staffing = await this.deps.staffing.staff(task);
+      if (staffing.kind === "owner-unresolved") return ownerUnresolved(task, sessionId, staffing, eventSink);
+      staff = staffing.staff;
       records = new DispatchRecords(base, task.id, sessionId);
       await records.writeBrief(brief);
     } catch (e) {
@@ -865,7 +974,8 @@ export class DevelopmentService {
     }
     const { workDir, repo } = workdir;
 
-    // The task's cell mounts only its worktree, with the gitlink read-only. A substrate
+    // The task's cell mounts only its worktree, labelled with the owner role's id; the gitlink is
+    // masked, since it names the git dir's host path and Z0 alone uses that git dir. A substrate
     // that vanished since the probe, or a cell that cannot start, still blocks: never a
     // host fallback.
     let cell: Cell;
@@ -874,9 +984,9 @@ export class DevelopmentService {
         image: cellImageOf(environment),
         project: task.projectId,
         task: task.id,
-        role: staff.role,
+        role: staff.role.id,
         instance: cells.instance,
-        mount: { hostPath: workDir, readOnlyEntries: [".git"] },
+        mount: { hostPath: workDir, maskedEntries: [".git"] },
       });
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
@@ -888,7 +998,7 @@ export class DevelopmentService {
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     }
-    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, role: staff.role, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
+    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
     const dispatch: Dispatch = {
       task,
@@ -969,6 +1079,15 @@ export class DevelopmentService {
    */
   private async planWork(task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
     if (task.taskSpec?.checkedBy === "substrate") return { kind: "substrate" };
+    // Environment work is decided by the substrate gate alone (in M1, Sprint 0's): stored checks
+    // and the implementer's ownership gate would refuse the very files it exists to write.
+    if (task.workKind === "environment") {
+      return {
+        kind: "unplannable",
+        operation: "checkSubstrateGate",
+        reason: `environment task ${task.id} is not checked by the substrate (task_spec.checkedBy), the only gate environment work has`,
+      };
+    }
     if (task.workKind === "check") {
       if (environment.kind !== "environment") {
         return { kind: "unplannable", operation: "resolveCheckedTask", reason: `check task ${task.id} has no environment to red-run its checks in` };
@@ -1027,7 +1146,7 @@ export class DevelopmentService {
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
 
     // A ProjectIntentUnavailable propagates to execute() and blocks the task.
-    const intent = await loadProjectIntent(this.deps.intentSource, task.id);
+    const projectIntent = await loadProjectIntent(this.deps.intentSource, task.id);
 
     const spec: TaskSpec = {
       goal: (typeof taskSpec?.goal === "string" ? taskSpec.goal : task.title),
@@ -1051,7 +1170,7 @@ export class DevelopmentService {
       {
         taskId: task.id,
         goal: spec.goal,
-        intent,
+        ...projectIntent,
         projectEnvironment: briefEnvironment(environment),
         context: taskContext,
         deliverables: spec.deliverables,
@@ -1140,7 +1259,8 @@ export class DevelopmentService {
       attempt: task.attempt,
       workDir,
       cellId: d.cell.id,
-      role: staff.role,
+      roleId: staff.role.id,
+      role: staff.role.name,
       provider: staff.model.provider,
       model: staff.model.modelId,
       records: d.records.dir,
@@ -1216,6 +1336,11 @@ export class DevelopmentService {
     const uncommitted = await this.commitWork(d, output);
     if (uncommitted !== null) return uncommitted;
 
+    if (d.work.kind === "stored-checks") {
+      const refused = await this.ownershipGate(d, output);
+      if (refused !== null) return refused;
+    }
+
     let finalizeDeps: FinalizeDeps;
     if (d.work.kind === "substrate") {
       const gate = await this.substrateGate(d, outcome.statement, output);
@@ -1247,7 +1372,7 @@ export class DevelopmentService {
         "postMergeVerify",
         finalizeResult.environmentFailure,
         "verifier cell",
-        { output, agentInvoked: true },
+        { output, agentWork: "kept" },
         eventSink,
         finalizeResult.errorLayer,
       );
@@ -1267,7 +1392,7 @@ export class DevelopmentService {
           chain: finalizeResult.errorLayer,
           unavailable: `verification infrastructure (${fault.step})`,
           output,
-          agentInvoked: true,
+          agentWork: "kept",
         },
         eventSink,
       );
@@ -1328,8 +1453,8 @@ export class DevelopmentService {
       targetProjectPath: d.targetProjectPath,
       checkoutDir: (purpose) => this.checkoutDir(d, purpose),
       images: this.deps.environment.images,
-      // Shared label (`:z`): the task cell may still mount the same tree. `.git` read-only: Z0's git
-      // reads that repository after the cell ran.
+      // Shared label (`:z`): the task cell may still mount the same tree. `.git` masked: it names
+      // host paths, and Z0's git reads that repository after the cell ran.
       createCell: ({ image, role, hostPath }) =>
         cells.substrate.createCell({
           image,
@@ -1337,7 +1462,7 @@ export class DevelopmentService {
           task: task.id,
           role,
           instance: cells.instance,
-          mount: { hostPath, shared: true, readOnlyEntries: [".git"] },
+          mount: { hostPath, shared: true, maskedEntries: [".git"] },
         }),
       teardownCell: (cell) => this.teardownCell(task.id, cell),
     };
@@ -1359,7 +1484,7 @@ export class DevelopmentService {
       if (environmentFailure === null && !(e instanceof WorktreeCommitIncomplete)) throw e;
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
       if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "commitWork", environmentFailure, "host git", { output, agentInvoked: true }, this.deps.eventSink);
+        return substrateBlocked(task, sessionId, "commitWork", environmentFailure, "host git", { output, agentWork: "kept" }, this.deps.eventSink);
       }
       const chain = wrapError("development", "commitWork", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -1371,6 +1496,80 @@ export class DevelopmentService {
       this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: envelope.summary });
       return { status: "failed", detail: envelope.summary, output, sessionId, attempt: task.attempt, errorEnvelope: envelope };
     }
+  }
+
+  /**
+   * Separation of duties (s-platform-role-m1, sprint0-run D5), before the tentative merge: the task
+   * branch's changes since it left main may not touch the current environment's owned paths (the
+   * platform role's) nor any stored check file of the project (the check author's). Only
+   * environment paths: environment_change_needed, Blocked, since no retry can make them the
+   * implementer's. Any check file: failed with the paths and the rule. Nothing is merged either
+   * way and the branch is kept. Z0's own git failing blocks for the operator. Null when clean.
+   */
+  private async ownershipGate(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
+    const { eventSink } = this.deps;
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
+    try {
+      // Fail closed: without the environment's owned set there is nothing to hold the branch to.
+      if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
+      const checkFiles = await this.deps.checks.checkFilesOf(task.projectId);
+      verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), d.environment.owned, checkFiles);
+    } catch (e) {
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the ownership gate could not run");
+      const environmentFailure = environmentErrorOf(e);
+      if (environmentFailure !== null) {
+        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { output, agentWork: "kept" }, eventSink);
+      }
+      const fault = new VerificationInfrastructureFault(task.id, "ownership gate", { cause: e });
+      return environmentBlocked(
+        {
+          task,
+          sessionId,
+          stage: "ownershipGate",
+          errorClass: fault.name,
+          message: fault.message,
+          chain: wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name }),
+          unavailable: `verification infrastructure (${fault.step})`,
+          output,
+          agentWork: "kept",
+        },
+        eventSink,
+      );
+    }
+    eventSink?.emit({ event: "ownership_gate", taskId: task.id, attempt: task.attempt, verdict: verdict.kind });
+    if (verdict.kind === "clean") return null;
+
+    await cleanupWorkdir(workDir, targetProjectPath);
+    const summary = `ownership gate refused the work of ${task.id}: ${verdict.reason}`;
+    if (verdict.kind === "environment_change_needed") {
+      const chain = wrapError("development", "ownershipGate", verdict.reason, { taskId: task.id, environmentPaths: verdict.paths });
+      console.warn(`[${task.id}] ${summary}`);
+      eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "ownershipGate", reason: summary });
+      return {
+        status: "environment_change_needed",
+        paths: verdict.paths,
+        detail: summary,
+        output,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: { outcome: "blocked", summary, chain, agentOutput: output },
+      };
+    }
+    const chain = wrapError("development", "ownershipGate", verdict.reason, {
+      taskId: task.id,
+      checkPaths: verdict.checkPaths,
+      environmentPaths: verdict.environmentPaths,
+    });
+    eventSink?.emit({ event: "gate_failed", taskId: task.id, attempt: task.attempt, reason: summary });
+    return {
+      status: "failed",
+      detail: summary,
+      output,
+      sessionId,
+      attempt: task.attempt,
+      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output },
+    };
   }
 
   /**
@@ -1404,7 +1603,7 @@ export class DevelopmentService {
       await cleanupWorkdir(workDir, targetProjectPath);
       return {
         kind: "ended",
-        result: substrateBlocked(task, sessionId, "substrateGate", environmentFailure, "CI cell", { output, agentInvoked: true }, eventSink),
+        result: substrateBlocked(task, sessionId, "substrateGate", environmentFailure, "CI cell", { output, agentWork: "kept" }, eventSink),
       };
     }
 
@@ -1459,11 +1658,14 @@ export class DevelopmentService {
     let runs: readonly SuiteRun[];
     let suites: readonly CheckSuite[];
     let earlier: readonly CompletedTaskChecks[];
+    let unchecked: readonly string[];
     try {
       if (d.environment.kind !== "environment") {
         throw new PostMergeEnvironmentMissing(task.id);
       }
-      earlier = await this.deps.checks.completedOf(task.projectId, task.id);
+      const completed = await this.deps.checks.completedOf(task.projectId, task.id);
+      earlier = completed.checked;
+      unchecked = completed.unchecked;
       suites = [
         { label: `the environment's test (version ${d.environment.version})`, checks: [{ name: "environment test", command: d.environment.test }], files: [] },
         ...earlier.map((prior) => ({
@@ -1487,7 +1689,20 @@ export class DevelopmentService {
       throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
     }
     const checkCount = suites.reduce((sum, suite) => sum + suite.checks.length, 0);
-    const verdict = suitesVerdict(suites, runs, earlier.length);
+    const suitesRun = suitesVerdict(suites, runs, earlier.length);
+    // A task completed with no stored check has nothing to re-run: skipping it is stated, never
+    // silent, and never a block (no transition could ever give a Completed task checks, so every
+    // later merge of the project would block on it with no exit).
+    const verdict: PostMergeVerdict =
+      unchecked.length === 0
+        ? suitesRun
+        : {
+            passed: suitesRun.passed,
+            details: `${suitesRun.details}\nNot re-run, no check is stored for them (completed before checks existed): ${unchecked.join(", ")}`,
+          };
+    if (unchecked.length > 0) {
+      console.warn(`[${task.id}] post-merge regression suite skips Completed task(s) with no stored check: ${unchecked.join(", ")}`);
+    }
     this.deps.eventSink?.emit({
       event: "post_merge_verify",
       taskId: task.id,
@@ -1495,6 +1710,7 @@ export class DevelopmentService {
       verdict: verdict.passed ? "passed" : "failed",
       revision: stored.revision,
       regressionTasks: earlier.map((prior) => prior.taskId),
+      uncheckedTasks: unchecked,
       boundSeconds: checkCount * this.deps.attemptPolicy.perCommandTimeoutSeconds,
       details: verdict.details,
     });
@@ -1504,24 +1720,32 @@ export class DevelopmentService {
   /**
    * run_checks' port: the stored checks, with their stored files written over a throwaway checkout
    * of a snapshot of the implementer's current worktree, run in a fresh CI cell from the dispatch's
-   * image. The implementer's worktree itself is never written. A substrate failure throws, which
-   * the attempt reads as its environment failing.
+   * image. The implementer's worktree itself is never written. A substrate failure throws as it
+   * is; a failure of Z0's own machinery (the snapshot commit, the checkout) throws as a
+   * VerificationInfrastructureFault. Either ends the attempt as its environment failing, and
+   * endWithoutDone names which.
    */
   private taskCheckRunPort(d: Dispatch, stored: TaskChecks): TaskCheckRunPort {
     let runs = 0;
     return {
       run: async (timeoutSeconds) => {
         runs += 1;
-        const commit = await worktreeSnapshotCommit(d.repo, d.task.id);
-        const report = await runChecksOnCheckout(
-          { ...this.checkCells(d), timeoutSeconds },
-          RED_RUN_ROLE,
-          cellImageOf(d.environment),
-          commit,
-          this.checkoutDir(d, `run-checks-${runs}`),
-          stored.checks,
-          stored.files,
-        );
+        let report: CheckRunReport;
+        try {
+          const commit = await worktreeSnapshotCommit(d.repo, d.task.id);
+          report = await runChecksOnCheckout(
+            { ...this.checkCells(d), timeoutSeconds },
+            RED_RUN_ROLE,
+            cellImageOf(d.environment),
+            commit,
+            this.checkoutDir(d, `run-checks-${runs}`),
+            stored.checks,
+            stored.files,
+          );
+        } catch (e) {
+          if (environmentErrorOf(e) !== null) throw e;
+          throw new VerificationInfrastructureFault(d.task.id, "run_checks", { cause: e });
+        }
         this.deps.eventSink?.emit({
           event: "task_checks_run",
           taskId: d.task.id,
@@ -1589,6 +1813,7 @@ export class DevelopmentService {
     return {
       status: "checks_stale",
       checkTaskId: stored.checkTaskId,
+      revision: stored.revision,
       detail: stale.message,
       output: null,
       sessionId,
@@ -1652,7 +1877,7 @@ export class DevelopmentService {
           harvest.files,
         );
       } catch (e) {
-        return redRunBlocked(task, sessionId, e, { output, agentInvoked: true }, eventSink);
+        return redRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink);
       }
       if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
       const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);
@@ -1722,9 +1947,18 @@ export class DevelopmentService {
     if (outcome.kind === "environment_failure") {
       // Workplace already told the substrate's failure from the tool's own (classifyCellError);
       // a records sink that cannot write is the same kind of failure, on the Z0 side.
+      // run_checks runs in a CI cell of its own, and Z0's machinery around it is no cell at all.
       const errorClass = outcome.error instanceof Error ? outcome.error.name : typeof outcome.error;
       const typed = environmentErrorOf(outcome.error);
-      const unavailable = outcome.source === "records" ? "attempt records" : typed !== null ? unavailableOf(typed, "task cell") : "task cell";
+      const cell = outcome.lastToolCall?.toolName === "run_checks" ? "CI cell (run_checks)" : "task cell";
+      const unavailable =
+        outcome.source === "records"
+          ? "attempt records"
+          : outcome.error instanceof VerificationInfrastructureFault
+            ? `verification infrastructure (${outcome.error.step})`
+            : typed !== null
+              ? unavailableOf(typed, cell)
+              : cell;
       return environmentBlocked(
         {
           task,
@@ -1735,14 +1969,14 @@ export class DevelopmentService {
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
           unavailable,
           output,
-          agentInvoked: true,
+          agentWork: agentWorkOf(d.work),
         },
         this.deps.eventSink,
       );
     }
 
     if (outcome.kind === "refused") {
-      const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; the partial work is kept on the task branch`;
+      const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; ${describeAgentWork(agentWorkOf(d.work))}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: task.attempt, errorClass: outcome.error.name, reason: summary });
       return {
@@ -1765,7 +1999,7 @@ export class DevelopmentService {
     // reason this process's shutdown signal was aborted with. Any other cancellation stays a failure.
     const shutdown = this.deps.shutdownSignal;
     if (outcome.kind === "cancelled" && shutdown.aborted && outcome.reason === shutdown.reason) {
-      const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); the partial work is kept on the task branch`;
+      const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); ${describeAgentWork(agentWorkOf(d.work))}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({ event: "task_interrupted", taskId: task.id, attempt: task.attempt, turns: outcome.turnsUsed });
       return {

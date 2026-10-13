@@ -20,6 +20,17 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
 ]);
 
 /**
+ * An assumption of the project's current vision: what work proceeds on until the client says
+ * otherwise. `key` is its id within the vision (A1, A2, ...); `status` is passed through as the
+ * vision records it (Inferred, or Stated).
+ */
+const VisionAssumptionSchema = z.strictObject({
+  key: z.string().min(1),
+  status: z.string().min(1),
+  statement: z.string().min(1),
+});
+
+/**
  * AgentBriefSchema: the validated task instruction the Development BC assembles for one dispatch
  * (ADR-013; ADR-033 §5). It is built in-process, handed to the Workplace attempt loop as its
  * AssignmentBrief, recorded in dev_sessions and written to workdirBase/records/<task>/. Every field
@@ -28,8 +39,9 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
  * assembled at cost and dropped on the way to the prompt).
  *
  * Field tiers:
- *  - PROJECT: `intent`, the owner's vision verbatim, and `projectEnvironment`, the environment the
- *    task works in. Rendered first: what the project is and what it is built with are the things
+ *  - PROJECT: `intent`, the owner's vision verbatim, `assumptions`, the assumptions of that same
+ *    vision version (`visionVersion`) work proceeds on, and `projectEnvironment`, the environment
+ *    the task works in. Rendered first: what the project is and what it is built with are the things
  *    the agent cannot discover for itself and would otherwise fill in from its training prior.
  *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`,
  *    `knowledgeContext`: the instruction, its requirements and prior lessons.
@@ -40,6 +52,8 @@ const AgentBriefSchema = z
     taskId: z.string().min(1),
     goal: z.string().min(1),
     intent: z.string().min(1),
+    visionVersion: z.number().int().min(1),
+    assumptions: z.array(VisionAssumptionSchema),
     projectEnvironment: ProjectEnvironmentSchema,
     context: z.string().min(1),
     deliverables: z.array(z.string()),

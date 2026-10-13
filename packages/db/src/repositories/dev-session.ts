@@ -1,7 +1,15 @@
-import { eq, notInArray } from "drizzle-orm";
+import { and, count, desc, eq, notInArray, sql } from "drizzle-orm";
 import { TERMINAL_SESSION_PHASES } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { devSessions } from "../schema.js";
+
+/** A COUNT over dev_sessions returned no row: the evidence cannot be read, so nothing is decided on it. */
+class DispatchEvidenceUnread extends Error {
+  constructor(readonly taskId: string) {
+    super(`dev_sessions of task ${taskId}: the count of crash-orphaned sessions returned no row`);
+    this.name = "DispatchEvidenceUnread";
+  }
+}
 
 export class DevSessionRepository {
   constructor(private readonly db: Database) {}
@@ -59,6 +67,35 @@ export class DevSessionRepository {
       .where(notInArray(devSessions.phase, [...TERMINAL_SESSION_PHASES]))
       .returning({ id: devSessions.id });
     return rows.length;
+  }
+
+  /**
+   * What the task's sessions say about its last dispatch, for the startup reconciler: the phase
+   * of its latest session (null when it has none), and how many of its sessions an earlier startup
+   * reconcile already closed as crash orphans (failStale's verification result names
+   * `resolvedBy`). Read before failStale closes this start's orphans.
+   */
+  async dispatchEvidence(
+    taskId: string,
+    resolvedBy: string,
+  ): Promise<{ readonly latestPhase: string | null; readonly orphanedBefore: number }> {
+    const [latest] = await this.db
+      .select({ phase: devSessions.phase })
+      .from(devSessions)
+      .where(eq(devSessions.taskId, taskId))
+      .orderBy(desc(devSessions.createdAt))
+      .limit(1);
+    const [orphaned] = await this.db
+      .select({ count: count() })
+      .from(devSessions)
+      .where(
+        and(
+          eq(devSessions.taskId, taskId),
+          sql`${devSessions.verificationResult} ->> 'resolvedBy' = ${resolvedBy}`,
+        ),
+      );
+    if (orphaned === undefined) throw new DispatchEvidenceUnread(taskId);
+    return { latestPhase: latest?.phase ?? null, orphanedBefore: orphaned.count };
   }
 
   async listActive() {

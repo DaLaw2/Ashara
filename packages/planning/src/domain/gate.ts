@@ -1,5 +1,7 @@
-import { projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
+import type { WorkItemStatus } from "@ashara/shared";
+import { InvalidStatusTransition, projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
+import { blockWorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import {
   DependencyGraph,
@@ -15,6 +17,10 @@ export class GateKeeper {
    * are never admitted, and an active project with a row that does not parse is
    * blocked and skipped instead of failing the gate for every project. A
    * dependency on an item outside the active projects read here waits.
+   *
+   * A Pending task whose dependencies can never be met (an Abandoned item, directly or
+   * transitively, or a cycle) is parked at Blocked with a dependency_unsatisfiable reason here:
+   * nothing else ever moves it, and left Pending it would stall with no record.
    */
   static async filterAvailable(repo: WorkItemRepository, projects: ActiveProjects): Promise<WorkItem[]> {
     const items: WorkItem[] = [];
@@ -34,10 +40,47 @@ export class GateKeeper {
     const graph = await DependencyGraph.load(repo);
     const resolution = graph.resolveDependencies(buildDependencyContext(items));
 
-    return items
-      .filter((item) => item.status === "Pending" && item.level === "Task")
-      .filter((item) => isMet(resolution, item.id));
+    const pending = items.filter((item) => item.status === "Pending" && item.level === "Task");
+    const statusById = new Map(items.map((item) => [item.id, item.status] as const));
+    for (const item of pending) {
+      const result = resolution.get(item.id);
+      if (result?.resolution === "blocked") await parkUnsatisfiable(repo, item, result.blockedBy, statusById);
+    }
+    return pending.filter((item) => isMet(resolution, item.id));
   }
+}
+
+/**
+ * Parks a Pending task that depends on work that can never complete. A concurrent change to the
+ * task (it left Pending since it was read) refuses the save; the next cycle's gate reads it again.
+ */
+async function parkUnsatisfiable(
+  repo: WorkItemRepository,
+  item: WorkItem,
+  blockedBy: readonly string[],
+  statusById: ReadonlyMap<string, WorkItemStatus>,
+): Promise<void> {
+  const causes = blockedBy
+    .map((id) => {
+      const status = statusById.get(id);
+      return status === "Abandoned" ? `${id} (Abandoned)` : `${id} (on a dependency cycle)`;
+    })
+    .join(", ");
+  blockWorkItem(item, {
+    source: "dependency_unsatisfiable",
+    blockedBy: [...blockedBy],
+    reason:
+      `this task can never be dispatched: it waits on ${causes}. Re-plan or replace that work, ` +
+      "then unblock this task, or abandon it.",
+  });
+  try {
+    await repo.save(item, "Pending");
+  } catch (err) {
+    if (!(err instanceof InvalidStatusTransition)) throw err;
+    console.warn(`[gate] task ${item.id}: not parked for unsatisfiable dependencies, it changed concurrently:`, err);
+    return;
+  }
+  console.warn(`[gate] task ${item.id}: parked at Blocked, it waits on ${causes}`);
 }
 
 /** Absent from the map ⇒ no dependencies ⇒ met. */

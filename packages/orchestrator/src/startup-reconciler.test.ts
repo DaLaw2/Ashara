@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
-import type { FailureRouter, WorkItemRepository } from "./acl/planning-acl.js";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import type { FailureRouter, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import type { StartupReconcilerDeps } from "./startup-reconciler.js";
 import { reconcileOnStartup } from "./startup-reconciler.js";
 
@@ -58,6 +59,9 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
         failStaleCalls.push({ reason });
         return 6;
       },
+      dispatchEvidence: async () => {
+        throw new Error("dispatchEvidence is not exercised: no item is InProgress");
+      },
     },
     // Required: an empty repo returns no dirs, so the sweep is a no-op.
     workdirBase: "/nonexistent-test-workdir",
@@ -99,11 +103,90 @@ describe("reconcileOnStartup — dev_session crash orphans", () => {
         failStale: async () => {
           throw new Error("db unreachable");
         },
+        dispatchEvidence: async () => {
+          throw new Error("dispatchEvidence is not exercised: no item is InProgress");
+        },
       },
     });
 
     const summary = await reconcileOnStartup(deps);
 
     expect(summary.sessionsTerminalized).toBe(0);
+  });
+});
+
+// The review of t-shutdown-cancel-not-failure: a hard kill left the dispatch counted, so a task
+// the operator's kill stopped was one attempt nearer its abandon bound.
+describe("reconcileOnStartup — the dispatch a dead process counted", () => {
+  const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa");
+
+  function orphanDeps(evidence: { readonly latestPhase: string | null; readonly orphanedBefore: number }) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const now = new Date();
+    let row: WorkItem = {
+      id: createWorkItemId(),
+      level: "Task",
+      status: "InProgress",
+      title: "orphan",
+      runScope: "run",
+      projectId: PROJECT_ID,
+      dispatchCount: 2,
+      workKind: "implementation",
+      createdAt: now,
+      updatedAt: now,
+      events: [],
+    };
+    const evidenceAsked: string[] = [];
+    const repo: WorkItemRepository = {
+      ...emptyWorkItemRepo(),
+      projectIdsWithStatus: async (status) => (status === "InProgress" && row.status === "InProgress" ? [PROJECT_ID] : []),
+      findByProjectAndStatus: async () => [{ ...row, events: [] }],
+      save: async (item) => {
+        row = { ...item, dispatchCount: row.dispatchCount, events: [] };
+      },
+      refundDispatchCount: async () => {
+        row = { ...row, dispatchCount: row.dispatchCount - 1 };
+        return row.dispatchCount;
+      },
+    };
+    const { deps } = buildDeps({
+      workItemRepo: repo,
+      devSessionStore: {
+        failStale: async () => 1,
+        dispatchEvidence: async (_taskId, resolvedBy) => {
+          evidenceAsked.push(resolvedBy);
+          return evidence;
+        },
+      },
+    });
+    return { deps, row: () => row, evidenceAsked };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("its latest session never got a terminal write: requeued and the dispatch given back", async () => {
+    const { deps, row, evidenceAsked } = orphanDeps({ latestPhase: "Preparing", orphanedBefore: 0 });
+
+    const summary = await reconcileOnStartup(deps);
+
+    expect(summary.orphansRequeued).toBe(1);
+    expect(row()).toMatchObject({ status: "Pending", dispatchCount: 1 });
+    // Counted by the very name failStale records, read before failStale closes this start's orphans.
+    expect(evidenceAsked).toEqual(["startup-reconciler"]);
+  });
+
+  test.each([
+    ["its latest session is terminal: the dispatch finished, only its routing was lost", { latestPhase: "Failed", orphanedBefore: 0 }],
+    ["it has no session: nothing shows the dispatch did not finish", { latestPhase: null, orphanedBefore: 0 }],
+    ["an earlier dispatch of it was orphaned already: past the bound", { latestPhase: "Preparing", orphanedBefore: 1 }],
+  ])("%s: requeued, the dispatch stays counted", async (_label, evidence) => {
+    const { deps, row } = orphanDeps(evidence);
+
+    await reconcileOnStartup(deps);
+
+    expect(row()).toMatchObject({ status: "Pending", dispatchCount: 2 });
   });
 });

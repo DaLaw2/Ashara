@@ -6,6 +6,7 @@ import type { TaskCheckStore } from "@ashara/development";
 export function createTaskCheckStore(db: ReturnType<typeof createDb>): TaskCheckStore {
   const repo = new TaskCheckRepository(db);
   return {
+    checkFilesOf: (projectId) => repo.checkFilesOf(projectId),
     completedOf: (projectId, exceptTaskId) => repo.completedOf(projectId, exceptTaskId),
     checkedTasksOf: (checkTaskId) => repo.checkedTasksOf(checkTaskId),
     append: (write) => repo.append(write),

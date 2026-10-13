@@ -87,8 +87,11 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         : `checks: only a check assignment may be given Z0's check recorder (work kind ${assignment.workKind ?? "none"})`,
     ]);
   }
-  if (isCheckWork && deps.taskChecks !== null) {
-    throw new InvalidAssignment(assignment.taskId, ["taskChecks: a check assignment writes checks; it has no stored checks to run"]);
+  // run_checks is implementation work's: check work writes checks, environment work is decided by its gate.
+  if ((isCheckWork || isEnvironmentWork) && deps.taskChecks !== null) {
+    throw new InvalidAssignment(assignment.taskId, [
+      `taskChecks: only implementation work runs stored checks (work kind ${assignment.workKind ?? "none"})`,
+    ]);
   }
   const tools = toolSchemasFor(assignment.workKind, deps.taskChecks !== null);
   const { clock, signal } = deps;
@@ -152,7 +155,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     at: startedAt,
     projectId: assignment.projectId,
     taskId: assignment.taskId,
-    role: assignment.role,
+    role: { id: assignment.role.id, name: assignment.role.name },
     provider: assignment.model.provider,
     modelId: assignment.model.modelId,
     cellImage: assignment.cellImage,

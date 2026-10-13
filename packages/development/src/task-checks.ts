@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
-import { runHostGit } from "@ashara/execution-infra";
+import { ownedPathsCover, runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { CheckDefinition, CheckDefinitionPort, CheckDefinitionResult, CheckRun, CheckRunReport } from "@ashara/workplace";
 import { targetRepo } from "./host-git.js";
@@ -44,14 +44,32 @@ export interface CompletedTaskChecks extends TaskChecks {
   readonly taskId: string;
 }
 
+/** A stored check file of a task of the project: its path, and the task whose checks hold it. */
+export interface StoredCheckFile {
+  readonly taskId: string;
+  readonly path: string;
+}
+
+/** The Completed implementation tasks of a project, split by whether any check is stored for them. */
+interface CompletedTasksChecks {
+  /** The latest checks of each task that has them, in the order the tasks completed. */
+  readonly checked: readonly CompletedTaskChecks[];
+  /**
+   * Tasks Completed with no stored check (completed before checks existed): there is nothing of
+   * theirs to re-run, so a later merge cannot be checked against them. Named, never dropped.
+   */
+  readonly unchecked: readonly string[];
+}
+
 /** Quality's task_checks (migration 036); the composition root supplies it. */
 export interface TaskCheckStore {
   /**
-   * The latest checks of every Completed implementation task of the project except `exceptTaskId`,
-   * in the order they completed. A Completed implementation task with no stored check throws:
-   * an empty set would read as "nothing to regress".
+   * The files of the latest checks of every task of the project, whatever its status: the paths
+   * only the check author writes, which no implementation task's branch may change.
    */
-  completedOf(projectId: ProjectId, exceptTaskId: WorkItemId): Promise<readonly CompletedTaskChecks[]>;
+  checkFilesOf(projectId: ProjectId): Promise<readonly StoredCheckFile[]>;
+  /** Every Completed implementation task of the project except `exceptTaskId`, checked or not. */
+  completedOf(projectId: ProjectId, exceptTaskId: WorkItemId): Promise<CompletedTasksChecks>;
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /** Appends one revision of the task's checks; returns the revision. */
@@ -204,11 +222,6 @@ export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string): Pr
   return commitIndex(repo, taskId, `ashara: current work of task ${taskId}, for run_checks`);
 }
 
-/** True when the owned entry `owned` contains `path` (itself, or anything under it). */
-function covers(owned: string, path: string): boolean {
-  return owned.endsWith("/") ? path.startsWith(owned) : path === owned || path.startsWith(`${owned}/`);
-}
-
 export type CheckHarvest =
   | { readonly kind: "harvested"; readonly files: readonly CheckFile[] }
   /** The check task's work cannot be kept; `reason` is told to the task's failure record. */
@@ -238,7 +251,7 @@ export async function harvestCheckFiles(
   if (deleted.length > 0) {
     return rejected(`a check may only add or change files; these were deleted or changed in kind: ${deleted.map((c) => `${c.path} (${c.status})`).join(", ")}`);
   }
-  const ownedHit = changed.filter((c) => owned.some((o) => covers(o, c.path)));
+  const ownedHit = changed.filter((c) => ownedPathsCover(owned, c.path));
   if (ownedHit.length > 0) {
     return rejected(`check files overlap the environment's owned paths [${owned.join(", ")}]: ${ownedHit.map((c) => c.path).join(", ")}`);
   }

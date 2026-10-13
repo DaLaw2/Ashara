@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
 import { CapabilityClassSchema, RoleSchema, describeViolation, nonEmptyArray, validateRoster } from "./roster.js";
-import type { Roster } from "./roster.js";
+import type { Role, Roster } from "./roster.js";
 import { assignmentViolations } from "./work-kind.js";
 
 // A roster read back from roster_roles (migration 031): the rows of one revision,
@@ -31,6 +31,25 @@ export class RosterUnreadable extends Error {
     super(`project ${projectId}: the stored roster is not a valid roster: ${problem}`);
     this.name = "RosterUnreadable";
   }
+}
+
+/** A work item's owner is not a role of the project's roster: no role can work it. */
+export class RoleNotInRoster extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly rosterRevision: number,
+    readonly roleId: string,
+  ) {
+    super(`project ${projectId}: role ${roleId} is not in roster revision ${rosterRevision}`);
+    this.name = "RoleNotInRoster";
+  }
+}
+
+/** The roster's role with this id; never a stand-in. */
+export function roleInRoster(roster: Roster, roleId: string): Role {
+  const role = roster.roles.find((candidate) => candidate.id === roleId);
+  if (role === undefined) throw new RoleNotInRoster(roster.projectId, roster.revision, roleId);
+  return role;
 }
 
 /** The project's roster from the rows of its latest revision. */

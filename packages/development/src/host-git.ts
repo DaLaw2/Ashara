@@ -14,7 +14,7 @@ class HostRepoUnresolved extends Error {
   }
 }
 
-/** The target checkout. Its `.git` is reachable only by the verifier cell, which mounts it read-only. */
+/** The target checkout. The verifier cell that mounts it sees its `.git` masked, never the repository. */
 export function targetRepo(targetProjectPath: string): HostRepo {
   return { gitDir: join(targetProjectPath, ".git"), workTree: targetProjectPath };
 }

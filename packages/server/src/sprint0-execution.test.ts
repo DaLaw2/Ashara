@@ -188,13 +188,16 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     sessionStore: sessions,
     knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => "A studio booking site" },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", inferences: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
-      staff: (staffed) => ({
-        role: staffed.workKind === "environment" ? "platform" : "developer",
-        model: gateway.resolveModel("Strong", "agent-runner"),
+      staff: async (staffed) => ({
+        kind: "staffed",
+        staff: {
+          role: staffed.workKind === "environment" ? { id: "platform", name: "Platform" } : { id: "developer", name: "Developer" },
+          model: gateway.resolveModel("Strong", "agent-runner"),
+        },
       }),
     },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },

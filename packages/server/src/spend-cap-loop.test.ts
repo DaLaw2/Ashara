@@ -261,20 +261,21 @@ describe("a turn refused at the project's spend cap", () => {
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
       knowledgeSink: { storeFinding: notExercised("storeFinding"), storeInsight: notExercised("storeInsight") },
-      intentSource: { loadIntent: async () => "A greeting file" },
+      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
       cells: {
         substrate: scriptedSubstrate(root),
         baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
         instance: `test-${randomUUID()}`,
       },
       llm: gateway,
-      staffing: { staff: () => ({ role: "developer", model: gateway.resolveModel("Strong", "agent-runner") }) },
+      staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build") },
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
       checks: {
+        checkFilesOf: notExercised("checkFilesOf"),
         completedOf: notExercised("completedOf"),
         checkedTasksOf: notExercised("checkedTasksOf"),
         append: notExercised("append"),

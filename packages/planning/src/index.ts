@@ -12,6 +12,7 @@ export {
   abandonWorkItem,
   requeueWorkItem,
   takeEvents,
+  exitStaleChecks,
   DependencyGraph,
   PlanningService,
 } from "./domain/index.js";

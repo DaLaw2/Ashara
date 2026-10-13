@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
+import { lstat, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
+import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
 import {
   CellExecFailed,
@@ -21,6 +21,10 @@ const LABEL_INSTANCE = "ashara.instance";
 const LABEL_PROJECT = "ashara.project";
 const LABEL_TASK = "ashara.task";
 const LABEL_ROLE = "ashara.role";
+
+/** Under the mount root: the empty stand-ins masked entries are covered with. No cell may mount it. */
+const MASK_DIR = ".ashara-cell-masks";
+type MaskKind = "file" | "directory";
 
 /** Seconds `timeout` waits after its signal before SIGKILL. */
 const KILL_GRACE_SECONDS = 5;
@@ -56,7 +60,7 @@ const cellSpecSchema = z
           .regex(/^\/[^:,\0\n]*$/, "hostPath must be absolute and free of ':', ',', NUL and newline"),
         readOnly: z.boolean().optional(),
         shared: z.boolean().optional(),
-        readOnlyEntries: z
+        maskedEntries: z
           .array(
             z
               .string()
@@ -84,11 +88,12 @@ export interface CellSpec {
     /** Policy default false (private `:Z` label); true for a path two cells share (`:z`). */
     readonly shared?: boolean;
     /**
-     * Names directly under hostPath that the cell sees read-only even in a writable mount: Z0's
-     * own metadata in a tree the cell writes (a repository's `.git`). Each must exist and must not
-     * be a symlink. Policy default: none.
+     * Names directly under hostPath the cell never sees: each is covered, read-only, by an empty
+     * file or an empty directory of the same kind. For Z0's own metadata in a tree the cell
+     * writes: a worktree's `.git` gitlink names the host path of its git dir, so the cell can
+     * neither read it nor rewrite it. Each must exist and must not be a symlink. Policy default: none.
      */
-    readonly readOnlyEntries?: readonly string[];
+    readonly maskedEntries?: readonly string[];
   };
 }
 
@@ -173,12 +178,17 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false; er
   }
 }
 
-function buildRunArgs(spec: CellSpec, name: string, hostPath: string): string[] {
+/** A masked entry and the empty stand-in of its kind mounted over it. */
+interface Mask {
+  readonly entry: string;
+  readonly source: string;
+}
+
+function buildRunArgs(spec: CellSpec, name: string, hostPath: string, masks: readonly Mask[]): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
-  const readOnlyEntries = (spec.mount.readOnlyEntries ?? []).flatMap((entry) => [
-    "-v", `${hostPath}/${entry}:${WORKSPACE_ROOT}/${entry}:ro,${label}`,
-  ]);
+  // Shared label: every cell mounts the same stand-ins.
+  const maskMounts = masks.flatMap(({ entry, source }) => ["-v", `${source}:${WORKSPACE_ROOT}/${entry}:ro,z`]);
   return [
     "run",
     "-d",
@@ -195,7 +205,7 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string): string[] 
     "--label", `${LABEL_TASK}=${spec.task}`,
     "--label", `${LABEL_ROLE}=${spec.role}`,
     "-v", `${hostPath}:${WORKSPACE_ROOT}:${options}`,
-    ...readOnlyEntries,
+    ...maskMounts,
     spec.image,
     "sleep", "infinity",
   ];
@@ -346,9 +356,12 @@ export class PodmanSubstrate {
     const parsed = cellSpecSchema.safeParse(spec);
     if (!parsed.success) throw new InvalidCellRequest("createCell", issuesOf(parsed.error));
     const hostPath = await this.canonicalMountPath(parsed.data.mount.hostPath);
-    for (const entry of parsed.data.mount.readOnlyEntries ?? []) await this.assertPlainEntry(hostPath, entry);
+    const masks: Mask[] = [];
+    for (const entry of parsed.data.mount.maskedEntries ?? []) {
+      masks.push({ entry, source: await this.maskSource(await this.plainEntryKind(hostPath, entry)) });
+    }
     const name = `ashara-cell-${randomUUID()}`;
-    const args = buildRunArgs(parsed.data, name, hostPath);
+    const args = buildRunArgs(parsed.data, name, hostPath, masks);
     const result = await this.run(args);
     const id = result.exitCode === 0 ? containerIdSchema.safeParse(result.stdout.trim()) : null;
     if (id === null || !id.success) {
@@ -381,6 +394,10 @@ export class PodmanSubstrate {
     if (canonical === root || !canonical.startsWith(`${root}${sep}`)) {
       throw new MountPathRejected(hostPath, canonical, root, "it is not strictly inside the mount root");
     }
+    const masks = join(root, MASK_DIR);
+    if (canonical === masks || canonical.startsWith(`${masks}${sep}`)) {
+      throw new MountPathRejected(hostPath, canonical, root, "it is the substrate's own mask stand-ins");
+    }
     const source = cellSpecSchema.shape.mount.shape.hostPath.safeParse(canonical);
     if (!source.success) {
       throw new MountPathRejected(hostPath, canonical, root, `the resolved path is not a valid volume source: ${issuesOf(source.error).join("; ")}`);
@@ -388,18 +405,53 @@ export class PodmanSubstrate {
     return canonical;
   }
 
-  /** A read-only entry is mounted by its own path, so a symlink there would mount whatever it points at. */
-  private async assertPlainEntry(canonicalHostPath: string, entry: string): Promise<void> {
+  /**
+   * A masked entry is covered at its own in-cell path, so a symlink there would have the stand-in
+   * mounted wherever it points; only a plain file or directory is masked.
+   */
+  private async plainEntryKind(canonicalHostPath: string, entry: string): Promise<MaskKind> {
     const path = `${canonicalHostPath}${sep}${entry}`;
     let canonical: string;
     try {
       canonical = await realpath(path);
     } catch (err) {
-      throw new MountPathRejected(path, null, canonicalHostPath, `the read-only entry cannot be resolved: ${messageOf(err)}`, { cause: err });
+      throw new MountPathRejected(path, null, canonicalHostPath, `the masked entry cannot be resolved: ${messageOf(err)}`, { cause: err });
     }
     if (canonical !== path) {
-      throw new MountPathRejected(path, canonical, canonicalHostPath, "the read-only entry is a symlink or resolves elsewhere");
+      throw new MountPathRejected(path, canonical, canonicalHostPath, "the masked entry is a symlink or resolves elsewhere");
     }
+    const entryStat = await lstat(path);
+    if (entryStat.isFile()) return "file";
+    if (entryStat.isDirectory()) return "directory";
+    throw new MountPathRejected(path, canonical, canonicalHostPath, "the masked entry is neither a regular file nor a directory");
+  }
+
+  /**
+   * The empty, read-only stand-in of `kind` under the mount root (made once, shared by every
+   * cell). One that exists but is not empty, or not of its kind, is refused rather than mounted.
+   */
+  private async maskSource(kind: MaskKind): Promise<string> {
+    let root: string;
+    try {
+      root = await realpath(this.mountRoot);
+    } catch (err) {
+      throw new MountPathRejected(this.mountRoot, null, this.mountRoot, `the mount root cannot be resolved: ${messageOf(err)}`, { cause: err });
+    }
+    const dir = join(root, MASK_DIR);
+    const source = join(dir, kind === "file" ? "empty-file" : "empty-directory");
+    try {
+      await mkdir(dir, { recursive: true });
+      if (kind === "file") await writeFile(source, "", { flag: "wx", mode: 0o444 });
+      else await mkdir(source, { mode: 0o555 });
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err && err.code === "EEXIST")) {
+        throw new MountPathRejected(source, null, root, `the mask stand-in cannot be created: ${messageOf(err)}`, { cause: err });
+      }
+    }
+    const made = await lstat(source);
+    const empty = kind === "file" ? made.isFile() && made.size === 0 : made.isDirectory() && (await readdir(source)).length === 0;
+    if (!empty) throw new MountPathRejected(source, null, root, `the mask stand-in is not an empty ${kind}`);
+    return source;
   }
 
   private async removeFailedStart(name: string): Promise<string> {

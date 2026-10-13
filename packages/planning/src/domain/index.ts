@@ -12,6 +12,8 @@ export {
   takeEvents,
 } from "./work-item.js";
 
+export { exitStaleChecks } from "./stale-checks.js";
+
 export type { WorkItemRepository } from "./repository.js";
 
 export { ContractAlreadyExists } from "./errors.js";

@@ -24,6 +24,21 @@ export function parseProjectId(raw: string): ProjectId {
   return raw as ProjectId;
 }
 
+export class InvalidWorkItemId extends Error {
+  constructor(readonly raw: string) {
+    super(`Invalid WorkItemId "${raw}": expected a UUID`);
+    this.name = "InvalidWorkItemId";
+  }
+}
+
+/** Validated narrowing of a stored work_items.id reference (e.g. a check task's id) into a `WorkItemId`. */
+export function parseWorkItemId(raw: string): WorkItemId {
+  if (!UUID_PATTERN.test(raw)) {
+    throw new InvalidWorkItemId(raw);
+  }
+  return raw as WorkItemId;
+}
+
 export function createWorkItemId(): WorkItemId {
   return crypto.randomUUID() as WorkItemId;
 }

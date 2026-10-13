@@ -26,11 +26,10 @@ import type { WorkItemStatus } from "./enums.js";
  * Abandoned). Their first traverser, the run-end sweep, was deleted by
  * t-cut-w7; the owner's PATCH /work-items/:id/status route remains one.
  *
- * `Completed -> Pending` has no traverser: its only one, reopenWorkItem, was
- * removed, and unblock/replan/requeue each pin a different from-status. The edge
- * is kept because removing it makes Completed terminal; that is an owner
- * decision. Its intended traverser
- * is story c-change-handling (reopened items).
+ * `Completed -> Pending` has one traverser: planning's exitStaleChecks reopens a
+ * Completed check task whose stored checks went stale, pinned to work kind
+ * "check" (unblock/replan/requeue each pin a different from-status). Reopening
+ * other items is story c-change-handling.
  */
 const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
   Pending: ["InProgress", "Blocked", "Abandoned"],

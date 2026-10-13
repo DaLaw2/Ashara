@@ -87,11 +87,66 @@ const environmentUndefinedSchema = z.object({
  * The checks stored for a task were red-run on another environment version than the dispatch's,
  * and no longer all fail on main there: they cannot decide the task's work. Not the task's
  * failure: the check task named by `checkTaskId` must write them again on the current
- * environment. No model was called. `reason` carries the red run, for the operator.
+ * environment. No model was called. `reason` carries the red run, for the operator. Written only
+ * when that check task could not be reopened (it is not a Completed check task any more); a
+ * reopenable one is reopened instead and the task waits on it at Pending.
  */
 const checksStaleSchema = z.object({
   source: z.literal("checks_stale"),
   checkTaskId: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * An implementation task's finished work changed files the environment owns, and nothing else it
+ * was refused for: environment files belong to the platform role, so the work needs an environment
+ * change no implementer may make (ADR-074 addendum 2 d63: in M1 such a task is Blocked, not
+ * retried). `paths` names the environment-owned paths its branch changed; nothing was merged.
+ */
+const environmentChangeNeededSchema = z.object({
+  source: z.literal("environment_change_needed"),
+  paths: z.array(z.string().min(1)).min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The task's checks went stale again after its check task had already written them again
+ * `bound` times (the stored checks are `revision`): the environment keeps moving under them, or
+ * the check author cannot write checks that hold on it. Parked for the operator; nothing reopens
+ * the check task again on its own. `reason` carries the latest red run.
+ */
+const checksRewriteBoundSchema = z.object({
+  source: z.literal("checks_rewrite_bound"),
+  checkTaskId: z.string().min(1),
+  revision: z.number().int().min(1),
+  bound: z.number().int().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The task cannot be staffed: it has no owner role, or its owner is not a role of the project's
+ * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
+ * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
+ */
+const ownerUnresolvedSchema = z.object({
+  source: z.literal("owner_unresolved"),
+  ownerRoleId: z.string().min(1).nullable(),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * A Pending task depends, directly or transitively, on work that can never complete: an
+ * Abandoned item, or a dependency cycle. The gate parks it here instead of leaving it Pending
+ * with nothing that would ever admit it. `blockedBy` names the root causes (the Abandoned items,
+ * or the task itself for a cycle); `reason` says so, for the operator.
+ */
+const dependencyUnsatisfiableSchema = z.object({
+  source: z.literal("dependency_unsatisfiable"),
+  blockedBy: z.array(z.string().min(1)).min(1),
   reason: z.string().min(1),
   ...augmentationFields,
 });
@@ -115,6 +170,10 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   environmentUnavailableSchema,
   environmentUndefinedSchema,
   checksStaleSchema,
+  environmentChangeNeededSchema,
+  ownerUnresolvedSchema,
+  checksRewriteBoundSchema,
+  dependencyUnsatisfiableSchema,
   apiSchema,
 ]);
 
@@ -171,6 +230,10 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "environment_unavailable":
     case "environment_undefined":
     case "checks_stale":
+    case "environment_change_needed":
+    case "owner_unresolved":
+    case "checks_rewrite_bound":
+    case "dependency_unsatisfiable":
     case "api":
       return { ...reason };
   }

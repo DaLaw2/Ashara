@@ -112,7 +112,8 @@ describe("a task runs on cells end to end", () => {
     // author stored it before the task started (s-independent-verify-m1).
     const check = "test -f /workspace/hello.txt && grep cell /workspace/hello.txt";
     const checks: TaskCheckStore = {
-      completedOf: async () => [],
+      checkFilesOf: async () => [],
+      completedOf: async () => ({ checked: [], unchecked: [] }),
       checkedTasksOf: async () => [],
       append: async () => {
         throw new Error("an implementation task appends no checks");
@@ -176,10 +177,10 @@ describe("a task runs on cells end to end", () => {
       sessionStore: sessions,
       knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
       eventSink: { emit: (event) => void events.push(event) },
-      intentSource: { loadIntent: async () => "A greeting file" },
+      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
       cells: { substrate, baseCell: base, instance },
       llm: gateway,
-      staffing: { staff: () => ({ role: "developer", model: gateway.resolveModel("Strong", "agent-runner") }) },
+      staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },

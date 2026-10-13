@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -85,22 +85,30 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[0]?.args).toContain(`${tree}:/workspace:ro,z`);
   });
 
-  it("mounts each read-only entry over the writable tree, and refuses one that is missing or a symlink", async () => {
+  it("covers each masked entry with an empty stand-in of its kind, and refuses one that is missing or a symlink", async () => {
     await mkdir(join(tree, ".git"), { recursive: true });
+    await writeFile(join(tree, "gitlink"), `gitdir: ${root}/host/.git/worktrees/t\n`);
     const { requests, substrate } = recorder([ok(ID)]);
-    await substrate.createCell({ ...spec, mount: { hostPath: tree, shared: true, readOnlyEntries: [".git"] } });
+    await substrate.createCell({ ...spec, mount: { hostPath: tree, shared: true, maskedEntries: [".git", "gitlink"] } });
     const args = requests[0]?.args ?? [];
     expect(args.slice(args.indexOf(`${tree}:/workspace:z`) - 1, args.indexOf(IMAGE))).toEqual([
       "-v", `${tree}:/workspace:z`,
-      "-v", `${tree}/.git:/workspace/.git:ro,z`,
+      "-v", `${root}/.ashara-cell-masks/empty-directory:/workspace/.git:ro,z`,
+      "-v", `${root}/.ashara-cell-masks/empty-file:/workspace/gitlink:ro,z`,
     ]);
+    // No volume source names the masked entries themselves: the host path in the gitlink never reaches the cell.
+    expect(args.some((arg) => arg.startsWith(`${tree}/.git`) || arg.startsWith(`${tree}/gitlink`))).toBe(false);
+    expect(await readFile(join(root, ".ashara-cell-masks", "empty-file"), "utf8")).toBe("");
+    expect(await readdir(join(root, ".ashara-cell-masks", "empty-directory"))).toEqual([]);
 
     await symlink(join(tree, ".git"), join(tree, "linked"));
     for (const entry of ["linked", "absent", "..", "a/b"]) {
-      await expect(substrate.createCell({ ...spec, mount: { hostPath: tree, readOnlyEntries: [entry] } })).rejects.toBeInstanceOf(
+      await expect(substrate.createCell({ ...spec, mount: { hostPath: tree, maskedEntries: [entry] } })).rejects.toBeInstanceOf(
         entry === ".." || entry === "a/b" ? InvalidCellRequest : MountPathRejected,
       );
     }
+    // The stand-ins are the substrate's own: no cell mounts them as its tree.
+    await expect(substrate.createCell({ ...spec, mount: { hostPath: join(root, ".ashara-cell-masks") } })).rejects.toBeInstanceOf(MountPathRejected);
     expect(requests).toHaveLength(1);
   });
 

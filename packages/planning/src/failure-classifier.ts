@@ -43,6 +43,8 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
     // The stored checks are the task's only verdict: a failure is the task's work, not the tree.
     case "postMergeTaskChecks":
     case "entryPointRewriteCheck":
+    // The branch wrote another role's files (a stored check file): the task's own work, retried with the reason.
+    case "ownershipGate":
       return "VERIFICATION_GAP";
   }
 

@@ -1,6 +1,14 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, StoredBlockedReason } from "@ashara/shared";
-import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo, projectBlockCause } from "@ashara/shared";
+import {
+  wrapError,
+  InvalidStatusTransition,
+  InvalidWorkItemId,
+  withSalvagedResult,
+  canTransitionTo,
+  projectBlockCause,
+  parseWorkItemId,
+} from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, RawFailureContext } from "./acl/planning-acl.js";
@@ -12,13 +20,23 @@ import {
   takeEvents,
   startWorkItem,
   recoverFailedItem,
+  exitStaleChecks,
 } from "./acl/planning-acl.js";
 import type { TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
-type ParkedReason = Extract<StoredBlockedReason, { source: "environment_unavailable" | "environment_undefined" | "checks_stale" }>;
+type ParkedReason = Extract<
+  StoredBlockedReason,
+  { source: "environment_unavailable" | "environment_undefined" | "checks_stale" | "environment_change_needed" | "owner_unresolved" }
+>;
+
+interface StaleChecksResult {
+  readonly checkTaskId: string;
+  readonly revision: number;
+  readonly detail: string;
+}
 
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -39,8 +57,9 @@ async function executeTask(
   output: AgentOutputJson | null;
   errorEnvelope?: ErrorEnvelope;
   /**
-   * The item was routed here, parked at Blocked (environment unavailable or undefined, checks stale)
-   * or returned to Pending (a refusal, a shutdown), so processTask must not run the
+   * The item was routed here, parked at Blocked (environment unavailable or undefined, checks stale
+   * past their exit) or returned to Pending (a refusal, a shutdown, stale checks being rewritten),
+   * so processTask must not run the
    * failed/blocked recovery ladder on it.
    */
   routedHere: boolean;
@@ -71,20 +90,53 @@ async function executeTask(
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
-  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined" || execResult.status === "checks_stale") {
+  if (execResult.status === "environment_change_needed") {
+    // Not a failure to retry: no implementer may change environment files, so a replan would meet
+    // the same refusal (ADR-074 addendum 2 d63). Parked at Blocked naming the paths, for the owner.
+    await routeAsParked(deps, task.id, { source: "environment_change_needed", paths: [...execResult.paths], reason: execResult.detail });
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "checks_stale") {
+    // Not a task failure (a replan keeps the item id, so it would meet the same checks): the
+    // check task is reopened to write them again and the item waits on it, within a bound.
+    await routeAsStaleChecks(deps, task.id, execResult);
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined") {
     // Not a task failure: re-dispatching cannot make the substrate or the
-    // project's environment appear, nor rewrite the checks a check task stored
-    // (a replan keeps the item id, so it meets the same checks), so the item is
-    // parked at Blocked for the operator, never routed to Failed.
+    // project's environment appear, so the item is parked at Blocked for the
+    // operator, never routed to Failed.
     await routeAsParked(
       deps,
       task.id,
       execResult.status === "environment_blocked"
         ? { source: "environment_unavailable", unavailable: execResult.unavailable, reason: execResult.detail }
-        : execResult.status === "checks_stale"
-          ? { source: "checks_stale", checkTaskId: execResult.checkTaskId, reason: execResult.detail }
-          : { source: "environment_undefined", reason: execResult.detail },
+        : { source: "environment_undefined", reason: execResult.detail },
     );
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "owner_unresolved") {
+    // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
+    // so the item is parked at Blocked until the roster or the plan changes, never routed to Failed.
+    await routeAsParked(deps, task.id, { source: "owner_unresolved", ownerRoleId: execResult.ownerRoleId, reason: execResult.reason });
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -196,15 +248,7 @@ async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  // A refund that fails leaves the dispatch counted: the retry bound is then charged one
-  // attempt too many, the conservative direction, so it is logged and the routing stands.
-  let dispatchCount: number | string;
-  try {
-    dispatchCount = await deps.workItemRepo.refundDispatchCount(taskId);
-  } catch (e) {
-    dispatchCount = "not refunded";
-    console.warn(`[${taskId}] the dispatch stopped by ${why} could not be refunded; it stays counted:`, e);
-  }
+  const dispatchCount = await refundBestEffort(deps, taskId, why);
   console.warn(`[${taskId}] back to Pending after ${why} (dispatch count ${dispatchCount})`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
 }
@@ -234,13 +278,112 @@ async function routeAsParked(
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   const what =
-    reason.source === "environment_unavailable"
+    reason.source === "environment_change_needed"
+      ? `environment change needed for ${reason.paths.join(", ")}`
+      : reason.source === "environment_unavailable"
       ? `${reason.unavailable} unavailable`
       : reason.source === "checks_stale"
         ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
-        : "no environment defined";
+        : reason.source === "owner_unresolved"
+          ? `no roster role can work it (owner ${reason.ownerRoleId ?? "none"})`
+          : "no environment defined";
   console.warn(`[${taskId}] blocked, ${what}: ${reason.reason}`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
+}
+
+/**
+ * A refund that fails leaves the dispatch counted: the retry bound is then charged one attempt
+ * too many, the conservative direction, so it is logged and the routing stands.
+ */
+async function refundBestEffort(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string): Promise<number | string> {
+  try {
+    return await deps.workItemRepo.refundDispatchCount(taskId);
+  } catch (e) {
+    console.warn(`[${taskId}] the dispatch stopped by ${why} could not be refunded; it stays counted:`, e);
+    return "not refunded";
+  }
+}
+
+/**
+ * The exit of an item whose stored checks went stale (planning's exitStaleChecks): its check task
+ * reopened and the item back at Pending waiting on it, with the dispatch given back (no model
+ * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item parked
+ * at Blocked for the operator. The check task is saved first: if that save loses a race the item
+ * is parked with checks_stale instead, never left waiting on a check task that stayed Completed.
+ */
+async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], stale: StaleChecksResult): Promise<void> {
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
+  if (!item) {
+    console.warn(`[${taskId}] work item vanished before its stale checks could be routed (${stale.detail})`);
+    return;
+  }
+  const checkTask = await findCheckTask(deps.workItemRepo, stale.checkTaskId);
+  const previousStatus = item.status;
+  const checkTaskPrevious = checkTask?.status;
+  let exit: ReturnType<typeof exitStaleChecks>;
+  try {
+    exit = exitStaleChecks(item, checkTask, stale);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${taskId}] stale-checks exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${stale.detail})`);
+    return;
+  }
+
+  if (exit.kind === "rewrite" && checkTask !== null && checkTaskPrevious !== undefined) {
+    try {
+      await PlanningService.saveWorkItem(deps.workItemRepo, checkTask, checkTaskPrevious);
+    } catch (e) {
+      if (!(e instanceof InvalidStatusTransition)) throw e;
+      await routeAsParked(deps, taskId, {
+        source: "checks_stale",
+        checkTaskId: stale.checkTaskId,
+        reason: `${stale.detail}\nThe check task cannot be reopened: it moved to ${e.from} while it was being reopened`,
+      });
+      return;
+    }
+    await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsStaleChecks");
+  }
+
+  try {
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    // An owner moved the item during the dispatch; a reopened check task stays reopened and the
+    // item keeps its dependency on it wherever the owner put it.
+    console.warn(`[${taskId}] stale-checks exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`);
+    return;
+  }
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsStaleChecks");
+
+  switch (exit.kind) {
+    case "rewrite": {
+      const dispatchCount = await refundBestEffort(deps, taskId, "stale stored checks");
+      console.warn(
+        `[${taskId}] stored checks revision ${stale.revision} stale; check task ${stale.checkTaskId} reopened to write them ` +
+          `again, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+      );
+      return;
+    }
+    case "bound":
+      console.warn(`[${taskId}] blocked, stored checks revision ${stale.revision} stale past the rewrite bound; check task ${stale.checkTaskId} is not reopened`);
+      return;
+    case "unreopenable":
+      console.warn(`[${taskId}] blocked, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`);
+      return;
+  }
+}
+
+/** The check task a stale revision names; null when the stored id is no work item's. */
+async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: string): Promise<WorkItem | null> {
+  let id: WorkItem["id"];
+  try {
+    id = parseWorkItemId(checkTaskId);
+  } catch (e) {
+    if (!(e instanceof InvalidWorkItemId)) throw e;
+    console.warn(`[stale-checks] the stored check task id names no work item: ${e.message}`);
+    return null;
+  }
+  return PlanningService.findWorkItem(workItemRepo, id);
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {

@@ -39,7 +39,8 @@ export type AttemptRecord =
       readonly at: number;
       readonly projectId: string;
       readonly taskId: string;
-      readonly role: string;
+      /** The roster role the attempt worked as: its id and its name. */
+      readonly role: { readonly id: string; readonly name: string };
       readonly provider: string;
       readonly modelId: string;
       readonly cellImage: AttemptCellImage;

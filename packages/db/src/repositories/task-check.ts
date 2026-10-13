@@ -62,15 +62,10 @@ class CheckedTaskMissing extends Error {
   }
 }
 
-/** A Completed implementation task has no stored check: nothing could tell whether a later merge regressed it. */
-class CompletedTaskUnchecked extends Error {
-  constructor(
-    readonly projectId: string,
-    readonly taskId: string,
-  ) {
-    super(`project ${projectId}: implementation task ${taskId} is Completed but no check is stored for it, so no later merge can be checked against it`);
-    this.name = "CompletedTaskUnchecked";
-  }
+interface CompletedChecks {
+  readonly checked: TaskChecksRecord[];
+  /** Completed implementation tasks with no stored check: nothing of theirs can be re-run. */
+  readonly unchecked: string[];
 }
 
 export class TaskCheckRepository {
@@ -89,10 +84,11 @@ export class TaskCheckRepository {
 
   /**
    * The latest checks of every Completed implementation task of the project except `exceptTaskId`,
-   * oldest completion first. A Completed implementation task with none throws: the set is what a
-   * later merge must not regress, and an empty one would read as "nothing to regress".
+   * oldest completion first, and separately the ids of those with no stored check at all (completed
+   * before checks existed), so a caller states them instead of reading their absence as "nothing to
+   * regress".
    */
-  async completedOf(projectId: string, exceptTaskId: string): Promise<TaskChecksRecord[]> {
+  async completedOf(projectId: string, exceptTaskId: string): Promise<CompletedChecks> {
     const tasks = await this.db
       .select({ id: workItems.id })
       .from(workItems)
@@ -105,13 +101,39 @@ export class TaskCheckRepository {
         ),
       )
       .orderBy(asc(workItems.updatedAt), asc(workItems.id));
-    const records: TaskChecksRecord[] = [];
+    const checked: TaskChecksRecord[] = [];
+    const unchecked: string[] = [];
     for (const task of tasks) {
       const record = await this.latest(task.id);
-      if (record === null) throw new CompletedTaskUnchecked(projectId, task.id);
-      records.push(record);
+      if (record === null) unchecked.push(task.id);
+      else checked.push(record);
     }
-    return records;
+    return { checked, unchecked };
+  }
+
+  /**
+   * The files of the latest revision of every task's checks in the project, one entry per task and
+   * path. Read for the ownership gate: a stored check file is the check author's, whatever the
+   * status of the task it decides.
+   */
+  async checkFilesOf(projectId: string): Promise<Array<{ readonly taskId: string; readonly path: string }>> {
+    const rows = await this.db
+      .selectDistinct({ taskId: taskChecks.taskId, revision: taskChecks.revision, files: taskChecks.files })
+      .from(taskChecks)
+      .where(
+        and(
+          eq(taskChecks.projectId, projectId),
+          sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
+        ),
+      )
+      .orderBy(asc(taskChecks.taskId));
+    const paths = new Map<string, { readonly taskId: string; readonly path: string }>();
+    for (const row of rows) {
+      const parsed = TaskCheckFilesSchema.safeParse(row.files);
+      if (!parsed.success) throw new TaskChecksCorrupt(row.taskId, row.revision, `files: ${z.prettifyError(parsed.error)}`);
+      for (const file of parsed.data) paths.set(`${row.taskId}\0${file.path}`, { taskId: row.taskId, path: file.path });
+    }
+    return [...paths.values()];
   }
 
   /** Appends the checks as the task's next revision; returns that revision. */

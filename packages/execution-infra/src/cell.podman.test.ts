@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -113,33 +113,37 @@ describe("cell on real podman", () => {
     expect(await ps(`label=ashara.task=${task}`)).toHaveLength(0);
   });
 
-  it("a read-only entry stays read-only to the cell while the rest of the mount is writable", async () => {
-    const tree = await mkdtemp(join(mountRoot, "ro-entry-"));
-    await mkdir(join(tree, ".git", "hooks"), { recursive: true });
-    await writeFile(join(tree, "gitlink"), "gitdir: /elsewhere\n");
+  // sprint0-run-2026-10-14 D13: a worktree's gitlink names its git dir's host path.
+  it("a masked gitlink is empty and unwritable in the cell; the host path it names is not readable there", async () => {
+    const tree = await mkdtemp(join(mountRoot, "masked-"));
+    const hostGitDir = join(mountRoot, "projects", "p", ".git", "worktrees", "task-x");
+    await writeFile(join(tree, ".git"), `gitdir: ${hostGitDir}\n`);
     const base = await loadBaseCell();
     const cell = await substrate.createCell({
       image: base.image,
       project: "proj-cell-test",
-      task: `${task}-ro`,
+      task: `${task}-mask`,
       role: "verifier",
       instance,
-      mount: { hostPath: tree, shared: true, readOnlyEntries: [".git", "gitlink"] },
+      mount: { hostPath: tree, shared: true, maskedEntries: [".git"] },
     });
     try {
-      const plant = await cell.exec(["sh", "-c", "echo x > .git/hooks/pre-commit"], { timeoutSeconds: 10 });
-      expect(plant.exitCode).not.toBe(0);
-      const rewrite = await cell.exec(["sh", "-c", "echo 'gitdir: planted' > gitlink"], { timeoutSeconds: 10 });
+      const read = await cell.exec(["cat", ".git"], { timeoutSeconds: 10 });
+      expect(read.exitCode).toBe(0);
+      expect(read.stdout).toBe("");
+      const search = await cell.exec(["sh", "-c", `grep -rs -- '${mountRoot}' /workspace; echo "exit $?"`], { timeoutSeconds: 10 });
+      expect(search.stdout).toBe("exit 1\n");
+      const rewrite = await cell.exec(["sh", "-c", "echo 'gitdir: planted' > .git"], { timeoutSeconds: 10 });
       expect(rewrite.exitCode).not.toBe(0);
-      const replace = await cell.exec(["sh", "-c", "rm -rf .git gitlink"], { timeoutSeconds: 10 });
+      const replace = await cell.exec(["sh", "-c", "rm -f .git"], { timeoutSeconds: 10 });
       expect(replace.exitCode).not.toBe(0);
       const work = await cell.exec(["sh", "-c", "echo ok > work.txt"], { timeoutSeconds: 10 });
       expect(work.exitCode).toBe(0);
     } finally {
       await cell.teardown();
     }
-    expect(await readFile(join(tree, "gitlink"), "utf8")).toBe("gitdir: /elsewhere\n");
-    expect(await readdir(join(tree, ".git", "hooks"))).toEqual([]);
+    // The host's gitlink is untouched: Z0's git still finds its git dir through it.
+    expect(await readFile(join(tree, ".git"), "utf8")).toBe(`gitdir: ${hostGitDir}\n`);
     expect(await readFile(join(tree, "work.txt"), "utf8")).toBe("ok\n");
   });
 

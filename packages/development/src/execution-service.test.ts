@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -16,7 +16,8 @@ import { toAgentOutput } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
 import { taskBranchName } from "./merge.js";
-import type { TaskCheckStore, TaskChecks } from "./task-checks.js";
+import { checkBranchName } from "./task-checks.js";
+import type { StoredCheckFile, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import { ensureTargetGitInit } from "./workspace.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
@@ -52,6 +53,8 @@ function brief(): AgentBrief {
       taskId: "11111111-1111-4111-8111-111111111111",
       goal: "do the thing",
       intent: "a thing",
+      visionVersion: 1,
+      assumptions: [],
       projectEnvironment: { kind: "to-define" },
       context: "end state: the thing exists",
       deliverables: [],
@@ -87,11 +90,23 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
     return {
       status,
       checkTaskId: "check-task",
+      revision: 1,
       detail: `${status} detail`,
       output: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "stale", chain: wrapError("development", "revalidateTaskChecks", "stale") },
+    };
+  }
+  if (status === "environment_change_needed") {
+    return {
+      status,
+      paths: ["environment/Containerfile"],
+      detail: `${status} detail`,
+      output: toAgentOutput({ ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null }, "m", { input: 0, output: 0 }),
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "environment change", chain: wrapError("development", "ownershipGate", "environment change") },
     };
   }
   if (status === "refused") {
@@ -104,6 +119,18 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "refused", chain: wrapError("development", "agentAttempt", refusal) },
+    };
+  }
+  if (status === "owner_unresolved") {
+    return {
+      status,
+      ownerRoleId: null,
+      reason: "the work item has no owner role",
+      detail: `${status} detail`,
+      output: null,
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "no owner", chain: wrapError("development", "assignAgent", "no owner") },
     };
   }
   if (status === "interrupted") {
@@ -135,7 +162,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "interrupted"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_needed", "interrupted"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -225,6 +252,19 @@ interface Probe {
   readonly requests: unknown[];
 }
 
+/** The roster role the test's tasks are owned by: a UUID id, as roster_roles stores it, and a name. */
+const OWNER_ROLE = { id: "44444444-4444-4444-8444-444444444444", name: "Greeting Developer" };
+
+/** The project's current vision as the intent source returns it: text and keyed assumptions. */
+const VISION = {
+  version: 2,
+  visionText: "build the thing",
+  inferences: [
+    { key: "A1", statement: "Greetings are written in lower case.", rationale: "the tender's sample", status: "Inferred" },
+    { key: "A2", statement: "The greeting file is plain text, one line.", rationale: "client answer", status: "Stated" },
+  ],
+};
+
 /** The checks a check author stored for the task: one that reads the greeting file the agent writes. */
 const STORED_CHECKS: TaskChecks = {
   checkTaskId: "33333333-3333-4333-8333-333333333333",
@@ -234,9 +274,10 @@ const STORED_CHECKS: TaskChecks = {
   files: [],
 };
 
-function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] = []): TaskCheckStore {
+function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] = [], checkFiles: readonly StoredCheckFile[] = []): TaskCheckStore {
   return {
-    completedOf: async () => [],
+    checkFilesOf: async () => checkFiles,
+    completedOf: async () => ({ checked: [], unchecked: [] }),
     checkedTasksOf: async () => checkedTasks,
     append: async () => {
       throw new Error("no checks may be appended");
@@ -251,6 +292,7 @@ function serviceOn(
   turns?: (probe: Probe) => TurnResult,
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
   shutdownSignal: AbortSignal = new AbortController().signal,
+  staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly reason: string } = "owned",
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [] };
   const events: Array<Record<string, unknown>> = [];
@@ -258,7 +300,7 @@ function serviceOn(
     config: { workdirBase },
     sessionStore: probe.sessions,
     knowledgeSink: { storeFinding: async () => void probe.findings++, storeInsight: async () => {} },
-    intentSource: { loadIntent: async () => "build the thing" },
+    intentSource: { loadIntent: async () => VISION },
     cells: {
       substrate,
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
@@ -276,9 +318,9 @@ function serviceOn(
       }),
     },
     staffing: {
-      staff: () => {
+      staff: async () => {
         probe.staffed++;
-        return { role: "developer", model: unusedModel };
+        return staffing === "owned" ? { kind: "staffed", staff: { role: OWNER_ROLE, model: unusedModel } } : staffing;
       },
     },
     attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
@@ -413,6 +455,45 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(existsSync(workdirBase)).toBe(false);
     vi.restoreAllMocks();
   });
+
+  // s-team-roster-m1: no default role stands in for a missing or unknown owner.
+  test("no roster role owns the task: owner_unresolved; no worktree, no cell, no model, no session", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noowner-")));
+    scratch.push(root);
+    const target = join(root, "target");
+    const workdirBase = join(root, "work");
+    await mkdir(target);
+    await ensureTargetGitInit(target);
+    await commitEnvironment(target);
+    const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
+    const substrate = new PodmanSubstrate({
+      podmanPath: "podman",
+      mountRoot: root,
+      runner: async (request) => {
+        if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+      },
+    });
+    const unresolved = { kind: "owner-unresolved", ownerRoleId: null, reason: "the work item has no owner role" } as const;
+    const { service, probe, events } = serviceOn(substrate, workdirBase, undefined, checkStore(STORED_CHECKS), undefined, unresolved);
+
+    const task = { ...someTask(), attempt: 3 };
+    const result = await service.execute(task, target);
+
+    expect(result.status).toBe("owner_unresolved");
+    if (result.status !== "owner_unresolved") return;
+    expect(result.ownerRoleId).toBeNull();
+    expect(result.reason).toBe("the work item has no owner role");
+    expect(result.attempt).toBe(3);
+    expect(result.errorEnvelope.chain.operation).toBe("assignAgent");
+    expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "assignAgent", attempt: 3 })]);
+    expect(probe.staffed).toBe(1);
+    expect(probe.modelCalls).toBe(0);
+    expect(probe.sessions.phases.size).toBe(0);
+    expect(await git(target, "branch", "--list", taskBranchName(task.id))).toBe("");
+    vi.restoreAllMocks();
+  });
 });
 
 // s-independent-verify-m1: no task is verified from nothing, and a check task decides exactly one task.
@@ -506,6 +587,12 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly wallClockRunsOutAfterFirstTurn?: boolean;
     /** The dispatch's ordinal, as the orchestrator's dispatch seam counted it; 1 when absent. */
     readonly attempt?: number;
+    /** Files the agent's first turn writes beside greet.txt, by path. */
+    readonly agentAlsoWrites?: Readonly<Record<string, string>>;
+    /** The project's stored check files, as the store reports them to the ownership gate. */
+    readonly checkFiles?: readonly StoredCheckFile[];
+    /** The task is a check task deciding one implementation task; an implementation task when absent. */
+    readonly checkWork?: boolean;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "") => ({
@@ -544,6 +631,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const mainBefore = await git(target, "rev-parse", "main");
     const workdirBase = join(root, "cells", "work");
     const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
+    /** Every `podman run`'s argv, as the substrate built it. */
+    const runs: string[][] = [];
 
     const substrate = new PodmanSubstrate({
       podmanPath: "podman",
@@ -553,6 +642,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
           case "info":
             return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
           case "run": {
+            runs.push([...args]);
             const role: Role = args.includes("ashara.role=verifier") ? "verifier" : args.includes("ashara.role=ci") ? "ci" : "developer";
             started.push({ role, image: args.find((arg) => arg.startsWith("sha256:") || arg.includes("@sha256:")) });
             return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
@@ -573,12 +663,13 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       await mkdir(workdirBase, { recursive: true });
       await writeFile(join(workdirBase, "checkouts"), "not a directory\n");
     }
-    const task = { ...someTask(), attempt: faults.attempt ?? 1 };
-    const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
+    const checkWork = faults.checkWork === true;
+    const task = { ...someTask(), attempt: faults.attempt ?? 1, workKind: checkWork ? ("check" as const) : ("implementation" as const) };
+    const workDir = join(workdirBase, (checkWork ? checkBranchName(task.id) : taskBranchName(task.id)).replace(/\//g, "-"));
     const shutdown = faults.shutdownDuringSecondTurn;
     // Read when the dispatch plans its work, after the environment's build reported its version.
     const stored = (probe: Probe): TaskCheckStore => ({
-      ...checkStore(null),
+      ...checkStore(null, checkWork ? [createWorkItemId()] : [], faults.checkFiles ?? []),
       latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", files: faults.storedFiles ?? [] }),
     });
     const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
@@ -610,20 +701,26 @@ describe("a substrate failure at any stage blocks the task on the environment", 
         return turn("run_command", { command: "true" });
       }
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
-      if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
+      if (probe.modelCalls === 1) {
+        writeFileSync(join(workDir, "greet.txt"), "hello\n");
+        for (const [path, content] of Object.entries(faults.agentAlsoWrites ?? {})) {
+          mkdirSync(dirname(join(workDir, path)), { recursive: true });
+          writeFileSync(join(workDir, path), content);
+        }
+      }
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
     }, stored, shutdown?.signal);
 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
     return {
-      result, events, warns, target, started, probe, workdirBase, taskId: task.id,
+      result, events, warns, target, started, runs, probe, workdirBase, taskId: task.id,
       mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "",
     };
   }
 
   test("an implementation task's cells start from the environment image; the version is recorded with the attempt", async () => {
-    const { result, started, probe, events, workdirBase, taskId } = await dispatch({});
+    const { result, started, runs, probe, events, workdirBase, taskId } = await dispatch({});
 
     expect(result.status, result.detail).toBe("completed");
     expect(probe.builds).toBe(1);
@@ -643,6 +740,19 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const { system } = z.object({ system: z.string() }).parse(first);
     expect(system).toContain(STATEMENT);
     expect(system).toContain(`version ${String(version)}`);
+
+    // s-team-roster-m1: the attempt runs as the work item's owner role, never a literal role.
+    expect(first).toMatchObject({ role: OWNER_ROLE });
+    expect(runs[0]).toContain(`ashara.role=${OWNER_ROLE.id}`);
+    expect(events.find((e) => e.event === "agent_launched")).toMatchObject({ roleId: OWNER_ROLE.id, role: OWNER_ROLE.name });
+    // The task cell sees the gitlink masked: no volume source is the worktree's .git, which names host paths.
+    const taskVolumes = (runs[0] ?? []).filter((_, i, all) => all[i - 1] === "-v");
+    expect(taskVolumes.some((v) => v.endsWith(":/workspace/.git:ro,Z") || v.endsWith(":/workspace/.git:ro,z"))).toBe(true);
+    expect(taskVolumes.some((v) => v.split(":")[0]?.endsWith("/.git"))).toBe(false);
+    // sprint0-run-2026-10-14 D9: the brief carries the vision's assumptions, not only its text.
+    expect(system).toContain("vision version 2");
+    expect(system).toContain("- A1 (Inferred): Greetings are written in lower case.");
+    expect(system).toContain("- A2 (Stated): The greeting file is plain text, one line.");
   });
 
   test.each([
@@ -731,6 +841,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.status, result.detail).toBe("checks_stale");
     if (result.status !== "checks_stale") return;
     expect(result.checkTaskId).toBe(STORED_CHECKS.checkTaskId);
+    expect(result.revision).toBe(STORED_CHECKS.revision);
     expect(result.detail).toContain(`check task ${STORED_CHECKS.checkTaskId}`);
     expect(result.errorEnvelope.outcome).toBe("blocked");
     expect(result.errorEnvelope.chain.operation).toBe("revalidateTaskChecks");
@@ -785,12 +896,91 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(true);
   });
 
+  // The review of t-shutdown-cancel-not-failure: the summary claimed a check task's work was kept.
+  test.each([
+    ["the shutdown signal", { shutdownDuringSecondTurn: new AbortController() }, "interrupted"],
+    ["a refused turn", { refusesSecondTurn: new PreCallRefusal("budget_cap: refused") }, "refused"],
+  ] satisfies ReadonlyArray<[string, Faults, ExecutionResult["status"]]>)(
+    "%s stops a check task: its summary says its partial work is discarded, and nothing of it is left",
+    async (_label, faults, status) => {
+      const { result, target, taskId } = await dispatch({ ...faults, checkWork: true });
+
+      expect(result.status, result.detail).toBe(status);
+      expect(result.detail).toContain("the check task's partial work is discarded");
+      expect(result.detail).not.toContain("kept on the task branch");
+      expect(await git(target, "branch", "--list", checkBranchName(taskId))).toBe("");
+    },
+  );
+
+  // The 93f7aeb7 review (a): a fault of Z0's own machinery inside run_checks was labelled "task cell".
+  test("Z0 cannot make run_checks' checkout: blocked as verification infrastructure, never the task cell", async () => {
+    const { result, events } = await dispatch({ agentRunsChecks: true, checkoutsBlocked: true });
+
+    expect(result.status, result.detail).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.unavailable).toBe("verification infrastructure (run_checks)");
+    expect(result.detail).toContain("stage agentAttempt (VerificationInfrastructureFault)");
+    expect(result.detail).toContain("the agent's work is kept on the task branch");
+    expect(events.some((e) => e.event === "task_failed")).toBe(false);
+  });
+
   test("the attempt's own wall clock running out stays a failure", async () => {
     const { result, events } = await dispatch({ wallClockRunsOutAfterFirstTurn: true });
 
     expect(result.status, result.detail).toBe("failed");
     expect(result.detail).toContain("wall_clock");
     expect(events.some((e) => e.event === "task_interrupted")).toBe(false);
+  });
+
+  // Sprint 0 run D5: an implementer's commit changed the environment's files and moved its version.
+  describe("the ownership gate: an implementer's branch touches only what its role may write", () => {
+    const CHECK_FILE: StoredCheckFile = { taskId: "44444444-4444-4444-8444-444444444444", path: "checks/greet.sh" };
+
+    test("a branch changing environment/Containerfile only: environment_change_needed naming it; nothing merged, no verifier", async () => {
+      const { result, events, started, probe, mainBefore, mainAfter, branchKept } = await dispatch({
+        agentAlsoWrites: { "environment/Containerfile": "FROM scratch\nRUN true\n" },
+        checkFiles: [CHECK_FILE],
+      });
+
+      expect(result.status, result.detail).toBe("environment_change_needed");
+      if (result.status !== "environment_change_needed") return;
+      expect(result.paths).toEqual(["environment/Containerfile"]);
+      expect(result.detail).toContain("environment files belong to the platform role; request an environment change");
+      expect(result.errorEnvelope.outcome).toBe("blocked");
+      expect(result.errorEnvelope.chain.operation).toBe("ownershipGate");
+      expect(started.map((s) => s.role)).toEqual(["developer"]);
+      expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "ownershipGate" })]);
+      expect(events.some((e) => e.event === "task_failed" || e.event === "gate_failed" || e.event === "task_completed")).toBe(false);
+      expect(probe.modelCalls).toBe(1);
+      expect(mainAfter).toBe(mainBefore);
+      expect(branchKept).toBe(true);
+    });
+
+    test("a branch writing a stored check file (and an environment file): failed naming both and both rules; nothing merged", async () => {
+      const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({
+        agentAlsoWrites: { "checks/greet.sh": "true\n", "environment/Containerfile": "FROM scratch\nRUN true\n" },
+        checkFiles: [CHECK_FILE],
+      });
+
+      expect(result.status, result.detail).toBe("failed");
+      expect(result.detail).toContain(`checks/greet.sh (checks of task ${CHECK_FILE.taskId})`);
+      expect(result.detail).toContain("check files belong to the check author");
+      expect(result.detail).toContain("environment/Containerfile");
+      expect(result.detail).toContain("environment files belong to the platform role");
+      expect(result.errorEnvelope?.chain.operation).toBe("ownershipGate");
+      expect(started.map((s) => s.role)).toEqual(["developer"]);
+      expect(events.filter((e) => e.event === "gate_failed")).toHaveLength(1);
+      expect(mainAfter).toBe(mainBefore);
+      expect(branchKept).toBe(true);
+    });
+
+    test("a branch clear of both: the gate passes and the work merges", async () => {
+      const { result, events, mainBefore, mainAfter } = await dispatch({ agentAlsoWrites: { "src/greet.sh": "cat greet.txt\n" }, checkFiles: [CHECK_FILE] });
+
+      expect(result.status, result.detail).toBe("completed");
+      expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
+      expect(mainAfter).not.toBe(mainBefore);
+    });
   });
 });
 

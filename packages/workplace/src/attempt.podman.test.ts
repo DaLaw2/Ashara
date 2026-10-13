@@ -96,13 +96,15 @@ describe("runAttempt on a real cell", () => {
         {
           projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
           taskId,
-          role: "worker",
+          role: { id: "worker", name: "Worker" },
           workKind: "implementation",
           model: gateway.resolveModel("Strong", "agent-runner"),
           cellImage: { kind: "base-cell", image: "base@sha256:0000000000000000000000000000000000000000000000000000000000000000", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
           brief: {
             goal: "Write src/hello.txt",
             intent: "A greeting file",
+            visionVersion: 1,
+            assumptions: [],
             projectEnvironment: { kind: "to-define" },
             context: "An empty workspace.",
             deliverables: ["src/hello.txt"],

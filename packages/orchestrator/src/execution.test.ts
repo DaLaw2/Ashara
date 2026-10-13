@@ -1,6 +1,6 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
 import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
+import { InvalidStatusTransition, createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
@@ -419,20 +419,32 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     ).not.toThrow();
   });
 
-  // The 30fb60d5 review (c): stale checks were classified VERIFICATION_GAP, replanned and lessoned against the implementer.
-  test("stored checks stale: Blocked naming the check task, never Failed, no failed approach, no failure router", async () => {
-    const detail = "the checks of task t (revision 1, check task c) were red-run on environment version e, but ...";
+
+  // ADR-074 addendum 2 d63: an implementer needing an environment change is Blocked in M1, not retried blindly.
+  test("environment change needed: Blocked naming the paths, never Failed, no failed approach, no failure router", async () => {
+    const detail = "ownership gate refused the work of t: environment files belong to the platform role; ...";
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
-      status: "checks_stale",
-      checkTaskId: "c",
+      status: "environment_change_needed",
+      paths: ["environment/Containerfile"],
       detail,
-      output: null,
+      output: {
+        status: "done",
+        summary: "wrote greet.sh and the Containerfile",
+        findings: [],
+        error: null,
+        error_detail: null,
+        total_tokens: { input: 100, output: 10 },
+        total_cost: 0.0006,
+        cost_measured: true,
+        turn_count: 4,
+        finish_reason: "completed",
+      },
       sessionId: "test-session",
       attempt: 1,
       errorEnvelope: {
         outcome: "blocked",
         summary: detail,
-        chain: { boundary: "development", operation: "revalidateTaskChecks", message: detail, timestamp: new Date().toISOString() },
+        chain: { boundary: "development", operation: "ownershipGate", message: detail, timestamp: new Date().toISOString() },
       },
     });
 
@@ -443,11 +455,188 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     const reason = stored().blockedReason;
-    expect(reason).toMatchObject({ source: "checks_stale", checkTaskId: "c", reason: detail });
+    expect(reason).toMatchObject({ source: "environment_change_needed", paths: ["environment/Containerfile"], reason: detail });
     expect(() =>
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
     ).not.toThrow();
   });
+
+  // s-team-roster-m1: an item no roster role owns blocks; no default role works it.
+  test("no owner role: Blocked with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
+    const detail = "no roster role can work task t: the work item has no owner role; no agent ran and nothing executed";
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+      status: "owner_unresolved",
+      ownerRoleId: null,
+      reason: "the work item has no owner role",
+      detail,
+      output: null,
+      sessionId: "test-session",
+      attempt: 1,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary: detail,
+        chain: { boundary: "development", operation: "assignAgent", message: "no owner", timestamp: new Date().toISOString() },
+      },
+    });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+    const reason = stored().blockedReason;
+    expect(reason).toEqual({ source: "owner_unresolved", ownerRoleId: null, reason: "the work item has no owner role" });
+    expect(parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }).blockedReason).toEqual(reason);
+  });
+});
+
+// The 30fb60d5 review (c): stale checks were classified VERIFICATION_GAP, replanned and lessoned against the implementer.
+// The 93f7aeb7 review (d): parked at Blocked naming the check task, nothing ever reopened it.
+describe("stored checks stale: the check task is reopened and the item waits on it", () => {
+  const CHECK_ID: WorkItemId = createWorkItemId();
+  const detail = "the checks of task t (revision 1, check task c) were red-run on environment version e, but ...";
+
+  function completedCheckTask(overrides: Partial<WorkItem> = {}): WorkItem {
+    return { ...freshPendingItem(), id: CHECK_ID, title: "write the checks", workKind: "check", status: "Completed", dispatchCount: 1, ...overrides };
+  }
+
+  function buildStaleDeps(options: { readonly checkTask: WorkItem | null; readonly revision: number; readonly checkTaskSaveLoses?: boolean }) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rows = new Map<string, WorkItem>([[ITEM_ID, freshPendingItem()]]);
+    if (options.checkTask !== null) rows.set(CHECK_ID, options.checkTask);
+    const written: Array<readonly [string, string]> = [];
+    const events: string[] = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const rowOf = (id: string): WorkItem => {
+      const row = rows.get(id);
+      if (row === undefined) throw new Error(`no row ${id}`);
+      return row;
+    };
+
+    const workItemRepo: WorkItemRepository = {
+      findById: async (id) => {
+        const row = rows.get(id);
+        return row === undefined ? null : copy(row);
+      },
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        const row = rowOf(item.id);
+        if (item.id === CHECK_ID && options.checkTaskSaveLoses === true) throw new InvalidStatusTransition(item.id, "Abandoned", item.status);
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        written.push([item.id === CHECK_ID ? "check" : "item", item.status]);
+        rows.set(item.id, { ...copy(item), dispatchCount: row.dispatchCount });
+      },
+      incrementDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
+        return row.dispatchCount + 1;
+      },
+      refundDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+        return row.dispatchCount - 1;
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listAllDependencies: notExercised("listAllDependencies"),
+      withTransaction: notExercised("withTransaction"),
+    };
+
+    const deps = coreLoopDeps({
+      workItemRepo,
+      eventStore: { publish: async (event) => void events.push(event.eventType) },
+      developmentService: {
+        execute: async () => ({
+          status: "checks_stale",
+          checkTaskId: CHECK_ID,
+          revision: options.revision,
+          detail,
+          output: null,
+          sessionId: "test-session",
+          attempt: 1,
+          errorEnvelope: {
+            outcome: "blocked",
+            summary: detail,
+            chain: { boundary: "development", operation: "revalidateTaskChecks", message: detail, timestamp: new Date().toISOString() },
+          },
+        }),
+      },
+      failedApproachRepo: { record: async () => { approaches++; } },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+    });
+    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), written, events, routed: () => routed, approaches: () => approaches };
+  }
+
+  const parses = (reason: StoredBlockedReason | undefined) => () =>
+    parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason });
+
+  test("within the bound: the check task back at Pending with the red run as its context, the item at Pending waiting, the dispatch given back", async () => {
+    const { deps, item, check, written, events, routed, approaches } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 1 });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    // The check task is saved first, so the item never waits on a check task that stayed Completed.
+    expect(written).toEqual([["item", "InProgress"], ["check", "Pending"], ["item", "Pending"]]);
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: undefined });
+    expect(check().status).toBe("Pending");
+    const context = check().blockedReason;
+    expect(context?.source).toBe("replan");
+    if (context?.source !== "replan") return;
+    expect(context.replanContext.detail).toContain(`task ${ITEM_ID} (revision 1)`);
+    expect(context.replanContext.detail).toContain(detail);
+    expect(parses(context)).not.toThrow();
+    expect(events).toEqual(expect.arrayContaining(["work_item.reopened", "work_item.awaiting_checks"]));
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
+
+  test("past the bound: the item parked with checks_rewrite_bound stating it; the check task left Completed", async () => {
+    const { deps, item, check } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 3 });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(item()).toMatchObject({ status: "Blocked", dispatchCount: 1 });
+    const reason = item().blockedReason;
+    expect(reason).toMatchObject({ source: "checks_rewrite_bound", checkTaskId: CHECK_ID, revision: 3, bound: 2 });
+    expect(reason?.source === "checks_rewrite_bound" ? reason.reason : "").toContain("written again 2 time(s), the bound of 2");
+    expect(parses(reason)).not.toThrow();
+    expect(check().status).toBe("Completed");
+  });
+
+  test.each([
+    ["the check task is not Completed", completedCheckTask({ status: "Abandoned" }), "is Abandoned, not Completed"],
+    ["the named item is not a check task", completedCheckTask({ workKind: "implementation" }), "of work kind implementation, not check"],
+    ["the check task is not on record", null, "is not on record"],
+  ])("%s: the item parked with checks_stale naming why it cannot be reopened", async (_label, checkTask, why) => {
+    const { deps, item } = buildStaleDeps({ checkTask, revision: 1 });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(item().status).toBe("Blocked");
+    const reason = item().blockedReason;
+    expect(reason).toMatchObject({ source: "checks_stale", checkTaskId: CHECK_ID });
+    expect(reason?.source === "checks_stale" ? reason.reason : "").toContain(why);
+    expect(parses(reason)).not.toThrow();
+  });
+
+  test("the check task moves before its reopen is saved: the item parked with checks_stale, never left waiting", async () => {
+    const { deps, item, written } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 1, checkTaskSaveLoses: true });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(written).toEqual([["item", "InProgress"], ["item", "Blocked"]]);
+    expect(item().blockedReason).toMatchObject({ source: "checks_stale", reason: expect.stringContaining("moved to Abandoned") });
+  });
+
 });
 
 // The 509bbbc5 review: a turn refused at a spend cap reached the FailureRouter as a failed attempt.

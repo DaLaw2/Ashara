@@ -86,7 +86,7 @@ export interface EnvironmentCheckScope {
   /** Where a fresh checkout for `purpose` goes: a path that does not exist, under the substrate's mount root. */
   readonly checkoutDir: (purpose: EnvironmentCheckoutPurpose) => string;
   readonly images: EnvironmentImages;
-  /** Creates a cell from `image` with the given role that mounts `hostPath` (with its `.git` read-only). */
+  /** Creates a cell from `image` with the given role that mounts `hostPath` (with its `.git` masked). */
   readonly createCell: (spec: Pick<CellSpec, "image" | "role"> & { readonly hostPath: string }) => Promise<Cell>;
   readonly teardownCell: (cell: Cell) => Promise<void>;
 }

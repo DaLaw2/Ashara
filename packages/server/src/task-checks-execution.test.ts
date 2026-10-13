@@ -147,13 +147,16 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => "A greeting page" },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", inferences: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
-      staff: (staffed) => ({
-        role: staffed.workKind === "check" ? "check-author" : "developer",
-        model: gateway.resolveModel("Strong", "agent-runner"),
+      staff: async (staffed) => ({
+        kind: "staffed",
+        staff: {
+          role: staffed.workKind === "check" ? { id: "check-author", name: "Check Author" } : { id: "developer", name: "Developer" },
+          model: gateway.resolveModel("Strong", "agent-runner"),
+        },
       }),
     },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },
@@ -318,7 +321,7 @@ describe("independent verification", () => {
     expect(existsSync(join(target, "checks"))).toBe(false);
   }, 300_000);
 
-  it("an implementation that rewrites its check file to pass still runs the stored original, and fails", async () => {
+  it("an implementation that rewrites its check file to pass is refused by the ownership gate before the merge", async () => {
     const goodbye = await plannedPair("Write bye.txt");
     const original = "grep goodbye bye.txt\n";
     await new TaskCheckRepository(db).append({
@@ -338,9 +341,10 @@ describe("independent verification", () => {
     ]);
 
     expect(result.status).toBe("failed");
-    expect(result.detail).toContain("post-merge verify failed");
-    expect(JSON.stringify(result.errorEnvelope)).toContain('Check \\"says goodbye\\": FAILED: exited 1');
+    expect(result.detail).toContain(`checks/bye.sh (checks of task ${goodbye.implementation.id})`);
+    expect(result.detail).toContain("check files belong to the check author");
     if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
+    expect(result.errorEnvelope.chain.operation).toBe("ownershipGate");
     const category = classifyFailure(result.errorEnvelope);
     expect(category).toBe("VERIFICATION_GAP");
     expect(new FailureRouter(2).route({
@@ -452,5 +456,23 @@ describe("post-merge regression suite", () => {
     expect(await readFile(join(target, "wave.txt"), "utf8")).toBe("wave\n");
     // The earlier task's check file was written over the checkout, never merged.
     expect(existsSync(join(target, "checks"))).toBe(false);
+  }, 300_000);
+
+  // The review of t-regression-suite-postmerge: CompletedTaskUnchecked blocked every later merge with no exit.
+  it("an earlier task Completed with no stored check is named as not re-run, never a block; the merge is decided by the rest", async () => {
+    const legacy = await plannedPair("Write legacy.txt");
+    await markCompleted(legacy.implementation.id);
+    const tide = await checkedPair("Write tide.txt", { name: "tides", command: "grep tide tide.txt" });
+
+    const { result, events } = await runTask(tide.implementation, [
+      toolCallTurn("write_file", { path: "tide.txt", content: "tide\n" }),
+      toolCallTurn("finish", { status: "done", summary: "Wrote tide.txt." }),
+    ]);
+
+    expect(result.status, result.detail).toBe("completed");
+    const verify = events.find((e) => e.event === "post_merge_verify");
+    expect(verify).toMatchObject({ verdict: "passed", uncheckedTasks: [legacy.implementation.id] });
+    expect(verify?.["regressionTasks"]).not.toContain(legacy.implementation.id);
+    expect(verify?.["details"]).toContain(`Not re-run, no check is stored for them (completed before checks existed): ${legacy.implementation.id}`);
   }, 300_000);
 });

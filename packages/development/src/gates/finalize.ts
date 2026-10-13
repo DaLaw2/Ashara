@@ -20,7 +20,8 @@ import { checkEntryPointRewrite } from "./entry-point.js";
 
 /**
  * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
- * into the checkout), after the merge or in a red run on main; not the substrate and not a check:
+ * into the checkout), after the merge, in a red run on main or in an implementer's run_checks; not
+ * the substrate and not a check:
  * no verdict exists, so the failure belongs to no party the task could answer for.
  */
 export class VerificationInfrastructureFault extends Error {

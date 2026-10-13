@@ -6,6 +6,7 @@ import {
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
+  DevSessionRepository,
   ProjectRepository,
   WorkItemRepository,
 } from "@ashara/db";
@@ -246,7 +247,7 @@ describe("one project's bad record at startup", () => {
         projects: new ProjectRepository(tx),
         eventStore: { publish: async () => undefined },
         failureRouter: new FailureRouter(3),
-        devSessionStore: { failStale: async () => 0 },
+        devSessionStore: { failStale: async () => 0, dispatchEvidence: (taskId, by) => new DevSessionRepository(db).dispatchEvidence(taskId, by) },
         workdirBase: `/nonexistent-${NAME_PREFIX}`,
       });
 

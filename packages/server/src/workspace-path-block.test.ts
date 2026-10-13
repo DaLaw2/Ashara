@@ -136,13 +136,13 @@ describe("a project whose workspace path is refused", () => {
         instance: `test-${randomUUID()}`,
       },
       llm: gateway,
-      staffing: { staff: () => ({ role: "developer", model: gateway.resolveModel("Strong", "agent-runner") }) },
+      staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build") },
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
-      checks: { completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), append: notExercised("append"), latest: notExercised("latest") },
+      checks: { checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), append: notExercised("append"), latest: notExercised("latest") },
       shutdownSignal: new AbortController().signal,
     });
 

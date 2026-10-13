@@ -8,6 +8,8 @@ function minimalBrief(): AgentBrief {
     taskId: "11111111-1111-4111-8111-111111111111",
     goal: "implement the thing",
     intent: "a project",
+    visionVersion: 1,
+    assumptions: [],
     projectEnvironment: { kind: "to-define" },
     context: "end state: the thing works",
     deliverables: [],

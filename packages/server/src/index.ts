@@ -19,6 +19,7 @@ import {
   ClientLoginFailureRepository,
   EnvironmentBuildRepository,
   createProjectWithTender,
+  latestRosterRoles,
   assertMigrationsCurrent,
   MIGRATIONS_DIR,
   MigrationDriftError,
@@ -83,6 +84,7 @@ import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
 import { createRosterStore } from "./roster-store.js";
+import { createAgentStaffing } from "./staffing.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -103,8 +105,6 @@ const ATTEMPT_POLICY = {
   perCommandTimeoutSeconds: 300,
   toolTimeoutSeconds: 60,
 };
-// Interim: s-team-roster-m1 replaces this with the roster's role for the task.
-const AGENT_ROLE = "developer";
 // Wall clock of one `podman build` of an environment version (build_environment and the
 // Sprint 0 gate); the podman client is killed after it.
 const ENVIRONMENT_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -248,19 +248,22 @@ async function main(): Promise<void> {
   const baseCell = await loadBaseCell();
   console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
 
-  // The agent half of each task's Assignment, resolved once per attempt.
-  const staffing: AgentStaffing = {
-    staff(task) {
+  // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
+  // role from the project's latest stored roster (s-team-roster-m1), and the model.
+  const staffing: AgentStaffing = createAgentStaffing({
+    async ownerOf(taskId) {
+      const row = await dbWorkItemRepo.findById(taskId);
+      return row === null ? { kind: "absent" } : { kind: "found", ownerRoleId: row.ownerRoleId };
+    },
+    latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
+    resolveModel(task) {
       const capability = determineCapability(task.dispatchCount, task.blockedReason);
       if (capability === "Frontier") {
         console.log(`[${task.id}] model escalated to Frontier (attempt ${task.attempt})`);
       }
-      return {
-        role: AGENT_ROLE,
-        model: llmGateway.resolveModel(capability, "agent-runner"),
-      };
+      return llmGateway.resolveModel(capability, "agent-runner");
     },
-  };
+  });
 
   const knowledgeSource: KnowledgeSource = {
     recentFindings: (scope, limit) => knowledgeRepo.recentFindingsScoped(scope.epicId, scope.queryText, limit),
@@ -290,15 +293,15 @@ async function main(): Promise<void> {
     },
   };
 
-  // The brief's intent: the task's project's current vision, VERBATIM
-  // visionText, never the summary: the paraphrase is the step that dropped "Go"
-  // in Run 36.
+  // The brief's intent: the task's project's current vision, its VERBATIM
+  // visionText (never the summary: the paraphrase is the step that dropped "Go"
+  // in Run 36) and its assumptions, which Development parses.
   const intentSource: ProjectIntentSource = {
-    async loadIntent(taskId: string): Promise<string | null> {
+    async loadIntent(taskId: string) {
       const projectId = await findTaskProjectId(taskId);
       if (!projectId) return null;
       const vision = await visionRepo.getCurrent(projectId);
-      return vision?.visionText ?? null;
+      return vision === null ? null : { version: vision.version, visionText: vision.visionText, inferences: vision.inferences };
     },
   };
 

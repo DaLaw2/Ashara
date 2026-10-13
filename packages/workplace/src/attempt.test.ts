@@ -122,13 +122,15 @@ function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
   return {
     projectId: parseProjectId("00000000-0000-4000-8000-000000000001"),
     taskId: createWorkItemId(),
-    role: "worker",
+    role: { id: "worker", name: "Worker" },
     workKind: "implementation",
     model,
     cellImage: { kind: "base-cell", image: "base@sha256:0000000000000000000000000000000000000000000000000000000000000000", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
     brief: {
       goal: "Write hello.txt",
       intent: "A greeting file",
+      visionVersion: 1,
+      assumptions: [],
       projectEnvironment: { kind: "to-define" },
       context: "An empty workspace.",
       deliverables: ["hello.txt"],
@@ -613,6 +615,11 @@ describe("run_checks", () => {
     const checks: CheckDefinitionPort = { define: () => ({ kind: "recorded", defined: 1 }) };
     await expect(
       runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
+    ).rejects.toBeInstanceOf(InvalidAssignment);
+    // Environment work is decided by its gate alone: it is never given the stored checks either.
+    const environment: EnvironmentCheckPort = { check: async () => ({ kind: "definition_refused", detail: "unused" }) };
+    await expect(
+      runAttempt({ ...assignment(), workKind: "environment" }, deps(scriptedLlm([]).llm, fakeCell().cell, { environment, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
   });
 });
