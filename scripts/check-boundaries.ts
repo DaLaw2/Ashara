@@ -1,8 +1,13 @@
 /**
  * ADR-044 Phase 7: Import boundary lint.
  *
- * Statically checks all cross-package @ashara/* imports against the
- * allowed matrix in boundary-rules.toml. Two rule shapes:
+ * Statically checks cross-package imports in src/ and test/ (test files
+ * included) against the allowed matrix in boundary-rules.toml. A
+ * cross-package import is an `@ashara/<pkg>` specifier (with or without a
+ * subpath) or a relative specifier that resolves into another package
+ * directory; a relative specifier that resolves outside packages/ is itself a
+ * violation. Only single-line `from`/`import` specifiers are recognised.
+ * Two rule shapes:
  *   allow            = [...]        which packages this package may import
  *   restrict.<pkg>   = [glob, ...]  which files inside this package may import <pkg>
  *
@@ -175,14 +180,10 @@ function collectTsFiles(dir: string): string[] {
       if (entry.isDirectory()) {
         if (entry.name === "node_modules") continue;
         walk(fullPath);
-      } else if (entry.isFile()) {
-        if (
-          entry.name.endsWith(".ts") &&
-          !entry.name.endsWith(".test.ts") &&
-          !entry.name.endsWith(".d.ts")
-        ) {
-          results.push(fullPath);
-        }
+      } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+        // Tests and declarations are scanned too: a test importing another BC's
+        // internals couples the packages exactly as production code would.
+        results.push(fullPath);
       }
     }
   }
@@ -196,23 +197,51 @@ function collectTsFiles(dir: string): string[] {
 // ---------------------------------------------------------------------------
 
 interface ImportRef {
-  line: number;
-  pkg: string;
+  readonly line: number;
+  readonly specifier: string;
+  /** Target package, or null when a relative specifier resolves outside packages/. */
+  readonly pkg: string | null;
 }
 
-const IMPORT_RE = /from\s+["']@ashara\/([a-z][a-z0-9-]*)["']/g;
+// `from "@ashara/x"`, side-effect `import "@ashara/x"`, and type-position or
+// dynamic `import("@ashara/x")`, each with an optional subpath ("@ashara/x/sub").
+const PACKAGE_IMPORT_RE = /\b(?:from|import)\s*\(?\s*["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["']/g;
 
-function extractAsharaImports(content: string): ImportRef[] {
-  const refs: ImportRef[] = [];
+// Relative specifiers in the same positions: a path that leaves the importing
+// package reaches another package's internals without naming it.
+const RELATIVE_IMPORT_RE = /\b(?:from|import)\s*\(?\s*["'](\.{1,2}\/[^"']*)["']/g;
+
+function scanLines(content: string, re: RegExp, onMatch: (line: number, match: RegExpExecArray) => void): void {
   const lines = content.split("\n");
-
   for (let i = 0; i < lines.length; i++) {
     let match: RegExpExecArray | null;
-    IMPORT_RE.lastIndex = 0;
-    while ((match = IMPORT_RE.exec(lines[i])) !== null) {
-      refs.push({ line: i + 1, pkg: match[1] });
+    re.lastIndex = 0;
+    while ((match = re.exec(lines[i])) !== null) {
+      onMatch(i + 1, match);
     }
   }
+}
+
+function extractAsharaImports(
+  content: string,
+  filePath: string,
+  packagesDir: string,
+  fromPkg: string,
+): ImportRef[] {
+  const refs: ImportRef[] = [];
+
+  scanLines(content, PACKAGE_IMPORT_RE, (line, match) => {
+    refs.push({ line, specifier: match[1], pkg: match[2] });
+  });
+
+  scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
+    const specifier = match[1];
+    const target = path.relative(packagesDir, path.resolve(path.dirname(filePath), specifier));
+    const targetPkg = target.split(path.sep)[0];
+    if (targetPkg === fromPkg) return;
+    const escapes = target === "" || targetPkg === ".." || path.isAbsolute(target);
+    refs.push({ line, specifier, pkg: escapes ? null : targetPkg });
+  });
 
   return refs;
 }
@@ -225,7 +254,7 @@ interface Violation {
   file: string;
   line: number;
   fromPkg: string;
-  importedPkg: string;
+  specifier: string;
   reason: string;
 }
 
@@ -271,35 +300,41 @@ function main(): void {
       throw new BoundaryRulesCoverageError(rulesRelative, pkgName, `${path.relative(root, srcDir)} does not exist`);
     }
 
-    const files = collectTsFiles(srcDir);
+    // src/ is required; test/ is optional and scanned under the same rule.
+    const testDir = path.join(pkgRoot, "test");
+    const files = [
+      ...collectTsFiles(srcDir),
+      ...(fs.existsSync(testDir) ? collectTsFiles(testDir) : []),
+    ];
 
     for (const filePath of files) {
       filesChecked++;
       const content = fs.readFileSync(filePath, "utf-8");
-      const imports = extractAsharaImports(content);
+      const imports = extractAsharaImports(content, filePath, packagesDir, pkgName);
       const pkgRelative = path.relative(pkgRoot, filePath).split(path.sep).join("/");
 
       for (const ref of imports) {
+        const violation = (reason: string): Violation => ({
+          file: path.relative(root, filePath),
+          line: ref.line,
+          fromPkg: pkgName,
+          specifier: ref.specifier,
+          reason,
+        });
+
+        if (ref.pkg === null) {
+          violations.push(violation("relative import leaves packages/"));
+          continue;
+        }
+
         if (!isWildcard && !rule.allow.includes(ref.pkg)) {
-          violations.push({
-            file: path.relative(root, filePath),
-            line: ref.line,
-            fromPkg: pkgName,
-            importedPkg: ref.pkg,
-            reason: "not in allow list",
-          });
+          violations.push(violation(`package "${ref.pkg}" not in allow list`));
           continue;
         }
 
         const soleImporters = rule.restrict.get(ref.pkg);
         if (soleImporters !== undefined && !matchesAnyGlob(pkgRelative, soleImporters)) {
-          violations.push({
-            file: path.relative(root, filePath),
-            line: ref.line,
-            fromPkg: pkgName,
-            importedPkg: ref.pkg,
-            reason: `only ${soleImporters.join(", ")} may import it`,
-          });
+          violations.push(violation(`only ${soleImporters.join(", ")} may import package "${ref.pkg}"`));
         }
       }
     }
@@ -310,7 +345,7 @@ function main(): void {
     console.error("\nBoundary violations found:\n");
     for (const v of violations) {
       console.error(
-        `  ${v.file}:${v.line}  ${v.fromPkg} -> @ashara/${v.importedPkg}  (${v.reason})`
+        `  ${v.file}:${v.line}  ${v.fromPkg} -> "${v.specifier}"  (${v.reason})`
       );
     }
     console.error(`\n${filesChecked} files checked, ${violations.length} violations found\n`);
