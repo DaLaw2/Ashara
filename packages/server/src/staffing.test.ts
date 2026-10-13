@@ -37,6 +37,7 @@ function staffingWith(ownerRoleId: string | null | "absent", rows: unknown = LAT
   return createAgentStaffing({
     ownerOf: async () => (ownerRoleId === "absent" ? { kind: "absent" } : { kind: "found", ownerRoleId }),
     latestRosterRows: async () => rows,
+    latestRosterRevision: async () => (Array.isArray(rows) && rows.length > 0 ? 2 : null),
     resolveModel: () => model,
   });
 }
@@ -59,6 +60,7 @@ describe("dispatch staffs the work item's owner from the latest stored roster", 
     expect(staffed.kind).toBe("owner-unresolved");
     if (staffed.kind !== "owner-unresolved") return;
     expect(staffed.ownerRoleId).toBe(owner === "absent" ? null : owner);
+    expect(staffed.rosterRevision).toBe(rows.length > 0 ? 2 : null);
     expect(staffed.reason).toContain(reason);
   });
 });

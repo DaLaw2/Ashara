@@ -20,6 +20,20 @@ export function taskBranchName(taskId: string): string {
   return `task/${taskId}`;
 }
 
+/**
+ * Deletes the task's branch, so its next attempt starts a fresh one from main (createWorkdir)
+ * instead of resuming it. Taken when an operator unblocks a task Blocked with
+ * environment_change_needed: that branch holds edits to environment-owned files, made and checked
+ * on an environment the operator has since changed on main. Nothing of it was merged. No branch is
+ * nothing to do; a branch git refuses to delete (a worktree still holds it) throws.
+ */
+export async function discardTaskBranch(targetPath: string, taskId: string): Promise<"deleted" | "absent"> {
+  const branch = taskBranchName(taskId);
+  if (!(await branchExists(targetPath, branch))) return "absent";
+  await runHostGit(targetRepo(targetPath), ["branch", "-D", branch]);
+  return "deleted";
+}
+
 export async function branchExists(targetPath: string, branch: string): Promise<boolean> {
   try {
     await runHostGit(targetRepo(targetPath), ["rev-parse", "--verify", `refs/heads/${branch}`]);

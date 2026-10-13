@@ -140,6 +140,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
     return {
       status,
       ownerRoleId: null,
+      rosterRevision: 1,
       reason: "the work item has no owner role",
       detail: `${status} detail`,
       output: null,
@@ -307,7 +308,7 @@ function serviceOn(
   turns?: (probe: Probe) => TurnResult,
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
   shutdownSignal: AbortSignal = new AbortController().signal,
-  staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly reason: string } = "owned",
+  staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string } = "owned",
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [] };
   const events: Array<Record<string, unknown>> = [];
@@ -490,7 +491,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
         return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
       },
     });
-    const unresolved = { kind: "owner-unresolved", ownerRoleId: null, reason: "the work item has no owner role" } as const;
+    const unresolved = { kind: "owner-unresolved", ownerRoleId: null, rosterRevision: 1, reason: "the work item has no owner role" } as const;
     const { service, probe, events } = serviceOn(substrate, workdirBase, undefined, checkStore(STORED_CHECKS), undefined, unresolved);
 
     const task = { ...someTask(), attempt: 3 };
@@ -499,6 +500,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(result.status).toBe("owner_unresolved");
     if (result.status !== "owner_unresolved") return;
     expect(result.ownerRoleId).toBeNull();
+    expect(result.rosterRevision).toBe(1);
     expect(result.reason).toBe("the work item has no owner role");
     expect(result.attempt).toBe(3);
     expect(result.errorEnvelope.chain.operation).toBe("assignAgent");

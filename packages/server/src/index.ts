@@ -20,6 +20,7 @@ import {
   EnvironmentBuildRepository,
   CheckDisputeRepository,
   createProjectWithTender,
+  latestRosterRevision,
   latestRosterRoles,
   assertMigrationsCurrent,
   MIGRATIONS_DIR,
@@ -39,8 +40,8 @@ import {
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
-import { DevelopmentService } from "@ashara/development";
-import { CheckDisputeReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
+import { DevelopmentService, discardTaskBranch } from "@ashara/development";
+import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation } from "@ashara/organization";
 import type {
   AgentStaffing,
@@ -84,6 +85,7 @@ import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
+import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
 import { createRosterStore } from "./roster-store.js";
 import { createAgentStaffing } from "./staffing.js";
@@ -258,6 +260,7 @@ async function main(): Promise<void> {
       return row === null ? { kind: "absent" } : { kind: "found", ownerRoleId: row.ownerRoleId };
     },
     latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
+    latestRosterRevision: (projectId) => latestRosterRevision(db, projectId),
     resolveModel(task) {
       const capability = determineCapability(task.dispatchCount, task.blockedReason);
       if (capability === "Frontier") {
@@ -339,7 +342,8 @@ async function main(): Promise<void> {
     shutdownSignal: abortController.signal,
   });
 
-  const checkDisputes = new CheckDisputeRepository(db);
+  // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
+  const blockReports = new BlockReports(createBlockReportStore(db));
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
     workItemRepo,
@@ -373,8 +377,10 @@ async function main(): Promise<void> {
     }),
     planReports: new PlanReports(createPlanReportStore(db)),
     stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
-    checkDisputes,
-    disputeReports: new CheckDisputeReports(checkDisputes),
+    checkDisputes: new CheckDisputeRepository(db),
+    blockReports,
+    disputeReports: blockReports,
+    parkedExits: createParkedExitChecks(db),
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -390,6 +396,12 @@ async function main(): Promise<void> {
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
+    async discardTaskBranch(projectId, taskId) {
+      const project = await projectRepo.get(projectId);
+      if (project === null || project.workspacePath === null) return;
+      const result = await discardTaskBranch(project.workspacePath, taskId);
+      console.log(`[unblock] task ${taskId}: branch ${result === "deleted" ? "deleted" : "absent"}; it restarts from main`);
+    },
   };
 
   // The web client (ADR-076) authenticates with a session cookie, never the API token.

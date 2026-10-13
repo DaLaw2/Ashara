@@ -7,6 +7,7 @@ import {
   parseRunScope,
   parseProjectId,
   parseWorkKind,
+  parseWorkItemId,
 } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 
@@ -109,9 +110,9 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
       const rows = await db.findChildren(parentId);
       return rows.map(rowToWorkItem);
     },
-    async listAllDependencies() {
-      const rows = await db.listAllDependencies();
-      return rows as Array<{ fromId: WorkItemId; toId: WorkItemId }>;
+    async listDependenciesByProject(projectId) {
+      const rows = await db.listDependenciesByProject(projectId);
+      return rows.map((row) => ({ fromId: parseWorkItemId(row.fromId), toId: parseWorkItemId(row.toId) }));
     },
     async withTransaction(fn) {
       return db.withTransaction((txDb) => fn(adaptWorkItemRepo(txDb)));

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
+import type { ProjectId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
 import { parseWorkItemStatus, parseProjectId, InvalidStatusTransition } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -38,6 +38,11 @@ export interface AppDeps extends ClientChannelDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly projectRepo: ProjectRepository;
+  /**
+   * Deletes a task's branch in its project's workspace, so its next attempt starts fresh from
+   * main; nothing to do when the project has no workspace or the task no branch.
+   */
+  readonly discardTaskBranch: (projectId: ProjectId, taskId: string) => Promise<void>;
 }
 
 type AppEnv = { Variables: { deps: AppDeps } };
@@ -69,7 +74,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.patch("/work-items/:id/status", async (c) => {
-    const { workItemRepo, eventStore } = c.get("deps");
+    const { workItemRepo, eventStore, discardTaskBranch } = c.get("deps");
     const id = c.req.param("id");
     const body = await c.req.json();
 
@@ -123,6 +128,22 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           if (previousStatus === "Failed") {
             replanWorkItem(item);
           } else {
+            // An item refused for environment edits restarts from main, never on the branch that
+            // holds them (discardTaskBranch). The branch goes first: a failure leaves it Blocked.
+            if (item.blockedReason?.source === "environment_change_needed") {
+              try {
+                await discardTaskBranch(item.projectId, item.id);
+              } catch (e) {
+                return c.json(
+                  {
+                    error:
+                      `cannot unblock ${item.id}: its branch, which holds environment edits, could not be deleted ` +
+                      `(${e instanceof Error ? e.message : String(e)}); it stays Blocked`,
+                  },
+                  409,
+                );
+              }
+            }
             unblockWorkItem(item);
           }
           break;

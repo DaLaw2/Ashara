@@ -55,8 +55,8 @@ export {
 
 export type { StoredTaskSpec } from "./task-spec.js";
 
-export type { StoredBlockedReason } from "./blocked-reason.js";
-export { blockedReasonToRecord, withSalvagedResult } from "./blocked-reason.js";
+export type { BlockedExit, StoredBlockedReason } from "./blocked-reason.js";
+export { blockedExitOf, blockedReasonToRecord, withSalvagedResult } from "./blocked-reason.js";
 
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 

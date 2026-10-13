@@ -1,4 +1,4 @@
-import type { WorkItemId, WorkItemStatus } from "@ashara/shared";
+import type { ProjectId, WorkItemId, WorkItemStatus } from "@ashara/shared";
 import type { WorkItemRepository } from "./repository.js";
 import { CycleDetected } from "./errors.js";
 
@@ -8,7 +8,7 @@ import { CycleDetected } from "./errors.js";
  *  - `waiting` — at least one dependency is still in flight (Pending/InProgress/Failed);
  *                a Failed dependency counts as waiting because recovery may replan it.
  *  - `blocked` — at least one dependency is permanently unsatisfiable (an Abandoned
- *                item, directly or transitively), so the
+ *                item, directly or transitively, or a cycle), so the
  *                item can never become dispatchable and must be routed as
  *                blocked-with-reason rather than waiting forever.
  */
@@ -34,8 +34,8 @@ export interface DependencyContext {
 export interface DependencyResolutionResult {
   readonly resolution: DependencyResolution;
   /**
-   * Root-cause Abandoned dependency ids that make this item unsatisfiable (direct or
-   * transitive). Empty unless `resolution === "blocked"`. It carries the "blocked"
+   * Root-cause ids that make this item unsatisfiable (direct or transitive): Abandoned
+   * dependencies, and for a cycle the item on it where resolution closed it. Empty unless `resolution === "blocked"`. It carries the "blocked"
    * resolution up the dependency chain: a dependent inherits its unsatisfiable
    * dependency's root causes, so the resolution stays "blocked" transitively.
    */
@@ -51,17 +51,45 @@ export class DependencyGraph {
   private edges: Map<string, Set<string>> = new Map();
   private reverseEdges: Map<string, Set<string>> = new Map();
   private nodes: Set<string> = new Set();
+  private readonly cycleEdges: CycleDetected[] = [];
 
-  static async load(repo: WorkItemRepository): Promise<DependencyGraph> {
-    const pairs = await repo.listAllDependencies();
+  /**
+   * One project's dependency graph: the edges whose dependent item is the project's (the
+   * dependencies table has no project_id). An edge that closes a cycle is kept and reported in
+   * `cycles`, never thrown: the cycle is that project's alone, and resolution parks its members
+   * instead of every project's gate failing on it.
+   */
+  static async load(repo: WorkItemRepository, projectId: ProjectId): Promise<DependencyGraph> {
+    const pairs = await repo.listDependenciesByProject(projectId);
     const graph = new DependencyGraph();
     for (const { fromId, toId } of pairs) {
-      graph.addEdge(fromId, toId);
+      try {
+        graph.addEdge(fromId, toId);
+      } catch (err) {
+        if (!(err instanceof CycleDetected)) throw err;
+        graph.link(fromId, toId);
+        graph.cycleEdges.push(err);
+      }
     }
     return graph;
   }
 
+  /** The edges load() kept although each closed a cycle; empty for an acyclic graph. */
+  get cycles(): readonly CycleDetected[] {
+    return this.cycleEdges;
+  }
+
+  /** Adds the edge, or throws CycleDetected naming it and leaves the graph as it was. */
   addEdge(fromId: WorkItemId, toId: WorkItemId): void {
+    const added = this.link(fromId, toId);
+    if (this.hasCycle()) {
+      this.unlink(fromId, toId, added);
+      throw new CycleDetected(fromId, toId);
+    }
+  }
+
+  private link(fromId: string, toId: string): { readonly from: boolean; readonly to: boolean } {
+    const added = { from: !this.nodes.has(fromId), to: !this.nodes.has(toId) };
     this.nodes.add(fromId);
     this.nodes.add(toId);
 
@@ -78,22 +106,26 @@ export class DependencyGraph {
       this.reverseEdges.set(toId, incoming);
     }
     incoming.add(fromId);
+    return added;
+  }
 
-    if (this.hasCycle()) {
-      outgoing.delete(toId);
-      if (outgoing.size === 0) this.edges.delete(fromId);
-      incoming.delete(fromId);
-      if (incoming.size === 0) this.reverseEdges.delete(toId);
-      throw new CycleDetected();
-    }
+  private unlink(fromId: string, toId: string, added: { readonly from: boolean; readonly to: boolean }): void {
+    const outgoing = this.edges.get(fromId);
+    outgoing?.delete(toId);
+    if (outgoing?.size === 0) this.edges.delete(fromId);
+    const incoming = this.reverseEdges.get(toId);
+    incoming?.delete(fromId);
+    if (incoming?.size === 0) this.reverseEdges.delete(toId);
+    if (added.from) this.nodes.delete(fromId);
+    if (added.to) this.nodes.delete(toId);
   }
 
   /**
    * Resolves every node's dependency state in one memoized pass. The returned map
    * contains entries only for items that appear in at least one dependency edge —
    * items with no edges are absent, so callers (e.g. `isMet`) must handle absence
-   * themselves. Traversal is safe
-   * because addEdge rejects cycles.
+   * themselves. A graph load() kept a cycle in resolves each item on it, and each
+   * item waiting on it, as blocked by the cycle.
    */
   resolveDependencies(ctx: DependencyContext): Map<string, DependencyResolutionResult> {
     const memo = new Map<string, DependencyResolutionResult>();
@@ -104,10 +136,12 @@ export class DependencyGraph {
   }
 
   /**
-   * Recurses into a node's dependencies (via classifyDependency) with no visited-set
-   * of its own: termination relies on the graph being acyclic, which addEdge enforces
-   * by rejecting any edge that would create a cycle (CycleDetected). The memo also
-   * caps each node to one computation.
+   * Recurses into a node's dependencies (via classifyDependency). `resolving` holds every node
+   * entered in this pass: a node met again before it is memoized is on a cycle, and resolves as
+   * blocked by itself, which every node of the cycle (and each waiting on it) inherits. Once
+   * memoized, a node is never computed again, so the recursion terminates on a cyclic graph too.
+   * A Completed dependency (or one with a Completed equivalent) is satisfied before any
+   * recursion, so a cycle through finished work blocks nothing.
    */
   private resolveNode(
     itemId: string,

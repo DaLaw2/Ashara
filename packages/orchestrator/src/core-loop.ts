@@ -1,9 +1,10 @@
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
-import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
+import { PlanningService } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
+import { releaseClearedBlocks } from "./parked-exits.js";
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
 function logIntake(outcome: IntakeOutcome): void {
@@ -75,6 +76,15 @@ export class CoreLoop {
       }
     }
 
+    // Blocks recorded in an earlier cycle (or before a restart), a project's return to work, and
+    // each task's block: one plain report each to the client. No LLM call, so before the
+    // spend-cap check: a project the budget cap blocked is told so.
+    for (const report of await deps.blockReports.runPending()) {
+      if (report.kind !== "project-blocked") {
+        console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      }
+    }
+
     // Every step below makes LLM calls, each admitted by Finance's spend cap.
     const atCap = await deps.spendCap.deploymentStop();
     if (atCap) return stopped(atCap);
@@ -112,11 +122,19 @@ export class CoreLoop {
       }
     }
 
-    const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo);
+    // Blocked tasks whose cause cleared by itself go back to Pending before the gate reads them.
+    await releaseClearedBlocks({
+      workItemRepo: deps.workItemRepo,
+      eventStore: deps.eventStore,
+      projects: deps.projectRepo,
+      checks: deps.parkedExits,
+    });
+
+    const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore);
     if (eligible.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
-    const graph = await DependencyGraph.load(deps.workItemRepo);
-    const batch = PlanningService.select(eligible, deps.config.maxBatchSize, graph.computeUnlockWeights());
+    const weights = await PlanningService.unlockWeights(deps.workItemRepo, eligible);
+    const batch = PlanningService.select(eligible, deps.config.maxBatchSize, weights);
 
     // Each task gets its own worktree (workspace.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a

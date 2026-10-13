@@ -85,6 +85,9 @@ function appDeps(): AppDeps {
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
+    discardTaskBranch: async () => {
+      throw new Error("discardTaskBranch: not exercised");
+    },
   };
 }
 

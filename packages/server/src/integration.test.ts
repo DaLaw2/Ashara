@@ -35,6 +35,8 @@ const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
 const createdProjectIds: string[] = [];
 let suiteClientId: string;
+const discardedBranches: Array<{ projectId: string; taskId: string }> = [];
+let branchDiscardFails = false;
 
 /** A project owned by this suite; its rows are removed in afterAll. */
 async function newProject(): Promise<ProjectId> {
@@ -96,6 +98,10 @@ beforeAll(async () => {
       const created = await createProjectWithTender(db, clientId, projectName, body);
       createdProjectIds.push(created.project.id);
       return created;
+    },
+    async discardTaskBranch(projectId, taskId) {
+      discardedBranches.push({ projectId, taskId });
+      if (branchDiscardFails) throw new Error("git refused: a worktree still holds the branch");
     },
   };
 
@@ -189,6 +195,55 @@ describe("Work Items", () => {
       status: "Pending",
     });
     expect(res.status).toBe(400);
+  });
+
+  /** A Task Blocked with `blockedReason`, in a project of this suite. */
+  async function blockedTask(blockedReason: unknown): Promise<{ id: string; projectId: ProjectId }> {
+    const id = randomUUID();
+    const projectId = await newProject();
+    await pool.query(
+      `INSERT INTO work_items (id, level, status, title, blocked_reason, run_scope, project_id)
+       VALUES ($1, 'Task', 'Blocked', 'Blocked task', $2::jsonb, $3, $4)`,
+      [id, JSON.stringify(blockedReason), RUN_SCOPE_AD_HOC, projectId],
+    );
+    createdWorkItemIds.push(id);
+    return { id, projectId };
+  }
+
+  const ENVIRONMENT_EDITS = { source: "environment_change_needed", paths: ["environment/environment.toml"], reason: "edited" };
+
+  test("unblocking a task refused for environment edits deletes its branch first, so it restarts from main", async () => {
+    const task = await blockedTask(ENVIRONMENT_EDITS);
+    discardedBranches.length = 0;
+
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+
+    expect(res.status).toBe(200);
+    expect(discardedBranches).toEqual([{ projectId: task.projectId, taskId: task.id }]);
+    expect(await statusOf(task.id)).toBe("Pending");
+  });
+
+  test("a branch that cannot be deleted refuses the unblock: the task stays Blocked", async () => {
+    const task = await blockedTask(ENVIRONMENT_EDITS);
+    branchDiscardFails = true;
+    try {
+      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toContain("stays Blocked");
+    } finally {
+      branchDiscardFails = false;
+    }
+    expect(await statusOf(task.id)).toBe("Blocked");
+  });
+
+  test("unblocking any other block keeps the task's branch", async () => {
+    const task = await blockedTask({ source: "api", note: "held by hand" });
+    discardedBranches.length = 0;
+
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+
+    expect(res.status).toBe(200);
+    expect(discardedBranches).toEqual([]);
   });
 });
 

@@ -62,7 +62,7 @@ describe("first-plan report", () => {
 
     const outcomes = await reports.runPending();
 
-    expect(blocked).toEqual([{ errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) }]);
+    expect(blocked).toEqual([{ category: "fault", errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) }]);
     expect(outcomes).toEqual([{ kind: "project-blocked", projectId, cause: blocked[0] }]);
     expect(posted).toHaveLength(0);
   });

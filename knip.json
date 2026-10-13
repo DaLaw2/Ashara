@@ -4,7 +4,7 @@
   "tags": ["-testseam"],
   "workspaces": {
     ".": {
-      "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts", "scripts/client.ts"],
+      "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts", "scripts/client.ts", "scripts/project.ts"],
       "project": ["scripts/**/*.ts", "!scripts/**/*.test.ts"],
       "vitest": false
     },

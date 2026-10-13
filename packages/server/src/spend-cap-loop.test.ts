@@ -94,7 +94,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
       addDependency: notExercised("addDependency"),
       getDependencies: notExercised("getDependencies"),
       findChildren: notExercised("findChildren"),
-      listAllDependencies: notExercised("listAllDependencies"),
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     },
     eventStore: { publish: notExercised("publish") },
@@ -116,6 +116,8 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     planReports: { runPending: async () => [] },
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    blockReports: { runPending: async () => [] },
+    parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     ...parts,
   };
 }

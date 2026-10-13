@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { parseProjectId, type ProjectBlockCause, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { projects } from "../schema.js";
+import { projectBlocks, projects } from "../schema.js";
 
 export interface ProjectRecord {
   readonly id: ProjectId;
@@ -122,19 +122,79 @@ export class ProjectRepository {
   }
 
   /**
-   * Blocks an active project and records why (migration 025). A project already
+   * Blocks an active project and records why (migration 025), with the cause's
+   * category (migration 040); the projects_block_episode trigger opens the block's
+   * episode, which the Liaison reports to the client once. A project already
    * blocked keeps its status and the cause it was first blocked with, so the
    * earliest cause stays on record. A project that does not exist throws.
    */
   async block(id: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> {
     const [row] = await this.db
       .update(projects)
-      .set({ status: "blocked", blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
+      .set({
+        status: "blocked",
+        blockedCategory: cause.category,
+        blockedErrorClass: cause.errorClass,
+        blockedReason: cause.reason,
+      })
       .where(and(eq(projects.id, id), eq(projects.status, "active")))
       .returning({ id: projects.id });
     if (row) return "blocked";
     const [existing] = await this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).limit(1);
     if (!existing) throw new ProjectNotFound(id, "block the project");
     return "already-blocked";
+  }
+
+  /**
+   * The operator's way out of 'blocked' (migration 040), after the cause is cleared: in one
+   * transaction with the project row locked, the open block episode is ended with who and why,
+   * and the project returns to 'active' with its cause cleared. A project whose first planning
+   * gave up has its planning record reset, so first planning runs again from no attempts. The
+   * Liaison then tells the client, once, that work resumed. Only a blocked project is unblocked:
+   * any other status throws ProjectNotBlocked, and nothing is written.
+   */
+  async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
+    return this.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ status: projects.status, planStoppedAt: projects.planStoppedAt })
+        .from(projects)
+        .where(eq(projects.id, id))
+        .for("update");
+      if (!locked) throw new ProjectNotFound(id, "unblock the project");
+      if (locked.status !== "blocked") throw new ProjectNotBlocked(id, locked.status);
+
+      const [episode] = await tx
+        .update(projectBlocks)
+        .set({ endedAt: sql`now()`, endKind: "unblocked", unblockedBy: by, unblockReason: reason })
+        .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)))
+        .returning({ id: projectBlocks.id });
+      if (!episode) throw new BlockEpisodeMissing(id);
+
+      const planningReset = locked.planStoppedAt === null ? {} : { planStoppedAt: null, planAttempts: 0, planLastError: null };
+      await tx
+        .update(projects)
+        .set({ status: "active", blockedCategory: null, blockedErrorClass: null, blockedReason: null, ...planningReset })
+        .where(eq(projects.id, id));
+      return { episodeId: episode.id };
+    });
+  }
+}
+
+/** An unblock named a project that is not blocked. */
+class ProjectNotBlocked extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly status: string,
+  ) {
+    super(`cannot unblock project ${projectId}: it is '${status}', not 'blocked'`);
+    this.name = "ProjectNotBlocked";
+  }
+}
+
+/** A blocked project with no open block episode: migration 040's trigger or backfill did not run for it. */
+class BlockEpisodeMissing extends Error {
+  constructor(readonly projectId: ProjectId) {
+    super(`cannot unblock project ${projectId}: it is blocked but has no open block episode to end`);
+    this.name = "BlockEpisodeMissing";
   }
 }

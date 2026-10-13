@@ -1,10 +1,6 @@
 import { count, eq } from "drizzle-orm";
-import { parseProjectId } from "@ashara/shared";
-import type { ProjectBlockCause } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { checkDisputes } from "../schema.js";
-import { ClientMessageRepository } from "./client-message.js";
-import { ProjectRepository } from "./project.js";
 
 // Quality's record of an implementer's disputes of its task's checks (migration 039).
 
@@ -43,22 +39,6 @@ export class CheckDisputeRepository {
         throw new CheckDisputeCountUnreadable(dispute.checkTaskId, row?.disputes ?? null);
       }
       return row.disputes;
-    });
-  }
-
-  /**
-   * Blocks an active project and, only when this call blocked it, posts the one report telling the
-   * client why, in one transaction: a project already blocked keeps its first cause and gets no
-   * second report.
-   */
-  async blockProjectWithReport(projectId: string, cause: ProjectBlockCause, report: string): Promise<"blocked" | "already-blocked"> {
-    const id = parseProjectId(projectId);
-    return this.db.transaction(async (tx) => {
-      const blocked = await new ProjectRepository(tx).block(id, cause);
-      if (blocked === "blocked") {
-        await new ClientMessageRepository(tx).insertOutbound({ projectId: id, kind: "report", body: report, inReplyTo: null });
-      }
-      return blocked;
     });
   }
 }

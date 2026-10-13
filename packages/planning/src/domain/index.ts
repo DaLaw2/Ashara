@@ -18,5 +18,4 @@ export type { WorkItemRepository } from "./repository.js";
 
 export { ContractAlreadyExists } from "./errors.js";
 
-export { DependencyGraph } from "./dependency.js";
 export { PlanningService } from "./service.js";

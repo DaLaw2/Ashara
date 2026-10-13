@@ -161,6 +161,9 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect(project.status).toBe("blocked");
     expect(project.blockedErrorClass).toBe("BudgetExceeded");
     expect(project.blockedReason).toMatch(/^budget_cap: the spend cap of project /);
+    // The stored reason names the one exit migration 040 leaves: a bare status UPDATE is refused.
+    expect(project.blockedReason).toContain(`scripts/project.ts unblock ${projectId}`);
+    expect(project.blockedReason).not.toContain("UPDATE projects");
   });
 
   test("an unmeasured call (cost_usd NULL) counts at its recorded estimate, never $0, and is logged at warn", async () => {

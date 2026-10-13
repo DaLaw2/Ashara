@@ -100,7 +100,7 @@ describe("TenderIntake per-project failure", () => {
       intakeLastError: null,
     };
     const next = { ...lying, id: "tender-next", projectId: parseProjectId("00000000-0000-4000-8000-000000000003"), intakeAttempts: 0 };
-    const blocked: Array<{ projectId: string; errorClass: string; reason: string }> = [];
+    const blocked: Array<{ projectId: string; category: string; errorClass: string; reason: string }> = [];
     const store: IntakeStore = {
       openTenders: async () => [lying, next],
       currentVisionVersion: async (projectId) => (projectId === next.projectId ? 1 : null),
@@ -131,7 +131,7 @@ describe("TenderIntake per-project failure", () => {
 
     expect(outcomes.map((o) => `${o.tenderId}:${o.kind}`)).toEqual(["tender-lying:project-blocked", "tender-next:vision-exists"]);
     expect(blocked).toEqual([
-      { projectId: lying.projectId, errorClass: "IntakeFailureUnrecorded", reason: expect.stringMatching(/^IntakeFailureUnrecorded: /) },
+      { projectId: lying.projectId, category: "fault", errorClass: "IntakeFailureUnrecorded", reason: expect.stringMatching(/^IntakeFailureUnrecorded: /) },
     ]);
   });
 });

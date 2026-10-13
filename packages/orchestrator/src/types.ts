@@ -4,12 +4,14 @@ import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type {
   LiaisonAnswers,
+  LiaisonBlockReports,
   LiaisonCheckDisputes,
   LiaisonClientStops,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
 } from "./acl/engagement-acl.js";
+import type { ParkedExitChecks } from "./parked-exits.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
 
@@ -142,8 +144,15 @@ export interface CoreLoopDeps {
   readonly stackChoices: LiaisonStackChoices;
   /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
   readonly checkDisputes: CheckDisputeRecord;
-  /** The Liaison's block of a project whose check disputes passed their bound, with its one report. */
+  /** The Liaison's block of a project whose check disputes passed their bound; blockReports posts its one report. */
   readonly disputeReports: LiaisonCheckDisputes;
+  /**
+   * The Liaison's one report per project block, per resumption after an operator's unblock and
+   * per task block; run every cycle, at the budget cap too (no LLM call).
+   */
+  readonly blockReports: LiaisonBlockReports;
+  /** What the automatic exits of Blocked tasks read; re-checked every cycle before the gate. */
+  readonly parkedExits: ParkedExitChecks;
 }
 
 /** One dispute of a stored check, as an implementer's attempt ended with it. */

@@ -405,6 +405,7 @@ function ownerUnresolved(
   return {
     status: "owner_unresolved",
     ownerRoleId: unresolved.ownerRoleId,
+    rosterRevision: unresolved.rosterRevision,
     reason: unresolved.reason,
     detail: summary,
     output: null,
@@ -459,6 +460,8 @@ interface OwnerUnresolved {
   readonly kind: "owner-unresolved";
   /** The work item's stored owner_role_id; null when it has none. */
   readonly ownerRoleId: string | null;
+  /** The project's latest roster revision the decision was made against; null when it has none. */
+  readonly rosterRevision: number | null;
   readonly reason: string;
 }
 
@@ -683,6 +686,8 @@ interface EnvironmentChangeNeededResult {
 interface OwnerUnresolvedResult {
   readonly status: "owner_unresolved";
   readonly ownerRoleId: string | null;
+  /** The roster revision the decision was made against: a newer one is the block's exit. */
+  readonly rosterRevision: number | null;
   readonly reason: string;
   readonly detail: string;
   readonly output: null;
@@ -923,8 +928,9 @@ export class DevelopmentService {
       // result is `blocked` with the lookup's own detail. The orchestrator
       // nevertheless routes a `blocked` result like `failed`: the item goes to
       // Failed and through the FailureRouter (executeTask in
-      // orchestrator/src/execution.ts). Only `environment_blocked` and
-      // `environment_undefined` park an item at Blocked.
+      // orchestrator/src/execution.ts). Only `environment_blocked`, `environment_undefined`,
+      // `owner_unresolved`, `environment_change_needed` and stale checks past their exit park an
+      // item at Blocked.
       if (!(e instanceof ProjectIntentUnavailable)) throw e;
       const chain = wrapError("development", "loadProjectIntent", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {

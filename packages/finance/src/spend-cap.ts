@@ -37,7 +37,7 @@ interface SpendCapDeps {
   readonly projects: {
     block(
       projectId: ProjectId,
-      cause: { readonly errorClass: string; readonly reason: string },
+      cause: { readonly category: "budget_cap"; readonly errorClass: string; readonly reason: string },
     ): Promise<"blocked" | "already-blocked">;
   };
   readonly caps: SpendCaps;
@@ -174,7 +174,7 @@ export class SpendCap {
     const projectInFlight = this.inFlightUsd(projectId);
     if (projectSpent + projectInFlight + estimatedCostUsd > caps.perProjectUsd) {
       const refused = refusal({ kind: "project", projectId }, caps.perProjectUsd, projectSpent, projectInFlight);
-      const blocked = await projects.block(projectId, { errorClass: refused.name, reason: refused.message });
+      const blocked = await projects.block(projectId, { category: "budget_cap", errorClass: refused.name, reason: refused.message });
       console.warn(`[SpendCap] project ${projectId} ${blocked}: ${refused.message}`);
       throw refused;
     }

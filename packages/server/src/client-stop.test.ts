@@ -8,6 +8,7 @@ import {
   createDb,
   createProjectWithTender,
   DEFAULT_DATABASE_URL,
+  EventStoreRepository,
   listDuePlanReports,
   listProjectsAwaitingFirstPlan,
   listProjectsAwaitingRoster,
@@ -74,10 +75,14 @@ function liaison(): ClientStops {
 
 function gate() {
   const projects = new ProjectRepository(db);
-  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRepository(db)), {
-    listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
-    block: projects.block.bind(projects),
-  });
+  return PlanningService.gate(
+    adaptWorkItemRepo(new WorkItemRepository(db)),
+    {
+      listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
+      block: projects.block.bind(projects),
+    },
+    new EventStoreRepository(db),
+  );
 }
 
 const ProjectRowSchema = z.array(
@@ -217,7 +222,7 @@ describe("a client's stop", () => {
 
   test("a blocked project the client stops keeps its blocked cause; nothing merged is said plainly", async () => {
     const project = await projectWith([["Set up the studio list", "Pending"]]);
-    await new ProjectRepository(db).block(project.projectId, { errorClass: "TestBlock", reason: "blocked by the test" });
+    await new ProjectRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
     await sendStop(project.projectId, "Never mind.");
 
     const [outcome] = await liaison().runPending();

@@ -144,10 +144,14 @@ const checkDisputedSchema = z.object({
  * The task cannot be staffed: it has no owner role, or its owner is not a role of the project's
  * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
  * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
+ * `rosterRevision` is the latest roster revision the decision was made against, null when the
+ * project had none (or, written before migration 040, when it was not recorded): a newer
+ * revision is this block's exit.
  */
 const ownerUnresolvedSchema = z.object({
   source: z.literal("owner_unresolved"),
   ownerRoleId: z.string().min(1).nullable(),
+  rosterRevision: z.number().int().min(1).nullable(),
   reason: z.string().min(1),
   ...augmentationFields,
 });
@@ -252,6 +256,47 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "dependency_unsatisfiable":
     case "api":
       return { ...reason };
+  }
+  const _: never = reason;
+  return _;
+}
+
+/**
+ * How a Blocked work item leaves Blocked (Discipline B: every state has a way out).
+ * `roster-revision`: by itself, once the project stores a roster revision newer than the one the
+ * block was decided against. `environment-built`: by itself, once the project's current
+ * environment version (on the target's main) has a recorded statement and a succeeded build.
+ * `operator`: only an operator's unblock (PATCH /work-items/:id/status to Pending) moves it.
+ */
+export type BlockedExit =
+  | { readonly kind: "roster-revision"; readonly decidedAgainst: number | null }
+  | { readonly kind: "environment-built" }
+  | { readonly kind: "operator" };
+
+/**
+ * The exit of a Blocked item's stored reason. The sources written only on Failed, Abandoned or
+ * Pending items (task_failed, orchestrator_error, replan, failure_router) and a Blocked item with
+ * no reason have no cause that clears by itself: the operator decides.
+ */
+export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedExit {
+  if (reason === undefined) return { kind: "operator" };
+  switch (reason.source) {
+    case "owner_unresolved":
+      return { kind: "roster-revision", decidedAgainst: reason.rosterRevision };
+    case "environment_undefined":
+      return { kind: "environment-built" };
+    case "environment_unavailable":
+    case "checks_stale":
+    case "environment_change_needed":
+    case "checks_rewrite_bound":
+    case "check_disputed":
+    case "dependency_unsatisfiable":
+    case "api":
+    case "task_failed":
+    case "orchestrator_error":
+    case "replan":
+    case "failure_router":
+      return { kind: "operator" };
   }
   const _: never = reason;
   return _;

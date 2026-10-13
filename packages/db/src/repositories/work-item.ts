@@ -288,10 +288,16 @@ export class WorkItemRepository {
     return rows.map((row) => this.validateRow(row));
   }
 
-  async listAllDependencies() {
+  /**
+   * The dependency edges of one project: every edge whose dependent (from) item is the
+   * project's. The dependencies table has no project_id; the dependent's row names it.
+   */
+  async listDependenciesByProject(projectId: string) {
     const rows = await this.db
       .select({ fromId: dependencies.fromId, toId: dependencies.toId })
-      .from(dependencies);
+      .from(dependencies)
+      .innerJoin(workItems, eq(workItems.id, dependencies.fromId))
+      .where(eq(workItems.projectId, projectId));
     return rows;
   }
 }

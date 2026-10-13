@@ -76,6 +76,8 @@ function coreLoopDeps(
     stackChoices: { runPending: notExercised("stackChoices") },
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    blockReports: { runPending: notExercised("blockReports") },
+    parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     ...parts,
   };
 }
@@ -131,7 +133,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
-    listAllDependencies: notExercised("listAllDependencies"),
+    listDependenciesByProject: notExercised("listDependenciesByProject"),
     withTransaction: notExercised("withTransaction"),
   };
 
@@ -309,7 +311,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listAllDependencies: notExercised("listAllDependencies"),
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -470,6 +472,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
       status: "owner_unresolved",
       ownerRoleId: null,
+      rosterRevision: 1,
       reason: "the work item has no owner role",
       detail,
       output: null,
@@ -489,7 +492,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     const reason = stored().blockedReason;
-    expect(reason).toEqual({ source: "owner_unresolved", ownerRoleId: null, reason: "the work item has no owner role" });
+    expect(reason).toEqual({ source: "owner_unresolved", ownerRoleId: null, rosterRevision: 1, reason: "the work item has no owner role" });
     expect(parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }).blockedReason).toEqual(reason);
   });
 });
@@ -549,7 +552,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listAllDependencies: notExercised("listAllDependencies"),
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -693,7 +696,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listAllDependencies: notExercised("listAllDependencies"),
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     };
     const deps = coreLoopDeps({
@@ -806,7 +809,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     const statusesWritten: string[] = [];
     let routed = 0;
     let approaches = 0;
-    const blocks: Array<{ readonly projectId: string; readonly errorClass: string; readonly reason: string }> = [];
+    const blocks: Array<{ readonly projectId: string; readonly category: string; readonly errorClass: string; readonly reason: string }> = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
     const refusal = scope === "configuration" ? new StubUnpricedModel() : new StubCapRefusal(scope === "shutdown" ? "project" : scope);
     const envelope = {
@@ -841,7 +844,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
-      listAllDependencies: notExercised("listAllDependencies"),
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     };
 
@@ -906,7 +909,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     expect(result.status).toBe("refused");
     if (result.status !== "refused") return;
     expect(result.refusal).toMatchObject({ kind: "configuration", projectId: TEST_PROJECT_ID, errorClass: "UnpricedModel" });
-    expect(blocks).toEqual([{ projectId: TEST_PROJECT_ID, errorClass: "UnpricedModel", reason: expect.stringContaining("is unpriced") }]);
+    expect(blocks).toEqual([{ projectId: TEST_PROJECT_ID, category: "configuration", errorClass: "UnpricedModel", reason: expect.stringContaining("is unpriced") }]);
     expect(statusesWritten).toEqual(["InProgress", "Pending"]);
     expect(stored().dispatchCount).toBe(0);
     expect(failureRoutes()).toBe(0);

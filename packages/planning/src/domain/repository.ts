@@ -55,7 +55,8 @@ export interface WorkItemRepository {
   addDependency(fromId: WorkItemId, toId: WorkItemId): Promise<void>;
   getDependencies(itemId: WorkItemId): Promise<WorkItemId[]>;
   findChildren(parentId: WorkItemId): Promise<WorkItem[]>;
-  listAllDependencies(): Promise<Array<{ fromId: WorkItemId; toId: WorkItemId }>>;
+  /** The edges whose dependent (from) item belongs to the project. */
+  listDependenciesByProject(projectId: ProjectId): Promise<Array<{ fromId: WorkItemId; toId: WorkItemId }>>;
   /**
    * Runs `fn` atomically. The repository handed to the callback is
    * transaction-scoped: creating a batch of work items AND their dependency

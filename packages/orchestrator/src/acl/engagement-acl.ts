@@ -15,6 +15,7 @@ export type {
   AnswerOutcome,
   IntakeOutcome,
   LiaisonAnswers,
+  LiaisonBlockReports,
   LiaisonCheckDisputes,
   LiaisonClientStops,
   LiaisonIntake,

@@ -8,9 +8,13 @@ class PlanningError extends Error {
   }
 }
 
+/** The dependency edge fromId -> toId closes a cycle: toId already waits, transitively, on fromId. */
 export class CycleDetected extends PlanningError {
-  constructor() {
-    super("Dependency cycle detected", "CYCLE_DETECTED");
+  constructor(
+    public readonly fromId: string,
+    public readonly toId: string,
+  ) {
+    super(`dependency cycle detected: the edge ${fromId} -> ${toId} closes it`, "CYCLE_DETECTED");
     this.name = "CycleDetected";
   }
 }

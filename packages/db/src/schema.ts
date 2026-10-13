@@ -10,6 +10,7 @@ import {
   doublePrecision,
   numeric,
   unique,
+  primaryKey,
   index,
   customType,
   type AnyPgColumn,
@@ -64,6 +65,8 @@ export const projects = pgTable("projects", {
   // Migration 038: the answer that contradicted an assumption the first plan was
   // built on; while set, none of the project's tasks is dispatched.
   replanRequestedBy: uuid("replan_requested_by").references((): AnyPgColumn => clientMessages.id),
+  // Migration 040: the cause's category, which the Liaison's plain report is chosen by.
+  blockedCategory: text("blocked_category"),
 });
 
 // ---------------------------------------------------------------------------
@@ -105,6 +108,8 @@ export const workItems = pgTable("work_items", {
   // Migration 037: the environment version the statement was tested on; a later task's
   // statement is chosen by it. NULL on a statement recorded before 037.
   environmentStatementVersion: text("environment_statement_version"),
+  // Migration 040: when the item last entered Blocked, kept by a trigger; NULL while not Blocked.
+  blockedAt: timestamptz("blocked_at"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
@@ -552,3 +557,46 @@ export const checkDisputes = pgTable("check_disputes", {
   evidence: text(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// project_blocks (migration 040): one row per time a project entered 'blocked',
+// opened and ended by the projects_block_episode trigger and the operator's unblock.
+// ---------------------------------------------------------------------------
+
+export const projectBlocks = pgTable("project_blocks", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  kind: text().notNull(),
+  errorClass: text("error_class"),
+  reason: text(),
+  blockedAt: timestamptz("blocked_at").notNull().defaultNow(),
+  reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
+  endedAt: timestamptz("ended_at"),
+  endKind: text("end_kind"),
+  unblockedBy: text("unblocked_by"),
+  unblockReason: text("unblock_reason"),
+  resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
+});
+
+// ---------------------------------------------------------------------------
+// blocked_task_reports (migration 040): the Liaison's one report per time a task
+// entered Blocked, keyed by work_items.blocked_at.
+// ---------------------------------------------------------------------------
+
+export const blockedTaskReports = pgTable(
+  "blocked_task_reports",
+  {
+    workItemId: uuid("work_item_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    blockedAt: timestamptz("blocked_at").notNull(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => clientMessages.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.workItemId, t.blockedAt] }),
+  }),
+);

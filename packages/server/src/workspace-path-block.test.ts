@@ -170,6 +170,8 @@ describe("a project whose workspace path is refused", () => {
       planReports: { runPending: async () => [] },
       checkDisputes: { record: notExercised("checkDisputes") },
       disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+      blockReports: { runPending: async () => [] },
+      parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     });
 
     const cycle = await loop.runCycle();

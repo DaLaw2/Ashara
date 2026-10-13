@@ -12,6 +12,8 @@ interface StaffingDeps {
   readonly ownerOf: (taskId: WorkItemId) => Promise<StoredOwner>;
   /** The roster_roles rows of the project's latest revision, unparsed. */
   readonly latestRosterRows: (projectId: ProjectId) => Promise<unknown>;
+  /** The project's latest roster revision; null when it has none. */
+  readonly latestRosterRevision: (projectId: ProjectId) => Promise<number | null>;
   /** The attempt's model; throws when none can be resolved, which fails the dispatch. */
   readonly resolveModel: (task: TaskDescriptor) => ResolvedModel;
 }
@@ -24,17 +26,24 @@ interface StaffingDeps {
 export function createAgentStaffing(deps: StaffingDeps): AgentStaffing {
   return {
     async staff(task): Promise<Staffing> {
+      // Read before the rows: a revision appended between the two reads is newer than the one
+      // recorded, so the block's exit re-checks it rather than missing it.
+      const rosterRevision = await deps.latestRosterRevision(task.projectId);
       const owner = await deps.ownerOf(task.id);
-      if (owner.kind === "absent") return { kind: "owner-unresolved", ownerRoleId: null, reason: "the work item row is gone" };
+      if (owner.kind === "absent") {
+        return { kind: "owner-unresolved", ownerRoleId: null, rosterRevision, reason: "the work item row is gone" };
+      }
       const { ownerRoleId } = owner;
-      if (ownerRoleId === null) return { kind: "owner-unresolved", ownerRoleId, reason: "the work item has no owner role" };
+      if (ownerRoleId === null) {
+        return { kind: "owner-unresolved", ownerRoleId, rosterRevision, reason: "the work item has no owner role" };
+      }
       const rows = await deps.latestRosterRows(task.projectId);
       try {
         const role = roleInRoster(parseStoredRoster(task.projectId, rows), ownerRoleId);
         return { kind: "staffed", staff: { role: { id: role.id, name: role.name }, model: deps.resolveModel(task) } };
       } catch (err) {
         if (!(err instanceof RosterUnreadable || err instanceof RoleNotInRoster)) throw err;
-        return { kind: "owner-unresolved", ownerRoleId, reason: err.message };
+        return { kind: "owner-unresolved", ownerRoleId, rosterRevision, reason: err.message };
       }
     },
   };

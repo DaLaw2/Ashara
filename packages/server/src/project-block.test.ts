@@ -110,7 +110,7 @@ function reports(handle: Handle): PlanReports {
 }
 
 function gate(handle: Handle) {
-  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRepository(handle)), ourActiveProjects(handle));
+  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRepository(handle)), ourActiveProjects(handle), { publish: async () => {} });
 }
 
 /** Rolls the probe transaction back once its assertions have run. */
@@ -165,7 +165,7 @@ describe("one project's bad record in a cycle", () => {
     expect(outcomes).toContainEqual({
       kind: "project-blocked",
       projectId: bad.projectId,
-      cause: { errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) },
+      cause: { category: "fault", errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) },
     });
     expect(await stateOf(db, bad.projectId)).toEqual({
       status: "blocked",
@@ -216,7 +216,7 @@ describe("one project's bad record in a cycle", () => {
       expect(outcomes).toContainEqual({
         kind: "project-blocked",
         projectId: corrupt.projectId,
-        cause: { errorClass: "WorkItemRowCorrupt", reason: expect.stringContaining("success_criteria does not parse") },
+        cause: { category: "fault", errorClass: "WorkItemRowCorrupt", reason: expect.stringContaining("success_criteria does not parse") },
       });
     });
   });
@@ -225,7 +225,7 @@ describe("one project's bad record in a cycle", () => {
     const project = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }], false);
     expect((await gate(db)).map((item) => item.id)).toEqual(project.taskIds);
 
-    await new ProjectRepository(db).block(project.projectId, { errorClass: "TestBlock", reason: "blocked by the test" });
+    await new ProjectRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
 
     expect(await gate(db)).toEqual([]);
   });

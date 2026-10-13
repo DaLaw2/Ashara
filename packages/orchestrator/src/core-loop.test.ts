@@ -39,9 +39,7 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
     PlanningService: {
       gate: async () => twoTasks(),
       select: (_eligible: WorkItem[], _max: number) => twoTasks(),
-    },
-    DependencyGraph: {
-      load: async () => ({ computeUnlockWeights: () => new Map<string, number>() }),
+      unlockWeights: async () => new Map<string, number>(),
     },
   };
 });
@@ -100,7 +98,7 @@ function buildDeps(
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
-    listAllDependencies: notExercised("listAllDependencies"),
+    listDependenciesByProject: notExercised("listDependenciesByProject"),
     withTransaction: notExercised("withTransaction"),
   };
 
@@ -114,7 +112,7 @@ function buildDeps(
     projectRepo: {
       get: async () => null,
       recordWorkspacePath: notExercised("recordWorkspacePath"),
-      listActiveIds: notExercised("listActiveIds"),
+      listActiveIds: async () => [],
       block: notExercised("block"),
     },
     developmentService: { execute: notExercised("execute") },
@@ -129,6 +127,8 @@ function buildDeps(
     stackChoices,
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    blockReports: { runPending: async () => [] },
+    parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
   };
 }
 

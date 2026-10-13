@@ -87,8 +87,7 @@ export class BudgetExceeded extends PreCallRefusal {
     const howToFix =
       context.scope.kind === "project"
         ? `Raise ASHARA_PROJECT_BUDGET_LIMIT_USD and restart the server, then return the project to work ` +
-          `(UPDATE projects SET status = 'active', blocked_error_class = NULL, blocked_reason = NULL ` +
-          `WHERE id = '${context.scope.projectId}').`
+          `(npx tsx scripts/project.ts unblock ${context.scope.projectId} --reason <why the cap is cleared>).`
         : `Raise ASHARA_BUDGET_LIMIT_USD and restart the server.`;
     super(
       `budget_cap: the spend cap of ${subject} is ${usd(context.capUsd)}, and this call would cross it: ` +

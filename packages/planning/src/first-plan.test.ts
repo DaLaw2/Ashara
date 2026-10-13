@@ -68,7 +68,7 @@ describe("FirstPlanner per-project failure", () => {
 
     expect(outcomes.map((o) => `${o.projectId}:${o.kind}`)).toEqual([`${lying}:project-blocked`, `${capped}:stopped`]);
     expect(blocked).toEqual([
-      { projectId: lying, cause: { errorClass: "PlanFailureUnrecorded", reason: expect.stringMatching(/^PlanFailureUnrecorded: /) } },
+      { projectId: lying, cause: { category: "fault", errorClass: "PlanFailureUnrecorded", reason: expect.stringMatching(/^PlanFailureUnrecorded: /) } },
     ]);
     expect(stopped).toEqual([capped]);
   });

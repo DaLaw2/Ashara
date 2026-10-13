@@ -14,7 +14,6 @@ export {
   takeEvents,
   exitStaleChecks,
   exitDisputedCheck,
-  DependencyGraph,
   PlanningService,
 } from "./domain/index.js";
 

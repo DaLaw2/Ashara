@@ -113,7 +113,8 @@ async function executeTask(
 
   if (execResult.status === "environment_change_needed") {
     // Not a failure to retry: no implementer may change environment files, so a replan would meet
-    // the same refusal (ADR-074 addendum 2 d63). Parked at Blocked naming the paths, for the owner.
+    // the same refusal (ADR-074 addendum 2 d63). Parked at Blocked naming the paths, for the
+    // operator; the operator's unblock deletes the task's branch, so it restarts from main.
     await routeAsParked(deps, task.id, { source: "environment_change_needed", paths: [...execResult.paths], reason: execResult.detail });
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -150,8 +151,10 @@ async function executeTask(
 
   if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined") {
     // Not a task failure: re-dispatching cannot make the substrate or the
-    // project's environment appear, so the item is parked at Blocked for the
-    // operator, never routed to Failed.
+    // project's environment appear, so the item is parked at Blocked, never
+    // routed to Failed. An unavailable substrate waits on the operator; an
+    // undefined environment leaves Blocked by itself once the current version
+    // has a statement and a succeeded build (parked-exits.ts).
     await routeAsParked(
       deps,
       task.id,
@@ -169,8 +172,14 @@ async function executeTask(
 
   if (execResult.status === "owner_unresolved") {
     // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
-    // so the item is parked at Blocked until the roster or the plan changes, never routed to Failed.
-    await routeAsParked(deps, task.id, { source: "owner_unresolved", ownerRoleId: execResult.ownerRoleId, reason: execResult.reason });
+    // so the item is parked at Blocked, never routed to Failed. Its exit (parked-exits.ts): the
+    // project stores a roster revision newer than `rosterRevision`, or the operator unblocks it.
+    await routeAsParked(deps, task.id, {
+      source: "owner_unresolved",
+      ownerRoleId: execResult.ownerRoleId,
+      rosterRevision: execResult.rosterRevision,
+      reason: execResult.reason,
+    });
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -196,13 +205,13 @@ async function executeTask(
     // One rule for every refusal: no lesson, no failure router, the dispatch given back. A
     // refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
     // fault a re-dispatch would meet again, so the project is blocked until the owner fixes it.
-    const refusal: TaskRefusal = deps.spendCap.refusalOf(execResult.refusal) ?? {
-      kind: "configuration",
-      projectId: task.projectId,
-      ...projectBlockCause(execResult.refusal),
-    };
+    const refusal: TaskRefusal = deps.spendCap.refusalOf(execResult.refusal) ?? configurationRefusal(task, execResult.refusal);
     if (refusal.kind === "configuration") {
-      const blocked = await deps.projects.block(task.projectId, { errorClass: refusal.errorClass, reason: refusal.reason });
+      const blocked = await deps.projects.block(task.projectId, {
+        category: "configuration",
+        errorClass: refusal.errorClass,
+        reason: refusal.reason,
+      });
       console.warn(`[${task.id}] project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`);
     }
     const cap =
@@ -258,6 +267,12 @@ async function executeTask(
     errorEnvelope: execResult.errorEnvelope,
     routedHere: false,
   };
+}
+
+/** A refusal no spend cap made: the project's configuration, with the refusal's class and chain. */
+function configurationRefusal(task: WorkItem, refused: Error): TaskRefusal {
+  const { errorClass, reason } = projectBlockCause(refused);
+  return { kind: "configuration", projectId: task.projectId, errorClass, reason };
 }
 
 /**
@@ -719,7 +734,8 @@ export async function processTask(
     // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
     // dispatch (a "blocked" result is a routine agent outcome — a BLOCKED:
     // marker or turn-limit — not a dependency wait). Blocked status is reached
-    // only via the HTTP PATCH path and an environment-blocked dispatch, which
+    // via the HTTP PATCH path, the gate's dependency_unsatisfiable park, and the
+    // parked dispatch outcomes (routeAsParked, routeAsStaleChecks), which
     // returned above. Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates
     // (abandon) rather than sitting in Failed and deadlocking its

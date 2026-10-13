@@ -26,8 +26,8 @@ export type { FirstPlanOutcome, FirstPlanning } from "@ashara/planning";
 
 // --- Values (re-exported) ---
 
-// Domain service & graph
-export { PlanningService, DependencyGraph } from "@ashara/planning";
+// Domain service
+export { PlanningService } from "@ashara/planning";
 
 // Work-item domain methods
 export {
@@ -35,6 +35,7 @@ export {
   failWorkItem,
   blockWorkItem,
   requeueWorkItem,
+  unblockWorkItem,
   takeEvents,
   exitStaleChecks,
   exitDisputedCheck,

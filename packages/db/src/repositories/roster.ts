@@ -115,13 +115,8 @@ export async function recordFirstRoster(db: Database, write: RosterWrite): Promi
 
 /** The rows of the project's latest roster revision, by name; empty when it has none. Rows are never updated (031). */
 export async function latestRosterRoles(db: DbHandle, projectId: ProjectId) {
-  const [latest] = await db
-    .select({ revision: rosterRoles.revision })
-    .from(rosterRoles)
-    .where(eq(rosterRoles.projectId, projectId))
-    .orderBy(desc(rosterRoles.revision))
-    .limit(1);
-  if (!latest) return [];
+  const revision = await latestRosterRevision(db, projectId);
+  if (revision === null) return [];
   return db
     .select({
       revision: rosterRoles.revision,
@@ -132,6 +127,17 @@ export async function latestRosterRoles(db: DbHandle, projectId: ProjectId) {
       capabilities: rosterRoles.capabilities,
     })
     .from(rosterRoles)
-    .where(and(eq(rosterRoles.projectId, projectId), eq(rosterRoles.revision, latest.revision)))
+    .where(and(eq(rosterRoles.projectId, projectId), eq(rosterRoles.revision, revision)))
     .orderBy(asc(rosterRoles.name));
+}
+
+/** The project's latest roster revision; null when it has no roster. */
+export async function latestRosterRevision(db: DbHandle, projectId: ProjectId): Promise<number | null> {
+  const [latest] = await db
+    .select({ revision: rosterRoles.revision })
+    .from(rosterRoles)
+    .where(eq(rosterRoles.projectId, projectId))
+    .orderBy(desc(rosterRoles.revision))
+    .limit(1);
+  return latest?.revision ?? null;
 }

@@ -62,12 +62,24 @@ export function parseWorkItemJsonb(row: WorkItemJsonbRow): ParsedWorkItemJsonb {
   };
 }
 
-/** Why a project was blocked (migration 025): the error's class and its full chain. */
+/**
+ * What kind of cause blocked a project (migration 040): the closed vocabulary the Liaison's plain
+ * report to the client is chosen by. `budget_cap`: the project's spend cap refused a model call.
+ * `configuration`: a model call was refused by anything but a spend cap (an unpriced model, a cost
+ * that cannot be estimated). `fault`: one of Ashara's own records or steps for the project failed.
+ * `check_dispute`: a task's implementer kept disputing one of its checks past the bound of disputes
+ * (migration 039), which nothing in the team settles.
+ */
+type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute";
+
+/** Why a project was blocked (migration 025): the cause's category, the error's class and its full chain. */
 export interface ProjectBlockCause {
+  readonly category: ProjectBlockCategory;
   readonly errorClass: string;
   readonly reason: string;
 }
 
+/** A project's own record or step failed: Ashara's fault, which the team must repair. */
 export function projectBlockCause(err: Error): ProjectBlockCause {
-  return { errorClass: err.name, reason: describeErrorChain(err) };
+  return { category: "fault", errorClass: err.name, reason: describeErrorChain(err) };
 }

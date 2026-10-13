@@ -26,7 +26,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     addDependency: unused("addDependency"),
     getDependencies: unused("getDependencies"),
     findChildren: unused("findChildren"),
-    listAllDependencies: unused("listAllDependencies"),
+    listDependenciesByProject: unused("listDependenciesByProject"),
     withTransaction: unused("withTransaction"),
   };
 }
