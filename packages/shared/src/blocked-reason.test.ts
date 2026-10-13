@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, storedBlockedReasonSchema, withSalvagedResult } from "./blocked-reason.js";
+import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, withSalvagedResult } from "./blocked-reason.js";
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
@@ -141,10 +141,9 @@ describe("withSalvagedResult helper", () => {
   });
 });
 
-describe("storedBlockedReasonSchema", () => {
+describe("stored blocked reason schema", () => {
   test("replan variant rejects missing replanContext", () => {
-    const result = storedBlockedReasonSchema.safeParse({ source: "replan" });
-    expect(result.success).toBe(false);
+    expect(() => parseStoredBlockedReason({ source: "replan" })).toThrow(BlockedReasonCorrupt);
   });
 });
 

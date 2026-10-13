@@ -8,7 +8,7 @@ import type { AgentOutputJson } from "@ashara/shared/agent-output";
  * reader knows the runner never wrote a result (vs. wrote a "failed"/"blocked" one,
  * which is a valid result, not this error).
  */
-export class AgentSpawnError extends Error {
+class AgentSpawnError extends Error {
   readonly context: {
     readonly taskId: string;
     readonly outputPath: string;

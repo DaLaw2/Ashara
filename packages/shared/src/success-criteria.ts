@@ -7,11 +7,14 @@ import { z } from "zod";
  * historically; this schema catches non-string elements at the boundary
  * rather than letting them silently survive to a consumer cast.
  */
-export const storedSuccessCriteriaSchema = z.array(z.string());
+const storedSuccessCriteriaSchema = z.array(z.string());
 
 export type StoredSuccessCriteria = z.infer<typeof storedSuccessCriteriaSchema>;
 
-/** Typed failure for a success_criteria jsonb value that is present but unreadable. */
+/**
+ * Typed failure for a success_criteria jsonb value that is present but unreadable.
+ * @testseam success-criteria.test.ts asserts the typed rejection and its context
+ */
 export class SuccessCriteriaCorrupt extends Error {
   constructor(
     public readonly raw: unknown,

@@ -25,7 +25,7 @@ export class ClientError extends Error {
 // --- Server-side types (match Rust serde output) ---
 
 export type WorkItemLevel = "Epic" | "Task";
-export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
+type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
 /** One node in a bulk hierarchy create. `tempId` is batch-local; `parentId` references another item's `tempId`. */
 export interface BulkWorkItem {
@@ -66,7 +66,7 @@ export interface WorkItem {
     readonly updatedAt: string;
 }
 
-export interface SessionBrief {
+interface SessionBrief {
     readonly goal: string;
     readonly [key: string]: unknown;
 }

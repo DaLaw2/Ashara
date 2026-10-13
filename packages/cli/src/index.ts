@@ -17,14 +17,14 @@ const NO_INTERACT_FLAG = "--no-interact";
  * the description. Extracted so the parsing itself is unit-testable without
  * invoking `process.exit`.
  */
-export function parseVisionArgs(args: readonly string[]): { visionText: string; noInteract: boolean } {
+function parseVisionArgs(args: readonly string[]): { visionText: string; noInteract: boolean } {
     const noInteract = args.includes(NO_INTERACT_FLAG);
     const visionText = args.filter((a) => a !== NO_INTERACT_FLAG).join(" ");
     return { visionText, noInteract };
 }
 
 /** Result of mapping a thrown error to CLI output: lines to print on stderr, and the exit code. */
-export interface CliErrorResult {
+interface CliErrorResult {
     readonly exitCode: number;
     readonly lines: readonly string[];
 }
@@ -33,7 +33,7 @@ export interface CliErrorResult {
  * Maps an error caught from `runVision` to the stderr lines and exit code the CLI should
  * produce. Extracted from `main()` so it can be unit-tested without invoking `process.exit`.
  */
-export function handleCliError(err: unknown): CliErrorResult {
+function handleCliError(err: unknown): CliErrorResult {
     if (err instanceof NoLLMProvidersConfigured) {
         return {
             exitCode: 1,

@@ -18,6 +18,7 @@ import { validateContainerfileSpec } from "./containerfile-validation.js";
 // Containerfile generation
 // ---------------------------------------------------------------------------
 
+/** @testseam podman-provisioner.test.ts checks the output without running podman */
 export function generateContainerfile(spec: EnvironmentSpec): string {
   const lines: string[] = [`FROM ${spec.baseImage}`];
 

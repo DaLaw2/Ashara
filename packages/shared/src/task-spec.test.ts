@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { parseStoredTaskSpec, TaskSpecCorrupt, storedTaskSpecSchema } from "./task-spec.js";
+import { parseStoredTaskSpec, TaskSpecCorrupt } from "./task-spec.js";
 
 describe("parseStoredTaskSpec", () => {
   test("null returns undefined (policy default: absent spec is deliberate delegation)", () => {
@@ -83,11 +83,10 @@ describe("parseStoredTaskSpec", () => {
   });
 });
 
-describe("storedTaskSpecSchema", () => {
+describe("stored task spec schema", () => {
   test("schema rejects deliverables containing non-strings", () => {
-    const result = storedTaskSpecSchema.safeParse({
+    expect(() => parseStoredTaskSpec({
       deliverables: ["valid.ts", 42, null],
-    });
-    expect(result.success).toBe(false);
+    })).toThrow(TaskSpecCorrupt);
   });
 });

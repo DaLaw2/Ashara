@@ -10,7 +10,7 @@ import { z } from "zod";
  * There is one record per database and nothing closes it, so the spend is a
  * lifetime total (ADR-073 addendum 3, interim until story c-cost-ledger).
  */
-export const runStateSchema = z.object({
+const runStateSchema = z.object({
   runId: z.string().min(1),
   openedAt: z.string().min(1),
   spendUsd: z.number().nonnegative(),
@@ -19,7 +19,7 @@ export const runStateSchema = z.object({
 export type RunState = z.infer<typeof runStateSchema>;
 
 /** Typed failure for a run record that exists but cannot be trusted (Discipline C). */
-export class RunStateCorrupt extends Error {
+class RunStateCorrupt extends Error {
   constructor(
     public readonly raw: string,
     public readonly detail: string,

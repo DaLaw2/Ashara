@@ -1,7 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreExportsUsedInFile": true,
   "includeEntryExports": true,
+  "tags": ["-testseam"],
   "workspaces": {
     ".": {
       "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts"],

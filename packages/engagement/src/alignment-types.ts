@@ -24,7 +24,7 @@ export type DirectionCategory = (typeof DIRECTION_CATEGORY_VALUES)[number];
 export const ALL_DIRECTION_CATEGORIES: readonly DirectionCategory[] = DIRECTION_CATEGORY_VALUES;
 
 /** Zod enum built from the SAME tuple as the type -- rejects any other string. */
-export const DirectionCategorySchema = z.enum(DIRECTION_CATEGORY_VALUES);
+const DirectionCategorySchema = z.enum(DIRECTION_CATEGORY_VALUES);
 
 export interface VisionInput {
   readonly description: string;
@@ -78,7 +78,7 @@ export interface ParsedVision {
 // axis set, so the model cannot introduce a scope-drifting new question).
 // ---------------------------------------------------------------------------
 
-export const LLMDirectionInferenceSchema = z
+const LLMDirectionInferenceSchema = z
   .object({
     category: DirectionCategorySchema,
     inference: z.string().min(1),

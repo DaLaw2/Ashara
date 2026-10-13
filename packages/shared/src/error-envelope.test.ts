@@ -1,6 +1,5 @@
 import { describe, test, expect } from "vitest";
 import {
-  errorLayerSchema,
   errorEnvelopeSchema,
   wrapError,
   flattenChain,
@@ -8,7 +7,12 @@ import {
 } from "./error-envelope.js";
 import type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
 
-describe("errorLayerSchema", () => {
+// The layer schema is file-local; a layer is exercised as an envelope's chain.
+function envelopeWithChain(chain: unknown): unknown {
+  return { outcome: "failed", summary: "s", chain };
+}
+
+describe("error layer schema (via envelope chain)", () => {
   test("parses a minimal layer", () => {
     const layer = {
       boundary: "agent-runner",
@@ -16,9 +20,9 @@ describe("errorLayerSchema", () => {
       message: "rate limit exceeded",
       timestamp: "2026-07-23T00:00:00.000Z",
     };
-    const result = errorLayerSchema.safeParse(layer);
+    const result = errorEnvelopeSchema.safeParse(envelopeWithChain(layer));
     expect(result.success).toBe(true);
-    expect(result.data).toEqual(layer);
+    expect(result.data?.chain).toEqual(layer);
   });
 
   test("round-trips a nested chain through JSON", () => {
@@ -38,14 +42,14 @@ describe("errorLayerSchema", () => {
     };
 
     const serialized = JSON.stringify(outer);
-    const parsed = errorLayerSchema.parse(JSON.parse(serialized));
+    const parsed = errorEnvelopeSchema.parse(envelopeWithChain(JSON.parse(serialized))).chain;
     expect(parsed.boundary).toBe("development");
     expect(parsed.cause?.boundary).toBe("origin");
     expect(parsed.cause?.context).toEqual({ exitCode: 1 });
   });
 
   test("rejects missing required fields", () => {
-    const result = errorLayerSchema.safeParse({ boundary: "x" });
+    const result = errorEnvelopeSchema.safeParse(envelopeWithChain({ boundary: "x" }));
     expect(result.success).toBe(false);
   });
 
@@ -71,7 +75,7 @@ describe("errorLayerSchema", () => {
       timestamp: "2026-07-23T00:02:00.000Z",
     };
 
-    const parsed = errorLayerSchema.parse(JSON.parse(JSON.stringify(layer1)));
+    const parsed = errorEnvelopeSchema.parse(envelopeWithChain(JSON.parse(JSON.stringify(layer1)))).chain;
     expect(parsed.cause?.cause?.message).toBe("ECONNREFUSED");
   });
 });

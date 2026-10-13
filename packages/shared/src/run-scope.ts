@@ -27,9 +27,12 @@ export const RUN_SCOPE_AD_HOC = "ad-hoc" as const;
  * "pre-scoping", or RUN_SCOPE_AD_HOC. The set is open on the runId
  * side (new UUIDs appear every run) so this validates shape, not membership.
  */
-export const runScopeSchema = z.string().min(1);
+const runScopeSchema = z.string().min(1);
 
-/** Typed failure for a run_scope value that is present but unreadable. */
+/**
+ * Typed failure for a run_scope value that is present but unreadable.
+ * @testseam run-scope.test.ts asserts the typed rejection and its context
+ */
 export class RunScopeCorrupt extends Error {
   constructor(
     public readonly raw: unknown,

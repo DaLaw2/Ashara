@@ -18,7 +18,7 @@ import type { AgentOutput } from "./output.js";
 // Public types
 // ---------------------------------------------------------------------------
 
-export interface RunnerConfig {
+interface RunnerConfig {
     readonly workingDir: string;
     readonly briefPath: string;
     readonly outputPath: string;
@@ -26,9 +26,7 @@ export interface RunnerConfig {
     readonly capability: CapabilityLevel;
 }
 
-export type { AgentBrief } from "@ashara/shared";
-
-export interface RunnerGateway {
+interface RunnerGateway {
     resolveModel(capability: CapabilityLevel, site: string): ResolvedModel;
 }
 
@@ -36,7 +34,7 @@ export interface RunnerGateway {
 // AgentRunner
 // ---------------------------------------------------------------------------
 
-export function loadRunnerConfigFromEnv(overrides?: Partial<RunnerConfig>): RunnerConfig {
+function loadRunnerConfigFromEnv(overrides?: Partial<RunnerConfig>): RunnerConfig {
     const env = loadAgentRunnerEnv();
     return {
         workingDir: overrides?.workingDir ?? env.workingDir,
@@ -47,7 +45,7 @@ export function loadRunnerConfigFromEnv(overrides?: Partial<RunnerConfig>): Runn
     };
 }
 
-export class AgentRunner {
+class AgentRunner {
     constructor(
         private readonly gateway: RunnerGateway,
         private readonly config: RunnerConfig,
@@ -135,7 +133,7 @@ function capabilityToolSet(capability: CapabilityLevel): Set<string> {
  * malformed brief throws a typed InvalidAgentBriefError and the task is blocked,
  * never run against a defaulted brief.
  */
-export function validateBrief(raw: unknown): AgentBrief {
+function validateBrief(raw: unknown): AgentBrief {
     return parseAgentBrief(raw, "agent-runner:brief.json");
 }
 
@@ -170,7 +168,7 @@ function formatProjectFrame(brief: AgentBrief): string {
     ].join("\n");
 }
 
-export function buildStaticSystemPrompt(toolPrompts?: string[]): string {
+function buildStaticSystemPrompt(toolPrompts?: string[]): string {
     const sections: string[] = [];
 
     sections.push(
@@ -246,7 +244,7 @@ function buildDoingTasksSection(): string {
     ].join("\n");
 }
 
-export function buildDynamicSystemPrompt(brief: AgentBrief): string {
+function buildDynamicSystemPrompt(brief: AgentBrief): string {
     const sections: string[] = [];
 
     // FIRST, ahead of the task: every instruction below is conditioned on what the

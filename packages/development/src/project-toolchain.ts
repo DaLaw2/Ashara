@@ -41,7 +41,7 @@ const STATE_FILE_RELATIVE = join("node_modules", ".ashara-toolchain.json");
 // Package-manager detection
 // ---------------------------------------------------------------------------
 
-export type NodePackageManager = "bun" | "npm";
+type NodePackageManager = "bun" | "npm";
 
 // Precedence: bun BEFORE npm. An explicit bun lockfile is a positive signal
 // the project's build was authored with bun; `npm install` auto-writes a
@@ -134,7 +134,7 @@ export class ToolchainError extends Error {
 }
 
 // open-by-design: log payloads carry caller-defined diagnostic fields
-export type ToolchainLogFn = (event: Record<string, unknown>) => void;
+type ToolchainLogFn = (event: Record<string, unknown>) => void;
 
 export interface ToolchainDeps {
   /**
@@ -148,7 +148,7 @@ export interface ToolchainDeps {
   readonly log?: ToolchainLogFn;
 }
 
-export interface CodegenOutcome {
+interface CodegenOutcome {
   readonly name: string;
   readonly ran: boolean;
   readonly reason: string;
@@ -197,7 +197,7 @@ function isLocalBinCommand(command: readonly string[]): boolean {
  * toolchain preparation runs inside a container where containment is structural
  * (--network controlled, --userns=keep-id, single mount), not string-based.
  */
-export function isSafeToolchainCommand(command: readonly string[]): boolean {
+function isSafeToolchainCommand(command: readonly string[]): boolean {
   if (command.length === 0) return false;
   return isPackageManagerCommand(command) || isLocalBinCommand(command);
 }

@@ -5,7 +5,7 @@ import { z } from "zod";
 // Config schema
 // ---------------------------------------------------------------------------
 
-export const CommandPolicyConfigSchema = z.object({
+const CommandPolicyConfigSchema = z.object({
     maxCommandLength: z.number().int().positive().default(4096),
     allowedCommands: z.record(z.string(), z.array(z.string())).default({}),
     blockedBinaries: z.array(z.string()).default([]),

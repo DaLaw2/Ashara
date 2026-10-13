@@ -11,14 +11,14 @@ import type { ProjectId } from "./ids.js";
 
 // --- Project Knowledge Graph (ADR-038) ---
 
-export const ProjectKnowledgeNodeSchema = z.object({
+const ProjectKnowledgeNodeSchema = z.object({
   id: z.string().min(1),
   kind: z.string().min(1),
   label: z.string().min(1),
   meta: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
-export const ProjectKnowledgeEdgeSchema = z.object({
+const ProjectKnowledgeEdgeSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
   rel: z.string().min(1),

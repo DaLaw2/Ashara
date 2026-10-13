@@ -119,7 +119,7 @@ async function applyReplan(
   await publishEvents(deps, item);
 }
 
-export async function applyAbandon(
+async function applyAbandon(
   deps: Pick<FailureRecoveryDeps, "workItemRepo" | "eventPublisher">,
   item: WorkItem,
   reason: StoredBlockedReason,
@@ -130,7 +130,7 @@ export async function applyAbandon(
   await publishEvents(deps, item);
 }
 
-export async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, item: WorkItem): Promise<void> {
+async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, item: WorkItem): Promise<void> {
   const events = takeEvents(item);
   for (const event of events) {
     try {

@@ -212,5 +212,4 @@ export function createDefaultRegistry(workingDir?: string, config?: RegistryConf
 }
 
 export { buildSanitizedEnv } from "./sanitized-env.js";
-export type { CommandPolicyConfig } from "./command-policy.js";
 export type { RegisteredTool, ToolDefinition } from "./types.js";

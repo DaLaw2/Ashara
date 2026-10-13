@@ -1,4 +1,4 @@
-export class PlanningError extends Error {
+class PlanningError extends Error {
   constructor(
     message: string,
     public readonly code: string,

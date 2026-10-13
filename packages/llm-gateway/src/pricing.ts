@@ -4,8 +4,8 @@ import { loadModelsConfigPathEnvOverride } from "@ashara/shared";
 import { resolveAsharaRoot } from "./paths.js";
 import type { ModelConfig } from "./types.js";
 
-export const ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1;
-export const ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25;
+const ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1;
+const ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25;
 
 export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Light: 0,

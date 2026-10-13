@@ -38,7 +38,7 @@ import { ProjectFrameSchema } from "./project-frame.js";
  * (the old `as string[]` fail-soft). `.strict()`: an unexpected producer field
  * fails the parse rather than riding along invisibly.
  */
-export const AgentBriefSchema = z
+const AgentBriefSchema = z
   .object({
     taskId: z.string().min(1),
     goal: z.string().min(1),
@@ -71,6 +71,7 @@ export type AgentBrief = z.infer<typeof AgentBriefSchema>;
  * source and the per-field Zod issues so the message alone says which field of
  * which side's brief was malformed — the original context survives across the
  * subprocess boundary rather than collapsing to `error.toString()`.
+ * @testseam agent-brief.test.ts asserts the typed rejection
  */
 export class InvalidAgentBriefError extends Error {
   constructor(

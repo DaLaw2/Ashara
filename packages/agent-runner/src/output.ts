@@ -7,7 +7,7 @@ import type { ConversationResult, ConversationTurn } from "./conversation.js";
 // Public types
 // ---------------------------------------------------------------------------
 
-export interface ErrorDetail {
+interface ErrorDetail {
     readonly model: string | null;
     readonly turnCount: number;
     readonly lastToolCall: string | null;

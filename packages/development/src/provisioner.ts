@@ -36,7 +36,7 @@ const NetworkPolicySchema = z.record(
   z.boolean(),
 );
 
-export const EnvironmentSpecSchema = z.object({
+const EnvironmentSpecSchema = z.object({
   baseImage: z.string().min(1),
   toolchains: z.array(ToolchainSchema),
   systemPackages: z.array(z.string()),
@@ -45,7 +45,7 @@ export const EnvironmentSpecSchema = z.object({
   projectMount: z.string().min(1),
 });
 
-export const ExecResultSchema = z.object({
+const ExecResultSchema = z.object({
   exitCode: z.number().int().nullable(),
   stdout: z.string(),
   stderr: z.string(),
@@ -73,7 +73,7 @@ export interface ExecOptions {
 // ProvisionedEnv — a running environment with immutable versioning
 // ---------------------------------------------------------------------------
 
-export type ProvisionedEnvStatus =
+type ProvisionedEnvStatus =
   | "provisioning"
   | "ready"
   | "updating"

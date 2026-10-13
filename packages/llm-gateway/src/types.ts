@@ -13,7 +13,7 @@ import type { CapabilityLevel, ProjectId, WorkItemId } from "@ashara/shared";
  * `RoutingProfileUnresolved` (see `ProviderRegistry.resolveFromProfile`). Only
  * the SITE dimension is boot-enforced; the capability dimension fails per call.
  */
-export type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & {
+type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & {
   default?: string;
 };
 
@@ -127,13 +127,13 @@ export interface TokenUsage {
  */
 export type ExtractedUsage = MeasuredUsage | UnmeasuredUsage;
 
-export interface MeasuredUsage {
+interface MeasuredUsage {
   readonly measured: true;
   readonly usage: TokenUsage;
   readonly reported: ReportedTokens;
 }
 
-export interface UnmeasuredUsage {
+interface UnmeasuredUsage {
   readonly measured: false;
   readonly usage: TokenUsage;
   readonly reported: ReportedTokens;
@@ -145,7 +145,7 @@ export interface UnmeasuredUsage {
  * `TokenUsage` zero-fills for its arithmetic consumers; this is what a record of
  * the call may state as measured.
  */
-export interface ReportedTokens {
+interface ReportedTokens {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly cacheReadTokens: number | null;
@@ -167,7 +167,7 @@ export interface CostBreakdown {
   readonly measured: boolean;
 }
 
-export interface BudgetConfig {
+interface BudgetConfig {
   /** Total spend cap in USD, checked against the in-process BudgetLedger. */
   maxCostTotal: number;
   /**
@@ -210,7 +210,7 @@ export interface StructuredResponse<T> {
  * Who a recorded call serves. `environment-spec` is a caller with no routing
  * site of its own: it routes by capability alone, so it is not a `KnownLLMSite`.
  */
-export type LlmCallSite = KnownLLMSite | "environment-spec";
+type LlmCallSite = KnownLLMSite | "environment-spec";
 
 /** Required on every recorded call: the project the spend belongs to, and the work item when one is served. */
 export interface LlmCallContext {

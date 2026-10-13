@@ -39,7 +39,7 @@ import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
  * zero executable checks existed — neither pass nor fail, because nothing was
  * tested.
  */
-export type VerifyVerdict = "passed" | "failed" | "unverified";
+type VerifyVerdict = "passed" | "failed" | "unverified";
 
 export interface CoreVerifyResult {
   readonly verdict: VerifyVerdict;
@@ -61,7 +61,7 @@ export type CommandRunner = (
 ) => Promise<{ exitCode: number; output: string }>;
 
 // open-by-design: log payloads carry caller-defined diagnostic fields
-export type VerifyLogFn = (event: Record<string, unknown>) => void;
+type VerifyLogFn = (event: Record<string, unknown>) => void;
 
 export interface CoreVerifyInput {
   readonly workDir: string;
@@ -115,6 +115,7 @@ export interface CoreVerifyDeps {
 // GIT-SAFETY (a): workDir/gitRoot validation
 // ---------------------------------------------------------------------------
 
+/** @testseam verify-core.test.ts asserts the typed rejection */
 export class InvalidVerifyPathError extends Error {
   constructor(
     public readonly field: "workDir" | "gitRoot",

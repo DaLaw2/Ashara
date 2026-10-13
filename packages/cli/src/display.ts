@@ -4,7 +4,7 @@
 
 import type { AsharaClient, SessionInfo, WorkItem } from "./client.js";
 
-export const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 5_000;
 
 // Idle-since-last-progress bound, not wall-clock-since-start (Run 8 G6/R8-F5:
 // a healthy 15-40min build was scored FAILED at 600s because the old timeout

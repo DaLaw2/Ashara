@@ -96,7 +96,7 @@ const CatalogProviderSchema = z.object({
   baseUrl: z.string().nullable(),
 });
 
-export const GatewayCatalogSchema = z.object({
+const GatewayCatalogSchema = z.object({
   models: z.array(CatalogModelSchema).min(1),
   providers: z.array(CatalogProviderSchema).min(1),
 });

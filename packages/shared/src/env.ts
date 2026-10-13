@@ -100,7 +100,7 @@ export function loadServerEnv(): ServerEnv {
 // subprocess (SEAM-2). Validated at both ends: fail-closed, no path defaults.
 // ---------------------------------------------------------------------------
 
-export const ExecutionContextSchema = z.object({
+const ExecutionContextSchema = z.object({
     ASHARA_BRIEF_PATH: z.string().min(1),
     ASHARA_OUTPUT_PATH: z.string().min(1),
     ASHARA_WORKING_DIR: z.string().min(1),
@@ -108,8 +108,9 @@ export const ExecutionContextSchema = z.object({
     AGENT_CAPABILITY: z.string().min(1).default("Strong"),
 });
 
-export type ExecutionContext = z.infer<typeof ExecutionContextSchema>;
+type ExecutionContext = z.infer<typeof ExecutionContextSchema>;
 
+/** @testseam env.test.ts checks the schema without mutating process.env */
 export function parseExecutionContext(env: Record<string, string | undefined>): ExecutionContext {
     return ExecutionContextSchema.parse(env);
 }

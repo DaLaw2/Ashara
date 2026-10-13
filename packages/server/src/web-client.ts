@@ -21,6 +21,7 @@ import type { SecretReader } from "./secrets.js";
 // token: a client logs in with the access code from the secret store and gets a
 // random session token in an HttpOnly cookie, stored server-side only as its hash.
 
+/** @testseam web-client.test.ts reads and sends the session cookie by name */
 export const CLIENT_SESSION_COOKIE = "ashara_client";
 
 /**
@@ -28,7 +29,7 @@ export const CLIENT_SESSION_COOKIE = "ashara_client";
  * a custom header, and a cross-site fetch that sets one needs a CORS preflight this
  * server never grants, so the header is CSRF defence independent of SameSite.
  */
-export const CLIENT_REQUEST_HEADER = "X-Ashara-Client";
+const CLIENT_REQUEST_HEADER = "X-Ashara-Client";
 
 /**
  * Below this length the fixed failure delay is no defence: the code itself must
@@ -57,7 +58,7 @@ export interface WebClientAssets {
 }
 
 /** A web client asset file could not be read at startup. */
-export class WebClientAssetMissing extends Error {
+class WebClientAssetMissing extends Error {
   constructor(
     readonly path: string,
     options: ErrorOptions,

@@ -34,7 +34,7 @@ export interface AlignmentLLM {
  * on ladder exhaustion -- it BLOCKS vision intake rather than silently
  * proceeding with an empty/poisoned inference set (Discipline A).
  */
-export class AlignmentInferenceError extends Error {
+class AlignmentInferenceError extends Error {
   readonly visionExcerpt: string;
 
   constructor(message: string, visionExcerpt: string, options?: { cause?: unknown }) {

@@ -14,7 +14,7 @@ export interface RunnerConfig {
   readonly databaseUrl: string;
 }
 
-export const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
+const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
   pollIntervalMs: 10_000,
   idleIntervalMs: 30_000,
   maxConsecutiveErrors: 3,

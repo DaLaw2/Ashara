@@ -13,13 +13,13 @@ import type { CommandRunner } from "./verify-core.js";
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_LENGTH = 2000;
-export const CHECK_TIMEOUT_MS = 30_000;
+const CHECK_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface CoreCheckResult {
+interface CoreCheckResult {
   readonly name: string;
   readonly passed: boolean;
   readonly output: string;

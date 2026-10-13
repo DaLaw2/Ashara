@@ -69,7 +69,7 @@ const apiSchema = z
   })
   .passthrough();
 
-export const storedBlockedReasonSchema = z.discriminatedUnion("source", [
+const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   taskFailedSchema,
   orchestratorErrorSchema,
   replanSchema,
@@ -79,7 +79,10 @@ export const storedBlockedReasonSchema = z.discriminatedUnion("source", [
 
 export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
-/** Typed failure for a blocked_reason jsonb value that is present but unreadable. */
+/**
+ * Typed failure for a blocked_reason jsonb value that is present but unreadable.
+ * @testseam blocked-reason.test.ts asserts the typed rejection and its context
+ */
 export class BlockedReasonCorrupt extends Error {
   constructor(
     public readonly raw: unknown,

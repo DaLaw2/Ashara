@@ -85,7 +85,7 @@ export interface ExecutionEventSink {
 // Configuration (subset relevant to execution)
 // ---------------------------------------------------------------------------
 
-export interface DevelopmentConfig {
+interface DevelopmentConfig {
   readonly workdirBase: string;
 }
 
@@ -965,6 +965,7 @@ export class DevelopmentService {
  * task that already passed its gates. A row left non-terminal by such an error is
  * resolved by the startup reconciler, the durable backstop Discipline B requires
  * — no in-process handler survives a crash.
+ * @testseam execution-service.test.ts asserts the terminal write directly
  */
 export async function withSessionLifecycle(
   sessionStore: SessionStore,

@@ -20,7 +20,10 @@ export interface LegacyImportReport {
   readonly imported: readonly string[];
 }
 
-/** The store already holds a different value under the name a legacy credential maps to. */
+/**
+ * The store already holds a different value under the name a legacy credential maps to.
+ * @testseam import-legacy-credentials.test.ts asserts the typed rejection
+ */
 export class LegacyImportConflict extends Error {
   readonly secretName: string;
   readonly source: string;
@@ -38,7 +41,7 @@ export class LegacyImportConflict extends Error {
 }
 
 /** A legacy row came back in a shape this importer does not recognise. */
-export class LegacyRowInvalid extends Error {
+class LegacyRowInvalid extends Error {
   readonly table: string;
   readonly issues: readonly string[];
 

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, TomlDate, TomlError } from "smol-toml";
 
-export interface VerifyCheck {
+interface VerifyCheck {
   readonly name: string;
   readonly command: string;
 }
@@ -11,6 +11,7 @@ export interface VerifyConfig {
   readonly checks: readonly VerifyCheck[];
 }
 
+/** @testseam verify-config.test.ts asserts the typed rejection */
 export class VerifyConfigParseError extends Error {
   readonly filePath: string;
   readonly key: string | undefined;

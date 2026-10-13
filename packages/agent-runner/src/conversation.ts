@@ -29,13 +29,13 @@ export interface ConversationTurn {
     readonly tokenUsage: TokenUsage;
 }
 
-export interface TurnToolCall {
+interface TurnToolCall {
     readonly id: string;
     readonly name: string;
     readonly input: Record<string, unknown>;
 }
 
-export interface ConversationToolResult {
+interface ConversationToolResult {
     readonly toolCallId: string;
     readonly toolName: string;
     readonly result: ToolResult;

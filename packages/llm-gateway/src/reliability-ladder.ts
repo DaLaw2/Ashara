@@ -44,7 +44,7 @@ const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong
  * SINGLE step (ADR-030: escalate at most one tier per site invocation — no
  * unbounded climb burning budget).
  */
-export function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
+function nextCapability(capability: CapabilityLevel): CapabilityLevel | null {
   const i = CAPABILITY_ORDER.indexOf(capability);
   if (i < 0 || i >= CAPABILITY_ORDER.length - 1) return null;
   return CAPABILITY_ORDER[i + 1];
@@ -58,7 +58,7 @@ function excerpt(raw: string): string {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface LadderRequest {
+interface LadderRequest {
   /** Stable identifier for the call site — surfaces in logs and errors. */
   readonly site: KnownLLMSite;
   readonly capability: CapabilityLevel;
@@ -78,7 +78,7 @@ export interface LadderAttemptEvent {
   readonly rawExcerpt?: string;
 }
 
-export interface LadderResult<T> {
+interface LadderResult<T> {
   readonly value: T;
   readonly capability: CapabilityLevel;
   readonly model: string;
@@ -89,7 +89,7 @@ export interface LadderResult<T> {
   readonly tiersUsed: number;
 }
 
-export interface LadderModelAttempts {
+interface LadderModelAttempts {
   readonly capability: CapabilityLevel;
   readonly model: string;
   readonly attempts: number;
@@ -100,7 +100,7 @@ export interface LadderModelAttempts {
  * Terminal typed failure: every validated attempt failed on every tier. Carries
  * enough context to diagnose the failure from the message alone (Discipline C).
  */
-export class StructuredOutputExhausted extends GatewayError {
+class StructuredOutputExhausted extends GatewayError {
   readonly site: string;
   readonly perModel: readonly LadderModelAttempts[];
   readonly lastRawExcerpt: string;
@@ -257,7 +257,7 @@ export type StructuredValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly errors: readonly string[] };
 
-export interface StructuredProviderRequest<T> {
+interface StructuredProviderRequest<T> {
   readonly capability: CapabilityLevel;
   readonly prompt: string;
   readonly schema: ZodType<T>;
@@ -275,7 +275,7 @@ export interface StructuredProviderRequest<T> {
   readonly validate?: (value: T) => StructuredValidation;
 }
 
-export interface StructuredProviderResult<T> {
+interface StructuredProviderResult<T> {
   readonly data: T;
   readonly model?: string;
   readonly provider?: string;

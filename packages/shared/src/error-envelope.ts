@@ -10,7 +10,7 @@ export interface ErrorLayer {
   readonly timestamp: string;
 }
 
-export const errorLayerSchema: z.ZodType<ErrorLayer> = z.lazy(() =>
+const errorLayerSchema: z.ZodType<ErrorLayer> = z.lazy(() =>
   z.object({
     boundary: z.string(),
     operation: z.string(),

@@ -12,7 +12,7 @@ import { CycleDetected } from "./errors.js";
  *                item can never become dispatchable and must be routed as
  *                blocked-with-reason rather than waiting forever.
  */
-export type DependencyResolution = "met" | "waiting" | "blocked";
+type DependencyResolution = "met" | "waiting" | "blocked";
 
 /** The status/identity view of a single item, as seen by dependency resolution. */
 export interface DependencyItemView {

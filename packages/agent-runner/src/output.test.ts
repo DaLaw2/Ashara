@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
-import type { ConversationResult, ConversationTurn, ConversationToolResult } from "./conversation.js";
-import type { AgentOutput, ErrorDetail } from "./output.js";
+import type { ConversationResult, ConversationTurn } from "./conversation.js";
+import type { AgentOutput } from "./output.js";
 import { OutputCollector } from "./output.js";
+
+type ConversationToolResult = ConversationTurn["toolResults"][number];
+type ErrorDetail = NonNullable<AgentOutput["errorDetail"]>;
 
 // ---------------------------------------------------------------------------
 // Helpers — build ConversationResult fixtures with minimal boilerplate

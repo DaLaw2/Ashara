@@ -51,7 +51,7 @@ export interface TaskResult {
   readonly detail: string;
 }
 
-export type TaskResultStatus = "completed" | "failed" | "blocked" | "retrying";
+type TaskResultStatus = "completed" | "failed" | "blocked" | "retrying";
 
 export function completedResult(taskId: string): TaskResult {
   return { taskId, status: "completed", detail: "task completed and verified successfully" };

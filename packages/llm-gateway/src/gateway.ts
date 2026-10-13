@@ -513,7 +513,7 @@ function isTemperatureUnsupportedWarning(
   return warning.type === "unsupported" && warning.feature === "temperature";
 }
 
-export interface TemperatureHonoredCheck {
+interface TemperatureHonoredCheck {
   /** `undefined` means the caller never asked for a temperature — nothing to honor. */
   readonly requestedTemperature: number | undefined;
   /** Structured provider warnings for the completed call; `undefined` when the SDK reported none. */
@@ -537,6 +537,7 @@ export interface TemperatureHonoredCheck {
  *
  * Any requested temperature counts, not just 0 — "I asked for X and silently
  * got something else" is the violation regardless of X.
+ * @testseam gateway.test.ts exercises the verdict without a provider
  */
 export function temperatureViolation(check: TemperatureHonoredCheck): TemperatureNotHonored | null {
   if (check.requestedTemperature === undefined) return null;

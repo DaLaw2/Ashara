@@ -1,7 +1,7 @@
 // Tool definition and registry types for the agent-runner subsystem.
 // Schemas are JSON Schema-compatible and convertible to Anthropic / OpenAI tool-use format.
 
-export interface SchemaProperty {
+interface SchemaProperty {
     readonly type: "string" | "number" | "boolean" | "array" | "integer";
     readonly description: string;
     readonly items?: { readonly type: string };

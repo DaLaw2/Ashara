@@ -16,7 +16,7 @@ export interface WorkdirInfo {
   readonly taskBranch: string;
 }
 
-export class WorkspaceError extends Error {
+class WorkspaceError extends Error {
   constructor(
     public readonly operation: string,
     public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskId?: string },
@@ -73,7 +73,7 @@ export async function createWorkdirForRetry(
   return { workDir, taskBranch };
 }
 
-export async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
+async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
   try {
     await execFileAsync("git", ["worktree", "remove", workDir, "--force"], {
       cwd: targetProjectPath,
@@ -102,7 +102,7 @@ export async function getChangedFiles(workDir: string): Promise<string[]> {
     .filter((path) => !isAsharaControlPath(path));
 }
 
-export async function hasGitCommits(dir: string): Promise<boolean> {
+async function hasGitCommits(dir: string): Promise<boolean> {
   try {
     await execFileAsync("git", ["-C", dir, "rev-parse", "HEAD"]);
     return true;
@@ -343,6 +343,7 @@ function describeAsharaRootViolation(canonical: string, asharaRoot: string): str
 // time, before any init.
 // ---------------------------------------------------------------------------
 
+/** @testseam workspace-target-path.test.ts asserts the typed rejection */
 export class InvalidTargetProjectPath extends Error {
   constructor(
     public readonly path: string,

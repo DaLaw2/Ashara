@@ -16,12 +16,12 @@ import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
-export interface ExecutionRoutingDeps {
+interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: EventStoreRepository;
 }
 
-export async function executeTask(
+async function executeTask(
   deps: ExecutionRoutingDeps,
   developmentService: DevelopmentService,
   task: WorkItem,
@@ -399,7 +399,7 @@ export async function processTask(
   return { result, costInfo };
 }
 
-export async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void> {
+async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void> {
   // Commit the Failed transition first, then publish best-effort. A publish
   // failure must not re-drive the domain fallback onto an already-Failed item
   // (Failed->Failed) — the transition is durable independent of the audit

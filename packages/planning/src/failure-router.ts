@@ -7,14 +7,14 @@ import type { FailureCategory } from "./failure-classifier.js";
  * lossy summarisation, so a re-planned attempt can be told exactly WHY the last
  * one failed (Discipline C — error reproducibility).
  */
-export const rawFailureContextSchema = z.object({
+const rawFailureContextSchema = z.object({
   detail: z.string(),
   raw: z.record(z.string(), z.unknown()),
 });
 
 export type RawFailureContext = z.infer<typeof rawFailureContextSchema>;
 
-export interface FailureRouterItem {
+interface FailureRouterItem {
   readonly id: string;
 }
 
@@ -55,7 +55,7 @@ export type FailureDecision =
       readonly failure: RawFailureContext;
     };
 
-export class FailureRouterError extends Error {
+class FailureRouterError extends Error {
   // open-by-design: diagnostic context varies per error site (config, item state, etc.)
   readonly context: Record<string, unknown>;
 
@@ -66,7 +66,7 @@ export class FailureRouterError extends Error {
   }
 }
 
-export class FailureRouterConfigError extends FailureRouterError {
+class FailureRouterConfigError extends FailureRouterError {
   constructor(maxReplanAttempts: number) {
     super(`FailureRouter.maxReplanAttempts must be a non-negative integer, got ${maxReplanAttempts}`, {
       maxReplanAttempts,
@@ -75,7 +75,7 @@ export class FailureRouterConfigError extends FailureRouterError {
   }
 }
 
-export class FailureContextError extends FailureRouterError {
+class FailureContextError extends FailureRouterError {
   constructor(itemId: string, issues: z.ZodIssue[]) {
     super(`FailureRouter received invalid raw failure context for work item ${itemId}`, {
       itemId,

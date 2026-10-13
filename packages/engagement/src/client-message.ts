@@ -51,7 +51,7 @@ const ClientMessageSchema = z.discriminatedUnion("direction", [
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
 /** A client_messages row read back from storage did not match the channel's language. */
-export class InvalidClientMessageRecord extends Error {
+class InvalidClientMessageRecord extends Error {
   constructor(
     readonly record: unknown,
     readonly issues: readonly z.core.$ZodIssue[],

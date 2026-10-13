@@ -7,7 +7,7 @@ import { z } from "zod";
  * extension is a declared field, so a producer writing an undeclared key is a
  * compile error, not a silent `unknown`.
  */
-export const storedTaskSpecSchema = z.object({
+const storedTaskSpecSchema = z.object({
   // Core specification (decomposition engine output)
   goal: z.string().optional(),
   endState: z.string().optional(),
@@ -22,7 +22,10 @@ export const storedTaskSpecSchema = z.object({
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;
 
-/** Typed failure for a task_spec jsonb value that is present but unreadable. */
+/**
+ * Typed failure for a task_spec jsonb value that is present but unreadable.
+ * @testseam task-spec.test.ts asserts the typed rejection and its context
+ */
 export class TaskSpecCorrupt extends Error {
   constructor(
     public readonly raw: unknown,

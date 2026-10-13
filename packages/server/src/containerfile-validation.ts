@@ -18,13 +18,14 @@ import type { EnvironmentSpec } from "@ashara/development";
 // Typed error (Discipline C: self-diagnosing, structured context)
 // ---------------------------------------------------------------------------
 
-export interface ContainerfileValidationContext {
+interface ContainerfileValidationContext {
   readonly field: string;
   readonly value: string;
   readonly rule: string;
   readonly detail: string;
 }
 
+/** @testseam containerfile-validation.test.ts asserts the typed rejection */
 export class ContainerfileValidationError extends Error {
   constructor(public readonly context: ContainerfileValidationContext) {
     super(

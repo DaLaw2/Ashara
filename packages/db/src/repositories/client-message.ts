@@ -18,7 +18,10 @@ interface NewClientMessage {
   readonly inReplyTo: string | null;
 }
 
-/** markConsumed found no unconsumed inbound row with this id. */
+/**
+ * markConsumed found no unconsumed inbound row with this id.
+ * @testseam client-message.test.ts asserts the typed rejection
+ */
 export class ClientMessageNotConsumable extends Error {
   constructor(readonly messageId: string) {
     super(

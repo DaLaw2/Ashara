@@ -53,21 +53,21 @@ class BlockParseError extends Error {
 // Types
 // ---------------------------------------------------------------------------
 
-export interface ClaimCommand {
+interface ClaimCommand {
   readonly command: string;
   /** 1-based line in the file where the $ line appears */
   readonly commandLine: number;
   readonly expectedOutput: string;
 }
 
-export interface VerifyBlock {
+interface VerifyBlock {
   readonly filePath: string;
   /** 1-based line where ```verify starts */
   readonly blockLine: number;
   readonly commands: readonly ClaimCommand[];
 }
 
-export interface ClaimFailure {
+interface ClaimFailure {
   readonly filePath: string;
   readonly blockLine: number;
   readonly commandLine: number;
@@ -77,7 +77,7 @@ export interface ClaimFailure {
   readonly kind: "mismatch" | "exit-nonzero" | "parse-error" | "unreadable";
 }
 
-export interface CheckResult {
+interface CheckResult {
   readonly failures: readonly ClaimFailure[];
   readonly commandsRun: number;
   readonly blocksChecked: number;
@@ -99,6 +99,7 @@ export interface CheckResult {
  * subsequent non-command lines until the next "$ " or the closing fence
  * are that command's expected stdout. Multiple commands per block are
  * supported — they run in sequence, each in an independent shell.
+ * @testseam check-docs.test.ts exercises parsing without running the CLI
  */
 export function parseVerifyBlocks(content: string, filePath: string): VerifyBlock[] {
   const blocks: VerifyBlock[] = [];
@@ -235,6 +236,7 @@ function executeCommand(command: string, cwd: string): ExecutionResult {
  * Run all commands in parsed verify blocks and compare against expected output.
  * Every block runs unconditionally — a command that cannot execute is a
  * failure, never a skip.
+ * @testseam check-docs.test.ts exercises checking without running the CLI
  */
 export function checkBlocks(blocks: readonly VerifyBlock[], cwd: string): CheckResult {
   const failures: ClaimFailure[] = [];

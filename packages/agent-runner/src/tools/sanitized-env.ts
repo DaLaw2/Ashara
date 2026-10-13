@@ -57,4 +57,4 @@ function buildSanitizedEnv(extraAllowed?: string[]): Record<string, string> {
     return result;
 }
 
-export { ENV_ALLOWLIST, SECRET_PATTERNS, buildSanitizedEnv };
+export { buildSanitizedEnv };

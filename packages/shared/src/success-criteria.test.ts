@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { parseStoredSuccessCriteria, SuccessCriteriaCorrupt, storedSuccessCriteriaSchema } from "./success-criteria.js";
+import { parseStoredSuccessCriteria, SuccessCriteriaCorrupt } from "./success-criteria.js";
 
 describe("parseStoredSuccessCriteria", () => {
   test("null returns undefined (policy default: not all items carry criteria)", () => {
@@ -45,9 +45,8 @@ describe("parseStoredSuccessCriteria", () => {
   });
 });
 
-describe("storedSuccessCriteriaSchema", () => {
+describe("stored success criteria schema", () => {
   test("rejects object (not an array)", () => {
-    const result = storedSuccessCriteriaSchema.safeParse({ criteria: "test" });
-    expect(result.success).toBe(false);
+    expect(() => parseStoredSuccessCriteria({ criteria: "test" })).toThrow(SuccessCriteriaCorrupt);
   });
 });

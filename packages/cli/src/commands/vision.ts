@@ -54,6 +54,7 @@ function createLLMFromGateway(gateway: LLMGateway): AlignmentLLM & Decomposition
 // Composition-root LLM acquisition (ADR-030). The acquired config always goes
 // through buildGateway: providers configured -> real gateway; zero providers
 // -> NoLLMProvidersConfigured propagates, naming the config sources checked.
+/** @testseam vision.test.ts asserts the fail-closed path with no LLM configured */
 export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
     const serverUrl = process.env.ASHARA_SERVER_URL;
     const apiToken = process.env.ASHARA_API_TOKEN;
@@ -108,7 +109,7 @@ function readLine(prompt: string): Promise<string> {
 
 // --- Alignment display ---
 
-export interface UserAnswer {
+interface UserAnswer {
     readonly category: string;
     readonly question: string;
     readonly answer: string;
@@ -139,7 +140,7 @@ function displayQuestions(questions: DirectionQuestion[]): void {
     }
 }
 
-export function buildEnrichedNorthStar(
+function buildEnrichedNorthStar(
     visionSummary: string,
     answers: UserAnswer[],
 ): string {
@@ -167,7 +168,7 @@ function toServerLevel(level: WorkItemSpec["level"]): WorkItemLevel {
 
 // --- Alignment helper ---
 
-export async function alignVision(visionText: string, llm: AlignmentLLM): Promise<AlignmentResult> {
+async function alignVision(visionText: string, llm: AlignmentLLM): Promise<AlignmentResult> {
     const engine = new AlignmentEngine(llm);
 
     try {
@@ -180,7 +181,7 @@ export async function alignVision(visionText: string, llm: AlignmentLLM): Promis
 
 // --- Decomposition helper ---
 
-export async function decomposeVision(
+async function decomposeVision(
     visionText: string,
     alignment: AlignmentResult,
     llm: DecompositionLLM,
