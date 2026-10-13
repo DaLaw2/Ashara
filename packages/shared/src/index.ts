@@ -68,13 +68,14 @@ export type { RunState } from "./run-state.js";
 export { parseRunState, serializeRunState } from "./run-state.js";
 
 export type { StoredTaskSpec } from "./task-spec.js";
-export { parseStoredTaskSpec } from "./task-spec.js";
 
 export type { StoredBlockedReason } from "./blocked-reason.js";
-export { blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } from "./blocked-reason.js";
+export { blockedReasonToRecord, withSalvagedResult } from "./blocked-reason.js";
 
 export type { StoredSuccessCriteria } from "./success-criteria.js";
-export { parseStoredSuccessCriteria } from "./success-criteria.js";
+
+export type { ProjectBlockCause } from "./work-item-row.js";
+export { WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./work-item-row.js";
 
 export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 

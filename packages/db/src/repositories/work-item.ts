@@ -1,12 +1,10 @@
-import { and, eq, asc, sql } from "drizzle-orm";
+import { and, eq, asc, inArray, sql } from "drizzle-orm";
 import {
   parseWorkItemStatus,
   canTransitionTo,
   InvalidStatusTransition,
   WorkItemNotFound,
-  parseStoredTaskSpec,
-  parseStoredSuccessCriteria,
-  parseStoredBlockedReason,
+  parseWorkItemJsonb,
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { workItems, dependencies } from "../schema.js";
@@ -18,16 +16,14 @@ export class WorkItemRepository {
 
   /**
    * Validates the three jsonb columns on a work_items row at the database
-   * boundary (Discipline A, Zod-at-boundaries). Each parser throws a typed
-   * error on a non-null value that fails its Zod schema — corrupt data is
-   * caught here, at the physical read, not deferred to an adapter or domain
-   * layer. Null/undefined passes through (absent is a policy default for all
-   * three columns).
+   * boundary (Discipline A, Zod-at-boundaries). A non-null value that fails its
+   * Zod schema throws WorkItemRowCorrupt naming the row's project, item and
+   * column — corrupt data is caught here, at the physical read, not deferred to
+   * an adapter or domain layer. Null/undefined passes through (absent is a
+   * policy default for all three columns).
    */
   private validateRow(row: WorkItemRow): WorkItemRow {
-    parseStoredTaskSpec(row.taskSpec);
-    parseStoredSuccessCriteria(row.successCriteria);
-    parseStoredBlockedReason(row.blockedReason);
+    parseWorkItemJsonb(row);
     return row;
   }
 
@@ -56,11 +52,46 @@ export class WorkItemRepository {
     return row ? this.validateRow(row) : null;
   }
 
-  async findByStatus(status: string) {
+  /**
+   * One project's items in `status`. Reads are per project so a corrupt row
+   * fails only its own project's read (story s-loop-never-stop-m1).
+   */
+  async findByProjectAndStatus(projectId: string, status: string) {
     const rows = await this.db
       .select()
       .from(workItems)
-      .where(eq(workItems.status, status));
+      .where(and(eq(workItems.projectId, projectId), eq(workItems.status, status)))
+      .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    return rows.map((row) => this.validateRow(row));
+  }
+
+  /** The projects that hold at least one item in `status`; no jsonb column is read. */
+  async projectIdsWithStatus(status: string): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ projectId: workItems.projectId })
+      .from(workItems)
+      .where(eq(workItems.status, status))
+      .orderBy(asc(workItems.projectId));
+    return rows.map((row) => row.projectId);
+  }
+
+  /** Ids of every item in one of `statuses`; no jsonb column is read. */
+  async listIdsByStatus(statuses: readonly string[]): Promise<string[]> {
+    if (statuses.length === 0) return [];
+    const rows = await this.db
+      .select({ id: workItems.id })
+      .from(workItems)
+      .where(inArray(workItems.status, [...statuses]));
+    return rows.map((row) => row.id);
+  }
+
+  /** One project's items, oldest first. A corrupt row fails this project's read only. */
+  async listByProject(projectId: string) {
+    const rows = await this.db
+      .select()
+      .from(workItems)
+      .where(eq(workItems.projectId, projectId))
+      .orderBy(asc(workItems.createdAt), asc(workItems.id));
     return rows.map((row) => this.validateRow(row));
   }
 

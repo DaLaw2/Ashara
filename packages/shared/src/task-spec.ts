@@ -27,7 +27,6 @@ export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;
 
 /**
  * Typed failure for a task_spec jsonb value that is present but unreadable.
- * @testseam task-spec.test.ts asserts the typed rejection and its context
  */
 export class TaskSpecCorrupt extends Error {
   constructor(

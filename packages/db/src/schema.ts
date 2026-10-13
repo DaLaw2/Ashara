@@ -56,6 +56,10 @@ export const projects = pgTable("projects", {
   // Migration 024: the target workspace Delivery works in. Minted once on first
   // dispatch, then never rewritten.
   workspacePath: text("workspace_path"),
+  // Migration 025: why one bad record blocked the project, so the loop skips it
+  // instead of failing every project's cycle. Recorded together, on blocked rows only.
+  blockedErrorClass: text("blocked_error_class"),
+  blockedReason: text("blocked_reason"),
 });
 
 // ---------------------------------------------------------------------------

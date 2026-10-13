@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { describeErrorChain, projectBlockCause } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
 // Proceed on silence at once (orchestrator 2026-10-13, on the board): the questions
@@ -110,13 +110,19 @@ export interface IntakeStore {
   recordFailedAttempt(tenderId: string, error: string): Promise<number>;
   /** Posts the report and consumes the tender together. */
   closeFailedTender(tender: OpenTender, report: string): Promise<void>;
+  /**
+   * Blocks the project and records why (migration 025); a project already
+   * blocked keeps its first cause. A blocked project's tenders are not open.
+   */
+  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 export type IntakeOutcome =
   | { readonly kind: "recorded"; readonly tenderId: string; readonly projectId: ProjectId; readonly questions: number }
   | { readonly kind: "vision-exists"; readonly tenderId: string; readonly projectId: ProjectId; readonly visionVersion: number }
   | { readonly kind: "failed"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
-  | { readonly kind: "abandoned"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempts: number };
+  | { readonly kind: "abandoned"; readonly tenderId: string; readonly projectId: ProjectId; readonly attempts: number }
+  | { readonly kind: "project-blocked"; readonly tenderId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 /** What the core loop asks of the Liaison each cycle. */
 export interface LiaisonIntake {
@@ -266,12 +272,31 @@ interface TenderIntakeDeps {
 export class TenderIntake implements LiaisonIntake {
   constructor(private readonly deps: TenderIntakeDeps) {}
 
+  /**
+   * A tender whose own record is inconsistent blocks its project, and the other
+   * tenders are still taken in. Any other failure, a store failure included,
+   * throws through and fails the cycle.
+   */
   async runPending(): Promise<readonly IntakeOutcome[]> {
     const outcomes: IntakeOutcome[] = [];
     for (const tender of await this.deps.store.openTenders()) {
-      outcomes.push(await this.intake(tender));
+      try {
+        outcomes.push(await this.intake(tender));
+      } catch (err) {
+        if (!(err instanceof IntakeFailureUnrecorded)) throw err;
+        outcomes.push(await this.block(tender, projectBlockCause(err)));
+      }
     }
     return outcomes;
+  }
+
+  private async block(tender: OpenTender, cause: ProjectBlockCause): Promise<IntakeOutcome> {
+    const result = await this.deps.store.blockProject(tender.projectId, cause);
+    console.warn(
+      `[liaison-intake] tender ${tender.id} (project ${tender.projectId}): ${cause.errorClass}; ` +
+        `project ${result}: ${cause.reason}`,
+    );
+    return { kind: "project-blocked", tenderId: tender.id, projectId: tender.projectId, cause };
   }
 
   private async intake(tender: OpenTender): Promise<IntakeOutcome> {

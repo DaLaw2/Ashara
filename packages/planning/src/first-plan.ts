@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId, ProjectKnowledge, WorkItemLevel } from "@ashara/shared";
+import { describeErrorChain, projectBlockCause } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type { DecompositionInput, DecompositionResult, WorkItemSpec } from "./decomposition-types.js";
@@ -55,13 +55,19 @@ export interface FirstPlanStore {
   recordFailedAttempt(projectId: ProjectId, error: string): Promise<number>;
   /** Blocks the project and stamps planning stopped. */
   stopPlanning(projectId: ProjectId): Promise<void>;
+  /**
+   * Blocks the project and records why (migration 025), for a project whose own
+   * record is inconsistent; a project already blocked keeps its first cause.
+   */
+  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
 export type FirstPlanOutcome =
   | { readonly kind: "planned"; readonly projectId: ProjectId; readonly epics: number; readonly tasks: number }
   | { readonly kind: "already-planned"; readonly projectId: ProjectId }
   | { readonly kind: "failed"; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
-  | { readonly kind: "stopped"; readonly projectId: ProjectId; readonly attempts: number };
+  | { readonly kind: "stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 /** What the core loop asks of Delivery's planning each cycle. */
 export interface FirstPlanning {
@@ -189,12 +195,28 @@ interface FirstPlannerDeps {
 export class FirstPlanner implements FirstPlanning {
   constructor(private readonly deps: FirstPlannerDeps) {}
 
+  /**
+   * A project whose own record is inconsistent is blocked, and the other
+   * projects are still planned. Any other failure, a store failure included,
+   * throws through and fails the cycle.
+   */
   async runPending(): Promise<readonly FirstPlanOutcome[]> {
     const outcomes: FirstPlanOutcome[] = [];
     for (const project of await this.deps.store.projectsAwaitingPlan()) {
-      outcomes.push(await this.plan(project));
+      try {
+        outcomes.push(await this.plan(project));
+      } catch (err) {
+        if (!(err instanceof PlanFailureUnrecorded)) throw err;
+        outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
+      }
     }
     return outcomes;
+  }
+
+  private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<FirstPlanOutcome> {
+    const result = await this.deps.store.blockProject(projectId, cause);
+    console.warn(`[first-plan] project ${projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
+    return { kind: "project-blocked", projectId, cause };
   }
 
   private async plan(project: ProjectAwaitingPlan): Promise<FirstPlanOutcome> {

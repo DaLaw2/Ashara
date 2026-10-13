@@ -15,16 +15,22 @@ function emptyWorkItemRepo(): WorkItemRepository {
   return {
     create: unused("create"),
     findById: unused("findById"),
-    findByStatus: async () => [],
+    listByProject: unused("listByProject"),
+    findByProjectAndStatus: unused("findByProjectAndStatus"),
+    projectIdsWithStatus: async () => [],
+    listIdsByStatus: async () => [],
     save: unused("save"),
     incrementDispatchCount: unused("incrementDispatchCount"),
-    listAll: unused("listAll"),
     addDependency: unused("addDependency"),
     getDependencies: unused("getDependencies"),
     findChildren: unused("findChildren"),
     listAllDependencies: unused("listAllDependencies"),
     withTransaction: unused("withTransaction"),
   };
+}
+
+async function unusedBlock(): Promise<never> {
+  throw new Error("ProjectRepository.block is not exercised by this test");
 }
 
 function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
@@ -35,8 +41,9 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
 
   const deps: StartupReconcilerDeps = {
     workItemRepo: emptyWorkItemRepo(),
+    projects: { block: unusedBlock },
     eventStore: { publish: async () => undefined },
-    // Provably never invoked: findByStatus("Failed") returns [], so no item is
+    // Provably never invoked: projectIdsWithStatus("Failed") returns [], so no item is
     // routed. FailureRouter has private members, so a structural double cannot
     // satisfy it; the throwing stub is what makes the "never invoked" claim
     // testable rather than assumed.

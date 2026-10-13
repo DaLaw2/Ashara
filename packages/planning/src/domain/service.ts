@@ -10,7 +10,7 @@ import type {
 } from "@ashara/shared";
 import { ContractBodySchema, ContractDeltaSchema, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
-import type { WorkItemRepository } from "./repository.js";
+import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
 import { TaskSelector } from "./select.js";
 import { LifecycleRouter } from "./router.js";
@@ -18,8 +18,8 @@ import { applyContractDelta } from "./contract-merge.js";
 import { ContractAlreadyExists, ContractNotFound } from "./errors.js";
 
 export class PlanningService {
-  static async gate(repo: WorkItemRepository): Promise<WorkItem[]> {
-    return GateKeeper.filterAvailable(repo);
+  static async gate(repo: WorkItemRepository, projects: ActiveProjects): Promise<WorkItem[]> {
+    return GateKeeper.filterAvailable(repo, projects);
   }
 
   static select(

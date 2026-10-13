@@ -1,4 +1,5 @@
 import {
+  ProjectRepository,
   listDuePlanReports,
   listProjectsAwaitingFirstPlan,
   postPlanReport,
@@ -6,7 +7,7 @@ import {
   stopFirstPlanning,
   withFirstPlanTransaction,
 } from "@ashara/db";
-import type { createDb } from "@ashara/db";
+import type { DbTransaction, createDb } from "@ashara/db";
 import type { PlanReportStore } from "@ashara/engagement";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
@@ -15,6 +16,7 @@ import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 /** Delivery's first-plan store over projects, vision_documents and work_items. */
 export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlanStore {
+  const projects = new ProjectRepository(db);
   return {
     async projectsAwaitingPlan() {
       const rows = await listProjectsAwaitingFirstPlan(db);
@@ -53,13 +55,16 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
     },
     recordFailedAttempt: (projectId, error) => recordFirstPlanFailure(db, projectId, error),
     stopPlanning: (projectId) => stopFirstPlanning(db, projectId),
+    blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }
 
 /** Engagement's planning-report store over projects, work_items and client_messages. */
-export function createPlanReportStore(db: ReturnType<typeof createDb>): PlanReportStore {
+export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransaction): PlanReportStore {
+  const projects = new ProjectRepository(db);
   return {
     dueReports: () => listDuePlanReports(db),
     postReport: (projectId, subject, body) => postPlanReport(db, projectId, subject, body),
+    blockProject: (projectId, cause) => projects.block(projectId, cause),
   };
 }

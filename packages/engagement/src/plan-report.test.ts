@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { parseProjectId } from "@ashara/shared";
+import type { ProjectBlockCause } from "@ashara/shared";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 
@@ -7,14 +8,19 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000010");
 
 function reportsFor(tasks: { decomposition: number; scaffold: number; unrecorded: number }) {
   const posted: string[] = [];
+  const blocked: ProjectBlockCause[] = [];
   const store: PlanReportStore = {
     dueReports: async () => [{ subject: "first-plan", projectId, epicTitles: ["Studio sign-up merge"], tasks }],
     postReport: async (_projectId, _subject, body) => {
       posted.push(body);
       return "posted";
     },
+    blockProject: async (_projectId, cause) => {
+      blocked.push(cause);
+      return "blocked";
+    },
   };
-  return { reports: new PlanReports(store), posted };
+  return { reports: new PlanReports(store), posted, blocked };
 }
 
 describe("first-plan report", () => {
@@ -29,10 +35,14 @@ describe("first-plan report", () => {
     expect(posted[0]).not.toMatch(/7 tasks/);
   });
 
-  test("a plan with a task of unrecorded origin is not reported", async () => {
-    const { reports, posted } = reportsFor({ decomposition: 6, scaffold: 0, unrecorded: 1 });
+  test("a plan with a task of unrecorded origin is not reported and its project is blocked", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, blocked } = reportsFor({ decomposition: 6, scaffold: 0, unrecorded: 1 });
 
-    await expect(reports.runPending()).rejects.toMatchObject({ name: "PlanReportUnfounded" });
+    const outcomes = await reports.runPending();
+
+    expect(blocked).toEqual([{ errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) }]);
+    expect(outcomes).toEqual([{ kind: "project-blocked", projectId, cause: blocked[0] }]);
     expect(posted).toHaveLength(0);
   });
 });

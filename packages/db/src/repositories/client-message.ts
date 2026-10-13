@@ -106,7 +106,11 @@ export class ClientMessageRepository {
       .orderBy(asc(clientMessages.createdAt), asc(clientMessages.position), asc(clientMessages.id));
   }
 
-  /** Inbound tenders not yet consumed, oldest first: the Liaison's intake queue. */
+  /**
+   * Inbound tenders not yet consumed, of active projects, oldest first: the
+   * Liaison's intake queue. A blocked project's tender stays unconsumed and is
+   * not taken in.
+   */
   async listUnconsumedTenders(): Promise<ClientMessageRow[]> {
     return this.db
       .select()
@@ -116,6 +120,7 @@ export class ClientMessageRepository {
           eq(clientMessages.direction, "inbound"),
           eq(clientMessages.kind, "tender"),
           isNull(clientMessages.consumedAt),
+          sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${clientMessages.projectId} AND p.status = 'active')`,
         ),
       )
       .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));

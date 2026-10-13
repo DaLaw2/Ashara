@@ -1,5 +1,5 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { parseProjectId, type ProjectBlockCause, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { projects } from "../schema.js";
 
@@ -36,6 +36,17 @@ class WorkspacePathNotRecorded extends Error {
   ) {
     super(`cannot record workspace path ${candidatePath} on project ${projectId}: ${reason}`);
     this.name = "WorkspacePathNotRecorded";
+  }
+}
+
+/** A project id named for a write that matches no project row. */
+class ProjectNotFound extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly operation: string,
+  ) {
+    super(`cannot ${operation}: no project ${projectId}`);
+    this.name = "ProjectNotFound";
   }
 }
 
@@ -81,5 +92,32 @@ export class ProjectRepository {
       throw new WorkspacePathNotRecorded(id, path, "the conditional UPDATE matched no row yet the path is still unset");
     }
     return existing.workspacePath;
+  }
+
+  /** The projects whose work may be dispatched: status 'active', oldest first. */
+  async listActiveIds(): Promise<ProjectId[]> {
+    const rows = await this.db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(eq(projects.status, "active"))
+      .orderBy(asc(projects.createdAt), asc(projects.id));
+    return rows.map((row) => parseProjectId(row.id));
+  }
+
+  /**
+   * Blocks an active project and records why (migration 025). A project already
+   * blocked keeps its status and the cause it was first blocked with, so the
+   * earliest cause stays on record. A project that does not exist throws.
+   */
+  async block(id: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> {
+    const [row] = await this.db
+      .update(projects)
+      .set({ status: "blocked", blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
+      .where(and(eq(projects.id, id), eq(projects.status, "active")))
+      .returning({ id: projects.id });
+    if (row) return "blocked";
+    const [existing] = await this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).limit(1);
+    if (!existing) throw new ProjectNotFound(id, "block the project");
+    return "already-blocked";
   }
 }

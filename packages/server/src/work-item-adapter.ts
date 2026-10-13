@@ -3,9 +3,7 @@ import type { WorkItemId } from "@ashara/shared";
 import {
   parseWorkItemLevel,
   parseWorkItemStatus,
-  parseStoredTaskSpec,
-  parseStoredBlockedReason,
-  parseStoredSuccessCriteria,
+  parseWorkItemJsonb,
   parseRunScope,
   parseProjectId,
 } from "@ashara/shared";
@@ -22,6 +20,7 @@ import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 type DbRow = Awaited<ReturnType<DbWorkItemRepository["findById"]>>;
 
 export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
+  const jsonb = parseWorkItemJsonb(row);
   return {
     id: row.id as WorkItemId,
     level: parseWorkItemLevel(row.level),
@@ -29,10 +28,10 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     parentId: (row.parentId as WorkItemId) ?? undefined,
     title: row.title,
     description: row.description ?? undefined,
-    taskSpec: parseStoredTaskSpec(row.taskSpec),
+    taskSpec: jsonb.taskSpec,
     northStar: row.northStar ?? undefined,
-    successCriteria: parseStoredSuccessCriteria(row.successCriteria),
-    blockedReason: parseStoredBlockedReason(row.blockedReason),
+    successCriteria: jsonb.successCriteria,
+    blockedReason: jsonb.blockedReason,
     runScope: parseRunScope(row.runScope),
     projectId: parseProjectId(row.projectId),
     dispatchCount: row.dispatchCount,
@@ -64,9 +63,21 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
       const row = await db.findById(id);
       return row ? rowToWorkItem(row) : null;
     },
-    async findByStatus(status) {
-      const rows = await db.findByStatus(status);
+    async listByProject(projectId) {
+      const rows = await db.listByProject(projectId);
       return rows.map(rowToWorkItem);
+    },
+    async findByProjectAndStatus(projectId, status) {
+      const rows = await db.findByProjectAndStatus(projectId, status);
+      return rows.map(rowToWorkItem);
+    },
+    async projectIdsWithStatus(status) {
+      const ids = await db.projectIdsWithStatus(status);
+      return ids.map(parseProjectId);
+    },
+    async listIdsByStatus(statuses) {
+      const ids = await db.listIdsByStatus(statuses);
+      return ids as WorkItemId[];
     },
     async save(item, expectedPreviousStatus) {
       await db.save(
@@ -81,10 +92,6 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     },
     async incrementDispatchCount(id) {
       return db.incrementDispatchCount(id);
-    },
-    async listAll() {
-      const rows = await db.listAll();
-      return rows.map(rowToWorkItem);
     },
     async addDependency(fromId, toId) {
       await db.addDependency(fromId, toId);

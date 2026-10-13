@@ -1,5 +1,12 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
-import { parseProjectId, parseStoredTaskSpec, type ProjectId } from "@ashara/shared";
+import {
+  parseProjectId,
+  parseWorkItemJsonb,
+  projectBlockCause,
+  WorkItemRowCorrupt,
+  type ProjectBlockCause,
+  type ProjectId,
+} from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
 
@@ -25,7 +32,9 @@ type DuePlanReportRow =
       readonly epicTitles: readonly string[];
       readonly tasks: TaskCounts;
     }
-  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number };
+  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  /** A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt). */
+  | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 const unreported = (subject: PlanReportSubject) =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = projects.id AND m.reports_on = ${subject})`;
@@ -33,7 +42,11 @@ const unreported = (subject: PlanReportSubject) =>
 /**
  * Planning outcomes the client has not been told about, oldest project first.
  * A first plan is summarised from the project's work items as they are now; the
- * report is normally posted in the cycle that wrote the plan.
+ * report is normally posted in the cycle that wrote the plan. Only an active
+ * project's first plan is due: a blocked one is not reported on. A work item
+ * whose jsonb does not parse is that one project's bad record, so it is
+ * returned as that project's row instead of failing the listing for every
+ * project (story s-loop-never-stop-m1).
  */
 export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow[]> {
   const due: DuePlanReportRow[] = [];
@@ -41,18 +54,36 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   const planned = await db
     .select({ id: projects.id })
     .from(projects)
-    .where(and(isNotNull(projects.firstPlannedAt), unreported("first-plan")))
+    .where(and(eq(projects.status, "active"), isNotNull(projects.firstPlannedAt), unreported("first-plan")))
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of planned) {
     const items = await db
-      .select({ level: workItems.level, title: workItems.title, taskSpec: workItems.taskSpec })
+      .select({
+        id: workItems.id,
+        projectId: workItems.projectId,
+        level: workItems.level,
+        title: workItems.title,
+        taskSpec: workItems.taskSpec,
+        successCriteria: workItems.successCriteria,
+        blockedReason: workItems.blockedReason,
+      })
       .from(workItems)
       .where(eq(workItems.projectId, row.id))
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
-    const origins = items.filter((i) => i.level === "Task").map((i) => parseStoredTaskSpec(i.taskSpec)?.origin);
+    const projectId = parseProjectId(row.id);
+    let origins: Array<string | undefined>;
+    try {
+      origins = items.map((i) => ({ level: i.level, spec: parseWorkItemJsonb(i).taskSpec }))
+        .filter((i) => i.level === "Task")
+        .map((i) => i.spec?.origin);
+    } catch (err) {
+      if (!(err instanceof WorkItemRowCorrupt)) throw err;
+      due.push({ subject: "first-plan-unreadable", projectId, cause: projectBlockCause(err) });
+      continue;
+    }
     due.push({
       subject: "first-plan",
-      projectId: parseProjectId(row.id),
+      projectId,
       epicTitles: items.filter((i) => i.level === "Epic").map((i) => i.title),
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,

@@ -36,6 +36,9 @@ describe("TenderIntake failure accounting", () => {
         return recorded.length;
       },
       closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
     };
 
     const [outcome] = await new TenderIntake({ llm, store }).runPending();
@@ -43,6 +46,53 @@ describe("TenderIntake failure accounting", () => {
     expect(outcome?.kind).toBe("failed");
     expect(recorded).toHaveLength(1);
     expect(recorded[0]).toMatch(/non-Error thrown: Object \(not serializable: .*circular/i);
+  });
+});
+
+describe("TenderIntake per-project failure", () => {
+  test("a tender at its cap with no recorded error blocks its project and the next tender is still taken in", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const lying = {
+      id: "tender-lying",
+      projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
+      body: "A booking page.",
+      intakeAttempts: 3,
+      intakeLastError: null,
+    };
+    const next = { ...lying, id: "tender-next", projectId: parseProjectId("00000000-0000-4000-8000-000000000003"), intakeAttempts: 0 };
+    const blocked: Array<{ projectId: string; errorClass: string; reason: string }> = [];
+    const store: IntakeStore = {
+      openTenders: async () => [lying, next],
+      currentVisionVersion: async (projectId) => (projectId === next.projectId ? 1 : null),
+      recordIntake: async () => {
+        throw new Error("recordIntake must not be reached");
+      },
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached");
+      },
+      closeFailedTender: async () => {
+        throw new Error("closeFailedTender must not be reached");
+      },
+      blockProject: async (projectId, cause) => {
+        blocked.push({ projectId, ...cause });
+        return "blocked";
+      },
+    };
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw new Error("no call expected");
+        },
+      }),
+    };
+
+    const outcomes = await new TenderIntake({ llm, store }).runPending();
+
+    expect(outcomes.map((o) => `${o.tenderId}:${o.kind}`)).toEqual(["tender-lying:project-blocked", "tender-next:vision-exists"]);
+    expect(blocked).toEqual([
+      { projectId: lying.projectId, errorClass: "IntakeFailureUnrecorded", reason: expect.stringMatching(/^IntakeFailureUnrecorded: /) },
+    ]);
   });
 });
 
@@ -86,6 +136,9 @@ describe("TenderIntake response schema", () => {
       consumeTender: async () => {},
       recordFailedAttempt: async () => 1,
       closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
     };
 
     await new TenderIntake({ llm, store }).runPending();
@@ -137,6 +190,9 @@ describe("TenderIntake assumption label", () => {
       consumeTender: async () => {},
       recordFailedAttempt: async () => 1,
       closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
     };
 
     const [outcome] = await new TenderIntake({ llm, store }).runPending();
@@ -187,6 +243,9 @@ describe("TenderIntake assumption label", () => {
       consumeTender: async () => {},
       recordFailedAttempt: async () => 1,
       closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
     };
 
     await new TenderIntake({ llm, store }).runPending();

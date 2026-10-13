@@ -499,6 +499,7 @@ async function main(): Promise<void> {
   try {
     await reconcileOnStartup({
       workItemRepo,
+      projects: projectRepo,
       eventStore,
       failureRouter,
       devSessionStore: devSessionRepo,

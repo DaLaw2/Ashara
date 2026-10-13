@@ -59,12 +59,16 @@ export class CoreLoop {
       // Then a first plan for each project that has a vision and no work items,
       // and the Liaison's report on each recorded planning outcome. Both before
       // gating, so a plan written this cycle can be dispatched this cycle.
+      // A project whose own record is bad is blocked inside each step, logged at
+      // warn there, and skipped; any other failure throws out of the cycle.
       for (const outcome of await deps.firstPlanning.runPending()) logFirstPlan(outcome);
       for (const report of await deps.planReports.runPending()) {
-        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+        if (report.kind !== "project-blocked") {
+          console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+        }
       }
 
-      const eligible = await PlanningService.gate(deps.workItemRepo);
+      const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo);
       if (eligible.length > 0) {
         const graph = await DependencyGraph.load(deps.workItemRepo);
         const unlockWeights = graph.computeUnlockWeights();

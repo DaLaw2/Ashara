@@ -13,7 +13,6 @@ export type StoredSuccessCriteria = z.infer<typeof storedSuccessCriteriaSchema>;
 
 /**
  * Typed failure for a success_criteria jsonb value that is present but unreadable.
- * @testseam success-criteria.test.ts asserts the typed rejection and its context
  */
 export class SuccessCriteriaCorrupt extends Error {
   constructor(

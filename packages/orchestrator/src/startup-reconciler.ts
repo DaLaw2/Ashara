@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DomainEvent } from "@ashara/shared";
-import { blockedReasonToRecord } from "@ashara/shared";
-import type { DevSessionRepository, EventStoreRepository } from "@ashara/db";
+import type { DomainEvent, ProjectId, WorkItemStatus } from "@ashara/shared";
+import { blockedReasonToRecord, projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
+import type { DevSessionRepository, EventStoreRepository, ProjectRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
 import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
 
 export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
+  /** Blocks a project one of whose rows does not parse (migration 025). */
+  readonly projects: Pick<ProjectRepository, "block">;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
   /**
@@ -26,8 +28,38 @@ export interface ReconcileSummary {
   readonly failedReplanned: number;
   readonly failedAbandoned: number;
   readonly failedErrored: number;
+  /** Projects blocked because one of their rows does not parse; their items are not reconciled. */
+  readonly projectsBlocked: number;
   readonly worktreesCleaned: number;
   readonly sessionsTerminalized: number;
+}
+
+/**
+ * Each project's items in `status`, read project by project so one corrupt row
+ * blocks its own project (recorded durably, logged at warn) and the other
+ * projects are still reconciled. A project blocked here yields nothing. Any
+ * other failure, a database failure included, throws through.
+ */
+async function* itemsByProject(
+  deps: StartupReconcilerDeps,
+  status: WorkItemStatus,
+  blocked: Set<ProjectId>,
+): AsyncGenerator<WorkItem[]> {
+  for (const projectId of await deps.workItemRepo.projectIdsWithStatus(status)) {
+    if (blocked.has(projectId)) continue;
+    try {
+      yield await deps.workItemRepo.findByProjectAndStatus(projectId, status);
+    } catch (err) {
+      if (!(err instanceof WorkItemRowCorrupt)) throw err;
+      blocked.add(projectId);
+      const cause = projectBlockCause(err);
+      const result = await deps.projects.block(projectId, cause);
+      console.warn(
+        `[startup-reconciler] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
+          `its ${status} items are not reconciled; project ${result}: ${cause.reason}`,
+      );
+    }
+  }
 }
 
 export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
@@ -36,18 +68,21 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
   let failedReplanned = 0;
   let failedAbandoned = 0;
   let failedErrored = 0;
+  let failedRouted = 0;
+  const blockedProjects = new Set<ProjectId>();
 
-  const orphans = await deps.workItemRepo.findByStatus("InProgress");
-  for (const orphan of orphans) {
-    try {
-      await requeueOrphan(deps, orphan);
-      orphansRequeued += 1;
-    } catch (error) {
-      orphansErrored += 1;
-      console.warn(
-        `[startup-reconciler] failed to requeue crash-orphaned InProgress item ${orphan.id}; left InProgress for the next reconcile:`,
-        error,
-      );
+  for await (const orphans of itemsByProject(deps, "InProgress", blockedProjects)) {
+    for (const orphan of orphans) {
+      try {
+        await requeueOrphan(deps, orphan);
+        orphansRequeued += 1;
+      } catch (error) {
+        orphansErrored += 1;
+        console.warn(
+          `[startup-reconciler] failed to requeue crash-orphaned InProgress item ${orphan.id}; left InProgress for the next reconcile:`,
+          error,
+        );
+      }
     }
   }
 
@@ -57,18 +92,20 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     failureRouter: deps.failureRouter,
   };
 
-  const parkedFailed = await deps.workItemRepo.findByStatus("Failed");
-  for (const failed of parkedFailed) {
-    try {
-      const action = await recoverFailedItem(recoveryDeps, failed, reconstructFailure(failed));
-      if (action === "replan") failedReplanned += 1;
-      else failedAbandoned += 1;
-    } catch (error) {
-      failedErrored += 1;
-      console.warn(
-        `[startup-reconciler] failed to route parked Failed item ${failed.id}; left Failed for the next reconcile:`,
-        error,
-      );
+  for await (const parkedFailed of itemsByProject(deps, "Failed", blockedProjects)) {
+    for (const failed of parkedFailed) {
+      failedRouted += 1;
+      try {
+        const action = await recoverFailedItem(recoveryDeps, failed, reconstructFailure(failed));
+        if (action === "replan") failedReplanned += 1;
+        else failedAbandoned += 1;
+      } catch (error) {
+        failedErrored += 1;
+        console.warn(
+          `[startup-reconciler] failed to route parked Failed item ${failed.id}; left Failed for the next reconcile:`,
+          error,
+        );
+      }
     }
   }
 
@@ -82,13 +119,15 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     failedReplanned,
     failedAbandoned,
     failedErrored,
+    projectsBlocked: blockedProjects.size,
     worktreesCleaned,
     sessionsTerminalized,
   };
   console.log(
     `[startup-reconciler] orphans requeued=${orphansRequeued} errored=${orphansErrored}; ` +
-      `parked Failed routed=${parkedFailed.length} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
+      `parked Failed routed=${failedRouted} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
       `errored=${failedErrored}); ` +
+      `projects blocked on a corrupt row=${blockedProjects.size}; ` +
       `sessions terminalized=${sessionsTerminalized}; ` +
       `worktrees cleaned=${worktreesCleaned}`,
   );
@@ -197,14 +236,8 @@ async function cleanOrphanedWorktrees(
       .map((d) => ({ dirName: d, taskId: d.slice(TASK_WORKTREE_PREFIX.length) }));
     if (taskDirs.length === 0) return 0;
 
-    const [pending, inProgress, blocked] = await Promise.all([
-      workItemRepo.findByStatus("Pending"),
-      workItemRepo.findByStatus("InProgress"),
-      workItemRepo.findByStatus("Blocked"),
-    ]);
-    const activeIds = new Set<string>(
-      [...pending, ...inProgress, ...blocked].map((item) => String(item.id)),
-    );
+    // Ids only: a row whose jsonb does not parse still keeps its worktree.
+    const activeIds = new Set<string>(await workItemRepo.listIdsByStatus(["Pending", "InProgress", "Blocked"]));
 
     for (const { dirName, taskId } of taskDirs) {
       if (activeIds.has(taskId)) continue;

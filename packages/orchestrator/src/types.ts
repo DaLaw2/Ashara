@@ -126,7 +126,11 @@ export interface CoreLoopDeps {
   readonly eventStore: EventStoreRepository;
   readonly costRepo: CostRepository;
   readonly failedApproachRepo: FailedApproachRepository;
-  /** Holds each project's target workspace path (migration 024). */
+  /**
+   * Holds each project's target workspace path (migration 024) and its status:
+   * the gate admits only active projects' tasks and blocks a project with a bad
+   * row (migration 025).
+   */
   readonly projectRepo: ProjectRepository;
   readonly developmentService: DevelopmentService;
   readonly eventLogger?: EventLogger;

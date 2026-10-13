@@ -17,9 +17,11 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     },
     // Methods not exercised by LifecycleRouter.route in these tests
     create: async (item: WorkItem) => item,
-    findByStatus: async () => [],
+    listByProject: async () => [...store.values()],
+    findByProjectAndStatus: async () => [],
+    projectIdsWithStatus: async () => [],
+    listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
-    listAll: async () => [...store.values()],
     addDependency: async () => {},
     getDependencies: async () => [],
     listAllDependencies: async () => [],

@@ -81,7 +81,6 @@ export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
 /**
  * Typed failure for a blocked_reason jsonb value that is present but unreadable.
- * @testseam blocked-reason.test.ts asserts the typed rejection and its context
  */
 export class BlockedReasonCorrupt extends Error {
   constructor(

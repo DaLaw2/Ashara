@@ -1,4 +1,5 @@
-import type { ProjectId } from "@ashara/shared";
+import { projectBlockCause } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 // The Liaison's report on a project's first plan (story s-liaison-intake-m1,
 // ADR-075): Delivery records the planning outcome on the project, and the
@@ -17,20 +18,28 @@ type DuePlanReport =
       /** The plan's tasks by producer, as task_spec.origin records it. */
       readonly tasks: { readonly decomposition: number; readonly scaffold: number; readonly unrecorded: number };
     }
-  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number };
+  | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  /** A first plan the store could not read back (a work item that does not parse). */
+  | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+
+type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unreadable" }>;
 
 /** Engagement's persistence port for planning reports. */
 export interface PlanReportStore {
   dueReports(): Promise<readonly DuePlanReport[]>;
   /** Posts the report unless one on this subject already exists for the project. */
   postReport(projectId: ProjectId, subject: PlanReportSubject, body: string): Promise<"posted" | "already-posted">;
+  /**
+   * Blocks the project and records why (migration 025); a project already
+   * blocked keeps its first cause. A blocked project's first plan is not due.
+   */
+  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
 }
 
-type PlanReportOutcome = {
-  readonly kind: "posted" | "already-posted";
-  readonly projectId: ProjectId;
-  readonly subject: PlanReportSubject;
-};
+type PlanReportOutcome =
+  | { readonly kind: "posted" | "already-posted"; readonly projectId: ProjectId; readonly subject: PlanReportSubject }
+  /** The project's record cannot be reported truthfully: nothing is posted and the project is blocked. */
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 /** What the core loop asks of the Liaison after Delivery's planning step. */
 export interface LiaisonPlanReports {
@@ -94,17 +103,41 @@ function planningStoppedReport(attempts: number): string {
 export class PlanReports implements LiaisonPlanReports {
   constructor(private readonly store: PlanReportStore) {}
 
+  /**
+   * One project's bad record blocks that project, and the other projects are
+   * still reported on. Any other failure, a store failure included, throws
+   * through and fails the cycle.
+   */
   async runPending(): Promise<readonly PlanReportOutcome[]> {
     const outcomes: PlanReportOutcome[] = [];
     for (const due of await this.store.dueReports()) {
-      const body = this.compose(due);
+      if (due.subject === "first-plan-unreadable") {
+        outcomes.push(await this.block(due.projectId, due.cause));
+        continue;
+      }
+      let body: string;
+      try {
+        body = this.compose(due);
+      } catch (err) {
+        if (!(err instanceof PlanReportUnfounded)) throw err;
+        outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
+        continue;
+      }
       const kind = await this.store.postReport(due.projectId, due.subject, body);
       outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
     }
     return outcomes;
   }
 
-  private compose(due: DuePlanReport): string {
+  private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<PlanReportOutcome> {
+    const result = await this.store.blockProject(projectId, cause);
+    console.warn(
+      `[liaison-report] project ${projectId}: ${cause.errorClass}, no report posted; project ${result}: ${cause.reason}`,
+    );
+    return { kind: "project-blocked", projectId, cause };
+  }
+
+  private compose(due: ReportableDue): string {
     if (due.subject === "planning-stopped") return planningStoppedReport(due.attempts);
     if (due.epicTitles.length === 0 || due.tasks.decomposition === 0 || due.tasks.unrecorded > 0) {
       throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, due.tasks);

@@ -1,5 +1,6 @@
+import { projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
-import type { WorkItemRepository } from "./repository.js";
+import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import {
   DependencyGraph,
   type DependencyContext,
@@ -8,8 +9,28 @@ import {
 } from "./dependency.js";
 
 export class GateKeeper {
-  static async filterAvailable(repo: WorkItemRepository): Promise<WorkItem[]> {
-    const items = await repo.listAll();
+  /**
+   * Pending tasks whose dependencies are met, of active projects only. Each
+   * active project's items are read on their own, so a blocked project's tasks
+   * are never admitted, and an active project with a row that does not parse is
+   * blocked and skipped instead of failing the gate for every project. A
+   * dependency on an item outside the active projects read here waits.
+   */
+  static async filterAvailable(repo: WorkItemRepository, projects: ActiveProjects): Promise<WorkItem[]> {
+    const items: WorkItem[] = [];
+    for (const projectId of await projects.listActiveIds()) {
+      try {
+        items.push(...(await repo.listByProject(projectId)));
+      } catch (err) {
+        if (!(err instanceof WorkItemRowCorrupt)) throw err;
+        const cause = projectBlockCause(err);
+        const result = await projects.block(projectId, cause);
+        console.warn(
+          `[gate] project ${projectId}: ${cause.errorClass} (item ${err.itemId}, ${err.column}); ` +
+            `none of its tasks dispatched; project ${result}: ${cause.reason}`,
+        );
+      }
+    }
     const graph = await DependencyGraph.load(repo);
     const resolution = graph.resolveDependencies(buildDependencyContext(items));
 

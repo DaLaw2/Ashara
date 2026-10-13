@@ -1,6 +1,6 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
 import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId, parseStoredBlockedReason } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
@@ -95,9 +95,11 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
       if (item.blockedReason) savedBlockedReasons.push(item.blockedReason);
     },
     create: notExercised("create"),
-    findByStatus: notExercised("findByStatus"),
+    listByProject: notExercised("listByProject"),
+    findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+    projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+    listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
-    listAll: notExercised("listAll"),
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
@@ -220,7 +222,9 @@ describe("processTask post-agent status ladder", () => {
     // The constructed reason must parse under storedBlockedReasonSchema
     expect(savedBlockedReasons.length).toBeGreaterThan(0);
     const lastSaved = savedBlockedReasons[savedBlockedReasons.length - 1];
-    expect(() => parseStoredBlockedReason(lastSaved)).not.toThrow();
+    expect(() =>
+      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: lastSaved }),
+    ).not.toThrow();
 
     // The constructed reason must carry the salvaged fields
     expect(lastSaved.salvagedOutcome).toBe("failed");
