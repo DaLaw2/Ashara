@@ -78,7 +78,9 @@ export type TaskResult =
    * its dispatch refunded, no lesson and no failure router. A deployment refusal stops the loop with
    * its reason; a configuration refusal has blocked the project.
    */
-  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: TaskRefusal };
+  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: TaskRefusal }
+  /** The process's shutdown interrupted the attempt: the item is back at Pending with its dispatch refunded. */
+  | { readonly taskId: string; readonly status: "interrupted"; readonly detail: string };
 
 export function completedResult(taskId: string): TaskResult {
   return { taskId, status: "completed", detail: "task completed and verified successfully" };

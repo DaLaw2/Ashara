@@ -272,9 +272,10 @@ describe("a turn refused at the project's spend cap", () => {
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build") },
-        statements: { record: notExercised("record"), current: notExercised("current") },
+        statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
       checks: {
+        completedOf: notExercised("completedOf"),
         checkedTasksOf: notExercised("checkedTasksOf"),
         append: notExercised("append"),
         latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), checks: [{ name: "noop", command: "true" }], files: [] }),

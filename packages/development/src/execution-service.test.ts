@@ -106,6 +106,16 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "refused", chain: wrapError("development", "agentAttempt", refusal) },
     };
   }
+  if (status === "interrupted") {
+    return {
+      status,
+      detail: `${status} detail`,
+      output: toAgentOutput({ ...base, kind: "cancelled", reason: "shutdown" }, "m", { input: 0, output: 0 }),
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "interrupted", chain: wrapError("development", "agentAttempt", "shutdown") },
+    };
+  }
   return {
     status,
     detail: `${status} detail`,
@@ -125,7 +135,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "interrupted"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -226,6 +236,7 @@ const STORED_CHECKS: TaskChecks = {
 
 function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] = []): TaskCheckStore {
   return {
+    completedOf: async () => [],
     checkedTasksOf: async () => checkedTasks,
     append: async () => {
       throw new Error("no checks may be appended");
@@ -239,6 +250,7 @@ function serviceOn(
   workdirBase: string,
   turns?: (probe: Probe) => TurnResult,
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
+  shutdownSignal: AbortSignal = new AbortController().signal,
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [] };
   const events: Array<Record<string, unknown>> = [];
@@ -293,11 +305,11 @@ function serviceOn(
         record: async () => {
           throw new Error("no environment statement may be recorded");
         },
-        current: async () => STATEMENT,
+        forVersion: async () => STATEMENT,
       },
     },
     checks: typeof checks === "function" ? checks(probe) : checks,
-    shutdownSignal: new AbortController().signal,
+    shutdownSignal,
   });
   return { service, probe, events };
 }
@@ -327,6 +339,7 @@ const someTask = () => ({
   projectId: parseProjectId("22222222-2222-4222-8222-222222222222"),
   title: "t",
   dispatchCount: 0,
+  attempt: 1,
   successCriteria: [],
   workKind: "implementation" as const,
 });
@@ -487,6 +500,12 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly agentRunsChecks?: boolean;
     /** A file sits where the throwaway checkouts' directory must be: Z0 cannot make a checkout. */
     readonly checkoutsBlocked?: boolean;
+    /** The process shuts down during the second turn's model call, after the first wrote greet.txt. */
+    readonly shutdownDuringSecondTurn?: AbortController;
+    /** The attempt's wall clock is past its limit once the first turn, which wrote greet.txt, returns. */
+    readonly wallClockRunsOutAfterFirstTurn?: boolean;
+    /** The dispatch's ordinal, as the orchestrator's dispatch seam counted it; 1 when absent. */
+    readonly attempt?: number;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "") => ({
@@ -554,14 +573,30 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       await mkdir(workdirBase, { recursive: true });
       await writeFile(join(workdirBase, "checkouts"), "not a directory\n");
     }
-    const task = someTask();
+    const task = { ...someTask(), attempt: faults.attempt ?? 1 };
     const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
+    const shutdown = faults.shutdownDuringSecondTurn;
     // Read when the dispatch plans its work, after the environment's build reported its version.
     const stored = (probe: Probe): TaskCheckStore => ({
       ...checkStore(null),
       latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", files: faults.storedFiles ?? [] }),
     });
     const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
+      if (shutdown !== undefined) {
+        if (probe.modelCalls === 2) {
+          shutdown.abort();
+          // What a provider call throws when its abort signal fires.
+          throw new DOMException("This operation was aborted", "AbortError");
+        }
+        writeFileSync(join(workDir, "greet.txt"), "hello\n");
+        return turn("run_command", { command: "true" });
+      }
+      if (faults.wallClockRunsOutAfterFirstTurn === true) {
+        writeFileSync(join(workDir, "greet.txt"), "hello\n");
+        const later = Date.now() + 21 * 60 * 1000;
+        vi.spyOn(Date, "now").mockImplementation(() => later);
+        return turn("run_command", { command: "true" });
+      }
       if (faults.agentRunsChecks === true) {
         if (probe.modelCalls === 1) {
           writeFileSync(join(workDir, "greet.txt"), "hello\n");
@@ -577,7 +612,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
       if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
-    }, stored);
+    }, stored, shutdown?.signal);
 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
@@ -735,6 +770,28 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(JSON.stringify(probe.requests[1])).toContain('Check \\"greets\\": PASSED');
     expect(result.output?.summary).toBe("check files in the worktree: 0");
   });
+
+  // Sprint 0 run D2: a SIGTERM mid-attempt was "failed", and the FailureRouter abandoned the item.
+  test("the shutdown signal mid-attempt: interrupted, never failed; no lesson; partial work kept", async () => {
+    const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({ shutdownDuringSecondTurn: new AbortController(), attempt: 3 });
+
+    expect(result.status, result.detail).toBe("interrupted");
+    expect(result.attempt).toBe(3);
+    expect(probe.modelCalls).toBe(2);
+    expect(probe.findings).toBe(0);
+    expect(events.filter((e) => e.event === "task_interrupted")).toEqual([expect.objectContaining({ attempt: 3 })]);
+    expect(events.some((e) => e.event === "task_failed" || e.event === "task_blocked" || e.event === "task_completed")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(true);
+  });
+
+  test("the attempt's own wall clock running out stays a failure", async () => {
+    const { result, events } = await dispatch({ wallClockRunsOutAfterFirstTurn: true });
+
+    expect(result.status, result.detail).toBe("failed");
+    expect(result.detail).toContain("wall_clock");
+    expect(events.some((e) => e.event === "task_interrupted")).toBe(false);
+  });
 });
 
 const base = {
@@ -768,12 +825,12 @@ function terminal(kind: FailedKind): Outcome {
 // The M1 adapter: only finished(done) may read as done; every other terminal is named.
 describe("toAgentOutput", () => {
   test("finished(done) is done with the measured cost and the recorded tokens", () => {
-    const output = toAgentOutput({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null }, "m", { input: 10, output: 5 });
+    const output = toAgentOutput({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null, statement: null }, "m", { input: 10, output: 5 });
     expect(output).toMatchObject({ status: "done", summary: "did it", total_cost: 0.25, cost_measured: true, total_tokens: { input: 10, output: 5 }, finish_reason: "completed", error_detail: null });
   });
 
   test("finished(blocked) is blocked and carries the reason", () => {
-    const output = toAgentOutput({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key" }, "m", { input: 0, output: 0 });
+    const output = toAgentOutput({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key", statement: null }, "m", { input: 0, output: 0 });
     expect(output.status).toBe("blocked");
     expect(output.error_detail?.message).toBe("needs a key");
   });
@@ -802,6 +859,7 @@ describe("toAgentOutput", () => {
         status: "done",
         summary: "did it",
         blockedReason: null,
+        statement: null,
         cost: { measured: false, measuredUsd: 0.1, unmeasuredTurns: [{ turn: 2, reason: "no usage" }] },
       },
       "m",

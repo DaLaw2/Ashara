@@ -87,23 +87,24 @@ export class WorkItemRepository {
   }
 
   /**
-   * Keeps a Sprint 0 task's statement of the stack it chose and why (migration 033).
-   * Only environment work takes one; a later attempt's statement replaces it.
+   * Keeps a Sprint 0 task's statement of the stack it chose and why (migration 033), with the
+   * environment version its substrate gate tested (migration 037). Only environment work takes
+   * one; a later attempt's statement replaces it.
    */
-  async recordEnvironmentStatement(id: string, statement: string): Promise<void> {
+  async recordEnvironmentStatement(id: string, statement: string, version: string): Promise<void> {
     const [row] = await this.db
       .update(workItems)
-      .set({ environmentStatement: statement })
+      .set({ environmentStatement: statement, environmentStatementVersion: version })
       .where(and(eq(workItems.id, id), eq(workItems.workKind, "environment")))
       .returning({ id: workItems.id });
     if (!row) throw new EnvironmentStatementNotRecordable(id);
   }
 
   /**
-   * The statement of the project's most recently completed environment task: the stack the
-   * environment on main was chosen for. Null when no environment task has completed with one.
+   * The statement of the project's most recently completed environment task that recorded it for
+   * `version`: the stack that version was chosen for. Null when no environment task did.
    */
-  async currentEnvironmentStatement(projectId: string): Promise<string | null> {
+  async environmentStatementFor(projectId: string, version: string): Promise<string | null> {
     const [row] = await this.db
       .select({ statement: workItems.environmentStatement })
       .from(workItems)
@@ -112,6 +113,7 @@ export class WorkItemRepository {
           eq(workItems.projectId, projectId),
           eq(workItems.workKind, "environment"),
           eq(workItems.status, "Completed"),
+          eq(workItems.environmentStatementVersion, version),
           isNotNull(workItems.environmentStatement),
         ),
       )

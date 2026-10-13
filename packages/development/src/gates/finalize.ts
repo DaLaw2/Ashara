@@ -84,7 +84,8 @@ export interface FinalizeDeps {
    * Checks the tentative merge in a short-lived cell, torn down after (execution-service):
    * the checks the check author stored for the task, on a throwaway checkout of the merge
    * with the stored check files written over it, or for a substrate-checked task the
-   * environment's test from the image the gate built, on the target checkout. The cell has
+   * gate's own run (the environment's build then test, from the image the gate built) on a
+   * throwaway checkout of the merge, which must stay clean. The cell has
    * no network (execution-infra's podman run passes --network=none). Required, no
    * fallback: there is no host runner.
    */

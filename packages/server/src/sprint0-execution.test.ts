@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -82,9 +82,17 @@ let root = "";
 let base: BaseCellReference;
 
 const STATEMENT = "A shell-only environment on the pinned Debian base: the project needs no toolchain yet.";
+/** The finish summary names files; only the statement may reach the work item and the client. */
+const SUMMARY = "Wrote environment/environment.toml and environment/Containerfile.";
 
-function definition(test: string): string {
-  return ['owned = ["environment/"]', 'containerfile = "environment/Containerfile"', 'build = "true"', `test = ${JSON.stringify(test)}`, ""].join("\n");
+function definition(test: string, options: { readonly build?: string; readonly owned?: readonly string[] } = {}): string {
+  return [
+    `owned = ${JSON.stringify(options.owned ?? ["environment/"])}`,
+    'containerfile = "environment/Containerfile"',
+    `build = ${JSON.stringify(options.build ?? "true")}`,
+    `test = ${JSON.stringify(test)}`,
+    "",
+  ].join("\n");
 }
 
 /** A Sprint 0 work item on record, owned as environment work, as a first plan writes it. */
@@ -101,6 +109,7 @@ async function sprint0Task(): Promise<TaskDescriptor> {
     title: "Define and commit the project environment",
     taskSpec,
     dispatchCount: 0,
+    attempt: 1,
     workKind: "environment",
     successCriteria: ["environment/environment.toml parses"],
   };
@@ -125,7 +134,7 @@ async function implementationTask(check: string, environmentVersion: string): Pr
     checks: [{ name: "hello", command: check }],
     files: [],
   });
-  return { id, projectId, title: "Write hello.txt", dispatchCount: 0, workKind: "implementation", successCriteria: [] };
+  return { id, projectId, title: "Write hello.txt", dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] };
 }
 
 interface TaskRun {
@@ -192,8 +201,8 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     environment: {
       images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
       statements: {
-        record: (taskId, statement) => workItems.recordEnvironmentStatement(taskId, statement),
-        current: (id) => workItems.currentEnvironmentStatement(id),
+        record: (taskId, statement, version) => workItems.recordEnvironmentStatement(taskId, statement, version),
+        forVersion: (id, version) => workItems.environmentStatementFor(id, version),
       },
     },
     checks: createTaskCheckStore(db),
@@ -255,7 +264,7 @@ describe("Sprint 0", () => {
       toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
       toolCallTurn("build_environment", {}),
-      toolCallTurn("finish", { status: "done", summary: STATEMENT }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
     ]);
 
     expect(result.status, result.detail).toBe("completed");
@@ -273,13 +282,62 @@ describe("Sprint 0", () => {
     // Merged into the target's main; the statement is kept on the work item.
     expect(await readFile(join(target, "environment", "environment.toml"), "utf8")).toBe(definition("echo ok"));
     expect(await statementOf(taskId)).toBe(STATEMENT);
+    expect(await statementOf(taskId)).not.toContain("environment/");
   }, 300_000);
+
+  it("work outside the owned paths fails the gate listing each path, and merges nothing", async () => {
+    const { result, target, taskId } = await runSprint0("scope", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("write_file", { path: "src/x", content: "product code\n" }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
+    ]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("touches paths outside the owned paths [environment/]");
+    expect(result.detail).toContain("- src/x");
+    expect(result.detail).not.toContain("- environment/");
+    expect(existsSync(join(target, "environment"))).toBe(false);
+    expect(await statementOf(taskId)).toBeNull();
+  }, 300_000);
+
+  it("a build output left untracked fails build_environment and the gate listing it; a .gitignore that lists it passes both", async () => {
+    const build = "mkdir -p out && echo a > out/a";
+    const dirty = await runSprint0("dirty", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok", { build }) }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("build_environment", {}),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
+    ]);
+    expect(promptText(dirty.mock, 3)).toContain("Checkout after build and test: NOT clean");
+    expect(promptText(dirty.mock, 3)).toContain("- out/a");
+    expect(dirty.result.status).toBe("failed");
+    expect(dirty.result.detail).toContain("substrate gate failed");
+    expect(dirty.result.detail).toContain("- out/a");
+    expect(existsSync(join(dirty.target, "environment"))).toBe(false);
+
+    // Its test reads what build wrote: post-merge verify must run build before test, as the gate does.
+    const owned = ["environment/", ".gitignore"];
+    const clean = await runSprint0("clean", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("cat out/a", { build, owned }) }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("write_file", { path: ".gitignore", content: "out/\n" }),
+      toolCallTurn("build_environment", {}),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
+    ]);
+    expect(promptText(clean.mock, 4)).toContain("Checkout after build and test: clean.");
+    expect(clean.result.status, clean.result.detail).toBe("completed");
+    expect(clean.events.find((e) => e.event === "substrate_gate_result")).toMatchObject({ passed: true, report: "tested" });
+    expect(clean.events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
+    expect(await readFile(join(clean.target, ".gitignore"), "utf8")).toBe("out/\n");
+    expect(existsSync(join(clean.target, "out")), "post-merge verify ran on a throwaway checkout, not the target").toBe(false);
+  }, 600_000);
 
   it("a definition whose test fails fails the gate with its output, merges nothing and records no statement", async () => {
     const { result, target, taskId } = await runSprint0("broken", [
       toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo broken-test-output; exit 3") }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("finish", { status: "done", summary: STATEMENT }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
     ]);
 
     expect(result.status).toBe("failed");
@@ -300,7 +358,7 @@ describe("Sprint 0", () => {
     const sprint0 = await runSprint0("flow", [
       toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("finish", { status: "done", summary: STATEMENT }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
     ]);
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
     // Sprint 0 itself ran on the BaseCell.
@@ -308,9 +366,14 @@ describe("Sprint 0", () => {
     // What the orchestrator does on a completed result.
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
 
+    // The version Sprint 0's gate tested: earlier tests of this project built other versions.
+    const gated = /Environment version ([0-9a-f]{64})/.exec(String(sprint0.events.find((e) => e.event === "substrate_gate_result")?.["output"]));
     const [build] = z
       .array(z.object({ version: z.string(), imageId: z.string() }))
-      .parse((await db.execute(sql`SELECT version, image_id AS "imageId" FROM environment_builds WHERE project_id = ${projectId} AND status = 'succeeded'`)).rows);
+      .parse(
+        (await db.execute(sql`SELECT version, image_id AS "imageId" FROM environment_builds
+                              WHERE project_id = ${projectId} AND status = 'succeeded' AND version = ${gated?.[1] ?? ""}`)).rows,
+      );
     if (build === undefined) throw new Error("no succeeded environment build is on record");
 
     const task = await implementationTask("cat /workspace/hello.txt", build.version);
@@ -369,5 +432,54 @@ describe("Sprint 0", () => {
       .parse((await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND reports_on = 'stack-choice'`)).rows);
     expect(reports).toHaveLength(1);
     expect(reports[0]?.body).toContain(STATEMENT);
+  }, 600_000);
+
+  // D5 of the 2026-10-14 Sprint 0 run: the statement was the project's latest, whatever version was on main.
+  it("the statement is the one recorded for the version on main; a version no environment task recorded is environment_undefined", async () => {
+    // Earlier cases in this project build other versions (the untracked-output case), so the version on main is
+    // the one the last dispatch after Sprint 0 resolved, not any succeeded build.
+    const [build] = z
+      .array(z.object({ version: z.string() }))
+      .parse((await db.execute(sql`
+        SELECT s.environment_version AS "version" FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
+        WHERE w.project_id = ${projectId} AND s.environment_version IS NOT NULL
+        ORDER BY s.created_at DESC LIMIT 1`)).rows);
+    if (build === undefined) throw new Error("no dispatch after Sprint 0 recorded an environment version");
+    const recorded = z
+      .array(z.object({ version: z.string().nullable() }))
+      .parse((await db.execute(sql`
+        SELECT environment_statement_version AS "version" FROM work_items
+        WHERE project_id = ${projectId} AND work_kind = 'environment' AND status = 'Completed'`)).rows);
+    expect(recorded).toEqual([{ version: build.version }]);
+
+    // A later environment task's statement, recorded for another version.
+    const OTHER = "A statement recorded for another environment version.";
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id,
+                              environment_statement, environment_statement_version, updated_at)
+      VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Change the environment', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'environment',
+              ${randomUUID()}, ${OTHER}, ${"f".repeat(64)}, now() + interval '1 hour')`);
+
+    const chosen = await runTask(
+      "flow",
+      await implementationTask("cat /workspace/second.txt", build.version),
+      [toolCallTurn("write_file", { path: "second.txt", content: "second\n" }), toolCallTurn("finish", { status: "done", summary: "Wrote second.txt." })],
+      memorySessions,
+    );
+    expect(chosen.result.status, chosen.result.detail).toBe("completed");
+    const [sessionDir] = await readdir(join(chosen.workdirBase, "records", chosen.taskId));
+    const conversation = await readFile(join(chosen.workdirBase, "records", chosen.taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
+    const { system } = z.object({ system: z.string() }).parse(JSON.parse(conversation.split("\n")[0] ?? "null"));
+    expect(system).toContain(STATEMENT);
+    expect(system).not.toContain(OTHER);
+
+    // A non-environment commit moves the version on main: no statement is on record for it.
+    await writeFile(join(chosen.target, "environment", "Containerfile"), `FROM ${base.image}\n# moved by an implementer\n`);
+    await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-am", "implementer"], { cwd: chosen.target });
+    const moved = await runTask("flow", await implementationTask("cat /workspace/third.txt", build.version), [], memorySessions);
+    expect(moved.result.status, moved.result.detail).toBe("environment_undefined");
+    expect(moved.result.detail).toContain("no completed environment task recorded a statement for that version");
+    expect(moved.result.detail).not.toContain(build.version);
+    expect(moved.mock.doGenerateCalls).toHaveLength(0);
   }, 600_000);
 });

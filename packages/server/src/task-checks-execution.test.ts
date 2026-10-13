@@ -101,6 +101,7 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
     projectId,
     title: taskTitle,
     dispatchCount: 0,
+    attempt: 1,
     workKind,
     successCriteria: [],
   });
@@ -162,7 +163,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
         record: async () => {
           throw new Error("no environment statement is recorded here");
         },
-        current: async () => "A plain Debian shell environment: the project is text files.",
+        forVersion: async () => "A plain Debian shell environment: the project is text files.",
       },
     },
     checks: createTaskCheckStore(db),
@@ -210,7 +211,7 @@ beforeAll(async () => {
   // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.
   await writeFile(
     join(target, "environment", "environment.toml"),
-    'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n',
+    'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "test ! -e BROKEN && echo environment ok"\n',
   );
   await writeFile(join(target, "environment", "Containerfile"), `FROM ${base.image}\n`);
   await run("git", ["init", "-q", "-b", "main"], { cwd: target });
@@ -234,8 +235,10 @@ afterAll(async () => {
   await rm(root, { recursive: true, force: true });
 }, 120_000);
 
+/** "Write hello.txt" and its check task: stored and merged by the first describe, a regression set for the second. */
+let hello: { readonly implementation: TaskDescriptor; readonly check: TaskDescriptor };
+
 describe("independent verification", () => {
-  let hello: { readonly implementation: TaskDescriptor; readonly check: TaskDescriptor };
 
   it("a check task's check that fails on main is stored; nothing of the check task reaches main", async () => {
     hello = await plannedPair("Write hello.txt");
@@ -358,5 +361,96 @@ describe("independent verification", () => {
     expect(result.status).toBe("failed");
     expect(result.errorEnvelope?.chain.operation).toBe("loadTaskChecks");
     expect(mock.doGenerateCalls).toHaveLength(0);
+  }, 300_000);
+});
+
+// D3 of the 2026-10-14 Sprint 0 run: a merge was checked only against its own task's checks.
+describe("post-merge regression suite", () => {
+  /** What the orchestrator does on a completed result. */
+  async function markCompleted(taskId: WorkItemId): Promise<void> {
+    await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${taskId}`);
+  }
+
+  /** A pair whose check, stored on the current environment version, is one command with no file. */
+  async function checkedPair(title: string, check: { readonly name: string; readonly command: string }) {
+    const pair = await plannedPair(title);
+    const [helloRow] = await checkRowsOf(hello.implementation.id);
+    if (helloRow === undefined) throw new Error("the first describe's hello checks are not on record");
+    await new TaskCheckRepository(db).append({
+      projectId,
+      taskId: pair.implementation.id,
+      checkTaskId: pair.check.id,
+      environmentVersion: helloRow.environmentVersion,
+      checks: [check],
+      files: [],
+    });
+    return pair;
+  }
+
+  beforeAll(async () => {
+    // The first describe merged "Write hello.txt", decided by its stored "says hello" check.
+    await markCompleted(hello.implementation.id);
+  });
+
+  it("a merge that breaks an earlier task's stored check fails naming that task and check, as this task's regression; nothing merged", async () => {
+    const greet = await checkedPair("Write greet.txt", { name: "greets", command: "grep hi greet.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result, events } = await runTask(greet.implementation, [
+      toolCallTurn("write_file", { path: "greet.txt", content: "hi\n" }),
+      toolCallTurn("write_file", { path: "hello.txt", content: "bye\n" }),
+      toolCallTurn("finish", { status: "done", summary: "Wrote greet.txt." }),
+    ]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain(`REGRESSION: earlier task ${hello.implementation.id}'s checks revision 1`);
+    expect(result.detail).toContain('check "says hello" FAILED: exited 1');
+    expect(result.detail).toContain("the regression is this task's");
+    // Its own check and the environment's test passed: only the regression failed it.
+    expect(result.detail).toContain('Check "greets": PASSED');
+    expect(result.detail).toContain('Check "environment test": PASSED');
+    expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed", regressionTasks: [hello.implementation.id] });
+    if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
+    expect(classifyFailure(result.errorEnvelope)).toBe("VERIFICATION_GAP");
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+    expect(await readFile(join(target, "hello.txt"), "utf8")).toBe("hello\n");
+    expect(existsSync(join(target, "greet.txt"))).toBe(false);
+  }, 300_000);
+
+  it("a merge that fails the environment's test fails naming it; nothing merged", async () => {
+    const notes = await checkedPair("Write notes.txt", { name: "notes", command: "grep note notes.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result } = await runTask(notes.implementation, [
+      toolCallTurn("write_file", { path: "notes.txt", content: "a note\n" }),
+      toolCallTurn("write_file", { path: "BROKEN", content: "breaks the environment's test\n" }),
+      toolCallTurn("finish", { status: "done", summary: "Wrote notes.txt." }),
+    ]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain(`the environment's test (version `);
+    expect(result.detail).toContain('check "environment test" FAILED: exited 1');
+    expect(result.detail).not.toContain("REGRESSION");
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+    expect(existsSync(join(target, "BROKEN"))).toBe(false);
+  }, 300_000);
+
+  it("a merge that passes the environment's test, every earlier task's checks and its own is merged", async () => {
+    const wave = await checkedPair("Write wave.txt", { name: "waves", command: "grep wave wave.txt" });
+
+    const { result, events } = await runTask(wave.implementation, [
+      toolCallTurn("write_file", { path: "wave.txt", content: "wave\n" }),
+      toolCallTurn("finish", { status: "done", summary: "Wrote wave.txt." }),
+    ]);
+
+    expect(result.status, result.detail).toBe("completed");
+    const verify = events.find((e) => e.event === "post_merge_verify");
+    expect(verify).toMatchObject({ verdict: "passed", regressionTasks: [hello.implementation.id], boundSeconds: 3 * 60 });
+    expect(verify?.["details"]).toContain('Check "environment test": PASSED');
+    expect(verify?.["details"]).toContain('Check "says hello": PASSED');
+    expect(verify?.["details"]).toContain('Check "waves": PASSED');
+    expect(await readFile(join(target, "wave.txt"), "utf8")).toBe("wave\n");
+    // The earlier task's check file was written over the checkout, never merged.
+    expect(existsSync(join(target, "checks"))).toBe(false);
   }, 300_000);
 });

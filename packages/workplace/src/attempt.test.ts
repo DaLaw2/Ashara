@@ -12,7 +12,7 @@ import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
 import type { CheckDefinition, CheckDefinitionPort } from "./check-definition.js";
 import type { CheckRunReport, TaskCheckRunPort } from "./check-run.js";
-import type { EnvironmentCheckPort, EnvironmentCheckReport } from "./environment-check.js";
+import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import type { AttemptRecord } from "./records.js";
@@ -382,13 +382,21 @@ describe("runAttempt", () => {
 });
 
 describe("build_environment", () => {
+  const empty = { text: "", truncated: false };
+  const ran: EnvironmentCommandsRun & { kind: "ran" } = {
+    kind: "ran",
+    build: { command: "true", exitCode: 0, timedOut: false, stdout: empty, stderr: empty },
+    test: { command: "echo ok", exitCode: 0, timedOut: false, stdout: { text: "ok\n", truncated: false }, stderr: empty },
+    leftOver: [],
+  };
   const tested: EnvironmentCheckReport = {
     kind: "tested",
     version: "v".repeat(64),
     imageRef: "localhost/ashara-env-p:vvvv",
     build: { kind: "built", log: { text: "STEP 1/1: FROM base", truncated: false } },
-    test: { command: "echo ok", exitCode: 0, timedOut: false, stdout: { text: "ok\n", truncated: false }, stderr: { text: "", truncated: false } },
+    commands: ran,
   };
+  const STATEMENT = "A shell-only environment, because nothing more is needed.";
 
   function port(report: EnvironmentCheckReport) {
     const timeouts: number[] = [];
@@ -420,16 +428,16 @@ describe("build_environment", () => {
   it("returns the version, build log and test output to the environment role's model", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "build_environment", input: {} }]),
-      () => turn([{ name: "finish", input: { status: "done", summary: "A shell-only environment, because nothing more is needed." } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Wrote environment/ and .gitignore.", statement: STATEMENT } }]),
     ]);
     const { cell } = fakeCell();
     const { environment, timeouts } = port(tested);
 
     const outcome = await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, cell, { environment }).deps);
 
-    expect(outcome).toMatchObject({ kind: "finished", status: "done" });
+    // The statement is kept apart from the summary: only it reaches the client.
+    expect(outcome).toMatchObject({ kind: "finished", status: "done", summary: "Wrote environment/ and .gitignore.", statement: STATEMENT });
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("build_environment");
-    expect(requests[0]?.system).toContain("statement of the stack you chose and why");
     expect(timeouts).toEqual([60]);
     const [result] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(result).toMatchObject({ type: "text", value: expect.stringContaining(`Environment version ${"v".repeat(64)}`) });
@@ -437,8 +445,33 @@ describe("build_environment", () => {
     expect(result).toMatchObject({ value: expect.stringContaining("Verdict: PASSED") });
   });
 
-  it("a test that prints nothing or a failed build is a tool error the model can act on, not a crash", async () => {
-    const silent: EnvironmentCheckReport = { ...tested, test: { ...tested.test, stdout: { text: "", truncated: false } } };
+  it("environment work's done without a statement is an argument error the model can fix; other work's finish takes none", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done.", statement: STATEMENT } }]),
+    ]);
+    const { environment } = port(tested);
+    const outcome = await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("statement") });
+    expect(outcome).toMatchObject({ kind: "finished", status: "done", statement: STATEMENT });
+
+    const other = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done." } }])]);
+    expect(await runAttempt(assignment(), deps(other.llm, fakeCell().cell).deps)).toMatchObject({ kind: "finished", statement: null });
+  });
+
+  it("the environment brief states the definition schema and the scope and cleanliness rules", () => {
+    const system = buildSystemPrompt(assignment().brief, "environment");
+    for (const field of ["- owned:", "- containerfile:", "- build:", "- test:"]) expect(system).toContain(field);
+    expect(system).toContain('"environment/" (required, the one owned directory)');
+    expect(system).toContain("Only owned paths may be added, changed or deleted");
+    expect(system).toContain("must be ignored by a committed .gitignore");
+    expect(system).toContain("do not write the product");
+  });
+
+  it("a test that prints nothing, a dirty checkout, out-of-scope work or a failed build is a tool error the model can act on", async () => {
+    const silent: EnvironmentCheckReport = { ...tested, commands: { ...ran, test: { ...ran.test, stdout: empty } } };
+    const dirty: EnvironmentCheckReport = { ...tested, commands: { ...ran, leftOver: ["out/a"] } };
+    const outside: EnvironmentCheckReport = { kind: "out_of_scope", owned: ["environment/"], paths: ["src/x"] };
     const failed: EnvironmentCheckReport = {
       kind: "build_failed",
       version: "v".repeat(64),
@@ -447,7 +480,10 @@ describe("build_environment", () => {
     };
     for (const [report, expected] of [
       [silent, "FAILED: the test command printed nothing"],
-      [failed, "Build log (truncated: only its end is shown):\nError: no such image"],
+      [dirty, "NOT clean"],
+      [dirty, "- out/a"],
+      [outside, "- src/x"],
+      [failed, "Image build log (truncated: only its end is shown):\nError: no such image"],
     ] as const) {
       const { llm, requests } = scriptedLlm([
         () => turn([{ name: "build_environment", input: {} }]),
@@ -485,7 +521,7 @@ describe("define_check", () => {
     for (const workKind of ["implementation", "environment", null] as const) {
       const { llm, requests } = scriptedLlm([
         () => turn([{ name: "define_check", input: { name: "x", command: "false" } }]),
-        () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+        () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool." } }]),
       ]);
       const environment: EnvironmentCheckPort | null =
         workKind === "environment" ? { check: async () => ({ kind: "definition_refused", detail: "unused" }) } : null;

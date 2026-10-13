@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNotAFile } from "./errors.js";
 import { runHostGitObjects } from "./host-git.js";
 
 const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
@@ -34,23 +34,73 @@ function covers(owned: string, path: string): boolean {
   return owned.endsWith("/") ? path.startsWith(owned) : path === owned || path.startsWith(`${owned}/`);
 }
 
+/** True when some owned entry contains `path`: the paths environment work may touch. */
+export function ownedPathsCover(owned: readonly string[], path: string): boolean {
+  return owned.some((entry) => covers(entry, path));
+}
+
+/**
+ * The only directory an owned entry may name is `environment/`; every other entry is one file
+ * (ADR-074 addendum 2 d64 a). Structural only: no stack is named.
+ */
+const ownedEntry = repoPath.superRefine((path, ctx) => {
+  if (path.endsWith("/") && path !== ENVIRONMENT_DIR) {
+    ctx.addIssue({
+      code: "custom",
+      message: `${JSON.stringify(path)} names a directory; the only owned directory is ${JSON.stringify(ENVIRONMENT_DIR)}, every other owned entry is one file`,
+    });
+  }
+});
+
+/** The definition's fields; DEFINITION_FIELD_RULES describes exactly these keys, so the brief cannot drift from them. */
+const definitionFields = {
+  owned: z
+    .array(ownedEntry)
+    .min(1)
+    .refine((owned) => new Set(owned).size === owned.length, "owned paths must be unique")
+    .refine((owned) => owned.includes(ENVIRONMENT_DIR), `owned must include ${JSON.stringify(ENVIRONMENT_DIR)}`),
+  containerfile: repoPath.refine((path) => !path.endsWith("/"), "containerfile must name a file"),
+  build: command,
+  test: command,
+};
+
+const DEFINITION_FIELD_RULES: Readonly<Record<keyof typeof definitionFields, string>> = {
+  owned:
+    `array of repository paths: ${JSON.stringify(ENVIRONMENT_DIR)} (required, the one owned directory) plus individual ` +
+    `files outside it (for example a dependency manifest or .gitignore), each without a trailing "/". No other ` +
+    `directory can be owned: an entry that is a directory in the committed tree is refused.`,
+  containerfile: "path of the container build file, inside an owned path; the image is built from the owned files only.",
+  build: "shell command that builds the project; it must exit 0.",
+  test: "shell command that runs the project's tests; it must exit 0 and print output.",
+};
+
 const definitionSchema = z
-  .object({
-    owned: z
-      .array(repoPath)
-      .min(1)
-      .refine((owned) => new Set(owned).size === owned.length, "owned paths must be unique")
-      .refine((owned) => owned.includes(ENVIRONMENT_DIR), `owned must include ${JSON.stringify(ENVIRONMENT_DIR)}`),
-    containerfile: repoPath.refine((path) => !path.endsWith("/"), "containerfile must name a file"),
-    build: command,
-    test: command,
-  })
+  .object(definitionFields)
   .strict()
   .superRefine((definition, ctx) => {
     if (!definition.owned.some((owned) => covers(owned, definition.containerfile))) {
       ctx.addIssue({ code: "custom", path: ["containerfile"], message: "containerfile must be inside an owned path" });
     }
   });
+
+/**
+ * The definition's schema and the rules Z0 holds environment work to, as the environment role's
+ * brief states them: generated from the fields above, naming no stack.
+ */
+export function environmentDefinitionRules(): string {
+  return [
+    `# The environment definition`,
+    `Write ${ENVIRONMENT_DEFINITION_PATH} as TOML with exactly these top-level keys, no table and no other key:`,
+    ...Object.entries(DEFINITION_FIELD_RULES).map(([field, rule]) => `- ${field}: ${rule}`),
+    ``,
+    `What decides this work:`,
+    `- Only owned paths may be added, changed or deleted; any other path in the work is refused. Product code, its`,
+    `  tests and its data are later tasks' work, not part of defining the environment.`,
+    `- build, then test, run on a fresh checkout of the committed work, in a cell from the built image. Afterwards the`,
+    `  checkout must be unchanged: every file build or test writes must be ignored by a committed .gitignore (then an`,
+    `  owned file). Any untracked or modified file left behind is listed and refused.`,
+  ].join("\n");
+}
 
 /**
  * The project's environment as the platform role commits it. Ashara never interprets it: the
@@ -169,6 +219,11 @@ export async function snapshotEnvironment(
     const problem = repoPathProblem(path);
     if (problem !== null) return fail(`owned entry ${JSON.stringify(path)} ${problem}`);
     blobs.push({ mode, oid, path });
+  }
+  for (const owned of definition.owned) {
+    if (owned.endsWith("/")) continue;
+    const inside = blobs.find((blob) => blob.path.startsWith(`${owned}/`));
+    if (inside !== undefined) throw new OwnedPathNotAFile(gitDir, resolvedCommit, owned, inside.path);
   }
   const unmatched = definition.owned.filter((owned) => !blobs.some((blob) => covers(owned, blob.path)));
   if (unmatched.length > 0) return fail(`owned path(s) ${JSON.stringify(unmatched)} match no file at this commit`);

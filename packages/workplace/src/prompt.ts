@@ -1,3 +1,4 @@
+import { environmentDefinitionRules } from "@ashara/execution-infra";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
 
@@ -76,15 +77,19 @@ const STATIC_PROMPT = [
 
 /**
  * Environment work defines how the project is built and tested; it names no stack: choosing one is
- * the work. Its finish summary is the statement of that choice, which Z0 keeps on the task.
+ * the work. The definition's schema and rules come from execution-infra, which enforces them. The
+ * finish statement is the statement of that choice, which Z0 keeps on the task.
  */
 const ENVIRONMENT_PROMPT = [
-  `# Defining the environment`,
-  `You define the environment every later task of this project works in.`,
-  `- Use build_environment to build the environment you defined and run its test command. Call it again after`,
-  `  each change; finish with status "done" only after it reports PASSED on the files as they are.`,
-  `- The finish summary of this task is a one-paragraph statement of the stack you chose and why, not a list of changes.`,
-].join("\n");
+  [
+    `# Defining the environment`,
+    `You define the environment every later task of this project works in, and nothing else: do not write the product.`,
+    `- Use build_environment to build the environment you defined and run its build and test commands. Call it again`,
+    `  after each change; finish with status "done" only after it reports PASSED on the files as they are.`,
+    `- Finish with a statement: one paragraph on the stack you chose and why. The client reads it; it lists no files.`,
+  ].join("\n"),
+  environmentDefinitionRules(),
+].join("\n\n");
 
 /**
  * Check work writes the checks that decide another task, before that task starts. Nothing of it is

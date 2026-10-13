@@ -33,13 +33,14 @@ async function executeTask(
   developmentService: CoreLoopDeps["developmentService"],
   task: WorkItem,
   targetProjectPath: string,
+  attempt: number,
 ): Promise<{
   result: TaskResult;
   output: AgentOutputJson | null;
   errorEnvelope?: ErrorEnvelope;
   /**
    * The item was routed here, parked at Blocked (environment unavailable or undefined, checks stale)
-   * or returned to Pending (a spend-cap refusal), so processTask must not run the
+   * or returned to Pending (a refusal, a shutdown), so processTask must not run the
    * failed/blocked recovery ladder on it.
    */
   routedHere: boolean;
@@ -63,6 +64,7 @@ async function executeTask(
     blockedReason: task.blockedReason,
     epicId,
     dispatchCount: task.dispatchCount,
+    attempt,
     workKind: task.workKind,
     successCriteria: task.successCriteria ?? [],
   };
@@ -91,6 +93,19 @@ async function executeTask(
     };
   }
 
+  if (execResult.status === "interrupted") {
+    // The shutdown stopped the attempt; it did not fail. No FailureRouter and no lesson: the
+    // item goes back to Pending now with its dispatch refunded, so the startup reconciler
+    // finds nothing InProgress to requeue and nothing Failed to route.
+    await requeueAndRefund(deps, task.id, "a shutdown interrupted its attempt", "execution.routeAsInterrupted");
+    return {
+      result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
   if (execResult.status === "refused") {
     // One rule for every refusal: no lesson, no failure router, the dispatch given back. A
     // refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
@@ -104,7 +119,13 @@ async function executeTask(
       const blocked = await deps.projects.block(task.projectId, { errorClass: refusal.errorClass, reason: refusal.reason });
       console.warn(`[${task.id}] project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`);
     }
-    await routeAsRefused(deps, task.id, refusal);
+    const cap =
+      refusal.kind === "project"
+        ? `project ${refusal.projectId}'s spend cap`
+        : refusal.kind === "deployment"
+          ? "the deployment's spend cap"
+          : `a configuration fault (${refusal.errorClass})`;
+    await requeueAndRefund(deps, task.id, `a refusal at ${cap}: ${refusal.reason}`, "execution.routeAsRefused");
     return {
       result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
       output: execResult.output,
@@ -154,22 +175,16 @@ async function executeTask(
 }
 
 /**
- * A model call of this dispatch was refused before it was sent: no failed approach, so the
- * item goes back to Pending and the dispatch the seam counted is given back. The project is
- * blocked already at a project-cap or configuration refusal (by Finance, or by executeTask),
- * so the gate skips the item until the owner returns the project to work; a deployment
- * refusal stops the loop.
+ * The dispatch stopped without the task being tried and found wanting: a model call was refused
+ * before it was sent, or the process's shutdown interrupted the attempt. No failed approach, so
+ * the item goes back to Pending and the dispatch the seam counted is given back. At a project-cap
+ * or configuration refusal the project is blocked already (by Finance, or by executeTask), so the
+ * gate skips the item until the owner returns the project to work; a deployment refusal stops the loop.
  */
-async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], refusal: TaskRefusal): Promise<void> {
-  const cap =
-    refusal.kind === "project"
-      ? `project ${refusal.projectId}'s spend cap`
-      : refusal.kind === "deployment"
-        ? "the deployment's spend cap"
-        : `a configuration fault (${refusal.errorClass})`;
+async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string, site: string): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
-    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after a refusal at ${cap}: ${refusal.reason}`);
+    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after ${why}`);
     return;
   }
   const previousStatus = item.status;
@@ -177,7 +192,7 @@ async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
     requeueWorkItem(item);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
-    console.warn(`[${taskId}] requeue after a refusal at ${cap} rejected (${e.from} -> Pending); item left at ${e.from}: ${refusal.reason}`);
+    console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
@@ -188,10 +203,10 @@ async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
     dispatchCount = await deps.workItemRepo.refundDispatchCount(taskId);
   } catch (e) {
     dispatchCount = "not refunded";
-    console.warn(`[${taskId}] the dispatch refused at ${cap} could not be refunded; it stays counted:`, e);
+    console.warn(`[${taskId}] the dispatch stopped by ${why} could not be refunded; it stays counted:`, e);
   }
-  console.warn(`[${taskId}] back to Pending after a refusal at ${cap} (dispatch count ${dispatchCount}): ${refusal.reason}`);
-  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsRefused");
+  console.warn(`[${taskId}] back to Pending after ${why} (dispatch count ${dispatchCount})`);
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
 }
 
 /**
@@ -384,7 +399,7 @@ export async function processTask(
   // This is the ONE place a dispatch is counted; every retry-bound consumer
   // (FailureRouter recovery, startup reconciler) reads the resulting
   // dispatch_count off the reloaded WorkItem.
-  await deps.workItemRepo.incrementDispatchCount(task.id);
+  const attempt = await deps.workItemRepo.incrementDispatchCount(task.id);
 
   const {
     result,
@@ -396,6 +411,7 @@ export async function processTask(
     deps.developmentService,
     task,
     targetProjectPath,
+    attempt,
   );
 
   // The target project path is minted, validated, and recorded on the project
@@ -414,8 +430,8 @@ export async function processTask(
     }
   }
 
-  // An environment-blocked item is already parked at Blocked, a refused one back at
-  // Pending (or either was left where an owner moved it): nothing to route or salvage.
+  // An environment-blocked item is already parked at Blocked, a refused or interrupted one
+  // back at Pending (or any was left where an owner moved it): nothing to route or salvage.
   if (routedHere) {
     return result;
   }

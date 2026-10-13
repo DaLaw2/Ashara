@@ -481,15 +481,21 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     }
   }
 
-  function buildRefusalDeps(scope: "project" | "deployment" | "configuration") {
+  function buildRefusalDeps(scope: "project" | "deployment" | "configuration" | "shutdown", priorDispatches = 0) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    let row = freshPendingItem();
+    let row: WorkItem = { ...freshPendingItem(), dispatchCount: priorDispatches };
+    const attempts: number[] = [];
     const statusesWritten: string[] = [];
     let routed = 0;
     let approaches = 0;
     const blocks: Array<{ readonly projectId: string; readonly errorClass: string; readonly reason: string }> = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
-    const refusal = scope === "configuration" ? new StubUnpricedModel() : new StubCapRefusal(scope);
+    const refusal = scope === "configuration" ? new StubUnpricedModel() : new StubCapRefusal(scope === "shutdown" ? "project" : scope);
+    const envelope = {
+      outcome: "blocked" as const,
+      summary: refusal.message,
+      chain: { boundary: "development", operation: "agentAttempt", message: refusal.message, timestamp: new Date().toISOString() },
+    };
 
     const workItemRepo: WorkItemRepository = {
       findById: async () => copy(row),
@@ -524,19 +530,12 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     const deps = coreLoopDeps({
       workItemRepo,
       developmentService: {
-        execute: async () => ({
-          status: "refused",
-          refusal,
-          detail: `attempt stopped after 2 turn(s): ${refusal.message}`,
-          output,
-          sessionId: "test-session",
-          attempt: 1,
-          errorEnvelope: {
-            outcome: "blocked",
-            summary: refusal.message,
-            chain: { boundary: "development", operation: "agentAttempt", message: refusal.message, timestamp: new Date().toISOString() },
-          },
-        }),
+        execute: async (task) => {
+          attempts.push(task.attempt);
+          return scope === "shutdown"
+            ? { status: "interrupted", detail: "attempt interrupted by shutdown after 2 turn(s)", output, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope }
+            : { status: "refused", refusal, detail: `attempt stopped after 2 turn(s): ${refusal.message}`, output, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope };
+        },
       },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
@@ -559,7 +558,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
             : null,
       },
     });
-    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, blocks };
+    return { deps, stored: () => row, statusesWritten, attempts, failureRoutes: () => routed, failedApproaches: () => approaches, blocks };
   }
 
   test.each(["project", "deployment"] as const)(
@@ -592,6 +591,22 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     expect(blocks).toEqual([{ projectId: TEST_PROJECT_ID, errorClass: "UnpricedModel", reason: expect.stringContaining("is unpriced") }]);
     expect(statusesWritten).toEqual(["InProgress", "Pending"]);
     expect(stored().dispatchCount).toBe(0);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+  });
+
+  // Sprint 0 run D2: a SIGTERM's cancelled attempt was counted, and the third count abandoned the item.
+  test("interrupted by shutdown on its third dispatch: back to Pending, count unchanged, no lesson, no failure router", async () => {
+    const { deps, stored, statusesWritten, attempts, failureRoutes, failedApproaches, blocks } = buildRefusalDeps("shutdown", 2);
+
+    const result = await processTask(deps, { ...freshPendingItem(), dispatchCount: 2 });
+
+    expect(result.status).toBe("interrupted");
+    expect(attempts).toEqual([3]);
+    expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+    expect(stored().status).toBe("Pending");
+    expect(stored().dispatchCount).toBe(2);
+    expect(blocks).toEqual([]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
   });

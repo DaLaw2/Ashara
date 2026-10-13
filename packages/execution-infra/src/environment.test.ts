@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { environmentVersion, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNotAFile } from "./errors.js";
 
 const run = promisify(execFile);
 const scratch: string[] = [];
@@ -52,6 +52,12 @@ describe("parseEnvironmentDefinition", () => {
     expect(escaping.join("; ")).toContain("escapes the repository");
     const absolute = issuesOf(VALID.replace('"package.json"', '"/etc/passwd"'));
     expect(absolute.join("; ")).toContain("is absolute");
+  });
+
+  it("refuses any owned directory other than environment/", () => {
+    expect(issuesOf(VALID.replace('"package.json"', '"src/"')).join("; ")).toContain(
+      '"src/" names a directory; the only owned directory is "environment/"',
+    );
   });
 
   it("refuses extra keys, a containerfile outside the owned set and empty commands", () => {
@@ -107,6 +113,17 @@ describe("environmentVersion", () => {
     expect(v2.version).not.toBe(v1.version);
     // An earlier commit still resolves to the earlier version.
     expect(await environmentVersion(gitDir, first, definition)).toEqual(v1);
+  });
+
+  it("refuses an owned file entry that is a directory in the committed tree, naming it", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "ashara-env-version-"));
+    scratch.push(repo);
+    await git(repo, "init", "-q", "-b", "main");
+    await commitFiles(repo, { "environment/Containerfile": "FROM scratch\n", "package.json/index.txt": "a directory\n" }, "dir");
+    const definition = parseEnvironmentDefinition(VALID, "env.toml");
+    const refusal = environmentVersion(join(repo, ".git"), "main", definition);
+    await expect(refusal).rejects.toBeInstanceOf(OwnedPathNotAFile);
+    await expect(refusal).rejects.toMatchObject({ ownedPath: "package.json", containedPath: "package.json/index.txt" });
   });
 
   it("fails closed on an owned path that matches nothing and on a missing definition", async () => {

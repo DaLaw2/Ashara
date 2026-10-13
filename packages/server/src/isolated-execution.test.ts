@@ -112,6 +112,7 @@ describe("a task runs on cells end to end", () => {
     // author stored it before the task started (s-independent-verify-m1).
     const check = "test -f /workspace/hello.txt && grep cell /workspace/hello.txt";
     const checks: TaskCheckStore = {
+      completedOf: async () => [],
       checkedTasksOf: async () => [],
       append: async () => {
         throw new Error("an implementation task appends no checks");
@@ -158,7 +159,7 @@ describe("a task runs on cells end to end", () => {
     await mkdir(join(target, "environment"));
     await writeFile(
       join(target, "environment", "environment.toml"),
-      'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n',
+      'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "echo environment ok"\n',
     );
     await writeFile(join(target, "environment", "Containerfile"), `FROM ${base.image}\n`);
     await run("git", ["init", "-q", "-b", "main"], { cwd: target });
@@ -186,7 +187,7 @@ describe("a task runs on cells end to end", () => {
           record: async () => {
             throw new Error("an implementation task records no environment statement");
           },
-          current: async () => "A plain Debian shell environment: the project is one text file.",
+          forVersion: async () => "A plain Debian shell environment: the project is one text file.",
         },
       },
       checks,
@@ -195,7 +196,7 @@ describe("a task runs on cells end to end", () => {
 
     try {
       const result = await service.execute(
-        { id: taskId, projectId, title: "Write hello.txt", dispatchCount: 0, workKind: "implementation", successCriteria: [] },
+        { id: taskId, projectId, title: "Write hello.txt", dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
         target,
       );
 

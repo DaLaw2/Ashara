@@ -99,6 +99,9 @@ export const workItems = pgTable("work_items", {
   // Migration 033: a Sprint 0 task's stack statement, written when its substrate
   // gate passed. Only on environment work.
   environmentStatement: text("environment_statement"),
+  // Migration 037: the environment version the statement was tested on; a later task's
+  // statement is chosen by it. NULL on a statement recorded before 037.
+  environmentStatementVersion: text("environment_statement_version"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

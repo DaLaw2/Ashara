@@ -1,4 +1,4 @@
-import { and, asc, eq, max, sql } from "drizzle-orm";
+import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../connection.js";
 import { dependencies, taskChecks, workItems } from "../schema.js";
@@ -62,6 +62,17 @@ class CheckedTaskMissing extends Error {
   }
 }
 
+/** A Completed implementation task has no stored check: nothing could tell whether a later merge regressed it. */
+class CompletedTaskUnchecked extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly taskId: string,
+  ) {
+    super(`project ${projectId}: implementation task ${taskId} is Completed but no check is stored for it, so no later merge can be checked against it`);
+    this.name = "CompletedTaskUnchecked";
+  }
+}
+
 export class TaskCheckRepository {
   constructor(private readonly db: Database) {}
 
@@ -74,6 +85,33 @@ export class TaskCheckRepository {
       .where(and(eq(dependencies.toId, checkTaskId), eq(workItems.workKind, "implementation")))
       .orderBy(asc(workItems.id));
     return [...new Set(rows.map((row) => row.id))];
+  }
+
+  /**
+   * The latest checks of every Completed implementation task of the project except `exceptTaskId`,
+   * oldest completion first. A Completed implementation task with none throws: the set is what a
+   * later merge must not regress, and an empty one would read as "nothing to regress".
+   */
+  async completedOf(projectId: string, exceptTaskId: string): Promise<TaskChecksRecord[]> {
+    const tasks = await this.db
+      .select({ id: workItems.id })
+      .from(workItems)
+      .where(
+        and(
+          eq(workItems.projectId, projectId),
+          eq(workItems.workKind, "implementation"),
+          eq(workItems.status, "Completed"),
+          ne(workItems.id, exceptTaskId),
+        ),
+      )
+      .orderBy(asc(workItems.updatedAt), asc(workItems.id));
+    const records: TaskChecksRecord[] = [];
+    for (const task of tasks) {
+      const record = await this.latest(task.id);
+      if (record === null) throw new CompletedTaskUnchecked(projectId, task.id);
+      records.push(record);
+    }
+    return records;
   }
 
   /** Appends the checks as the task's next revision; returns that revision. */

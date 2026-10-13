@@ -30,12 +30,16 @@ const runChecksArgs = z.object({}).strict();
 const defineCheckArgs = z
   .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
   .strict();
-const finishArgs = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("done"), summary: nonEmpty }).strict(),
-  z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict(),
+const MAX_STATEMENT_CHARS = 1500;
+const blockedFinish = z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict();
+const finishArgs = z.discriminatedUnion("status", [z.object({ status: z.literal("done"), summary: nonEmpty }).strict(), blockedFinish]);
+/** Environment work's done carries the stack statement apart from the summary: only the statement reaches the client. */
+const environmentFinishArgs = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), summary: nonEmpty, statement: nonBlank.pipe(z.string().max(MAX_STATEMENT_CHARS)) }).strict(),
+  blockedFinish,
 ]);
 
-type FinishArgs = z.infer<typeof finishArgs>;
+type FinishArgs = z.infer<typeof finishArgs> | z.infer<typeof environmentFinishArgs>;
 
 const pathProperty = { type: "string", description: "Path relative to the workspace root." } as const;
 
@@ -134,9 +138,35 @@ const TOOL_SCHEMAS: ToolSchemas = {
 const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
   description:
     "Build the environment defined in environment/environment.toml from the workspace's current files, then run " +
-    "its test command in a fresh workspace started from the built image. Returns the environment version, the " +
-    "build log and the test output. Only the image build can reach the network.",
+    "its build and test commands on a fresh checkout of those files in a workspace started from the built image, " +
+    "and list any file they left untracked or modified. Refuses work that touches a path outside the owned paths. " +
+    "Returns the environment version, the image build log, both commands' output and the verdict. Only the image " +
+    "build can reach the network.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+/** Environment work's finish: a done carries the stack statement, which is what the client is told. */
+const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
+  description:
+    'End the attempt. status "done": build_environment reported PASSED on the files as they are. ' +
+    'status "blocked": you cannot proceed; blockedReason says what is missing.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      status: { type: "string", enum: ["done", "blocked"] },
+      summary: { type: "string", description: "What you changed, in 1-2 sentences." },
+      statement: {
+        type: "string",
+        maxLength: MAX_STATEMENT_CHARS,
+        description:
+          'Required when status is "done": one paragraph stating the stack you chose (language, toolchain, base ' +
+          "image) and why. It is shown to the client: no file list, no list of changes.",
+      },
+      blockedReason: { type: "string", description: 'Required when status is "blocked".' },
+    },
+    required: ["status", "summary"],
+    additionalProperties: false,
+  },
 };
 
 /** Only the check author defines checks (the work kind needing "author-checks"). */
@@ -173,7 +203,7 @@ export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): T
   const offered = runChecks ? { ...TOOL_SCHEMAS, run_checks: RUN_CHECKS_SCHEMA } : TOOL_SCHEMAS;
   switch (workKind) {
     case "environment":
-      return { ...offered, build_environment: BUILD_ENVIRONMENT_SCHEMA };
+      return { ...offered, build_environment: BUILD_ENVIRONMENT_SCHEMA, finish: ENVIRONMENT_FINISH_SCHEMA };
     case "check":
       return { ...offered, define_check: DEFINE_CHECK_SCHEMA };
     case "implementation":
@@ -334,7 +364,8 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       return { kind: "result", output: formatCheckRunReport(report), isError: !allPass };
     }
     case "finish": {
-      const args = finishArgs.safeParse(input);
+      // The finish parsed is the finish offered: environment work's carries the statement.
+      const args = (context.tools.finish === ENVIRONMENT_FINISH_SCHEMA ? environmentFinishArgs : finishArgs).safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       return { kind: "finish", args: args.data };
     }

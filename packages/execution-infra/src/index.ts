@@ -15,7 +15,7 @@ export {
 export { CellExecFailed } from "./errors.js";
 export { initHostRepo, runHostGit } from "./host-git.js";
 export type { HostRepo } from "./host-git.js";
-export { parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
+export { environmentDefinitionRules, ownedPathsCover, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
 export type { EnvironmentDefinition } from "./environment.js";
 export { environmentVersion } from "./environment.js";
 export { buildEnvironmentImage } from "./environment-build.js";

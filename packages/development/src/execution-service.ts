@@ -11,10 +11,10 @@ import {
   checkPassed,
   checkVerdict,
   environmentCheckPassed,
-  environmentTestPassed,
+  environmentCommandsPassed,
   formatEnvironmentCheck,
   formatCheckRuns,
-  formatEnvironmentTest,
+  formatEnvironmentCommands,
   runAttempt,
 } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
@@ -22,7 +22,7 @@ import { DispatchRecords, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
 import { resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
-import { environmentCheckPort, runEnvironmentTest, runSubstrateGate } from "./environment-check.js";
+import { environmentCheckPort, runPostMergeEnvironmentCommands, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
 import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
@@ -44,10 +44,11 @@ import {
   mainCommit,
   redRunProblem,
   runChecksOnCheckout,
+  runSuitesOnCheckout,
   tentativeMergeCommit,
   worktreeSnapshotCommit,
 } from "./task-checks.js";
-import type { CheckCells, TaskCheckStore, TaskChecks } from "./task-checks.js";
+import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
   commitAllChanges,
@@ -101,8 +102,11 @@ interface AgentPart {
 
 const NO_AGENT: AgentPart = { output: null, agentInvoked: false };
 
+/** The dispatch a result or event belongs to: its task and the item's real dispatch ordinal. */
+type DispatchRef = Pick<TaskDescriptor, "id" | "attempt">;
+
 interface EnvironmentBlock extends AgentPart {
-  readonly taskId: WorkItemId;
+  readonly task: DispatchRef;
   readonly sessionId: string;
   readonly stage: EnvironmentStage;
   /** The failure's class name, e.g. MountPathRejected; the reason names it. */
@@ -119,7 +123,8 @@ interface EnvironmentBlock extends AgentPart {
  * (s-isolated-worker-m1 C2, at every stage).
  */
 function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
-  const { taskId, stage, errorClass } = block;
+  const { task, stage, errorClass } = block;
+  const taskId = task.id;
   const kept = block.agentInvoked
     ? "the agent's work is kept on the task branch"
     : "no agent ran and nothing executed";
@@ -130,21 +135,21 @@ function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSi
     ...(block.output !== null ? { agentOutput: block.output } : {}),
   };
   console.warn(`[${taskId}] ${envelope.summary}`);
-  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, stage, errorClass, reason: envelope.summary });
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage, errorClass, reason: envelope.summary });
   return {
     status: "environment_blocked",
     unavailable: block.unavailable,
     detail: envelope.summary,
     output: block.output,
     sessionId: block.sessionId,
-    attempt: 1,
+    attempt: task.attempt,
     errorEnvelope: envelope,
   };
 }
 
 /** An environment block for a typed substrate error raised at `stage`. */
 function substrateBlocked(
-  taskId: WorkItemId,
+  task: DispatchRef,
   sessionId: string,
   stage: EnvironmentStage,
   e: EnvironmentError,
@@ -156,12 +161,12 @@ function substrateBlocked(
   const unavailable = unavailableOf(e, cell);
   return environmentBlocked(
     {
-      taskId,
+      task,
       sessionId,
       stage,
       errorClass: e.name,
       message: e.message,
-      chain: chain ?? wrapError("development", stage, e, { taskId, unavailable, errorClass: e.name }),
+      chain: chain ?? wrapError("development", stage, e, { taskId: task.id, unavailable, errorClass: e.name }),
       unavailable,
       ...agent,
     },
@@ -176,19 +181,20 @@ function substrateBlocked(
  * says anything about the checks or the task, so neither is ever a failure to route.
  */
 function redRunBlocked(
-  taskId: WorkItemId,
+  task: DispatchRef,
   sessionId: string,
   e: unknown,
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
 ): ExecutionResult {
+  const taskId = task.id;
   const environmentFailure = environmentErrorOf(e);
-  if (environmentFailure !== null) return substrateBlocked(taskId, sessionId, "checkRedRun", environmentFailure, "CI cell", agent, eventSink);
+  if (environmentFailure !== null) return substrateBlocked(task, sessionId, "checkRedRun", environmentFailure, "CI cell", agent, eventSink);
   const fault = new VerificationInfrastructureFault(taskId, "red run on main", { cause: e });
   const unavailable = `verification infrastructure (${fault.step})`;
   return environmentBlocked(
     {
-      taskId,
+      task,
       sessionId,
       stage: "checkRedRun",
       errorClass: fault.name,
@@ -201,15 +207,67 @@ function redRunBlocked(
   );
 }
 
-function failedBeforeAgent(taskId: WorkItemId, sessionId: string, operation: string, e: unknown, summary: string): ExecutionResult {
-  const chain = wrapError("development", operation, e, { taskId });
+/** A task decided by stored checks reached its post-merge run without an environment to take its test from. */
+class PostMergeEnvironmentMissing extends Error {
+  constructor(readonly taskId: string) {
+    super(`task ${taskId} is decided by stored checks but was dispatched on the BaseCell: no environment test exists to run on its merge`);
+    this.name = "PostMergeEnvironmentMissing";
+  }
+}
+
+/**
+ * The post-merge verdict on suites run in order (the environment's test, then `regressionCount`
+ * earlier tasks' checks, then the task's own): passed only when every suite ran every one of its
+ * checks and each passed. The details open with each failure, naming its suite and check.
+ */
+function suitesVerdict(suites: readonly CheckSuite[], runs: readonly SuiteRun[], regressionCount: number): PostMergeVerdict {
+  const failures: string[] = [];
+  const sections: string[] = [];
+  let regressed = false;
+  if (runs.length !== suites.length) failures.push(`${runs.length} of ${suites.length} suites reported a run`);
+  suites.forEach((suite, index) => {
+    const regression = index >= 1 && index <= regressionCount;
+    const prefix = regression ? "REGRESSION: " : "";
+    const run = runs[index];
+    if (run === undefined || run.suite !== suite) {
+      failures.push(`${prefix}${suite.label}: did not run`);
+      regressed ||= regression;
+      return;
+    }
+    if (run.report.kind === "files_refused") {
+      failures.push(`${prefix}${suite.label}: its check files could not be written over the merged work: ${run.report.detail}`);
+      sections.push(`${suite.label}: not run, its check files could not be written: ${run.report.detail}`);
+      regressed ||= regression;
+      return;
+    }
+    const ran = run.report.runs;
+    if (ran.length !== suite.checks.length || ran.length === 0) {
+      failures.push(`${prefix}${suite.label}: ${ran.length} of ${suite.checks.length} checks ran`);
+      regressed ||= regression;
+    }
+    for (const failed of ran.filter((check) => !checkPassed(check))) {
+      failures.push(`${prefix}${suite.label}: check ${JSON.stringify(failed.name)} ${checkVerdict(failed)}`);
+      regressed ||= regression;
+    }
+    sections.push(`${suite.label}:\n${formatCheckRuns(ran, checkVerdict)}`);
+  });
+  if (failures.length === 0) return { passed: true, details: sections.join("\n") };
+  const head = [`${failures.length} failure(s) on the merge:`, ...failures.map((failure) => `- ${failure}`)];
+  if (regressed) {
+    head.push("This task's merge breaks checks of a task already merged: the regression is this task's, and nothing was merged.");
+  }
+  return { passed: false, details: [...head, "", ...sections].join("\n") };
+}
+
+function failedBeforeAgent(task: DispatchRef, sessionId: string, operation: string, e: unknown, summary: string): ExecutionResult {
+  const chain = wrapError("development", operation, e, { taskId: task.id });
   const envelope: ErrorEnvelope = { outcome: "failed", summary: `${summary}: ${chain.message}`, chain };
   return {
     status: "failed",
     detail: envelope.summary,
     output: null,
     sessionId,
-    attempt: 1,
+    attempt: task.attempt,
     errorEnvelope: envelope,
   };
 }
@@ -277,22 +335,23 @@ function sessionEnvironmentVersion(environment: DispatchEnvironment): string | n
  * before anything ran, never a BaseCell fallback (s-platform-role-m1 C2).
  */
 function environmentUndefined(
-  taskId: WorkItemId,
+  task: DispatchRef,
   sessionId: string,
   reason: string,
   eventSink: ExecutionEventSink | undefined,
 ): ExecutionResult {
+  const taskId = task.id;
   const chain = wrapError("development", "resolveCurrentEnvironment", reason, { taskId });
   const summary = `no environment for task ${taskId}: ${reason}; no agent ran and nothing executed`;
   console.warn(`[${taskId}] ${summary}`);
-  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, stage: "resolveCurrentEnvironment", reason: summary });
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage: "resolveCurrentEnvironment", reason: summary });
   return {
     status: "environment_undefined",
     reason,
     detail: summary,
     output: null,
     sessionId,
-    attempt: 1,
+    attempt: task.attempt,
     errorEnvelope: { outcome: "blocked", summary, chain },
   };
 }
@@ -389,6 +448,12 @@ export interface TaskDescriptor {
    */
   readonly dispatchCount: number;
   /**
+   * This dispatch's ordinal: work_items.dispatch_count as the orchestrator's dispatch seam left
+   * it (incrementDispatchCount's return), so every event and result of the dispatch names it.
+   * A refunded dispatch (a spend-cap refusal, a shutdown) gives its number to the next one.
+   */
+  readonly attempt: number;
+  /**
    * work_items.work_kind: which kind of work the task is. Only an environment task's
    * attempt is given build_environment. null for a task planned before owners were assigned.
    */
@@ -425,7 +490,7 @@ interface EnvironmentBlockedResult {
   /** null when no agent ran; the attempt's output when a cell failed under it. */
   readonly output: AgentOutputJson | null;
   readonly sessionId: string;
-  readonly attempt: 1;
+  readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
 }
 
@@ -440,7 +505,7 @@ interface EnvironmentUndefinedResult {
   readonly detail: string;
   readonly output: null;
   readonly sessionId: string;
-  readonly attempt: 1;
+  readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
 }
 
@@ -458,7 +523,22 @@ interface RefusedResult {
   readonly detail: string;
   readonly output: AgentOutputJson;
   readonly sessionId: string;
-  readonly attempt: 1;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+/**
+ * The process's shutdown signal cancelled the attempt mid-flight. Not a task failure and not a
+ * lesson: the work was stopped, not tried and found wanting. The orchestrator returns the item to
+ * Pending and refunds the dispatch; the partial work is committed on the task branch. A wall-clock
+ * exhaustion is not this: it is the attempt's own limit and stays a failure.
+ */
+interface InterruptedResult {
+  readonly status: "interrupted";
+  readonly detail: string;
+  readonly output: AgentOutputJson;
+  readonly sessionId: string;
+  readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
 }
 
@@ -474,11 +554,17 @@ interface ChecksStaleResult {
   readonly detail: string;
   readonly output: null;
   readonly sessionId: string;
-  readonly attempt: 1;
+  readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
 }
 
-export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult | RefusedResult | ChecksStaleResult;
+export type ExecutionResult =
+  | AgentExecutionResult
+  | EnvironmentBlockedResult
+  | EnvironmentUndefinedResult
+  | RefusedResult
+  | ChecksStaleResult
+  | InterruptedResult;
 
 interface AgentExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
@@ -486,9 +572,8 @@ interface AgentExecutionResult {
   readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   /**
-   * Always 1 — execute() makes exactly one agent invocation per call. Retrying a
-   * failed task is the orchestrator's FailureRouter's job (re-dispatch, tracked via
-   * WorkItem.dispatchCount), not this service's.
+   * The item's dispatch ordinal (TaskDescriptor.attempt). execute() makes exactly one agent
+   * invocation per call; retrying a failed task is the orchestrator's FailureRouter's job.
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
@@ -611,14 +696,14 @@ export class DevelopmentService {
       await cells.substrate.probeSubstrate();
     } catch (e) {
       if (!(e instanceof SubstrateUnavailable)) throw e;
-      return substrateBlocked(task.id, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
+      return substrateBlocked(task, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
     }
 
     // Only the environment role's work is checked by the substrate: any other task so marked
     // would skip verification without being able to build what the gate checks.
     if (task.taskSpec?.checkedBy === "substrate" && task.workKind !== "environment") {
       const result = failedBeforeAgent(
-        task.id,
+        task,
         sessionId,
         "checkSubstrateGate",
         `task_spec.checkedBy is "substrate" but the task's work kind is ${task.workKind ?? "unrecorded"}, not environment`,
@@ -642,7 +727,7 @@ export class DevelopmentService {
           this.deps.environment.statements,
         );
         if (resolution.kind === "undefined") {
-          const result = environmentUndefined(task.id, sessionId, resolution.reason, eventSink);
+          const result = environmentUndefined(task, sessionId, resolution.reason, eventSink);
           await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
           return result;
         }
@@ -650,10 +735,10 @@ export class DevelopmentService {
       } catch (e) {
         const environmentFailure = environmentErrorOf(e);
         if (environmentFailure !== null) {
-          return substrateBlocked(task.id, sessionId, "resolveEnvironment", environmentFailure, "environment image build", NO_AGENT, eventSink);
+          return substrateBlocked(task, sessionId, "resolveEnvironment", environmentFailure, "environment image build", NO_AGENT, eventSink);
         }
-        const result = failedBeforeAgent(task.id, sessionId, "resolveCurrentEnvironment", e, `the current environment of ${task.id} could not be resolved`);
-        eventSink?.emit({ event: "error", location: "DevelopmentService:resolveCurrentEnvironment", taskId: task.id, attempt: 1, error: result.detail });
+        const result = failedBeforeAgent(task, sessionId, "resolveCurrentEnvironment", e, `the current environment of ${task.id} could not be resolved`);
+        eventSink?.emit({ event: "error", location: "DevelopmentService:resolveCurrentEnvironment", taskId: task.id, attempt: task.attempt, error: result.detail });
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
         return result;
       }
@@ -674,15 +759,15 @@ export class DevelopmentService {
     try {
       const planned = await this.planWork(task, environment);
       if (planned.kind === "unplannable") {
-        const result = failedBeforeAgent(task.id, sessionId, planned.operation, planned.reason, `no work plan for ${task.id}`);
-        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: result.detail });
+        const result = failedBeforeAgent(task, sessionId, planned.operation, planned.reason, `no work plan for ${task.id}`);
+        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
         return result;
       }
       plan = planned;
     } catch (e) {
-      const result = failedBeforeAgent(task.id, sessionId, "planWork", e, `the checks of ${task.id} could not be read`);
-      eventSink?.emit({ event: "error", location: "DevelopmentService:planWork", taskId: task.id, attempt: 1, error: result.detail });
+      const result = failedBeforeAgent(task, sessionId, "planWork", e, `the checks of ${task.id} could not be read`);
+      eventSink?.emit({ event: "error", location: "DevelopmentService:planWork", taskId: task.id, attempt: task.attempt, error: result.detail });
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     }
@@ -714,7 +799,7 @@ export class DevelopmentService {
       eventSink?.emit({
         event: "task_blocked",
         taskId: task.id,
-        attempt: 1,
+        attempt: task.attempt,
         reason: envelope.summary,
       });
       const result: ExecutionResult = {
@@ -722,7 +807,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output: null,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: envelope,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -738,8 +823,8 @@ export class DevelopmentService {
       records = new DispatchRecords(base, task.id, sessionId);
       await records.writeBrief(brief);
     } catch (e) {
-      const result = failedBeforeAgent(task.id, sessionId, "assignAgent", e, `agent assignment failed for ${task.id}`);
-      eventSink?.emit({ event: "error", location: "DevelopmentService:assignAgent", taskId: task.id, attempt: 1, error: result.detail });
+      const result = failedBeforeAgent(task, sessionId, "assignAgent", e, `agent assignment failed for ${task.id}`);
+      eventSink?.emit({ event: "error", location: "DevelopmentService:assignAgent", taskId: task.id, attempt: task.attempt, error: result.detail });
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     }
@@ -767,12 +852,12 @@ export class DevelopmentService {
         work = plan;
       }
     } catch (e) {
-      const result = failedBeforeAgent(task.id, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
+      const result = failedBeforeAgent(task, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
       eventSink?.emit({
         event: "error",
         location: "DevelopmentService:createWorkdir",
         taskId: task.id,
-        attempt: 1,
+        attempt: task.attempt,
         error: result.detail,
       });
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -797,9 +882,9 @@ export class DevelopmentService {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
-        return substrateBlocked(task.id, sessionId, "createCell", environmentFailure, "task cell", NO_AGENT, eventSink);
+        return substrateBlocked(task, sessionId, "createCell", environmentFailure, "task cell", NO_AGENT, eventSink);
       }
-      const result = failedBeforeAgent(task.id, sessionId, "createCell", e, `task cell refused for ${task.id}`);
+      const result = failedBeforeAgent(task, sessionId, "createCell", e, `task cell refused for ${task.id}`);
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     }
@@ -829,9 +914,9 @@ export class DevelopmentService {
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
-      // touching its many return sites. A refused call, and stale stored checks (the check
-      // task's to rewrite, no model ran), are no lesson about the task.
-      if (result.status !== "completed" && result.status !== "refused" && result.status !== "checks_stale") {
+      // touching its many return sites. A refused call, stale stored checks (the check task's to
+      // rewrite, no model ran) and a shutdown are no lesson about the task.
+      if (result.status !== "completed" && result.status !== "refused" && result.status !== "checks_stale" && result.status !== "interrupted") {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       }
       return result;
@@ -841,7 +926,7 @@ export class DevelopmentService {
         event: "error",
         location: "DevelopmentService:execute",
         taskId: task.id,
-        attempt: 1,
+        attempt: task.attempt,
         error: chain.message,
       });
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -855,7 +940,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output: null,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: envelope,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -922,7 +1007,10 @@ export class DevelopmentService {
   }
 
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
-  private checkoutDir(d: Dispatch, purpose: "red-run" | "verify" | `run-checks-${number}`): string {
+  private checkoutDir(
+    d: Dispatch,
+    purpose: "red-run" | "verify" | `run-checks-${number}` | "environment-check" | "substrate-gate",
+  ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
 
@@ -1049,7 +1137,7 @@ export class DevelopmentService {
     eventSink?.emit({
       event: "agent_launched",
       taskId: task.id,
-      attempt: 1,
+      attempt: task.attempt,
       workDir,
       cellId: d.cell.id,
       role: staff.role,
@@ -1086,7 +1174,7 @@ export class DevelopmentService {
     eventSink?.emit({
       event: "agent_completed",
       taskId: task.id,
-      attempt: 1,
+      attempt: task.attempt,
       status: output.status,
       outcome: outcome.kind,
       turns: outcome.turnsUsed,
@@ -1107,7 +1195,7 @@ export class DevelopmentService {
       eventSink?.emit({
         event: "task_failed",
         taskId: task.id,
-        attempt: 1,
+        attempt: task.attempt,
         reason: "agent produced no file changes",
       });
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -1120,7 +1208,7 @@ export class DevelopmentService {
         detail: "agent produced no file changes",
         output,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: { outcome: "failed", summary: "agent produced no file changes", chain, agentOutput: output },
       };
     }
@@ -1130,7 +1218,7 @@ export class DevelopmentService {
 
     let finalizeDeps: FinalizeDeps;
     if (d.work.kind === "substrate") {
-      const gate = await this.substrateGate(d, outcome.summary, output);
+      const gate = await this.substrateGate(d, outcome.statement, output);
       if (gate.kind === "ended") return gate.result;
       finalizeDeps = {
         eventSink,
@@ -1146,7 +1234,7 @@ export class DevelopmentService {
       };
     }
 
-    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, 1, {
+    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, task.attempt, {
       entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
@@ -1154,7 +1242,7 @@ export class DevelopmentService {
       // failed, which is the operator's to fix, not a regression of the tree.
       await cleanupWorkdir(workDir, targetProjectPath);
       return substrateBlocked(
-        task.id,
+        task,
         sessionId,
         "postMergeVerify",
         finalizeResult.environmentFailure,
@@ -1171,7 +1259,7 @@ export class DevelopmentService {
       await cleanupWorkdir(workDir, targetProjectPath);
       return environmentBlocked(
         {
-          taskId: task.id,
+          task,
           sessionId,
           stage: "postMergeCheckRun",
           errorClass: fault.name,
@@ -1186,16 +1274,17 @@ export class DevelopmentService {
     }
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer;
+      // The lesson carries what failed: which suite and which check, and whether it was a regression.
       const envelope: ErrorEnvelope = {
         outcome: "failed",
-        summary: `post-merge verify failed for ${task.id}`,
+        summary: `post-merge verify failed for ${task.id}:\n${finalizeResult.gateFailureContext}`,
         chain: gateChain,
         agentOutput: output,
       };
       eventSink?.emit({
         event: "gate_failed",
         taskId: task.id,
-        attempt: 1,
+        attempt: task.attempt,
         reason: envelope.summary,
       });
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -1204,7 +1293,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: envelope,
       };
     }
@@ -1216,14 +1305,14 @@ export class DevelopmentService {
     } else {
       console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
     }
-    eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
+    eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
     return {
       status: "completed",
       detail: "task completed and verified successfully",
       output,
       sessionId,
-      attempt: 1,
+      attempt: task.attempt,
     };
   }
 
@@ -1236,6 +1325,8 @@ export class DevelopmentService {
       taskId: task.id,
       workDir: d.workDir,
       repo: d.repo,
+      targetProjectPath: d.targetProjectPath,
+      checkoutDir: (purpose) => this.checkoutDir(d, purpose),
       images: this.deps.environment.images,
       // Shared label (`:z`): the task cell may still mount the same tree. `.git` read-only: Z0's git
       // reads that repository after the cell ran.
@@ -1268,7 +1359,7 @@ export class DevelopmentService {
       if (environmentFailure === null && !(e instanceof WorktreeCommitIncomplete)) throw e;
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
       if (environmentFailure !== null) {
-        return substrateBlocked(task.id, sessionId, "commitWork", environmentFailure, "host git", { output, agentInvoked: true }, this.deps.eventSink);
+        return substrateBlocked(task, sessionId, "commitWork", environmentFailure, "host git", { output, agentInvoked: true }, this.deps.eventSink);
       }
       const chain = wrapError("development", "commitWork", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -1277,8 +1368,8 @@ export class DevelopmentService {
         chain,
         agentOutput: output,
       };
-      this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: envelope.summary });
-      return { status: "failed", detail: envelope.summary, output, sessionId, attempt: 1, errorEnvelope: envelope };
+      this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: envelope.summary });
+      return { status: "failed", detail: envelope.summary, output, sessionId, attempt: task.attempt, errorEnvelope: envelope };
     }
   }
 
@@ -1287,12 +1378,22 @@ export class DevelopmentService {
    * work as committed to the task branch (commitWork), its environment definition must parse, its image
    * build and its `test` pass in a fresh CI cell. A failed gate is a task failure (the definition
    * is the environment role's work), never environment_unavailable; a substrate that cannot run
-   * the gate blocks the task. On a pass the finish statement is kept on the work item.
+   * the gate blocks the task. On a pass the finish statement (the stack statement only, never the
+   * summary) is kept on the work item; a done without one fails the task before the gate runs.
    */
-  private async substrateGate(d: Dispatch, statement: string, output: AgentOutputJson): Promise<SubstrateGateOutcome> {
+  private async substrateGate(d: Dispatch, statement: string | null, output: AgentOutputJson): Promise<SubstrateGateOutcome> {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
-    eventSink?.emit({ event: "substrate_gate_started", taskId: task.id, attempt: 1, workDir });
+    const fail = (summary: string, chain: ReturnType<typeof wrapError>): SubstrateGateOutcome => ({
+      kind: "ended",
+      result: { status: "failed", detail: summary, output, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output } },
+    });
+    if (statement === null) {
+      await cleanupWorkdir(workDir, targetProjectPath);
+      const summary = `substrate gate failed for ${task.id}: the attempt finished done without a stack statement (finish's statement field)`;
+      return fail(summary, wrapError("development", "substrateGate", summary, { taskId: task.id }));
+    }
+    eventSink?.emit({ event: "substrate_gate_started", taskId: task.id, attempt: task.attempt, workDir });
 
     let run: SubstrateGateRun;
     try {
@@ -1303,84 +1404,101 @@ export class DevelopmentService {
       await cleanupWorkdir(workDir, targetProjectPath);
       return {
         kind: "ended",
-        result: substrateBlocked(task.id, sessionId, "substrateGate", environmentFailure, "CI cell", { output, agentInvoked: true }, eventSink),
+        result: substrateBlocked(task, sessionId, "substrateGate", environmentFailure, "CI cell", { output, agentInvoked: true }, eventSink),
       };
     }
 
     const passed = environmentCheckPassed(run.report);
     const gateOutput = formatEnvironmentCheck(run.report);
-    eventSink?.emit({ event: "substrate_gate_result", taskId: task.id, attempt: 1, passed, report: run.report.kind, output: gateOutput });
+    eventSink?.emit({ event: "substrate_gate_result", taskId: task.id, attempt: task.attempt, passed, report: run.report.kind, output: gateOutput });
     if (!passed || run.tested === null) {
       await cleanupWorkdir(workDir, targetProjectPath);
       const chain = wrapError("development", "substrateGate", gateOutput, { taskId: task.id, report: run.report.kind });
-      const envelope: ErrorEnvelope = {
-        outcome: "failed",
-        summary: `substrate gate failed for ${task.id}:\n${gateOutput}`,
-        chain,
-        agentOutput: output,
-      };
-      return {
-        kind: "ended",
-        result: { status: "failed", detail: envelope.summary, output, sessionId, attempt: 1, errorEnvelope: envelope },
-      };
+      return fail(`substrate gate failed for ${task.id}:\n${gateOutput}`, chain);
     }
 
-    await this.deps.environment.statements.record(task.id, statement);
+    await this.deps.environment.statements.record(task.id, statement, run.tested.version);
     return { kind: "passed", tested: run.tested };
   }
 
-  /** A substrate-checked task's post-merge check: the environment's test, from the gate's image, on the merged tree. */
+  /**
+   * A substrate-checked task's post-merge check: the gate's run again, the environment's `build` then
+   * `test` from the gate's image, on a throwaway checkout of the tentative merge, left clean.
+   */
   private async postMergeEnvironmentTest(d: Dispatch, targetProjectPath: string, tested: TestedEnvironment): Promise<PostMergeVerdict> {
-    const test = await runEnvironmentTest(
+    const commit = await tentativeMergeCommit(targetProjectPath, d.task.id);
+    const commands = await runPostMergeEnvironmentCommands(
       this.environmentScope(d),
       POST_MERGE_VERIFIER_ROLE,
-      tested.imageRef,
-      targetProjectPath,
-      tested.test,
+      tested,
+      commit,
       this.deps.attemptPolicy.perCommandTimeoutSeconds,
     );
-    const passed = environmentTestPassed(test);
-    const details = formatEnvironmentTest(test);
-    this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: d.task.id, attempt: 1, verdict: passed ? "passed" : "failed", details });
+    const passed = environmentCommandsPassed(commands);
+    const details = formatEnvironmentCommands(commands);
+    this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: d.task.id, attempt: d.task.attempt, verdict: passed ? "passed" : "failed", details });
     return { passed, details };
   }
 
   /**
-   * Every other task's post-merge check (s-independent-verify-m1): the checks the check author stored
-   * for it, run in a verifier cell from the dispatch's image on a throwaway checkout of the tentative
-   * merge with the stored check files written over it, so whatever the implementer put at those
-   * paths is replaced and it cannot grade itself. Every check must exit 0 with output. A substrate
-   * failure throws, which finalize turns into an environment block.
+   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d), in one
+   * verifier cell from the dispatch's image on a throwaway checkout of the tentative merge, in order:
+   * the environment definition's `test`; the latest stored checks of every implementation task of
+   * the project already Completed, each with its files written over the checkout; then this task's
+   * own stored checks with theirs, so whatever the implementer put at those paths is replaced and it
+   * cannot grade itself. An earlier task's checks are not red-run again on this environment: they
+   * are regression checks and must pass on the merge whatever version they were red-run on. Every
+   * check must exit 0 with output; any failure fails this task naming the suite and the check, and
+   * an earlier task's check that fails is this task's regression. Sequential, each check bounded by
+   * the per-command timeout: the run takes at most (1 + every check counted) x that timeout, plus
+   * the cell's start and teardown. A substrate failure throws, which finalize turns into an
+   * environment block.
    */
   private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks): Promise<PostMergeVerdict> {
     const { task } = d;
-    let outcome: CheckRunReport;
+    let runs: readonly SuiteRun[];
+    let suites: readonly CheckSuite[];
+    let earlier: readonly CompletedTaskChecks[];
     try {
+      if (d.environment.kind !== "environment") {
+        throw new PostMergeEnvironmentMissing(task.id);
+      }
+      earlier = await this.deps.checks.completedOf(task.projectId, task.id);
+      suites = [
+        { label: `the environment's test (version ${d.environment.version})`, checks: [{ name: "environment test", command: d.environment.test }], files: [] },
+        ...earlier.map((prior) => ({
+          label: `earlier task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
+          checks: prior.checks,
+          files: prior.files,
+        })),
+        { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files },
+      ];
       const commit = await tentativeMergeCommit(targetProjectPath, task.id);
-      outcome = await runChecksOnCheckout(
+      runs = await runSuitesOnCheckout(
         this.checkCells(d),
         POST_MERGE_VERIFIER_ROLE,
         cellImageOf(d.environment),
         commit,
         this.checkoutDir(d, "verify"),
-        stored.checks,
-        stored.files,
+        suites,
       );
     } catch (e) {
       if (environmentErrorOf(e) !== null) throw e;
       throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
     }
-    let passed: boolean;
-    let details: string;
-    if (outcome.kind === "files_refused") {
-      passed = false;
-      details = `the stored check files (revision ${stored.revision}) could not be written over the merged work: ${outcome.detail}`;
-    } else {
-      passed = outcome.runs.length === stored.checks.length && outcome.runs.length > 0 && outcome.runs.every(checkPassed);
-      details = `checks revision ${stored.revision} from check task ${stored.checkTaskId}:\n${formatCheckRuns(outcome.runs, checkVerdict)}`;
-    }
-    this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: 1, verdict: passed ? "passed" : "failed", revision: stored.revision, details });
-    return { passed, details };
+    const checkCount = suites.reduce((sum, suite) => sum + suite.checks.length, 0);
+    const verdict = suitesVerdict(suites, runs, earlier.length);
+    this.deps.eventSink?.emit({
+      event: "post_merge_verify",
+      taskId: task.id,
+      attempt: task.attempt,
+      verdict: verdict.passed ? "passed" : "failed",
+      revision: stored.revision,
+      regressionTasks: earlier.map((prior) => prior.taskId),
+      boundSeconds: checkCount * this.deps.attemptPolicy.perCommandTimeoutSeconds,
+      details: verdict.details,
+    });
+    return verdict;
   }
 
   /**
@@ -1407,7 +1525,7 @@ export class DevelopmentService {
         this.deps.eventSink?.emit({
           event: "task_checks_run",
           taskId: d.task.id,
-          attempt: 1,
+          attempt: d.task.attempt,
           run: runs,
           revision: stored.revision,
           ...(report.kind === "ran" ? { passed: report.runs.filter(checkPassed).map((run) => run.name) } : { refused: report.detail }),
@@ -1445,7 +1563,7 @@ export class DevelopmentService {
       );
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return redRunBlocked(task.id, sessionId, e, NO_AGENT, eventSink);
+      return redRunBlocked(task, sessionId, e, NO_AGENT, eventSink);
     }
     const problem =
       redRun.kind === "files_refused"
@@ -1456,7 +1574,7 @@ export class DevelopmentService {
     eventSink?.emit({
       event: "checks_revalidated",
       taskId: task.id,
-      attempt: 1,
+      attempt: task.attempt,
       revision: stored.revision,
       storedVersion: stored.environmentVersion,
       currentVersion: current,
@@ -1467,14 +1585,14 @@ export class DevelopmentService {
     await cleanupWorkdir(workDir, targetProjectPath);
     const stale = new StoredChecksStale(task.id, stored, current, problem);
     console.warn(`[${task.id}] ${stale.message}`);
-    eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: 1, stage: "revalidateTaskChecks", errorClass: stale.name, reason: stale.message });
+    eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "revalidateTaskChecks", errorClass: stale.name, reason: stale.message });
     return {
       status: "checks_stale",
       checkTaskId: stored.checkTaskId,
       detail: stale.message,
       output: null,
       sessionId,
-      attempt: 1,
+      attempt: task.attempt,
       errorEnvelope: {
         outcome: "blocked",
         summary: stale.message,
@@ -1493,14 +1611,14 @@ export class DevelopmentService {
   private checksRejected(d: Dispatch, output: AgentOutputJson, reason: string): ExecutionResult {
     const { task, sessionId } = d;
     const summary = `the checks of check task ${task.id} were rejected: ${reason}`;
-    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: summary });
+    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary });
     const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });
     return {
       status: "failed",
       detail: summary,
       output,
       sessionId,
-      attempt: 1,
+      attempt: task.attempt,
       errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output },
     };
   }
@@ -1534,12 +1652,12 @@ export class DevelopmentService {
           harvest.files,
         );
       } catch (e) {
-        return redRunBlocked(task.id, sessionId, e, { output, agentInvoked: true }, eventSink);
+        return redRunBlocked(task, sessionId, e, { output, agentInvoked: true }, eventSink);
       }
       if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
       const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);
       const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
-      eventSink?.emit({ event: "check_red_run", taskId: task.id, attempt: 1, rejected: problems.map((run) => run.name), report });
+      eventSink?.emit({ event: "check_red_run", taskId: task.id, attempt: task.attempt, rejected: problems.map((run) => run.name), report });
       if (problems.length > 0) return this.checksRejected(d, output, `red run on main:\n${report}`);
 
       const revision = await this.deps.checks.append({
@@ -1558,13 +1676,13 @@ export class DevelopmentService {
         checks: defined.map((check) => check.name),
         files: harvest.files.map((file) => file.path),
       });
-      eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
+      eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
       return {
         status: "completed",
         detail: `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}; each fails on main`,
         output,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
       };
     } finally {
       await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
@@ -1584,7 +1702,7 @@ export class DevelopmentService {
     } else {
       await commitPartialWork(
         d.repo,
-        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, ${outcome.kind})`,
+        `ashara: partial work for retry (task ${task.id}, dispatch ${task.attempt}, ${outcome.kind})`,
       );
       await cleanupWorkdir(workDir, targetProjectPath);
     }
@@ -1609,7 +1727,7 @@ export class DevelopmentService {
       const unavailable = outcome.source === "records" ? "attempt records" : typed !== null ? unavailableOf(typed, "task cell") : "task cell";
       return environmentBlocked(
         {
-          taskId: task.id,
+          task,
           sessionId,
           stage: "agentAttempt",
           errorClass,
@@ -1626,18 +1744,40 @@ export class DevelopmentService {
     if (outcome.kind === "refused") {
       const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; the partial work is kept on the task branch`;
       console.warn(`[${task.id}] ${summary}`);
-      this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: 1, errorClass: outcome.error.name, reason: summary });
+      this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: task.attempt, errorClass: outcome.error.name, reason: summary });
       return {
         status: "refused",
         refusal: outcome.error,
         detail: summary,
         output,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: {
           outcome: "blocked",
           summary,
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, errorClass: outcome.error.name }),
+          agentOutput: output,
+        },
+      };
+    }
+
+    // Identified by the abort reason itself, not its text: the cancellation carries the very
+    // reason this process's shutdown signal was aborted with. Any other cancellation stays a failure.
+    const shutdown = this.deps.shutdownSignal;
+    if (outcome.kind === "cancelled" && shutdown.aborted && outcome.reason === shutdown.reason) {
+      const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); the partial work is kept on the task branch`;
+      console.warn(`[${task.id}] ${summary}`);
+      this.deps.eventSink?.emit({ event: "task_interrupted", taskId: task.id, attempt: task.attempt, turns: outcome.turnsUsed });
+      return {
+        status: "interrupted",
+        detail: summary,
+        output,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: {
+          outcome: "blocked",
+          summary,
+          chain: wrapError("development", "agentAttempt", outcome.reason, context),
           agentOutput: output,
         },
       };
@@ -1656,7 +1796,7 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        attempt: 1,
+        attempt: task.attempt,
         errorEnvelope: envelope,
       };
     }
@@ -1674,7 +1814,7 @@ export class DevelopmentService {
       detail: envelope.summary,
       output,
       sessionId,
-      attempt: 1,
+      attempt: task.attempt,
       errorEnvelope: envelope,
     };
   }

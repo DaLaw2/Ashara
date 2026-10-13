@@ -253,7 +253,7 @@ async function main(): Promise<void> {
     staff(task) {
       const capability = determineCapability(task.dispatchCount, task.blockedReason);
       if (capability === "Frontier") {
-        console.log(`[${task.id}] model escalated to Frontier (attempt ${task.dispatchCount + 1})`);
+        console.log(`[${task.id}] model escalated to Frontier (attempt ${task.attempt})`);
       }
       return {
         role: AGENT_ROLE,
@@ -326,8 +326,8 @@ async function main(): Promise<void> {
           }),
       },
       statements: {
-        record: (taskId, statement) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement),
-        current: (projectId) => dbWorkItemRepo.currentEnvironmentStatement(projectId),
+        record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
+        forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
       },
     },
     checks: createTaskCheckStore(db),

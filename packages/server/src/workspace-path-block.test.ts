@@ -140,9 +140,9 @@ describe("a project whose workspace path is refused", () => {
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
         images: { build: notExercised("build") },
-        statements: { record: notExercised("record"), current: notExercised("current") },
+        statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
-      checks: { checkedTasksOf: notExercised("checkedTasksOf"), append: notExercised("append"), latest: notExercised("latest") },
+      checks: { completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), append: notExercised("append"), latest: notExercised("latest") },
       shutdownSignal: new AbortController().signal,
     });
 

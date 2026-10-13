@@ -39,8 +39,19 @@ export interface TaskChecks {
   readonly files: readonly CheckFile[];
 }
 
+/** The latest checks of an implementation task already merged: what a later merge must still pass. */
+export interface CompletedTaskChecks extends TaskChecks {
+  readonly taskId: string;
+}
+
 /** Quality's task_checks (migration 036); the composition root supplies it. */
 export interface TaskCheckStore {
+  /**
+   * The latest checks of every Completed implementation task of the project except `exceptTaskId`,
+   * in the order they completed. A Completed implementation task with no stored check throws:
+   * an empty set would read as "nothing to regress".
+   */
+  completedOf(projectId: ProjectId, exceptTaskId: WorkItemId): Promise<readonly CompletedTaskChecks[]>;
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /** Appends one revision of the task's checks; returns the revision. */
@@ -114,6 +125,14 @@ class CheckGitStepFailed extends Error {
   ) {
     super(`checks of task ${taskId}: ${step} failed: ${detail}`);
     this.name = "CheckGitStepFailed";
+  }
+}
+
+/** A run of one suite reported none: no verdict exists for it. */
+class SuiteRunMissing extends Error {
+  constructor(readonly checkoutDir: string) {
+    super(`the checks run on checkout ${checkoutDir} reported no suite`);
+    this.name = "SuiteRunMissing";
   }
 }
 
@@ -257,35 +276,50 @@ export interface CheckCells {
   readonly timeoutSeconds: number;
 }
 
+/** One named set of checks run on a checkout: its files are written over it just before they run. */
+export interface CheckSuite {
+  /** Names the suite in the verdict, e.g. which task's checks these are. */
+  readonly label: string;
+  readonly checks: readonly CheckDefinition[];
+  readonly files: readonly CheckFile[];
+}
+
+export interface SuiteRun {
+  readonly suite: CheckSuite;
+  readonly report: CheckRunReport;
+}
+
 /**
- * Checks `commit` out into `dir` (a detached worktree of the target that no cell has mounted),
- * writes the check files over it, and runs each check from the root of a fresh cell from `image`
- * that mounts it. The checkout and the cell are removed afterwards. A substrate failure throws.
+ * Checks `commit` out into `dir` (a detached worktree of the target that no cell has mounted) and
+ * runs the suites in order, sequentially, in one cell from `image` that mounts it, started when the
+ * first suite's files are in place. Before each suite its files are written over the checkout; a
+ * suite whose files cannot be written is reported `files_refused` and the next one still runs. An
+ * earlier suite's files and whatever its commands wrote stay in the checkout. Each check is bounded
+ * by `cells.timeoutSeconds`, so the run is bounded by that times the number of checks, plus the
+ * cell's start and teardown. The checkout and the cell are removed afterwards. A substrate failure throws.
  */
-export async function runChecksOnCheckout(
+export async function runSuitesOnCheckout(
   cells: CheckCells,
   role: string,
   image: string,
   commit: string,
   dir: string,
-  checks: readonly CheckDefinition[],
-  files: readonly CheckFile[],
-): Promise<CheckRunReport> {
+  suites: readonly CheckSuite[],
+): Promise<readonly SuiteRun[]> {
   await mkdir(dirname(dir), { recursive: true });
   await runHostGit(targetRepo(cells.targetProjectPath), ["worktree", "add", "--detach", dir, commit]);
+  let cell: Cell | null = null;
   try {
-    for (const file of files) {
-      try {
-        await writeTreeFile(dir, file.path, file.content);
-      } catch (err) {
-        if (err instanceof TreePathRefused) return { kind: "files_refused", detail: err.message };
-        throw err;
+    const reports: SuiteRun[] = [];
+    for (const suite of suites) {
+      const refused = await writeCheckFiles(dir, suite.files);
+      if (refused !== null) {
+        reports.push({ suite, report: { kind: "files_refused", detail: refused } });
+        continue;
       }
-    }
-    const cell = await cells.createCell({ image, role, hostPath: dir });
-    try {
+      cell ??= await cells.createCell({ image, role, hostPath: dir });
       const runs: CheckRun[] = [];
-      for (const check of checks) {
+      for (const check of suite.checks) {
         const result = await cell.exec(["sh", "-c", check.command], { timeoutSeconds: cells.timeoutSeconds });
         runs.push({
           name: check.name,
@@ -295,13 +329,44 @@ export async function runChecksOnCheckout(
           output: tailOf(`${result.stdout}${result.stderr}`.trim()),
         });
       }
-      return { kind: "ran", runs };
-    } finally {
-      await cells.teardownCell(cell);
+      reports.push({ suite, report: { kind: "ran", runs } });
     }
+    return reports;
   } finally {
-    await cleanupWorkdir(dir, cells.targetProjectPath);
+    try {
+      if (cell !== null) await cells.teardownCell(cell);
+    } finally {
+      await cleanupWorkdir(dir, cells.targetProjectPath);
+    }
   }
+}
+
+/** Writes the files over the checkout; the refusal's message when one cannot be placed, else null. */
+async function writeCheckFiles(dir: string, files: readonly CheckFile[]): Promise<string | null> {
+  for (const file of files) {
+    try {
+      await writeTreeFile(dir, file.path, file.content);
+    } catch (err) {
+      if (err instanceof TreePathRefused) return err.message;
+      throw err;
+    }
+  }
+  return null;
+}
+
+/** One suite of checks on a fresh checkout of `commit`, as runSuitesOnCheckout runs it. */
+export async function runChecksOnCheckout(
+  cells: CheckCells,
+  role: string,
+  image: string,
+  commit: string,
+  dir: string,
+  checks: readonly CheckDefinition[],
+  files: readonly CheckFile[],
+): Promise<CheckRunReport> {
+  const [only] = await runSuitesOnCheckout(cells, role, image, commit, dir, [{ label: "checks", checks, files }]);
+  if (only === undefined) throw new SuiteRunMissing(dir);
+  return only.report;
 }
 
 /**
@@ -329,6 +394,8 @@ export function formatChecksForBrief(stored: TaskChecks): string {
     `exits 0 and prints output, run from the project root on your merged work. Their files are put back as written`,
     `whenever they run, so changing them changes nothing. Call run_checks to run them on your current work before`,
     `you finish: it reports each check's exit code and output exactly as verification would.`,
+    `Verification on the merge also runs the environment's test and the checks of every task already merged:`,
+    `if your work breaks any of them, this task fails as a regression and nothing is merged.`,
     ...stored.checks.map((check) => `- ${check.name}: \`${check.command}\``),
   ];
   if (stored.files.length > 0) lines.push(`Check files: ${stored.files.map((file) => file.path).join(", ")}`);

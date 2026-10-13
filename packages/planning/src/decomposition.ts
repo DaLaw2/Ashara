@@ -176,7 +176,8 @@ export class DecompositionEngine {
         const successCriteria = [
             "environment/environment.toml parses",
             "the environment it defines builds",
-            "the environment's test command passes in a fresh cell and prints output",
+            "the work touches owned paths only",
+            "the environment's build then test commands pass on a fresh checkout, test printing output, and leave it clean",
         ];
         const sprint0Task: WorkItemSpec & { taskSpec: TaskSpec } = {
             id: sprint0Id,
@@ -189,11 +190,11 @@ export class DecompositionEngine {
             taskSpec: {
                 goal: SPRINT0_DESCRIPTION,
                 endState: successCriteria.join("; "),
-                scope: "environment/environment.toml and the files it names",
+                scope: "environment/environment.toml and the owned files it names; no product code",
                 deliverables: [
                     "environment/environment.toml naming the owned paths, the containerfile, and the build and test commands",
-                    "the files environment/environment.toml names",
-                    "a one-paragraph statement of the stack chosen and why",
+                    "the owned files environment/environment.toml names",
+                    "a one-paragraph statement of the stack chosen and why, given as finish's statement",
                 ],
                 capability: "Strong",
                 origin: "sprint0",
@@ -460,9 +461,10 @@ const DECOMPOSITION_EXAMPLES: ContextExamples = {
 const SPRINT0_TITLE = "Define and commit the project environment";
 
 const SPRINT0_DESCRIPTION =
-    "Define and commit the project environment: environment/environment.toml (owned paths, containerfile, " +
-    "build and test commands) and the files it names; build it with build_environment and finish with a " +
-    "one-paragraph statement of the stack you chose and why.";
+    "Define and commit the project environment, and nothing else: environment/environment.toml (owned paths, " +
+    "containerfile, build and test commands) and the owned files it names, as the environment brief states them; " +
+    "build it with build_environment and finish with a one-paragraph statement of the stack you chose and why. " +
+    "The product's code, tests and data are later tasks' work.";
 
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
 

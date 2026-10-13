@@ -257,6 +257,27 @@ export class EnvironmentVersionUnresolved extends ExecutionInfraError {
   }
 }
 
+/**
+ * An owned entry named as one file is a directory in the committed tree. Only `environment/` can be
+ * an owned directory, so no environment version exists for that commit.
+ */
+export class OwnedPathNotAFile extends EnvironmentVersionUnresolved {
+  readonly ownedPath: string;
+  readonly containedPath: string;
+
+  constructor(gitDir: string, commit: string, ownedPath: string, containedPath: string) {
+    super(
+      gitDir,
+      commit,
+      `owned entry ${JSON.stringify(ownedPath)} is a directory at this commit (it holds ${JSON.stringify(containedPath)}); ` +
+        `only "environment/" can be an owned directory, every other owned entry must be one file`,
+    );
+    this.name = "OwnedPathNotAFile";
+    this.ownedPath = ownedPath;
+    this.containedPath = containedPath;
+  }
+}
+
 /** `podman build` of an environment version did not produce an image. */
 export class EnvironmentBuildFailed extends ExecutionInfraError {
   readonly projectId: string;

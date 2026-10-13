@@ -38,6 +38,8 @@ export type Outcome =
       readonly summary: string;
       /** Present exactly when status is "blocked". */
       readonly blockedReason: string | null;
+      /** Environment work's stack statement: present exactly when environment work finished done. */
+      readonly statement: string | null;
     })
   | (OutcomeBase & {
       readonly kind: "model_stopped_without_finish";

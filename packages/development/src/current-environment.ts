@@ -26,7 +26,10 @@ export interface CurrentEnvironment {
   readonly imageRef: string;
   /** Whether the image was already built for this version (no build ran). */
   readonly reused: boolean;
+  /** The statement recorded with this version when the environment task that produced it merged. */
   readonly statement: string;
+  /** The definition's `test` command on main: run on every post-merge checkout, from this image. */
+  readonly test: string;
   /** The definition's owned paths on main: the environment's files, which no check may touch. */
   readonly owned: readonly string[];
 }
@@ -91,9 +94,15 @@ export async function resolveCurrentEnvironment(
     throw err;
   }
 
-  const statement = await statements.current(projectId);
+  // The statement belongs to a version, not to the project: one an environment task recorded for
+  // another version (or none at all, as when a non-environment commit moved the version) says
+  // nothing about the stack this version was chosen for.
+  const statement = await statements.forVersion(projectId, version);
   if (statement === null) {
-    return undefinedBecause(`environment version ${version} is on ${MAIN}, but no statement of the stack it was chosen for is on record`);
+    return undefinedBecause(
+      `environment version ${version} is on ${MAIN} at ${commit}, but no completed environment task recorded a statement ` +
+        `for that version: the version was not produced by an environment task`,
+    );
   }
 
   let built: BuiltEnvironment;
@@ -119,6 +128,7 @@ export async function resolveCurrentEnvironment(
       imageRef: built.imageRef,
       reused: built.reused,
       statement,
+      test: definition.test,
       owned: definition.owned,
     },
   };
