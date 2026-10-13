@@ -1,6 +1,6 @@
-import type { WorkItemId, ProjectKnowledge, StoredTaskSpec, ContractRepository } from "@ashara/shared";
-import { parseProjectId, parseWorkItemLevel } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository } from "./domain/index.js";
+import type { ProjectId, WorkItemId, ProjectKnowledge, StoredTaskSpec, ContractRepository } from "@ashara/shared";
+import { parseWorkItemLevel } from "@ashara/shared";
+import type { WorkItemRepository } from "./domain/index.js";
 import {
   PlanningService,
   createPendingWorkItem,
@@ -58,6 +58,8 @@ export interface CreateBulkPlanDeps {
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ) => Promise<T>;
   readonly runScope: string;
+  /** The project every created item belongs to, and the key its contract is written under. */
+  readonly projectId: ProjectId;
 }
 
 /**
@@ -81,7 +83,6 @@ export async function createBulkPlanWithContract(
 ): Promise<BulkPlanResult> {
   return deps.withPlanningTransaction(async ({ workItemRepo, contractRepo }) => {
     const tempIdToId = new Map<string, WorkItemId>();
-    const created: WorkItem[] = [];
 
     for (const spec of items) {
       const level = parseWorkItemLevel(spec.level);
@@ -96,6 +97,7 @@ export async function createBulkPlanWithContract(
         level,
         spec.title,
         deps.runScope,
+        deps.projectId,
         parentRealId,
         spec.description,
         spec.taskSpec,
@@ -103,7 +105,6 @@ export async function createBulkPlanWithContract(
       );
       const createdItem = await PlanningService.createWorkItem(workItemRepo, item);
       tempIdToId.set(spec.tempId, createdItem.id);
-      created.push(createdItem);
     }
 
     for (const edge of edges) {
@@ -114,7 +115,7 @@ export async function createBulkPlanWithContract(
       await workItemRepo.addDependency(fromId, toId);
     }
 
-    await deriveAndWriteContract(contractRepo, created, knowledge);
+    await deriveAndWriteContract(contractRepo, deps.projectId, knowledge);
 
     const tempIdToIdRecord: Record<string, string> = {};
     for (const [tempId, id] of tempIdToId) tempIdToIdRecord[tempId] = id;
@@ -125,22 +126,16 @@ export async function createBulkPlanWithContract(
 /**
  * Seeds the knowledge graph (writeContract) if the project has no contract, else
  * merges it (amendContract) — the seed-once-then-amend protocol. Keyed by the
- * single project ROOT (the item with no parent); a batch without exactly one root
- * skips the contract (nothing else in the system knows how to key it). The write
- * is gated on what this call actually adds: knowledge merges by KIND
- * (applyContractDelta), so a delta carrying only kinds already present is a no-op
- * and must not mint a contract version (ADR-046).
+ * project (projects.id, migration 014). The write is gated on what this call
+ * actually adds: knowledge merges by KIND (applyContractDelta), so a delta
+ * carrying only kinds already present is a no-op and must not mint a contract
+ * version (ADR-046).
  */
 async function deriveAndWriteContract(
   contractRepo: ContractRepository,
-  created: readonly WorkItem[],
+  projectId: ProjectId,
   knowledge: ProjectKnowledge,
 ): Promise<void> {
-  const roots = created.filter((item) => item.parentId === undefined);
-  if (roots.length !== 1) return;
-  const root = roots[0]!;
-
-  const projectId = parseProjectId(root.id);
   const existing = await contractRepo.getLatest(projectId);
   if (!existing) {
     if (knowledge.nodes.length === 0) return;

@@ -1,25 +1,36 @@
 import { desc, eq, sql } from "drizzle-orm";
-import type { Database } from "../connection.js";
+import type { ProjectId } from "@ashara/shared";
+import type { DbHandle } from "../connection.js";
 import { visionDocuments } from "../schema.js";
 
-export class VisionRepository {
-  constructor(private readonly db: Database) {}
+export type VisionInput = Omit<typeof visionDocuments.$inferInsert, "id" | "projectId" | "version" | "createdAt">;
 
-  async create(doc: Omit<typeof visionDocuments.$inferInsert, "id" | "version" | "createdAt">) {
+export class VisionRepository {
+  constructor(private readonly db: DbHandle) {}
+
+  /**
+   * Appends the project's next vision version (its first is 1). The version is
+   * computed in the INSERT itself; two racing writers that compute the same
+   * number fail on UNIQUE (project_id, version) rather than sharing it.
+   */
+  async create(projectId: ProjectId, doc: VisionInput) {
     const [row] = await this.db
       .insert(visionDocuments)
       .values({
         ...doc,
-        version: sql`(SELECT COALESCE(MAX(version), 0) + 1 FROM vision_documents)`,
+        projectId,
+        version: sql`(SELECT COALESCE(MAX(version), 0) + 1 FROM vision_documents WHERE project_id = ${projectId})`,
       })
       .returning();
     return row;
   }
 
-  async getLatest() {
+  /** The project's highest vision version, or null when the project has none. */
+  async getCurrent(projectId: ProjectId) {
     const [row] = await this.db
       .select()
       .from(visionDocuments)
+      .where(eq(visionDocuments.projectId, projectId))
       .orderBy(desc(visionDocuments.version))
       .limit(1);
     return row ?? null;

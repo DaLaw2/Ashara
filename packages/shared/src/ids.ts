@@ -4,15 +4,22 @@ export type SessionId = string & { readonly __brand: "SessionId" };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+class InvalidProjectId extends Error {
+  constructor(readonly raw: string) {
+    super(`Invalid ProjectId "${raw}": expected a UUID`);
+    this.name = "InvalidProjectId";
+  }
+}
+
 /**
- * Validated narrowing of an external string into a branded `ProjectId` (used at
- * the contract read boundary, ADR-028). Rejects anything that is not a UUID so
- * the brand is never assumed without validation. Mirrors the parse* helpers in
- * enums.ts.
+ * Validated narrowing of an external string into a branded `ProjectId` — a
+ * projects.id (migration 014), the key of a project's visions, work items and
+ * contract. Rejects anything that is not a UUID so the brand is never assumed
+ * without validation. Mirrors the parse* helpers in enums.ts.
  */
 export function parseProjectId(raw: string): ProjectId {
   if (!UUID_PATTERN.test(raw)) {
-    throw new Error(`Invalid ProjectId "${raw}": expected a UUID`);
+    throw new InvalidProjectId(raw);
   }
   return raw as ProjectId;
 }

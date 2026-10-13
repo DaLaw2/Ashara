@@ -7,6 +7,7 @@ import {
   parseStoredBlockedReason,
   parseStoredSuccessCriteria,
   parseRunScope,
+  parseProjectId,
 } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 
@@ -33,6 +34,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     successCriteria: parseStoredSuccessCriteria(row.successCriteria),
     blockedReason: parseStoredBlockedReason(row.blockedReason),
     runScope: parseRunScope(row.runScope),
+    projectId: parseProjectId(row.projectId),
     dispatchCount: row.dispatchCount,
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
@@ -54,6 +56,7 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
         northStar: item.northStar ?? null,
         successCriteria: item.successCriteria ?? null,
         runScope: item.runScope,
+        projectId: item.projectId,
       });
       return rowToWorkItem(row);
     },

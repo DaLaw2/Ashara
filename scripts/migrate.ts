@@ -5,9 +5,9 @@
  * files already recorded there. Each migration runs inside a transaction so a
  * failure rolls back cleanly and names the file that broke.
  *
- * Two callers share this one mechanism:
- *   just migrate            (developer, loads .env via dotenv-load)
- *   CI / npx tsx scripts/migrate.ts  (explicit DATABASE_URL in env)
+ * The database URL is `DATABASE_URL` when set, otherwise the policy default
+ * `DEFAULT_DATABASE_URL` from @ashara/db, the same resolution the server and the
+ * test suites use. CI sets DATABASE_URL explicitly; a local run needs nothing.
  *
  * Usage: npx tsx scripts/migrate.ts
  */
@@ -15,22 +15,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
+import { DEFAULT_DATABASE_URL } from "@ashara/db";
 
 // ---------------------------------------------------------------------------
 // Typed errors (Discipline C)
 // ---------------------------------------------------------------------------
-
-class MissingDatabaseUrlError extends Error {
-  readonly operation = "migrate";
-
-  constructor() {
-    super(
-      "DATABASE_URL environment variable is required. " +
-        "Run via `just migrate` (which loads .env) or set DATABASE_URL explicitly.",
-    );
-    this.name = "MissingDatabaseUrlError";
-  }
-}
 
 interface PgDiagnostics {
   readonly code: string | undefined;
@@ -153,10 +142,7 @@ async function applyMigration(
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new MissingDatabaseUrlError();
-  }
+  const databaseUrl = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
   const root = path.resolve(
     import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname),

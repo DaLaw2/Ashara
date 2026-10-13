@@ -1,6 +1,6 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
@@ -54,6 +54,7 @@ vi.mock("./run-state.js", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
 const TASK_IDS: [WorkItemId, WorkItemId] = [createWorkItemId(), createWorkItemId()];
 
 function pendingTask(id: WorkItemId, title: string): WorkItem {
@@ -64,6 +65,7 @@ function pendingTask(id: WorkItemId, title: string): WorkItem {
     status: "Pending",
     title,
     runScope: "run-parallel-test",
+    projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
     createdAt: now,
     updatedAt: now,
@@ -98,7 +100,7 @@ function buildDeps(): CoreLoopDeps {
     publish: async () => {},
   };
   const costRepo = { recordTaskCost: async () => {}, getTaskCostHistory: async () => [] };
-  const visionRepo = { getLatest: async () => null, getProjectPath: async () => null, setProjectPath: async () => {} };
+  const visionRepo = { getCurrent: async () => null, getProjectPath: async () => null, setProjectPath: async () => {} };
   const failedApproachRepo = { record: async () => {} };
   const runStateStore = { load: async () => null, save: async () => {} };
 

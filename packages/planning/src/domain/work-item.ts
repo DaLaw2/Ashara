@@ -1,4 +1,5 @@
 import {
+  type ProjectId,
   type WorkItemId,
   type WorkItemLevel,
   type WorkItemStatus,
@@ -30,6 +31,8 @@ export interface WorkItem {
    * must supply this explicitly — there is no default (Discipline A).
    */
   runScope: string;
+  /** The project (projects.id) this item belongs to. Required: no item exists outside a project. */
+  projectId: ProjectId;
   /**
    * Number of times this item has been dispatched for execution (migration 018,
    * r9f-t1). Incremented UNCONDITIONALLY at the dispatch seam (CoreLoop.processTask)
@@ -46,6 +49,7 @@ export function createPendingWorkItem(
   level: WorkItemLevel,
   title: string,
   runScope: string,
+  projectId: ProjectId,
   parentId?: WorkItemId,
   description?: string,
   taskSpec?: StoredTaskSpec,
@@ -64,6 +68,7 @@ export function createPendingWorkItem(
     northStar,
     successCriteria,
     runScope,
+    projectId,
     dispatchCount: 0,
     createdAt: now,
     updatedAt: now,

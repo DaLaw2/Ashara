@@ -1,6 +1,6 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
 import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseStoredBlockedReason } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, parseStoredBlockedReason } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
@@ -9,6 +9,7 @@ import type { CoreLoopDeps } from "./types.js";
 import { processTask } from "./execution.js";
 
 const RUN_SCOPE = "run-test-preemption";
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
 // Stable ID shared by every item copy the mock repo returns, so the domain
 // service, lifecycle router, and processTask itself all operate on what looks
 // like the same row.
@@ -22,6 +23,7 @@ function freshPendingItem(): WorkItem {
     status: "Pending",
     title: "test-preempted-task",
     runScope: RUN_SCOPE,
+    projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
     createdAt: now,
     updatedAt: now,
@@ -109,7 +111,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   // standard test workaround for class-typed dependency slots.
   const eventStore = { publish: async () => {} };
   const visionRepo = {
-    getLatest: async () => null,
+    getCurrent: async () => null,
     getProjectPath: async () => null,
     setProjectPath: async () => {},
   };

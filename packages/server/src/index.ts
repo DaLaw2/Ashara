@@ -10,6 +10,7 @@ import {
   EventStoreRepository,
   DevSessionRepository,
   VisionRepository,
+  ProjectRepository,
   ConfigRepository,
   CostRepository,
   KnowledgeRepository,
@@ -18,6 +19,7 @@ import {
   RunStateRepository,
   SecretRepository,
   withPlanningTransaction,
+  createProjectWithVision,
 } from "@ashara/db";
 import {
   CoreLoop,
@@ -58,8 +60,8 @@ import {
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
 import { SecretStore } from "@ashara/security";
-import type { WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
   const eventStore = new EventStoreRepository(db);
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
+  const projectRepo = new ProjectRepository(db);
   const configRepo = new ConfigRepository(db);
   const costRepo = new CostRepository(db);
   const runStateRepo = new RunStateRepository(db);
@@ -329,42 +332,32 @@ async function main(): Promise<void> {
     emit: (event) => eventLogger.emit(event),
   };
 
-  // The ProjectContract is keyed by the project ROOT id (the top of the parent
-  // chain, an epic — see bulk-plan.deriveAndWriteContract). Walk parentId up
-  // from any work item to that root; all three contract adapters below share it so
-  // the Development/Planning BCs stay free of a db dependency (ADR-027).
-  const resolveProjectRootId = async (workItemId: string): Promise<string | null> => {
-    let current = await workItemRepo.findById(workItemId as WorkItemId);
-    if (!current) return null;
-    while (current.parentId) {
-      const parent = await workItemRepo.findById(current.parentId as WorkItemId);
-      if (!parent) break;
-      current = parent;
-    }
-    return current.id;
+  // A task's project is the project_id on its own row (migration 014): the
+  // contract and the vision are both keyed by it, so no reader walks the parent
+  // chain or falls back on a global latest. A task that cannot be found yields
+  // null and blocks the dispatch — handing an agent some other project's
+  // contract or intent would be worse than stopping.
+  const findTaskProjectId = async (taskId: string): Promise<ProjectId | null> => {
+    const task = await workItemRepo.findById(taskId as WorkItemId);
+    return task ? task.projectId : null;
   };
 
   // The task's project contract: its knowledge graph feeds the project frame.
   const contractSource: ContractSource = {
     async loadForTask(taskId: string): Promise<ProjectContract | null> {
-      const rootId = await resolveProjectRootId(taskId);
-      return rootId ? contractRepo.getLatest(parseProjectId(rootId)) : null;
+      const projectId = await findTaskProjectId(taskId);
+      return projectId ? contractRepo.getLatest(projectId) : null;
     },
   };
 
-  // Project frame — intent (ADR-046). vision_documents carries no work-item key:
-  // a run plans exactly ONE vision, which every other reader also takes via
-  // getLatest() (orchestrator/task-helpers.ts resolveTargetProjectPath). So the
-  // root-id resolution is the check that this task belongs to a planned project,
-  // and the latest vision is that project's stated intent. VERBATIM visionText,
-  // never the summary: the paraphrase is the step that dropped "Go" in Run 36.
-  // A task whose root cannot be resolved yields null and blocks the dispatch —
-  // handing an agent some other project's intent would be worse than stopping.
+  // Project frame — intent (ADR-046): the task's project's current vision,
+  // VERBATIM visionText, never the summary: the paraphrase is the step that
+  // dropped "Go" in Run 36.
   const intentSource: ProjectIntentSource = {
     async loadIntent(taskId: string): Promise<string | null> {
-      const rootId = await resolveProjectRootId(taskId);
-      if (!rootId) return null;
-      const vision = await visionRepo.getLatest();
+      const projectId = await findTaskProjectId(taskId);
+      if (!projectId) return null;
+      const vision = await visionRepo.getCurrent(projectId);
       return vision?.visionText ?? null;
     },
   };
@@ -458,13 +451,20 @@ async function main(): Promise<void> {
     eventStore,
     devSessionRepo,
     visionRepo,
+    projectRepo,
+    createProject: (name, vision) => createProjectWithVision(db, name, vision),
     configRepo,
     secretStore,
     runner,
     // Bulk plan creation writes the ProjectContract knowledge in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
-    createBulkPlan: (items, edges, knowledge) =>
-      createBulkPlanWithContract({ withPlanningTransaction: planningTransaction, runScope: RUN_SCOPE_AD_HOC }, items, edges, knowledge),
+    createBulkPlan: (projectId, items, edges, knowledge) =>
+      createBulkPlanWithContract(
+        { withPlanningTransaction: planningTransaction, runScope: RUN_SCOPE_AD_HOC, projectId },
+        items,
+        edges,
+        knowledge,
+      ),
   };
 
   const app = new Hono();

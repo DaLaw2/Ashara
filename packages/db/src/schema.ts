@@ -22,6 +22,17 @@ function timestamptz(name?: string) {
 }
 
 // ---------------------------------------------------------------------------
+// projects (migration 014, K3 Project Record)
+// ---------------------------------------------------------------------------
+
+export const projects = pgTable("projects", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  name: text().notNull(),
+  status: varchar({ length: 20 }).notNull().default("active"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // work_items
 // ---------------------------------------------------------------------------
 
@@ -41,6 +52,10 @@ export const workItems = pgTable("work_items", {
   // RUN_SCOPE_AD_HOC for items created outside any orchestrator run (HTTP API).
   // No default: every insert site must supply the value explicitly.
   runScope: varchar("run_scope", { length: 50 }).notNull(),
+  // No default: every insert names its project (migration 014).
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id),
   // Dispatch-guaranteed attempt counter (migration 018, r9f-t1). Incremented at the
   // dispatch seam so the retry bound survives a crashed agent or discarded output —
   // decoupled from task_cost_history billing. See CoreLoop.processTask.
@@ -122,20 +137,31 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
 // vision_documents
 // ---------------------------------------------------------------------------
 
-export const visionDocuments = pgTable("vision_documents", {
-  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
-  version: integer().notNull().default(1),
-  visionText: text("vision_text").notNull(),
-  summary: text().notNull(),
-  inferences: jsonb().notNull().default({}),
-  scopeBoundaries: jsonb("scope_boundaries").notNull().default(sql`'[]'`),
-  confirmedDirections: jsonb("confirmed_directions").notNull().default(sql`'[]'`),
-  userAnswers: jsonb("user_answers").notNull().default(sql`'[]'`),
-  openQuestions: jsonb("open_questions").notNull().default(sql`'[]'`),
-  changeReason: text("change_reason"),
-  projectPath: text("project_path"),
-  createdAt: timestamptz("created_at").notNull().defaultNow(),
-});
+// `version` counts per project; UNIQUE (project_id, version) fails a racing
+// writer closed instead of letting two rows share a version (migration 014).
+export const visionDocuments = pgTable(
+  "vision_documents",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    version: integer().notNull(),
+    visionText: text("vision_text").notNull(),
+    summary: text().notNull(),
+    inferences: jsonb().notNull().default({}),
+    scopeBoundaries: jsonb("scope_boundaries").notNull().default(sql`'[]'`),
+    confirmedDirections: jsonb("confirmed_directions").notNull().default(sql`'[]'`),
+    userAnswers: jsonb("user_answers").notNull().default(sql`'[]'`),
+    openQuestions: jsonb("open_questions").notNull().default(sql`'[]'`),
+    changeReason: text("change_reason"),
+    projectPath: text("project_path"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    projectVersionUnique: unique("vision_documents_project_version_unique").on(t.projectId, t.version),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // failed_approaches
@@ -231,6 +257,8 @@ export const secrets = pgTable("secrets", {
 // version) constraint is the monotonicity guard: two racing amends that compute the
 // same next version fail closed on the constraint instead of reusing a version. The
 // whole body lives in `contract` jsonb, validated by Zod at both read and write.
+// Since migration 014 `project_id` is a projects.id; rows written before it are
+// keyed by a root work item id and carry no FK for that reason.
 
 export const projectContracts = pgTable(
   "project_contracts",

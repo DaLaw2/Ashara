@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { WorkItemId, WorkItemStatus, StoredBlockedReason, DomainEvent } from "@ashara/shared";
-import { createWorkItemId, withSalvagedResult } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, withSalvagedResult } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import { LifecycleRouter } from "./router.js";
@@ -28,10 +28,13 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
   };
 }
 
+const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
+
 function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkItemStatus; title: string }): WorkItem {
   return {
     level: "Task",
     runScope: "test-run",
+    projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
     createdAt: new Date(),
     updatedAt: new Date(),

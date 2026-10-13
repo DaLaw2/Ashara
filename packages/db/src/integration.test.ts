@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { eq, sql } from "drizzle-orm";
+import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
 import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
@@ -10,6 +11,7 @@ import { ConfigRepository } from "./repositories/config.js";
 import { KnowledgeRepository } from "./repositories/knowledge.js";
 import { CostRepository } from "./repositories/cost.js";
 import { FailedApproachRepository } from "./repositories/failed-approach.js";
+import { ProjectRepository } from "./repositories/project.js";
 import {
   devSessions,
   domainEvents,
@@ -42,8 +44,12 @@ const createdFailedApproachTaskIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
-beforeAll(() => {
+// Every work item and vision needs a project (migration 014); this suite owns one.
+let testProjectId: ProjectId;
+
+beforeAll(async () => {
   db = createDb(DATABASE_URL);
+  testProjectId = (await new ProjectRepository(db).create(`db-intg-${randomUUID().slice(0, 8)}`)).id;
 });
 
 afterAll(async () => {
@@ -83,6 +89,7 @@ async function cleanupAll() {
   for (const id of [...createdWorkItemIds].reverse()) {
     await db.execute(sql`DELETE FROM work_items WHERE id = ${id}`);
   }
+  await db.execute(sql`DELETE FROM projects WHERE id = ${testProjectId}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +117,7 @@ describe("WorkItemRepository", () => {
       successCriteria: ["tests pass"],
       blockedReason: null,
       runScope: "test-run",
+      projectId: testProjectId,
     };
     createdWorkItemIds.push(epicId);
 
@@ -146,6 +154,7 @@ describe("DevSessionRepository", () => {
       status: "Pending",
       title: "Task for DevSession test",
       runScope: "test-run",
+      projectId: testProjectId,
     });
     createdWorkItemIds.push(taskId);
   });
@@ -234,11 +243,12 @@ describe("VisionRepository", () => {
       changeReason: "initial test creation",
     };
 
-    const created = await repo.create(doc);
+    const created = await repo.create(testProjectId, doc);
     createdVisionIds.push(created.id);
 
     expect(created.visionText).toBe("Integration test vision text");
-    expect(typeof created.version).toBe("number");
+    expect(created.version).toBe(1);
+    expect(created.projectId).toBe(testProjectId);
 
     const [row] = await db.select().from(visionDocuments).where(eq(visionDocuments.id, created.id));
     expect(row).toBeDefined();
@@ -308,6 +318,7 @@ describe("KnowledgeRepository", () => {
       status: "Pending",
       title: "Knowledge Test Epic",
       runScope: "test-run",
+      projectId: testProjectId,
     });
     createdWorkItemIds.push(epicId);
 
@@ -318,6 +329,7 @@ describe("KnowledgeRepository", () => {
       parentId: epicId,
       title: "Knowledge Test Task",
       runScope: "test-run",
+      projectId: testProjectId,
     });
     createdWorkItemIds.push(taskId);
   });
@@ -401,6 +413,7 @@ describe("FailedApproachRepository", () => {
       status: "Pending",
       title: "FailedApproach Test Epic",
       runScope: "test-run",
+      projectId: testProjectId,
     });
     createdWorkItemIds.push(epicId);
 
@@ -411,6 +424,7 @@ describe("FailedApproachRepository", () => {
       parentId: epicId,
       title: "FailedApproach Test Task",
       runScope: "test-run",
+      projectId: testProjectId,
     });
     createdWorkItemIds.push(taskId);
   });

@@ -15,14 +15,17 @@ import {
   EventStoreRepository,
   DevSessionRepository,
   VisionRepository,
+  ProjectRepository,
   ConfigRepository,
   SecretRepository,
   withPlanningTransaction,
+  createProjectWithVision,
 } from "@ashara/db";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
@@ -30,7 +33,7 @@ import type { AppDeps } from "./routes.js";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
-  return (items, edges, knowledge) =>
+  return (projectId, items, edges, knowledge) =>
     createBulkPlanWithContract(
       {
         withPlanningTransaction: (fn) =>
@@ -38,6 +41,7 @@ function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
             fn({ workItemRepo: adaptWorkItemRepo(w), contractRepo }),
           ),
         runScope: RUN_SCOPE_AD_HOC,
+        projectId,
       },
       items,
       edges,
@@ -55,11 +59,19 @@ let keyDir: string;
 
 const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
+const createdProjectIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
 const createdSecretNames: string[] = [];
 let keyedProviderName: string;
 let keylessProviderName: string;
+
+/** A project owned by this suite; its rows are removed in afterAll. */
+async function newProject(): Promise<ProjectId> {
+  const project = await new ProjectRepository(db).create(`server-intg-${randomUUID().slice(0, 8)}`);
+  createdProjectIds.push(project.id);
+  return project.id;
+}
 
 function authHeaders(): Record<string, string> {
   return {
@@ -115,6 +127,13 @@ beforeAll(async () => {
     eventStore,
     devSessionRepo,
     visionRepo,
+    projectRepo: new ProjectRepository(db),
+    createProject: async (name, vision) => {
+      const created = await createProjectWithVision(db, name, vision);
+      createdProjectIds.push(created.project.id);
+      createdVisionIds.push(created.vision.id);
+      return created;
+    },
     configRepo,
     secretStore,
     runner,
@@ -171,6 +190,10 @@ afterAll(async () => {
   for (const id of [...createdWorkItemIds].reverse()) {
     await pool.query("DELETE FROM work_items WHERE id = $1", [id]);
   }
+  for (const id of createdProjectIds) {
+    await pool.query("DELETE FROM project_contracts WHERE project_id = $1", [id]);
+    await pool.query("DELETE FROM projects WHERE id = $1", [id]);
+  }
   await pool.end();
 });
 
@@ -205,6 +228,7 @@ describe("Work Items", () => {
       taskSpec: null,
       northStar: null,
       runScope: RUN_SCOPE_AD_HOC,
+      projectId: await newProject(),
     });
     createdWorkItemIds.push(createdId);
   });
@@ -252,9 +276,11 @@ describe("Work Items Bulk", () => {
     edges: [{ from: "entry-cli", to: "lang-go", rel: "uses" }],
   };
 
-  test("happy path: creates hierarchy + edges atomically", async () => {
+  test("happy path: creates hierarchy + edges atomically, every item in the project", async () => {
     const nonce = randomUUID().slice(0, 8);
+    const projectId = await newProject();
     const res = await req("POST", "/work-items/bulk", {
+      projectId,
       items: [
         { tempId: "epic-1", level: "Epic", title: `bulk-epic-${nonce}` },
         { tempId: "task-1", level: "Task", title: `bulk-task-1-${nonce}`, parentId: "epic-1" },
@@ -278,6 +304,38 @@ describe("Work Items Bulk", () => {
       [map["task-2"], map["task-1"]],
     );
     expect(deps.rowCount).toBe(1);
+
+    const projects = await pool.query(
+      "SELECT DISTINCT project_id FROM work_items WHERE id = ANY($1::uuid[])",
+      [Object.values(map)],
+    );
+    expect(projects.rows).toEqual([{ project_id: projectId }]);
+  });
+
+  test("a batch without a projectId is refused", async () => {
+    const nonce = randomUUID().slice(0, 8);
+    const res = await req("POST", "/work-items/bulk", {
+      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-noproj-epic-${nonce}` }],
+      edges: [],
+      knowledge: GO_KNOWLEDGE,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("a batch naming an unknown project is refused with nothing persisted", async () => {
+    const nonce = randomUUID().slice(0, 8);
+    const res = await req("POST", "/work-items/bulk", {
+      projectId: randomUUID(),
+      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-ghostproj-epic-${nonce}` }],
+      edges: [],
+      knowledge: GO_KNOWLEDGE,
+    });
+    expect(res.status).toBe(404);
+    const survivors = await pool.query(
+      "SELECT count(*)::int AS n FROM work_items WHERE title LIKE $1",
+      [`bulk-ghostproj-%-${nonce}`],
+    );
+    expect(survivors.rows[0].n).toBe(0);
   });
 
   // The regression that motivated ADR-052. These items name no HTTP endpoint and
@@ -287,7 +345,9 @@ describe("Work Items Bulk", () => {
   // individually green while the end-to-end result was an empty graph.
   test("the posted knowledge graph reaches the persisted contract", async () => {
     const nonce = randomUUID().slice(0, 8);
+    const projectId = await newProject();
     const res = await req("POST", "/work-items/bulk", {
+      projectId,
       items: [
         { tempId: "epic-1", level: "Epic", title: `bulk-kg-epic-${nonce}` },
         { tempId: "task-1", level: "Task", title: `bulk-kg-task-${nonce}`, parentId: "epic-1" },
@@ -302,7 +362,7 @@ describe("Work Items Bulk", () => {
 
     const contract = await pool.query(
       "SELECT contract FROM project_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1",
-      [map["epic-1"]],
+      [projectId],
     );
     expect(contract.rowCount).toBe(1);
     const knowledge = contract.rows[0].contract.knowledge;
@@ -312,6 +372,7 @@ describe("Work Items Bulk", () => {
   test("a batch with no knowledge graph is refused", async () => {
     const nonce = randomUUID().slice(0, 8);
     const res = await req("POST", "/work-items/bulk", {
+      projectId: await newProject(),
       items: [{ tempId: "epic-1", level: "Epic", title: `bulk-nokg-epic-${nonce}` }],
       edges: [],
     });
@@ -327,6 +388,7 @@ describe("Work Items Bulk", () => {
   test("unresolved edge rolls the whole batch back", async () => {
     const nonce = randomUUID().slice(0, 8);
     const res = await req("POST", "/work-items/bulk", {
+      projectId: await newProject(),
       items: [
         { tempId: "epic-1", level: "Epic", title: `bulk-rb-epic-${nonce}` },
         { tempId: "task-1", level: "Task", title: `bulk-rb-task-${nonce}`, parentId: "epic-1" },
@@ -384,20 +446,53 @@ describe("Config", () => {
 // ===========================================================================
 
 describe("Vision", () => {
-  test("POST /vision returns 201", async () => {
-    const res = await req("POST", "/vision", {
-      visionText: "Integration test vision",
-      summary: "Test summary",
-      inferences: { test: true },
-      scopeBoundaries: ["scope-a"],
-      confirmedDirections: [],
-      userAnswers: [],
-      openQuestions: ["open?"],
-    });
+  const tender = (visionText: string) => ({
+    projectName: `intg-${randomUUID().slice(0, 8)}`,
+    visionText,
+    summary: "Test summary",
+    inferences: { test: true },
+    scopeBoundaries: ["scope-a"],
+    confirmedDirections: [],
+    userAnswers: [],
+    openQuestions: ["open?"],
+  });
+  const CreatedSchema = z.object({
+    projectId: z.string().uuid(),
+    vision: z.object({ id: z.string(), projectId: z.string(), version: z.number(), visionText: z.string() }),
+  });
+
+  test("POST /vision creates a project and its vision v1, read back by project id", async () => {
+    const res = await req("POST", "/vision", tender("Integration test vision"));
     expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(typeof body.id).toBe("string");
-    createdVisionIds.push(body.id);
+    const body = CreatedSchema.parse(await res.json());
+    expect(body.vision.projectId).toBe(body.projectId);
+    expect(body.vision.version).toBe(1);
+
+    const read = await req("GET", `/projects/${body.projectId}/vision`);
+    expect(read.status).toBe(200);
+    const vision = CreatedSchema.shape.vision.parse(await read.json());
+    expect(vision.id).toBe(body.vision.id);
+    expect(vision.visionText).toBe("Integration test vision");
+  });
+
+  test("each tender is its own project at version 1", async () => {
+    const a = CreatedSchema.parse(await (await req("POST", "/vision", tender("vision A"))).json());
+    const b = CreatedSchema.parse(await (await req("POST", "/vision", tender("vision B"))).json());
+    expect(a.projectId).not.toBe(b.projectId);
+    expect([a.vision.version, b.vision.version]).toEqual([1, 1]);
+    const readA = CreatedSchema.shape.vision.parse(await (await req("GET", `/projects/${a.projectId}/vision`)).json());
+    expect(readA.visionText).toBe("vision A");
+  });
+
+  test("POST /vision without a projectName is refused", async () => {
+    const { projectName: _omitted, ...withoutName } = tender("nameless");
+    const res = await req("POST", "/vision", withoutName);
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /projects/:id/vision is 404 for a project with no vision and 400 for a non-UUID", async () => {
+    expect((await req("GET", `/projects/${randomUUID()}/vision`)).status).toBe(404);
+    expect((await req("GET", "/projects/not-a-uuid/vision")).status).toBe(400);
   });
 });
 

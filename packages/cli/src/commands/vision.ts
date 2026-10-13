@@ -200,7 +200,11 @@ export async function decomposeVision(
 
 // --- Post work items to server ---
 
-async function postWorkItems(client: AsharaClient, decomposition: DecompositionResult): Promise<void> {
+async function postWorkItems(
+    client: AsharaClient,
+    projectId: string,
+    decomposition: DecompositionResult,
+): Promise<void> {
     // Build the whole hierarchy (epic -> tasks) plus its
     // dependency edges as ONE transactional request (ADR-029). Items are ordered
     // parents-before-children and reference each other by decomposition ID
@@ -232,7 +236,7 @@ async function postWorkItems(client: AsharaClient, decomposition: DecompositionR
     // The graph travels with the plan that produced it (ADR-052). Before this it
     // never left the CLI: the server derived a contract from task prose alone and
     // wrote an empty knowledge graph, so nothing downstream could name the stack.
-    await client.createWorkItemsBulk({ items, edges, knowledge: decomposition.knowledge });
+    await client.createWorkItemsBulk({ projectId, items, edges, knowledge: decomposition.knowledge });
 }
 
 // --- Main entry ---
@@ -310,8 +314,10 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
         }
     }
 
-    // 5. Persist vision + alignment to server
+    // 5. Persist vision + alignment to server. This creates the project every
+    // later request is keyed by, so a failure here stops the run.
     console.log("[ashara] Persisting vision document...");
+    let projectId: string;
     try {
         const confirmedDirections = alignment.inferences.map(inf => ({
             dimension: inf.category,
@@ -336,7 +342,8 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
             inferencesJson[inf.category] = inf.inference;
         }
 
-        await client.createVision({
+        projectId = await client.createVision({
+            projectName: visionText.length > 80 ? visionText.slice(0, 80) : visionText,
             visionText,
             summary: alignment.visionSummary,
             inferences: inferencesJson,
@@ -345,10 +352,11 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
             userAnswers,
             openQuestions,
         });
-        console.log("[ashara] Vision document persisted.");
+        console.log(`[ashara] Project ${projectId} created; vision document persisted.`);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[ashara] Failed to persist vision (non-fatal): ${message}`);
+        console.error(`[ashara] Failed to persist vision: ${message}`);
+        return 1;
     }
 
     // 6. Decomposition (with user answers)
@@ -361,7 +369,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     // 8. Post work items to server
     console.log("[ashara] Posting work items to server...");
     try {
-        await postWorkItems(client, decomposition);
+        await postWorkItems(client, projectId, decomposition);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[ashara] Failed to post work items: ${message}`);

@@ -1,14 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { WorkItemId, WorkItemStatus, ProjectKnowledge, StoredBlockedReason } from "@ashara/shared";
+import type { ProjectId, WorkItemStatus, ProjectKnowledge, StoredBlockedReason } from "@ashara/shared";
 import {
   createDomainEvent,
   parseWorkItemStatus,
-  parseWorkItemLevel,
-  parseStoredTaskSpec,
-  parseStoredBlockedReason,
-  parseStoredSuccessCriteria,
-  parseRunScope,
+  parseProjectId,
   ProjectKnowledgeSchema,
   InvalidStatusTransition,
 } from "@ashara/shared";
@@ -17,8 +13,10 @@ import {
   EventStoreRepository,
   DevSessionRepository,
   VisionRepository,
+  ProjectRepository,
   ConfigRepository,
 } from "@ashara/db";
+import type { CreatedProject, VisionInput } from "@ashara/db";
 import {
   startWorkItem,
   completeWorkItem,
@@ -33,6 +31,7 @@ import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
 import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
 import { providerApiKeySecretName } from "@ashara/security";
+import { rowToWorkItem } from "./work-item-adapter.js";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables
@@ -43,6 +42,9 @@ export interface AppDeps {
   readonly eventStore: EventStoreRepository;
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
+  readonly projectRepo: ProjectRepository;
+  /** A tender: the project row and its vision v1 in one transaction (K3). */
+  readonly createProject: (name: string, vision: VisionInput) => Promise<CreatedProject>;
   readonly configRepo: ConfigRepository;
   /** Presence only: no route ever reads or returns a secret value. */
   readonly secretStore: { has(name: string): Promise<boolean> };
@@ -53,6 +55,7 @@ export interface AppDeps {
    * (createBulkPlanWithContract); the handler stays thin.
    */
   readonly createBulkPlan: (
+    projectId: ProjectId,
     items: readonly BulkPlanItem[],
     edges: readonly BulkPlanEdge[],
     knowledge: ProjectKnowledge,
@@ -91,6 +94,7 @@ const BulkEdgeSchema = z.object({
 // identity-element fail-open this change removes, one layer further out — an old
 // client posting without it must be rejected, not silently planned stackless.
 const BulkCreateSchema = z.object({
+  projectId: z.string().uuid(),
   items: z.array(BulkItemSchema).min(1),
   edges: z.array(BulkEdgeSchema).default([]),
   knowledge: ProjectKnowledgeSchema,
@@ -104,6 +108,7 @@ const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
 // ---------------------------------------------------------------------------
 
 const CreateVisionSchema = z.object({
+  projectName: z.string().min(1),
   vision_text: z.string().min(1).optional(),
   visionText: z.string().min(1).optional(),
   summary: z.string().min(1),
@@ -139,13 +144,17 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
 
   app.post("/work-items/bulk", async (c) => {
-    const { eventStore, createBulkPlan } = c.get("deps");
+    const { eventStore, createBulkPlan, projectRepo } = c.get("deps");
 
     const parsed = BulkCreateSchema.safeParse(await c.req.json());
     if (!parsed.success) {
       return c.json({ error: "invalid bulk request", issues: parsed.error.issues }, 400);
     }
     const { items, edges, knowledge } = parsed.data;
+    const projectId = parseProjectId(parsed.data.projectId);
+    if (!(await projectRepo.get(projectId))) {
+      return c.json({ error: `project not found: ${projectId}` }, 404);
+    }
 
     // The whole hierarchy AND its derived ProjectContract commit or roll back as
     // one unit (mig9-t5). Reference resolution and the contract write happen inside
@@ -153,7 +162,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     // closed: nothing is left persisted.
     let result: BulkPlanResult;
     try {
-      result = await createBulkPlan(items, edges, knowledge);
+      result = await createBulkPlan(projectId, items, edges, knowledge);
     } catch (e) {
       if (e instanceof BulkReferenceError) {
         return c.json({ error: e.message }, 400);
@@ -205,23 +214,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const row = await workItemRepo.findById(id);
     if (!row) return c.json({ error: "work item not found" }, 404);
 
-    const item = {
-      id: row.id as WorkItemId,
-      level: parseWorkItemLevel(row.level),
-      status: parseWorkItemStatus(row.status),
-      parentId: row.parentId as WorkItemId | undefined,
-      title: row.title,
-      description: row.description ?? undefined,
-      taskSpec: parseStoredTaskSpec(row.taskSpec),
-      northStar: row.northStar ?? undefined,
-      successCriteria: parseStoredSuccessCriteria(row.successCriteria),
-      blockedReason: parseStoredBlockedReason(row.blockedReason),
-      runScope: parseRunScope(row.runScope),
-      dispatchCount: row.dispatchCount,
-      createdAt: row.createdAt ?? new Date(),
-      updatedAt: row.updatedAt ?? new Date(),
-      events: [] as import("@ashara/shared").DomainEvent[],
-    };
+    const item = rowToWorkItem(row);
 
     const previousStatus = item.status;
 
@@ -347,7 +340,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
 
   app.post("/vision", async (c) => {
-    const { visionRepo } = c.get("deps");
+    const { createProject } = c.get("deps");
 
     const parsed = CreateVisionSchema.safeParse(await c.req.json());
     if (!parsed.success) {
@@ -359,7 +352,9 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       return c.json({ error: "vision_text/visionText is required" }, 400);
     }
 
-    const created = await visionRepo.create({
+    // A tender creates its project and vision v1 together (K3); the caller keys
+    // every later request for this project by the returned projectId.
+    const created = await createProject(body.projectName, {
       visionText,
       summary: body.summary,
       inferences: body.inferences ?? {},
@@ -374,13 +369,18 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const { runner } = c.get("deps");
     runner.wake();
 
-    return c.json(created, 201);
+    return c.json({ projectId: created.project.id, vision: created.vision }, 201);
   });
 
-  app.get("/vision", async (c) => {
+  app.get("/projects/:projectId/vision", async (c) => {
     const { visionRepo } = c.get("deps");
-    const latest = await visionRepo.getLatest();
-    return c.json(latest);
+    const parsed = z.string().uuid().safeParse(c.req.param("projectId"));
+    if (!parsed.success) {
+      return c.json({ error: "projectId must be a UUID", issues: parsed.error.issues }, 400);
+    }
+    const current = await visionRepo.getCurrent(parseProjectId(parsed.data));
+    if (!current) return c.json({ error: `no vision for project ${parsed.data}` }, 404);
+    return c.json(current);
   });
 
   // -----------------------------------------------------------------------

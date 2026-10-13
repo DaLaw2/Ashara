@@ -39,6 +39,8 @@ export interface BulkWorkItem {
 }
 
 export interface BulkCreateRequest {
+    /** The project returned by createVision; the server rejects a batch without it. */
+    readonly projectId: string;
     readonly items: BulkWorkItem[];
     readonly edges: Array<{ readonly from: string; readonly to: string }>;
     /**
@@ -79,6 +81,7 @@ export interface SessionInfo {
 }
 
 export interface CreateVisionRequest {
+    readonly projectName: string;
     readonly visionText: string;
     readonly summary: string;
     // open-by-design: user/alignment-supplied inference results, shape varies per vision
@@ -114,6 +117,10 @@ const WorkItemSchema = z.object({
     blockedReason: z.any(),
     createdAt: z.string(),
     updatedAt: z.string(),
+});
+
+const CreateVisionResponseSchema = z.object({
+    projectId: z.string().uuid(),
 });
 
 const BulkCreateResponseSchema = z.object({
@@ -168,8 +175,10 @@ export class AsharaClient {
         return z.array(SessionInfoSchema).parse(await this.parseJson(response));
     }
 
-    async createVision(req: CreateVisionRequest): Promise<void> {
-        await this.post("/vision", req);
+    /** Creates the project and its vision v1; returns the project id. */
+    async createVision(req: CreateVisionRequest): Promise<string> {
+        const response = await this.post("/vision", req);
+        return CreateVisionResponseSchema.parse(await this.parseJson(response)).projectId;
     }
 
     // -- internal helpers --

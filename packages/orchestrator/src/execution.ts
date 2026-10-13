@@ -236,7 +236,7 @@ export async function processTask(
     await deps.eventStore.publish(event);
   }
 
-  const targetProjectPath = await resolveTargetProjectPath(deps.visionRepo, deps.config.workdirBase);
+  const targetProjectPath = await resolveTargetProjectPath(deps.visionRepo, workItem.projectId, deps.config.workdirBase);
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
     eventStore: deps.eventStore,

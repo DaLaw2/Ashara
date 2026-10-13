@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { WorkItemId } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { FailedApproachRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
@@ -8,20 +8,25 @@ import { assertValidTargetProjectPath } from "./acl/development-acl.js";
 // Narrow structural view of the vision persistence needed to mint, validate,
 // and persist a target project path. VisionRepository satisfies this; the
 // segregated interface keeps the minting/persist logic unit-testable without a
-// live database (deterministic, no shared getLatest() cross-test races).
+// live database.
 export interface ProjectPathStore {
-  getLatest(): Promise<{ id: string } | null>;
+  getCurrent(projectId: ProjectId): Promise<{ id: string } | null>;
   getProjectPath(visionId: string): Promise<string | null>;
   setProjectPath(visionId: string, path: string): Promise<void>;
 }
 
+/** Reads the path off the project's current vision (migration 014), never a global latest. */
 export async function resolveTargetProjectPath(
   visionRepo: ProjectPathStore,
+  projectId: ProjectId,
   workdirBase: string,
 ): Promise<string | null> {
   try {
-    const vision = await visionRepo.getLatest();
-    if (!vision) return null;
+    const vision = await visionRepo.getCurrent(projectId);
+    if (!vision) {
+      console.warn(`[project ${projectId}] no vision recorded; target project path unresolved`);
+      return null;
+    }
 
     const dbPath = await visionRepo.getProjectPath(vision.id);
     if (dbPath) {
@@ -39,26 +44,24 @@ export async function resolveTargetProjectPath(
     // closes the gap where the path was only stored after the first COMPLETED
     // task: a workdirBase change across a restart before any completion would
     // otherwise re-mint a divergent path. no-overwrite semantics preserved.
-    await persistProjectPath(visionRepo, defaultPath);
+    await persistProjectPath(visionRepo, vision.id, defaultPath);
     return defaultPath;
   } catch (e) {
-    console.warn("Failed to resolve target project path:", e);
+    console.warn(`[project ${projectId}] failed to resolve target project path:`, e);
     return null;
   }
 }
 
 async function persistProjectPath(
   visionRepo: ProjectPathStore,
+  visionId: string,
   targetProjectPath: string,
 ): Promise<void> {
   try {
-    const vision = await visionRepo.getLatest();
-    if (!vision) return;
-
-    const existing = await visionRepo.getProjectPath(vision.id);
+    const existing = await visionRepo.getProjectPath(visionId);
     if (!existing) {
-      await visionRepo.setProjectPath(vision.id, targetProjectPath);
-      console.log(`Stored target project path for vision ${vision.id}: ${targetProjectPath}`);
+      await visionRepo.setProjectPath(visionId, targetProjectPath);
+      console.log(`Stored target project path for vision ${visionId}: ${targetProjectPath}`);
     }
   } catch (e) {
     console.warn("Failed to persist target project path:", e);
