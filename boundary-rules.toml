@@ -51,3 +51,7 @@ allow = ["db", "llm-gateway"]
 [execution-infra]
 # ADR-075 Execution Infrastructure: cells on the container substrate. Imports no other context.
 allow = ["shared"]
+
+[workplace]
+# ADR-075 Workplace: the attempt loop in Z0 (each model turn through llm-gateway) with every tool on a cell.
+allow = ["shared", "llm-gateway", "execution-infra"]

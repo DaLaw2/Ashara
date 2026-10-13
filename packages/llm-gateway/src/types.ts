@@ -53,6 +53,22 @@ export interface GatewayConfig {
   budget?: BudgetConfig;
   /** Static per-site routing playbooks, keyed by enabled-provider combo. */
   routingProfiles?: RoutingProfiles;
+  /**
+   * Thinking mode per call site (config/models.toml `[thinking]`). Absent is
+   * thinking off at every site: the decided default (ADR-074 D13), not a guess.
+   */
+  thinking?: ThinkingPolicy;
+}
+
+/** Whether a reasoning model thinks before it answers (ADR-074 D13: per role tier, default off). */
+export const THINKING_MODES = ["off", "on"] as const;
+
+export type ThinkingMode = (typeof THINKING_MODES)[number];
+
+/** The thinking mode of each call site; a site with no entry uses `default`. */
+export interface ThinkingPolicy {
+  readonly default: ThinkingMode;
+  readonly sites: Readonly<Partial<Record<KnownLLMSite, ThinkingMode>>>;
 }
 
 /**
@@ -148,6 +164,11 @@ export interface TokenUsage {
 export interface ExtractedUsage {
   readonly usage: TokenUsage;
   readonly reported: ReportedTokens;
+  /**
+   * Output tokens the provider reported as reasoning, a part of the output
+   * count and of `maxTokens`; `null` when the provider reported no such count.
+   */
+  readonly reasoningTokens: number | null;
 }
 
 export interface ReportedTokens {
@@ -233,9 +254,28 @@ export interface LlmCallContext {
 
 export type LlmCallOperation = "generateObject" | "generateText:structured-fallback" | "generateText:turn";
 
+/**
+ * `truncated` is the error kind of a structured call that stopped at
+ * `maxTokens` (finish reason `length`) without a valid result.
+ */
 export type LlmCallOutcome =
   | { readonly kind: "ok" }
   | { readonly kind: "error"; readonly errorKind: string };
+
+/**
+ * Why the provider stopped, as the AI SDK reports it; `no-response` when the
+ * request threw before any response arrived. A value the SDK does not document
+ * is kept as `unrecognized:<value>` rather than folded into a known one.
+ */
+export type LlmFinishReason =
+  | "stop"
+  | "length"
+  | "content-filter"
+  | "tool-calls"
+  | "error"
+  | "other"
+  | "no-response"
+  | `unrecognized:${string}`;
 
 /** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
 export interface LlmProviderCall {
@@ -250,6 +290,7 @@ export interface LlmProviderCall {
   readonly model: ModelConfig;
   readonly operation: LlmCallOperation;
   readonly usage: ExtractedUsage | null;
+  readonly finishReason: LlmFinishReason;
   readonly outcome: LlmCallOutcome;
 }
 

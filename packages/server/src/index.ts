@@ -61,6 +61,7 @@ import {
   buildGateway,
   buildGatewayConfig,
   loadRoutingProfilesFromToml,
+  loadThinkingPolicyFromToml,
   resolveModelsConfigPath,
   toModelConfig,
   LLMGateway,
@@ -198,6 +199,7 @@ async function main(): Promise<void> {
     const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
     const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
     const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
+    gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
     gwConfig.budget = {
       maxCostTotal: config.coreLoop.budgetLimitUsd,
       maxCostPerProvider: gwConfig.budget?.maxCostPerProvider,

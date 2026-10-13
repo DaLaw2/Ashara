@@ -19,13 +19,19 @@ export type NewLlmCall = {
   readonly outputTokens: number | null;
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
+  /** Output tokens the provider reported as reasoning; `null` when it reported no such count. */
+  readonly reasoningTokens: number | null;
   readonly costUsd: number | null;
+  /** Why the provider stopped (`no-response` when the request threw before one arrived). */
+  readonly finishReason: string;
   /** The instant the call was made; its rates priced `costUsd`. */
   readonly createdAt: Date;
 } & LlmCallOutcomeColumns;
 
-type LlmCallRecord = NewLlmCall & {
+/** A stored row. `finishReason` is `null` only on a row written before migration 030 recorded it. */
+type LlmCallRecord = Omit<NewLlmCall, "finishReason"> & {
   readonly id: string;
+  readonly finishReason: string | null;
 };
 
 type LlmCallRow = typeof llmCalls.$inferSelect;
@@ -48,13 +54,15 @@ function toRecord(row: LlmCallRow): LlmCallRecord {
     outputTokens: row.outputTokens,
     cacheReadTokens: row.cacheReadTokens,
     cacheWriteTokens: row.cacheWriteTokens,
+    reasoningTokens: row.reasoningTokens,
     costUsd: row.costUsd,
+    finishReason: row.finishReason,
     createdAt: row.createdAt,
     ...outcome,
   };
 }
 
-/** The Finance cost ledger's per-call rows (architecture K10, migration 015). */
+/** The Finance cost ledger's per-call rows (architecture K10, migrations 015 and 030). */
 export class LlmCallRepository {
   constructor(private readonly db: DbHandle) {}
 
@@ -71,7 +79,9 @@ export class LlmCallRepository {
         outputTokens: call.outputTokens,
         cacheReadTokens: call.cacheReadTokens,
         cacheWriteTokens: call.cacheWriteTokens,
+        reasoningTokens: call.reasoningTokens,
         costUsd: call.costUsd,
+        finishReason: call.finishReason,
         outcome: call.outcome,
         errorKind: call.errorKind,
         createdAt: call.createdAt,

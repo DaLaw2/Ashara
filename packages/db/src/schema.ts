@@ -369,6 +369,9 @@ export const llmCalls = pgTable(
     outcome: text().notNull(),
     errorKind: text("error_kind"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
+    // Migration 030: NULL only on rows written before it; a CHECK refuses NULL on every new row.
+    finishReason: text("finish_reason"),
+    reasoningTokens: integer("reasoning_tokens"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),

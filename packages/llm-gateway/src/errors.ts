@@ -72,6 +72,22 @@ export class NoProviderAvailableError extends GatewayError {
   }
 }
 
+/** A pinned model names a provider this gateway was not configured with. */
+export class UnknownProvider extends GatewayError {
+  readonly provider: string;
+  readonly configuredProviders: readonly string[];
+
+  constructor(provider: string, configuredProviders: readonly string[]) {
+    super(
+      `Provider "${provider}" is not configured in this gateway ` +
+        `(configured: ${configuredProviders.length > 0 ? configuredProviders.join(", ") : "none"})`,
+    );
+    this.name = "UnknownProvider";
+    this.provider = provider;
+    this.configuredProviders = configuredProviders;
+  }
+}
+
 export interface RoutingProfileUnresolvedContext {
   /** Enabled-provider combo whose profile was consulted, e.g. "anthropic+deepseek". */
   readonly combo: string;
@@ -123,6 +139,65 @@ export class SchemaValidationError extends GatewayError {
     super(`Schema validation failed: ${errors.join("; ")}`, options);
     this.name = "SchemaValidationError";
     this.errors = errors;
+  }
+}
+
+/**
+ * A structured request stopped at its `maxTokens` (finish reason `length`)
+ * without a valid result. A failed attempt to the reliability ladder, like any
+ * schema failure; its own class so the cause is not read as a malformed answer.
+ */
+export class StructuredOutputTruncated extends SchemaValidationError {
+  readonly provider: string;
+  readonly model: string;
+  readonly maxTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly reasoningTokens: number | null;
+  readonly textLength: number;
+
+  constructor(
+    context: {
+      readonly provider: string;
+      readonly model: string;
+      readonly maxTokens: number | null;
+      readonly outputTokens: number | null;
+      readonly reasoningTokens: number | null;
+      readonly text: string;
+    },
+    options?: ErrorOptions,
+  ) {
+    super(
+      [
+        `output truncated: ${context.provider}/${context.model} stopped at maxTokens=${context.maxTokens ?? "provider default"} ` +
+          `(finish reason length; output tokens ${context.outputTokens ?? "unreported"}, of which reasoning ` +
+          `${context.reasoningTokens ?? "unreported"}; text length ${context.text.length})`,
+        `Raw LLM response: ${context.text.slice(0, 500)}`,
+      ],
+      options,
+    );
+    this.name = "StructuredOutputTruncated";
+    this.provider = context.provider;
+    this.model = context.model;
+    this.maxTokens = context.maxTokens;
+    this.outputTokens = context.outputTokens;
+    this.reasoningTokens = context.reasoningTokens;
+    this.textLength = context.text.length;
+  }
+}
+
+/** Thrown by `loadThinkingPolicyFromToml` when a present `[thinking]` table fails validation. */
+export class InvalidThinkingPolicy extends GatewayError {
+  readonly configPath: string;
+  readonly issues: readonly string[];
+
+  constructor(configPath: string, issues: readonly string[]) {
+    super(
+      `Invalid [thinking] table in ${configPath}: ${issues.join("; ")}. ` +
+        `Expected default = "off" | "on" and an optional [thinking.sites] table keyed by known LLM sites.`,
+    );
+    this.name = "InvalidThinkingPolicy";
+    this.configPath = configPath;
+    this.issues = issues;
   }
 }
 

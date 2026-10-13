@@ -8,6 +8,7 @@ import {
   NoProviderAvailableError,
   ProviderMissingBaseUrl,
   RoutingProfileUnresolved,
+  UnknownProvider,
 } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
@@ -137,6 +138,15 @@ export class ProviderRegistry {
 
     // Fallback: default provider first, then cheapest
     return this.resolveDefault(enabledProviders, capability);
+  }
+
+  /** The adapter type of a configured provider, by name. */
+  providerTypeOf(providerName: string): ProviderType {
+    const provider = this.config.providers.find((p) => p.name === providerName);
+    if (!provider) {
+      throw new UnknownProvider(providerName, this.config.providers.map((p) => p.name));
+    }
+    return provider.providerType;
   }
 
   resolveFallback(

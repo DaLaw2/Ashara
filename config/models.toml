@@ -89,3 +89,24 @@
 "stack-derivation" = "deepseek-flash"
 # Sonnet 5.5 replaces Sonnet 4.6 (Decided: owner 2026-10-13, ADR-077).
 "escalation" = "claude-sonnet-5-5"
+
+# =============================================================================
+# Thinking mode per call site (ADR-074 D13: per role tier, default off, turned
+# on only after an A/B). Read by the gateway and sent as a provider option to a
+# provider_type that takes one: today only "deepseek" (thinking.type). Every
+# other provider type gets no option, whatever this table says.
+#
+# Why off: deepseek-flash thinks by default, and its reasoning tokens count
+# against maxTokens. In transcript 3 (2026-10-13) 19 of 23 structured requests
+# spent all 4,096 tokens reasoning and returned no text.
+#
+# `default` is required when this table is present; [thinking.sites] keys are
+# the routing sites ("escalation" covers every escalated ladder attempt). A call
+# with no routing site (environment-spec) uses `default`. With no [thinking]
+# table at all, thinking is off at every site.
+# =============================================================================
+
+[thinking]
+default = "off"
+
+[thinking.sites]

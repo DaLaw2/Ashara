@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
-import { GatewayError, SchemaValidationError } from "./errors.js";
+import { GatewayError, SchemaValidationError, StructuredOutputTruncated } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import type { KnownLLMSite } from "./types.js";
 
@@ -36,6 +36,9 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 // ---------------------------------------------------------------------------
 
 const RAW_EXCERPT_LENGTH = 400;
+
+/** See `StructuredLadderOptions.attempts`. */
+const DEFAULT_ATTEMPTS_PER_TIER = 3;
 
 const CAPABILITY_ORDER: readonly CapabilityLevel[] = ["Light", "Medium", "Strong", "Frontier"];
 
@@ -286,10 +289,11 @@ export interface StructuredProvider {
 
 export interface StructuredLadderOptions {
   /**
-   * Validated attempts PER capability tier. Default 1 — the underlying
-   * generateStructured already runs its own same-model text-fallback retries;
-   * the ladder's added value here is the ESCALATION tier (ADR-030 G5 enum
-   * drift), not redundant same-model repetition.
+   * Validated attempts PER capability tier. Default 3. One attempt is one
+   * provider request: the gateway sends no retry of its own (no text fallback
+   * after generateObject, no re-ask loop, SDK `maxRetries: 0`), so these are
+   * the only same-model retries, each reported through `onAttempt`. 3 keeps
+   * the per-tier request count the gateway's own 1 + 2 retries used to give.
    */
   readonly attempts?: number;
   /**
@@ -322,7 +326,7 @@ export function withStructuredLadder(
   provider: StructuredProvider,
   options: StructuredLadderOptions,
 ): StructuredProvider {
-  const attempts = options.attempts ?? 1;
+  const attempts = options.attempts ?? DEFAULT_ATTEMPTS_PER_TIER;
   return {
     async generateStructured<T>(request: StructuredProviderRequest<T>): Promise<StructuredProviderResult<T>> {
       const { validate, ...providerRequest } = request;
@@ -377,6 +381,7 @@ export function withStructuredLadder(
                   ok: false,
                   errors: err.errors,
                   rawExcerpt: excerpt(err.errors.join("; ")),
+                  model: err instanceof StructuredOutputTruncated ? err.model : undefined,
                 };
               }
               throw err;

@@ -7,6 +7,7 @@ import {
 } from "@ashara/shared";
 import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
+import { loadThinkingPolicyFromToml } from "./thinking.js";
 import { InvalidGatewayCatalog } from "./errors.js";
 import { PROVIDER_TYPES } from "./types.js";
 import type {
@@ -270,6 +271,7 @@ function buildConfigFromCatalog(source: string, catalog: GatewayCatalog): Gatewa
       maxCostPerProvider: budget.perProvider,
     },
     routingProfiles,
+    thinking: loadThinkingPolicyFromToml(resolveModelsConfigPath()),
   };
 }
 

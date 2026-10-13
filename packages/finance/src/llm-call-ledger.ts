@@ -52,7 +52,9 @@ function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
     outputTokens: call.usage?.reported.outputTokens ?? null,
     cacheReadTokens: call.usage?.reported.cacheReadTokens ?? null,
     cacheWriteTokens: call.usage?.reported.cacheWriteTokens ?? null,
+    reasoningTokens: call.usage?.reasoningTokens ?? null,
     costUsd: costOf(call),
+    finishReason: call.finishReason,
     createdAt: call.requestedAt,
     ...outcome,
   };

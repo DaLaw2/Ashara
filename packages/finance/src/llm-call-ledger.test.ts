@@ -4,8 +4,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { buildGateway } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { buildGateway, withStructuredLadder } from "@ashara/llm-gateway";
+import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
 
@@ -53,6 +53,7 @@ function gateway(
   providerName: "anthropic" | "deepseek" | "openai",
   modelConfig: ModelConfig,
   clock: () => Date = () => PEAK,
+  thinking?: Parameters<typeof buildGateway>[0]["config"]["thinking"],
 ): LLMGateway {
   const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
@@ -66,6 +67,7 @@ function gateway(
       },
     ],
     defaultProvider: providerName,
+    thinking,
   };
   return buildGateway({
     config,
@@ -113,6 +115,8 @@ const LlmCallRowSchema = z.object({
   createdAt: z.coerce.date(),
   outcome: z.string(),
   errorKind: z.string().nullable(),
+  finishReason: z.string().nullable(),
+  reasoningTokens: z.number().int().nullable(),
 });
 
 async function rowsOfThisProject(): Promise<z.infer<typeof LlmCallRowSchema>[]> {
@@ -120,7 +124,8 @@ async function rowsOfThisProject(): Promise<z.infer<typeof LlmCallRowSchema>[]> 
     SELECT project_id AS "projectId", task_id AS "taskId", call_site AS "callSite", provider, model,
            input_tokens AS "inputTokens", output_tokens AS "outputTokens",
            cache_read_tokens AS "cacheReadTokens", cache_write_tokens AS "cacheWriteTokens",
-           cost_usd::float8 AS "costUsd", created_at AS "createdAt", outcome, error_kind AS "errorKind"
+           cost_usd::float8 AS "costUsd", created_at AS "createdAt", outcome, error_kind AS "errorKind",
+           finish_reason AS "finishReason", reasoning_tokens AS "reasoningTokens"
     FROM llm_calls WHERE project_id = ${projectId}
     ORDER BY created_at, id`);
   return z.array(LlmCallRowSchema).parse(result.rows);
@@ -346,15 +351,14 @@ describe("one llm_calls row per provider call", () => {
     ).rejects.toThrow(/stub provider unavailable/);
 
     const rows = await rowsOfThisProject();
-    // generateObject, then the same-model text fallback: two provider requests.
-    expect(mock.doGenerateCalls.length).toBe(2);
-    expect(rows).toHaveLength(mock.doGenerateCalls.length);
-    for (const row of rows) {
-      expect(row.outcome).toBe("error");
-      expect(row.errorKind).toBe("Error");
-      expect(row.inputTokens).toBeNull();
-      expect(row.costUsd).toBeNull();
-    }
+    // One provider request: no text fallback after generateObject, no SDK retry.
+    expect(mock.doGenerateCalls).toHaveLength(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("error");
+    expect(rows[0]?.errorKind).toBe("Error");
+    expect(rows[0]?.finishReason).toBe("no-response");
+    expect(rows[0]?.inputTokens).toBeNull();
+    expect(rows[0]?.costUsd).toBeNull();
   });
 
   test("unreported usage is written as NULL tokens and NULL cost, never 0", async () => {
@@ -522,5 +526,117 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
     await expect(call).rejects.toThrow(/execute function/);
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await rowsOfThisProject()).toHaveLength(0);
+  });
+});
+
+describe("one ladder attempt is one recorded, charged provider request", () => {
+  function result(
+    text: string,
+    finishReason: "stop" | "length",
+    output: number,
+    raw: Record<string, number | Record<string, number>>,
+  ) {
+    return {
+      content: text === "" ? [] : [{ type: "text" as const, text }],
+      usage: {
+        inputTokens: { total: 1000, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: output, text: undefined, reasoning: undefined },
+        raw,
+      },
+      finishReason: { unified: finishReason, raw: finishReason },
+      warnings: [],
+    };
+  }
+  const DEEPSEEK_RAW = { prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1000 };
+
+  test("a deepseek-type request carries thinking disabled by default and enabled where the policy says; others carry none", async () => {
+    const ask = (gw: LLMGateway, callSite: "decomposition" | "liaison-intake") =>
+      gw.forCall({ projectId, taskId: null, callSite }).generateStructured({
+        capability: "Strong",
+        prompt: "greet",
+        schema: GreetingSchema,
+        site: callSite,
+      });
+    const ok = result('{"greeting":"hi"}', "stop", 10, DEEPSEEK_RAW);
+    const deepseek = model({ id: "ds-thinking", cacheWriteCostPer1M: null });
+
+    let mock = stubModel({ doGenerate: ok });
+    await ask(gateway("deepseek", deepseek), "decomposition");
+    expect(mock.doGenerateCalls[0]?.providerOptions).toEqual({ deepseek: { thinking: { type: "disabled" } } });
+
+    mock = stubModel({ doGenerate: ok });
+    const policy = { default: "off" as const, sites: { "liaison-intake": "on" as const } };
+    await ask(gateway("deepseek", deepseek, () => PEAK, policy), "liaison-intake");
+    expect(mock.doGenerateCalls[0]?.providerOptions).toEqual({ deepseek: { thinking: { type: "enabled" } } });
+
+    mock = stubModel({ doGenerate: ok });
+    await ask(gateway("anthropic", model({}), () => PEAK, policy), "liaison-intake");
+    expect(mock.doGenerateCalls[0]?.providerOptions).toBeUndefined();
+  });
+
+  test("empty text at finish reason length is a 'truncated' error row with its reasoning tokens, never ok", async () => {
+    await clearRows();
+    const raw = { ...DEEPSEEK_RAW, completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: 4096 } };
+    stubModel({ doGenerate: result("", "length", 4096, raw) });
+
+    await expect(
+      gateway("deepseek", model({ id: "ds-truncated", cacheWriteCostPer1M: null }))
+        .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
+    ).rejects.toMatchObject({ name: "StructuredOutputTruncated", reasoningTokens: 4096, textLength: 0 });
+
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      outcome: "error",
+      errorKind: "truncated",
+      finishReason: "length",
+      outputTokens: 4096,
+      reasoningTokens: 4096,
+    });
+  });
+
+  test("a failed generateObject is charged to the budget ledger exactly as llm_calls records it", async () => {
+    await clearRows();
+    const anthropicRaw = { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    stubModel({ doGenerate: result('{"greeting": "cut off', "length", 4096, anthropicRaw) });
+    const gw = gateway("anthropic", model({ id: "sonnet-like" }));
+
+    await expect(
+      gw.forCall({ projectId, taskId: null, callSite: "decomposition" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
+    ).rejects.toMatchObject({ name: "StructuredOutputTruncated" });
+
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ outcome: "error", errorKind: "truncated", finishReason: "length" });
+    const recorded = rows.reduce((sum, row) => sum + (row.costUsd ?? Number.NaN), 0);
+    expect(recorded).toBeCloseTo((1000 * 3 + 4096 * 15) / 1_000_000, 6);
+    expect(gw.getCostSummary().totalCost).toBeCloseTo(recorded, 6);
+  });
+
+  test("every ladder attempt sends exactly one provider request and writes one row", async () => {
+    await clearRows();
+    const mock = stubModel({ doGenerate: result("not json", "stop", 5, DEEPSEEK_RAW) });
+    const attempts: LadderAttemptEvent[] = [];
+    // Frontier serves both the Strong base tier and the Frontier escalation tier.
+    const gw = gateway("deepseek", model({ id: "ds-ladder", capabilityLevel: "Frontier", cacheWriteCostPer1M: null }));
+    const laddered = withStructuredLadder(gw.forCall({ projectId, taskId: null, callSite: "decomposition" }), {
+      site: "decomposition",
+      attempts: 2,
+      onAttempt: (event) => attempts.push(event),
+    });
+
+    await expect(
+      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
+    ).rejects.toThrow(/Structured output exhausted/);
+
+    expect(attempts).toHaveLength(4);
+    expect(mock.doGenerateCalls).toHaveLength(attempts.length);
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(attempts.length);
+    expect(rows.every((row) => row.errorKind === "InvalidJson" && row.finishReason === "stop")).toBe(true);
+    const recorded = rows.reduce((sum, row) => sum + (row.costUsd ?? Number.NaN), 0);
+    expect(gw.getCostSummary().totalCost).toBeCloseTo(recorded, 9);
   });
 });
