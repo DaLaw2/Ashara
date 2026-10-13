@@ -3,7 +3,6 @@ export type { ContextualLlm, ResolvedModel } from "./gateway.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export {
   buildGatewayConfig,
-  loadGatewayConfigFromApi,
   loadGatewayCatalogFromFile,
   toModelConfig,
 } from "./config.js";
@@ -15,7 +14,6 @@ export { withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
 export { LlmCallNotRecorded, NoLLMProvidersConfigured, PreCallRefusal } from "./errors.js";
 export type {
-  GatewayConfig,
   LlmCallRecorder,
   LlmProviderCall,
   ModelConfig,

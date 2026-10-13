@@ -33,9 +33,6 @@ allow = ["shared"]
 [engagement]
 allow = ["shared", "llm-gateway"]
 
-[cli]
-allow = ["shared", "llm-gateway", "engagement"]
-
 [server]
 allow = ["*"]
 

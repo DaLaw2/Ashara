@@ -1,7 +1,7 @@
 export type { ProjectId, WorkItemId } from "./ids.js";
 export { parseProjectId, createWorkItemId, createSessionId } from "./ids.js";
 
-export type { WorkItemLevel, WorkItemStatus, CapabilityLevel, SessionPhase } from "./enums.js";
+export type { WorkItemLevel, WorkItemStatus, CapabilityLevel } from "./enums.js";
 export {
   TERMINAL_SESSION_PHASES,
   parseCapabilityLevel,
@@ -12,7 +12,6 @@ export {
 export {
   loadProviderKeys,
   loadBudgetEnv,
-  loadServerEnv,
   loadAgentRunnerEnv,
 
   loadModelsConfigPathEnvOverride,

@@ -97,16 +97,17 @@ class VisionUnreadable extends Error {
 
 const ScopeBoundariesSchema = z.array(z.string().min(1));
 
-// Intake (migration 019 onward) writes assumptions as Inferred records; the CLI
-// path writes a map of direction category to inference. Both are read; anything
+// Intake (migration 019 onward) writes assumptions as Inferred records; rows the
+// deleted CLI path (POST /vision) wrote hold a map of direction category to
+// inference and are still in the database. Both are read; anything
 // else stops the attempt rather than planning without the assumptions.
 const InferencesSchema = z.union([
   z.array(z.object({ statement: z.string().min(1), status: z.string().min(1) })),
   z.record(z.string(), z.string()),
 ]);
 
-// The client's answers to alignment questions (the CLI path writes them; the
-// column defaults to an empty array).
+// The client's answers to alignment questions (rows the deleted CLI path wrote
+// hold them; the column defaults to an empty array).
 const UserAnswersSchema = z.array(z.object({ question: z.string().min(1), answer: z.string().min(1) }));
 
 function parseField<T>(schema: z.ZodType<T>, value: unknown, project: ProjectAwaitingPlan, field: string): T {

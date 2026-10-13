@@ -84,7 +84,7 @@ function assertRoutingProfileModelsPresent(config: GatewayConfig): void {
 export interface BuildGatewayOptions {
   /**
    * Already-resolved gateway config. Acquisition (TOML/env for the server,
-   * API-then-TOML fallback chain for the CLI) stays caller-side — this
+   * the catalog file for the agent-runner) stays caller-side — this
    * factory only enforces the refuse-to-start invariant on the result.
    */
   readonly config: GatewayConfig;

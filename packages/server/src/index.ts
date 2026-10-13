@@ -18,7 +18,6 @@ import {
   RunStateRepository,
   SecretRepository,
   LlmCallRepository,
-  createProjectWithVision,
   ClientMessageRepository,
   ClientSessionRepository,
   ClientRepository,
@@ -456,13 +455,9 @@ async function main(): Promise<void> {
     devSessionRepo,
     visionRepo,
     projectRepo,
-    createProject: (clientId, name, vision) => createProjectWithVision(db, clientId, name, vision),
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
-    configRepo,
-    secretStore,
-    runner,
   };
 
   // The web client (ADR-076) authenticates with a session cookie, never the API token.

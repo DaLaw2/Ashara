@@ -15,7 +15,7 @@ import { TenderIntake } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
 import { LlmCallLedger } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
-import type { GatewayConfig, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import type { ProjectId } from "@ashara/shared";
 import { createIntakeStore } from "./intake-store.js";
 
@@ -132,7 +132,7 @@ async function callSitesOf(projectId: ProjectId): Promise<string[]> {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  const config: GatewayConfig = {
+  const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
       {
         name: "deepseek",

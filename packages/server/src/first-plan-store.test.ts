@@ -8,16 +8,16 @@ import {
   ClientRepository,
   createDb,
   createProjectWithTender,
-  createProjectWithVision,
   DEFAULT_DATABASE_URL,
   LlmCallRepository,
   ProjectRepository,
+  VisionRepository,
 } from "@ashara/db";
 import { PlanReports, TenderIntake } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { LlmCallLedger } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
-import type { GatewayConfig, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { FirstPlanner } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
 import type { ProjectId } from "@ashara/shared";
@@ -144,15 +144,16 @@ function reports(): PlanReports {
 }
 
 async function projectWithVision(userAnswers: unknown[] = []): Promise<ProjectId> {
-  const created = await createProjectWithVision(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, {
+  const project = await new ProjectRepository(db).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
+  ourProjects.add(project.id);
+  await new VisionRepository(db).create(project.id, {
     visionText: "Booking page for my two pottery studios.",
     summary: "A booking page for two pottery studios.",
     scopeBoundaries: ["In: class booking", "Out: payments"],
     inferences: [{ statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" }],
     userAnswers,
   });
-  ourProjects.add(created.project.id);
-  return created.project.id;
+  return project.id;
 }
 
 const WorkItemRowSchema = z.object({ id: z.string(), level: z.string(), parentId: z.string().nullable() });
@@ -200,7 +201,7 @@ async function outboundOf(projectId: ProjectId) {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  const config: GatewayConfig = {
+  const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
       {
         name: "deepseek",

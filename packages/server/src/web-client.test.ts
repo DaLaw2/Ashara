@@ -18,10 +18,8 @@ import {
   ClientMessageRepository,
   ClientRepository,
   ClientSessionRepository,
-  ConfigRepository,
   createDb,
   createProjectWithTender,
-  createProjectWithVision,
   DEFAULT_DATABASE_URL,
   DevSessionRepository,
   EventStoreRepository,
@@ -78,13 +76,9 @@ function appDeps(): AppDeps {
     devSessionRepo: new DevSessionRepository(db),
     visionRepo: new VisionRepository(db),
     projectRepo: new ProjectRepository(db),
-    createProject: (clientId, name, vision) => createProjectWithVision(db, clientId, name, vision),
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
-    configRepo: new ConfigRepository(db),
-    secretStore,
-    runner: { wake: () => {} },
   };
 }
 
@@ -367,8 +361,8 @@ describe("client session", () => {
 
   test("the operator API still requires the bearer token, and a session cookie does not open it", async () => {
     const token = await loggedIn();
-    expect((await app.request("/config/models", { headers: withSession(token) })).status).toBe(401);
-    const bearer = await app.request("/config/models", { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+    expect((await app.request("/work-items", { headers: withSession(token) })).status).toBe(401);
+    const bearer = await app.request("/work-items", { headers: { Authorization: `Bearer ${API_TOKEN}` } });
     expect(bearer.status).toBe(200);
   });
 

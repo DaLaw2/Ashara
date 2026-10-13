@@ -1,9 +1,6 @@
 // Server integration tests — boot Hono app, hit every endpoint, verify format
 
 import { randomUUID } from "crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -16,14 +13,10 @@ import {
   DevSessionRepository,
   VisionRepository,
   ProjectRepository,
-  ConfigRepository,
-  SecretRepository,
-  createProjectWithVision,
   ClientMessageRepository,
   ClientRepository,
   createProjectWithTender,
 } from "@ashara/db";
-import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
@@ -37,17 +30,11 @@ const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;
 let db: Database;
 let pool: pg.Pool;
 let app: Hono;
-let keyDir: string;
 
 const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
 const createdProjectIds: string[] = [];
-const createdProviderNames: string[] = [];
-const createdModelIds: string[] = [];
-const createdSecretNames: string[] = [];
 let suiteClientId: string;
-let keyedProviderName: string;
-let keylessProviderName: string;
 
 /** A project owned by this suite; its rows are removed in afterAll. */
 async function newProject(): Promise<ProjectId> {
@@ -95,16 +82,7 @@ beforeAll(async () => {
   const eventStore = new EventStoreRepository(db);
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
-  const configRepo = new ConfigRepository(db);
-  const runner: AppDeps["runner"] = { wake: () => {} };
   suiteClientId = (await new ClientRepository(db).create(`server-intg-${randomUUID()}`)).id;
-
-  // A throwaway master key in a temp file: never the owner's key, never the
-  // owner's secrets. Only names derived from this suite's unique providers are written.
-  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-server-intg-key-"));
-  const keyFile = path.join(keyDir, "secret.key");
-  fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
-  const secretStore = new SecretStore(new SecretRepository(db), loadMasterKey(keyFile));
 
   const deps: AppDeps = {
     workItemRepo,
@@ -112,12 +90,6 @@ beforeAll(async () => {
     devSessionRepo,
     visionRepo,
     projectRepo: new ProjectRepository(db),
-    createProject: async (clientId, name, vision) => {
-      const created = await createProjectWithVision(db, clientId, name, vision);
-      createdProjectIds.push(created.project.id);
-      createdVisionIds.push(created.vision.id);
-      return created;
-    },
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: async (clientId, projectName, body) => {
@@ -125,49 +97,15 @@ beforeAll(async () => {
       createdProjectIds.push(created.project.id);
       return created;
     },
-    configRepo,
-    secretStore,
-    runner,
   };
 
   const honoApp = new Hono();
   honoApp.use("*", bearerAuth(API_TOKEN));
   honoApp.route("/", createRoutes(deps));
   app = honoApp;
-
-  const testProviderName = `intg-provider-${randomUUID().slice(0, 8)}`;
-  keyedProviderName = testProviderName;
-  keylessProviderName = `intg-provider-${randomUUID().slice(0, 8)}`;
-  for (const name of [keyedProviderName, keylessProviderName]) {
-    createdProviderNames.push(name);
-    await pool.query(
-      "INSERT INTO provider_configs (name, provider_type, base_url) VALUES ($1, $2, $3)",
-      [name, "openai-compatible", "http://localhost:11434/v1"],
-    );
-  }
-  const keyedSecret = providerApiKeySecretName(keyedProviderName);
-  createdSecretNames.push(keyedSecret);
-  await secretStore.put(keyedSecret, "throwaway-intg-value");
-
-  const testModelId = `intg-model-${randomUUID().slice(0, 8)}`;
-  createdModelIds.push(testModelId);
-  await pool.query(
-    "INSERT INTO model_configs (model_id, provider_name, api_model_id, capability, input_cost_per_1m, output_cost_per_1m, max_context_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-    [testModelId, testProviderName, "test-model-v1", "Strong", 1.0, 5.0, 128000],
-  );
 });
 
 afterAll(async () => {
-  for (const name of createdSecretNames) {
-    await pool.query("DELETE FROM secrets WHERE name = $1", [name]);
-  }
-  fs.rmSync(keyDir, { recursive: true, force: true });
-  for (const modelId of createdModelIds) {
-    await pool.query("DELETE FROM model_configs WHERE model_id = $1", [modelId]);
-  }
-  for (const name of createdProviderNames) {
-    await pool.query("DELETE FROM provider_configs WHERE name = $1", [name]);
-  }
   for (const id of createdVisionIds) {
     await pool.query("DELETE FROM vision_documents WHERE id = $1", [id]);
   }
@@ -255,94 +193,24 @@ describe("Work Items", () => {
 });
 
 // ===========================================================================
-// 4. Config
-// ===========================================================================
-
-describe("Config", () => {
-  test("GET /config/providers reports hasKey from the secret store and never a key", async () => {
-    const res = await req("GET", "/config/providers");
-    expect(res.status).toBe(200);
-    const text = await res.text();
-    expect(text).not.toContain("throwaway-intg-value");
-    const rows = z.array(z.record(z.string(), z.unknown())).parse(JSON.parse(text));
-    for (const row of rows) {
-      expect(row).not.toHaveProperty("apiKey");
-      expect(row).not.toHaveProperty("api_key");
-      expect(typeof row["hasKey"]).toBe("boolean");
-    }
-    expect(rows.find((r) => r["name"] === keyedProviderName)).toMatchObject({
-      providerType: "openai-compatible",
-      hasKey: true,
-    });
-    expect(rows.find((r) => r["name"] === keylessProviderName)).toMatchObject({ hasKey: false });
-    expect(rows[0]?.["provider_type"]).toBeUndefined();
-  });
-
-  test("GET /config/models returns camelCase array", async () => {
-    const res = await req("GET", "/config/models");
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(Array.isArray(body)).toBe(true);
-    expect(body.length).toBeGreaterThanOrEqual(1);
-    expect(body[0]).toHaveProperty("modelId");
-    expect(body[0].model_id).toBeUndefined();
-  });
-});
-
-// ===========================================================================
 // 5. Vision
 // ===========================================================================
 
 describe("Vision", () => {
-  const tender = (visionText: string) => ({
-    clientId: suiteClientId,
-    projectName: `intg-${randomUUID().slice(0, 8)}`,
-    visionText,
-    summary: "Test summary",
-    inferences: { test: true },
-    scopeBoundaries: ["scope-a"],
-    confirmedDirections: [],
-    userAnswers: [],
-    openQuestions: ["open?"],
-  });
-  const CreatedSchema = z.object({
-    projectId: z.string().uuid(),
-    vision: z.object({ id: z.string(), projectId: z.string(), version: z.number(), visionText: z.string() }),
-  });
+  const VisionSchema = z.object({ id: z.string(), projectId: z.string(), version: z.number(), visionText: z.string() });
 
-  test("POST /vision creates a project and its vision v1, read back by project id", async () => {
-    const res = await req("POST", "/vision", tender("Integration test vision"));
-    expect(res.status).toBe(201);
-    const body = CreatedSchema.parse(await res.json());
-    expect(body.vision.projectId).toBe(body.projectId);
-    expect(body.vision.version).toBe(1);
+  test("GET /projects/:id/vision returns the project's current vision", async () => {
+    const projectId = await newProject();
+    const created = await new VisionRepository(db).create(projectId, {
+      visionText: "Integration test vision",
+      summary: "Test summary",
+    });
+    createdVisionIds.push(created.id);
 
-    const read = await req("GET", `/projects/${body.projectId}/vision`);
+    const read = await req("GET", `/projects/${projectId}/vision`);
     expect(read.status).toBe(200);
-    const vision = CreatedSchema.shape.vision.parse(await read.json());
-    expect(vision.id).toBe(body.vision.id);
-    expect(vision.visionText).toBe("Integration test vision");
-  });
-
-  test("each tender is its own project at version 1", async () => {
-    const a = CreatedSchema.parse(await (await req("POST", "/vision", tender("vision A"))).json());
-    const b = CreatedSchema.parse(await (await req("POST", "/vision", tender("vision B"))).json());
-    expect(a.projectId).not.toBe(b.projectId);
-    expect([a.vision.version, b.vision.version]).toEqual([1, 1]);
-    const readA = CreatedSchema.shape.vision.parse(await (await req("GET", `/projects/${a.projectId}/vision`)).json());
-    expect(readA.visionText).toBe("vision A");
-  });
-
-  test("POST /vision without a projectName is refused", async () => {
-    const { projectName: _omitted, ...withoutName } = tender("nameless");
-    const res = await req("POST", "/vision", withoutName);
-    expect(res.status).toBe(400);
-  });
-
-  test("POST /vision names its client: none is 400, an unknown one is 404", async () => {
-    const { clientId: _omitted, ...withoutClient } = tender("clientless");
-    expect((await req("POST", "/vision", withoutClient)).status).toBe(400);
-    expect((await req("POST", "/vision", { ...tender("unknown client"), clientId: randomUUID() })).status).toBe(404);
+    const vision = VisionSchema.parse(await read.json());
+    expect(vision).toMatchObject({ id: created.id, projectId, version: 1, visionText: "Integration test vision" });
   });
 
   test("GET /projects/:id/vision is 404 for a project with no vision and 400 for a non-UUID", async () => {

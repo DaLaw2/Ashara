@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { buildGateway } from "@ashara/llm-gateway";
-import type { GatewayConfig, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
 
@@ -54,7 +54,7 @@ function gateway(
   modelConfig: ModelConfig,
   clock: () => Date = () => PEAK,
 ): LLMGateway {
-  const config: GatewayConfig = {
+  const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
       {
         name: providerName,
@@ -302,7 +302,7 @@ describe("one llm_calls row per provider call", () => {
 
     await expect(
       gateway("anthropic", model({}))
-        .forCall({ projectId, taskId: null, callSite: "alignment" })
+        .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
         .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
     ).rejects.toThrow(/stub provider unavailable/);
 
@@ -323,7 +323,7 @@ describe("one llm_calls row per provider call", () => {
     stubModel({ doGenerate: textResult('{"greeting":"hi"}', { input: undefined, output: undefined }) });
 
     await gateway("anthropic", model({}))
-      .forCall({ projectId, taskId: null, callSite: "alignment" })
+      .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
       .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
 
     const [row] = await rowsOfThisProject();
@@ -341,7 +341,7 @@ describe("refusals", () => {
     const mock = stubModel({ doGenerate: textResult('{"greeting":"hi"}', { input: 1, output: 1 }) });
 
     const call = gateway("anthropic", model({ id: "free-model", inputCostPer1M: 0, outputCostPer1M: 0 }))
-      .forCall({ projectId, taskId: null, callSite: "alignment" })
+      .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
       .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
 
     await expect(call).rejects.toBeInstanceOf(UnpricedModel);
@@ -357,7 +357,7 @@ describe("refusals", () => {
     await expect(
       recorded.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
     ).rejects.toThrow(/without a call context/);
-    const contextWithoutProject = { taskId: null, callSite: "alignment" } as const;
+    const contextWithoutProject = { taskId: null, callSite: "liaison-intake" } as const;
     // @ts-expect-error LlmCallContext requires projectId: a call with no project does not typecheck
     recorded.forCall(contextWithoutProject);
     expect(mock.doGenerateCalls).toHaveLength(0);

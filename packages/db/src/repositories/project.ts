@@ -1,8 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { projects, visionDocuments } from "../schema.js";
-import { VisionRepository, type VisionInput } from "./vision.js";
+import type { DbHandle } from "../connection.js";
+import { projects } from "../schema.js";
 
 export interface ProjectRecord {
   readonly id: ProjectId;
@@ -48,26 +47,4 @@ export class ProjectRepository {
       .orderBy(desc(projects.createdAt), desc(projects.id));
     return rows.map(toRecord);
   }
-}
-
-export interface CreatedProject {
-  readonly project: ProjectRecord;
-  readonly vision: typeof visionDocuments.$inferSelect;
-}
-
-/**
- * A tender: the project row and its vision version 1, committed together so no
- * project exists without its vision and no vision without its project.
- */
-export async function createProjectWithVision(
-  db: Database,
-  clientId: string,
-  name: string,
-  vision: VisionInput,
-): Promise<CreatedProject> {
-  return db.transaction(async (tx) => {
-    const project = await new ProjectRepository(tx).create(name, clientId);
-    const created = await new VisionRepository(tx).create(project.id, vision);
-    return { project, vision: created };
-  });
 }

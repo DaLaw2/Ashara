@@ -78,24 +78,6 @@ export function loadBudgetEnv(): BudgetEnv {
 }
 
 // ---------------------------------------------------------------------------
-// Server connection — used by CLI and other clients
-// ---------------------------------------------------------------------------
-
-export interface ServerEnv {
-    readonly serverUrl: string;
-    readonly apiToken?: string;
-    readonly httpTimeoutMs: number;
-}
-
-export function loadServerEnv(): ServerEnv {
-    return {
-        serverUrl: process.env["ASHARA_SERVER_URL"] ?? "http://localhost:3000",
-        apiToken: nonEmpty(process.env["ASHARA_API_TOKEN"]),
-        httpTimeoutMs: parseIntOr(process.env["ASHARA_HTTP_TIMEOUT_MS"], 30_000),
-    };
-}
-
-// ---------------------------------------------------------------------------
 // Execution context — env-var handoff from server spawn to agent-runner
 // subprocess (SEAM-2). Validated at both ends: fail-closed, no path defaults.
 // ---------------------------------------------------------------------------
@@ -146,7 +128,7 @@ export function loadAgentRunnerEnv(): AgentRunnerEnv {
  * Optional operator override for the models.toml config path
  * (`ASHARA_MODELS_CONFIG`). Read directly rather than through
  * `loadAgentRunnerEnv()`: pricing/routing-profile resolution runs in the
- * server and CLI processes too, not just inside the agent-runner subprocess,
+ * server process too, not just inside the agent-runner subprocess,
  * where the required `ExecutionContextSchema` fields are never set.
  */
 export function loadModelsConfigPathEnvOverride(): string | undefined {
@@ -160,12 +142,6 @@ export function loadModelsConfigPathEnvOverride(): string | undefined {
 function nonEmpty(value: string | undefined): string | undefined {
     if (!value || value.trim() === "") return undefined;
     return value;
-}
-
-function parseIntOr(value: string | undefined, fallback: number): number {
-    if (!value) return fallback;
-    const parsed = parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parseFloatOr(value: string | undefined, fallback: number): number {

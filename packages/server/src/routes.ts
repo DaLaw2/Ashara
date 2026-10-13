@@ -8,9 +8,7 @@ import {
   DevSessionRepository,
   VisionRepository,
   ProjectRepository,
-  ConfigRepository,
 } from "@ashara/db";
-import type { CreatedProject, VisionInput } from "@ashara/db";
 import {
   startWorkItem,
   completeWorkItem,
@@ -21,11 +19,8 @@ import {
   abandonWorkItem,
   takeEvents,
 } from "@ashara/planning";
-import type { ContinuousRunner } from "@ashara/orchestrator";
-import { providerApiKeySecretName } from "@ashara/security";
 import {
   listClientMessages,
-  notJson,
   postClientMessage,
   readJsonBody,
   submitTender,
@@ -43,43 +38,11 @@ export interface AppDeps extends ClientChannelDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly projectRepo: ProjectRepository;
-  /** A tender: the project row, owned by `clientId`, and its vision v1 in one transaction (K3). */
-  readonly createProject: (clientId: string, name: string, vision: VisionInput) => Promise<CreatedProject>;
-  readonly configRepo: ConfigRepository;
-  /** Presence only: no route ever reads or returns a secret value. */
-  readonly secretStore: { has(name: string): Promise<boolean> };
-  readonly runner: Pick<ContinuousRunner, "wake">;
 }
 
 type AppEnv = { Variables: { deps: AppDeps } };
 
 const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
-
-// ---------------------------------------------------------------------------
-// Request-body schemas for the remaining mutating routes (SEAM-6 / Move 7):
-// every route that reads `body.*` validates the shape before touching it.
-// ---------------------------------------------------------------------------
-
-// `clientId` is required: every project belongs to a client (migration 018), and
-// the operator creating one on a client's behalf names which.
-const CreateVisionSchema = z.object({
-  clientId: z.uuid(),
-  projectName: z.string().min(1),
-  vision_text: z.string().min(1).optional(),
-  visionText: z.string().min(1).optional(),
-  summary: z.string().min(1),
-  inferences: z.record(z.string(), z.unknown()).optional(),
-  scope_boundaries: z.array(z.unknown()).optional(),
-  scopeBoundaries: z.array(z.unknown()).optional(),
-  confirmed_directions: z.array(z.unknown()).optional(),
-  confirmedDirections: z.array(z.unknown()).optional(),
-  user_answers: z.array(z.unknown()).optional(),
-  userAnswers: z.array(z.unknown()).optional(),
-  open_questions: z.array(z.unknown()).optional(),
-  openQuestions: z.array(z.unknown()).optional(),
-  change_reason: z.string().optional(),
-  changeReason: z.string().optional(),
-});
 
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -254,44 +217,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // Vision
   // -----------------------------------------------------------------------
 
-  app.post("/vision", async (c) => {
-    const { createProject, clientRepo } = c.get("deps");
-
-    const json = await readJsonBody(() => c.req.json());
-    if (!json.ok) return c.json(notJson("create vision", json).body, 400);
-    const parsed = CreateVisionSchema.safeParse(json.value);
-    if (!parsed.success) {
-      return c.json({ error: "invalid vision", issues: parsed.error.issues }, 400);
-    }
-    const body = parsed.data;
-    const visionText = body.vision_text ?? body.visionText;
-    if (!visionText) {
-      return c.json({ error: "vision_text/visionText is required" }, 400);
-    }
-    if ((await clientRepo.get(body.clientId)) === null) {
-      return c.json({ error: `client not found: ${body.clientId}` }, 404);
-    }
-
-    // A tender creates its project and vision v1 together (K3); the caller keys
-    // every later request for this project by the returned projectId.
-    const created = await createProject(body.clientId, body.projectName, {
-      visionText,
-      summary: body.summary,
-      inferences: body.inferences ?? {},
-      scopeBoundaries: body.scope_boundaries ?? body.scopeBoundaries ?? [],
-      confirmedDirections:
-        body.confirmed_directions ?? body.confirmedDirections ?? [],
-      userAnswers: body.user_answers ?? body.userAnswers ?? [],
-      openQuestions: body.open_questions ?? body.openQuestions ?? [],
-      changeReason: body.change_reason ?? body.changeReason ?? null,
-    });
-
-    const { runner } = c.get("deps");
-    runner.wake();
-
-    return c.json({ projectId: created.project.id, vision: created.vision }, 201);
-  });
-
   app.get("/projects/:projectId/vision", async (c) => {
     const { visionRepo } = c.get("deps");
     const parsed = z.string().uuid().safeParse(c.req.param("projectId"));
@@ -326,32 +251,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   app.get("/projects/:projectId/messages", async (c) => {
     const result = await listClientMessages(c.get("deps"), operator, c.req.param("projectId"), c.req.query());
     return c.json(result.body, result.status);
-  });
-
-  // -----------------------------------------------------------------------
-  // Config
-  // -----------------------------------------------------------------------
-
-  app.get("/config/models", async (c) => {
-    const { configRepo } = c.get("deps");
-    const models = await configRepo.listModelConfigs();
-    return c.json(models);
-  });
-
-  // Reports whether a key is stored, never the key (ADR-075 C2).
-  app.get("/config/providers", async (c) => {
-    const { configRepo, secretStore } = c.get("deps");
-    const rows = await configRepo.listProviderConfigs();
-
-    const configs = await Promise.all(
-      rows.map(async (row) => ({
-        name: row.name,
-        providerType: row.providerType,
-        baseUrl: row.baseUrl ?? null,
-        hasKey: await secretStore.has(providerApiKeySecretName(row.name)),
-      })),
-    );
-    return c.json(configs);
   });
 
   return app;

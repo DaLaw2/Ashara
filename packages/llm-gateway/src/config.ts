@@ -76,7 +76,7 @@ export function buildGatewayConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Gateway catalog — one schema, one converter, two transports (file, HTTP)
+// Gateway catalog — one schema, one converter, one transport (file)
 // ---------------------------------------------------------------------------
 
 const RateSchema = z.number().nonnegative();
@@ -183,8 +183,7 @@ export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
 
 /**
  * Shared converter: turns a validated {@link GatewayCatalog} into a
- * {@link GatewayConfig}. Both transports (file and HTTP) call this after
- * schema validation. API keys and budget come from the process's own
+ * {@link GatewayConfig}, called after schema validation. API keys and budget come from the process's own
  * environment, routing profiles from the local TOML.
  */
 function buildConfigFromCatalog(source: string, catalog: GatewayCatalog): GatewayConfig {
@@ -289,40 +288,4 @@ export async function loadGatewayCatalogFromFile(
   }
 
   return buildConfigFromCatalog(filePath, validateCatalog(filePath, json));
-}
-
-/**
- * HTTP transport: fetch models and providers from the server API,
- * validate the combined payload with the same {@link GatewayCatalogSchema},
- * and convert to {@link GatewayConfig}. Used by the CLI
- * (`packages/cli/src/commands/vision.ts`).
- *
- * A malformed response now throws {@link InvalidGatewayCatalog} with the
- * server URL and Zod issue details instead of the previous unvalidated
- * `as` cast that would produce a confusing downstream crash.
- */
-export async function loadGatewayConfigFromApi(
-  serverUrl: string,
-  apiToken: string,
-): Promise<GatewayConfig> {
-  const headers = { Authorization: `Bearer ${apiToken}` };
-
-  const [modelsResp, providersResp] = await Promise.all([
-    fetch(`${serverUrl}/config/models`, { headers }),
-    fetch(`${serverUrl}/config/providers`, { headers }),
-  ]);
-
-  if (!modelsResp.ok) {
-    throw new InvalidGatewayCatalog(serverUrl, [`/config/models returned ${modelsResp.status}`]);
-  }
-  if (!providersResp.ok) {
-    throw new InvalidGatewayCatalog(serverUrl, [`/config/providers returned ${providersResp.status}`]);
-  }
-
-  const rawCatalog = {
-    models: await modelsResp.json(),
-    providers: await providersResp.json(),
-  };
-
-  return buildConfigFromCatalog(serverUrl, validateCatalog(serverUrl, rawCatalog));
 }

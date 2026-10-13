@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
 import { ClientRepository } from "./client.js";
-import { ProjectRepository, createProjectWithVision } from "./project.js";
+import { ProjectRepository } from "./project.js";
 import { VisionRepository } from "./vision.js";
 
 // Against the shared dev database: every row here is created by this suite under
@@ -66,8 +66,10 @@ describe("Project Record vision versions", () => {
   let b: ProjectId;
 
   beforeAll(async () => {
-    a = (await createProjectWithVision(db, clientId, `project-test-${NONCE}-a`, vision("vision A1"))).project.id;
-    b = (await createProjectWithVision(db, clientId, `project-test-${NONCE}-b`, vision("vision B1"))).project.id;
+    a = (await projects.create(`project-test-${NONCE}-a`, clientId)).id;
+    b = (await projects.create(`project-test-${NONCE}-b`, clientId)).id;
+    await visions.create(a, vision("vision A1"));
+    await visions.create(b, vision("vision B1"));
   });
 
   test("each project's first vision is version 1", async () => {
@@ -92,16 +94,6 @@ describe("Project Record vision versions", () => {
     const empty = await projects.create(`project-test-${NONCE}-empty`, clientId);
     expect(await visions.getCurrent(empty.id)).toBeNull();
     expect((await projects.get(empty.id))?.status).toBe("active");
-  });
-
-  test("a tender whose vision insert fails leaves no project row", async () => {
-    const name = `project-test-${NONCE}-rollback`;
-    await expect(
-      // Postgres rejects a NUL byte in text, so the vision insert fails after the project insert.
-      createProjectWithVision(db, clientId, name, { visionText: "x\u0000y", summary: "s" }),
-    ).rejects.toThrow();
-    const rows = await db.execute(sql`SELECT 1 FROM projects WHERE name = ${name}`);
-    expect(rows.rows).toHaveLength(0);
   });
 });
 

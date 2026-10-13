@@ -21,7 +21,7 @@
 # "escalation" is not a call site of its own: the reliability ladder stamps
 # it on any attempt run at an ESCALATED capability tier, regardless of which
 # site the base attempt used, so every escalated retry (decomposition,
-# stack-derivation, alignment, ...) can be sent to one
+# stack-derivation, liaison-intake, ...) can be sent to one
 # deliberately-chosen reliable model.
 #
 # A site's value is either a bare model id (applied regardless of the
@@ -66,9 +66,8 @@
 # $2/$10). Frontier stays on Pro (no-op).
 "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
 "decomposition" = "deepseek-flash"
-"alignment" = "deepseek-flash"
 # The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
-# the CLI's alignment call, kept on the same model.
+# the deleted CLI alignment call.
 "liaison-intake" = "deepseek-flash"
 # Stack derivation (ADR-046) is a once-per-project label extraction -- cheap,
 # and keeping it on DeepSeek preserves
