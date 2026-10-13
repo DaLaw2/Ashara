@@ -43,6 +43,7 @@ export async function executeTask(
 
   const taskDescriptor: TaskDescriptor = {
     id: task.id,
+    projectId: task.projectId,
     title: task.title,
     parentId: task.parentId,
     taskSpec: task.taskSpec,

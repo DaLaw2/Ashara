@@ -82,7 +82,16 @@ export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
         );
     }
 
-    return createLLMFromGateway(buildGateway({ config, checkedSources }));
+    // Client-side calls: no database here, and alignment runs before the project
+    // exists. The CLI is deleted when the web client is in use (ADR-076).
+    return createLLMFromGateway(buildGateway({
+        config,
+        checkedSources,
+        recording: {
+            kind: "unrecorded",
+            reason: "client-side CLI process with no database; alignment runs before the project row exists",
+        },
+    }));
 }
 
 // --- CLI input ---

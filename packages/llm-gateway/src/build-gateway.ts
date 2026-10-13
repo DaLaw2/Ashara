@@ -4,7 +4,7 @@ import { NoLLMProvidersConfigured, RoutingProfileIncomplete } from "./errors.js"
 import { resolveModelsConfigPath } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import { KNOWN_LLM_SITES } from "./types.js";
-import type { GatewayConfig, LLMCallRecord } from "./types.js";
+import type { CallRecording, GatewayConfig } from "./types.js";
 
 const HOW_TO_FIX =
   "Store an API key for at least one provider listed in provider_configs: " +
@@ -72,7 +72,11 @@ export interface BuildGatewayOptions {
    * root) must pass their own instance.
    */
   readonly ledger?: BudgetLedger;
-  readonly logSink?: (record: LLMCallRecord) => void;
+  /**
+   * Whether every structured call writes a ledger row. Required: a process
+   * that does not record says why, at its own construction site.
+   */
+  readonly recording: CallRecording;
 }
 
 /**
@@ -93,5 +97,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
   }
 
   assertRoutingProfileComplete(config);
-  return new LLMGateway(config, options.ledger, options.logSink);
+  return new LLMGateway(config, options.recording, options.ledger);
 }

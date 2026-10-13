@@ -1,5 +1,5 @@
 export { LLMGateway, extractUsage } from "./gateway.js";
-export type { ResolvedModel } from "./gateway.js";
+export type { ContextualLlm, ResolvedModel } from "./gateway.js";
 export { BudgetLedger } from "./budget-ledger.js";
 export {
   buildGatewayConfig,
@@ -12,10 +12,11 @@ export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { buildGateway } from "./build-gateway.js";
 export { withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
-export { NoLLMProvidersConfigured } from "./errors.js";
+export { NoLLMProvidersConfigured, PreCallRefusal } from "./errors.js";
 export type {
   GatewayConfig,
-  LLMCallRecord,
+  LlmCallRecorder,
+  LlmProviderCall,
   ModelConfig,
   TokenUsage,
   CostBreakdown,

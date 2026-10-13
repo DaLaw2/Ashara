@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { CallWarning } from "ai";
 import { TemperatureNotHonored } from "./errors.js";
-import { assertTemperatureHonored, extractUsage } from "./gateway.js";
+import { extractUsage, temperatureViolation } from "./gateway.js";
 
 const TEMPERATURE_UNSUPPORTED: CallWarning = {
   type: "unsupported",
@@ -9,7 +9,7 @@ const TEMPERATURE_UNSUPPORTED: CallWarning = {
   details: "temperature is not supported by claude-sonnet-5 and will be ignored",
 };
 
-function check(overrides: Partial<Parameters<typeof assertTemperatureHonored>[0]> = {}) {
+function check(overrides: Partial<Parameters<typeof temperatureViolation>[0]> = {}) {
   return {
     requestedTemperature: 0,
     warnings: undefined,
@@ -21,35 +21,30 @@ function check(overrides: Partial<Parameters<typeof assertTemperatureHonored>[0]
   };
 }
 
-describe("assertTemperatureHonored", () => {
-  test("throws with self-diagnosing context when the provider reports it dropped the temperature", () => {
-    let thrown: unknown;
-    try {
-      assertTemperatureHonored(check({ warnings: [TEMPERATURE_UNSUPPORTED] }));
-    } catch (err) {
-      thrown = err;
-    }
+describe("temperatureViolation", () => {
+  test("returns a self-diagnosing violation when the provider reports it dropped the temperature", () => {
+    const violation = temperatureViolation(check({ warnings: [TEMPERATURE_UNSUPPORTED] }));
 
-    expect(thrown).toBeInstanceOf(TemperatureNotHonored);
-    if (!(thrown instanceof TemperatureNotHonored)) throw new Error("unreachable");
-    expect(thrown.requestedTemperature).toBe(0);
-    expect(thrown.model).toBe("claude-sonnet-5");
-    expect(thrown.provider).toBe("anthropic");
-    expect(thrown.site).toBe("decomposition");
-    expect(thrown.operation).toBe("generateObject");
-    expect(thrown.details).toBe(TEMPERATURE_UNSUPPORTED.details);
-    expect(thrown.message).toContain(TEMPERATURE_UNSUPPORTED.details);
+    expect(violation).toBeInstanceOf(TemperatureNotHonored);
+    if (!(violation instanceof TemperatureNotHonored)) throw new Error("unreachable");
+    expect(violation.requestedTemperature).toBe(0);
+    expect(violation.model).toBe("claude-sonnet-5");
+    expect(violation.provider).toBe("anthropic");
+    expect(violation.site).toBe("decomposition");
+    expect(violation.operation).toBe("generateObject");
+    expect(violation.details).toBe(TEMPERATURE_UNSUPPORTED.details);
+    expect(violation.message).toContain(TEMPERATURE_UNSUPPORTED.details);
   });
 
-  test("throws for any requested temperature, not only 0 — the violation is the silent substitution", () => {
-    expect(() =>
-      assertTemperatureHonored(check({ requestedTemperature: 0.7, warnings: [TEMPERATURE_UNSUPPORTED] })),
-    ).toThrow(TemperatureNotHonored);
+  test("flags any requested temperature, not only 0 — the violation is the silent substitution", () => {
+    expect(
+      temperatureViolation(check({ requestedTemperature: 0.7, warnings: [TEMPERATURE_UNSUPPORTED] })),
+    ).toBeInstanceOf(TemperatureNotHonored);
   });
 
   test("passes when no warnings were returned, including the undefined case", () => {
-    expect(() => assertTemperatureHonored(check({ warnings: undefined }))).not.toThrow();
-    expect(() => assertTemperatureHonored(check({ warnings: [] }))).not.toThrow();
+    expect(temperatureViolation(check({ warnings: undefined }))).toBeNull();
+    expect(temperatureViolation(check({ warnings: [] }))).toBeNull();
   });
 
   test("passes on warnings about other features or of other kinds", () => {
@@ -57,15 +52,13 @@ describe("assertTemperatureHonored", () => {
       { type: "unsupported", feature: "topP", details: "topP is not supported" },
       { type: "compatibility", feature: "temperature", details: "clamped for compatibility" },
     ];
-    expect(() => assertTemperatureHonored(check({ warnings: unrelated }))).not.toThrow();
+    expect(temperatureViolation(check({ warnings: unrelated }))).toBeNull();
   });
 
   test("passes when no temperature was requested — nothing was promised to honor", () => {
-    expect(() =>
-      assertTemperatureHonored(
-        check({ requestedTemperature: undefined, warnings: [TEMPERATURE_UNSUPPORTED] }),
-      ),
-    ).not.toThrow();
+    expect(
+      temperatureViolation(check({ requestedTemperature: undefined, warnings: [TEMPERATURE_UNSUPPORTED] })),
+    ).toBeNull();
   });
 });
 
@@ -82,16 +75,46 @@ describe("extractUsage", () => {
     expect(extraction.usage.cacheWriteTokens).toBe(0);
   });
 
-  test("extracts Anthropic cache tokens from providerMetadata", () => {
+  test("reports no cache counts when the provider metadata carries none", () => {
+    const extraction = extractUsage({ inputTokens: 100, outputTokens: 50 }, undefined);
+    expect(extraction.reported).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+    });
+  });
+
+  test("extracts Anthropic cache tokens from the raw usage @ai-sdk/anthropic copies into providerMetadata", () => {
     const extraction = extractUsage(
       { inputTokens: 200, outputTokens: 80 },
-      { anthropic: { cacheReadInputTokens: 150, cacheCreationInputTokens: 30 } },
+      { anthropic: { usage: { input_tokens: 20, cache_read_input_tokens: 150, cache_creation_input_tokens: 30 } } },
     );
     expect(extraction.measured).toBe(true);
     expect(extraction.usage.inputTokens).toBe(200);
     expect(extraction.usage.outputTokens).toBe(80);
     expect(extraction.usage.cacheReadTokens).toBe(150);
     expect(extraction.usage.cacheWriteTokens).toBe(30);
+    expect(extraction.reported.cacheReadTokens).toBe(150);
+    expect(extraction.reported.cacheWriteTokens).toBe(30);
+  });
+
+  test("extracts DeepSeek cache hits; no write class when hits plus misses cover every input token", () => {
+    const extraction = extractUsage(
+      { inputTokens: 1000, outputTokens: 40 },
+      { deepseek: { promptCacheHitTokens: 600, promptCacheMissTokens: 400 } },
+    );
+    expect(extraction.reported.cacheReadTokens).toBe(600);
+    expect(extraction.reported.cacheWriteTokens).toBe(0);
+  });
+
+  test("leaves DeepSeek cache writes unknown when the miss count is not reported", () => {
+    const extraction = extractUsage(
+      { inputTokens: 1000, outputTokens: 40 },
+      { deepseek: { promptCacheHitTokens: 600 } },
+    );
+    expect(extraction.reported.cacheReadTokens).toBe(600);
+    expect(extraction.reported.cacheWriteTokens).toBeNull();
   });
 
   test("returns unmeasured when the usage object is absent — completes, does not throw", () => {

@@ -1,5 +1,5 @@
 import type { ZodType } from "zod";
-import type { CapabilityLevel } from "@ashara/shared";
+import type { CapabilityLevel, ProjectId, WorkItemId } from "@ashara/shared";
 
 /**
  * Per-capability model table for a single site (routing-profiles story). Used
@@ -130,12 +130,26 @@ export type ExtractedUsage = MeasuredUsage | UnmeasuredUsage;
 export interface MeasuredUsage {
   readonly measured: true;
   readonly usage: TokenUsage;
+  readonly reported: ReportedTokens;
 }
 
 export interface UnmeasuredUsage {
   readonly measured: false;
   readonly usage: TokenUsage;
+  readonly reported: ReportedTokens;
   readonly missingFields: readonly string[];
+}
+
+/**
+ * The token counts the provider actually reported, each `null` when it did not.
+ * `TokenUsage` zero-fills for its arithmetic consumers; this is what a record of
+ * the call may state as measured.
+ */
+export interface ReportedTokens {
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
 }
 
 export interface CostBreakdown {
@@ -173,20 +187,6 @@ export interface CostSummary {
   costByProvider: Record<string, number>;
 }
 
-export interface LLMCallRecord {
-  readonly site: string;
-  readonly capability: string;
-  readonly model: string;
-  readonly provider: string;
-  readonly promptExcerpt: string;
-  readonly responseExcerpt: string;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly costUsd: number;
-  readonly durationMs: number;
-  readonly timestamp: string;
-}
-
 export interface StructuredRequest<T> {
   capability: CapabilityLevel;
   prompt: string;
@@ -205,3 +205,50 @@ export interface StructuredResponse<T> {
   provider: string;
   model: string;
 }
+
+/**
+ * Who a recorded call serves. `environment-spec` is a caller with no routing
+ * site of its own: it routes by capability alone, so it is not a `KnownLLMSite`.
+ */
+export type LlmCallSite = KnownLLMSite | "environment-spec";
+
+/** Required on every recorded call: the project the spend belongs to, and the work item when one is served. */
+export interface LlmCallContext {
+  readonly projectId: ProjectId;
+  readonly taskId: WorkItemId | null;
+  readonly callSite: LlmCallSite;
+}
+
+export type LlmCallOperation = "generateObject" | "generateText:structured-fallback";
+
+export type LlmCallOutcome =
+  | { readonly kind: "ok" }
+  | { readonly kind: "error"; readonly errorKind: string };
+
+/** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
+export interface LlmProviderCall {
+  readonly context: LlmCallContext;
+  readonly provider: string;
+  readonly model: ModelConfig;
+  readonly operation: LlmCallOperation;
+  readonly usage: ExtractedUsage | null;
+  readonly outcome: LlmCallOutcome;
+}
+
+/**
+ * Supplied by the composition root. `assertPriced` runs before every provider
+ * request and throws to refuse it; `record` runs once after every provider
+ * request, success or failure, and a throw from it fails the call.
+ */
+export interface LlmCallRecorder {
+  assertPriced(provider: string, model: ModelConfig): void;
+  record(call: LlmProviderCall): Promise<void>;
+}
+
+/**
+ * Whether a gateway records its calls. `unrecorded` names why, so a process
+ * that skips the ledger says so at its construction site instead of by omission.
+ */
+export type CallRecording =
+  | { readonly kind: "recorded"; readonly recorder: LlmCallRecorder }
+  | { readonly kind: "unrecorded"; readonly reason: string };

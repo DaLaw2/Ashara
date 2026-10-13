@@ -44,3 +44,8 @@ allow = ["shared"]
 [security]
 # ADR-075 S1: db holds the ciphertext rows; the master key stays outside it.
 allow = ["db"]
+
+[finance]
+# ADR-075 S2 (story s-cost-ledger-m1): llm_calls rows go through db; prices and the
+# recorder port come from llm-gateway's public API (calculateCost is not moved here).
+allow = ["db", "llm-gateway"]

@@ -19,4 +19,6 @@ export { ConfigRepository } from "./repositories/config.js";
 export { RunStateRepository } from "./repositories/run-state.js";
 export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
+export { LlmCallRepository } from "./repositories/llm-call.js";
+export type { NewLlmCall } from "./repositories/llm-call.js";
 export { withPlanningTransaction } from "./repositories/planning-transaction.js";

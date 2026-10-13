@@ -9,7 +9,7 @@
  */
 
 import { readdir } from "node:fs/promises";
-import type { ProjectContract, ProjectFrame, ProjectFrameAttempt } from "@ashara/shared";
+import type { ProjectContract, ProjectFrame, ProjectFrameAttempt, ProjectId, WorkItemId } from "@ashara/shared";
 import { ProjectFrameSchema, ProjectFrameUnresolvable, nodeLabels } from "@ashara/shared";
 
 // MARKER_LABELS deleted: a hardcoded {filename → language} table gave 9 known
@@ -31,11 +31,18 @@ export interface ProjectIntentSource {
  * temperature 0 (Discipline A: deterministic operation).
  */
 export interface StackDeriver {
-  deriveStack(intent: string): Promise<readonly string[]>;
+  /** `scope` names the project and task the derivation call is charged to. */
+  deriveStack(intent: string, scope: StackDerivationScope): Promise<readonly string[]>;
+}
+
+export interface StackDerivationScope {
+  readonly projectId: ProjectId;
+  readonly taskId: WorkItemId;
 }
 
 export interface ResolveProjectFrameArgs {
-  readonly taskId: string;
+  readonly taskId: WorkItemId;
+  readonly projectId: ProjectId;
   readonly contract: ProjectContract | null;
   readonly targetProjectPath: string | null;
   readonly intentSource: ProjectIntentSource | undefined;
@@ -69,7 +76,7 @@ export async function resolveProjectFrame(args: ResolveProjectFrameArgs): Promis
   const declared = contractKnowledgeLabels(args.contract, attempted);
   if (declared.length > 0) return buildFrame(intent, declared, "contract-knowledge");
 
-  const derived = await derivedStackLabels(intent, args.stackDeriver, attempted);
+  const derived = await derivedStackLabels(intent, args.stackDeriver, { projectId: args.projectId, taskId: args.taskId }, attempted);
   if (derived.length > 0) return buildFrame(intent, derived, "vision-derivation");
 
   throw new ProjectFrameUnresolvable({ taskId: args.taskId, projectId, attempted });
@@ -182,6 +189,7 @@ function contractKnowledgeLabels(
 async function derivedStackLabels(
   intent: string,
   deriver: StackDeriver | undefined,
+  scope: StackDerivationScope,
   attempted: ProjectFrameAttempt[],
 ): Promise<readonly string[]> {
   if (!deriver) {
@@ -189,7 +197,7 @@ async function derivedStackLabels(
     return [];
   }
   try {
-    const labels = dedupe((await deriver.deriveStack(intent)).map((label) => label.trim()));
+    const labels = dedupe((await deriver.deriveStack(intent, scope)).map((label) => label.trim()));
     if (labels.length === 0) {
       attempted.push({ source: "vision-derivation", reason: "the deriver returned no stack labels for this intent" });
     }

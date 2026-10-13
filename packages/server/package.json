@@ -12,6 +12,7 @@
     "@ashara/agent-runner": "*",
     "@ashara/db": "*",
     "@ashara/development": "*",
+    "@ashara/finance": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/orchestrator": "*",
     "@ashara/planning": "*",

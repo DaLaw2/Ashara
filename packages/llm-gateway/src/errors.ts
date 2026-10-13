@@ -334,3 +334,79 @@ export class InvalidRoutingProfiles extends GatewayError {
     this.howToFix = howToFix;
   }
 }
+
+/**
+ * Base for a refusal raised by the call recorder BEFORE a provider request
+ * (e.g. Finance's UnpricedModel). The gateway never retries one on a fallback
+ * model: a refusal is a configuration gap to fix, not a transient failure.
+ */
+export class PreCallRefusal extends GatewayError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "PreCallRefusal";
+  }
+}
+
+/** A recorded gateway was called without a call context, so the call could not be attributed to a project. */
+export class LlmCallContextMissing extends GatewayError {
+  readonly operation: string;
+
+  constructor(operation: string) {
+    super(
+      `LLMGateway.${operation} was called without a call context on a gateway that records every call. ` +
+        `Call gateway.forCall({ projectId, taskId, callSite }).generateStructured(...) instead; ` +
+        `a call with no project cannot be written to llm_calls and is refused.`,
+    );
+    this.name = "LlmCallContextMissing";
+    this.operation = operation;
+  }
+}
+
+/** `forCall` was used on a gateway built with `recording: { kind: "unrecorded" }`. */
+export class LlmCallRecorderMissing extends GatewayError {
+  readonly unrecordedReason: string;
+
+  constructor(unrecordedReason: string) {
+    super(
+      `LLMGateway.forCall needs a call recorder, but this gateway was built unrecorded ` +
+        `(reason given at construction: "${unrecordedReason}"). Build it with ` +
+        `recording: { kind: "recorded", recorder } to attribute calls to a project.`,
+    );
+    this.name = "LlmCallRecorderMissing";
+    this.unrecordedReason = unrecordedReason;
+  }
+}
+
+export interface LlmCallNotRecordedContext {
+  readonly projectId: string;
+  readonly callSite: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly operation: string;
+  /** The provider call's own outcome, which the failed write was recording. */
+  readonly callOutcome: string;
+  /** The provider call's error when it failed too; `undefined` for a successful call. */
+  readonly providerError: unknown;
+}
+
+/**
+ * The recorder could not write the row for a provider call. The call fails:
+ * a spend that reached the provider but not the ledger must not be returned
+ * as a success. The write error is `cause`; the provider's own error, when the
+ * call failed as well, is `context.providerError`.
+ */
+export class LlmCallNotRecorded extends GatewayError {
+  readonly context: LlmCallNotRecordedContext;
+
+  constructor(context: LlmCallNotRecordedContext, options: ErrorOptions) {
+    const writeError = options.cause instanceof Error ? options.cause.message : String(options.cause);
+    super(
+      `llm_calls row not written for provider="${context.provider}" model="${context.model}" ` +
+        `operation="${context.operation}" callSite="${context.callSite}" project=${context.projectId} ` +
+        `(call outcome: ${context.callOutcome}): ${writeError}`,
+      options,
+    );
+    this.name = "LlmCallNotRecorded";
+    this.context = context;
+  }
+}

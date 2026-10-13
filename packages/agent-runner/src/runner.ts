@@ -319,7 +319,16 @@ if (import.meta.main) {
     // refuse-to-start guard duplicated here.
     let gateway: LLMGateway;
     try {
-        gateway = buildGateway({ config: gatewayConfig, checkedSources });
+        gateway = buildGateway({
+            config: gatewayConfig,
+            checkedSources,
+            recording: {
+                kind: "unrecorded",
+                reason:
+                    "agent-runner calls the SDK directly (conversation.ts) and only uses the gateway to " +
+                    "resolve a model; its spend moves into the ledger with story s-isolated-worker-m1",
+            },
+        });
     } catch (e) {
         if (e instanceof NoLLMProvidersConfigured) {
             console.error("[agent-runner] fatal: no LLM providers configured (ADR-030) -- refusing to start.");

@@ -1,10 +1,10 @@
 import path from "node:path";
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import type { WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
+import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { LLMGateway } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/llm-gateway";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
 import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
@@ -86,6 +86,8 @@ export interface DevelopmentConfig {
 
 export interface TaskDescriptor {
   readonly id: WorkItemId;
+  /** work_items.project_id: every LLM call made for this task is charged to it. */
+  readonly projectId: ProjectId;
   readonly title: string;
   readonly parentId?: string;
   readonly taskSpec?: StoredTaskSpec;
@@ -180,7 +182,7 @@ export interface DevelopmentServiceDeps {
   readonly knowledgeSink: KnowledgeSink;
   readonly knowledgeSource?: KnowledgeSource;
   readonly agentInvoker: AgentInvoker;
-  readonly llmGateway: LLMGateway | null;
+  readonly llmGateway: ContextualLlm | null;
   readonly eventSink?: ExecutionEventSink;
   /**
    * Supplies the owner's own vision text for a task's project (ADR-046). Absent ⇒
@@ -324,7 +326,10 @@ export class DevelopmentService {
       try {
         const manifestContent = await readManifestContext(targetProjectPath);
         if (manifestContent) {
-          const spec = await deriveEnvironmentSpec(manifestContent, this.deps.llmGateway);
+          const spec = await deriveEnvironmentSpec(
+            manifestContent,
+            this.deps.llmGateway.forCall({ projectId: task.projectId, taskId: task.id, callSite: "environment-spec" }),
+          );
           localEnv = await this.deps.provisioner.provision(spec);
         }
       } catch (e) {
@@ -399,6 +404,7 @@ export class DevelopmentService {
     // brief with no stated target is the fail-open this ladder replaces (ADR-046).
     const projectFrame = await resolveProjectFrame({
       taskId: task.id,
+      projectId: task.projectId,
       contract,
       targetProjectPath,
       intentSource: this.deps.intentSource,

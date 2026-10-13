@@ -9,6 +9,7 @@ import {
   integer,
   bigint,
   doublePrecision,
+  numeric,
   unique,
   index,
   customType,
@@ -292,3 +293,33 @@ export const taskCostHistory = pgTable("task_cost_history", {
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 
+// ---------------------------------------------------------------------------
+// llm_calls (migration 015, K10 cost ledger, Finance context)
+// ---------------------------------------------------------------------------
+// One row per provider call. Token and cost columns are nullable with no
+// default: NULL means unmeasured, never zero.
+
+export const llmCalls = pgTable(
+  "llm_calls",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: uuid("task_id"),
+    callSite: text("call_site").notNull(),
+    provider: text().notNull(),
+    model: text().notNull(),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheReadTokens: integer("cache_read_tokens"),
+    cacheWriteTokens: integer("cache_write_tokens"),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    outcome: text().notNull(),
+    errorKind: text("error_kind"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),
+  }),
+);

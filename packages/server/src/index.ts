@@ -18,6 +18,7 @@ import {
   ContractRepository,
   RunStateRepository,
   SecretRepository,
+  LlmCallRepository,
   withPlanningTransaction,
   createProjectWithVision,
 } from "@ashara/db";
@@ -37,6 +38,7 @@ import {
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
 import type {
+  StackDerivationScope,
   SessionStore,
   KnowledgeSink,
   KnowledgeSource,
@@ -58,7 +60,8 @@ import {
   NoLLMProvidersConfigured,
   withStructuredLadder,
 } from "@ashara/llm-gateway";
-import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
+import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
+import { LlmCallLedger } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, RUN_SCOPE_AD_HOC } from "@ashara/shared";
@@ -124,15 +127,14 @@ async function main(): Promise<void> {
   const eventLogger = new EventLogger(pipelineLogPath);
   console.log(`Pipeline event log: ${pipelineLogPath}`);
 
-  const llmLogSink = (record: LLMCallRecord): void => {
-    eventLogger.emit({ event: "llm_call", ...record });
-  };
-
   const ladderAttemptSink = (attempt: LadderAttemptEvent): void => {
     eventLogger.emit({ event: "ladder_attempt", ...attempt });
   };
 
   const budgetLedger = new BudgetLedger();
+  // Finance's cost ledger (K10): the gateway refuses an unpriced model before
+  // the request and writes one llm_calls row per provider request after it.
+  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db));
   let llmGateway: LLMGateway;
   try {
     // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
@@ -167,7 +169,7 @@ async function main(): Promise<void> {
       config: gwConfig,
       checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
       ledger: budgetLedger,
-      logSink: llmLogSink,
+      recording: { kind: "recorded", recorder: llmCallLedger },
     });
     console.log("LLM gateway initialized");
     console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
@@ -363,13 +365,13 @@ async function main(): Promise<void> {
   // project, not once per task. Temperature 0 (Discipline A: deterministic) and
   // laddered like every other structured planning call, with a validate that
   // rejects an empty answer so the ladder re-asks instead of returning nothing.
-  const stackLadder = withStructuredLadder(llmGateway, {
-    site: "stack-derivation",
-    onAttempt: ladderAttemptSink,
-  });
   const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
   const stackDeriver: StackDeriver = {
-    async deriveStack(intent: string): Promise<readonly string[]> {
+    async deriveStack(intent: string, scope: StackDerivationScope): Promise<readonly string[]> {
+      const stackLadder = withStructuredLadder(
+        llmGateway.forCall({ projectId: scope.projectId, taskId: scope.taskId, callSite: "stack-derivation" }),
+        { site: "stack-derivation", onAttempt: ladderAttemptSink },
+      );
       const response = await stackLadder.generateStructured({
         capability: "Strong",
         prompt: [
