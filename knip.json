@@ -5,14 +5,17 @@
   "workspaces": {
     ".": {
       "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts"],
-      "project": ["scripts/**/*.ts"]
+      "project": ["scripts/**/*.ts", "!scripts/**/*.test.ts"],
+      "vitest": false
     },
     "packages/*": {
-      "project": ["src/**/*.ts"]
+      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+      "vitest": false
     },
     "packages/agent-runner": {
       "entry": ["src/runner.ts"],
-      "project": ["src/**/*.ts"],
+      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+      "vitest": false,
       "ignoreBinaries": ["podman"]
     },
     "packages/development": {
@@ -20,23 +23,10 @@
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false
     },
-    "packages/memory": {
-      "ignoreDependencies": [
-        "@ashara/shared"
-      ]
-    },
-    "packages/orchestrator": {
-      "ignoreDependencies": [
-        "@ashara/agent-runner",
-        "@ashara/llm-gateway",
-        "@ashara/memory"
-      ]
-    },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,
-      "ignoreBinaries": ["podman"],
-      "ignoreDependencies": ["pg", "@types/pg"]
+      "ignoreBinaries": ["podman"]
     }
   }
 }

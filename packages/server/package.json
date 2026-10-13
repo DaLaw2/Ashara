@@ -17,11 +17,8 @@
     "@ashara/orchestrator": "*",
     "@ashara/planning": "*",
     "@ashara/shared": "*",
+    "@hono/node-server": "2.0.12",
     "hono": "4.12.32",
-    "pg": "8.22.0"
-  },
-  "devDependencies": {
-    "@types/pg": "8.20.0",
     "zod": "4.4.3"
   }
 }

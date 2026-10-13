@@ -4,7 +4,6 @@ export { parseProjectId, createWorkItemId, createSessionId } from "./ids.js";
 export type { WorkItemLevel, WorkItemStatus, CapabilityLevel, SessionPhase } from "./enums.js";
 export {
   TERMINAL_SESSION_PHASES,
-  WORK_ITEM_STATUSES,
   parseCapabilityLevel,
   parseWorkItemLevel,
   parseWorkItemStatus,

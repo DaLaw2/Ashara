@@ -93,98 +93,14 @@ jobs:
         run: just check
 
       - name: Test suite
-        id: test
+        run: npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
+
+      # vitest exits non-zero on a failed test, a suite that fails to collect,
+      # or zero test files, but exits 0 with skipped tests; this step closes that.
+      - name: Reject skipped tests
         run: |
-          # Run vitest with JSON reporter to capture counts, plus default for human output.
-          npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
-
-      - name: Enforce test-suite invariants
-        if: always() && steps.test.outcome != 'skipped'
-        run: |
-          set -euo pipefail
-
-          # This step previously enforced a hand-maintained test-count floor
-          # (min_passed from ci.toml). That floor was deleted because it never
-          # fired and cost a comment-fix commit for every test addition.
-          #
-          # Four invariants remain, none requiring a maintained number:
-          #   1. vitest reported success (success === true).
-          #   2. Zero failed suites — a suite that fails to collect (e.g. an
-          #      import error) is invisible to per-test counts: numTotalTests,
-          #      numFailedTests, and numPendingTests all silently exclude its
-          #      tests, so every count field reads "fine" while tests never ran.
-          #      Only numFailedTestSuites reveals it.
-          #   3. Zero skipped — a skipped test is a silent hole.
-          #   4. At least one test ran — numTotalTests == 0 with success: true
-          #      is the identity element reading as "fine".
-          #
-          # This step validates the result independently — it does not rely
-          # on the test step's exit code for correctness. The `if:` condition
-          # uses `outcome != 'skipped'` (not `== 'success'`) so every
-          # invariant is reachable: a test assertion failure triggers #1, a
-          # suite that fails to collect triggers #2, and `outcome` (not
-          # `conclusion`) survives a future `continue-on-error` addition.
-          #
-          # Failure mode NOT covered: *partial* disappearance — some tests
-          # vanish (e.g. a vitest include-glob narrows or a file is renamed
-          # out of the pattern) while at least one survives, and all suites
-          # still collect. numTotalTests silently excludes tests in files that
-          # fail to collect, but it has no memory of how many tests *should*
-          # exist — so "1 of 426 ran" is indistinguishable from "426 of 426
-          # ran" as long as every loaded suite passes. The correct instrument
-          # for that is coverage, not a count.
-
-          # Fail closed: if vitest-results.json is missing or unparseable,
-          # this step must fail rather than passing on an unread invariant.
-          if [ ! -f vitest-results.json ]; then
-            echo "::error::vitest-results.json not found. Cannot enforce test invariants — refusing to report green on an unread result."
-            exit 1
-          fi
-
-          eval "$(node -e "
-            let r;
-            try { r = require('./vitest-results.json'); } catch (e) {
-              process.stderr.write('Failed to parse vitest-results.json: ' + e.message + '\n');
-              process.exit(1);
-            }
-            for (const key of ['numTotalTests', 'numPendingTests', 'numFailedTestSuites']) {
-              if (typeof r[key] !== 'number') {
-                process.stderr.write(key + ' is not a number\n');
-                process.exit(1);
-              }
-            }
-            if (typeof r.success !== 'boolean') {
-              process.stderr.write('success is not a boolean\n');
-              process.exit(1);
-            }
-            console.log('SUCCESS=' + (r.success ? '1' : '0'));
-            console.log('FAILED_SUITES=' + r.numFailedTestSuites);
-            console.log('TOTAL=' + r.numTotalTests);
-            console.log('SKIPPED=' + r.numPendingTests);
-          ")"
-
-          echo "Success:       ${SUCCESS}"
-          echo "Failed suites: ${FAILED_SUITES}"
-          echo "Total tests:   ${TOTAL}"
-          echo "Skipped:       ${SKIPPED}"
-
-          FAIL=0
-          if [ "$SUCCESS" -ne 1 ]; then
-            echo "::error::vitest reported success: false. The suite did not pass."
-            FAIL=1
-          fi
-          if [ "$FAILED_SUITES" -gt 0 ]; then
-            echo "::error::${FAILED_SUITES} test suite(s) failed to collect. Per-test counts silently exclude tests in files that fail to load — a green count is not evidence those tests ran."
-            FAIL=1
-          fi
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "::error::Zero tests ran. A suite that executes nothing reports the same green as one that passed — this is not evidence that anything works."
-            FAIL=1
-          fi
-          if [ "$SKIPPED" -gt 0 ]; then
-            echo "::error::Skipped count ${SKIPPED} is not zero. A skipped test is a silent hole — no tests should be skipped."
-            FAIL=1
-          fi
-          if [ "$FAIL" -eq 1 ]; then
-            exit 1
-          fi
+          node -e "
+            const r = require('./vitest-results.json');
+            if (typeof r.numPendingTests !== 'number') throw new Error('numPendingTests is not a number: ' + JSON.stringify(r.numPendingTests));
+            if (r.numPendingTests !== 0) throw new Error(r.numPendingTests + ' skipped test(s); a skipped test is a silent hole');
+          "

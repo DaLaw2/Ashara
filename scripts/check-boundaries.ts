@@ -6,7 +6,8 @@
  *   allow            = [...]        which packages this package may import
  *   restrict.<pkg>   = [glob, ...]  which files inside this package may import <pkg>
  *
- * Exits 0 if clean, 1 on violations or on a malformed rules file.
+ * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
+ * rules sections and the directories under packages/ do not match one-to-one.
  *
  * Usage: npx tsx scripts/check-boundaries.ts
  */
@@ -27,6 +28,17 @@ class BoundaryRulesParseError extends Error {
   ) {
     super(`${rulesPath}:${lineNumber}: ${reason} — ${JSON.stringify(lineText)}`);
     this.name = "BoundaryRulesParseError";
+  }
+}
+
+class BoundaryRulesCoverageError extends Error {
+  constructor(
+    readonly rulesPath: string,
+    readonly packageName: string,
+    readonly reason: string,
+  ) {
+    super(`${rulesPath}: package "${packageName}": ${reason}`);
+    this.name = "BoundaryRulesCoverageError";
   }
 }
 
@@ -155,12 +167,7 @@ function collectTsFiles(dir: string): string[] {
   const results: string[] = [];
 
   function walk(current: string): void {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      return;
-    }
+    const entries = fs.readdirSync(current, { withFileTypes: true });
 
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name);
@@ -231,13 +238,7 @@ function main(): void {
     process.exit(1);
   }
 
-  let rules: BoundaryRules;
-  try {
-    rules = parseRules(fs.readFileSync(rulesPath, "utf-8"), path.relative(root, rulesPath));
-  } catch (err) {
-    console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
-  }
+  const rules = parseRules(fs.readFileSync(rulesPath, "utf-8"), path.relative(root, rulesPath));
 
   const packagesDir = path.join(root, "packages");
 
@@ -248,18 +249,27 @@ function main(): void {
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
 
+  const rulesRelative = path.relative(root, rulesPath);
+  for (const section of rules.keys()) {
+    if (!packageDirs.includes(section)) {
+      throw new BoundaryRulesCoverageError(rulesRelative, section, "section has no directory under packages/");
+    }
+  }
+
   for (const pkgName of packageDirs) {
     const rule = rules.get(pkgName);
-
-    // If no rules defined for this package, skip it (unconfigured)
-    if (rule === undefined) continue;
+    if (rule === undefined) {
+      throw new BoundaryRulesCoverageError(rulesRelative, pkgName, "directory under packages/ has no section");
+    }
 
     // Wildcard: all imports allowed (composition root)
     const isWildcard = rule.allow.length === 1 && rule.allow[0] === "*";
 
     const pkgRoot = path.join(packagesDir, pkgName);
     const srcDir = path.join(pkgRoot, "src");
-    if (!fs.existsSync(srcDir)) continue;
+    if (!fs.existsSync(srcDir)) {
+      throw new BoundaryRulesCoverageError(rulesRelative, pkgName, `${path.relative(root, srcDir)} does not exist`);
+    }
 
     const files = collectTsFiles(srcDir);
 
@@ -311,4 +321,10 @@ function main(): void {
   }
 }
 
-main();
+// Parse, coverage and filesystem errors all fail closed with one message format.
+try {
+  main();
+} catch (err) {
+  console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
+}

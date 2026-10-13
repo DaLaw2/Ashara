@@ -9,11 +9,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/agent-runner": "*",
     "@ashara/db": "*",
     "@ashara/development": "*",
-    "@ashara/llm-gateway": "*",
-    "@ashara/memory": "*",
     "@ashara/planning": "*",
     "@ashara/shared": "*"
   }

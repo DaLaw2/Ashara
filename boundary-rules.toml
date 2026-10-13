@@ -7,6 +7,9 @@
 # restrict.<pkg> = [glob, ...]  package-relative files that may import <pkg>;
 #                               every other file in the package is a violation.
 
+[shared]
+allow = []
+
 [orchestrator]
 # planning + development reachable ONLY through acl/ (enforced by restrict below)
 # db is infrastructure, not a BC boundary

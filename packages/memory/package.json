@@ -9,7 +9,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/shared": "*",
     "tree-sitter-wasms": "0.1.13",
     "web-tree-sitter": "0.25.10",
     "zod": "4.4.3"

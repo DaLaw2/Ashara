@@ -17,9 +17,6 @@
     "vitest": "4.1.10",
     "typescript-7": "npm:typescript@7.0.2"
   },
-  "dependencies": {
-    "@hono/node-server": "2.0.12"
-  },
   "scripts": {
     "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "typecheck:full": "node node_modules/typescript/bin/tsc --noEmit"

@@ -1,8 +1,7 @@
 import { describe, test, expect } from "vitest";
-import type { StoredBlockedReason } from "@ashara/shared";
+import type { StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import {
   TERMINAL_STATUSES,
-  WORK_ITEM_STATUSES,
   RUN_SCOPE_AD_HOC,
   RUN_SCOPE_PRE_SCOPING,
   canTransitionTo,
@@ -20,10 +19,17 @@ import {
   takeEvents,
 } from "./work-item.js";
 
-// Read from the Published Language, not re-listed here: a status added to the
-// union is automatically covered by every sweep below instead of silently
-// escaping a stale local copy.
-const ALL_STATUSES = WORK_ITEM_STATUSES;
+// A Record keyed by the union: a status added to WorkItemStatus fails to
+// compile here until it is listed, so no sweep below silently skips it.
+const STATUS_BY_NAME: Record<WorkItemStatus, WorkItemStatus> = {
+  Pending: "Pending",
+  InProgress: "InProgress",
+  Completed: "Completed",
+  Blocked: "Blocked",
+  Failed: "Failed",
+  Abandoned: "Abandoned",
+};
+const ALL_STATUSES = Object.values(STATUS_BY_NAME);
 
 // Test fixture: a valid StoredBlockedReason for use in domain method calls.
 const FAIL_REASON: StoredBlockedReason = { source: "task_failed", reason: "task_failed" };
