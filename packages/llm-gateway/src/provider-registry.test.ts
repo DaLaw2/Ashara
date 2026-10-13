@@ -22,6 +22,7 @@ describe("ProviderRegistry base_url guard", () => {
       providers: [
         {
           name: "mistral",
+          providerType: "openai-compatible",
           apiKey: "test-key",
           // baseUrl deliberately absent
           models: [MODEL],
@@ -58,6 +59,7 @@ describe("ProviderRegistry base_url guard", () => {
       providers: [
         {
           name: "local",
+          providerType: "local",
           models: [localModel],
           enabled: true,
         },
@@ -84,6 +86,7 @@ describe("ProviderRegistry base_url guard", () => {
       providers: [
         {
           name: "mistral",
+          providerType: "openai-compatible",
           apiKey: "test-key",
           baseUrl: "https://api.mistral.ai/v1",
           models: [MODEL],
@@ -99,25 +102,52 @@ describe("ProviderRegistry base_url guard", () => {
     expect(resolved.modelConfig.id).toBe("mistral-large");
   });
 
-  test("deepseek resolves through the official provider, not the openai-compatible path", () => {
-    const deepseekModel: ModelConfig = { ...MODEL, id: "deepseek-v4-flash", apiModelId: "deepseek-chat", provider: "deepseek" };
+  test("a deepseek-type row of any name resolves through the official provider, not the openai-compatible path", () => {
+    const deepseekModel: ModelConfig = { ...MODEL, id: "deepseek-v4-flash", apiModelId: "deepseek-chat", provider: "my-ds" };
     const registry = new ProviderRegistry({
       providers: [
-        { name: "deepseek", apiKey: "k", baseUrl: "https://api.deepseek.com/v1", models: [deepseekModel], enabled: true },
+        {
+          name: "my-ds",
+          providerType: "deepseek",
+          apiKey: "k",
+          baseUrl: "https://api.deepseek.com/v1",
+          models: [deepseekModel],
+          enabled: true,
+        },
+      ],
+      defaultProvider: "my-ds",
+    });
+    const resolved = registry.resolve("Strong");
+    if (typeof resolved.provider === "string") throw new Error("expected a model instance, got a gateway id");
+    expect(resolved.providerName).toBe("my-ds");
+    expect(resolved.provider.provider).toBe("deepseek.chat");
+    expect(resolved.provider.modelId).toBe("deepseek-chat");
+  });
+
+  test("a row named like an SDK provider but typed openai-compatible does not get that SDK's adapter", () => {
+    const registry = new ProviderRegistry({
+      providers: [
+        {
+          name: "deepseek",
+          providerType: "openai-compatible",
+          apiKey: "k",
+          baseUrl: "https://api.deepseek.com/v1",
+          models: [{ ...MODEL, provider: "deepseek" }],
+          enabled: true,
+        },
       ],
       defaultProvider: "deepseek",
     });
     const { provider } = registry.resolve("Strong");
     if (typeof provider === "string") throw new Error("expected a model instance, got a gateway id");
-    expect(provider.provider).toBe("deepseek.chat");
-    expect(provider.modelId).toBe("deepseek-chat");
+    expect(provider.provider).not.toBe("deepseek.chat");
   });
 });
 
 describe("ProviderRegistry fails closed instead of substituting a model", () => {
   const config = (routingProfiles?: GatewayConfig["routingProfiles"]): GatewayConfig => ({
     providers: [
-      { name: "mistral", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
+      { name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
     ],
     defaultProvider: "mistral",
     routingProfiles,
@@ -145,8 +175,8 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
   test("a curated profile whose mapped model is on the excluded provider falls back to capability logic", () => {
     const registry = new ProviderRegistry({
       providers: [
-        { name: "mistral", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
-        { name: "other", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [{ ...MODEL, id: "other-large" }], enabled: true },
+        { name: "mistral", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
+        { name: "other", providerType: "openai-compatible", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [{ ...MODEL, id: "other-large" }], enabled: true },
       ],
       defaultProvider: "mistral",
       routingProfiles: { "mistral+other": { "agent-runner": "mistral-large" } },

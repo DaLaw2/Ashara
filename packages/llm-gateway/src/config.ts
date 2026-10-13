@@ -8,7 +8,15 @@ import {
 import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 import { InvalidGatewayCatalog } from "./errors.js";
-import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles, TokenRates } from "./types.js";
+import { PROVIDER_TYPES } from "./types.js";
+import type {
+  GatewayConfig,
+  ModelConfig,
+  ProviderConfig,
+  ProviderType,
+  RoutingProfiles,
+  TokenRates,
+} from "./types.js";
 
 /**
  * A provider's credentials for gateway configuration. Decoupled from the
@@ -16,8 +24,23 @@ import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles, Token
  */
 export interface ProviderCredential {
   readonly name: string;
+  /** The provider_configs row's `provider_type`, unvalidated; parsed against {@link PROVIDER_TYPES} here. */
+  readonly providerType: string;
   readonly apiKey?: string | null;
   readonly baseUrl?: string | null;
+}
+
+const ProviderTypeSchema = z.enum(PROVIDER_TYPES);
+
+/** Fails closed on a provider_type no SDK adapter serves, naming the row. */
+function parseProviderType(source: string, providerName: string, raw: string): ProviderType {
+  const parsed = ProviderTypeSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new InvalidGatewayCatalog(source, [
+      `provider "${providerName}": provider_type "${raw}" is not one of ${PROVIDER_TYPES.join(", ")}`,
+    ]);
+  }
+  return parsed.data;
 }
 
 /**
@@ -45,16 +68,18 @@ export function buildGatewayConfig(
 
   const providers: ProviderConfig[] = [];
   for (const cred of credentials) {
+    const providerType = parseProviderType("provider_configs", cred.name, cred.providerType);
     const providerModels = modelsByProvider[cred.name];
     if (!providerModels) continue;
 
     const hasCredentials =
       (cred.apiKey != null && cred.apiKey !== "") ||
-      (cred.name === "local" && cred.baseUrl != null);
+      (providerType === "local" && cred.baseUrl != null);
     if (!hasCredentials) continue;
 
     providers.push({
       name: cred.name,
+      providerType,
       apiKey: cred.apiKey ?? undefined,
       baseUrl: cred.baseUrl ?? undefined,
       models: Object.values(providerModels),
@@ -110,6 +135,7 @@ type CatalogPriceWindow = z.infer<typeof CatalogPriceWindowSchema>;
 
 const CatalogProviderSchema = z.object({
   name: z.string().min(1),
+  // Parsed by `parseProviderType` in the converter, so the server builds a catalog from raw rows.
   providerType: z.string().min(1),
   baseUrl: z.string().nullable(),
 });
@@ -211,18 +237,20 @@ function buildConfigFromCatalog(source: string, catalog: GatewayCatalog): Gatewa
 
   const providers: ProviderConfig[] = [];
   for (const p of catalog.providers) {
+    const providerType = parseProviderType(source, p.name, p.providerType);
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
     const resolvedKey = envKeysByProvider[p.name];
     const hasCredentials =
       resolvedKey !== undefined ||
-      (p.name === "local" && (envKeys.localLlmUrl ?? p.baseUrl) != null);
+      (providerType === "local" && (envKeys.localLlmUrl ?? p.baseUrl) != null);
     if (!hasCredentials) continue;
     providers.push({
       name: p.name,
+      providerType,
       apiKey: resolvedKey,
       baseUrl:
-        p.name === "local"
+        providerType === "local"
           ? (envKeys.localLlmUrl ?? p.baseUrl ?? undefined)
           : (p.baseUrl ?? undefined),
       models,

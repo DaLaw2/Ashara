@@ -1,4 +1,4 @@
-import { NoObjectGeneratedError, generateObject, generateText } from "ai";
+import { NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { extractJson } from "@ashara/shared";
@@ -12,11 +12,14 @@ import {
   PreCallRefusal,
   ProviderError,
   SchemaValidationError,
+  TurnResponseInvalid,
 } from "./errors.js";
 import { describeUnmeasuredCost, measureCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
+import { assistantMessageOf, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
+import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
   CallRecording,
   CostMeasurement,
@@ -29,6 +32,7 @@ import type {
   LlmCallOutcome,
   LlmCallRecorder,
   ModelConfig,
+  ProviderType,
   StructuredRequest,
   StructuredResponse,
   TokenUsage,
@@ -49,6 +53,9 @@ export interface ContextualLlm {
 
 /** The recorder and context of one recorded call; `null` on an unrecorded gateway. */
 type CallScope = { readonly recorder: LlmCallRecorder; readonly context: LlmCallContext } | null;
+
+/** The provider and model a request is priced and recorded against. */
+type CallTarget = Pick<ResolvedProvider, "providerName" | "modelConfig">;
 
 const OK: LlmCallOutcome = { kind: "ok" };
 
@@ -146,7 +153,7 @@ export class LLMGateway implements ContextualLlm {
    */
   private recordCost(
     extraction: ExtractedUsage,
-    resolved: ResolvedProvider,
+    resolved: CallTarget,
     site: string,
     operation: LlmCallOperation,
     requestedAt: Date,
@@ -214,13 +221,82 @@ export class LLMGateway implements ContextualLlm {
   }
 
   /** The recorded entry point: every provider request made for `context` writes one row through the recorder. */
-  forCall(context: LlmCallContext): StructuredProvider {
+  forCall(context: LlmCallContext): StructuredProvider & TurnLlm {
     if (this.recording.kind === "unrecorded") {
       throw new LlmCallRecorderMissing(this.recording.reason);
     }
-    const scope: CallScope = { recorder: this.recording.recorder, context };
+    const scope = { recorder: this.recording.recorder, context };
     return {
       generateStructured: <T>(request: StructuredRequest<T>) => this.structured(request, scope),
+      generateTurn: (request: TurnRequest) => this.turn(request, scope),
+    };
+  }
+
+  /**
+   * One agent turn: exactly one provider request, one step, one llm_calls row.
+   * Tools go out as schemas and come back as calls; nothing is executed and
+   * nothing loops (ADR-074 d7). The model is the caller's pinned resolution:
+   * no re-routing, no fallback, no budget degrade (ADR-074 d44), and no SDK
+   * retry, so every provider request is the row the caller sees.
+   *
+   * No production caller yet: adopted by t-workplace-loop (s-isolated-worker-m1),
+   * which also re-exports the turn types from the package index. knip does not
+   * check members, so this note, not a `@testseam` tag, records the gap.
+   */
+  private async turn(request: TurnRequest, scope: NonNullable<CallScope>): Promise<TurnResult> {
+    const operation: LlmCallOperation = "generateText:turn";
+    const target: CallTarget = { providerName: request.model.provider, modelConfig: request.model.modelConfig };
+    const tools = toSdkTools(request.tools);
+    this.checkBudget(target.providerName);
+
+    const params: Parameters<typeof generateText>[0] = {
+      model: request.model.model,
+      system: request.system,
+      messages: [...request.messages],
+      tools,
+      stopWhen: isStepCount(1),
+      maxRetries: 0,
+      abortSignal: request.abortSignal,
+    };
+    const { result, requestedAt } = await this.send(scope, target, operation, () => generateText(params));
+
+    // One step, whose usage keeps the raw cache counts that the summed `result.usage` drops.
+    const [onlyStep] = result.steps;
+    const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
+    const cost = this.recordCost(extraction, target, scope.context.callSite, operation, requestedAt);
+
+    const parsedCalls = parseToolCalls(result.toolCalls, request.tools);
+    const invalidCallIds = new Set(parsedCalls.toolCalls.filter((c) => c.kind === "invalid").map((c) => c.toolCallId));
+    const message = assistantMessageOf(result.response.messages, invalidCallIds);
+    const issues = [
+      ...(result.steps.length === 1 ? [] : [`expected exactly one step, got ${result.steps.length}`]),
+      ...("issue" in message ? [message.issue] : []),
+      ...parsedCalls.issues,
+    ];
+    if (issues.length > 0 || !("assistant" in message)) {
+      const invalid = new TurnResponseInvalid({ provider: target.providerName, model: target.modelConfig.id, issues });
+      await this.record(scope, target, operation, requestedAt, extraction, errorOutcome(invalid), invalid);
+      throw invalid;
+    }
+
+    const finishReason = mapFinishReason(result.finishReason);
+    const rawFinishReason = result.rawFinishReason ?? null;
+    const outcome: LlmCallOutcome =
+      finishReason === "provider_error"
+        ? { kind: "error", errorKind: `FinishReason:${String(result.finishReason ?? "missing")}` }
+        : OK;
+    await this.record(scope, target, operation, requestedAt, extraction, outcome);
+
+    return {
+      assistant: message.assistant,
+      text: result.text,
+      toolCalls: parsedCalls.toolCalls,
+      finishReason,
+      rawFinishReason,
+      usage: extraction.usage,
+      cost,
+      provider: target.providerName,
+      model: target.modelConfig.id,
     };
   }
 
@@ -241,7 +317,7 @@ export class LLMGateway implements ContextualLlm {
     resolved: ResolvedProvider,
     scope: CallScope,
   ): Promise<StructuredResponse<T>> {
-    if (this.providerSupportsStructuredOutput(resolved.providerName)) {
+    if (this.providerSupportsStructuredOutput(resolved.providerType)) {
       try {
         return await this.executeGenerateObject(request, resolved, scope);
       } catch (err) {
@@ -252,8 +328,8 @@ export class LLMGateway implements ContextualLlm {
     return await this.executeTextFallback(request, resolved, scope);
   }
 
-  private providerSupportsStructuredOutput(providerName: string): boolean {
-    return providerName === "anthropic" || providerName === "openai";
+  private providerSupportsStructuredOutput(providerType: ProviderType): boolean {
+    return providerType === "anthropic" || providerType === "openai";
   }
 
   /**
@@ -264,7 +340,7 @@ export class LLMGateway implements ContextualLlm {
    */
   private async send<R>(
     scope: CallScope,
-    resolved: ResolvedProvider,
+    resolved: CallTarget,
     operation: LlmCallOperation,
     request: () => Promise<R>,
   ): Promise<{ readonly result: R; readonly requestedAt: Date }> {
@@ -281,7 +357,7 @@ export class LLMGateway implements ContextualLlm {
   /** Writes the one row for a provider request. A failed write fails the call (Discipline A). */
   private async record(
     scope: CallScope,
-    resolved: ResolvedProvider,
+    resolved: CallTarget,
     operation: LlmCallOperation,
     requestedAt: Date,
     usage: ExtractedUsage | null,

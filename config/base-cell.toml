@@ -1,0 +1,7 @@
+# The BaseCell reference: the image every cell starts from until s-platform-role-m1 builds images from the
+# project's committed environment (Decided: ADR-074 addendum 2 d61).
+#
+# A bare Debian slim image pinned by digest and run with --pull=never: Ashara bakes in no toolchain (Target
+# Generality). The digest is the identity; the tag is a label for people. packages/execution-infra/src/base-cell.ts
+# loads this file and rejects a reference that is not pinned by a sha256 digest.
+image = "docker.io/library/debian:12-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"

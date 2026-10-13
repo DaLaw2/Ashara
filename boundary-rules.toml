@@ -47,3 +47,7 @@ allow = ["db"]
 # ADR-075 S2 (story s-cost-ledger-m1): llm_calls rows go through db; prices and the
 # recorder port come from llm-gateway's public API (calculateCost is not moved here).
 allow = ["db", "llm-gateway"]
+
+[execution-infra]
+# ADR-075 Execution Infrastructure: cells on the container substrate. Imports no other context.
+allow = ["shared"]

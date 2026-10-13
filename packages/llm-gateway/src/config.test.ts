@@ -2,7 +2,7 @@ import { writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { loadGatewayCatalogFromFile, toModelConfig } from "./config.js";
+import { buildGatewayConfig, loadGatewayCatalogFromFile, toModelConfig } from "./config.js";
 import { InvalidGatewayCatalog } from "./errors.js";
 
 const TMP = join(tmpdir(), "ashara-catalog-test");
@@ -54,6 +54,21 @@ describe("toModelConfig", () => {
         const base = validCatalog().models[0]!;
         const model = { ...base, cacheWriteCostPer1m: null, priceWindows: [offPeak(0, 60)] };
         expect(() => toModelConfig("catalog.json", model)).toThrow(/cache write rate/);
+    });
+});
+
+describe("buildGatewayConfig reads the provider type, not the name", () => {
+    const model = toModelConfig("model_configs", { ...validCatalog().models[0]!, providerName: "ollama" });
+
+    test("a local-type row of any name needs no key; an unknown type refuses to build", () => {
+        const local = buildGatewayConfig({ m: model }, {}, [
+            { name: "ollama", providerType: "local", apiKey: null, baseUrl: "http://localhost:11434/v1" },
+        ]);
+        expect(local.providers.map((p) => [p.name, p.providerType])).toEqual([["ollama", "local"]]);
+
+        expect(() =>
+            buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }]),
+        ).toThrow(/provider "ollama": provider_type "vllm"/);
     });
 });
 

@@ -1,0 +1,194 @@
+/**
+ * Every error names the operation, the exact argv sent to the substrate (argv never carries a
+ * secret: cells get no -e, --env-host or --secret), the exit code and stderr where one exists.
+ */
+
+/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
+export class ExecutionInfraError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ExecutionInfraError";
+  }
+}
+
+/** The process runner could not start the binary at all (missing, not executable). */
+export class ProcessSpawnFailed extends ExecutionInfraError {
+  readonly file: string;
+  readonly code: string;
+  readonly detail: string;
+
+  constructor(file: string, code: string, detail: string, options?: ErrorOptions) {
+    super(`Could not start "${file}" (${code}): ${detail}`, options);
+    this.name = "ProcessSpawnFailed";
+    this.file = file;
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+/**
+ * The container substrate cannot be used. Never answered by a host fallback: the caller blocks the
+ * work (s-isolated-worker-m1 criterion C2).
+ */
+export class SubstrateUnavailable extends ExecutionInfraError {
+  readonly binary: string;
+  readonly detail: string;
+
+  constructor(binary: string, detail: string, options?: ErrorOptions) {
+    super(`Container substrate "${binary}" is unavailable: ${detail}`, options);
+    this.name = "SubstrateUnavailable";
+    this.binary = binary;
+    this.detail = detail;
+  }
+}
+
+export class InvalidCellRequest extends ExecutionInfraError {
+  readonly operation: string;
+  readonly issues: readonly string[];
+
+  constructor(operation: string, issues: readonly string[]) {
+    super(`Invalid ${operation} request: ${issues.join("; ")}`);
+    this.name = "InvalidCellRequest";
+    this.operation = operation;
+    this.issues = issues;
+  }
+}
+
+export class CellStartFailed extends ExecutionInfraError {
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly stderr: string;
+
+  constructor(argv: readonly string[], exitCode: number | null, stderr: string) {
+    super(`Cell start failed (exit ${exitCode ?? "none"}): ${stderr.trim() || "(no stderr)"}; argv: ${JSON.stringify(argv)}`);
+    this.name = "CellStartFailed";
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
+  }
+}
+
+/**
+ * The substrate failed to run a command in the cell, as opposed to the command itself failing.
+ */
+export class CellExecFailed extends ExecutionInfraError {
+  readonly cellId: string;
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly stderr: string;
+  readonly detail: string;
+
+  constructor(cellId: string, argv: readonly string[], exitCode: number | null, stderr: string, detail: string, options?: ErrorOptions) {
+    super(
+      `Exec in cell ${cellId} failed (exit ${exitCode ?? "none"}): ${detail}; stderr: ${stderr.trim() || "(none)"}; argv: ${JSON.stringify(argv)}`,
+      options,
+    );
+    this.name = "CellExecFailed";
+    this.cellId = cellId;
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
+    this.detail = detail;
+  }
+}
+
+export class CellTeardownFailed extends ExecutionInfraError {
+  readonly cellId: string;
+  readonly exitCode: number | null;
+  readonly stderr: string;
+
+  constructor(cellId: string, exitCode: number | null, stderr: string, options?: ErrorOptions) {
+    super(`Teardown of cell ${cellId} failed (exit ${exitCode ?? "none"}): ${stderr.trim() || "(no stderr)"}`, options);
+    this.name = "CellTeardownFailed";
+    this.cellId = cellId;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
+  }
+}
+
+/**
+ * Some cells could not be removed; `removed` lists the ones that were.
+ */
+export class TeardownIncomplete extends ExecutionInfraError {
+  readonly operation: string;
+  readonly removed: readonly string[];
+  readonly failures: readonly CellTeardownFailed[];
+
+  constructor(operation: string, removed: readonly string[], failures: readonly CellTeardownFailed[]) {
+    super(
+      `${operation}: ${failures.length} cell(s) could not be removed (${failures.map((f) => f.cellId).join(", ")}); ` +
+        `removed ${removed.length}. First failure: ${failures[0]?.message ?? "(none)"}`,
+    );
+    this.name = "TeardownIncomplete";
+    this.operation = operation;
+    this.removed = removed;
+    this.failures = failures;
+  }
+}
+
+/**
+ * Podman exited non-zero or printed something that does not match the expected schema.
+ */
+export class PodmanCommandFailed extends ExecutionInfraError {
+  readonly operation: string;
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly detail: string;
+
+  constructor(operation: string, argv: readonly string[], exitCode: number | null, detail: string) {
+    super(`podman ${operation} failed (exit ${exitCode ?? "none"}): ${detail}; argv: ${JSON.stringify(argv)}`);
+    this.name = "PodmanCommandFailed";
+    this.operation = operation;
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.detail = detail;
+  }
+}
+
+export class PathOutsideWorkspace extends ExecutionInfraError {
+  readonly path: string;
+  readonly reason: string;
+
+  constructor(path: string, reason: string) {
+    super(`Path ${JSON.stringify(path)} is outside /workspace: ${reason}. Use a path relative to the workspace root.`);
+    this.name = "PathOutsideWorkspace";
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+/**
+ * A tool's POSIX utility ran in the cell and reported failure (or timed out).
+ */
+export class CellToolFailed extends ExecutionInfraError {
+  readonly tool: string;
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+
+  constructor(tool: string, argv: readonly string[], exitCode: number | null, stderr: string, timedOut: boolean) {
+    super(
+      `${tool} failed in cell (exit ${exitCode ?? "none"}${timedOut ? ", timed out" : ""}): ` +
+        `${stderr.trim() || "(no stderr)"}; argv: ${JSON.stringify(argv)}`,
+    );
+    this.name = "CellToolFailed";
+    this.tool = tool;
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
+    this.timedOut = timedOut;
+  }
+}
+
+export class BaseCellConfigInvalid extends ExecutionInfraError {
+  readonly path: string;
+  readonly detail: string;
+
+  constructor(path: string, detail: string, options?: ErrorOptions) {
+    super(`BaseCell reference "${path}" is unusable: ${detail}`, options);
+    this.name = "BaseCellConfigInvalid";
+    this.path = path;
+    this.detail = detail;
+  }
+}

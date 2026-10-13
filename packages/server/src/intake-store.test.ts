@@ -136,6 +136,7 @@ beforeAll(async () => {
     providers: [
       {
         name: "deepseek",
+        providerType: "deepseek",
         apiKey: "test-key",
         baseUrl: "https://stub.invalid/v1",
         models: [model("intake-strong", "Strong"), model("intake-frontier", "Frontier")],

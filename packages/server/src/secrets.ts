@@ -61,16 +61,23 @@ export async function loadApiToken(secrets: SecretReader): Promise<string> {
   return secrets.get(API_TOKEN_SECRET_NAME);
 }
 
+/** One provider_configs row as the credential resolver reads it. */
+interface ProviderRow {
+  readonly name: string;
+  readonly providerType: string;
+  readonly baseUrl: string | null;
+}
+
 /** A provider with no stored key gets no apiKey; buildGatewayConfig then leaves it out. */
 export async function resolveProviderCredentials(
   secrets: SecretReader,
-  providers: readonly { readonly name: string; readonly baseUrl: string | null }[],
+  providers: readonly ProviderRow[],
 ): Promise<ProviderCredential[]> {
   const credentials: ProviderCredential[] = [];
   for (const provider of providers) {
     const secretName = providerApiKeySecretName(provider.name);
     const apiKey = (await secrets.has(secretName)) ? await secrets.get(secretName) : undefined;
-    credentials.push({ name: provider.name, apiKey, baseUrl: provider.baseUrl });
+    credentials.push({ name: provider.name, providerType: provider.providerType, apiKey, baseUrl: provider.baseUrl });
   }
   return credentials;
 }
@@ -92,7 +99,7 @@ const PROVIDER_KEY_ENV_MAP: Readonly<Record<string, string>> = {
  */
 export async function buildProviderKeyEnv(
   secrets: SecretReader,
-  providers: readonly { readonly name: string; readonly baseUrl: string | null }[],
+  providers: readonly ProviderRow[],
 ): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
   for (const credential of await resolveProviderCredentials(secrets, providers)) {
@@ -100,7 +107,7 @@ export async function buildProviderKeyEnv(
     if (envName !== undefined && credential.apiKey) {
       env[envName] = credential.apiKey;
     }
-    if (credential.name === "local" && credential.baseUrl) {
+    if (credential.providerType === "local" && credential.baseUrl) {
       env["LOCAL_LLM_URL"] = credential.baseUrl;
     }
   }

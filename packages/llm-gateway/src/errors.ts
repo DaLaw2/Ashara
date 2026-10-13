@@ -384,3 +384,41 @@ export class LlmCallNotRecorded extends GatewayError {
     this.context = context;
   }
 }
+
+/**
+ * A tool passed to `generateTurn` carries an `execute` function. The gateway
+ * sends tool schemas only and never runs a tool: Z0 executes every tool call.
+ * Raised before any provider request, so no llm_calls row is written.
+ */
+export class TurnToolExecutable extends GatewayError {
+  readonly toolName: string;
+
+  constructor(toolName: string) {
+    super(
+      `generateTurn received tool "${toolName}" with an execute function. Pass the tool's description and ` +
+        `input schema only; the Workplace loop executes tool calls, the gateway never does.`,
+    );
+    this.name = "TurnToolExecutable";
+    this.toolName = toolName;
+  }
+}
+
+export interface TurnResponseInvalidContext {
+  readonly provider: string;
+  readonly model: string;
+  readonly issues: readonly string[];
+}
+
+/** A turn's provider response did not validate: no single assistant message, or a malformed tool call. */
+export class TurnResponseInvalid extends GatewayError {
+  readonly context: TurnResponseInvalidContext;
+
+  constructor(context: TurnResponseInvalidContext) {
+    super(
+      `generateTurn response from provider="${context.provider}" model="${context.model}" is invalid: ` +
+        `${context.issues.join("; ") || "no issue reported"}`,
+    );
+    this.name = "TurnResponseInvalid";
+    this.context = context;
+  }
+}

@@ -79,7 +79,7 @@ describe("the model catalog", () => {
       .map((m) => toModelConfig("model_configs", m));
     const gateway = new LLMGateway(
       {
-        providers: [{ name: "anthropic", apiKey: "unused", models, enabled: true }],
+        providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "unused", models, enabled: true }],
         defaultProvider: "anthropic",
       },
       { kind: "unrecorded", reason: "resolution only: no request is sent" },

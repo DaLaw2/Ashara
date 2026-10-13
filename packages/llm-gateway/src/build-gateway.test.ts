@@ -20,7 +20,7 @@ const MODEL: ModelConfig = {
 
 function makeConfig(routingProfiles: RoutingProfiles): GatewayConfig {
   return {
-    providers: [{ name: "deepseek", apiKey: "test-key", models: [MODEL], enabled: true }],
+    providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "test-key", models: [MODEL], enabled: true }],
     defaultProvider: "deepseek",
     routingProfiles,
   };

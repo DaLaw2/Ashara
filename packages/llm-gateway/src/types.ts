@@ -84,8 +84,18 @@ export const KNOWN_LLM_SITES = [
 
 export type KnownLLMSite = (typeof KNOWN_LLM_SITES)[number];
 
+/**
+ * Which SDK adapter serves a provider_configs row, read from its `provider_type`
+ * column. The row's name is identity only: a `deepseek` row of any name uses
+ * the DeepSeek adapter, and only a `local` row may lack an API key.
+ */
+export const PROVIDER_TYPES = ["anthropic", "openai", "deepseek", "openai-compatible", "local"] as const;
+
+export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
 export interface ProviderConfig {
   name: string;
+  providerType: ProviderType;
   apiKey?: string;
   baseUrl?: string;
   models: ModelConfig[];
@@ -221,7 +231,7 @@ export interface LlmCallContext {
   readonly callSite: LlmCallSite;
 }
 
-export type LlmCallOperation = "generateObject" | "generateText:structured-fallback";
+export type LlmCallOperation = "generateObject" | "generateText:structured-fallback" | "generateText:turn";
 
 export type LlmCallOutcome =
   | { readonly kind: "ok" }

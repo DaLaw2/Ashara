@@ -3,22 +3,37 @@ import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { CapabilityLevel } from "@ashara/shared";
-import { NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
+import {
+  InvalidGatewayCatalog,
+  NoProviderAvailableError,
+  ProviderMissingBaseUrl,
+  RoutingProfileUnresolved,
+} from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
-import type { GatewayConfig, KnownLLMSite, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
+import type {
+  GatewayConfig,
+  KnownLLMSite,
+  ModelConfig,
+  ProviderConfig,
+  ProviderType,
+  RoutingProfiles,
+} from "./types.js";
 
 export interface ResolvedProvider {
   provider: LanguageModel;
   modelConfig: ModelConfig;
   providerName: string;
+  providerType: ProviderType;
 }
 
+/** The adapter is chosen by the row's provider type; its name is identity only. */
 function createLanguageModel(
   providerConfig: ProviderConfig,
   modelConfig: ModelConfig,
 ): LanguageModel {
-  switch (providerConfig.name) {
+  const type = providerConfig.providerType;
+  switch (type) {
     case "anthropic": {
       const anthropic = createAnthropic({ apiKey: providerConfig.apiKey });
       return anthropic(modelConfig.apiModelId);
@@ -47,7 +62,7 @@ function createLanguageModel(
       });
       return local.chat(modelConfig.apiModelId);
     }
-    default: {
+    case "openai-compatible": {
       if (!providerConfig.baseUrl) {
         throw new ProviderMissingBaseUrl(providerConfig.name);
       }
@@ -56,6 +71,12 @@ function createLanguageModel(
         apiKey: providerConfig.apiKey,
       });
       return provider.chat(modelConfig.apiModelId);
+    }
+    default: {
+      const unhandled: never = type;
+      throw new InvalidGatewayCatalog("provider_configs", [
+        `provider "${providerConfig.name}": no SDK adapter for provider_type "${String(unhandled)}"`,
+      ]);
     }
   }
 }
@@ -202,6 +223,7 @@ export class ProviderRegistry {
           provider: createLanguageModel(providerConfig, model),
           modelConfig: model,
           providerName: providerConfig.name,
+          providerType: providerConfig.providerType,
         };
       }
     }
@@ -244,6 +266,7 @@ export class ProviderRegistry {
           provider: createLanguageModel(providerConfig, modelConfig),
           modelConfig,
           providerName: providerConfig.name,
+          providerType: providerConfig.providerType,
         };
       }
     }

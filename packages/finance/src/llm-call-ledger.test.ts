@@ -58,6 +58,7 @@ function gateway(
     providers: [
       {
         name: providerName,
+        providerType: providerName,
         apiKey: "test-key",
         baseUrl: "https://stub.invalid/v1",
         models: [{ ...modelConfig, provider: providerName }],
@@ -399,5 +400,127 @@ describe("refusals", () => {
     // @ts-expect-error LlmCallContext requires projectId: a call with no project does not typecheck
     recorded.forCall(contextWithoutProject);
     expect(mock.doGenerateCalls).toHaveLength(0);
+  });
+});
+
+describe("generateTurn: one recorded single-step call per agent turn", () => {
+  const READ_FILE = {
+    description: "Read a file",
+    inputSchema: { type: "object" as const, properties: { path: { type: "string" as const } }, required: ["path"] },
+  };
+
+  function toolCallResult(raw?: Record<string, number>) {
+    return {
+      content: [{ type: "tool-call" as const, toolCallId: "tc-1", toolName: "read_file", input: '{"path":"a.txt"}' }],
+      usage: {
+        inputTokens: { total: 1000, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 50, text: 50, reasoning: undefined },
+        raw,
+      },
+      finishReason: { unified: "tool-calls" as const, raw: "tool_use" },
+      warnings: [],
+    };
+  }
+
+  async function turnOn(gw: LLMGateway) {
+    const pinned = gw.resolveModel("Strong", "agent-runner");
+    return gw.forCall({ projectId, taskId: null, callSite: "agent-runner" }).generateTurn({
+      model: pinned,
+      system: "You are a worker.",
+      messages: [{ role: "user", content: "Read a.txt" }],
+      tools: { read_file: READ_FILE },
+      abortSignal: new AbortController().signal,
+    });
+  }
+
+  test("a turn writes exactly one ok row with measured cost and returns the tool call unexecuted", async () => {
+    await clearRows();
+    const mock = stubModel({
+      doGenerate: toolCallResult({ input_tokens: 100, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 }),
+    });
+
+    const result = await turnOn(gateway("anthropic", model({ id: "turn-model" })));
+
+    expect(mock.doGenerateCalls).toHaveLength(1);
+    expect(result.finishReason).toBe("tool_calls");
+    expect(result.toolCalls).toEqual([
+      { kind: "valid", toolCallId: "tc-1", toolName: "read_file", input: { path: "a.txt" } },
+    ]);
+    expect(result.assistant.role).toBe("assistant");
+    const expectedCost = (100 * 3 + 900 * 0.3 + 50 * 15) / 1_000_000;
+    expect(result.cost.measured && result.cost.totalCost).toBeCloseTo(expectedCost, 9);
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("ok");
+    expect(rows[0]?.callSite).toBe("agent-runner");
+    expect(rows[0]?.model).toBe("turn-model");
+    expect(rows[0]?.costUsd).toBeCloseTo(expectedCost, 9);
+  });
+
+  test("a call to an undeclared tool comes back as an invalid call for the loop to answer, in one ok row", async () => {
+    await clearRows();
+    const call = { type: "tool-call" as const, toolCallId: "tc-x", toolName: "rm_rf", input: "{}" };
+    stubModel({ doGenerate: { ...toolCallResult(), content: [call] } });
+
+    const result = await turnOn(gateway("anthropic", model({})));
+
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({ kind: "invalid", toolCallId: "tc-x", toolName: "rm_rf", error: expect.stringMatching(/NoSuchTool/) }),
+    ]);
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("ok");
+  });
+
+  test("a provider error writes one error row, with no retry and no fallback", async () => {
+    await clearRows();
+    const mock = stubModel({
+      doGenerate: async () => {
+        throw new Error("stub provider unavailable");
+      },
+    });
+
+    await expect(turnOn(gateway("anthropic", model({})))).rejects.toThrow(/stub provider unavailable/);
+
+    expect(mock.doGenerateCalls).toHaveLength(1);
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("error");
+    expect(rows[0]?.costUsd).toBeNull();
+  });
+
+  test("a truncated turn maps to `truncated`; an `error` finish reason is a provider_error row", async () => {
+    await clearRows();
+    stubModel({ doGenerate: { ...toolCallResult(), finishReason: { unified: "length" as const, raw: "max_tokens" } } });
+    expect((await turnOn(gateway("anthropic", model({})))).finishReason).toBe("truncated");
+
+    await clearRows();
+    stubModel({ doGenerate: { ...toolCallResult(), finishReason: { unified: "error" as const, raw: undefined } } });
+    const errored = await turnOn(gateway("anthropic", model({})));
+    expect(errored.finishReason).toBe("provider_error");
+    const rows = await rowsOfThisProject();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.outcome).toBe("error");
+    expect(rows[0]?.errorKind).toBe("FinishReason:error");
+  });
+
+  test("a tool with an execute function is refused before any request, and no row is written", async () => {
+    await clearRows();
+    const mock = stubModel({ doGenerate: toolCallResult() });
+    const gw = gateway("anthropic", model({}));
+    const executable = { ...READ_FILE, execute: async () => "ran" };
+
+    const call = gw.forCall({ projectId, taskId: null, callSite: "agent-runner" }).generateTurn({
+      model: gw.resolveModel("Strong", "agent-runner"),
+      system: "s",
+      messages: [{ role: "user", content: "u" }],
+      // @ts-expect-error TurnToolSchema types `execute` as never: the gateway never runs a tool
+      tools: { read_file: executable },
+      abortSignal: new AbortController().signal,
+    });
+
+    await expect(call).rejects.toThrow(/execute function/);
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    expect(await rowsOfThisProject()).toHaveLength(0);
   });
 });

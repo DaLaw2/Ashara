@@ -89,8 +89,8 @@ describe("server startup secrets", () => {
     };
     const reader = memoryReader({ "provider/deepseek/api_key": "store-value" });
     const providers = [
-      { name: "deepseek", baseUrl: "https://api.deepseek.com/v1" },
-      { name: "openai", baseUrl: null },
+      { name: "deepseek", providerType: "deepseek", baseUrl: "https://api.deepseek.com/v1" },
+      { name: "openai", providerType: "openai", baseUrl: null },
     ];
     const credentials = await resolveProviderCredentials(reader, providers);
     const config = buildGatewayConfig(

@@ -91,6 +91,19 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium
 
+      # packages/execution-infra/src/cell.podman.test.ts runs real cells, never skipped. ubuntu-latest
+      # (24.04) lists Podman 4.9.3 in its runner image; catatonit backs `podman run --init` and is
+      # installed explicitly rather than assumed. Cells run with --pull=never, so the pinned BaseCell
+      # image is pulled here, by the reference config/base-cell.toml names.
+      - name: Prepare podman and the BaseCell image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman catatonit
+          podman --version
+          image="$(sed -n 's/^image = "\(.*\)"$/\1/p' config/base-cell.toml)"
+          test -n "$image"
+          podman pull "$image"
+
       - name: Run migrations
         run: npx tsx scripts/migrate.ts
 
