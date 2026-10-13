@@ -2,6 +2,7 @@
 // page headers against the composed app, then a recorded headless-browser session
 // against a live port.
 
+import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -32,6 +33,7 @@ import { clientAccessCodeSecretName, generateKeyFileContent, loadMasterKey, Secr
 import { parseProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { buildApp } from "./app.js";
+import { createIntakeStore } from "./intake-store.js";
 import type { AppDeps } from "./routes.js";
 import type { SecretReader } from "./secrets.js";
 import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "./web-client.js";
@@ -42,7 +44,8 @@ const NONCE = randomUUID().slice(0, 8);
 const API_TOKEN = `web-client-test-${randomUUID()}`;
 const FAILURE_DELAY_MS = 150;
 const TTL_SECONDS = 3600;
-const THROTTLE = { maxFailures: 5, windowSeconds: 15 * 60 };
+const THROTTLE = { windowSeconds: 15 * 60, perNameAndSource: 5, perSource: 20 };
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const CLIENT_HEADER = { "X-Ashara-Client": "1" };
 const JSON_HEADERS = { "Content-Type": "application/json", ...CLIENT_HEADER };
 
@@ -54,6 +57,7 @@ interface TestClient {
 
 let db: Database;
 let keyDir: string;
+let keyFile: string;
 let secretStore: SecretStore;
 let app: Hono;
 /** Client A: the default for every test that does not name one. */
@@ -114,17 +118,48 @@ async function newClient(label: string, storeCode = true): Promise<TestClient> {
   return { id: row.id, name, code };
 }
 
+/** A documentation-range IPv6 address in a fresh /64, so tests that do not name one never share a throttle source. */
+function freshAddress(): string {
+  const [a, b, c] = randomBytes(6).toString("hex").match(/.{4}/g) ?? [];
+  return `2001:db8:${a}:${b}:${c}::1`;
+}
+
+/** The Node adapter's bindings as a request over a socket from `address` carries them. */
+function fromAddress(address: string): { incoming: { socket: { remoteAddress: string } } } {
+  return { incoming: { socket: { remoteAddress: address } } };
+}
+
 async function attempt(
   target: Hono,
   client: string,
   code: string,
-  url = "http://localhost/client/login",
+  options: { readonly url?: string; readonly address?: string } = {},
 ): Promise<Response> {
-  return target.request(url, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ client, code }) });
+  return target.request(
+    options.url ?? "http://localhost/client/login",
+    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ client, code }) },
+    fromAddress(options.address ?? freshAddress()),
+  );
 }
 
-function login(target: Hono, who: TestClient = alice, url?: string): Promise<Response> {
-  return attempt(target, who.name, who.code, url);
+function login(target: Hono, who: TestClient = alice, options?: { url?: string; address?: string }): Promise<Response> {
+  return attempt(target, who.name, who.code, options);
+}
+
+/** Runs an operator script from the repository root with this suite's key file; never throws on exit status. */
+function runScript(args: readonly string[], input = ""): { status: number | null; output: string } {
+  const result = spawnSync("npx", ["tsx", ...args], {
+    cwd: REPO_ROOT,
+    input,
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_URL, ASHARA_SECRET_KEY_FILE: keyFile },
+  });
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+async function sessionCount(clientId: string): Promise<number> {
+  const rows = await db.$client.query("SELECT count(*)::int AS n FROM client_sessions WHERE client_id = $1", [clientId]);
+  return z.object({ n: z.number() }).parse(rows.rows[0]).n;
 }
 
 function sessionToken(response: Response): string {
@@ -170,7 +205,7 @@ beforeAll(async () => {
   db = createDb(DATABASE_URL);
   // A throwaway master key; every secret written is named by a client id this run created.
   keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-web-client-key-"));
-  const keyFile = path.join(keyDir, "secret.key");
+  keyFile = path.join(keyDir, "secret.key");
   fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
   secretStore = new SecretStore(new SecretRepository(db), loadMasterKey(keyFile));
   alice = await newClient("alice");
@@ -240,85 +275,189 @@ describe("client login", () => {
     ]);
     expect(row.rows).toEqual([{ client_id: alice.id }]);
 
-    const remote = await login(app, alice, "https://ashara.example/client/login");
+    const remote = await login(app, alice, { url: "https://ashara.example/client/login" });
     expect(remote.status).toBe(204);
     expect(remote.headers.get("set-cookie")).toContain("Secure");
   });
 
-  test("an unknown client and a wrong code are indistinguishable: same 401 body, both after the delay", async () => {
+  test("unknown name, known name without a code, a too-short stored code and a wrong code answer identically", async () => {
+    const codeless = await newClient("codeless", false);
+    const weak = build({
+      secrets: memoryReader({ [clientAccessCodeSecretName(alice.id)]: "short", [clientAccessCodeSecretName(bob.id)]: bob.code }),
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
     const answers: { status: number; body: unknown; elapsed: number; cookie: string | null }[] = [];
-    for (const [client, code] of [
-      [alice.name, `${alice.code}x`],
-      [`web-client-test-${NONCE}-nobody`, alice.code],
-      [alice.name, bob.code],
-    ]) {
-      const started = Date.now();
-      const response = await attempt(app, client, code);
-      answers.push({
-        status: response.status,
-        body: await response.json(),
-        elapsed: Date.now() - started,
-        cookie: response.headers.get("set-cookie"),
-      });
+    try {
+      for (const [target, client, code] of [
+        [app, alice.name, `${alice.code}x`],
+        [app, `web-client-test-${NONCE}-nobody`, alice.code],
+        [app, codeless.name, codeless.code],
+        [weak, alice.name, "short"],
+        [app, alice.name, bob.code],
+      ] as const) {
+        const started = Date.now();
+        const response = await attempt(target, client, code);
+        answers.push({
+          status: response.status,
+          body: await response.json(),
+          elapsed: Date.now() - started,
+          cookie: response.headers.get("set-cookie"),
+        });
+      }
+      // The operator still learns why the codeless client cannot log in, from the log only.
+      const logged = errors.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain(`scripts/client.ts set-code "${codeless.name}"`);
+      expect(JSON.stringify(answers)).not.toContain(codeless.id);
+    } finally {
+      errors.mockRestore();
+      warns.mockRestore();
     }
     for (const answer of answers) {
       expect(answer.status).toBe(401);
-      expect(answer.body).toEqual(answers[0].body);
+      expect(answer.body).toEqual({ error: "client name or access code rejected" });
       expect(answer.elapsed).toBeGreaterThanOrEqual(FAILURE_DELAY_MS - 5);
       expect(answer.cookie).toBeNull();
     }
-    // A success purges the client's failures, so these leave no throttle behind.
-    await loggedIn(alice);
-    const left = await db.$client.query("SELECT count(*)::int AS n FROM client_login_failures WHERE client_name = $1", [
-      alice.name,
-    ]);
+    // A success clears this address's failures for the name; other addresses' stay counted.
+    const from = freshAddress();
+    expect((await attempt(app, alice.name, "wrong-code-from-a-known-address", { address: from })).status).toBe(401);
+    expect((await login(app, alice, { address: from })).status).toBe(204);
+    const left = await db.$client.query(
+      "SELECT count(*)::int AS n FROM client_login_failures WHERE client_name = $1 AND source_address = $2",
+      [alice.name, from],
+    );
     expect(left.rows).toEqual([{ n: 0 }]);
   });
 
-  test("5 failures within the window close login with 429, across an app re-create, until the window passes", async () => {
-    for (let i = 0; i < THROTTLE.maxFailures; i++) {
-      expect((await attempt(app, throttled.name, `wrong-${i}`)).status).toBe(401);
+  test("5 failures from one address close login there with 429, across an app re-create, until the window passes", async () => {
+    const from = freshAddress();
+    for (let i = 0; i < THROTTLE.perNameAndSource; i++) {
+      expect((await attempt(app, throttled.name, `wrong-${i}`, { address: from })).status).toBe(401);
     }
-    const blocked = await login(app, throttled);
+    const blocked = await login(app, throttled, { address: from });
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("set-cookie")).toBeNull();
 
     // A restart keeps the throttle: a new app over the same database still refuses.
     const restarted = build();
-    expect((await login(restarted, throttled)).status).toBe(429);
+    expect((await login(restarted, throttled, { address: from })).status).toBe(429);
 
     // Once the failures fall out of the window, the right code works again.
     await db.$client.query(
       "UPDATE client_login_failures SET failed_at = now() - make_interval(secs => $2) WHERE client_name = $1",
       [throttled.name, THROTTLE.windowSeconds + 60],
     );
-    expect((await login(restarted, throttled)).status).toBe(204);
+    expect((await login(restarted, throttled, { address: from })).status).toBe(204);
   });
 
-  test("a client with no stored code is 503 with a generic body; the operator instruction goes to the log", async () => {
-    const codeless = await newClient("codeless", false);
+  test("a burst of 40 parallel wrong codes gets exactly the cap evaluated; another address still logs in", async () => {
+    const target = await newClient("burst");
+    const attacker = freshAddress();
+    const statuses = await Promise.all(
+      Array.from({ length: 40 }, (_, i) => attempt(app, target.name, `burst-wrong-${i}`, { address: attacker })),
+    ).then((responses) => responses.map((r) => r.status));
+    expect(statuses.filter((s) => s === 401)).toHaveLength(THROTTLE.perNameAndSource);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(40 - THROTTLE.perNameAndSource);
+
+    // The attacker's address stays closed, even to the right code; the client's own address is open.
+    expect((await login(app, target, { address: attacker })).status).toBe(429);
+    expect((await login(app, target, { address: freshAddress() })).status).toBe(204);
+    const counted = await db.$client.query("SELECT count(*)::int AS n FROM client_login_failures WHERE client_name = $1", [
+      target.name,
+    ]);
+    expect(counted.rows).toEqual([{ n: THROTTLE.perNameAndSource }]);
+  });
+
+  test("no number of other sources closes a client out; one /64 counts as one source", async () => {
+    const tight = build({ loginThrottle: { ...THROTTLE, perNameAndSource: 2, perSource: 3 } });
+    const target = await newClient("lockout");
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Many sources, each up to its cap, against one name and against made-up names.
+      const statuses = await Promise.all(
+        Array.from({ length: 20 }, async (_, s) => {
+          const from = freshAddress();
+          return [
+            (await attempt(tight, target.name, `spread-${s}-a`, { address: from })).status,
+            (await attempt(tight, target.name, `spread-${s}-b`, { address: from })).status,
+            (await attempt(tight, `web-client-test-${NONCE}-walk-${s}`, "x", { address: from })).status,
+            (await attempt(tight, target.name, `spread-${s}-c`, { address: from })).status,
+          ];
+        }),
+      );
+      // Each source reached its own caps: two failures for the name, three in all.
+      expect(statuses.every((s) => s.join() === "401,401,401,429")).toBe(true);
+      expect((await login(tight, target)).status).toBe(204);
+      expect((await login(tight, bob)).status).toBe(204);
+
+      // Varying the interface identifier inside one /64 buys no new attempts.
+      const host = freshAddress().replace(/::1$/, "");
+      for (let i = 0; i < 3; i++) {
+        const address = `${host}::${(i + 2).toString(16)}`;
+        expect((await attempt(tight, `web-client-test-${NONCE}-walk-v6-${i}`, "x", { address })).status).toBe(401);
+      }
+      expect((await login(tight, bob, { address: `${host}::ffff` })).status).toBe(429);
+    } finally {
+      warns.mockRestore();
+    }
+  });
+
+  test("a request with no socket address is refused before any attempt is counted", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      const response = await login(app, codeless);
+      const response = await app.request("http://localhost/client/login", {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ client: alice.name, code: alice.code }),
+      });
       expect(response.status).toBe(503);
-      const text = await response.text();
-      expect(text).not.toContain("secret");
-      expect(text).not.toContain(codeless.id);
       expect(response.headers.get("set-cookie")).toBeNull();
-      const logged = errors.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(logged).toContain(`scripts/secret.ts put ${clientAccessCodeSecretName(codeless.id)}`);
     } finally {
       errors.mockRestore();
     }
   });
 
-  test("a stored code too short to resist guessing is 503, even when presented exactly", async () => {
-    const weak = build({ secrets: memoryReader({ [clientAccessCodeSecretName(alice.id)]: "short" }) });
+  test("setting a new code deletes the client's sessions; revoke-sessions deletes them alone", async () => {
+    const rotated = await newClient("rotated");
+    const first = await loggedIn(rotated);
+    const second = await loggedIn(rotated);
+    expect(await sessionCount(rotated.id)).toBe(2);
+
+    const newCode = randomBytes(24).toString("hex");
+    const setCode = runScript(["scripts/client.ts", "set-code", rotated.name], newCode);
+    expect(setCode.output).toContain("deleted 2 session(s)");
+    expect(setCode.status).toBe(0);
+    expect(await sessionCount(rotated.id)).toBe(0);
+    for (const token of [first, second]) {
+      expect((await app.request("/client/api/projects", { headers: withSession(token) })).status).toBe(401);
+    }
+    expect((await login(app, rotated)).status).toBe(401);
+    const third = await loggedIn({ ...rotated, code: newCode });
+
+    const revoke = runScript(["scripts/client.ts", "revoke-sessions", rotated.name]);
+    expect(revoke.output).toContain("Deleted 1 session(s)");
+    expect(revoke.status).toBe(0);
+    expect((await app.request("/client/api/projects", { headers: withSession(third) })).status).toBe(401);
+
+    // The generic secret tool refuses a client access code, so no code changes with its sessions left alive.
+    const bypass = runScript(["scripts/secret.ts", "put", clientAccessCodeSecretName(rotated.id)], "x".repeat(40));
+    expect(bypass.status).toBe(1);
+    expect(bypass.output).toContain("scripts/client.ts set-code");
+    const fourth = await loggedIn({ ...rotated, code: newCode });
+
+    // Removing the code ends its sessions too, and login is then refused like a wrong code.
+    const removed = runScript(["scripts/client.ts", "remove-code", rotated.name]);
+    expect(removed.output).toContain("deleted 1 session(s)");
+    expect(removed.status).toBe(0);
+    expect((await app.request("/client/api/projects", { headers: withSession(fourth) })).status).toBe(401);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect((await attempt(weak, alice.name, "short")).status).toBe(503);
+      expect((await login(app, { ...rotated, code: newCode })).status).toBe(401);
     } finally {
       errors.mockRestore();
+      warns.mockRestore();
     }
   });
 
@@ -529,7 +668,7 @@ describe("recorded web-client session", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  test("login, tender, a seeded question answered, stop; the inbound rows are in Postgres", async () => {
+  test("login, tender, a seeded question answered, a report shown, stop; the rows are in Postgres", async () => {
     const recordDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-web-client-session-"));
     const transcript: string[] = [];
     const step = (text: string): void => {
@@ -580,8 +719,10 @@ describe("recorded web-client session", () => {
       const project = projects.find((p) => p.name === projectName);
       if (project === undefined) throw new Error(`project ${projectName} not found after the tender`);
 
-      // No production outbound writer exists until s-liaison-intake-m1; the test seeds one.
-      // The markup in the body must arrive as text, never as an element.
+      // The production question writer is the Liaison's intake (recordTenderIntake), which
+      // also writes an LLM-derived vision; the test inserts the question through the
+      // repository that intake writes through. The report below goes through a
+      // production writer. The markup in the body must arrive as text, never as an element.
       const questionBody = 'Which file encodings must it support? <img src="x" id="xss-probe">';
       const question = await new ClientMessageRepository(db).insertOutbound({
         projectId: project.id,
@@ -589,7 +730,7 @@ describe("recorded web-client session", () => {
         body: questionBody,
         inReplyTo: null,
       });
-      step(`seeded outbound question ${question.id} directly in Postgres`);
+      step(`seeded outbound question ${question.id} through ClientMessageRepository.insertOutbound`);
 
       const questionItem = page.locator(`#timeline li[data-message-id="${question.id}"]`);
       await questionItem.waitFor({ timeout: 15_000 });
@@ -603,6 +744,22 @@ describe("recorded web-client session", () => {
       await page.locator("#timeline li.kind-answer .msg-body", { hasText: answerBody }).waitFor();
       await questionItem.locator(".answered").waitFor();
       step("answered the question; the answer appears and the question shows as answered");
+
+      // A report through the intake store the server composes (createIntakeStore), the
+      // path the Liaison takes when it gives up on a tender: tender consumed, report posted.
+      const intakeStore = createIntakeStore(db);
+      const tender = (await intakeStore.openTenders()).find((t) => t.projectId === project.id);
+      if (tender === undefined) throw new Error(`no open tender for project ${project.id}`);
+      const reportBody = "Ashara could not process your tender after 3 attempts, so this request has been stopped.";
+      await intakeStore.closeFailedTender(tender, reportBody);
+      const reportItem = page.locator("#timeline li.kind-report", { hasText: reportBody });
+      await reportItem.waitFor({ timeout: 15_000 });
+      expect(await reportItem.locator(".msg-meta").textContent()).toContain("Report from Ashara");
+      expect(await reportItem.locator(".msg-body").textContent()).toBe(reportBody);
+      step(
+        `posted an outbound report through the intake store's closeFailedTender; it appeared by polling as ` +
+          `"${(await reportItem.innerText()).replace(/\s+/g, " ")}"`,
+      );
 
       await page.click("#stop-open");
       await page.locator("#stop-confirm").waitFor();
@@ -625,6 +782,7 @@ describe("recorded web-client session", () => {
         { direction: "inbound", kind: "tender", projectId: project.id, inReplyTo: null },
         { direction: "outbound", kind: "question", projectId: project.id, inReplyTo: null },
         { direction: "inbound", kind: "answer", projectId: project.id, inReplyTo: question.id },
+        { direction: "outbound", kind: "report", projectId: project.id, inReplyTo: tender.id },
         { direction: "inbound", kind: "stop", projectId: project.id, inReplyTo: null },
       ]);
       step(`Postgres rows for project ${project.id}: ${JSON.stringify(summary)}`);

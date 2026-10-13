@@ -90,11 +90,22 @@ import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
-// working day; a failed login answers after one second; five failures for one
-// client name within fifteen minutes close login for that name until the window passes.
+// working day; a failed login answers one second after it arrived.
 const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
-const CLIENT_LOGIN_THROTTLE = { maxFailures: 5, windowSeconds: 15 * 60 };
+// Login throttle, per fifteen-minute window and per source (an IPv4 address or an
+// IPv6 /64, source-network.ts), task t-login-hardening:
+// - 5 per (name, source): a client is closed out only by its own source's failures.
+// - 20 per source across names: one source cannot walk many names.
+// No cap counts across sources, so no number of sources locks out a client, or
+// every client, that they are not. The price is that distributed guessing is
+// bounded per source, not in total; against that the code itself carries the
+// entropy (MIN_CLIENT_ACCESS_CODE_LENGTH).
+const CLIENT_LOGIN_THROTTLE = {
+  windowSeconds: 15 * 60,
+  perNameAndSource: 5,
+  perSource: 20,
+};
 
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential

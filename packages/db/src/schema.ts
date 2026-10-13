@@ -428,9 +428,18 @@ export const clientLoginFailures = pgTable(
   "client_login_failures",
   {
     clientName: text("client_name").notNull(),
+    // The attempt's source (migration 027): an IPv4 address or an IPv6 /64 (server/src/source-network.ts sourceNetwork).
+    sourceAddress: text("source_address").notNull(),
     failedAt: timestamptz("failed_at").notNull().defaultNow(),
   },
   (t) => ({
     nameTimeIdx: index("idx_client_login_failures_name_time").on(t.clientName, t.failedAt),
+    nameSourceTimeIdx: index("idx_client_login_failures_name_source_time").on(
+      t.clientName,
+      t.sourceAddress,
+      t.failedAt,
+    ),
+    sourceTimeIdx: index("idx_client_login_failures_source_time").on(t.sourceAddress, t.failedAt),
+    timeIdx: index("idx_client_login_failures_time").on(t.failedAt),
   }),
 );

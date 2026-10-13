@@ -22,6 +22,11 @@ export function clientAccessCodeSecretName(clientId: string): string {
   return parseSecretName(`client/${clientId}/access_code`);
 }
 
+/** Whether a name has the shape clientAccessCodeSecretName produces, for any client. */
+export function isClientAccessCodeSecretName(name: string): boolean {
+  return /^client\/[^/]+\/access_code$/.test(name);
+}
+
 /**
  * Below this length the login's failure delay and throttle are no defence: the
  * code itself must carry the entropy. The operator tool refuses to store a

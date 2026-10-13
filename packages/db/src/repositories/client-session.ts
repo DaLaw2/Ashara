@@ -52,6 +52,19 @@ export class ClientSessionRepository {
   }
 
   /**
+   * Deletes every session of one client, active or ended; returns how many rows
+   * went. `scripts/client.ts set-code` and `remove-code` call this in the same
+   * transaction as the code change, so no session opened with the old code outlives it.
+   */
+  async deleteByClient(clientId: string): Promise<number> {
+    const rows = await this.db
+      .delete(clientSessions)
+      .where(eq(clientSessions.clientId, clientId))
+      .returning({ id: clientSessions.id });
+    return rows.length;
+  }
+
+  /**
    * Deletes sessions that expired or were revoked more than `graceSeconds` ago.
    * Returns how many rows went.
    */

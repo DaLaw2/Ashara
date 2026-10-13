@@ -1,7 +1,8 @@
 /**
  * Operator access to the secret store (ADR-073 Q10). Never prints a secret value.
  *
- *   npx tsx scripts/secret.ts put <name>     value read from piped stdin, one trailing newline stripped
+ *   npx tsx scripts/secret.ts put <name>     value read from piped stdin, one trailing newline stripped;
+ *                                            refuses a client access code (scripts/client.ts set-code)
  *   npx tsx scripts/secret.ts check <name>   confirms the secret exists and decrypts under the loaded key
  *   npx tsx scripts/secret.ts list           names only
  *   npx tsx scripts/secret.ts import-legacy  moves plaintext provider_configs.api_key and the
@@ -13,7 +14,13 @@
  */
 
 import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
-import { SecretNotFound, SecretStore, loadMasterKey, resolveKeyFilePath } from "@ashara/security";
+import {
+  SecretNotFound,
+  SecretStore,
+  isClientAccessCodeSecretName,
+  loadMasterKey,
+  resolveKeyFilePath,
+} from "@ashara/security";
 import { importLegacyCredentials } from "./import-legacy-credentials.js";
 import { readPipedStdin } from "./read-piped-stdin.js";
 
@@ -48,6 +55,13 @@ async function main(): Promise<void> {
     switch (command) {
       case "put": {
         const secretName = requireName(name, command);
+        if (isClientAccessCodeSecretName(secretName)) {
+          // A code changed here would leave the client's old sessions valid.
+          throw new SecretCliUsageError(
+            `"${secretName}" is a client access code; set it with ` +
+              "`npx tsx scripts/client.ts set-code <name>`, which also deletes the client's sessions. Nothing was stored.",
+          );
+        }
         await store.put(secretName, await readPipedStdin("secret.ts put"));
         console.log(`Stored secret "${secretName}" under key ${key.id}.`);
         return;

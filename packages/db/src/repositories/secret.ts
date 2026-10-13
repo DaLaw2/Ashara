@@ -52,6 +52,12 @@ export class SecretRepository {
     return rows.length > 0;
   }
 
+  /** Whether a row of that name existed and is now gone. */
+  async delete(name: string): Promise<boolean> {
+    const rows = await this.db.delete(secrets).where(eq(secrets.name, name)).returning({ name: secrets.name });
+    return rows.length > 0;
+  }
+
   async listNames(): Promise<string[]> {
     const rows = await this.db
       .select({ name: secrets.name })

@@ -5,6 +5,7 @@ export {
   API_TOKEN_SECRET_NAME,
   MIN_CLIENT_ACCESS_CODE_LENGTH,
   clientAccessCodeSecretName,
+  isClientAccessCodeSecretName,
   providerApiKeySecretName,
 } from "./secret-name.js";
 export { SecretKeyFileExists, SecretNotFound, SecurityError } from "./errors.js";

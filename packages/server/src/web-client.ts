@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import type { ClientLoginFailureRepository, ClientSessionRepository } from "@ashara/db";
+import type { ClientLoginFailureRepository, ClientSessionRepository, LoginAttemptCaps } from "@ashara/db";
 import { MIN_CLIENT_ACCESS_CODE_LENGTH, clientAccessCodeSecretName } from "@ashara/security";
 import {
   listClientMessages,
@@ -16,6 +16,7 @@ import {
 } from "./client-channel.js";
 import type { ChannelCaller, ClientChannelDeps } from "./client-channel.js";
 import type { SecretReader } from "./secrets.js";
+import { sourceNetwork } from "./source-network.js";
 
 // The web client (ADR-076): one static page, one plain script and one stylesheet,
 // served by this process with no build step, plus a session-authenticated copy of
@@ -54,8 +55,29 @@ const LoginSchema = z.strictObject({
   code: z.string().min(1).max(1024),
 });
 
-/** Unknown client and wrong code answer with this one body, after the same delay. */
+/**
+ * Unknown name, known name with no usable stored code, and wrong code all answer
+ * 401 with this one body at the same moment, so the answer reveals neither which
+ * names exist nor which have a code configured.
+ */
 const LOGIN_REJECTED = { error: "client name or access code rejected" };
+
+/**
+ * Compared against when there is no stored code, so every failed login does the
+ * same comparison work. Random per process: no presented code can be known to match it.
+ */
+const NO_STORED_CODE = randomBytes(32).toString("hex");
+
+/**
+ * The Node adapter's bindings carry the request's socket. Only the socket's own
+ * remote address is used: X-Forwarded-For and similar headers are written by the
+ * caller and are not trusted, because no trusted-proxy configuration exists. A
+ * deployment behind a proxy would see every client as the proxy's address and
+ * needs such a configuration first.
+ */
+const NodeBindingsSchema = z.object({
+  incoming: z.object({ socket: z.object({ remoteAddress: z.string().min(1) }) }),
+});
 
 export interface WebClientAssets {
   readonly html: string;
@@ -101,19 +123,14 @@ export function loadWebClientAssets(): WebClientAssets {
   };
 }
 
-/** At `maxFailures` failed logins for one client name within `windowSeconds`, login answers 429. */
-interface LoginThrottle {
-  readonly maxFailures: number;
-  readonly windowSeconds: number;
-}
-
 export interface WebClientDeps extends ClientChannelDeps {
   readonly secrets: SecretReader;
   readonly sessionRepo: ClientSessionRepository;
   readonly loginFailureRepo: ClientLoginFailureRepository;
-  readonly loginThrottle: LoginThrottle;
+  /** Attempts each scope admits per window before login answers 429. */
+  readonly loginThrottle: LoginAttemptCaps;
   readonly sessionTtlSeconds: number;
-  /** Every failed login waits this long before answering. */
+  /** Every failed login answers this long after the request arrived, whatever made it fail. */
   readonly loginFailureDelayMs: number;
   readonly assets: WebClientAssets;
 }
@@ -150,6 +167,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** The socket's remote address, or null when the request did not arrive over a Node socket. */
+function sourceAddress(c: Context<WebClientEnv>): string | null {
+  const bindings: unknown = c.env;
+  const parsed = NodeBindingsSchema.safeParse(bindings);
+  return parsed.success ? parsed.data.incoming.socket.remoteAddress : null;
+}
+
 function sessionClientId(c: Context<WebClientEnv>): string {
   const clientId = c.get("clientId");
   if (typeof clientId !== "string" || clientId === "") throw new ClientSessionMissing(c.req.path);
@@ -180,8 +204,8 @@ const securityHeaders: MiddlewareHandler = async (c, next) => {
 
 /**
  * The stored code for this client, or why login cannot run: absent, or too short
- * to carry the entropy a login needs. The browser gets a generic 503; the
- * operator's instruction goes to the server log.
+ * to carry the entropy a login needs. The browser gets the same 401 as for a
+ * wrong code; the operator's instruction goes to the server log.
  */
 async function storedAccessCode(
   deps: WebClientDeps,
@@ -189,7 +213,7 @@ async function storedAccessCode(
 ): Promise<{ readonly ok: true; readonly code: string } | { readonly ok: false }> {
   const secretName = clientAccessCodeSecretName(client.id);
   const fix =
-    `The operator stores one with \`read -rs C && printf '%s' "$C" | npx tsx scripts/secret.ts put ${secretName}\` ` +
+    `The operator stores one with \`read -rs C && printf '%s' "$C" | npx tsx scripts/client.ts set-code "${client.name}"\` ` +
     `(at least ${MIN_CLIENT_ACCESS_CODE_LENGTH} characters).`;
   if (!(await deps.secrets.has(secretName))) {
     console.error(
@@ -210,7 +234,7 @@ async function storedAccessCode(
 
 export function createWebClientRoutes(deps: WebClientDeps): Hono<WebClientEnv> {
   const app = new Hono<WebClientEnv>();
-  const { maxFailures, windowSeconds } = deps.loginThrottle;
+  const { windowSeconds } = deps.loginThrottle;
 
   // "/client/*" also matches "/client" itself.
   app.use("/client/*", securityHeaders);
@@ -243,41 +267,55 @@ export function createWebClientRoutes(deps: WebClientDeps): Hono<WebClientEnv> {
       return c.json({ error: "invalid login", issues: parsed.error.issues }, 400);
     }
     const { client: clientName, code } = parsed.data;
+    const arrivedAt = Date.now();
 
-    // Counted by the name as presented, so an unknown name is throttled exactly
-    // like a known one and the 429 reveals nothing about which names exist.
-    const recentFailures = await deps.loginFailureRepo.countWithin(clientName, windowSeconds);
-    if (recentFailures >= maxFailures) {
+    const remoteAddress = sourceAddress(c);
+    const source = remoteAddress === null ? null : sourceNetwork(remoteAddress);
+    if (source === null) {
+      console.error(
+        `[web-client] login refused for client name "${clientName}": ` +
+          (remoteAddress === null
+            ? "the request carries no socket remote address"
+            : `the socket remote address "${remoteAddress}" is not an IP address`) +
+          ", so the throttle cannot be applied",
+      );
+      return c.json({ error: "client login is temporarily unavailable" }, 503);
+    }
+
+    // Reserved before the code is compared, atomically with the count, so a burst
+    // of parallel guesses gets at most the cap evaluated. Keyed by the name as
+    // presented, so an unknown name is throttled exactly like a known one and the
+    // 429 reveals nothing about which names exist. Every cap is per source, so a
+    // 429 closes login only for the source that earned it.
+    const reservation = await deps.loginFailureRepo.reserve(clientName, source, deps.loginThrottle);
+    if (reservation.kind === "throttled") {
       console.warn(
-        `[web-client] login throttled for client name "${clientName}": ${recentFailures} failures ` +
-          `within ${windowSeconds}s (limit ${maxFailures})`,
+        `[web-client] login throttled for client name "${clientName}" from ${source}: ${reservation.count} ` +
+          `attempts per ${reservation.scope} within ${windowSeconds}s (limit ${reservation.limit})`,
       );
       c.header("Retry-After", String(windowSeconds));
       return c.json({ error: "too many failed logins; try again later" }, 429);
     }
 
     const client = await deps.clientRepo.findByName(clientName);
-    let expected: string | null = null;
-    if (client !== null) {
-      const stored = await storedAccessCode(deps, client);
-      if (!stored.ok) return c.json({ error: "client login is temporarily unavailable" }, 503);
-      expected = stored.code;
-    }
-
-    // An unknown client still pays for a comparison, so both rejections do the same work.
-    const matched = codeMatches(code, expected ?? "") && expected !== null;
-    if (client === null || !matched) {
-      await deps.loginFailureRepo.record(clientName, windowSeconds);
+    const stored = client === null ? null : await storedAccessCode(deps, client);
+    const expected = stored?.ok === true ? stored.code : null;
+    const compared = codeMatches(code, expected ?? NO_STORED_CODE);
+    if (client === null || expected === null || !compared) {
+      const reason =
+        client === null ? "no such client" : expected === null ? "no usable stored access code" : "wrong access code";
       console.warn(
-        `[web-client] login failed for client name "${clientName}": ` +
-          `${client === null ? "no such client" : "wrong access code"} ` +
-          `(${recentFailures + 1} within ${windowSeconds}s, limit ${maxFailures})`,
+        `[web-client] login failed for client name "${clientName}" from ${source}: ${reason} ` +
+          `(${reservation.nameAndSourceCount} from this address within ${windowSeconds}s, ` +
+          `limit ${deps.loginThrottle.perNameAndSource})`,
       );
-      await delay(deps.loginFailureDelayMs);
+      // Answered at a fixed moment after arrival, so the secret-store work a known
+      // name costs does not show in the timing.
+      await delay(Math.max(0, arrivedAt + deps.loginFailureDelayMs - Date.now()));
       return c.json(LOGIN_REJECTED, 401);
     }
 
-    await deps.loginFailureRepo.purge(clientName);
+    await deps.loginFailureRepo.clearNameAndSource(clientName, source);
     await deps.sessionRepo.deleteEndedBefore(ENDED_SESSION_RETENTION_SECONDS);
     const token = randomBytes(32).toString("base64url");
     await deps.sessionRepo.create(hashToken(token), client.id, deps.sessionTtlSeconds);

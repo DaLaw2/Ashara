@@ -21,6 +21,7 @@ export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.j
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
+export type { LoginAttemptCaps } from "./repositories/client-login-failure.js";
 export { EventStoreRepository } from "./repositories/event-store.js";
 export { CostRepository } from "./repositories/cost.js";
 export type { CapabilityCostEstimate } from "./repositories/cost.js";
