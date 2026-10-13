@@ -1,0 +1,107 @@
+[hidden] {
+  display: none !important;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0 auto;
+  max-width: 64rem;
+  padding: 0 1rem 2rem;
+  color: #1d1d1f;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#status:empty {
+  display: none;
+}
+
+#status {
+  padding: 0.5rem 0.75rem;
+  background: #fff4e5;
+  border: 1px solid #f0c27b;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 18rem 1fr;
+  gap: 2rem;
+}
+
+label {
+  display: block;
+  margin-top: 0.5rem;
+  font-weight: 600;
+}
+
+input,
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  font: inherit;
+}
+
+button {
+  font: inherit;
+  margin-top: 0.5rem;
+}
+
+button.danger {
+  background: #b3261e;
+  color: #fff;
+  border: none;
+  padding: 0.3rem 0.8rem;
+}
+
+#projects {
+  list-style: none;
+  padding: 0;
+}
+
+#projects button {
+  width: 100%;
+  text-align: left;
+}
+
+#projects button[aria-current="true"] {
+  font-weight: 700;
+}
+
+#timeline {
+  list-style: none;
+  padding: 0;
+}
+
+.msg {
+  border-left: 4px solid #999;
+  margin: 0.75rem 0;
+  padding: 0.25rem 0.75rem;
+}
+
+.msg-outbound {
+  border-color: #2f6fde;
+  background: #f2f6fd;
+}
+
+.msg-inbound {
+  border-color: #3a8a3a;
+}
+
+.msg-meta {
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.msg-body {
+  white-space: pre-wrap;
+  margin: 0.25rem 0;
+}
+
+.stop {
+  border-top: 1px solid #ddd;
+  margin-top: 1.5rem;
+}

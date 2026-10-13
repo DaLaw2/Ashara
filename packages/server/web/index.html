@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ashara</title>
+  <link rel="stylesheet" href="/client/app.css">
+  <script src="/client/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Ashara</h1>
+    <button id="logout" type="button" hidden>Log out</button>
+  </header>
+
+  <p id="status" role="status"></p>
+
+  <section id="login" hidden>
+    <h2>Log in</h2>
+    <form id="login-form">
+      <label for="login-code">Access code</label>
+      <input id="login-code" name="code" type="password" autocomplete="current-password" required>
+      <button type="submit">Log in</button>
+    </form>
+  </section>
+
+  <main id="workspace" hidden>
+    <aside>
+      <section>
+        <h2>New project</h2>
+        <form id="tender-form">
+          <label for="tender-name">Project name</label>
+          <input id="tender-name" name="projectName" required>
+          <label for="tender-body">What do you want built?</label>
+          <textarea id="tender-body" name="body" rows="5" required></textarea>
+          <button type="submit">Send tender</button>
+        </form>
+      </section>
+      <section>
+        <h2>Projects</h2>
+        <ul id="projects"></ul>
+      </section>
+    </aside>
+
+    <section id="project" hidden>
+      <h2 id="project-name"></h2>
+      <ol id="timeline"></ol>
+      <div class="stop">
+        <button id="stop-open" type="button">Stop this project</button>
+        <div id="stop-confirm" hidden>
+          <p>Stopping tells Ashara to halt work on this project. Say why (optional), then confirm.</p>
+          <label for="stop-reason">Reason</label>
+          <textarea id="stop-reason" rows="2"></textarea>
+          <button id="stop-confirm-button" type="button" class="danger">Confirm stop</button>
+          <button id="stop-cancel" type="button">Cancel</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -349,3 +349,16 @@ export const clientMessages = pgTable(
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// client_sessions (migration 017, ADR-076 web client)
+// ---------------------------------------------------------------------------
+
+export const clientSessions = pgTable("client_sessions", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  // SHA-256 of the cookie's token, hex; the token itself is never stored.
+  tokenHash: text("token_hash").notNull().unique(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  expiresAt: timestamptz("expires_at").notNull(),
+  revokedAt: timestamptz("revoked_at"),
+});

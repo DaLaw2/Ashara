@@ -15,15 +15,8 @@ import {
   VisionRepository,
   ProjectRepository,
   ConfigRepository,
-  ClientMessageRepository,
 } from "@ashara/db";
-import type { CreatedProject, CreatedTender, VisionInput } from "@ashara/db";
-import {
-  ClientPostSchema,
-  TenderSchema,
-  parseClientMessage,
-  replyTargetProblem,
-} from "@ashara/engagement";
+import type { CreatedProject, VisionInput } from "@ashara/db";
 import {
   startWorkItem,
   completeWorkItem,
@@ -38,13 +31,20 @@ import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
 import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
 import { providerApiKeySecretName } from "@ashara/security";
+import {
+  listClientMessages,
+  postClientMessage,
+  readJsonBody,
+  submitTender,
+} from "./client-channel.js";
+import type { ClientChannelDeps } from "./client-channel.js";
 import { rowToWorkItem } from "./work-item-adapter.js";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables
 // ---------------------------------------------------------------------------
 
-export interface AppDeps {
+export interface AppDeps extends ClientChannelDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: EventStoreRepository;
   readonly devSessionRepo: DevSessionRepository;
@@ -52,13 +52,10 @@ export interface AppDeps {
   readonly projectRepo: ProjectRepository;
   /** A tender: the project row and its vision v1 in one transaction (K3). */
   readonly createProject: (name: string, vision: VisionInput) => Promise<CreatedProject>;
-  readonly clientMessageRepo: ClientMessageRepository;
-  /** A tender: the project row and its inbound 'tender' message in one transaction (K1). */
-  readonly createTender: (projectName: string, body: string) => Promise<CreatedTender>;
   readonly configRepo: ConfigRepository;
   /** Presence only: no route ever reads or returns a secret value. */
   readonly secretStore: { has(name: string): Promise<boolean> };
-  readonly runner: ContinuousRunner;
+  readonly runner: Pick<ContinuousRunner, "wake">;
   /**
    * Creates a whole bulk plan hierarchy AND its derived ProjectContract in one
    * transaction (mig9-t5). The composition root wires the transactional facade
@@ -134,25 +131,6 @@ const CreateVisionSchema = z.object({
   change_reason: z.string().optional(),
   changeReason: z.string().optional(),
 });
-
-const ProjectIdParamSchema = z.uuid();
-
-// `since` is an instant; one without an offset would be read in the server's zone.
-const MessagesQuerySchema = z.strictObject({
-  since: z.iso.datetime({ offset: true }).optional(),
-});
-
-type JsonBody =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly reason: string };
-
-async function readJsonBody(read: () => Promise<unknown>): Promise<JsonBody> {
-  try {
-    return { ok: true, value: await read() };
-  } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-  }
-}
 
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -418,76 +396,19 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
 
   app.post("/tenders", async (c) => {
-    const { createTender } = c.get("deps");
-    const json = await readJsonBody(() => c.req.json());
-    if (!json.ok) return c.json({ error: `request body is not JSON: ${json.reason}` }, 400);
-    const parsed = TenderSchema.safeParse(json.value);
-    if (!parsed.success) {
-      return c.json({ error: "invalid tender", issues: parsed.error.issues }, 400);
-    }
-    const created = await createTender(parsed.data.projectName, parsed.data.body);
-    return c.json(
-      { projectId: created.project.id, message: parseClientMessage(created.message) },
-      201,
-    );
+    const result = await submitTender(c.get("deps"), await readJsonBody(() => c.req.json()));
+    return c.json(result.body, result.status);
   });
 
   app.post("/projects/:projectId/messages", async (c) => {
-    const { projectRepo, clientMessageRepo } = c.get("deps");
-    const idParsed = ProjectIdParamSchema.safeParse(c.req.param("projectId"));
-    if (!idParsed.success) {
-      return c.json({ error: "projectId must be a UUID", issues: idParsed.error.issues }, 400);
-    }
-    const projectId = parseProjectId(idParsed.data);
-
     const json = await readJsonBody(() => c.req.json());
-    if (!json.ok) return c.json({ error: `request body is not JSON: ${json.reason}` }, 400);
-    const parsed = ClientPostSchema.safeParse(json.value);
-    if (!parsed.success) {
-      return c.json({ error: "invalid client message", issues: parsed.error.issues }, 400);
-    }
-    const post = parsed.data;
-
-    if (!(await projectRepo.get(projectId))) {
-      return c.json({ error: `project not found: ${projectId}` }, 404);
-    }
-
-    let inReplyTo: string | null = null;
-    if (post.kind === "answer") {
-      const target = await clientMessageRepo.findById(post.inReplyTo);
-      const problem = replyTargetProblem(projectId, target ? parseClientMessage(target) : null);
-      if (problem !== null) return c.json({ error: problem }, 400);
-      inReplyTo = post.inReplyTo;
-    }
-
-    const row = await clientMessageRepo.insertInbound({
-      projectId,
-      kind: post.kind,
-      body: post.body,
-      inReplyTo,
-    });
-    return c.json(parseClientMessage(row), 201);
+    const result = await postClientMessage(c.get("deps"), c.req.param("projectId"), json);
+    return c.json(result.body, result.status);
   });
 
   app.get("/projects/:projectId/messages", async (c) => {
-    const { projectRepo, clientMessageRepo } = c.get("deps");
-    const idParsed = ProjectIdParamSchema.safeParse(c.req.param("projectId"));
-    if (!idParsed.success) {
-      return c.json({ error: "projectId must be a UUID", issues: idParsed.error.issues }, 400);
-    }
-    const projectId = parseProjectId(idParsed.data);
-    const query = MessagesQuerySchema.safeParse(c.req.query());
-    if (!query.success) {
-      return c.json({ error: "invalid query", issues: query.error.issues }, 400);
-    }
-
-    if (!(await projectRepo.get(projectId))) {
-      return c.json({ error: `project not found: ${projectId}` }, 404);
-    }
-
-    const since = query.data.since === undefined ? undefined : new Date(query.data.since);
-    const rows = await clientMessageRepo.listByProject(projectId, since);
-    return c.json(rows.map((row) => parseClientMessage(row)));
+    const result = await listClientMessages(c.get("deps"), c.req.param("projectId"), c.req.query());
+    return c.json(result.body, result.status);
   });
 
   // -----------------------------------------------------------------------

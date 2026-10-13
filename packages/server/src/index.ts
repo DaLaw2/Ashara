@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import {
   createDb,
@@ -22,6 +21,7 @@ import {
   withPlanningTransaction,
   createProjectWithVision,
   ClientMessageRepository,
+  ClientSessionRepository,
   createProjectWithTender,
 } from "@ashara/db";
 import {
@@ -64,15 +64,14 @@ import {
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger } from "@ashara/finance";
-import { SecretStore } from "@ashara/security";
+import { CLIENT_ACCESS_CODE_SECRET_NAME, SecretStore } from "@ashara/security";
 import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { buildApp } from "./app.js";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
-import { bearerAuth } from "./middleware.js";
-import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
 import { resolveAgentOutput } from "./agent-output.js";
 import { ContainerSpawnError } from "./container-spawn.js";
@@ -84,6 +83,12 @@ import {
   loadServerMasterKey,
   resolveProviderCredentials,
 } from "./secrets.js";
+import { loadWebClientAssets } from "./web-client.js";
+
+// Policy defaults for the web client's sessions (ADR-076). A session lasts a
+// working day; a failed login answers after one second.
+const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
+const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
 
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential
@@ -468,10 +473,18 @@ async function main(): Promise<void> {
       ),
   };
 
-  const app = new Hono();
-
-  app.use("*", bearerAuth(config.apiToken));
-  app.route("/", createRoutes(appDeps));
+  // The web client (ADR-076) authenticates with a session cookie, never the API token.
+  const app = buildApp(config.apiToken, appDeps, {
+    projectRepo: appDeps.projectRepo,
+    clientMessageRepo: appDeps.clientMessageRepo,
+    createTender: appDeps.createTender,
+    secrets: secretStore,
+    accessCodeSecretName: CLIENT_ACCESS_CODE_SECRET_NAME,
+    sessionRepo: new ClientSessionRepository(db),
+    sessionTtlSeconds: CLIENT_SESSION_TTL_SECONDS,
+    loginFailureDelayMs: CLIENT_LOGIN_FAILURE_DELAY_MS,
+    assets: loadWebClientAssets(),
+  });
 
   // Startup reconciliation (Discipline B) — MUST run before the runner starts
   // cycling. A prior process may have crashed mid-dispatch (this project's history

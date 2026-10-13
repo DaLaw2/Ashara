@@ -17,6 +17,9 @@ export function parseSecretName(name: string): string {
 /** The server's bearer token for its HTTP API (ADR-075 C4). */
 export const API_TOKEN_SECRET_NAME = "server/api_token";
 
+/** The code a client presents to the web client's login (ADR-076). */
+export const CLIENT_ACCESS_CODE_SECRET_NAME = "client/access_code";
+
 /** Where a provider's API key lives in the store (ADR-075 C2). */
 export function providerApiKeySecretName(provider: string): string {
   return parseSecretName(`provider/${provider}/api_key`);

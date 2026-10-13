@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { projects, visionDocuments } from "../schema.js";
@@ -29,6 +29,12 @@ export class ProjectRepository {
   async get(id: ProjectId): Promise<ProjectRecord | null> {
     const [row] = await this.db.select().from(projects).where(eq(projects.id, id)).limit(1);
     return row ? toRecord(row) : null;
+  }
+
+  /** Every project, newest first. */
+  async list(): Promise<ProjectRecord[]> {
+    const rows = await this.db.select().from(projects).orderBy(desc(projects.createdAt), desc(projects.id));
+    return rows.map(toRecord);
   }
 }
 

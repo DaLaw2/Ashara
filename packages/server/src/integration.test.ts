@@ -23,7 +23,6 @@ import {
   ClientMessageRepository,
   createProjectWithTender,
 } from "@ashara/db";
-import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
@@ -115,7 +114,7 @@ beforeAll(async () => {
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
   const configRepo = new ConfigRepository(db);
-  const runner = { wake: () => {} } as unknown as ContinuousRunner;
+  const runner: AppDeps["runner"] = { wake: () => {} };
 
   // A throwaway master key in a temp file: never the owner's key, never the
   // owner's secrets. Only names derived from this suite's unique providers are written.
