@@ -3,12 +3,10 @@
 // ---------------------------------------------------------------------------
 
 import { createInterface } from "node:readline";
-import { z } from "zod";
 import {
     AlignmentEngine,
     createGatewayAlignmentLLM,
     alignmentReask,
-    DEFAULT_DIRECTION_ASSUMPTIONS,
 } from "@ashara/engagement";
 import type { AlignmentLLM, AlignmentResult, DirectionInference, DirectionQuestion } from "@ashara/engagement";
 import { DecompositionEngine, resetIdCounter, createGatewayDecompositionLLM } from "@ashara/planning";
@@ -19,12 +17,6 @@ import { loadServerEnv } from "@ashara/shared";
 import { AsharaClient } from "../client.js";
 import type { BulkWorkItem, WorkItemLevel } from "../client.js";
 import { monitorProgress } from "../display.js";
-
-const DeepSeekBalanceSchema = z.object({
-    balance_infos: z.array(z.object({
-        total_balance: z.string(),
-    })),
-});
 
 // --- Error type ---
 
@@ -87,7 +79,6 @@ export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
         checkedSources.push(`API ${serverUrl}`);
         console.log(`[Vision] config loaded from API (${serverUrl})`);
     } catch (e) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const msg = e instanceof Error ? e.message : String(e);
         throw new VisionError(
             "llm_unavailable",
@@ -131,21 +122,6 @@ export interface UserAnswer {
     readonly answer: string;
 }
 
-/**
- * A non-interactive default-assumption record (ADR-019, T3): the CLI's
- * best-effort stand-in for a `UserAnswer` when nothing is running
- * interactively to answer `question`. Kept as a distinct type (not folded
- * into `UserAnswer`) so the enriched north star and the persisted vision
- * document can label system-picked defaults differently from what a human
- * actually confirmed -- the whole point of recording an assumption is that
- * it is honestly NOT the same thing as a user answer.
- */
-export interface Assumption {
-    readonly category: string;
-    readonly question: string;
-    readonly value: string;
-}
-
 function displayInferences(inferences: DirectionInference[]): void {
     if (inferences.length === 0) return;
     console.log("\n  System Understanding:");
@@ -171,46 +147,15 @@ function displayQuestions(questions: DirectionQuestion[]): void {
     }
 }
 
-/**
- * Picks the non-interactive default for an open question (ADR-019 T3). Prefers
- * a tentative same-category inference if one exists (the "highest-confidence
- * default" from the inference set) -- in the real `AlignmentEngine.align`
- * pipeline a question's category never has one (see `generateQuestions`'s
- * ambiguity gate: a category is only asked about when it has NO inference, or
- * is explicitly flagged ambiguous, and those two sets are schema-enforced to
- * be disjoint) -- so this falls through to the documented per-axis default in
- * practice. The inference branch is defensive, not dead: it protects a caller
- * that builds `AlignmentResult` some other way (e.g. a future dashboard flow)
- * from silently losing a real tentative guess to a generic fallback.
- */
-export function pickDefaultAssumption(
-    question: DirectionQuestion,
-    inferences: DirectionInference[],
-): string {
-    const tentative = inferences.find((i) => i.category === question.category);
-    return tentative?.inference ?? DEFAULT_DIRECTION_ASSUMPTIONS[question.category];
-}
-
 export function buildEnrichedNorthStar(
     visionSummary: string,
     answers: UserAnswer[],
-    assumptions: Assumption[] = [],
 ): string {
     const sections = [visionSummary];
 
     if (answers.length > 0) {
         const answerContext = answers.map((a) => `${a.question} -> ${a.answer}`).join("\n");
         sections.push(`User clarifications:\n${answerContext}`);
-    }
-
-    if (assumptions.length > 0) {
-        // Labeled distinctly from "User clarifications" -- these were never
-        // confirmed by a human, so downstream planning prompts should read
-        // them as a working default, not a settled decision.
-        const assumptionContext = assumptions
-            .map((a) => `${a.question} -> ${a.value} (assumed default, not confirmed by user)`)
-            .join("\n");
-        sections.push(`System-assumed defaults (non-interactive mode; rerun interactively to change):\n${assumptionContext}`);
     }
 
     if (sections.length === 1) return visionSummary;
@@ -242,7 +187,6 @@ export async function alignVision(visionText: string, llm: AlignmentLLM): Promis
     try {
         return await engine.align({ description: visionText });
     } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         throw new VisionError("alignment_failed", `Alignment failed: ${message}`, { cause: err });
     }
@@ -255,13 +199,12 @@ export async function decomposeVision(
     alignment: AlignmentResult,
     llm?: DecompositionLLM,
     answers?: UserAnswer[],
-    assumptions?: Assumption[],
 ): Promise<DecompositionResult> {
     const engine = new DecompositionEngine(llm ?? null);
 
     resetIdCounter();
 
-    const enrichedNorthStar = buildEnrichedNorthStar(alignment.visionSummary, answers ?? [], assumptions ?? []);
+    const enrichedNorthStar = buildEnrichedNorthStar(alignment.visionSummary, answers ?? []);
 
     const input = {
         epicTitle: visionText.length > 80 ? visionText.slice(0, 80) : visionText,
@@ -273,7 +216,6 @@ export async function decomposeVision(
     try {
         return await engine.decompose(input);
     } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         throw new VisionError("decomposition_failed", `Decomposition failed: ${message}`);
     }
@@ -365,28 +307,6 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     const llm = await tryCreateLLM();
     console.log("[ashara] Using real LLM gateway for alignment and decomposition");
 
-    // 0b. Pre-flight DeepSeek balance check (best-effort)
-    if (process.env["DEEPSEEK_API_KEY"]) {
-        try {
-            const balanceResp = await fetch("https://api.deepseek.com/user/balance", {
-                headers: { Authorization: `Bearer ${process.env["DEEPSEEK_API_KEY"]}` },
-            });
-            if (balanceResp.ok) {
-                const parsed = DeepSeekBalanceSchema.safeParse(await balanceResp.json());
-                if (parsed.success) {
-                    const balance = parseFloat(parsed.data.balance_infos[0]?.total_balance ?? "0");
-                    console.log(`[ashara] DeepSeek balance: $${balance.toFixed(2)}`);
-                    if (balance < 1.0) {
-                        console.warn(`[ashara] WARNING: DeepSeek balance is low ($${balance.toFixed(2)})`);
-                    }
-                }
-            }
-        } catch (e: unknown) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
-            console.warn(`[ashara] Failed to check DeepSeek balance: ${e instanceof Error ? e.message : String(e)}`);
-        }
-    }
-
     // 1. Alignment
     console.log("[ashara] Analyzing vision...");
     const alignment = await alignVision(visionText, llm);
@@ -403,7 +323,6 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     // fallback selector (unchanged from before this flag existed).
     const isInteractive = options.noInteract ? false : (process.stdin.isTTY ?? false);
     const answers: UserAnswer[] = [];
-    const assumptions: Assumption[] = [];
 
     if (alignment.questions.length > 0 && isInteractive) {
         displayQuestions(alignment.questions);
@@ -421,19 +340,11 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
             console.log(`\n[ashara] Received ${answers.length} answer(s).`);
         }
     } else if (alignment.questions.length > 0) {
-        // ADR-019 non-interactive default-assumption path (T3): each open
-        // question gets a recorded, Inferred-confidence assumption instead of
-        // being silently discarded. It stays visible in `open_questions` too
-        // (Discipline C honest residue) -- nothing here was actually
-        // confirmed by a human, only tentatively resolved by the system.
+        // Non-interactive: nothing answers the questions, so each one is
+        // recorded as open on the vision document (openQuestions below).
         console.log(
-            `[ashara] ${alignment.questions.length} question(s) unanswered (non-interactive mode) -- recording default assumptions:`,
+            `[ashara] ${alignment.questions.length} question(s) unanswered (non-interactive mode) -- recorded as open questions`,
         );
-        for (const q of alignment.questions) {
-            const value = pickDefaultAssumption(q, alignment.inferences);
-            assumptions.push({ category: q.category, question: q.question, value });
-            console.log(`    Assumed: ${value} — rerun interactively to change`);
-        }
     }
 
     // 4. Confirm before proceeding
@@ -448,24 +359,12 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     // 5. Persist vision + alignment to server
     console.log("[ashara] Persisting vision document...");
     try {
-        const confirmedDirections = [
-            ...alignment.inferences.map(inf => ({
-                dimension: inf.category,
-                direction: inf.inference,
-                confidence: (inf.confidence === "high" ? "Explicit" : "Inferred") as "Explicit" | "Inferred",
-                source: (inf.source === "explicit" ? "UserAnswer" : "SystemInference") as "UserAnswer" | "SystemInference" | "AlignmentConversation",
-            })),
-            // Non-interactive default assumptions (T3): always Inferred
-            // confidence / SystemInference source -- distinct from both an
-            // explicit vision-text signal and a real user answer, since
-            // neither actually happened here.
-            ...assumptions.map(a => ({
-                dimension: a.category,
-                direction: a.value,
-                confidence: "Inferred" as const,
-                source: "SystemInference" as const,
-            })),
-        ];
+        const confirmedDirections = alignment.inferences.map(inf => ({
+            dimension: inf.category,
+            direction: inf.inference,
+            confidence: (inf.confidence === "high" ? "Explicit" : "Inferred") as "Explicit" | "Inferred",
+            source: (inf.source === "explicit" ? "UserAnswer" : "SystemInference") as "UserAnswer" | "SystemInference" | "AlignmentConversation",
+        }));
         const userAnswers = answers.map(a => ({
             question: a.question,
             answer: a.answer,
@@ -494,14 +393,13 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
         });
         console.log("[ashara] Vision document persisted.");
     } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`[ashara] Failed to persist vision (non-fatal): ${message}`);
     }
 
-    // 6. Decomposition (with user answers and/or recorded assumptions)
+    // 6. Decomposition (with user answers)
     console.log("[ashara] Decomposing into work items...");
-    const decomposition = await decomposeVision(visionText, alignment, llm, answers, assumptions);
+    const decomposition = await decomposeVision(visionText, alignment, llm, answers);
     console.log(
         `[ashara] Created: ${decomposition.stories.length} stories, ${decomposition.tasks.length} tasks`,
     );
@@ -511,7 +409,6 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     try {
         await postWorkItems(client, decomposition);
     } catch (err) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[ashara] Failed to post work items: ${message}`);
         return 1;

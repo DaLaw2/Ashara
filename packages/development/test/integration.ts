@@ -223,7 +223,6 @@ async function runStep(
             step: name,
             passed: false,
             duration: Date.now() - start,
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             detail: err instanceof Error ? err.message : String(err),
         };
     }

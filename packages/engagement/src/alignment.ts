@@ -176,38 +176,6 @@ const CATEGORY_QUESTIONS: Record<DirectionCategory, { question: string; why: str
   },
 };
 
-/**
- * Documented, per-category fallback assumption (ADR-019 non-interactive mode).
- * Used when a question fires (category uncovered or flagged ambiguous, see
- * `generateQuestions`) but nothing is running interactively to answer it: the
- * CLI records this value as an `Inferred`-confidence, `SystemInference`-source
- * assumption instead of silently discarding the question. Each value is the
- * safest, least-committal choice for that axis -- e.g. "no auth" over
- * "enterprise SSO", "core flow only" over "full feature set" (ADR-018
- * scope-drift guardrail) -- so a wrong guess costs the least if the vision
- * turns out to need something else. `priorities` defaults to reliability
- * because that is this project's own stated engineering priority (CLAUDE.md
- * "Safety & Stability"), not an arbitrary pick.
- *
- * Deliberately exhaustive over `DirectionCategory` (enforced by the `Record`
- * type -- adding a category without a default here is a compile error) so the
- * non-interactive path never has a question it cannot at least tentatively
- * resolve.
- */
-export const DEFAULT_DIRECTION_ASSUMPTIONS: Record<DirectionCategory, string> = {
-  platform: "Unspecified application",
-  architecture: "Monolithic architecture",
-  data_flow: "Request-response (synchronous)",
-  scale: "Single user / personal tool",
-  persistence: "No persistence assumed",
-  deployment: "Cloud deployment",
-  integration: "No external integrations",
-  security: "Basic user authentication",
-  scope: "Core flow only (MVP); defer anything not explicitly named",
-  stack: "Use the project's existing stack/conventions",
-  priorities: "Reliability / production-readiness",
-};
-
 function buildInferencePrompt(visionRaw: string, categories: readonly DirectionCategory[]): string {
   const lines = [
     `You are inferring unstated technical/product directions for a project vision.`,

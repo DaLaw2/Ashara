@@ -8,7 +8,6 @@ const DEFAULT_MAX_DEPTH = 3;
 
 export const listDirectoryTool: ToolDefinition = {
     name: "list_directory",
-    shouldDefer: true,
     description:
         "List files and directories at the given path. " +
         "Use this to explore project structure before making changes — know what exists first. " +
@@ -68,7 +67,6 @@ export class ListDirectoryExecutor implements ToolExecutor {
             }
             return { success: true, output: entries.join("\n") };
         } catch (err: unknown) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const msg = err instanceof Error ? err.message : String(err);
             return { success: false, output: "", error: `Failed to list directory: ${msg}` };
         }

@@ -235,7 +235,6 @@ function main(): void {
   try {
     rules = parseRules(fs.readFileSync(rulesPath, "utf-8"), path.relative(root, rulesPath));
   } catch (err) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   }

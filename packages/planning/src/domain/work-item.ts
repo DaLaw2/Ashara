@@ -71,19 +71,6 @@ export function createPendingWorkItem(
   };
 }
 
-export function createTask(
-  title: string,
-  runScope: string,
-  parentId?: WorkItemId,
-  taskSpec?: StoredTaskSpec,
-): WorkItem {
-  return createPendingWorkItem("Task", title, runScope, parentId, undefined, taskSpec);
-}
-
-// canTransitionTo is now in @ashara/shared (Published Language, ADR-044).
-// Re-exported here for backward compatibility during the ACL migration.
-export { canTransitionTo } from "@ashara/shared";
-
 export function startWorkItem(item: WorkItem): void {
   if (!canTransitionTo(item.status, "InProgress")) {
     throw new InvalidStatusTransition(item.id, item.status, "InProgress");
@@ -206,37 +193,6 @@ export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): vo
   item.updatedAt = new Date();
   item.events.push(
     createDomainEvent("work_item.abandoned", "planning", {
-      work_item_id: item.id,
-      level: item.level,
-    }),
-  );
-}
-
-/**
- * Reopens a Completed item back to Pending when evidence shows the artifact is
- * broken (e.g. a downstream test proves the delivered code does not work). The
- * evidence string is REQUIRED — fail-closed: you cannot reopen without a reason.
- * The evidence is stored in blockedReason so the next dispatch attempt knows WHY
- * the item was reopened. Pins its from-status to `Completed` EXPLICITLY: although
- * the graph edge Completed -> Pending is now legal, only this method may traverse
- * it — the reopen intent is distinct from unblock, replan, and requeue.
- * @public — caller lands in t-redecompose-against-artifact (P2 wave 2)
- */
-export function reopenWorkItem(item: WorkItem, evidence: string): void {
-  if (item.status !== "Completed") {
-    throw new InvalidStatusTransition(item.id, item.status, "Pending");
-  }
-  if (!evidence || evidence.trim().length === 0) {
-    throw new Error("reopenWorkItem: evidence is required (fail-closed)");
-  }
-  item.status = "Pending";
-  item.blockedReason = {
-    source: "reopen",
-    evidence,
-  };
-  item.updatedAt = new Date();
-  item.events.push(
-    createDomainEvent("work_item.reopened", "planning", {
       work_item_id: item.id,
       level: item.level,
     }),

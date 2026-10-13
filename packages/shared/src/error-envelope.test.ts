@@ -88,17 +88,12 @@ describe("errorEnvelopeSchema", () => {
         context: { taskId: "task-123" },
         timestamp: "2026-07-23T00:00:00.000Z",
       },
-      gateResults: { smoke: { passed: false, output: "missing POST /api/users" } },
       agentOutput: { filesChanged: ["src/routes.ts"] },
     };
 
     const parsed = errorEnvelopeSchema.parse(JSON.parse(JSON.stringify(envelope)));
     expect(parsed.outcome).toBe("failed");
     expect(parsed.chain.context?.taskId).toBe("task-123");
-    expect(parsed.gateResults?.smoke).toEqual({
-      passed: false,
-      output: "missing POST /api/users",
-    });
   });
 });
 

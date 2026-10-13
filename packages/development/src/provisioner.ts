@@ -55,9 +55,6 @@ export const ExecResultSchema = z.object({
 // Types derived from schemas
 // ---------------------------------------------------------------------------
 
-export type Toolchain = z.infer<typeof ToolchainSchema>;
-type NetworkPhase = z.infer<typeof NetworkPhaseSchema>;
-export type NetworkPolicy = z.infer<typeof NetworkPolicySchema>;
 export type EnvironmentSpec = z.infer<typeof EnvironmentSpecSchema>;
 export type ExecResult = z.infer<typeof ExecResultSchema>;
 
@@ -86,34 +83,6 @@ export interface ProvisionedEnv {
   readonly version: number;
   readonly spec: EnvironmentSpec;
   readonly status: ProvisionedEnvStatus;
-}
-
-// ---------------------------------------------------------------------------
-// EnvChangeRequest — a proposed change from any stage, before governance
-// ---------------------------------------------------------------------------
-
-export type SafetyTier = "auto" | "orchestrator" | "owner";
-
-interface EnvChangeBase {
-  readonly reason: string;
-  readonly requestedBy: string;
-  readonly safetyTier: SafetyTier;
-}
-
-export type EnvChangeRequest =
-  | (EnvChangeBase & { readonly kind: "add_toolchain"; readonly detail: Toolchain })
-  | (EnvChangeBase & { readonly kind: "add_package"; readonly detail: string })
-  | (EnvChangeBase & { readonly kind: "set_env"; readonly detail: Record<string, string> })
-  | (EnvChangeBase & { readonly kind: "change_network"; readonly detail: Partial<NetworkPolicy> });
-
-// ---------------------------------------------------------------------------
-// EnvChangeDelta — an approved change (after governance review)
-// ---------------------------------------------------------------------------
-
-export interface EnvChangeDelta {
-  readonly request: EnvChangeRequest;
-  readonly approvedBy: string;
-  readonly approvedAt: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +122,6 @@ export class TeardownError extends Error {
 
 export interface Provisioner {
   provision(spec: EnvironmentSpec): Promise<ProvisionedEnv>;
-  update(env: ProvisionedEnv, delta: EnvChangeDelta): Promise<ProvisionedEnv>;
   execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult>;
   teardown(env: ProvisionedEnv): Promise<void>;
   activeContainerName(): string | undefined;

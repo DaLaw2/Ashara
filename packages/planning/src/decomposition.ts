@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
+import type { ProjectKnowledge } from "@ashara/shared";
 import { ProjectKnowledgeSchema, nodeLabels } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
@@ -47,10 +47,6 @@ const POSITIVE_FRAMING_RULES: ReadonlyArray<readonly [RegExp, string]> = [
     [/\bmust\s+not\s+(.+)/gi, "ensure $1 is avoided"],
     [/\bavoid\s+(.+)/gi, "prefer alternatives to $1"],
 ];
-
-export function inferCapability(_task: { title: string; description?: string; level: string }): CapabilityLevel {
-    return "Strong";
-}
 
 /**
  * SEMANTIC gate on the derived knowledge graph, run inside the reliability
@@ -121,7 +117,7 @@ export class DecompositionEngine {
                 : this.deriveDeliverables(task),
             checks: task.checks && task.checks.length > 0 ? task.checks : [],
             priorWorkPointers,
-            capability: inferCapability(task),
+            capability: "Strong",
         };
     }
 
@@ -178,7 +174,6 @@ export class DecompositionEngine {
         // out to 3-4 layers and reproduce the 40-item explosion this strategy
         // exists to avoid.
         const maxDepth = this.config.maxDepth;
-        const maxTotalItems = this.config.maxTotalItems;
 
         const epicId = generateId("epic");
         const epic: WorkItemSpec = {
@@ -208,7 +203,7 @@ export class DecompositionEngine {
         const knownInput: DecompositionInput = { ...input, knowledge };
 
         const tasks = await this.decomposeEpicIntoTasks(epic, knownInput);
-        for (const task of this.capItems(tasks, maxTotalItems, 1)) {
+        for (const task of tasks) {
             const taskSpec = this.generateTaskSpec(task, knownInput);
             allTasks.push({ ...task, taskSpec });
             for (const dep of task.dependsOn) {
@@ -228,14 +223,6 @@ export class DecompositionEngine {
             dependencyEdges,
             knowledge,
         };
-    }
-
-    private capItems(items: WorkItemSpec[], maxTotalItems: number, currentCount: number): WorkItemSpec[] {
-        if (maxTotalItems <= 0) {
-            return items;
-        }
-        const remaining = Math.max(0, maxTotalItems - currentCount);
-        return items.slice(0, remaining);
     }
 
     /**

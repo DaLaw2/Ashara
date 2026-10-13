@@ -77,7 +77,6 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
       await execFileAsync("git", args, { cwd: targetPath });
     } catch (e) {
       const stderr = e instanceof Error && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       const message = e instanceof Error ? e.message : String(e);
       return {
         status: "error",
@@ -94,7 +93,6 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     await execFileAsync("git", ["merge", "--no-commit", "--no-ff", branch], { cwd: targetPath });
     return { status: "clean" };
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const errMsg = e instanceof Error ? e.message : String(e);
     const stderr = (e as { stderr?: string }).stderr ?? "";
     console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
@@ -114,13 +112,11 @@ export async function abortMerge(targetPath: string): Promise<void> {
   try {
     await execFileAsync("git", ["checkout", "--", "."], { cwd: targetPath });
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[abortMerge] git checkout -- . failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   try {
     await execFileAsync("git", ["clean", "-fd"], { cwd: targetPath });
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[abortMerge] git clean -fd failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   await execFileAsync("git", ["merge", "--abort"], { cwd: targetPath });
@@ -143,7 +139,6 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
       await execFileAsync("git", ["checkout", "main"], { cwd: targetPath });
     }
   } catch (e: unknown) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

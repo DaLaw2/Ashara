@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
 import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
@@ -19,6 +19,9 @@ import {
   taskCostHistory,
   brainstormLog,
   failedApproaches,
+  providerConfigs,
+  systemSettings,
+  visionDocuments,
 } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -200,7 +203,7 @@ describe("EventStoreRepository", () => {
       correlationId: randomUUID(),
       payload: { key: "value", nested: { a: 1 } },
     };
-    await repo.publish(event, "Internal");
+    await repo.publish(event);
     createdEventIds.push(eventId);
 
     const [row] = await db
@@ -214,8 +217,6 @@ describe("EventStoreRepository", () => {
     expect(row.eventType).toBe("TestEvent");
     expect(row.sourceContext).toBe("integration-test");
     expect(row.payload).toEqual({ key: "value", nested: { a: 1 } });
-    expect(row.priority).toBe("Internal");
-    expect(row.processed).toBe(false);
     expect(row.timestamp).toBeInstanceOf(Date);
     expect(row.createdAt).toBeInstanceOf(Date);
   });
@@ -232,7 +233,7 @@ describe("VisionRepository", () => {
     repo = new VisionRepository(db);
   });
 
-  test("create inserts a vision document and getById reads it back", async () => {
+  test("create inserts a vision document that reads back by id", async () => {
     const doc = {
       visionText: "Integration test vision text",
       summary: "Test summary",
@@ -250,8 +251,8 @@ describe("VisionRepository", () => {
     expect(created.visionText).toBe("Integration test vision text");
     expect(typeof created.version).toBe("number");
 
-    const row = await repo.getById(created.id);
-    expect(row).not.toBeNull();
+    const [row] = await db.select().from(visionDocuments).where(eq(visionDocuments.id, created.id));
+    expect(row).toBeDefined();
     expect(row!.summary).toBe("Test summary");
     expect(row!.inferences).toEqual({ key: "val" });
   });
@@ -265,72 +266,43 @@ describe("ConfigRepository", () => {
   let repo: ConfigRepository;
   const testProviderName = `test-provider-${randomUUID().slice(0, 8)}`;
   const testModelId = `test-model-${randomUUID().slice(0, 8)}`;
-  const testSettingKey = `test-setting-${randomUUID().slice(0, 8)}`;
 
   beforeAll(() => {
     repo = new ConfigRepository(db);
   });
 
-  // ConfigRepository manages three distinct tables (providers, models,
-  // settings) with independent upsert semantics; one round trip per table,
-  // kept as a single test since all three back the same repository.
-  test("seedProviders, seedModelsFromToml, and updateSetting each round-trip through their table", async () => {
+  test("providers and upsertModelConfig each round-trip through their table", async () => {
     createdProviderNames.push(testProviderName);
-    await repo.seedProviders([
-      {
-        name: testProviderName,
-        providerType: "openai-compatible",
-        apiKey: "sk-test-key-12345",
-        baseUrl: "http://localhost:11434/v1",
-      },
-    ]);
+    await db.insert(providerConfigs).values({
+      name: testProviderName,
+      providerType: "openai-compatible",
+      apiKey: "sk-test-key-12345",
+      baseUrl: "http://localhost:11434/v1",
+    });
     const providers = await repo.listProviderConfigs();
     const provider = providers.find((p) => p.name === testProviderName);
     expect(provider?.providerType).toBe("openai-compatible");
     expect(provider?.apiKey).toBe("sk-test-key-12345");
 
     createdModelIds.push(testModelId);
-    await repo.seedModelsFromToml([
-      {
-        modelId: testModelId,
-        providerName: testProviderName,
-        capability: "Strong",
-        inputCostPer1m: 3.0,
-      },
-    ]);
+    await repo.upsertModelConfig({
+      modelId: testModelId,
+      providerName: testProviderName,
+      capability: "Strong",
+      inputCostPer1m: 3.0,
+      outputCostPer1m: 0,
+      maxContextTokens: 128000,
+    });
     const models = await repo.listModelConfigs();
     const model = models.find((m) => m.modelId === testModelId);
     expect(model?.providerName).toBe(testProviderName);
     expect(model?.capability).toBe("Strong");
-
-    createdSettingKeys.push(testSettingKey);
-    await repo.updateSetting(testSettingKey, "initial-value");
-    const settings = await repo.getSettings();
-    expect(settings.find((s) => s.key === testSettingKey)?.value).toBe("initial-value");
-  });
-
-  test("seedProviders without a key does not clobber an existing key", async () => {
-    // Seed with a key first.
-    const providerName = `test-noclobber-${randomUUID().slice(0, 8)}`;
-    createdProviderNames.push(providerName);
-    await repo.seedProviders([
-      { name: providerName, providerType: "anthropic", apiKey: "sk-real-key-abc" },
-    ]);
-
-    // Re-seed WITHOUT a key — simulates the server startup seed path.
-    await repo.seedProviders([
-      { name: providerName, providerType: "anthropic" },
-    ]);
-
-    const providers = await repo.listProviderConfigs();
-    const row = providers.find((p) => p.name === providerName);
-    expect(row?.apiKey).toBe("sk-real-key-abc");
   });
 
   test("getSetting returns the value for an existing key", async () => {
     const key = `test-getsetting-${randomUUID().slice(0, 8)}`;
     createdSettingKeys.push(key);
-    await repo.updateSetting(key, "hello");
+    await db.insert(systemSettings).values({ key, value: "hello" });
     expect(await repo.getSetting(key)).toBe("hello");
   });
 

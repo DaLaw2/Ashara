@@ -1,4 +1,4 @@
-import { and, eq, isNull, asc, sql } from "drizzle-orm";
+import { and, eq, asc, sql } from "drizzle-orm";
 import {
   parseWorkItemStatus,
   canTransitionTo,
@@ -159,29 +159,6 @@ export class WorkItemRepository {
       .from(workItems)
       .where(eq(workItems.parentId, parentId));
     return rows.map((row) => this.validateRow(row));
-  }
-
-  async findDuplicate(level: string, title: string, parentId: string | null) {
-    const conditions = parentId
-      ? and(
-          eq(workItems.level, level),
-          eq(workItems.title, title),
-          eq(workItems.parentId, parentId),
-          eq(workItems.status, "Pending"),
-        )
-      : and(
-          eq(workItems.level, level),
-          eq(workItems.title, title),
-          isNull(workItems.parentId),
-          eq(workItems.status, "Pending"),
-        );
-
-    const [row] = await this.db
-      .select()
-      .from(workItems)
-      .where(conditions)
-      .limit(1);
-    return row ? this.validateRow(row) : null;
   }
 
   async listAllDependencies() {

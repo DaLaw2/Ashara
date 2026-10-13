@@ -16,7 +16,6 @@
 // Domain types
 export type { WorkItem } from "@ashara/planning";
 export type { WorkItemRepository } from "@ashara/planning";
-export type { ContractRepository } from "@ashara/planning";
 export type { CoverageHold } from "@ashara/planning";
 
 // Termination & run-summary types
@@ -47,7 +46,6 @@ export { PlanningService, DependencyGraph } from "@ashara/planning";
 
 // Work-item domain methods
 export {
-  canTransitionTo,
   createPendingWorkItem,
   startWorkItem,
   failWorkItem,
@@ -63,9 +61,8 @@ export { decomposeLeafStories } from "@ashara/planning";
 export { createCoverageRollupGuard, reconcileCoverage } from "@ashara/planning";
 export { computeCoverageGaps, isBlockingCoverageGap } from "@ashara/planning";
 
-// Failure recovery & task split
+// Failure recovery
 export { recoverFailedItem } from "@ashara/planning";
-export { shouldSplit, splitFailedTask } from "@ashara/planning";
 
 // Brainstorm & NorthStar orchestration
 export {

@@ -123,7 +123,6 @@ async function collectFiles(
             }
         }
     } catch (e: unknown) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         console.warn(`[collectFiles] Failed to read directory ${dir}: ${e instanceof Error ? e.message : String(e)}`);
     }
 }

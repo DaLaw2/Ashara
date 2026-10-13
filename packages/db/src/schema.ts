@@ -9,7 +9,6 @@ import {
   integer,
   bigint,
   doublePrecision,
-  customType,
   unique,
   index,
 } from "drizzle-orm/pg-core";
@@ -20,12 +19,6 @@ function timestamptz(name?: string) {
     ? timestamp(name, { withTimezone: true })
     : timestamp({ withTimezone: true });
 }
-
-const vector = customType<{ data: string; driverType: string }>({
-  dataType() {
-    return "vector(1024)";
-  },
-});
 
 // ---------------------------------------------------------------------------
 // work_items
@@ -81,8 +74,6 @@ export const domainEvents = pgTable("domain_events", {
   sourceContext: varchar("source_context", { length: 50 }).notNull(),
   correlationId: uuid("correlation_id"),
   payload: jsonb().notNull().default({}),
-  priority: varchar({ length: 10 }).notNull().default("Internal"),
-  processed: boolean().notNull().default(false),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 
@@ -121,7 +112,6 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
   ingestionTime: timestamptz("ingestion_time").notNull().defaultNow(),
   decisionData: jsonb("decision_data"),
   findingData: jsonb("finding_data"),
-  embedding: vector("embedding"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   freshness: varchar({ length: 10 }).notNull().default("fresh"),
   sourceTaskId: uuid("source_task_id").references(() => workItems.id),
@@ -206,7 +196,6 @@ export const modelConfigs = pgTable("model_configs", {
   apiModelId: text("api_model_id"),
   capability: text().notNull(),
   formatGroup: text("format_group").notNull().default("native-fc"),
-  strictMode: boolean("strict_mode").notNull().default(false),
   inputCostPer1m: doublePrecision("input_cost_per_1m").notNull().default(0),
   outputCostPer1m: doublePrecision("output_cost_per_1m").notNull().default(0),
   maxContextTokens: integer("max_context_tokens").notNull().default(128000),

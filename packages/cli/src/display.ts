@@ -49,7 +49,6 @@ export async function monitorProgress(client: AsharaClient): Promise<boolean> {
             items = await client.listWorkItems();
             sessions = await client.listSessions();
         } catch (err) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             console.error(`[ashara] Error polling server: ${message}`);
             await sleep(POLL_INTERVAL_MS);

@@ -25,12 +25,6 @@ export const errorEnvelopeSchema = z.object({
   outcome: z.enum(["failed", "blocked"]),
   summary: z.string(),
   chain: errorLayerSchema,
-  gateResults: z
-    .object({
-      integration: z.unknown().optional(),
-      smoke: z.unknown().optional(),
-    })
-    .optional(),
   agentOutput: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -68,7 +62,6 @@ export function wrapError(
   const message =
     existingLayer != null
       ? existingLayer.message
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       : error instanceof Error
         ? error.message
         : String(error);

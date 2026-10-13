@@ -49,7 +49,6 @@ export {
 export type {
   GatewayConfig,
   LLMCallRecord,
-  ModelPreferences,
   ProviderConfig,
   FormatGroup,
   ModelConfig,

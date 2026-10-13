@@ -52,9 +52,13 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     expect(config.coreLoop.budgetLimitUsd).toBe(1);
   });
 
-  test("defaults to 5 when neither is set", () => {
-    const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect(config.coreLoop.budgetLimitUsd).toBe(5);
+  test("refuses to start when neither is set", () => {
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/must be set explicitly/);
+  });
+
+  test.each(["0", "-1", "abc", "1usd"])("rejects an unusable cap %s instead of substituting one", (raw) => {
+    process.env["ASHARA_BUDGET_TOTAL"] = raw;
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/not a positive finite number/);
   });
 
   test("the economy stop trips at the env cap (ASHARA_BUDGET_TOTAL=1)", () => {
@@ -66,13 +70,11 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     // Below the cap: economy stop must NOT trip.
     budget.accumulateCost(measured(0.9293), "Strong", true);
     expect(budget.isExhausted()).toBe(false);
-    expect(budget.checkpoint()).not.toBe("exhausted");
 
     // The Run-11 over-run shape: crossing $1 must trip the economy stop.
     budget.accumulateCost(measured(0.1512), "Strong", true);
     expect(budget.totalCostUsd).toBeCloseTo(1.0805);
     expect(budget.isExhausted()).toBe(true);
-    expect(budget.checkpoint()).toBe("exhausted");
   });
 
   // An agent that crashed, timed out, or wrote malformed output reports no cost.

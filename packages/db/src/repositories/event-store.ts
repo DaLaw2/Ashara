@@ -1,4 +1,4 @@
-import { eq, asc, desc, sql } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import type { Database } from "../connection.js";
 import { domainEvents } from "../schema.js";
 
@@ -15,7 +15,6 @@ export class EventStoreRepository {
       // open-by-design: event payload is BC-specific, matches DomainEvent.payload
       payload: Record<string, unknown>;
     },
-    priority: "External" | "Internal",
   ) {
     await this.db.insert(domainEvents).values({
       eventId: event.eventId,
@@ -24,26 +23,7 @@ export class EventStoreRepository {
       sourceContext: event.sourceContext,
       correlationId: event.correlationId ?? null,
       payload: event.payload,
-      priority,
     });
-  }
-
-  async pollUnprocessed() {
-    return this.db
-      .select()
-      .from(domainEvents)
-      .where(eq(domainEvents.processed, false))
-      .orderBy(
-        sql`CASE WHEN ${domainEvents.priority} = 'External' THEN 0 ELSE 1 END`,
-        asc(domainEvents.timestamp),
-      );
-  }
-
-  async markProcessed(eventId: string) {
-    await this.db
-      .update(domainEvents)
-      .set({ processed: true })
-      .where(eq(domainEvents.eventId, eventId));
   }
 
   async listRecent(limit: number) {

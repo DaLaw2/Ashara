@@ -1,4 +1,4 @@
-import type { WorkItemId, WorkItemLevel, WorkItemStatus } from "@ashara/shared";
+import type { WorkItemId, WorkItemStatus } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
 
 export interface WorkItemRepository {
@@ -27,7 +27,6 @@ export interface WorkItemRepository {
   addDependency(fromId: WorkItemId, toId: WorkItemId): Promise<void>;
   getDependencies(itemId: WorkItemId): Promise<WorkItemId[]>;
   findChildren(parentId: WorkItemId): Promise<WorkItem[]>;
-  findDuplicate(level: WorkItemLevel, title: string, parentId?: WorkItemId): Promise<WorkItem | null>;
   listAllDependencies(): Promise<Array<{ fromId: WorkItemId; toId: WorkItemId }>>;
   /**
    * Runs `fn` atomically. The repository handed to the callback is

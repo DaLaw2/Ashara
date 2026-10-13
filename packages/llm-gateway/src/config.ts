@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import type { CapabilityLevel } from "@ashara/shared";
 import {
   loadProviderKeys,
   loadProviderBaseUrls,
@@ -10,7 +9,7 @@ import {
 import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 import { InvalidGatewayCatalog } from "./errors.js";
-import type { FormatGroup, GatewayConfig, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
+import type { FormatGroup, GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
 
 /**
  * A provider's credentials for gateway configuration. Decoupled from the
@@ -95,7 +94,6 @@ const CatalogModelSchema = z.object({
   apiModelId: z.string().nullable(),
   capability: z.string().min(1),
   formatGroup: z.string().min(1),
-  strictMode: z.boolean(),
   inputCostPer1m: z.number(),
   outputCostPer1m: z.number(),
   maxContextTokens: z.number().int().positive(),
@@ -112,35 +110,9 @@ const CatalogProviderSchema = z.object({
 export const GatewayCatalogSchema = z.object({
   models: z.array(CatalogModelSchema).min(1),
   providers: z.array(CatalogProviderSchema).min(1),
-  settings: z.record(z.string(), z.string()).default({}),
 });
 
 export type GatewayCatalog = z.infer<typeof GatewayCatalogSchema>;
-
-const CAPABILITY_LEVELS: readonly string[] = ["Frontier", "Strong", "Medium", "Light"];
-
-function buildPreferencesFromSettings(
-  settings: Record<string, string>,
-): ModelPreferences | undefined {
-  const preferredProvider = settings["preferred_provider"];
-
-  const preferredModels: Partial<Record<CapabilityLevel, string>> = {};
-  let hasPreferredModel = false;
-  for (const cap of CAPABILITY_LEVELS) {
-    const value = settings[`preferred_model.${cap}`];
-    if (value) {
-      preferredModels[cap as CapabilityLevel] = value;
-      hasPreferredModel = true;
-    }
-  }
-
-  if (!preferredProvider && !hasPreferredModel) return undefined;
-
-  return {
-    preferredProvider,
-    preferredModels: hasPreferredModel ? preferredModels : undefined,
-  };
-}
 
 /**
  * Shared converter: turns a validated {@link GatewayCatalog} into a
@@ -157,7 +129,6 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
       provider: m.providerName,
       capabilityLevel: parseCapabilityLevel(m.capability),
       formatGroup: parseFormatGroup(m.formatGroup),
-      strictMode: m.strictMode,
       inputCostPer1M: m.inputCostPer1m,
       outputCostPer1M: m.outputCostPer1m,
       maxContextTokens: m.maxContextTokens,
@@ -205,7 +176,6 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
 
   const budget = loadBudgetEnv();
   const defaultProvider = providers.length > 0 ? providers[0].name : "local";
-  const preferences = buildPreferencesFromSettings(catalog.settings);
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
 
   return {
@@ -215,7 +185,6 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
       maxCostTotal: budget.total,
       maxCostPerProvider: budget.perProvider,
     },
-    preferences,
     routingProfiles,
   };
 }
@@ -249,7 +218,6 @@ export async function loadGatewayCatalogFromFile(
     raw = await readFile(filePath, "utf-8");
   } catch (err) {
     throw new InvalidGatewayCatalog(filePath, [
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `file not readable: ${err instanceof Error ? err.message : String(err)}`,
     ]);
   }
@@ -259,7 +227,6 @@ export async function loadGatewayCatalogFromFile(
     json = JSON.parse(raw);
   } catch (err) {
     throw new InvalidGatewayCatalog(filePath, [
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
     ]);
   }
@@ -268,7 +235,7 @@ export async function loadGatewayCatalogFromFile(
 }
 
 /**
- * HTTP transport: fetch model/provider/settings from the server API,
+ * HTTP transport: fetch models and providers from the server API,
  * validate the combined payload with the same {@link GatewayCatalogSchema},
  * and convert to {@link GatewayConfig}. Used by the CLI
  * (`packages/cli/src/commands/vision.ts`).
@@ -283,10 +250,9 @@ export async function loadGatewayConfigFromApi(
 ): Promise<GatewayConfig> {
   const headers = { Authorization: `Bearer ${apiToken}` };
 
-  const [modelsResp, providersResp, settingsResp] = await Promise.all([
+  const [modelsResp, providersResp] = await Promise.all([
     fetch(`${serverUrl}/config/models`, { headers }),
     fetch(`${serverUrl}/config/providers`, { headers }),
-    fetch(`${serverUrl}/config/settings`, { headers }),
   ]);
 
   if (!modelsResp.ok) {
@@ -295,14 +261,10 @@ export async function loadGatewayConfigFromApi(
   if (!providersResp.ok) {
     throw new InvalidGatewayCatalog(serverUrl, [`/config/providers returned ${providersResp.status}`]);
   }
-  if (!settingsResp.ok) {
-    throw new InvalidGatewayCatalog(serverUrl, [`/config/settings returned ${settingsResp.status}`]);
-  }
 
   const rawCatalog = {
     models: await modelsResp.json(),
     providers: await providersResp.json(),
-    settings: await settingsResp.json(),
   };
 
   return buildConfigFromCatalog(validateCatalog(serverUrl, rawCatalog));

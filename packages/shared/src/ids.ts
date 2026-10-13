@@ -17,13 +17,6 @@ export function parseProjectId(raw: string): ProjectId {
   return raw as ProjectId;
 }
 
-export function parseWorkItemId(raw: string): WorkItemId {
-  if (!UUID_PATTERN.test(raw)) {
-    throw new Error(`Invalid WorkItemId "${raw}": expected a UUID`);
-  }
-  return raw as WorkItemId;
-}
-
 export function createWorkItemId(): WorkItemId {
   return crypto.randomUUID() as WorkItemId;
 }

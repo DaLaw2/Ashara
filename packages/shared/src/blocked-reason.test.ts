@@ -97,19 +97,6 @@ describe("source variant round-trips", () => {
     }
   });
 
-  test("split_on_failure variant round-trips", () => {
-    const input = {
-      source: "split_on_failure",
-      reason: "split into subtasks",
-      attempts: 1,
-      substitutedBy: "wi-part-b",
-    };
-    const result = parseStoredBlockedReason(input);
-    expect(result).toBeDefined();
-    expect(result!.source).toBe("split_on_failure");
-    expect(result!.substitutedBy).toBe("wi-part-b");
-  });
-
   test("shutdown-reconciler variant round-trips", () => {
     const input = {
       source: "shutdown-reconciler",

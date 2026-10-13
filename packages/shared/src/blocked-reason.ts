@@ -81,22 +81,6 @@ const startupReconcilerSchema = z.object({
   ...augmentationFields,
 });
 
-/** Task-split abandon: the original task is abandoned in favor of two subtasks. */
-const splitOnFailureSchema = z.object({
-  source: z.literal("split_on_failure"),
-  reason: z.string(),
-  attempts: z.number().optional(),
-  lastFailure: z.unknown().optional(),
-  ...augmentationFields,
-});
-
-/** Reopen a Completed item when evidence shows the artifact is broken. */
-const reopenSchema = z.object({
-  source: z.literal("reopen"),
-  evidence: z.string(),
-  ...augmentationFields,
-});
-
 /**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
@@ -113,10 +97,8 @@ export const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   orchestratorErrorSchema,
   replanSchema,
   failureRouterSchema,
-  splitOnFailureSchema,
   shutdownReconcilerSchema,
   startupReconcilerSchema,
-  reopenSchema,
   apiSchema,
 ]);
 
@@ -181,10 +163,8 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "orchestrator_error":
     case "replan":
     case "failure_router":
-    case "split_on_failure":
     case "shutdown-reconciler":
     case "startup-reconciler":
-    case "reopen":
     case "api":
       return { ...reason };
   }

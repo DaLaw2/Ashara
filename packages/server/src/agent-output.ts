@@ -54,7 +54,6 @@ export async function resolveAgentOutput(
       taskId,
       outputPath,
       exitCode,
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       cause: `output file unreadable: ${readError instanceof Error ? readError.message : String(readError)}`,
       stderr: stderr.slice(0, 500),
     });
@@ -68,7 +67,6 @@ export async function resolveAgentOutput(
       taskId,
       outputPath,
       exitCode,
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       cause: `output is not valid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
       stderr: stderr.slice(0, 500),
     });

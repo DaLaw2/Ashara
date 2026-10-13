@@ -1,21 +1,24 @@
 import { describe, test, expect } from "vitest";
 import type { StoredBlockedReason } from "@ashara/shared";
-import { TERMINAL_STATUSES, WORK_ITEM_STATUSES, RUN_SCOPE_AD_HOC, RUN_SCOPE_PRE_SCOPING } from "@ashara/shared";
+import {
+  TERMINAL_STATUSES,
+  WORK_ITEM_STATUSES,
+  RUN_SCOPE_AD_HOC,
+  RUN_SCOPE_PRE_SCOPING,
+  canTransitionTo,
+  InvalidStatusTransition,
+} from "@ashara/shared";
 import {
   createPendingWorkItem,
-  canTransitionTo,
   startWorkItem,
-  completeWorkItem,
   failWorkItem,
   blockWorkItem,
   unblockWorkItem,
   replanWorkItem,
-  reopenWorkItem,
   abandonWorkItem,
   requeueWorkItem,
   takeEvents,
 } from "./work-item.js";
-import { InvalidStatusTransition } from "./errors.js";
 
 // Read from the Published Language, not re-listed here: a status added to the
 // union is automatically covered by every sweep below instead of silently
@@ -67,7 +70,7 @@ describe("canTransitionTo — Failed recovery transitions", () => {
     expect(canTransitionTo("InProgress", "Completed")).toBe(true);
     expect(canTransitionTo("InProgress", "Failed")).toBe(true);
     expect(canTransitionTo("InProgress", "Blocked")).toBe(true);
-    // Completed -> Pending is now legal (reopen on broken artifact evidence)
+    // Completed -> Pending stays legal with no traverser; see transitions.ts
     expect(canTransitionTo("Completed", "Pending")).toBe(true);
     expect(canTransitionTo("Pending", "Completed")).toBe(false);
   });
@@ -257,50 +260,7 @@ describe("abandonWorkItem", () => {
   });
 });
 
-describe("reopenWorkItem", () => {
-  function seedCompleted() {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run");
-    startWorkItem(item);
-    completeWorkItem(item);
-    takeEvents(item);
-    return item;
-  }
-
-  test("transitions Completed -> Pending and emits work_item.reopened", () => {
-    const item = seedCompleted();
-
-    reopenWorkItem(item, "integration test proves the endpoint returns 500");
-    const events = takeEvents(item);
-
-    expect(item.status).toBe("Pending");
-    expect(events).toHaveLength(1);
-    expect(events[0]?.eventType).toBe("work_item.reopened");
-    expect(events[0]?.payload.work_item_id).toBe(item.id);
-  });
-
-  test("sets blockedReason with source='reopen' and the evidence string", () => {
-    const item = seedCompleted();
-    const evidence = "acceptance test failed: auth middleware missing";
-
-    reopenWorkItem(item, evidence);
-
-    expect(item.blockedReason).toEqual({ source: "reopen", evidence });
-  });
-
-  test("throws InvalidStatusTransition on a non-Completed item", () => {
-    const pending = createPendingWorkItem("Task", "leaf-task", "test-run");
-    expect(() => reopenWorkItem(pending, "evidence")).toThrow(InvalidStatusTransition);
-
-    const failed = seedFailed();
-    expect(() => reopenWorkItem(failed, "evidence")).toThrow(InvalidStatusTransition);
-  });
-
-  test("throws on empty evidence (fail-closed)", () => {
-    const item = seedCompleted();
-    expect(() => reopenWorkItem(item, "")).toThrow("evidence is required");
-    expect(() => reopenWorkItem(item, "   ")).toThrow("evidence is required");
-  });
-
+describe("Completed re-entry", () => {
   test("canTransitionTo('Completed', 'Pending') returns true", () => {
     expect(canTransitionTo("Completed", "Pending")).toBe(true);
   });

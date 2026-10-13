@@ -1,8 +1,6 @@
 export type { WorkItem } from "./work-item.js";
 export {
   createPendingWorkItem,
-  createTask,
-  canTransitionTo,
   startWorkItem,
   completeWorkItem,
   failWorkItem,
@@ -17,13 +15,9 @@ export {
 export type { WorkItemRepository } from "./repository.js";
 
 export {
-  InvalidStatusTransition,
   ContractConflict,
   ContractAlreadyExists,
-  ContractVersionConflict,
 } from "./errors.js";
-
-export type { ContractRepository } from "./contract-repository.js";
 
 export { DependencyGraph } from "./dependency.js";
 export type { DependencyResolution } from "./dependency.js";

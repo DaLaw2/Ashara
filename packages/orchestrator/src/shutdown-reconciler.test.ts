@@ -59,7 +59,6 @@ function buildDeps(items: WorkItem[]): {
     addDependency: () => { throw new Error("not exercised"); },
     getDependencies: () => { throw new Error("not exercised"); },
     findChildren: () => { throw new Error("not exercised"); },
-    findDuplicate: () => { throw new Error("not exercised"); },
     listAllDependencies: () => { throw new Error("not exercised"); },
     withTransaction: () => { throw new Error("not exercised"); },
   };

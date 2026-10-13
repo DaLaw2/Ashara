@@ -3,8 +3,9 @@
 import { randomUUID } from "crypto";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
-import pg from "pg";
+import type pg from "pg";
 import {
+  createDb,
   DEFAULT_DATABASE_URL,
   WorkItemRepository,
   EventStoreRepository,
@@ -18,7 +19,6 @@ import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
-import { createDbFromPool } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
@@ -49,7 +49,6 @@ let app: Hono;
 
 const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
-const createdSettingKeys: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
 
@@ -85,13 +84,12 @@ async function req(
 // ---------------------------------------------------------------------------
 
 beforeAll(async () => {
-  pool = new pg.Pool({ connectionString: DATABASE_URL });
-  db = createDbFromPool(pool);
+  db = createDb(DATABASE_URL);
+  pool = db.$client;
 
   try {
     await initParser();
   } catch (e: unknown) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[integration.test] initParser failed (tree-sitter may not be available): ${e instanceof Error ? e.message : String(e)}`);
   }
 
@@ -119,37 +117,27 @@ beforeAll(async () => {
 
   const testProviderName = `intg-provider-${randomUUID().slice(0, 8)}`;
   createdProviderNames.push(testProviderName);
-  await configRepo.seedProviders([
-    {
-      name: testProviderName,
-      providerType: "openai-compatible",
-      apiKey: "sk-test-intg",
-      baseUrl: "http://localhost:11434/v1",
-    },
-  ]);
+  await pool.query(
+    "INSERT INTO provider_configs (name, provider_type, api_key, base_url) VALUES ($1, $2, $3, $4)",
+    [testProviderName, "openai-compatible", "sk-test-intg", "http://localhost:11434/v1"],
+  );
 
   const testModelId = `intg-model-${randomUUID().slice(0, 8)}`;
   createdModelIds.push(testModelId);
-  await configRepo.seedModelsFromToml([
-    {
-      modelId: testModelId,
-      providerName: testProviderName,
-      apiModelId: "test-model-v1",
-      capability: "Strong",
-      formatGroup: "native-fc",
-      strictMode: false,
-      inputCostPer1m: 1.0,
-      outputCostPer1m: 5.0,
-      maxContextTokens: 128000,
-      supportsCaching: false,
-    },
-  ]);
+  await configRepo.upsertModelConfig({
+    modelId: testModelId,
+    providerName: testProviderName,
+    apiModelId: "test-model-v1",
+    capability: "Strong",
+    formatGroup: "native-fc",
+    inputCostPer1m: 1.0,
+    outputCostPer1m: 5.0,
+    maxContextTokens: 128000,
+    supportsCaching: false,
+  });
 });
 
 afterAll(async () => {
-  for (const key of createdSettingKeys) {
-    await pool.query("DELETE FROM system_settings WHERE key = $1", [key]);
-  }
   for (const modelId of createdModelIds) {
     await pool.query("DELETE FROM model_configs WHERE model_id = $1", [modelId]);
   }
@@ -162,7 +150,6 @@ afterAll(async () => {
   for (const id of [...createdWorkItemIds].reverse()) {
     await pool.query("DELETE FROM dev_sessions WHERE task_id = $1", [id]);
     await pool.query("DELETE FROM failed_approaches WHERE task_id = $1 OR epic_id = $1", [id]);
-    await pool.query("DELETE FROM file_changes WHERE task_id = $1", [id]);
     await pool.query("DELETE FROM knowledge_entries WHERE source_task_id = $1", [id]);
     await pool.query("DELETE FROM dependencies WHERE from_id = $1 OR to_id = $1", [id]);
   }
@@ -191,26 +178,29 @@ describe("Health", () => {
 describe("Work Items", () => {
   let createdId: string;
 
-  test("POST /work-items creates item with camelCase response", async () => {
-    const res = await req("POST", "/work-items", {
+  beforeAll(async () => {
+    createdId = randomUUID();
+    await new WorkItemRepository(db).create({
+      id: createdId,
       level: "Epic",
-      title: `Intg Test Epic ${randomUUID().slice(0, 8)}`,
+      status: "Pending",
+      parentId: null,
+      title: `Intg Test Epic ${createdId.slice(0, 8)}`,
+      description: null,
+      taskSpec: null,
+      northStar: null,
+      runScope: RUN_SCOPE_AD_HOC,
     });
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    createdWorkItemIds.push(body.id);
-    createdId = body.id;
-    expect(typeof body.id).toBe("string");
-    expect(body.level).toBe("Epic");
-    expect(body.status).toBe("Pending");
-    expect(body.parentId).toBeNull();
-    // Sentinel: serialization layer converts to camelCase
-    expect(body.parent_id).toBeUndefined();
-    expect(body.created_at).toBeUndefined();
+    createdWorkItemIds.push(createdId);
   });
 
-  test("GET /work-items/:nonexistent returns 404", async () => {
-    const res = await req("GET", `/work-items/${randomUUID()}`);
+  async function statusOf(id: string): Promise<unknown> {
+    const row = await pool.query("SELECT status FROM work_items WHERE id = $1", [id]);
+    return row.rows[0]?.status;
+  }
+
+  test("PATCH /work-items/:id/status on an unknown id returns 404", async () => {
+    const res = await req("PATCH", `/work-items/${randomUUID()}/status`, { status: "InProgress" });
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe("work item not found");
   });
@@ -220,8 +210,7 @@ describe("Work Items", () => {
       status: "InProgress",
     });
     expect(res.status).toBe(200);
-    const getRes = await req("GET", `/work-items/${createdId}`);
-    expect((await getRes.json()).status).toBe("InProgress");
+    expect(await statusOf(createdId)).toBe("InProgress");
   });
 
   test("PATCH /work-items/:id/status rejects invalid transition", async () => {
@@ -229,18 +218,6 @@ describe("Work Items", () => {
       status: "Pending",
     });
     expect(res.status).toBe(400);
-  });
-
-  test("POST /work-items duplicate returns 200 (idempotent)", async () => {
-    const title = `Intg Dedup Epic ${randomUUID().slice(0, 8)}`;
-    const res1 = await req("POST", "/work-items", { level: "Epic", title });
-    expect(res1.status).toBe(201);
-    const first = await res1.json();
-    createdWorkItemIds.push(first.id);
-
-    const res2 = await req("POST", "/work-items", { level: "Epic", title });
-    expect(res2.status).toBe(200);
-    expect((await res2.json()).id).toBe(first.id);
   });
 });
 
@@ -279,8 +256,8 @@ describe("Work Items Bulk", () => {
     const map = body.tempIdToId as Record<string, string>;
     for (const id of Object.values(map)) createdWorkItemIds.push(id);
 
-    const storyRow = await req("GET", `/work-items/${map["story-1"]}`);
-    expect((await storyRow.json()).parentId).toBe(map["epic-1"]);
+    const storyRow = await pool.query("SELECT parent_id FROM work_items WHERE id = $1", [map["story-1"]]);
+    expect(storyRow.rows[0]?.parent_id).toBe(map["epic-1"]);
 
     const deps = await pool.query(
       "SELECT 1 FROM dependencies WHERE from_id = $1 AND to_id = $2",
@@ -378,17 +355,6 @@ describe("Config", () => {
     expect(body[0]).toHaveProperty("modelId");
     expect(body[0].model_id).toBeUndefined();
   });
-
-  test("PUT /config/settings upserts and returns 200", async () => {
-    const testKey = `intg-setting-${randomUUID().slice(0, 8)}`;
-    createdSettingKeys.push(testKey);
-    const res = await req("PUT", "/config/settings", {
-      settings: { [testKey]: "test_val" },
-    });
-    expect(res.status).toBe(200);
-    const getRes = await req("GET", "/config/settings");
-    expect((await getRes.json())[testKey]).toBe("test_val");
-  });
 });
 
 // ===========================================================================
@@ -463,44 +429,3 @@ describe("Sessions", () => {
     expect(Array.isArray(await res.json())).toBe(true);
   });
 });
-
-// ===========================================================================
-// 10. Dependencies
-// ===========================================================================
-
-describe("Dependencies", () => {
-  test("POST /dependencies creates a dependency edge", async () => {
-    const r1 = await req("POST", "/work-items", {
-      level: "Epic",
-      title: `Dep Parent ${randomUUID().slice(0, 8)}`,
-    });
-    const parent = await r1.json();
-    createdWorkItemIds.push(parent.id);
-
-    const r2 = await req("POST", "/work-items", {
-      level: "Task",
-      title: `Dep Child ${randomUUID().slice(0, 8)}`,
-    });
-    const child = await r2.json();
-    createdWorkItemIds.push(child.id);
-
-    const res = await req("POST", "/dependencies", {
-      fromId: child.id,
-      toId: parent.id,
-    });
-    expect(res.status).toBe(201);
-  });
-});
-
-// ===========================================================================
-// 11. Cycle
-// ===========================================================================
-
-describe("Cycle", () => {
-  test("POST /cycle returns 200", async () => {
-    const res = await req("POST", "/cycle", undefined);
-    expect(res.status).toBe(200);
-    expect(typeof (await res.json()).message).toBe("string");
-  });
-});
-

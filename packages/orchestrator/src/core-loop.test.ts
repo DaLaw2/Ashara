@@ -99,15 +99,12 @@ function buildDeps(): CoreLoopDeps {
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
-    findDuplicate: async () => null,
     listAllDependencies: notExercised("listAllDependencies"),
     withTransaction: notExercised("withTransaction"),
   };
 
   const eventStore = {
     publish: async () => {},
-    pollUnprocessed: async () => [],
-    markProcessed: async () => {},
   };
   const costRepo = { recordTaskCost: async () => {}, getTaskCostHistory: async () => [] };
   const visionRepo = { getLatest: async () => null, getProjectPath: async () => null, setProjectPath: async () => {} };

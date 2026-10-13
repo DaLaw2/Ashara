@@ -77,7 +77,6 @@ export async function finalizeSuccess(
   try {
     await commitAllChanges(workDir, `ashara: agent output for task ${task.id}`);
   } catch (e: unknown) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     console.warn(`[finalize] commitAllChanges failed for task ${task.id}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
@@ -178,7 +177,6 @@ export async function finalizeSuccess(
     try {
       dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
     } catch (e) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       const detail = e instanceof Error ? e.message : String(e);
       return abortAndFail(
         task.id,

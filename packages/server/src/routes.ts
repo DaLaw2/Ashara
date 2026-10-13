@@ -5,13 +5,12 @@ import {
   createDomainEvent,
   parseWorkItemStatus,
   parseWorkItemLevel,
-  parseWorkItemId,
   parseStoredTaskSpec,
   parseStoredBlockedReason,
   parseStoredSuccessCriteria,
   parseRunScope,
   ProjectKnowledgeSchema,
-  RUN_SCOPE_AD_HOC,
+  InvalidStatusTransition,
 } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -21,7 +20,6 @@ import {
   ConfigRepository,
 } from "@ashara/db";
 import {
-  createPendingWorkItem,
   startWorkItem,
   completeWorkItem,
   failWorkItem,
@@ -30,7 +28,6 @@ import {
   replanWorkItem,
   abandonWorkItem,
   takeEvents,
-  InvalidStatusTransition,
 } from "@ashara/planning";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
@@ -103,25 +100,6 @@ const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
 // every route that reads `body.*` validates the shape before touching it.
 // ---------------------------------------------------------------------------
 
-const CreateWorkItemSchema = z.object({
-  level: z.string().min(1),
-  title: z.string().min(1),
-  description: z.string().optional(),
-  parent_id: z.string().min(1).optional(),
-  parentId: z.string().min(1).optional(),
-  task_spec: z.record(z.string(), z.unknown()).optional(),
-  taskSpec: z.record(z.string(), z.unknown()).optional(),
-  north_star: z.string().optional(),
-  northStar: z.string().optional(),
-});
-
-const AddDependencySchema = z.object({
-  from_id: z.string().min(1).optional(),
-  fromId: z.string().min(1).optional(),
-  to_id: z.string().min(1).optional(),
-  toId: z.string().min(1).optional(),
-});
-
 const CreateVisionSchema = z.object({
   vision_text: z.string().min(1).optional(),
   visionText: z.string().min(1).optional(),
@@ -145,15 +123,10 @@ const ModelConfigInputSchema = z.object({
   apiModelId: z.string().optional(),
   capability: z.enum(["Frontier", "Strong", "Medium", "Light"]),
   formatGroup: z.enum(["native-fc", "code-fence", "text-patch"]).optional(),
-  strictMode: z.boolean().default(false),
   inputCostPer1m: z.number().nonnegative(),
   outputCostPer1m: z.number().nonnegative(),
   maxContextTokens: z.number().int().positive(),
   supportsCaching: z.boolean().default(false),
-});
-
-const UpdateSettingsSchema = z.object({
-  settings: z.record(z.string(), z.string()),
 });
 
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
@@ -173,66 +146,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
   // Work Items
   // -----------------------------------------------------------------------
-
-  app.post("/work-items", async (c) => {
-    const { workItemRepo, eventStore } = c.get("deps");
-
-    const parsed = CreateWorkItemSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid work item", issues: parsed.error.issues }, 400);
-    }
-    const body = parsed.data;
-
-    const level = parseWorkItemLevel(body.level);
-    const title = body.title;
-    const description = body.description;
-    const parentId = body.parent_id ?? body.parentId;
-    const taskSpec = body.task_spec ?? body.taskSpec;
-    const northStar = body.north_star ?? body.northStar;
-
-    const existing = await workItemRepo.findDuplicate(
-      level,
-      title,
-      parentId ?? null,
-    );
-    if (existing) {
-      return c.json(existing, 200);
-    }
-
-    const item = createPendingWorkItem(
-      level,
-      title,
-      RUN_SCOPE_AD_HOC,
-      parentId ? parseWorkItemId(parentId) : undefined,
-      description,
-      taskSpec,
-      northStar,
-    );
-
-    const created = await workItemRepo.create({
-      id: item.id,
-      level: item.level,
-      status: item.status,
-      parentId: item.parentId ?? null,
-      title: item.title,
-      description: item.description ?? null,
-      taskSpec: item.taskSpec ?? null,
-      northStar: item.northStar ?? null,
-      runScope: item.runScope,
-    });
-
-    const event = createDomainEvent("work_item.created", "server", {
-      work_item_id: created.id,
-      level: created.level,
-    });
-    try {
-      await eventStore.publish(event, "Internal");
-    } catch (e) {
-      console.warn("failed to publish work_item.created event:", e);
-    }
-
-    return c.json(created, 201);
-  });
 
   app.post("/work-items/bulk", async (c) => {
     const { eventStore, createBulkPlan } = c.get("deps");
@@ -258,11 +171,11 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     }
 
     // Audit events published only after the transaction commits (best-effort,
-    // consistent with the single-item create path above).
+    // an audit write failure never undoes a committed plan).
     for (const [, id] of Object.entries(result.tempIdToId)) {
       const event = createDomainEvent("work_item.created", "server", { work_item_id: id });
       try {
-        await eventStore.publish(event, "Internal");
+        await eventStore.publish(event);
       } catch (e) {
         console.warn("failed to publish work_item.created event:", e);
       }
@@ -275,14 +188,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const { workItemRepo } = c.get("deps");
     const items = await workItemRepo.listAll();
     return c.json(items);
-  });
-
-  app.get("/work-items/:id", async (c) => {
-    const { workItemRepo } = c.get("deps");
-    const id = c.req.param("id");
-    const item = await workItemRepo.findById(id);
-    if (!item) return c.json({ error: "work item not found" }, 404);
-    return c.json(item);
   });
 
   app.patch("/work-items/:id/status", async (c) => {
@@ -406,7 +311,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const events = takeEvents(item);
     for (const event of events) {
       try {
-        await eventStore.publish(event, "Internal");
+        await eventStore.publish(event);
       } catch (e) {
         console.warn(
           `[PATCH /work-items/:id/status] failed to publish audit event for ${item.id} (status transition already committed):`,
@@ -416,37 +321,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     }
 
     return c.body(null, 200);
-  });
-
-  // -----------------------------------------------------------------------
-  // Dependencies
-  // -----------------------------------------------------------------------
-
-  app.post("/dependencies", async (c) => {
-    const { workItemRepo } = c.get("deps");
-
-    const parsed = AddDependencySchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid dependency", issues: parsed.error.issues }, 400);
-    }
-    const fromId = parsed.data.from_id ?? parsed.data.fromId;
-    const toId = parsed.data.to_id ?? parsed.data.toId;
-    if (!fromId || !toId) {
-      return c.json({ error: "from_id/fromId and to_id/toId are required" }, 400);
-    }
-
-    await workItemRepo.addDependency(fromId, toId);
-    return c.body(null, 201);
-  });
-
-  // -----------------------------------------------------------------------
-  // Orchestration
-  // -----------------------------------------------------------------------
-
-  app.post("/cycle", async (c) => {
-    const { runner } = c.get("deps");
-    runner.wake();
-    return c.json({ message: "cycle triggered via continuous runner" });
   });
 
   // -----------------------------------------------------------------------
@@ -570,30 +444,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       };
     });
     return c.json(configs);
-  });
-
-  app.get("/config/settings", async (c) => {
-    const { configRepo } = c.get("deps");
-    const rows = await configRepo.getSettings();
-    const settings: Record<string, string> = {};
-    for (const row of rows) {
-      settings[row.key] = row.value;
-    }
-    return c.json(settings);
-  });
-
-  app.put("/config/settings", async (c) => {
-    const { configRepo } = c.get("deps");
-
-    const parsed = UpdateSettingsSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid settings", issues: parsed.error.issues }, 400);
-    }
-
-    for (const [key, value] of Object.entries(parsed.data.settings)) {
-      await configRepo.updateSetting(key, value);
-    }
-    return c.body(null, 200);
   });
 
   return app;

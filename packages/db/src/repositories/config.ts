@@ -36,7 +36,6 @@ export class ConfigRepository {
     apiModelId?: string | null;
     capability: string;
     formatGroup?: string;
-    strictMode?: boolean;
     inputCostPer1m: number;
     outputCostPer1m: number;
     maxContextTokens: number;
@@ -50,7 +49,6 @@ export class ConfigRepository {
         apiModelId: model.apiModelId ?? null,
         capability: model.capability,
         formatGroup: model.formatGroup ?? "native-fc",
-        strictMode: model.strictMode ?? false,
         inputCostPer1m: model.inputCostPer1m,
         outputCostPer1m: model.outputCostPer1m,
         maxContextTokens: model.maxContextTokens,
@@ -64,7 +62,6 @@ export class ConfigRepository {
           apiModelId: sql`EXCLUDED.api_model_id`,
           capability: sql`EXCLUDED.capability`,
           formatGroup: sql`EXCLUDED.format_group`,
-          strictMode: sql`EXCLUDED.strict_mode`,
           inputCostPer1m: sql`EXCLUDED.input_cost_per_1m`,
           outputCostPer1m: sql`EXCLUDED.output_cost_per_1m`,
           maxContextTokens: sql`EXCLUDED.max_context_tokens`,
@@ -88,110 +85,11 @@ export class ConfigRepository {
     return this.db.select().from(providerConfigs);
   }
 
-  async getSettings() {
-    return this.db.select().from(systemSettings);
-  }
-
   async getSetting(key: string): Promise<string | null> {
     const rows = await this.db
       .select()
       .from(systemSettings)
       .where(eq(systemSettings.key, key));
     return rows[0]?.value ?? null;
-  }
-
-  async updateSetting(key: string, value: string) {
-    await this.db
-      .insert(systemSettings)
-      .values({ key, value, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: systemSettings.key,
-        set: { value, updatedAt: new Date() },
-      });
-  }
-
-  async seedProviders(
-    providers: Array<{
-      name: string;
-      providerType: string;
-      apiKey?: string | null;
-      baseUrl?: string | null;
-    }>,
-  ) {
-    for (const provider of providers) {
-      await this.db
-        .insert(providerConfigs)
-        .values({
-          name: provider.name,
-          providerType: provider.providerType,
-          apiKey: provider.apiKey ?? null,
-          baseUrl: provider.baseUrl ?? null,
-          updatedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: providerConfigs.name,
-          set: {
-            providerType: sql`EXCLUDED.provider_type`,
-            // COALESCE: seeding without a key must never destroy a hand-written
-            // key already in the row. The seed caller passes no key, so
-            // EXCLUDED.api_key is NULL — without COALESCE every server start
-            // would silently revert an operator's INSERT.
-            apiKey: sql`COALESCE(EXCLUDED.api_key, provider_configs.api_key)`,
-            // Prefer the operator's existing base_url over the seed's default:
-            // the seed supplies well-known URLs as a convenience, but an operator
-            // who customized the URL must not have it reverted on restart.
-            baseUrl: sql`COALESCE(provider_configs.base_url, EXCLUDED.base_url)`,
-            updatedAt: sql`EXCLUDED.updated_at`,
-          },
-        });
-    }
-  }
-
-  async seedModelsFromToml(
-    models: Array<{
-      modelId: string;
-      providerName: string;
-      apiModelId?: string;
-      capability: string;
-      formatGroup?: string;
-      strictMode?: boolean;
-      inputCostPer1m?: number;
-      outputCostPer1m?: number;
-      maxContextTokens?: number;
-      supportsCaching?: boolean;
-    }>,
-  ) {
-    for (const model of models) {
-      await this.db
-        .insert(modelConfigs)
-        .values({
-          modelId: model.modelId,
-          providerName: model.providerName,
-          apiModelId: model.apiModelId ?? null,
-          capability: model.capability,
-          formatGroup: model.formatGroup ?? "native-fc",
-          strictMode: model.strictMode ?? false,
-          inputCostPer1m: model.inputCostPer1m ?? 0,
-          outputCostPer1m: model.outputCostPer1m ?? 0,
-          maxContextTokens: model.maxContextTokens ?? 128000,
-          supportsCaching: model.supportsCaching ?? false,
-          updatedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: modelConfigs.modelId,
-          set: {
-            providerName: sql`EXCLUDED.provider_name`,
-            apiModelId: sql`EXCLUDED.api_model_id`,
-            capability: sql`EXCLUDED.capability`,
-            formatGroup: sql`EXCLUDED.format_group`,
-            strictMode: sql`EXCLUDED.strict_mode`,
-            inputCostPer1m: sql`EXCLUDED.input_cost_per_1m`,
-            outputCostPer1m: sql`EXCLUDED.output_cost_per_1m`,
-            maxContextTokens: sql`EXCLUDED.max_context_tokens`,
-            supportsCaching: sql`EXCLUDED.supports_caching`,
-            updatedAt: sql`EXCLUDED.updated_at`,
-          },
-        });
-    }
   }
 }

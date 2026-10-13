@@ -200,7 +200,7 @@ async function publishBestEffort(
 ): Promise<void> {
   for (const event of events) {
     try {
-      await eventStore.publish(event, "Internal");
+      await eventStore.publish(event);
     } catch (error) {
       console.warn(
         `[shutdown-reconciler] failed to publish audit event for ${itemId} (transition already committed):`,

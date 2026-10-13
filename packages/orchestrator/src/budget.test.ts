@@ -144,7 +144,6 @@ describe("BudgetTracker — unmeasured cost path", () => {
       recordTaskCost: vi.fn().mockResolvedValue(undefined),
       loadModelPricing: vi.fn().mockResolvedValue({}),
       loadCostHistory: vi.fn().mockResolvedValue({}),
-      checkProviderBalances: vi.fn().mockResolvedValue([]),
     };
 
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -174,7 +173,6 @@ describe("BudgetTracker — unmeasured cost path", () => {
       recordTaskCost: vi.fn().mockResolvedValue(undefined),
       loadModelPricing: vi.fn().mockResolvedValue({}),
       loadCostHistory: vi.fn().mockResolvedValue({}),
-      checkProviderBalances: vi.fn().mockResolvedValue([]),
     };
 
     vi.spyOn(console, "log").mockImplementation(() => {});

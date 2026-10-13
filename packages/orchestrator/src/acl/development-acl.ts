@@ -11,11 +11,9 @@
 
 // --- Types (re-exported as type-only) ---
 export type { DevelopmentService, TaskDescriptor } from "@ashara/development";
-export type { AttributionResult } from "@ashara/development";
 export type { ProvisionedEnv } from "@ashara/development";
 
 // --- Values (re-exported) ---
 export { readManifestContext } from "@ashara/development";
 export { assertValidTargetProjectPath } from "@ashara/development";
-export { extractImplicatedFiles, attributeFilesToTasks } from "@ashara/development";
 export { deriveEnvironmentSpec } from "@ashara/development";

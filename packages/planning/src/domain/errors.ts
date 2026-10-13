@@ -1,14 +1,3 @@
-import type { WorkItemStatus } from "@ashara/shared";
-
-// Re-export cross-boundary errors from Published Language (ADR-044).
-// Planning's domain code still imports them from this file; consumers
-// will migrate to @ashara/shared via their ACL.
-export {
-  InvalidStatusTransition,
-  WorkItemNotFound,
-  ContractVersionConflict,
-} from "@ashara/shared";
-
 export class PlanningError extends Error {
   constructor(
     message: string,

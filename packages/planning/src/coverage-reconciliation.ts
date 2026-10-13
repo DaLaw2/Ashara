@@ -6,10 +6,11 @@ import type {
   WorkItemId,
   WorkItemStatus,
   StoredTaskSpec,
+  ContractRepository,
 } from "@ashara/shared";
 import { parseProjectId, TERMINAL_STATUSES } from "@ashara/shared";
 import type { EndpointCoverageGap } from "./run-summary.js";
-import type { WorkItem, WorkItemRepository, ContractRepository, CoverageHold } from "./domain/index.js";
+import type { WorkItem, WorkItemRepository, CoverageHold } from "./domain/index.js";
 import {
   PlanningService,
   createPendingWorkItem,

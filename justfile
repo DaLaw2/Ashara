@@ -71,11 +71,5 @@ server:
 install:
     npm install
 
-clean:
-    rm -rf node_modules
-
 knip:
     npx knip
-
-build-sandbox:
-    bash docker/build-sandbox.sh

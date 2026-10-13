@@ -5,7 +5,6 @@ const DEFAULT_MAX_RESULTS = 50;
 
 export const searchCodebaseTool: ToolDefinition = {
     name: "search_codebase",
-    shouldDefer: true,
     description:
         "Search for text patterns across project files using regex. " +
         "Use this to find files, function definitions, imports, references, or any text pattern. " +

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { ProvisioningError } from "@ashara/development";
-import type { EnvironmentSpec, Toolchain } from "@ashara/development";
+import type { EnvironmentSpec } from "@ashara/development";
 import { generateContainerfile, PodmanProvisioner } from "./podman-provisioner.js";
 
 // ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ describe("generateContainerfile", () => {
   });
 
   test("toolchains with installMethod produce RUN lines", () => {
-    const toolchains: Toolchain[] = [
+    const toolchains: EnvironmentSpec["toolchains"] = [
       { name: "gcc", installMethod: "apk add --no-cache gcc musl-dev make" },
       { name: "elixir", version: "1.17", installMethod: "apt-get update && apt-get install -y elixir=1.17" },
     ];
@@ -46,7 +46,7 @@ describe("generateContainerfile", () => {
   });
 
   test("toolchains without installMethod produce no RUN line", () => {
-    const toolchains: Toolchain[] = [
+    const toolchains: EnvironmentSpec["toolchains"] = [
       { name: "zig" },
     ];
     const result = generateContainerfile(minimalSpec({ toolchains }));

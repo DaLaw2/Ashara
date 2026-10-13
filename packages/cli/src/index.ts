@@ -46,7 +46,6 @@ export function handleCliError(err: unknown): CliErrorResult {
     if (err instanceof ClientError) {
         return { exitCode: 1, lines: [`[ashara] Server error (${err.kind}): ${err.message}`] };
     }
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     const message = err instanceof Error ? err.message : String(err);
     return { exitCode: 1, lines: [`[ashara] Unexpected error: ${message}`] };
 }
@@ -93,7 +92,7 @@ function printUsage(): void {
     console.log("");
     console.log("Options:");
     console.log("  --help, -h              -- Show this help");
-    console.log(`  ${NO_INTERACT_FLAG}          -- Skip interactive Q&A; record default assumptions instead (ADR-019)`);
+    console.log(`  ${NO_INTERACT_FLAG}          -- Skip interactive Q&A; unanswered questions stay open`);
     console.log("                             (default mode selection otherwise follows TTY detection)");
     console.log("");
     console.log("Environment:");

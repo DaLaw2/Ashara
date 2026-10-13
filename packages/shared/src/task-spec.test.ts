@@ -44,8 +44,6 @@ describe("parseStoredTaskSpec", () => {
       priorWorkPointers: ["task-scaffold"],
       capability: "Strong",
       origin: "acceptance-gap",
-      splitDepth: 1,
-      splitFrom: "wi-abc-123",
     };
 
     const result = parseStoredTaskSpec(input);
@@ -58,8 +56,6 @@ describe("parseStoredTaskSpec", () => {
     expect(result!.priorWorkPointers).toEqual(input.priorWorkPointers);
     expect(result!.capability).toBe(input.capability);
     expect(result!.origin).toBe(input.origin);
-    expect(result!.splitDepth).toBe(1);
-    expect(result!.splitFrom).toBe(input.splitFrom);
   });
 
   test("empty object is valid (all fields optional)", () => {
@@ -70,8 +66,7 @@ describe("parseStoredTaskSpec", () => {
   test("closed schema strips undeclared keys (no passthrough)", () => {
     const input = {
       goal: "Fix the bug",
-      origin: "bug-fix",
-      culpritTaskId: "wi-deadbeef",
+      origin: "coverage-reconciliation",
       experimentalMetric: 0.95,
       customTag: "hotfix-urgent",
     };
@@ -80,8 +75,7 @@ describe("parseStoredTaskSpec", () => {
     expect(result).toBeDefined();
     // Declared fields survive
     expect(result!.goal).toBe("Fix the bug");
-    expect(result!.origin).toBe("bug-fix");
-    expect(result!.culpritTaskId).toBe("wi-deadbeef");
+    expect(result!.origin).toBe("coverage-reconciliation");
     // Undeclared keys are stripped — the key set is closed
     expect((result as Record<string, unknown>)["experimentalMetric"]).toBeUndefined();
     expect((result as Record<string, unknown>)["customTag"]).toBeUndefined();

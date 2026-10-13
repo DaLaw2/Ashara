@@ -40,14 +40,6 @@ export class ToolRegistry {
         return [...this.tools.keys()];
     }
 
-    getCoreDefinitions(): ToolDefinition[] {
-        return [...this.tools.values()].filter((t) => !t.definition.shouldDefer).map((t) => t.definition);
-    }
-
-    getDeferredNames(): string[] {
-        return [...this.tools.values()].filter((t) => t.definition.shouldDefer).map((t) => t.definition.name);
-    }
-
     collectPrompts(ctx?: ToolPromptContext): string[] {
         const prompts: string[] = [];
         for (const tool of this.tools.values()) {
@@ -118,7 +110,6 @@ function buildExecuteFn(
         try {
             result = await executor.execute(input);
         } catch (err: unknown) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             return JSON.stringify({ type: "error", message });
         }
@@ -148,60 +139,6 @@ function buildExecuteFn(
 
         return output;
     };
-}
-
-// ---------------------------------------------------------------------------
-// tool_search — meta-tool for deferred schema loading
-// ---------------------------------------------------------------------------
-
-export const toolSearchTool: ToolDefinition = {
-    name: "tool_search",
-    description:
-        "Load the full schema for deferred tools. " +
-        "Call this when you need to use a tool whose schema was not loaded initially. " +
-        "Pass the tool name to get its full parameter schema.",
-    inputSchema: {
-        type: "object",
-        properties: {
-            name: {
-                type: "string",
-                description: "Name of the tool to load the schema for.",
-            },
-        },
-        required: ["name"],
-    },
-};
-
-export class ToolSearchExecutor implements ToolExecutor {
-    constructor(private readonly registry: ToolRegistry) {}
-
-    // open-by-design: implements ToolExecutor — LLM-authored tool arguments
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
-        const name = input["name"];
-        if (typeof name !== "string" || name.length === 0) {
-            return { success: false, output: "", error: "Missing or invalid 'name' parameter." };
-        }
-        const def = this.registry.getDefinition(name);
-        if (!def) {
-            return {
-                success: false,
-                output: "",
-                error: `Tool '${name}' not found. Available tools: ${this.registry.names().join(", ")}`,
-            };
-        }
-        return {
-            success: true,
-            output: JSON.stringify(
-                {
-                    name: def.name,
-                    description: def.description,
-                    parameters: def.inputSchema,
-                },
-                null,
-                2,
-            ),
-        };
-    }
 }
 
 const ALL_TOOL_DEFINITIONS: readonly ToolDefinition[] = [
@@ -234,7 +171,6 @@ export function createDefaultRegistry(workingDir?: string, config?: RegistryConf
         for (const def of ALL_TOOL_DEFINITIONS) {
             registry.register({ definition: def });
         }
-        registry.register({ definition: toolSearchTool });
         return registry;
     }
 
@@ -269,12 +205,9 @@ export function createDefaultRegistry(workingDir?: string, config?: RegistryConf
         maxResultSizeChars: TOOL_RESULT_BUDGETS.list_directory,
     });
 
-    const toolSearchExec = new ToolSearchExecutor(registry);
-    registry.register({ definition: toolSearchTool, executor: toolSearchExec });
-
     return registry;
 }
 
 export { buildSanitizedEnv } from "./sanitized-env.js";
 export type { CommandPolicyConfig } from "./command-policy.js";
-export type { RegisteredTool, ToolDefinition, ToolPromptContext, ToolResult } from "./types.js";
+export type { RegisteredTool, ToolDefinition, ToolPromptContext } from "./types.js";

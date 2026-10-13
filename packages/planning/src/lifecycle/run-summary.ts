@@ -240,7 +240,7 @@ function buildGaps(
 
   // Filter to unsettled items: items that are NOT Completed or Abandoned.
   // Uses explicit status checks rather than TERMINAL_STATUSES because Completed
-  // is no longer graph-terminal (it has a reopen edge) but IS settled for the
+  // is not graph-terminal (it keeps a -> Pending edge) but IS settled for the
   // purpose of identifying budget-cutoff gaps.
   return items
     .filter((it) => it.status !== "Completed" && it.status !== "Abandoned")

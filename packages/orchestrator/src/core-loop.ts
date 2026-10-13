@@ -41,32 +41,20 @@ export class CoreLoop {
   async runCycle(): Promise<CycleResult> {
     const { deps } = this;
 
-    const unprocessed = await deps.eventStore.pollUnprocessed();
-    for (const envelope of unprocessed) {
-      await deps.eventStore.markProcessed(envelope.eventId);
-    }
-
     await this.budget.ensureLoaded(deps.costRepo);
     await this.ensureRunOpen();
     const runScope = this.currentRunScope;
 
-    const budgetStatus = this.budget.checkpoint();
-    if (budgetStatus === "low") {
-      await this.budget.checkProviderBalances(deps.costRepo);
-    }
-
     let batch: WorkItem[] = [];
     const results: TaskResult[] = [];
 
-    // When the periodic budget checkpoint reports exhaustion, skip decomposition and
-    // dispatch for this cycle (preserving the pre-Phase-7 early-return semantics) but
+    // When the budget is exhausted, skip decomposition and dispatch for this cycle but
     // DO fall through to the termination evaluation below, so the run stops with the
     // `economy` reason instead of idling forever — the Run-8 failure mode. When budget
     // remains, run the full decompose → gate → dispatch → post-cycle flow so the
-    // termination snapshot is taken at a quiescent point. The economy verdict itself is
-    // driven by the live Budget.isExhausted() read in evaluateTermination, not by this
-    // periodic checkpoint, so it fires on the very cycle the budget is truly spent.
-    if (budgetStatus !== "exhausted") {
+    // termination snapshot is taken at a quiescent point. Read live on every cycle:
+    // decomposition itself spends, so it must not run past the cap.
+    if (!this.budget.isExhausted()) {
       const decomposed = await decomposeLeafStories({
         workItemRepo: deps.workItemRepo,
         decompositionEngine: deps.decompositionEngine,
@@ -101,14 +89,12 @@ export class CoreLoop {
             break;
           }
           const capability = extractCapability(task);
-          const estCost = this.budget.estimateTaskCost(capability);
-          console.log(`[${task.id}] pre-dispatch estimate: $${estCost.toFixed(4)} (${capability})`);
           budgetedTasks.push({ task, capability });
         }
 
         // Dispatch all concurrently
         const settled = await Promise.allSettled(
-          budgetedTasks.map(({ task }) => processTask(deps, task, runScope)),
+          budgetedTasks.map(({ task }) => processTask(deps, task)),
         );
 
         // Accumulate costs sequentially (budget is in-memory, not concurrent-safe)
@@ -165,7 +151,7 @@ export class CoreLoop {
             }
 
             const retrySettled = await Promise.allSettled(
-              retryBudgeted.map(({ task }) => processTask(deps, task, runScope)),
+              retryBudgeted.map(({ task }) => processTask(deps, task)),
             );
 
             for (let i = 0; i < retrySettled.length; i++) {

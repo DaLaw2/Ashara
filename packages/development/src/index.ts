@@ -14,19 +14,11 @@ export {
   formatCodeContext,
 } from "./brief-assembly.js";
 
-export type {
-  TaskSpec,
-  CheckResult,
-  TierResult,
-  VerifyRequest,
-  VerifyResponse,
-} from "./types.js";
+export type { TaskSpec } from "./types.js";
 export type { ContractSource } from "./contract-slice.js";
 export type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 export type { ContractAmender, CompletionDeliverables } from "./contract-completion.js";
 export { selectModulePaths } from "./contract-completion.js";
-export type { VerifyLogOptions, VerifyRunners } from "./verify.js";
-export { verify } from "./verify.js";
 export { runVerifyCore } from "./verify-core.js";
 export type { CommandRunner } from "./verify-core.js";
 export { defaultRunCommand } from "./check-runner.js";
@@ -72,24 +64,16 @@ export type {
 
 export type { VerifyCheck, VerifyConfig, VerifyStartConfig } from "./verify-config.js";
 
-export type { AttributionResult, WorkItemLookup, GitLogRunner } from "./gates/attribution.js";
-export { extractImplicatedFiles, attributeFilesToTasks } from "./gates/attribution.js";
-
 export {
   ProvisioningError,
   TeardownError,
 } from "./provisioner.js";
 export type {
-  Toolchain,
-  NetworkPolicy,
   EnvironmentSpec,
   ExecResult,
   ExecOptions,
   ProvisionedEnvStatus,
   ProvisionedEnv,
-  SafetyTier,
-  EnvChangeRequest,
-  EnvChangeDelta,
   ProvisioningErrorContext,
   TeardownErrorContext,
   Provisioner,

@@ -28,9 +28,9 @@ function isTerminal(status: WorkItemStatus): boolean {
 
 /**
  * An item is settled when it has reached a resolved state: Completed or Abandoned.
- * Distinct from isTerminal: Completed now has an outbound edge (-> Pending, for
- * reopen-on-broken-evidence), so it is no longer terminal, but a Completed item IS
- * settled for the purpose of deciding whether the run achieved its plan.
+ * Distinct from isTerminal: Completed keeps an outbound edge (-> Pending, see
+ * transitions.ts), so it is not terminal, but a Completed item IS settled for the
+ * purpose of deciding whether the run achieved its plan.
  */
 function isSettled(status: WorkItemStatus): boolean {
   return status === "Completed" || status === "Abandoned";
@@ -42,8 +42,8 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   const counts = tallyCounts(items, parentsWithChildren);
 
   // Completeness: every item reached Completed or Abandoned. Uses isSettled (not
-  // isTerminal) because Completed is no longer graph-terminal — it has the reopen
-  // edge — but a Completed item still means "work done" for run-termination.
+  // isTerminal) because Completed is not graph-terminal — it keeps the
+  // Completed -> Pending edge — but a Completed item still means "work done" for run-termination.
   const unsettled = counts.pending + counts.inProgress + counts.blocked + counts.failed;
   if (counts.total > 0 && unsettled === 0 && openCoverageGaps === 0) {
     logCompletionFigure("completeness", completionFigure);

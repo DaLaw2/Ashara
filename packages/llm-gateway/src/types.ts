@@ -1,17 +1,12 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
 
-export interface ModelPreferences {
-  preferredProvider?: string;
-  preferredModels?: Partial<Record<CapabilityLevel, string>>;
-}
-
 /**
  * Per-capability model table for a single site (routing-profiles story). Used
  * when one site's requests legitimately vary in REQUESTED capability across
  * calls — e.g. agent-runner tags every request `site: "agent-runner"` but the
- * per-task capability ranges over Light/Strong/Frontier (see
- * `inferCapability` in planning/decomposition.ts) — so a single fixed model
+ * per-task capability ranges over Light/Strong/Frontier (taskSpec.capability)
+ * — so a single fixed model
  * for the site would silently downgrade a Frontier-classified task. `default`
  * covers any requested capability without its own entry; a capability with
  * neither its own entry nor `default` falls through to capability logic
@@ -57,7 +52,6 @@ export interface GatewayConfig {
   providers: ProviderConfig[];
   defaultProvider: string;
   budget?: BudgetConfig;
-  preferences?: ModelPreferences;
   /** Static per-site routing playbooks, keyed by enabled-provider combo. */
   routingProfiles?: RoutingProfiles;
 }
@@ -111,7 +105,6 @@ export interface ModelConfig {
   provider: string;
   capabilityLevel: CapabilityLevel;
   formatGroup?: FormatGroup;
-  strictMode?: boolean;
   inputCostPer1M: number;
   outputCostPer1M: number;
   maxContextTokens: number;

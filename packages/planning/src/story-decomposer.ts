@@ -1,6 +1,6 @@
-import type { ContractDelta, ContractInput, WorkItemId, ProjectKnowledge } from "@ashara/shared";
+import type { ContractDelta, ContractInput, WorkItemId, ProjectKnowledge, ContractRepository } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
-import type { WorkItem, WorkItemRepository, ContractRepository } from "./domain/index.js";
+import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import {
   PlanningService,
   createPendingWorkItem,

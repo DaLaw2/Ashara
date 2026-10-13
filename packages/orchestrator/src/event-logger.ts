@@ -22,8 +22,4 @@ export class EventLogger {
     const line = JSON.stringify({ ...event, timestamp: new Date().toISOString() });
     appendFileSync(this.logPath, line + "\n");
   }
-
-  get path(): string {
-    return this.logPath;
-  }
 }

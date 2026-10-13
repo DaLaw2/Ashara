@@ -90,7 +90,6 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
-    findDuplicate: async () => null,
     listAllDependencies: notExercised("listAllDependencies"),
     withTransaction: notExercised("withTransaction"),
   };
@@ -115,7 +114,6 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
         : "agent hit turn limit",
       output: null as AgentOutputJson | null,
       sessionId: "test-session",
-      filesChanged: [] as string[],
       attempt: 1,
       agentInvoked: false,
     }),
@@ -148,7 +146,7 @@ describe("processTask post-agent status ladder", () => {
     const { deps, logs, savedBlockedReasons } = buildPreemptionDeps();
     const task = freshPendingItem();
 
-    const { result, costInfo } = await processTask(deps, task, RUN_SCOPE);
+    const { result, costInfo } = await processTask(deps, task);
 
     // The function must return the agent's result, not throw
     expect(result.status).toBe("failed");
@@ -174,7 +172,7 @@ describe("processTask post-agent status ladder", () => {
     });
     const task = freshPendingItem();
 
-    const { result, costInfo } = await processTask(deps, task, RUN_SCOPE);
+    const { result, costInfo } = await processTask(deps, task);
 
     // The completed agent result is still returned
     expect(result.status).toBe("completed");
@@ -199,7 +197,7 @@ describe("processTask post-agent status ladder", () => {
     });
     const task = freshPendingItem();
 
-    const { result } = await processTask(deps, task, RUN_SCOPE);
+    const { result } = await processTask(deps, task);
 
     expect(result.status).toBe("failed");
 
@@ -238,7 +236,7 @@ describe("processTask post-agent status ladder", () => {
     };
 
     const task = freshPendingItem();
-    const { result } = await processTask(deps, task, RUN_SCOPE);
+    const { result } = await processTask(deps, task);
 
     expect(result.status).toBe("failed");
 

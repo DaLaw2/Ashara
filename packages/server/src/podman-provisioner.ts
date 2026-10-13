@@ -8,7 +8,6 @@ import type {
   Provisioner,
   EnvironmentSpec,
   ProvisionedEnv,
-  EnvChangeDelta,
   ExecResult,
   ExecOptions,
 } from "@ashara/development";
@@ -109,13 +108,6 @@ export class PodmanProvisioner implements Provisioner {
     return undefined;
   }
 
-  async update(env: ProvisionedEnv, delta: EnvChangeDelta): Promise<ProvisionedEnv> {
-    const newSpec = applyDelta(env.spec, delta);
-    await this.teardown(env);
-    const newEnv = await this.provision(newSpec);
-    return { ...newEnv, version: env.version + 1 };
-  }
-
   async execute(env: ProvisionedEnv, command: string[], opts?: ExecOptions): Promise<ExecResult> {
     const handle = this.handles.get(env.id);
     if (!handle) {
@@ -190,30 +182,11 @@ export class PodmanProvisioner implements Provisioner {
     } catch (e) {
       throw new TeardownError({
         envId: env.id,
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         detail: e instanceof Error ? e.message : String(e),
       });
     } finally {
       this.handles.delete(env.id);
     }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Delta application
-// ---------------------------------------------------------------------------
-
-function applyDelta(spec: EnvironmentSpec, delta: EnvChangeDelta): EnvironmentSpec {
-  const req = delta.request;
-  switch (req.kind) {
-    case "add_toolchain":
-      return { ...spec, toolchains: [...spec.toolchains, req.detail] };
-    case "add_package":
-      return { ...spec, systemPackages: [...spec.systemPackages, req.detail] };
-    case "set_env":
-      return { ...spec, envVars: { ...spec.envVars, ...req.detail } };
-    case "change_network":
-      return { ...spec, networkPolicy: { ...spec.networkPolicy, ...req.detail } };
   }
 }
 

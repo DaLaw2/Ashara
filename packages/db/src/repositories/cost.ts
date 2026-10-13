@@ -1,18 +1,12 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { taskCostHistory, modelConfigs, providerConfigs } from "../schema.js";
+import { taskCostHistory, modelConfigs } from "../schema.js";
 
 export interface CapabilityCostEstimate {
   avgInputTokens: number;
   avgOutputTokens: number;
   avgCostUsd: number;
   sampleCount: number;
-}
-
-export interface VerifiedTaskCostEstimate {
-  totalCostUsd: number;
-  verifiedTaskCount: number;
-  costPerVerifiedTaskUsd: number;
 }
 
 export class CostRepository {
@@ -38,31 +32,6 @@ export class CostRepository {
       success,
       attempt,
     });
-  }
-
-  /** Cost-per-verified-task (success = true), grouped by capability tier. */
-  async loadCostPerVerifiedTask(): Promise<Record<string, VerifiedTaskCostEstimate>> {
-    const rows = await this.db
-      .select({
-        capability: taskCostHistory.capability,
-        totalCost: sql<number>`SUM(${taskCostHistory.actualCostUsd})::float`,
-        verifiedCount: sql<number>`COUNT(*)::int`,
-      })
-      .from(taskCostHistory)
-      .where(eq(taskCostHistory.success, true))
-      .groupBy(taskCostHistory.capability);
-
-    const result: Record<string, VerifiedTaskCostEstimate> = {};
-    for (const row of rows) {
-      const verifiedTaskCount = row.verifiedCount;
-      const totalCostUsd = row.totalCost;
-      result[row.capability] = {
-        totalCostUsd,
-        verifiedTaskCount,
-        costPerVerifiedTaskUsd: verifiedTaskCount > 0 ? totalCostUsd / verifiedTaskCount : 0,
-      };
-    }
-    return result;
   }
 
   async loadCostHistory(): Promise<Record<string, CapabilityCostEstimate>> {
@@ -107,15 +76,5 @@ export class CostRepository {
       };
     }
     return pricing;
-  }
-
-  async checkProviderBalances() {
-    return this.db
-      .select({
-        name: providerConfigs.name,
-        providerType: providerConfigs.providerType,
-        baseUrl: providerConfigs.baseUrl,
-      })
-      .from(providerConfigs);
   }
 }

@@ -22,7 +22,6 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     listAll: async () => [...store.values()],
     addDependency: async () => {},
     getDependencies: async () => [],
-    findDuplicate: async () => null,
     listAllDependencies: async () => [],
     withTransaction: async <T>(fn: (repo: WorkItemRepository) => Promise<T>) =>
       fn(buildInMemoryRepo([...store.values()])),

@@ -47,7 +47,6 @@ function parseToml(raw: string, filePath: string) {
     const detail =
       err instanceof TomlError
         ? `TOML syntax error at line ${err.line}, column ${err.column}: ${err.message}`
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         : err instanceof Error
           ? err.message
           : String(err);
@@ -66,7 +65,6 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
     throw new VerifyConfigParseError(
       filePath,
       undefined,
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       `cannot read file: ${err instanceof Error ? err.message : String(err)}`,
     );
   }

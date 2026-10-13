@@ -100,7 +100,6 @@ async function loadIntent(
     }
     return intent.trim();
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for attempt log
     attempted.push({ source: "project-intent", reason: `intent lookup threw: ${e instanceof Error ? e.message : String(e)}` });
     return null;
   }
@@ -133,7 +132,6 @@ async function observedManifestLabels(
   } catch (e) {
     attempted.push({
       source: "observed-manifest",
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for attempt log
       reason: `${targetProjectPath} could not be listed: ${e instanceof Error ? e.message : String(e)}`,
     });
     return [];
@@ -197,7 +195,6 @@ async function derivedStackLabels(
     }
     return labels;
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: diagnostic string for attempt log
     attempted.push({ source: "vision-derivation", reason: `derivation threw: ${e instanceof Error ? e.message : String(e)}` });
     return [];
   }

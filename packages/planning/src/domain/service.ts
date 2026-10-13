@@ -1,22 +1,21 @@
 import type {
   WorkItemId,
-  WorkItemLevel,
   WorkItemStatus,
   DomainEvent,
   ProjectId,
   ProjectContract,
   ContractInput,
   ContractDelta,
+  ContractRepository,
 } from "@ashara/shared";
-import { ContractBodySchema, ContractDeltaSchema } from "@ashara/shared";
+import { ContractBodySchema, ContractDeltaSchema, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
-import type { ContractRepository } from "./contract-repository.js";
 import { GateKeeper } from "./gate.js";
 import { TaskSelector } from "./select.js";
 import { LifecycleRouter, type CoverageHold } from "./router.js";
 import { applyContractDelta } from "./contract-merge.js";
-import { ContractAlreadyExists, ContractNotFound, ContractVersionConflict } from "./errors.js";
+import { ContractAlreadyExists, ContractNotFound } from "./errors.js";
 
 export class PlanningService {
   static async gate(repo: WorkItemRepository): Promise<WorkItem[]> {
@@ -65,15 +64,6 @@ export class PlanningService {
 
   static async findByStatus(repo: WorkItemRepository, status: WorkItemStatus): Promise<WorkItem[]> {
     return repo.findByStatus(status);
-  }
-
-  static async findDuplicate(
-    repo: WorkItemRepository,
-    level: WorkItemLevel,
-    title: string,
-    parentId?: WorkItemId,
-  ): Promise<WorkItem | null> {
-    return repo.findDuplicate(level, title, parentId);
   }
 
   static async findStoriesNeedingDecomposition(repo: WorkItemRepository): Promise<WorkItem[]> {

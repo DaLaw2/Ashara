@@ -1,6 +1,6 @@
-import type { ContractDelta, ProjectContract, ProjectId } from "@ashara/shared";
-import type { ContractRepository } from "./domain/index.js";
-import { PlanningService, ContractVersionConflict } from "./domain/index.js";
+import type { ContractDelta, ContractRepository, ProjectContract, ProjectId } from "@ashara/shared";
+import { ContractVersionConflict } from "@ashara/shared";
+import { PlanningService } from "./domain/index.js";
 
 const MAX_CONTRACT_RETRY_ATTEMPTS = 3;
 

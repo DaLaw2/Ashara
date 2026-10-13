@@ -1,26 +1,22 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent } from "@ashara/shared";
-import { wrapError, InvalidStatusTransition, withSalvagedResult } from "@ashara/shared";
+import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, CoverageHold, RawFailureContext } from "./acl/planning-acl.js";
 import {
   PlanningService,
-  canTransitionTo,
   failWorkItem,
   takeEvents,
   startWorkItem,
   createCoverageRollupGuard,
   recoverFailedItem,
-  shouldSplit,
-  splitFailedTask,
 } from "./acl/planning-acl.js";
 import type { DevelopmentService, TaskDescriptor, ProvisionedEnv } from "./acl/development-acl.js";
-import { extractImplicatedFiles, attributeFilesToTasks, deriveEnvironmentSpec } from "./acl/development-acl.js";
+import { deriveEnvironmentSpec } from "./acl/development-acl.js";
 import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
 import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
-import { createBugFixTask } from "./bug-fix.js";
 
 export interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -45,19 +41,6 @@ export async function executeTask(
   errorEnvelope?: ErrorEnvelope;
   /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
   agentInvoked: boolean;
-  /**
-   * Files the agent changed, observed on the HOST by `getChangedFiles` before
-   * the worktree is cleaned — never reported by the agent.
-   *
-   * The agent cannot observe this: it runs in a container where the worktree's
-   * `.git` file points at a host path that is not mounted, so every git command
-   * inside `/workspace` fails. It used to arrive as `output.files_changed`, and
-   * when that field was removed the split decision silently began reading zero
-   * on every run — an evidence default flowing straight into a verdict.
-   * Carried here rather than on `TaskResult`, which is Published Language and
-   * has no business growing a field for one consumer.
-   */
-  filesChanged: readonly string[];
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -101,7 +84,6 @@ export async function executeTask(
       output: execResult.output,
       attempt: execResult.attempt,
       agentInvoked: execResult.agentInvoked,
-      filesChanged: execResult.filesChanged,
     };
   }
 
@@ -114,7 +96,6 @@ export async function executeTask(
       attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
       agentInvoked: execResult.agentInvoked,
-      filesChanged: execResult.filesChanged,
     };
   }
 
@@ -124,14 +105,13 @@ export async function executeTask(
     attempt: execResult.attempt,
     errorEnvelope: execResult.errorEnvelope,
     agentInvoked: execResult.agentInvoked,
-    filesChanged: execResult.filesChanged,
   };
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
   const events = await PlanningService.route(deps.workItemRepo, task.id, true, deps.coverageHold);
   for (const event of events) {
-    await deps.eventStore.publish(event, "Internal");
+    await deps.eventStore.publish(event);
   }
 }
 
@@ -175,7 +155,7 @@ async function publishBestEffort(
 ): Promise<void> {
   for (const event of events) {
     try {
-      await eventStore.publish(event, "Internal");
+      await eventStore.publish(event);
     } catch (publishError) {
       console.warn(
         `[${site}] failed to publish audit event for ${workItemId} (status transition already committed):`,
@@ -240,7 +220,6 @@ async function salvagePreemptedResult(
 export async function processTask(
   deps: CoreLoopDeps,
   task: WorkItem,
-  runScope: string,
 ): Promise<{ result: TaskResult; costInfo: TaskCostInfo }> {
   const workItem = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!workItem) {
@@ -262,7 +241,7 @@ export async function processTask(
   const startEvents = takeEvents(workItem);
   const ancestorEvents = await PlanningService.activateAncestors(deps.workItemRepo, workItem.parentId);
   for (const event of [...startEvents, ...ancestorEvents]) {
-    await deps.eventStore.publish(event, "Internal");
+    await deps.eventStore.publish(event);
   }
 
   const targetProjectPath = await resolveTargetProjectPath(deps.visionRepo, deps.config.workdirBase);
@@ -288,7 +267,6 @@ export async function processTask(
     attempt,
     errorEnvelope: execEnvelope,
     agentInvoked,
-    filesChanged: changedFiles,
   } = await executeTask(
     routingDeps,
     deps.developmentService,
@@ -339,16 +317,6 @@ export async function processTask(
     } else {
       switch (current.status) {
         case "Failed": {
-          if (targetProjectPath) {
-            await handleCompletedPoison(
-              deps,
-              task.id,
-              { detail: result.detail },
-              targetProjectPath,
-              runScope,
-            );
-          }
-
           const failure: RawFailureContext = {
             detail: result.detail,
             raw: execEnvelope ? { ...execEnvelope } : (output ?? {}),
@@ -357,59 +325,31 @@ export async function processTask(
           // seam above and is not mutated by recoverFailedItem, so it is the exact
           // "attempts so far" count recoverFailedItem itself reads as priorAttempts.
           const attempts = current.dispatchCount;
-          // EVIDENCE default: "why did the agent stop?" is epistemic. output
-          // is AgentOutputJson | null; when present, finish_reason is required
-          // by the Zod enum (shared/src/agent-output.ts:37), so this ?? fires
-          // only when the whole output is null. Fail-closed: "unknown" !== "turn_limit"
-          // in shouldSplit (planning/src/lifecycle/task-split.ts:13), so the task
-          // falls through to failure routing — the conservative path.
-          const finishReason = output?.finish_reason ?? "unknown";
-          // From the HOST observation, never from the agent's output. The agent
-          // cannot run git inside its container, and when `output.files_changed`
-          // was removed this read silently became a constant 0 — which made
-          // shouldSplit constantly false and killed split-on-turn-limit outright.
-          // `?? 0` is deliberately absent: a missing supplier must fail to compile,
-          // not resolve to the value that means "nothing happened".
-          const filesChanged = changedFiles.length;
-
-          // Split-on-failure: agent hit turn limit while making progress (files
-          // changed) — structurally "too big," not a specific bug.
-          if (shouldSplit(finishReason, filesChanged, current)) {
-            await splitFailedTask({ workItemRepo: deps.workItemRepo, eventPublisher: deps.eventStore, runScope }, current, failure);
-            await recordFailedApproach(
-              deps.failedApproachRepo,
-              deps.workItemRepo,
-              current,
-              failure.detail,
-              `Task split: agent hit turn limit (finish_reason=${finishReason}) with ${filesChanged} files changed.`,
-            );
-          } else {
-            const action = await recoverFailedItem(
-              {
-                workItemRepo: deps.workItemRepo,
-                eventPublisher: deps.eventStore,
-                failureRouter: deps.failureRouter,
-                contractLookup: deps.contractLookup,
-              },
-              current,
-              failure,
-            );
-            // Every FailureRouter decision here (replan/abandon/substitute) means
-            // this dispatch attempt did not succeed (kl-t1): capture it as a
-            // failed_approaches lesson so a later brief sees WHY, closing the gap
-            // where only a THROWN orchestrator error (the catch block below) ever
-            // reached recordFailedApproach. This is the ONLY call site that writes
-            // for the typed-failed-results path — the catch block's own
-            // recoverFailedItem call does not, so a thrown error never
-            // double-writes.
-            await recordFailedApproach(
-              deps.failedApproachRepo,
-              deps.workItemRepo,
-              current,
-              failure.detail,
-              composeRoutedLesson(current.title, action, attempts, failure.detail),
-            );
-          }
+          const action = await recoverFailedItem(
+            {
+              workItemRepo: deps.workItemRepo,
+              eventPublisher: deps.eventStore,
+              failureRouter: deps.failureRouter,
+              contractLookup: deps.contractLookup,
+            },
+            current,
+            failure,
+          );
+          // Every FailureRouter decision here (replan/abandon/substitute) means
+          // this dispatch attempt did not succeed (kl-t1): capture it as a
+          // failed_approaches lesson so a later brief sees WHY, closing the gap
+          // where only a THROWN orchestrator error (the catch block below) ever
+          // reached recordFailedApproach. This is the ONLY call site that writes
+          // for the typed-failed-results path — the catch block's own
+          // recoverFailedItem call does not, so a thrown error never
+          // double-writes.
+          await recordFailedApproach(
+            deps.failedApproachRepo,
+            deps.workItemRepo,
+            current,
+            failure.detail,
+            composeRoutedLesson(current.title, action, attempts, failure.detail),
+          );
           break;
         }
 
@@ -467,46 +407,6 @@ export async function processTask(
   }
 
   return { result, costInfo };
-}
-
-async function handleCompletedPoison(
-  deps: CoreLoopDeps,
-  currentTaskId: string,
-  execResult: { detail: string },
-  targetProjectPath: string,
-  runScope: string,
-): Promise<void> {
-  const gateOutput = execResult.detail;
-  const files = extractImplicatedFiles(gateOutput);
-  if (files.length === 0) return;
-
-  let attributions;
-  try {
-    attributions = await attributeFilesToTasks(targetProjectPath, files, deps.workItemRepo);
-  } catch (err) {
-    console.warn("[bug-fix] attribution failed, continuing:", err);
-    return;
-  }
-  if (attributions.length === 0) return;
-
-  const externalCulprits = attributions.filter((a) => a.culpritTaskId !== currentTaskId);
-  if (externalCulprits.length === 0) return;
-
-  const gateType = inferGateType(gateOutput);
-  for (const culprit of externalCulprits) {
-    try {
-      await createBugFixTask(deps.workItemRepo, culprit, gateOutput, gateType, runScope);
-    } catch (err) {
-      console.warn(`[bug-fix] failed to create task for culprit ${culprit.culpritTaskId}:`, err);
-    }
-  }
-}
-
-function inferGateType(gateOutput: string): string {
-  if (/\(\d+,\d+\): error TS\d+/.test(gateOutput)) return "tsc";
-  if (/unreachable|not reachable|disconnected/.test(gateOutput)) return "reachability";
-  if (/ELIFECYCLE|Cannot find module|ERR_MODULE_NOT_FOUND|crash|exit code/.test(gateOutput)) return "smoke";
-  return "unknown";
 }
 
 export async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void> {

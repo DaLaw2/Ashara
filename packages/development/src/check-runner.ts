@@ -268,7 +268,6 @@ async function bootApp(workDir: string): Promise<AppHandle> {
         return;
       } catch (e: unknown) {
         if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
-          // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
           console.warn(`[checkRunner] Failed to signal process group ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
@@ -277,7 +276,6 @@ async function bootApp(workDir: string): Promise<AppHandle> {
       proc.kill(signal);
     } catch (e: unknown) {
       if (!(e instanceof Error && 'code' in e && e.code === 'ESRCH')) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         console.warn(`[checkRunner] Failed to signal process ${proc.pid}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }

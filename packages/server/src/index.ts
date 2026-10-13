@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { cors } from "hono/cors";
 import {
   createDb,
   WorkItemRepository as DbWorkItemRepository,
@@ -88,9 +87,9 @@ import { createEmbedderFromEnv, createInProcessGraphClient } from "@ashara/memor
 import type { GraphClient } from "@ashara/memory";
 import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, WorkItemLevel, WorkItemStatus, DomainEvent, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseWorkItemLevel, parseWorkItemStatus, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
-import { PlanningService, ContractVersionConflict } from "@ashara/planning";
+import { PlanningService } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
@@ -125,16 +124,6 @@ async function main(): Promise<void> {
   const contractRepo = new ContractRepository(db);
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
-
-  await configRepo.seedProviders([
-    { name: "anthropic", providerType: "anthropic", baseUrl: null },
-    { name: "openai", providerType: "openai", baseUrl: null },
-    { name: "deepseek", providerType: "openai-compatible", baseUrl: "https://api.deepseek.com/v1" },
-    { name: "mistral", providerType: "openai-compatible", baseUrl: "https://api.mistral.ai/v1" },
-    { name: "xai", providerType: "openai-compatible", baseUrl: "https://api.x.ai/v1" },
-    { name: "google", providerType: "openai-compatible", baseUrl: null },
-    { name: "local", providerType: "openai-compatible", baseUrl: null },
-  ]);
 
   // Phase 2: API token from the database (systemSettings). Fail-closed:
   // a missing token means the server cannot authenticate any request. The
@@ -192,7 +181,6 @@ async function main(): Promise<void> {
         provider: row.providerName,
         capabilityLevel: parseCapabilityLevel(row.capability),
         formatGroup: parseFormatGroup(row.formatGroup),
-        strictMode: row.strictMode,
         inputCostPer1M: row.inputCostPer1m,
         outputCostPer1M: row.outputCostPer1m,
         maxContextTokens: row.maxContextTokens,
@@ -342,16 +330,10 @@ async function main(): Promise<void> {
   }
 
   async function buildSpawnData(): Promise<SpawnData> {
-    const [modelRows, providerRows, settingsRows] = await Promise.all([
+    const [modelRows, providerRows] = await Promise.all([
       configRepo.listModelConfigs(),
       configRepo.listProviderConfigs(),
-      configRepo.getSettings(),
     ]);
-
-    const settings: Record<string, string> = {};
-    for (const row of settingsRows) {
-      settings[row.key] = row.value;
-    }
 
     const catalog: GatewayCatalog = {
       models: modelRows.map((row) => ({
@@ -360,7 +342,6 @@ async function main(): Promise<void> {
         apiModelId: row.apiModelId,
         capability: row.capability,
         formatGroup: row.formatGroup,
-        strictMode: row.strictMode,
         inputCostPer1m: row.inputCostPer1m,
         outputCostPer1m: row.outputCostPer1m,
         maxContextTokens: row.maxContextTokens,
@@ -371,7 +352,6 @@ async function main(): Promise<void> {
         providerType: row.providerType,
         baseUrl: row.baseUrl,
       })),
-      settings,
     };
 
     // Inject provider API keys from the database into env vars for the
@@ -485,7 +465,6 @@ async function main(): Promise<void> {
 
   const devEventSink: ExecutionEventSink = {
     emit: (event) => eventLogger.emit(event),
-    get path() { return eventLogger.path; },
   };
 
   // The ProjectContract is keyed by the project ROOT id (the top of the parent
@@ -641,7 +620,6 @@ async function main(): Promise<void> {
   const developmentService = new DevelopmentService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
-      useRealAgent: config.coreLoop.useRealAgent,
       sandboxImage: `${SANDBOX_IMAGE}:${SANDBOX_TAG}`,
     },
     sessionStore,
@@ -754,19 +732,6 @@ async function main(): Promise<void> {
   };
 
   const app = new Hono();
-
-  const corsOrigins = process.env["ASHARA_CORS_ORIGINS"];
-  if (corsOrigins) {
-    const origins = corsOrigins.split(",").map((o) => o.trim()).filter(Boolean);
-    app.use(
-      "*",
-      cors({
-        origin: origins,
-        allowMethods: ["GET", "POST", "PUT", "PATCH"],
-        allowHeaders: ["Content-Type", "Authorization"],
-      }),
-    );
-  }
 
   app.use("*", bearerAuth(config.apiToken));
   app.route("/", createRoutes(appDeps));

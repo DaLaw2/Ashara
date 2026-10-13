@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { CostRepository, CapabilityCostEstimate } from "@ashara/db";
 
 // The port load() actually depends on — two queries, no private db handle.
@@ -8,18 +7,6 @@ export interface CostDataSource {
   loadModelPricing: CostRepository["loadModelPricing"];
   loadCostHistory: CostRepository["loadCostHistory"];
 }
-
-interface ProviderBalance {
-  providerName: string;
-  balanceUsd: number | null;
-}
-
-const DeepSeekBalanceSchema = z.object({
-  balance_infos: z.array(z.object({
-    currency: z.string(),
-    total_balance: z.string(),
-  })),
-});
 
 export class CostEstimator {
   private modelPricing: Record<string, { inputPer1m: number; outputPer1m: number }> = {};
@@ -105,23 +92,6 @@ export class CostEstimator {
     };
   }
 
-  static async checkProviderBalances(costRepo: CostRepository): Promise<ProviderBalance[]> {
-    let providers: Array<{ name: string; providerType: string; baseUrl: string | null }>;
-    try {
-      providers = await costRepo.checkProviderBalances();
-    } catch (e) {
-      console.warn("Failed to query provider configs for balance check:", e);
-      return [];
-    }
-
-    const balances: ProviderBalance[] = [];
-    for (const { name, providerType, baseUrl } of providers) {
-      const balance = await CostEstimator.checkSingleProviderBalance(name, providerType, baseUrl);
-      balances.push({ providerName: name, balanceUsd: balance });
-    }
-    return balances;
-  }
-
   private coldStartEstimate(capability: string): number {
     const pricing = this.modelPricing[capability];
     if (pricing) {
@@ -144,41 +114,5 @@ export class CostEstimator {
       case "Light": return 0.01;
       default: return 0.10;
     }
-  }
-
-  private static async checkSingleProviderBalance(
-    name: string,
-    providerType: string,
-    baseUrl: string | null,
-  ): Promise<number | null> {
-    const apiKeyEnv = `${name.toUpperCase()}_API_KEY`;
-    const apiKey = process.env[apiKeyEnv];
-    if (!apiKey) return null;
-
-    if (providerType === "deepseek") {
-      const url = baseUrl ?? "https://api.deepseek.com";
-      try {
-        const resp = await fetch(`${url}/user/balance`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!resp.ok) {
-          console.warn(`Provider balance check failed for ${name}: ${resp.status}`);
-          return null;
-        }
-        const parsed = DeepSeekBalanceSchema.safeParse(await resp.json());
-        if (!parsed.success) return null;
-        for (const entry of parsed.data.balance_infos) {
-          if (entry.currency === "USD" || entry.currency === "CNY") {
-            const bal = parseFloat(entry.total_balance);
-            if (!isNaN(bal)) return bal;
-          }
-        }
-      } catch (e) {
-        console.warn(`Provider balance check request failed for ${name}:`, e);
-      }
-    }
-
-    return null;
   }
 }

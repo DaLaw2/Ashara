@@ -15,14 +15,12 @@ function validCatalog() {
             apiModelId: null,
             capability: "Strong",
             formatGroup: "native-fc",
-            strictMode: false,
             inputCostPer1m: 3,
             outputCostPer1m: 15,
             maxContextTokens: 200000,
             supportsCaching: true,
         }],
         providers: [{ name: "anthropic", providerType: "anthropic", baseUrl: null }],
-        settings: {},
     };
 }
 
@@ -78,7 +76,6 @@ describe("loadGatewayConfigFromApi", () => {
     function mockFetch(
         models: { body: unknown; ok?: boolean },
         providers: { body: unknown; ok?: boolean },
-        settings: { body: unknown; ok?: boolean },
     ) {
         const resp = (cfg: { body: unknown; ok?: boolean }) => ({
             ok: cfg.ok ?? true,
@@ -87,15 +84,13 @@ describe("loadGatewayConfigFromApi", () => {
         });
         vi.stubGlobal("fetch", vi.fn()
             .mockResolvedValueOnce(resp(models))
-            .mockResolvedValueOnce(resp(providers))
-            .mockResolvedValueOnce(resp(settings)));
+            .mockResolvedValueOnce(resp(providers)));
     }
 
     test("malformed model response throws InvalidGatewayCatalog with the server URL", async () => {
         mockFetch(
             { body: [{ modelId: "x" }] },  // missing required fields
             { body: [{ name: "anthropic", providerType: "anthropic", baseUrl: null }] },
-            { body: {} },
         );
         const err = await loadGatewayConfigFromApi("http://test:3000", "tok")
             .catch((e: unknown) => e);
@@ -103,15 +98,14 @@ describe("loadGatewayConfigFromApi", () => {
         expect((err as InvalidGatewayCatalog).source).toBe("http://test:3000");
     });
 
-    test("settings endpoint failure throws InvalidGatewayCatalog instead of defaulting", async () => {
+    test("providers endpoint failure throws InvalidGatewayCatalog instead of defaulting", async () => {
         mockFetch(
             { body: [validCatalog().models[0]] },
-            { body: validCatalog().providers },
             { body: null, ok: false },
         );
         const err = await loadGatewayConfigFromApi("http://test:3000", "tok")
             .catch((e: unknown) => e);
         expect(err).toBeInstanceOf(InvalidGatewayCatalog);
-        expect((err as InvalidGatewayCatalog).issues[0]).toContain("/config/settings");
+        expect((err as InvalidGatewayCatalog).issues[0]).toContain("/config/providers");
     });
 });

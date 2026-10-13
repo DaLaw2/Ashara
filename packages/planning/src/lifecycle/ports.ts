@@ -1,10 +1,7 @@
 import type { DomainEvent } from "@ashara/shared";
 
 export interface EventPublisher {
-  publish(
-    event: DomainEvent,
-    priority: "External" | "Internal",
-  ): Promise<void>;
+  publish(event: DomainEvent): Promise<void>;
 }
 
 export interface EventSink {

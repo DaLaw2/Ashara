@@ -26,7 +26,6 @@ export interface ToolDefinition {
     readonly name: string;
     readonly description: string;
     readonly inputSchema: ToolSchema;
-    readonly shouldDefer?: boolean;
     readonly prompt?: (ctx?: ToolPromptContext) => string;
 }
 

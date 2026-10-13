@@ -182,7 +182,6 @@ export class AsharaClient {
         try {
             response = await fetch(url, { headers: this.authHeaders(), signal: controller.signal });
         } catch (err) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             throw new ClientError("network", `GET ${url} failed: ${message}`);
         } finally {
@@ -205,7 +204,6 @@ export class AsharaClient {
                 signal: controller.signal,
             });
         } catch (err) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             throw new ClientError("network", `POST ${url} failed: ${message}`);
         } finally {
@@ -235,7 +233,6 @@ export class AsharaClient {
         try {
             return await response.json();
         } catch (err) {
-            // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
             const message = err instanceof Error ? err.message : String(err);
             throw new ClientError("parse", `Failed to parse JSON response: ${message}`);
         }

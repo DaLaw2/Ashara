@@ -94,10 +94,6 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
       const rows = await db.findChildren(parentId);
       return rows.map(rowToWorkItem);
     },
-    async findDuplicate(level, title, parentId) {
-      const row = await db.findDuplicate(level, title, parentId ?? null);
-      return row ? rowToWorkItem(row) : null;
-    },
     async listAllDependencies() {
       const rows = await db.listAllDependencies();
       return rows as Array<{ fromId: WorkItemId; toId: WorkItemId }>;

@@ -7,6 +7,5 @@ export {
   AlignmentEngine,
   createGatewayAlignmentLLM,
   alignmentReask,
-  DEFAULT_DIRECTION_ASSUMPTIONS,
 } from "./alignment.js";
 export type { AlignmentLLM } from "./alignment.js";

@@ -45,7 +45,6 @@ export function parseRunState(raw: string): RunState {
   try {
     json = JSON.parse(raw);
   } catch (e) {
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     throw new RunStateCorrupt(raw, e instanceof Error ? e.message : String(e));
   }
 

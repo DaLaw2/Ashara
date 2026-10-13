@@ -6,14 +6,13 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { ProductObservation, ProjectContract } from "@ashara/shared";
+import type { ContractRepository, ProductObservation, ProjectContract } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   RunSummary,
   TerminationDecision,
   ReplanLLM,
   WorkItemRepository,
-  ContractRepository,
   BrainstormEngine,
   NorthStarChecker,
   DecompositionEngine,
@@ -35,7 +34,6 @@ export interface CoreLoopConfig {
   readonly budgetLimitUsd: number;
   readonly agentTimeoutMs: number;
   readonly maxRetries: number;
-  readonly useRealAgent: boolean;
   readonly asharaSourceDir: string;
   readonly brainstormCooldownThreshold: number;
   readonly maxPendingWorkItems: number;
@@ -70,7 +68,6 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   budgetLimitUsd: 5.0,
   agentTimeoutMs: 300_000,
   maxRetries: 1,
-  useRealAgent: false,
   asharaSourceDir: ".",
   brainstormCooldownThreshold: 3,
   maxPendingWorkItems: 15,

@@ -5,7 +5,6 @@ import type { FailureRouter, FailureDecision, RawFailureContext } from "../failu
 import { classifyFailure, tryParseEnvelope } from "../failure-classifier.js";
 import type { FailureCategory } from "../failure-classifier.js";
 import type { EventPublisher } from "./ports.js";
-import { deriveRetryChecks, deriveRetryDeliverables } from "./derive-retry-checks.js";
 
 export interface ContractRegistryLookup {
   loadForItem(item: { id: string; parentId?: string }): Promise<ProjectContract | null>;
@@ -179,7 +178,6 @@ async function abandonFailClosed(
   }
   await applyAbandon(deps, fresh, {
     reason: "failure_router_error",
-    // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
     detail: error instanceof Error ? error.message : String(error),
     attempts: priorAttempts,
     lastFailure: failure,
@@ -196,17 +194,6 @@ async function applyReplan(
 ): Promise<void> {
   const previousStatus = item.status;
   replanWorkItem(item);
-
-  const spec = item.taskSpec ?? {};
-  const existingChecks = spec.checks ?? [];
-  const existingDeliverables = spec.deliverables ?? [];
-
-  const mergedChecks = deriveRetryChecks(failure, existingChecks);
-  const mergedDeliverables = deriveRetryDeliverables(failure, existingDeliverables);
-
-  if (mergedChecks.length !== existingChecks.length || mergedDeliverables.length !== existingDeliverables.length) {
-    item.taskSpec = { ...spec, checks: mergedChecks, deliverables: mergedDeliverables };
-  }
 
   item.blockedReason = {
     source: "replan",
@@ -231,7 +218,7 @@ export async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublis
   const events = takeEvents(item);
   for (const event of events) {
     try {
-      await deps.eventPublisher.publish(event, "Internal");
+      await deps.eventPublisher.publish(event);
     } catch (publishError) {
       console.warn(
         `[failure-recovery.publishEvents] failed to publish audit event for ${item.id} (status transition already committed):`,

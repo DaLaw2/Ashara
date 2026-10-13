@@ -189,7 +189,6 @@ export class LLMGateway {
         request.site,
       );
       if (!fallback) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         const rootMsg = error instanceof Error ? error.message : String(error);
         throw new ProviderError(
           resolved.providerName,

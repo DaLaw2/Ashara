@@ -28,6 +28,12 @@ import { WORK_ITEM_STATUSES } from "./enums.js";
  * each terminated leaving non-terminal items behind because the machine had no
  * edge to close them on; the manual cleanup that followed is the symptom this
  * fixes.
+ *
+ * `Completed -> Pending` has no traverser: its only one, reopenWorkItem, was
+ * removed, and unblock/replan/requeue each pin a different from-status. The edge
+ * is kept because removing it makes Completed terminal, which changes every
+ * TERMINAL_STATUSES consumer; that is an owner decision. Its intended traverser
+ * is story c-change-handling (reopened items).
  */
 const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
   Pending: ["InProgress", "Blocked", "Abandoned"],

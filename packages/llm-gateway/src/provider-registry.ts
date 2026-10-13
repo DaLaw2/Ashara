@@ -5,7 +5,7 @@ import type { CapabilityLevel } from "@ashara/shared";
 import { NoProviderAvailableError, ProviderMissingBaseUrl } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
-import type { GatewayConfig, KnownLLMSite, ModelConfig, ModelPreferences, ProviderConfig, RoutingProfiles } from "./types.js";
+import type { GatewayConfig, KnownLLMSite, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
 
 export interface ResolvedProvider {
   provider: LanguageModel;
@@ -78,7 +78,6 @@ function findBestModel(
 // TODO: capability → model routing should migrate to Compute domain (Phase 25)
 export class ProviderRegistry {
   private readonly config: GatewayConfig;
-  private readonly preferences: ModelPreferences | undefined;
   private readonly routingProfiles: RoutingProfiles | undefined;
   /**
    * The deployment's enabled-provider combo (routing-profiles story), fixed
@@ -91,7 +90,6 @@ export class ProviderRegistry {
 
   constructor(config: GatewayConfig) {
     this.config = config;
-    this.preferences = config.preferences;
     this.routingProfiles = config.routingProfiles;
     this.enabledCombo = computeProviderCombo(
       config.providers.filter((p) => p.enabled).map((p) => p.name),
@@ -116,40 +114,7 @@ export class ProviderRegistry {
       if (fromProfile) return fromProfile;
     }
 
-    // 1. Per-capability preferred model
-    const preferredModelId = this.preferences?.preferredModels?.[capability];
-    if (preferredModelId) {
-      for (const providerConfig of enabledProviders) {
-        const model = providerConfig.models.find(
-          (m) => m.id === preferredModelId || m.apiModelId === preferredModelId,
-        );
-        if (model) {
-          return {
-            provider: createLanguageModel(providerConfig, model),
-            modelConfig: model,
-            providerName: providerConfig.name,
-          };
-        }
-      }
-    }
-
-    // 2. Preferred provider — pick best model from that provider
-    if (this.preferences?.preferredProvider) {
-      const preferredName = this.preferences.preferredProvider;
-      const preferred = enabledProviders.find((p) => p.name === preferredName);
-      if (preferred) {
-        const model = findBestModel(preferred.models, capability);
-        if (model) {
-          return {
-            provider: createLanguageModel(preferred, model),
-            modelConfig: model,
-            providerName: preferred.name,
-          };
-        }
-      }
-    }
-
-    // 3. Fallback: default provider first, then cheapest (existing behavior)
+    // Fallback: default provider first, then cheapest
     return this.resolveDefault(enabledProviders, capability);
   }
 

@@ -29,8 +29,3 @@ export function createDb(databaseUrl: string) {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   return drizzle(pool, { schema });
 }
-
-/** @public — consumed by server integration tests via direct import */
-export function createDbFromPool(pool: pg.Pool) {
-  return drizzle(pool, { schema });
-}

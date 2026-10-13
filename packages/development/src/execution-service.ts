@@ -2,13 +2,11 @@ import path from "node:path";
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, flattenChain, ProjectFrameUnresolvable } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
 import { describeIndexShortfall } from "@ashara/memory";
-import type { VerifyLogOptions } from "./verify.js";
-import { verify } from "./verify.js";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
 import type { ProjectProfile } from "./brief-assembly.js";
 import { buildBriefWithRetry, formatAcceptanceCriteria, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
@@ -22,6 +20,7 @@ import { deriveEndpoints } from "./gates/endpoints.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
+import { runVerifyCore } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
 import { defaultRunCommand } from "./check-runner.js";
 import { readManifestContext } from "./dispatch-utils.js";
@@ -83,7 +82,6 @@ export interface ConventionsExtractor {
 export interface ExecutionEventSink {
   // open-by-design: log events carry caller-defined fields alongside the required `event` tag
   emit(event: Record<string, unknown> & { readonly event: string }): void;
-  readonly path: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +90,6 @@ export interface ExecutionEventSink {
 
 export interface DevelopmentConfig {
   readonly workdirBase: string;
-  readonly useRealAgent: boolean;
   /**
    * Full image tag for the check container (e.g. "alpine:3.20").
    * Used by the Provisioner abstraction to build the contained
@@ -150,7 +147,6 @@ export interface ExecutionResult {
   readonly detail: string;
   readonly output: AgentOutputJson | null;
   readonly sessionId: string;
-  readonly filesChanged: string[];
   /**
    * Always 1 — execute() makes exactly one agent invocation per call. Retrying a
    * failed task is the orchestrator's FailureRouter's job (re-dispatch, tracked via
@@ -300,7 +296,6 @@ export class DevelopmentService {
         detail: envelope.summary,
         output: null,
         sessionId,
-        filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: false,
@@ -338,7 +333,6 @@ export class DevelopmentService {
           detail: envelope.summary,
           output: null,
           sessionId,
-          filesChanged: [],
           attempt: 1,
           errorEnvelope: envelope,
           agentInvoked: false,
@@ -401,7 +395,6 @@ export class DevelopmentService {
         detail: envelope.summary,
         output: null,
         sessionId,
-        filesChanged: [],
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: dispatch.agentInvoked,
@@ -581,7 +574,6 @@ export class DevelopmentService {
         hasFileTree = true;
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -604,7 +596,6 @@ export class DevelopmentService {
         sections.push(depLines.join("\n"));
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to read package.json in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -618,7 +609,6 @@ export class DevelopmentService {
           sections.push(`## Project Manifests\n${manifestContent}`);
         }
       } catch (e: unknown) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
@@ -629,7 +619,6 @@ export class DevelopmentService {
         const head = content.split("\n").slice(0, 50).join("\n");
         sections.push(`## Entry Point (${contractEntryPointPath})\n\`\`\`\n${head}\n\`\`\``);
       } catch (e: unknown) {
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
@@ -644,7 +633,6 @@ export class DevelopmentService {
         sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -652,7 +640,6 @@ export class DevelopmentService {
       const conventions = await this.deps.conventionsExtractor.extract(targetProjectPath);
       if (conventions) sections.push("## Conventions\n" + conventions);
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildContextMap] Failed to extract conventions for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -686,7 +673,6 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -703,7 +689,6 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
-      // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
       console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${e instanceof Error ? e.message : String(e)}`);
     }
 
@@ -738,16 +723,8 @@ export class DevelopmentService {
       briefPath,
     });
 
-    let output: AgentOutputJson;
-
     dispatch.agentInvoked = true;
-    if (config.useRealAgent) {
-      output = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount, blockedReason: task.blockedReason });
-    } else {
-      output = stubAgentOutput();
-      await writeFile(outputPath, JSON.stringify(output, null, 2));
-      console.log(`[${task.id}] agent execution stub — set useRealAgent to enable real execution`);
-    }
+    const output: AgentOutputJson = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount, blockedReason: task.blockedReason });
 
     const agentStatus = output.status;
 
@@ -789,7 +766,6 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: true,
@@ -833,25 +809,8 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: true,
-      };
-    }
-
-    if (!config.useRealAgent) {
-      await persistConversationRecord(workDir, task.id, recordsBase, "pre-launch");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
-      const chain = wrapError("development", "agentExecution", "stub agent output — skipping verify", { taskId: task.id });
-      return {
-        status: "failed",
-        detail: "stub agent output — skipping verify",
-        output,
-        sessionId,
-        filesChanged: [],
-        attempt: 1,
-        errorEnvelope: { outcome: "failed", summary: "stub agent output — skipping verify", chain, agentOutput: output },
         agentInvoked: true,
       };
     }
@@ -875,7 +834,6 @@ export class DevelopmentService {
         detail: "agent produced no file changes",
         output,
         sessionId,
-        filesChanged: [],
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: "agent produced no file changes", chain, agentOutput: output },
         agentInvoked: true,
@@ -927,7 +885,6 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: true,
@@ -958,7 +915,6 @@ export class DevelopmentService {
         detail: "verification failed",
         output,
         sessionId,
-        filesChanged,
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: verifyOutcome.details ?? "verification failed", chain, agentOutput: output },
         agentInvoked: true,
@@ -998,7 +954,6 @@ export class DevelopmentService {
         detail: envelope.summary,
         output,
         sessionId,
-        filesChanged,
         attempt: 1,
         errorEnvelope: envelope,
         agentInvoked: true,
@@ -1015,7 +970,6 @@ export class DevelopmentService {
       detail: "task completed and verified successfully",
       output,
       sessionId,
-      filesChanged,
       attempt: 1,
       agentInvoked: true,
     };
@@ -1032,23 +986,22 @@ export class DevelopmentService {
     // Per-task verify uses only verify.toml; contract and taskSpec checks are
     // deferred to integration verify (they reference project-wide files that may
     // not exist in this task's worktree).
-    const verifyRequest = {
-      session_id: createSessionId(),
-      task_id: task.id,
-      checks: [] as string[],
-      contractChecks: [] as string[],
-      working_directory: workDir,
-      git_root: workDir,
-    };
-
     try {
-      const verifyLogOpts: VerifyLogOptions | undefined = this.deps.eventSink
-        ? { logPath: this.deps.eventSink.path }
-        : undefined;
       const image = this.deps.config.sandboxImage;
-      const { runCommand: checkRunner, prepareRunCommand: prepareRunner } = this.buildRunners(workDir, image, provisionedEnv);
-      const runners = { checkRunner, prepareRunner };
-      const response = await verify(verifyRequest, runners, verifyLogOpts);
+      const { runCommand, prepareRunCommand } = this.buildRunners(workDir, image, provisionedEnv);
+      const response = await runVerifyCore(
+        { workDir, gitRoot: workDir, checks: [], contractChecks: [] },
+        {
+          runCommand,
+          prepareRunCommand,
+          log: (event) => this.deps.eventSink?.emit({
+            ...event,
+            event: typeof event["event"] === "string" ? event["event"] : "verify_log",
+            taskId: task.id,
+            attempt,
+          }),
+        },
+      );
       console.log(
         `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, verdict=${response.verdict}`,
       );
@@ -1186,7 +1139,6 @@ export async function withSessionLifecycle(
       sessionStore.fail(sessionId, {
         passed: false,
         outcome: "errored",
-        // eslint-disable-next-line no-restricted-syntax -- lossy-extraction-ok: migration backlog
         detail: e instanceof Error ? e.message : String(e),
       }),
     );
@@ -1337,22 +1289,6 @@ function extractReplanContext(
   return candidate;
 }
 
-type GateKind = "entry-point" | "merge" | "agent" | "verify" | "post-merge-verify" | "unknown";
-
-function detectGateKind(envelope: ErrorEnvelope): GateKind {
-  const layers = flattenChain(envelope.chain);
-  for (const layer of layers) {
-    switch (layer.operation) {
-      case "entryPointRewriteCheck": return "entry-point";
-      case "tentativeMerge": return "merge";
-      case "agentExecution": return "agent";
-      case "postMergeVerify": return "post-merge-verify";
-      case "verify": return "verify";
-    }
-  }
-  return "unknown";
-}
-
 function innermostLayer(layer: ErrorLayer): ErrorLayer {
   let current = layer;
   while (current.cause) {
@@ -1361,74 +1297,11 @@ function innermostLayer(layer: ErrorLayer): ErrorLayer {
   return current;
 }
 
-function extractFilePathsFromChain(envelope: ErrorEnvelope): readonly string[] {
-  const paths: string[] = [];
-  const filePattern = /[\w@./-]+\/[\w./-]+\.(?:tsx?|jsx?|mjs|cjs|json|css|html)/g;
-  for (const layer of flattenChain(envelope.chain)) {
-    const msgMatches = layer.message.match(filePattern);
-    if (msgMatches) paths.push(...msgMatches);
-    if (layer.context) {
-      for (const value of Object.values(layer.context)) {
-        if (typeof value === "string") {
-          const ctxMatches = value.match(filePattern);
-          if (ctxMatches) paths.push(...ctxMatches);
-        }
-      }
-    }
-  }
-  return [...new Set(paths)];
-}
-
-function collectDiagnosticText(envelope: ErrorEnvelope): string {
-  const parts: string[] = [envelope.summary];
-  for (const layer of flattenChain(envelope.chain)) {
-    parts.push(layer.message);
-  }
-  return parts.join(" ").toLowerCase();
-}
-
-function derivePrescriptiveInstruction(envelope: ErrorEnvelope): string {
-  const gateKind = detectGateKind(envelope);
-  const text = collectDiagnosticText(envelope);
-  const filePaths = extractFilePathsFromChain(envelope);
-  const fileRef = filePaths.length > 0
-    ? ` The affected file(s): ${filePaths.join(", ")}.`
-    : "";
-
-  if (/error ts\d{4}/.test(text) || /tsc.*(fail|error)/.test(text) || text.includes("typescript compilation")) {
-    return `TypeScript compilation fails. Fix the type errors listed below before any other work.${fileRef}`;
-  }
-
-  switch (gateKind) {
-    case "entry-point":
-      return `The entry point file was rewritten, breaking existing routes. Modify the entry point additively — do not replace its contents.${fileRef}`;
-
-    case "merge":
-      return `The changes conflict with code merged since your last attempt. Resolve the merge conflicts in the listed files, keeping both sets of changes intact.${fileRef}`;
-
-    case "agent":
-      if (text.includes("no file changes")) {
-        return "The agent completed but made no file changes. Ensure you actually write the implementation to disk, not just plan it.";
-      }
-      return "The agent execution failed. Review the failure summary and take a fundamentally different approach.";
-
-    case "verify":
-      return `Verification failed. The changes do not pass the required checks. Fix the failing checks listed below before proceeding.${fileRef}`;
-
-    case "post-merge-verify":
-      return `Post-merge verification failed. The tree you merged into is broken — this is NOT caused by your changes. Do not attempt to fix checks you did not break.${fileRef}`;
-
-    default:
-      return `Review the failure details below and address the root cause before proceeding.${fileRef}`;
-  }
-}
-
 function formatPriorAttemptFailure(ctx: ReplanContext): string {
   const envelopeParsed = errorEnvelopeSchema.safeParse(ctx.raw);
   if (envelopeParsed.success) {
     const envelope = envelopeParsed.data;
     const diagnostic = innermostLayer(envelope.chain).message;
-    const prescriptive = derivePrescriptiveInstruction(envelope);
 
     const lines: string[] = [
       `# CRITICAL: Previous attempt FAILED — read this FIRST`,
@@ -1437,9 +1310,6 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
       ``,
       `## What failed`,
       diagnostic,
-      ``,
-      `## What you MUST do differently`,
-      prescriptive,
       ``,
       `## Do NOT repeat`,
       `YOU MUST fix: ${diagnostic}. Previous attempt failed because ${ctx.detail}.`,
@@ -1464,9 +1334,6 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
     `## What failed`,
     `Detail: ${ctx.detail}`,
     ``,
-    `## What you MUST do differently`,
-    `Review the failure details below and address the root cause before proceeding.`,
-    ``,
     `## Do NOT repeat`,
     `Do NOT repeat the same approach that produced this failure.`,
     ``,
@@ -1475,26 +1342,5 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
     rawText,
     "```",
   ].join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Pure utility functions (no BC dependencies)
-// ---------------------------------------------------------------------------
-
-function stubAgentOutput(): AgentOutputJson {
-  return {
-    status: "failed",
-    summary: "agent execution not yet wired — orchestration flow complete",
-    // A measured zero, not a missing field: no LLM call happened, so the budget
-    // must charge $0 rather than fall back to the unknown-cost estimate.
-    total_cost: 0,
-    cost_measured: true,
-    findings: [],
-    error: null,
-    error_detail: null,
-    total_tokens: { input: 0, output: 0 },
-    turn_count: 0,
-    finish_reason: "error",
-  };
 }
 

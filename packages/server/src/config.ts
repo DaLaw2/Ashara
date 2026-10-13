@@ -12,6 +12,19 @@ export interface ServerConfig {
   readonly coreLoop: CoreLoopConfig;
 }
 
+class InvalidBudgetLimit extends Error {
+  constructor(public readonly raw: string | undefined) {
+    super(
+      raw === undefined
+        ? "neither ASHARA_BUDGET_LIMIT_USD nor ASHARA_BUDGET_TOTAL is set; every run dispatches paid agents, " +
+            "so the per-run cap in USD must be set explicitly"
+        : `ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL="${raw}" is not a positive finite number; ` +
+            "set it to the per-run cap in USD",
+    );
+    this.name = "InvalidBudgetLimit";
+  }
+}
+
 export function loadDatabaseUrl(): string {
   return process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 }
@@ -33,10 +46,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const baseBranch =
     process.env["BASE_BRANCH"] ?? detectDefaultBranch(repoPath) ?? "master";
 
-  const useRealAgent =
-    process.env["USE_REAL_AGENT"] === "1" ||
-    process.env["USE_REAL_AGENT"]?.toLowerCase() === "true";
-
   const asharaSourceDir = process.env["ASHARA_SOURCE_DIR"] ?? ".";
   const maxBatchSize = parseIntOr(process.env["MAX_BATCH_SIZE"], 2);
   // Finding (a), E2E Run 11: the orchestrator's reactive budget is the only
@@ -48,15 +57,8 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // ASHARA_BUDGET_LIMIT_USD still winning when both are set. Blank values are
   // treated as unset so an empty override never masks the fallback.
   const rawBudgetLimit = nonEmptyEnv("ASHARA_BUDGET_LIMIT_USD") ?? nonEmptyEnv("ASHARA_BUDGET_TOTAL");
-  if (rawBudgetLimit !== undefined) {
-    const parsed = parseFloat(rawBudgetLimit);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      console.warn(
-        `ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL="${rawBudgetLimit}" is not a valid positive number — falling back to default`,
-      );
-    }
-  }
-  const budgetLimitUsd = parseFloatOr(rawBudgetLimit, 5.0);
+  // No default: every run dispatches paid agents, so the cap is the owner's explicit consent to spend.
+  const budgetLimitUsd = parseBudgetLimit(rawBudgetLimit);
 
   const brainstormCooldownThreshold = parseIntOr(
     process.env["BRAINSTORM_COOLDOWN_THRESHOLD"],
@@ -80,7 +82,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     repoPath,
     workdirBase,
     baseBranch,
-    useRealAgent,
     asharaSourceDir,
     maxBatchSize,
     budgetLimitUsd,
@@ -109,10 +110,13 @@ function parseIntOr(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function parseFloatOr(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+// An owner-set cap that does not parse is not consent to the default: a typo must
+// not silently become a different spend limit.
+function parseBudgetLimit(raw: string | undefined): number {
+  if (raw === undefined) throw new InvalidBudgetLimit(raw);
+  const parsed = Number(raw.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new InvalidBudgetLimit(raw);
+  return parsed;
 }
 
 function detectDefaultBranch(repoPath: string): string | null {

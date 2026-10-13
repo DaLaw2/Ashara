@@ -1,12 +1,10 @@
 export type {
   WorkItem,
   WorkItemRepository,
-  ContractRepository,
   CoverageHold,
 } from "./domain/index.js";
 export {
   createPendingWorkItem,
-  canTransitionTo,
   startWorkItem,
   completeWorkItem,
   failWorkItem,
@@ -16,8 +14,6 @@ export {
   abandonWorkItem,
   requeueWorkItem,
   takeEvents,
-  InvalidStatusTransition,
-  ContractVersionConflict,
   DependencyGraph,
   PlanningService,
 } from "./domain/index.js";
@@ -112,8 +108,6 @@ export type {
 } from "./lifecycle/index.js";
 export {
   recoverFailedItem,
-  shouldSplit,
-  splitFailedTask,
   evaluate,
   assembleRunSummaryItems,
   buildRunSummary,

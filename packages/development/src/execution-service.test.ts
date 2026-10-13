@@ -50,7 +50,6 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
     detail: `${status} detail`,
     output: null,
     sessionId: "s",
-    filesChanged: [],
     attempt: 1,
     agentInvoked: true,
   };

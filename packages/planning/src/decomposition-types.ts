@@ -110,7 +110,6 @@ export class KnowledgeDerivationError extends Error {
 export interface DecompositionConfig {
     readonly maxTasksPerEpic: number;
     readonly maxTasksPerStory: number;
-    readonly maxTotalItems: number;
     /**
      * Depth of the decomposition tree: 2 = Epic -> Tasks directly (skips
      * Story/Feature layers), 3 = Epic -> Stories -> Tasks, 4 = full
@@ -126,7 +125,6 @@ export interface DecompositionConfig {
 export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
     maxTasksPerEpic: 15,   // was 5 -- budget is the real limit (economy termination)
     maxTasksPerStory: 8,   // was 4
-    maxTotalItems: 0,
     maxDepth: 2,
 };
 

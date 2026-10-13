@@ -25,15 +25,6 @@ export class VisionRepository {
     return row ?? null;
   }
 
-  async getById(id: string) {
-    const [row] = await this.db
-      .select()
-      .from(visionDocuments)
-      .where(eq(visionDocuments.id, id))
-      .limit(1);
-    return row ?? null;
-  }
-
   async getProjectPath(visionId: string): Promise<string | null> {
     const [row] = await this.db
       .select({ projectPath: visionDocuments.projectPath })
