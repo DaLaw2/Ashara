@@ -26,7 +26,7 @@ export interface WorkItem {
   successCriteria?: StoredSuccessCriteria;
   blockedReason?: StoredBlockedReason;
   /**
-   * Which run created this item: either a runId (UUID from openRun),
+   * Which run created this item: either a runId (a run's UUID),
    * "pre-scoping" (migration backfill), or RUN_SCOPE_AD_HOC
    * (created without a run id, today a project's first plan). Every insert site
    * must supply this explicitly — there is no default (Discipline A).

@@ -38,9 +38,11 @@ export interface EnvironmentImages {
   build(request: EnvironmentBuildRequest): Promise<BuiltEnvironment>;
 }
 
-/** Keeps the Sprint 0 statement (the stack chosen and why) on its work item; t-dispatch-by-env-version reads it. */
+/** The Sprint 0 statement (the stack chosen and why), kept on its work item. */
 export interface EnvironmentStatementStore {
   record(taskId: WorkItemId, statement: string): Promise<void>;
+  /** The statement of the project's most recently completed environment task, or null when none is on record. */
+  current(projectId: ProjectId): Promise<string | null>;
 }
 
 /** A git step of the environment check printed something that is not what it must print. */

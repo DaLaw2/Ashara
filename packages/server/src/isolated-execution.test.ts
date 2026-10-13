@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -9,11 +9,11 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import type { SessionStore } from "@ashara/development";
-import { PodmanSubstrate, loadBaseCell } from "@ashara/execution-infra";
-import { LlmCallLedger } from "@ashara/finance";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
+import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { createWorkItemId } from "@ashara/shared";
@@ -28,6 +28,8 @@ vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model })
 
 const run = promisify(execFile);
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+// Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
+const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const psSchema = z.array(z.object({ Id: z.string() }));
 
 async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
@@ -88,6 +90,10 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  const { stdout } = await run("podman", ["images", "-q", "--filter", `label=ashara.project=${projectId}`]);
+  const images = [...new Set(stdout.split("\n").filter((id) => id !== ""))];
+  if (images.length > 0) await run("podman", ["rmi", "-f", ...images]);
+  await db.execute(sql`DELETE FROM environment_builds WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${projectId}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
@@ -127,12 +133,28 @@ describe("a task runs on cells end to end", () => {
         defaultProvider: "anthropic",
       },
       checkedSources: ["test"],
-      recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+      recording: { kind: "recorded", recorder: new LlmCallLedger(
+      new LlmCallRepository(db),
+      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    ) },
       clock: () => new Date(),
     });
 
+    // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.
+    const base = await loadBaseCell();
+    await mkdir(join(target, "environment"));
+    await writeFile(
+      join(target, "environment", "environment.toml"),
+      'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n',
+    );
+    await writeFile(join(target, "environment", "Containerfile"), `FROM ${base.image}\n`);
+    await run("git", ["init", "-q", "-b", "main"], { cwd: target });
+    await run("git", ["add", "environment"], { cwd: target });
+    await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment"], { cwd: target });
+
     const instance = `test-${randomUUID()}`;
     const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
+    const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();
     const service = new DevelopmentService({
@@ -141,21 +163,17 @@ describe("a task runs on cells end to end", () => {
       knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
       eventSink: { emit: (event) => void events.push(event) },
       intentSource: { loadIntent: async () => "A greeting file" },
-      stackDeriver: { deriveStack: async () => ["Plain text"] },
-      cells: { substrate, baseCell: await loadBaseCell(), instance },
+      cells: { substrate, baseCell: base, instance },
       llm: gateway,
       staffing: { staff: () => ({ role: "developer", model: gateway.resolveModel("Strong", "agent-runner") }) },
       attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
-        images: {
-          build: async () => {
-            throw new Error("an implementation task builds no environment");
-          },
-        },
+        images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
         statements: {
           record: async () => {
             throw new Error("an implementation task records no environment statement");
           },
+          current: async () => "A plain Debian shell environment: the project is one text file.",
         },
       },
       shutdownSignal: new AbortController().signal,
@@ -179,7 +197,14 @@ describe("a task runs on cells end to end", () => {
       // The task's checks ran in the task cell, the post-merge check in a verifier cell.
       const verified = events.find((e) => e.event === "verify_result");
       expect(verified).toMatchObject({ verdict: "passed", deterministicChecks: [{ name: check, passed: true }] });
-      expect(events.filter((e) => e.event === "cell_created")).toHaveLength(1);
+      const created = events.filter((e) => e.event === "cell_created");
+      expect(created).toHaveLength(1);
+      // Its cells started from the environment version's image, built and recorded for it.
+      const resolved = events.find((e) => e.event === "environment_resolved");
+      expect(resolved).toMatchObject({ reused: false, imageId: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
+      expect(created[0]).toMatchObject({ image: resolved?.["imageId"] });
+      const recordedBuilds = await db.execute(sql`SELECT status FROM environment_builds WHERE project_id = ${projectId}`);
+      expect(recordedBuilds.rows).toEqual([{ status: "succeeded" }]);
       expect(events.some((e) => e.event === "post_merge_verify" && e["verdict"] === "passed")).toBe(true);
 
       // Every cell of the task is gone.

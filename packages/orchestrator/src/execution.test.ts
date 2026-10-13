@@ -118,7 +118,6 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     recordWorkspacePath: notExercised("recordWorkspacePath"),
   };
   const failedApproachRepo = { record: async () => {} };
-  const runStateStore = { load: async () => null, save: async () => {} };
   const developmentService = {
     execute: async () => ({
       status: agentOutcome,
@@ -136,11 +135,9 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
     workItemRepo,
     eventStore,
-    costRepo: { recordTaskCost: async () => {} },
     failedApproachRepo,
     projectRepo,
     developmentService,
-    runStateStore,
   } as unknown as CoreLoopDeps;
 
   return { deps, warns, logs, savedBlockedReasons };
@@ -155,11 +152,10 @@ describe("processTask post-agent status ladder", () => {
     const { deps, logs, savedBlockedReasons } = buildPreemptionDeps();
     const task = freshPendingItem();
 
-    const { result, costInfo } = await processTask(deps, task);
+    const result = await processTask(deps, task);
 
     // The function must return the agent's result, not throw
     expect(result.status).toBe("failed");
-    expect(costInfo.costUsd).toBe(0);
 
     // The salvage must produce a structured log (Discipline C)
     const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
@@ -181,11 +177,10 @@ describe("processTask post-agent status ladder", () => {
     });
     const task = freshPendingItem();
 
-    const { result, costInfo } = await processTask(deps, task);
+    const result = await processTask(deps, task);
 
     // The completed agent result is still returned
     expect(result.status).toBe("completed");
-    expect(costInfo.costUsd).toBe(0);
 
     // The salvage must produce a structured log
     const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
@@ -206,7 +201,7 @@ describe("processTask post-agent status ladder", () => {
     });
     const task = freshPendingItem();
 
-    const { result } = await processTask(deps, task);
+    const result = await processTask(deps, task);
 
     expect(result.status).toBe("failed");
 
@@ -247,7 +242,7 @@ describe("processTask post-agent status ladder", () => {
     };
 
     const task = freshPendingItem();
-    const { result } = await processTask(deps, task);
+    const result = await processTask(deps, task);
 
     expect(result.status).toBe("failed");
 
@@ -314,11 +309,9 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
       workItemRepo,
       eventStore: { publish: async () => {} },
-      costRepo: { recordTaskCost: async () => {} },
-      failedApproachRepo: { record: async () => { approaches++; } },
+        failedApproachRepo: { record: async () => { approaches++; } },
       projectRepo: { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") },
       developmentService,
-      runStateStore: { load: async () => null, save: async () => {} },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
     } as unknown as CoreLoopDeps;
 
@@ -328,10 +321,9 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
   test("the item becomes Blocked with an environment_unavailable reason, never Failed, and the failure router is not called", async () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps();
 
-    const { result, costInfo } = await processTask(deps, freshPendingItem());
+    const result = await processTask(deps, freshPendingItem());
 
     expect(result.status).toBe("blocked");
-    expect(costInfo.costUsd).toBe(0);
     expect(stored().status).toBe("Blocked");
     expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
     expect(statusesWritten).not.toContain("Failed");
@@ -383,10 +375,9 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       agentInvoked: true,
     });
 
-    const { result, costInfo } = await processTask(deps, freshPendingItem());
+    const result = await processTask(deps, freshPendingItem());
 
     expect(result.status).toBe("blocked");
-    expect(costInfo.costUsd).toBe(0.0006);
     expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
@@ -395,5 +386,36 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     if (reason?.source !== "environment_unavailable") return;
     expect(reason.unavailable).toBe("verifier cell mount (/x/target)");
     expect(reason.reason).toContain("stage postMergeVerify (MountPathRejected)");
+  });
+
+  // s-platform-role-m1 C2: a project with no environment blocks its task; it never runs on the BaseCell.
+  test("no environment defined: Blocked with an environment_undefined reason, never Failed, no failure router", async () => {
+    const detail = "no environment for task t: no environment is defined on main at abc; no agent ran and nothing executed";
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+      status: "environment_undefined",
+      reason: "no environment is defined on main at abc",
+      detail,
+      output: null,
+      sessionId: "test-session",
+      attempt: 1,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary: detail,
+        chain: { boundary: "development", operation: "resolveCurrentEnvironment", message: "no environment", timestamp: new Date().toISOString() },
+      },
+      agentInvoked: false,
+    });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+    const reason = stored().blockedReason;
+    expect(reason).toMatchObject({ source: "environment_undefined", reason: detail });
+    expect(() =>
+      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
+    ).not.toThrow();
   });
 });

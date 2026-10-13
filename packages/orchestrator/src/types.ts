@@ -1,22 +1,14 @@
-import type {
-  EventStoreRepository,
-  FailedApproachRepository,
-  ProjectRepository,
-  CostRepository,
-} from "@ashara/db";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
+import type { EventStoreRepository, FailedApproachRepository, ProjectRepository } from "@ashara/db";
 import type { WorkItemRepository, FailureRouter, FirstPlanning } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
-import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports } from "./acl/engagement-acl.js";
+import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
-import type { RunStateStore } from "./run-state.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
   readonly baseBranch: string;
   readonly maxBatchSize: number;
-  readonly budgetLimitUsd: number;
   readonly maxRetries: number;
   readonly decompositionTimeoutMs: number;
   readonly verifyTimeoutMs: number;
@@ -32,15 +24,36 @@ export interface CoreLoopConfig {
 export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   baseBranch: "master",
   maxBatchSize: 2,
-  budgetLimitUsd: 5.0,
   maxRetries: 1,
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
 };
 
+/** Why the loop must stop for good; the runner ends on it instead of cycling again. */
+export interface LoopStop {
+  readonly reason: string;
+}
+
 export interface CycleResult {
   readonly tasksProcessed: number;
   readonly results: TaskResult[];
+  /** Set when this cycle found the loop must stop. */
+  readonly stop: LoopStop | null;
+}
+
+/** A spend cap refusing an LLM call, as the loop routes it. */
+type SpendRefusal =
+  | { readonly kind: "project"; readonly projectId: string; readonly reason: string }
+  | { readonly kind: "deployment"; readonly reason: string };
+
+/**
+ * Finance's spend cap, as the loop reads it. A project refusal has already
+ * blocked its project; a deployment refusal, or recorded spend at the
+ * deployment cap, stops the loop.
+ */
+interface SpendCapPort {
+  deploymentStop(): Promise<LoopStop | null>;
+  refusalOf(error: unknown): SpendRefusal | null;
 }
 
 export interface TaskResult {
@@ -63,65 +76,10 @@ export function blockedResult(taskId: string, detail: string): TaskResult {
   return { taskId, status: "blocked", detail };
 }
 
-export interface TaskCostInfo {
-  /**
-   * What this dispatch cost, or `null` for "an agent ran and we cannot tell".
-   * The identity element is deliberately unavailable here (Discipline A): a
-   * crashed, timed-out or malformed agent run used to read as `0`, and a `0`
-   * that flows into the cap gating a runaway is not a measurement, it is an
-   * assumption the caller never knew it was making. `null` forces the budget to
-   * decide what an unbounded run costs; see BudgetTracker.accumulateCost.
-   */
-  readonly costUsd: number | null;
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly modelId: string | null;
-  /** Which agent invocation (1 = original, 2 = the single retry) produced this cost. */
-  readonly attempt: number;
-}
-
-/** No agent was dispatched, so $0 is MEASURED, not assumed. */
-export function zeroCost(): TaskCostInfo {
-  return { costUsd: 0, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
-}
-
-export function costFromOutput(
-  output: AgentOutputJson | null,
-  attempt: number,
-  agentInvoked: boolean,
-): TaskCostInfo {
-  if (!output) {
-    // No output means no agent ran (early exit) or the output was unavailable.
-    // agentInvoked distinguishes "genuinely $0" from "unknown cost."
-    return { costUsd: agentInvoked ? null : 0, inputTokens: 0, outputTokens: 0, modelId: null, attempt };
-  }
-  // An unmeasured run's total_cost is understated (at least one gateway call
-  // contributed $0 because its provider reported no token counts). Treat the
-  // entire run's cost as unknown so the budget's unknownCostCharge fires
-  // rather than the ledger recording a number known to be wrong.
-  if (!output.cost_measured) {
-    return { costUsd: null, inputTokens: output.total_tokens.input, outputTokens: output.total_tokens.output, modelId: output.error_detail?.model ?? null, attempt };
-  }
-  const costUsd =
-    Number.isFinite(output.total_cost) && output.total_cost >= 0
-      ? output.total_cost
-      : agentInvoked
-        ? null
-        : 0;
-  return {
-    costUsd,
-    inputTokens: output.total_tokens.input,
-    outputTokens: output.total_tokens.output,
-    modelId: output.error_detail?.model ?? null,
-    attempt,
-  };
-}
-
 export interface CoreLoopDeps {
   readonly config: CoreLoopConfig;
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: EventStoreRepository;
-  readonly costRepo: CostRepository;
   readonly failedApproachRepo: FailedApproachRepository;
   /**
    * Holds each project's target workspace path (migration 024) and its status:
@@ -132,11 +90,11 @@ export interface CoreLoopDeps {
   readonly developmentService: DevelopmentService;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRouter;
-  /** Durable home of the budget's spend. */
-  readonly runStateStore: RunStateStore;
+  /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
+  readonly spendCap: SpendCapPort;
   /**
-   * The Liaison's handling of the client's stops, run first in every cycle, at
-   * the budget cap too: a stopped project is never intaken, planned or gated.
+   * The Liaison's handling of the client's stops, run first in every cycle,
+   * before the spend-cap check: a stopped project is never intaken, planned or gated.
    */
   readonly clientStops: LiaisonClientStops;
   /** The Liaison's tender intake, run each cycle before work-item gating. */
@@ -147,4 +105,9 @@ export interface CoreLoopDeps {
   readonly firstPlanning: FirstPlanning;
   /** The Liaison's reports on recorded planning outcomes, run after planning. */
   readonly planReports: LiaisonPlanReports;
+  /**
+   * The stack each merged Sprint 0 task chose, made an Inferred assumption in a new vision
+   * version and reported to the client once; run every cycle, at the budget cap too (no LLM call).
+   */
+  readonly stackChoices: LiaisonStackChoices;
 }

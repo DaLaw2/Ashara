@@ -122,9 +122,11 @@ function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
     role: "worker",
     workKind: "implementation",
     model,
+    cellImage: { kind: "base-cell", image: "base@sha256:0000000000000000000000000000000000000000000000000000000000000000", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
     brief: {
       goal: "Write hello.txt",
-      projectFrame: { intent: "A greeting file", stack: ["Plain text"], source: "contract-knowledge" },
+      intent: "A greeting file",
+      projectEnvironment: { kind: "to-define" },
       context: "An empty workspace.",
       deliverables: ["hello.txt"],
     },

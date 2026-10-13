@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -13,20 +13,24 @@ import {
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
+  DevSessionRepository,
   EnvironmentBuildRepository,
   LlmCallRepository,
   ProjectRepository,
+  VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
+import { StackChoiceReports } from "@ashara/engagement";
 import type { SessionStore, TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
-import { LlmCallLedger } from "@ashara/finance";
+import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
+import { createStackChoiceStore } from "./stack-choice-store.js";
 
 // Sprint 0 end to end on real podman, real git and the real recorded gateway, with a scripted
 // model: no real LLM call and no skip. The environment role writes a minimal environment, calls
@@ -37,6 +41,8 @@ vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model })
 
 const run = promisify(execFile);
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+// Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
+const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 
 const modelConfig: ModelConfig = {
   id: "mock-model",
@@ -98,15 +104,32 @@ async function sprint0Task(): Promise<TaskDescriptor> {
   };
 }
 
-interface Sprint0Run {
+/** An implementation task on record, as a first plan writes one after Sprint 0. */
+async function implementationTask(): Promise<TaskDescriptor> {
+  const id = createWorkItemId();
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id)
+    VALUES (${id}, 'Task', 'InProgress', 'Write hello.txt', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()})`);
+  return { id, projectId, title: "Write hello.txt", dispatchCount: 0, workKind: "implementation", successCriteria: [] };
+}
+
+interface TaskRun {
   readonly result: Awaited<ReturnType<DevelopmentService["execute"]>>;
   readonly mock: MockLanguageModelV4;
   readonly events: ReadonlyArray<Record<string, unknown> & { readonly event: string }>;
   readonly target: string;
+  readonly workdirBase: string;
   readonly taskId: WorkItemId;
 }
 
-async function runSprint0(name: string, script: ReturnType<typeof toolCallTurn>[]): Promise<Sprint0Run> {
+/** One model turn, or a step run between turns (it sees the task's live cells) that yields the turn. */
+type ScriptStep = ReturnType<typeof toolCallTurn> | (() => Promise<ReturnType<typeof toolCallTurn>>);
+
+async function runSprint0(name: string, script: ScriptStep[]): Promise<TaskRun> {
+  return runTask(name, await sprint0Task(), script, memorySessions);
+}
+
+async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[], sessions: SessionStore): Promise<TaskRun> {
   const workdirBase = join(root, name);
   const target = join(workdirBase, "projects", "p");
   await mkdir(target, { recursive: true });
@@ -114,7 +137,7 @@ async function runSprint0(name: string, script: ReturnType<typeof toolCallTurn>[
     doGenerate: async () => {
       const next = script.shift();
       if (next === undefined) throw new Error("the mock model's script is exhausted");
-      return next;
+      return typeof next === "function" ? next() : next;
     },
   });
   stub.model = mock;
@@ -126,7 +149,10 @@ async function runSprint0(name: string, script: ReturnType<typeof toolCallTurn>[
       defaultProvider: "anthropic",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(
+      new LlmCallRepository(db),
+      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    ) },
     clock: () => new Date(),
   });
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
@@ -135,27 +161,33 @@ async function runSprint0(name: string, script: ReturnType<typeof toolCallTurn>[
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
-    sessionStore: memorySessions,
+    sessionStore: sessions,
     knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => "A studio booking site" },
-    stackDeriver: { deriveStack: async () => ["Undecided"] },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
-    staffing: { staff: () => ({ role: "platform", model: gateway.resolveModel("Strong", "agent-runner") }) },
+    staffing: {
+      staff: (staffed) => ({
+        role: staffed.workKind === "environment" ? "platform" : "developer",
+        model: gateway.resolveModel("Strong", "agent-runner"),
+      }),
+    },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },
     environment: {
       images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
-      statements: { record: (taskId, statement) => workItems.recordEnvironmentStatement(taskId, statement) },
+      statements: {
+        record: (taskId, statement) => workItems.recordEnvironmentStatement(taskId, statement),
+        current: (id) => workItems.currentEnvironmentStatement(id),
+      },
     },
     shutdownSignal: new AbortController().signal,
   });
-  const task = await sprint0Task();
   try {
     const result = await service.execute(task, target);
     const { stdout } = await run("podman", ["ps", "-a", "-q", "--filter", `label=ashara.task=${task.id}`]);
     expect(stdout.trim(), "every cell of the task is gone").toBe("");
-    return { result, mock, events, target, taskId: task.id };
+    return { result, mock, events, target, workdirBase, taskId: task.id };
   } finally {
     await substrate.teardownAll();
   }
@@ -190,6 +222,9 @@ afterAll(async () => {
   if (images.length > 0) await run("podman", ["rmi", "-f", ...images]);
   await db.execute(sql`DELETE FROM environment_builds WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id = ${projectId})`);
+  await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM vision_documents WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${projectId}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
@@ -237,4 +272,85 @@ describe("Sprint 0", () => {
     expect(existsSync(join(target, "environment"))).toBe(false);
     expect(await statementOf(taskId)).toBeNull();
   }, 300_000);
+
+  it("after Sprint 0 merges, the next task's cells run from the environment image, and the stack choice reaches the vision and the client once", async () => {
+    await new VisionRepository(db).create(projectId, {
+      visionText: "A studio booking site",
+      summary: "Book studio time online",
+      inferences: [{ key: "A1", statement: "Bookings are in one time zone", rationale: "the tender names one city", status: "Inferred" }],
+    });
+
+    const sprint0 = await runSprint0("flow", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("finish", { status: "done", summary: STATEMENT }),
+    ]);
+    expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
+    // Sprint 0 itself ran on the BaseCell.
+    expect(sprint0.events.find((e) => e.event === "cell_created")).toMatchObject({ image: base.image, cellImage: { kind: "base-cell" } });
+    // What the orchestrator does on a completed result.
+    await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
+
+    const [build] = z
+      .array(z.object({ version: z.string(), imageId: z.string() }))
+      .parse((await db.execute(sql`SELECT version, image_id AS "imageId" FROM environment_builds WHERE project_id = ${projectId} AND status = 'succeeded'`)).rows);
+    if (build === undefined) throw new Error("no succeeded environment build is on record");
+
+    const task = await implementationTask();
+    const sessions = new DevSessionRepository(db);
+    const liveImages: string[] = [];
+    const check = "test -f /workspace/hello.txt";
+    const { result, events, workdirBase, taskId } = await runTask(
+      "flow",
+      task,
+      [
+        toolCallTurn("write_file", { path: "verify.toml", content: `[checks]\nhello = "${check}"\n` }),
+        async () => {
+          // The task's cell, inspected while the attempt runs.
+          const { stdout } = await run("podman", ["ps", "--filter", `label=ashara.task=${task.id}`, "--format", "json"]);
+          liveImages.push(...z.array(z.object({ ImageID: z.string() })).parse(JSON.parse(stdout)).map((cell) => cell.ImageID));
+          return toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" });
+        },
+        toolCallTurn("finish", { status: "done", summary: "Wrote hello.txt." }),
+      ],
+      {
+        insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version),
+        complete: (sid) => sessions.complete(sid),
+        fail: (sid, verification) => sessions.fail(sid, verification),
+      },
+    );
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(liveImages).toEqual([build.imageId.replace(/^sha256:/, "")]);
+    expect(events.find((e) => e.event === "environment_resolved")).toMatchObject({ version: build.version, imageId: build.imageId, reused: true });
+    expect(events.some((e) => e.event === "post_merge_verify" && e["verdict"] === "passed")).toBe(true);
+
+    // The version is recorded with the attempt and on its dev session.
+    const [sessionDir] = await readdir(join(workdirBase, "records", taskId));
+    const conversation = await readFile(join(workdirBase, "records", taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
+    const first: unknown = JSON.parse(conversation.split("\n")[0] ?? "null");
+    expect(first).toMatchObject({ kind: "attempt_started", cellImage: { kind: "environment", version: build.version, imageId: build.imageId } });
+    expect(z.object({ system: z.string() }).parse(first).system).toContain(STATEMENT);
+    const recorded = z
+      .array(z.object({ version: z.string().nullable() }))
+      .parse((await db.execute(sql`SELECT environment_version AS "version" FROM dev_sessions WHERE task_id = ${taskId}`)).rows);
+    expect(recorded).toEqual([{ version: build.version }]);
+
+    // The stack choice: an Inferred assumption in vision v2 and one report, however often the Liaison runs.
+    const liaison = new StackChoiceReports(createStackChoiceStore(db));
+    expect(await liaison.runPending()).toEqual([{ kind: "recorded", projectId, visionVersion: 2 }]);
+    expect(await liaison.runPending()).toEqual([]);
+    const vision = await new VisionRepository(db).getCurrent(projectId);
+    expect(vision?.version).toBe(2);
+    expect(vision?.visionText).toBe("A studio booking site");
+    expect(vision?.inferences).toEqual([
+      { key: "A1", statement: "Bookings are in one time zone", rationale: "the tender names one city", status: "Inferred" },
+      expect.objectContaining({ key: "A2", statement: STATEMENT, status: "Inferred" }),
+    ]);
+    const reports = z
+      .array(z.object({ body: z.string() }))
+      .parse((await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND reports_on = 'stack-choice'`)).rows);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.body).toContain(STATEMENT);
+  }, 600_000);
 });

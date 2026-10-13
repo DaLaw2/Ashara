@@ -4,6 +4,8 @@ export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
 export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
+export { StackChoiceReports } from "./stack-choice.js";
+export type { LiaisonStackChoices, StackChoiceStore } from "./stack-choice.js";
 export {
   ClientPostSchema,
   TenderSchema,

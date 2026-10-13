@@ -16,7 +16,7 @@ export const EMPTY_WORKDIR_CONTEXT_MAP = [
   "",
   "The working directory is empty. No files exist yet; read_file, list_directory and",
   "search_codebase will return nothing. Nothing about this project can be detected —",
-  "what is known is stated in Project Frame above.",
+  "what is known is stated under Project above.",
 ].join("\n");
 
 export function formatTaskSpec(spec: TaskSpec): string {

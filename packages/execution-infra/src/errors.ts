@@ -293,3 +293,34 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
     this.detail = detail;
   }
 }
+
+/**
+ * `podman build` produced an image, but its succeeded build could not be recorded. The image is
+ * not used: buildEnvironmentImage reuses only an image whose build is on record, so the next
+ * resolution of this version builds it again.
+ */
+export class EnvironmentBuildUnrecorded extends ExecutionInfraError {
+  readonly projectId: string;
+  readonly version: string;
+  readonly commit: string;
+  readonly imageRef: string;
+  readonly imageId: string;
+
+  constructor(
+    build: { readonly projectId: string; readonly version: string; readonly commit: string; readonly imageRef: string; readonly imageId: string },
+    detail: string,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `Environment build of project ${build.projectId} version ${build.version} (commit ${build.commit}) produced image ` +
+        `${build.imageId} (${build.imageRef}), but recording it failed: ${detail}`,
+      options,
+    );
+    this.name = "EnvironmentBuildUnrecorded";
+    this.projectId = build.projectId;
+    this.version = build.version;
+    this.commit = build.commit;
+    this.imageRef = build.imageRef;
+    this.imageId = build.imageId;
+  }
+}

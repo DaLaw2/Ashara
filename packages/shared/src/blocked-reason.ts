@@ -73,6 +73,17 @@ const environmentUnavailableSchema = z.object({
 });
 
 /**
+ * The project has no environment a task's cells can be built from: none is defined on the
+ * target's main, or the current version's image could not be built. No agent ran, and the task is
+ * never run on the BaseCell instead (s-platform-role-m1). `reason` names which, for the operator.
+ */
+const environmentUndefinedSchema = z.object({
+  source: z.literal("environment_undefined"),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
  */
@@ -89,6 +100,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   replanSchema,
   failureRouterSchema,
   environmentUnavailableSchema,
+  environmentUndefinedSchema,
   apiSchema,
 ]);
 
@@ -143,6 +155,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "replan":
     case "failure_router":
     case "environment_unavailable":
+    case "environment_undefined":
     case "api":
       return { ...reason };
   }

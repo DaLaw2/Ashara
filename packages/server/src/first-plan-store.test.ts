@@ -15,7 +15,7 @@ import {
 } from "@ashara/db";
 import { PlanReports, TenderIntake } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
-import { LlmCallLedger } from "@ashara/finance";
+import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { RosterDerivation } from "@ashara/organization";
@@ -37,6 +37,8 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+// Caps far above anything a stubbed call can cost: these tests are about the calls, not the cap.
+const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NONCE = randomUUID().slice(0, 8);
 const NAME_PREFIX = `first-plan-test-${NONCE}`;
 
@@ -309,7 +311,10 @@ beforeAll(async () => {
   gateway = buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(new LlmCallRepository(db)) },
+    recording: { kind: "recorded", recorder: new LlmCallLedger(
+      new LlmCallRepository(db),
+      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    ) },
     clock: () => new Date(),
   });
 });

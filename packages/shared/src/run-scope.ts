@@ -4,7 +4,7 @@ import { z } from "zod";
  * Published Language: the run-scope association on a work item.
  *
  * Every work item carries a run scope that says which run created it. The
- * value is either a runId (UUID from openRun), RUN_SCOPE_AD_HOC for items
+ * value is either a runId (a run's UUID), RUN_SCOPE_AD_HOC for items
  * created without a run id, or the migration backfill value "pre-scoping" on
  * rows that existed before the column was added. Today the only work-item
  * writer is the server's first-plan store, which writes RUN_SCOPE_AD_HOC; no

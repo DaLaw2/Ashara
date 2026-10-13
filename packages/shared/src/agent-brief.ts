@@ -1,5 +1,23 @@
 import { z } from "zod";
-import { ProjectFrameSchema } from "./project-frame.js";
+
+/**
+ * The project environment a task works in, as the brief states it. Ashara never names a stack:
+ * a defined environment is passed through as the team's own statement of the stack it chose and
+ * why, with the environment version every cell of the task is built from.
+ */
+const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
+  /** The project has no environment yet: defining it is this task's work (Sprint 0). */
+  z.strictObject({ kind: z.literal("to-define") }),
+  z.strictObject({
+    kind: z.literal("defined"),
+    /** sha256 (hex) over the owned files of environment/environment.toml at the target's main. */
+    version: z.string().regex(/^[0-9a-f]{64}$/),
+    /** The last commit that touched an owned path. */
+    commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    /** The environment role's statement of the stack it chose and why, verbatim. */
+    statement: z.string().min(1),
+  }),
+]);
 
 /**
  * AgentBriefSchema: the validated task instruction the Development BC assembles for one dispatch
@@ -10,9 +28,9 @@ import { ProjectFrameSchema } from "./project-frame.js";
  * assembled at cost and dropped on the way to the prompt).
  *
  * Field tiers:
- *  - FRAME: `projectFrame`, what the project IS (owner intent verbatim, the target stack as labels,
- *    and where that stack was derived from). Required and rendered first: it is the one thing the
- *    agent cannot discover for itself and would otherwise fill in from its training prior (ADR-046).
+ *  - PROJECT: `intent`, the owner's vision verbatim, and `projectEnvironment`, the environment the
+ *    task works in. Rendered first: what the project is and what it is built with are the things
+ *    the agent cannot discover for itself and would otherwise fill in from its training prior.
  *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`,
  *    `knowledgeContext`: the instruction, its requirements and prior lessons.
  *  - SUPPLEMENTARY: `contextMap`, reference rendered after the binding sections.
@@ -21,7 +39,8 @@ const AgentBriefSchema = z
   .object({
     taskId: z.string().min(1),
     goal: z.string().min(1),
-    projectFrame: ProjectFrameSchema,
+    intent: z.string().min(1),
+    projectEnvironment: ProjectEnvironmentSchema,
     context: z.string().min(1),
     deliverables: z.array(z.string()),
     knowledgeContext: z.string().optional(),

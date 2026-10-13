@@ -67,7 +67,7 @@ interface LadderRequest {
   readonly capability: CapabilityLevel;
   readonly prompt: string;
   readonly systemPrompt?: string;
-  readonly maxTokens?: number;
+  readonly maxTokens: number;
 }
 
 export interface LadderAttemptEvent {
@@ -265,7 +265,8 @@ interface StructuredProviderRequest<T> {
   readonly prompt: string;
   readonly schema: ZodType<T>;
   readonly systemPrompt?: string;
-  readonly maxTokens?: number;
+  /** The output bound of every attempt; Finance prices the call's worst case from it. */
+  readonly maxTokens: number;
   /** Routing site override for this call (rarely set directly — see `StructuredLadderOptions.site`, which sets it for every call this wrapper makes). */
   readonly site?: KnownLLMSite;
   /**

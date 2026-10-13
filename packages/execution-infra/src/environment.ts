@@ -194,7 +194,6 @@ export async function snapshotEnvironment(
 
 /**
  * The environment version at `commit`: unchanged by commits that touch no owned path.
- * @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1)
  */
 export async function environmentVersion(
   gitDir: string,

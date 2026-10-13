@@ -1,4 +1,4 @@
-export type { ProjectIntentSource, StackDeriver, StackDerivationScope } from "./project-frame.js";
+export type { ProjectIntentSource } from "./project-intent.js";
 
 export { DevelopmentService } from "./execution-service.js";
 export { assertValidTargetProjectPath } from "./workspace.js";

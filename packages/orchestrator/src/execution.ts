@@ -13,11 +13,11 @@ import {
   recoverFailedItem,
 } from "./acl/planning-acl.js";
 import type { DevelopmentService, TaskDescriptor } from "./acl/development-acl.js";
-import type { TaskResult, TaskCostInfo, CoreLoopDeps } from "./types.js";
-import { completedResult, failedResult, blockedResult, zeroCost, costFromOutput } from "./types.js";
+import type { TaskResult, CoreLoopDeps } from "./types.js";
+import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
-type EnvironmentUnavailableReason = Extract<StoredBlockedReason, { source: "environment_unavailable" }>;
+type EnvironmentBlockedReason = Extract<StoredBlockedReason, { source: "environment_unavailable" | "environment_undefined" }>;
 
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
@@ -32,12 +32,9 @@ async function executeTask(
 ): Promise<{
   result: TaskResult;
   output: AgentOutputJson | null;
-  attempt: number;
   errorEnvelope?: ErrorEnvelope;
-  /** Whether the agent attempt was started — see TaskCostInfo.costUsd. */
-  agentInvoked: boolean;
   /**
-   * The item was parked at Blocked here (environment unavailable), so
+   * The item was parked at Blocked here (environment unavailable or undefined), so
    * processTask must not run the failed/blocked recovery ladder on it.
    */
   parkedAtBlocked: boolean;
@@ -67,20 +64,21 @@ async function executeTask(
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
-  if (execResult.status === "environment_blocked") {
-    // Not a task failure: re-dispatching cannot make the substrate appear, so
-    // the item is parked at Blocked for the operator, never routed to Failed.
-    await routeAsEnvironmentBlocked(deps, task.id, {
-      source: "environment_unavailable",
-      unavailable: execResult.unavailable,
-      reason: execResult.detail,
-    });
+  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined") {
+    // Not a task failure: re-dispatching cannot make the substrate or the
+    // project's environment appear, so the item is parked at Blocked for the
+    // operator, never routed to Failed.
+    await routeAsEnvironmentBlocked(
+      deps,
+      task.id,
+      execResult.status === "environment_blocked"
+        ? { source: "environment_unavailable", unavailable: execResult.unavailable, reason: execResult.detail }
+        : { source: "environment_undefined", reason: execResult.detail },
+    );
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
-      attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
-      agentInvoked: execResult.agentInvoked,
       parkedAtBlocked: true,
     };
   }
@@ -102,8 +100,6 @@ async function executeTask(
     return {
       result: completedResult(task.id),
       output: execResult.output,
-      attempt: execResult.attempt,
-      agentInvoked: execResult.agentInvoked,
       parkedAtBlocked: false,
     };
   }
@@ -114,9 +110,7 @@ async function executeTask(
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
-      attempt: execResult.attempt,
       errorEnvelope: execResult.errorEnvelope,
-      agentInvoked: execResult.agentInvoked,
       parkedAtBlocked: false,
     };
   }
@@ -124,9 +118,7 @@ async function executeTask(
   return {
     result: failedResult(task.id, execResult.detail),
     output: execResult.output,
-    attempt: execResult.attempt,
     errorEnvelope: execResult.errorEnvelope,
-    agentInvoked: execResult.agentInvoked,
     parkedAtBlocked: false,
   };
 }
@@ -139,7 +131,7 @@ async function executeTask(
 async function routeAsEnvironmentBlocked(
   deps: ExecutionRoutingDeps,
   taskId: WorkItem["id"],
-  reason: EnvironmentUnavailableReason,
+  reason: EnvironmentBlockedReason,
 ): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
@@ -155,7 +147,8 @@ async function routeAsEnvironmentBlocked(
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  console.warn(`[${taskId}] blocked, ${reason.unavailable} unavailable: ${reason.reason}`);
+  const what = reason.source === "environment_unavailable" ? `${reason.unavailable} unavailable` : "no environment defined";
+  console.warn(`[${taskId}] blocked, ${what}: ${reason.reason}`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsEnvironmentBlocked");
 }
 
@@ -270,19 +263,13 @@ async function salvagePreemptedResult(
 export async function processTask(
   deps: CoreLoopDeps,
   task: WorkItem,
-): Promise<{ result: TaskResult; costInfo: TaskCostInfo }> {
+): Promise<TaskResult> {
   const workItem = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!workItem) {
-    return {
-      result: blockedResult(task.id, "work item not found"),
-      costInfo: zeroCost(),
-    };
+    return blockedResult(task.id, "work item not found");
   }
   if (workItem.status !== "Pending") {
-    return {
-      result: blockedResult(task.id, "task already picked up by another cycle"),
-      costInfo: zeroCost(),
-    };
+    return blockedResult(task.id, "task already picked up by another cycle");
   }
 
   const previousStatus = workItem.status;
@@ -313,9 +300,7 @@ export async function processTask(
   const {
     result,
     output,
-    attempt,
     errorEnvelope: execEnvelope,
-    agentInvoked,
     parkedAtBlocked,
   } = await executeTask(
     routingDeps,
@@ -323,7 +308,6 @@ export async function processTask(
     task,
     targetProjectPath,
   );
-  const costInfo = costFromOutput(output, attempt, agentInvoked);
 
   // The target project path is minted, validated, and recorded on the project
   // inside resolveTargetProjectPath, its single writer.
@@ -344,7 +328,7 @@ export async function processTask(
   // An environment-blocked item is already parked at Blocked (or was left where
   // an owner moved it); no agent ran, so there is nothing to route or salvage.
   if (parkedAtBlocked) {
-    return { result, costInfo };
+    return result;
   }
 
   if (result.status === "failed" || result.status === "blocked") {
@@ -460,7 +444,7 @@ export async function processTask(
     }
   }
 
-  return { result, costInfo };
+  return result;
 }
 
 async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void> {

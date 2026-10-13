@@ -1,5 +1,4 @@
 import { LLMGateway } from "./gateway.js";
-import { BudgetLedger } from "./budget-ledger.js";
 import { NoLLMProvidersConfigured, RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { resolveModelsConfigPath } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
@@ -93,20 +92,13 @@ export interface BuildGatewayOptions {
    */
   readonly checkedSources: readonly string[];
   /**
-   * The process-wide in-memory budget gate to wire into the constructed
-   * gateway. Defaults to a fresh `BudgetLedger` when omitted — callers that
-   * want one ledger shared across the gateway (e.g. the server composition
-   * root) must pass their own instance.
-   */
-  readonly ledger?: BudgetLedger;
-  /**
    * Whether every structured call writes a ledger row. Required: a process
    * that does not record says why, at its own construction site.
    */
   readonly recording: CallRecording;
   /**
    * Read once per provider request, before it is sent; that instant prices the
-   * call in the budget ledger and in the recorder's row. Required: the rate
+   * call in the recorder's row and in the cost the gateway returns. Required: the rate
    * of a time-windowed model depends on it.
    */
   readonly clock: () => Date;
@@ -133,5 +125,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
 
   assertRoutingProfileComplete(config);
   assertRoutingProfileModelsPresent(config);
-  return new LLMGateway(config, options.recording, options.clock, options.ledger);
+  return new LLMGateway(config, options.recording, options.clock);
 }

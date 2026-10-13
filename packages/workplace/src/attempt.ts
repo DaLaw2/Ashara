@@ -126,6 +126,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     role: assignment.role,
     provider: assignment.model.provider,
     modelId: assignment.model.modelId,
+    cellImage: assignment.cellImage,
     limits,
     system,
     firstMessage: FIRST_MESSAGE,

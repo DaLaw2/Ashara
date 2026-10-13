@@ -36,10 +36,6 @@ export function nodeByKind(graph: ProjectKnowledge, kind: string): ProjectKnowle
   return graph.nodes.find(n => n.kind === kind);
 }
 
-export function nodeLabels(graph: ProjectKnowledge, kind: string): string[] {
-  return graph.nodes.filter(n => n.kind === kind).map(n => n.label);
-}
-
 /**
  * The authored contract body: everything a caller declares. `projectId` (the key)
  * and `version` (monotonic, repo-assigned) are NOT part of the body — they are

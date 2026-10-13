@@ -42,7 +42,7 @@ function build(routingProfiles: RoutingProfiles): ReturnType<typeof buildGateway
 describe("buildGateway routing-profile completeness", () => {
   test("refuses to start when a non-empty profile omits a site, naming the missing site", () => {
     const partial = completeProfile();
-    delete partial["stack-derivation"];
+    delete partial["roster"];
 
     expect(() => build({ deepseek: partial })).toThrow(RoutingProfileIncomplete);
 
@@ -53,9 +53,9 @@ describe("buildGateway routing-profile completeness", () => {
       expect(err).toBeInstanceOf(RoutingProfileIncomplete);
       const typed = err as RoutingProfileIncomplete;
       expect(typed.combo).toBe("deepseek");
-      expect(typed.missingSites).toEqual(["stack-derivation"]);
+      expect(typed.missingSites).toEqual(["roster"]);
       expect(typed.mappedSites).toContain("agent-runner");
-      expect(typed.message).toContain("stack-derivation");
+      expect(typed.message).toContain("roster");
       expect(typed.message).toContain(typed.configPath);
     }
   });

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
 import { materializeSnapshot, snapshotEnvironment, type EnvironmentDefinition } from "./environment.js";
-import { EnvironmentBuildFailed, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
+import { EnvironmentBuildFailed, EnvironmentBuildUnrecorded, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
 import type { PodmanSubstrate } from "./podman.js";
 
 /**
@@ -208,7 +208,11 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     } catch (err) {
       return await fail(result.exitCode, false, log, `podman build succeeded but wrote no valid image id: ${messageOf(err)}`, err);
     }
-    await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(log) });
+    try {
+      await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(log) });
+    } catch (err) {
+      throw new EnvironmentBuildUnrecorded({ ...identity, imageId }, messageOf(err), { cause: err });
+    }
     return { ...identity, imageId, reused: false, log: tailOf(log) };
   } finally {
     await rm(workDir, { recursive: true, force: true });

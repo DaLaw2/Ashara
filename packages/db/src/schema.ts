@@ -5,10 +5,8 @@ import {
   text,
   jsonb,
   timestamp,
-  boolean,
   integer,
   smallint,
-  bigint,
   doublePrecision,
   numeric,
   unique,
@@ -80,8 +78,8 @@ export const workItems = pgTable("work_items", {
   northStar: text("north_star"),
   successCriteria: jsonb("success_criteria"),
   blockedReason: jsonb("blocked_reason"),
-  // Run-scope association (migration 003). The column admits a runId (UUID from
-  // openRun), "pre-scoping" for rows that existed before this column, or
+  // Run-scope association (migration 003). The column admits a runId (a run's
+  // UUID), "pre-scoping" for rows that existed before this column, or
   // RUN_SCOPE_AD_HOC. Today the only writer is the server's first-plan store,
   // which writes RUN_SCOPE_AD_HOC; no code path writes a runId.
   // No default: every insert site must supply the value explicitly.
@@ -92,7 +90,7 @@ export const workItems = pgTable("work_items", {
     .references(() => projects.id),
   // Dispatch-guaranteed attempt counter (migration 018, r9f-t1). Incremented at the
   // dispatch seam so the retry bound survives a crashed agent or discarded output —
-  // decoupled from task_cost_history billing. See CoreLoop.processTask.
+  // decoupled from any cost record. See CoreLoop.processTask.
   dispatchCount: integer("dispatch_count").notNull().default(0),
   // Who owns the item (migration 031): its kind of work and the roster role
   // holding the capability that kind needs. Both or neither; only on a Task.
@@ -149,6 +147,9 @@ export const devSessions = pgTable("dev_sessions", {
   output: jsonb(),
   verificationResult: jsonb("verification_result"),
   findings: jsonb(),
+  // Migration 034: the environment version the session's cells were built from; NULL when they
+  // ran on the BaseCell (only the Sprint 0 task does).
+  environmentVersion: text("environment_version"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
@@ -361,23 +362,6 @@ export const projectContracts = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// task_cost_history
-// ---------------------------------------------------------------------------
-
-export const taskCostHistory = pgTable("task_cost_history", {
-  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
-  taskId: uuid("task_id").notNull(),
-  capability: text().notNull(),
-  inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
-  outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
-  actualCostUsd: doublePrecision("actual_cost_usd").notNull().default(0.0),
-  modelId: text("model_id"),
-  success: boolean().notNull().default(false),
-  attempt: integer().notNull().default(1),
-  createdAt: timestamptz("created_at").notNull().defaultNow(),
-});
-
-// ---------------------------------------------------------------------------
 // llm_calls (migration 015, K10 cost ledger, Finance context)
 // ---------------------------------------------------------------------------
 // One row per provider call. Token and cost columns are nullable with no
@@ -405,6 +389,8 @@ export const llmCalls = pgTable(
     // Migration 030: NULL only on rows written before it; a CHECK refuses NULL on every new row.
     finishReason: text("finish_reason"),
     reasoningTokens: integer("reasoning_tokens"),
+    // Migration 035: Finance's worst-case estimate, made before the call; the cap counts it when costUsd is NULL.
+    estimatedCostUsd: numeric("estimated_cost_usd", { precision: 20, scale: 12, mode: "number" }),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),

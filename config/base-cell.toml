@@ -1,5 +1,5 @@
-# The BaseCell reference: the image every cell starts from until s-platform-role-m1 builds images from the
-# project's committed environment (Decided: ADR-074 addendum 2 d61).
+# The BaseCell reference (Decided: ADR-074 addendum 2 d61): the image the Sprint 0 task's cells start from.
+# Every later task's cells start from the image of the project's current environment version (s-platform-role-m1).
 #
 # A bare Debian slim image pinned by digest and run with --pull=never: Ashara bakes in no toolchain (Target
 # Generality). The digest is the identity; the tag is a label for people. packages/execution-infra/src/base-cell.ts

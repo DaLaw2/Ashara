@@ -157,4 +157,31 @@ describe("environment image build", () => {
     expect(recorded).toHaveLength(2);
     expect(recorded[1]).toMatchObject({ status: "failed", network: "private", image_id: null, error: expect.stringContaining("failed") });
   });
+
+  it("a built image whose build cannot be recorded throws a typed error carrying the build, and is never reused", async () => {
+    const base = await loadBaseCell();
+    await commitFiles({ "environment/Containerfile": `FROM ${base.image}\nLABEL unrecorded=1\n` }, "unrecorded");
+    const gitDir = join(repo, ".git");
+    const definition = await readEnvironmentDefinition(gitDir, "main");
+    const recorder = {
+      findSucceeded: (id: ProjectId, version: string) => builds.findSucceeded(id, version),
+      recordSucceeded: async () => {
+        throw new Error("connection terminated");
+      },
+      recordFailed: (build: Parameters<EnvironmentBuildRepository["recordFailed"]>[0]) => builds.recordFailed(build),
+    };
+    const failure = await buildEnvironmentImage(
+      { projectId, repoGitDir: gitDir, commit: "main", definition },
+      { substrate, recorder, timeoutMs: 120_000 },
+    ).catch((err: unknown) => err);
+    expect(failure).toMatchObject({
+      name: "EnvironmentBuildUnrecorded",
+      projectId,
+      version: expect.stringMatching(/^[0-9a-f]{64}$/),
+      imageId: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      message: expect.stringContaining("connection terminated"),
+    });
+    // Nothing is on record for it, so the next resolution builds it again rather than reusing it.
+    expect(await rows()).toHaveLength(2);
+  });
 });

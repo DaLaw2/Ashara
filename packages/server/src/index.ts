@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import { z } from "zod";
 import { serve } from "@hono/node-server";
 import {
   createDb,
@@ -9,11 +8,9 @@ import {
   VisionRepository,
   ProjectRepository,
   ConfigRepository,
-  CostRepository,
   KnowledgeRepository,
   FailedApproachRepository,
   ContractRepository,
-  RunStateRepository,
   SecretRepository,
   LlmCallRepository,
   ClientMessageRepository,
@@ -41,22 +38,19 @@ import {
   tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
-import { ClientStops, PlanReports, TenderIntake } from "@ashara/engagement";
+import { ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation } from "@ashara/organization";
 import type {
   AgentStaffing,
-  StackDerivationScope,
   SessionStore,
   KnowledgeSink,
   KnowledgeSource,
   ExecutionEventSink,
   ContractSource,
   ProjectIntentSource,
-  StackDeriver,
 } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
 import {
-  BudgetLedger,
   buildGateway,
   buildGatewayConfig,
   loadRoutingProfilesFromToml,
@@ -65,10 +59,9 @@ import {
   toModelConfig,
   LLMGateway,
   NoLLMProvidersConfigured,
-  withStructuredLadder,
 } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
-import { LlmCallLedger } from "@ashara/finance";
+import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { CapabilityLevel, ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
@@ -87,6 +80,7 @@ import { loadWebClientAssets } from "./web-client.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
+import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createRosterStore } from "./roster-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
@@ -153,8 +147,6 @@ async function main(): Promise<void> {
   const visionRepo = new VisionRepository(db);
   const projectRepo = new ProjectRepository(db);
   const configRepo = new ConfigRepository(db);
-  const costRepo = new CostRepository(db);
-  const runStateRepo = new RunStateRepository(db);
   const knowledgeRepo = new KnowledgeRepository(db);
   const failedApproachRepo = new FailedApproachRepository(db);
   const contractRepo = new ContractRepository(db);
@@ -171,13 +163,6 @@ async function main(): Promise<void> {
   // silent fallback here: zero providers -> NoLLMProvidersConfigured
   // propagates out of this block and the server refuses to start (see catch
   // below).
-  //
-  // budgetLedger is the ONE in-memory, per-run budget gate for this process
-  // (structural simplification: replaces the file-based CostTracker). Its
-  // total cap is overridden from config.coreLoop.budgetLimitUsd -- the same
-  // single number the orchestrator's BudgetTracker enforces -- so
-  // ASHARA_BUDGET_LIMIT_USD / ASHARA_BUDGET_TOTAL has exactly one parse site
-  // (loadServerConfig) instead of two independently-defaulted readers.
   const pipelineLogPath = join(config.coreLoop.workdirBase, "pipeline.jsonl");
   const eventLogger = new EventLogger(pipelineLogPath);
   console.log(`Pipeline event log: ${pipelineLogPath}`);
@@ -186,10 +171,16 @@ async function main(): Promise<void> {
     eventLogger.emit({ event: "ladder_attempt", ...attempt });
   };
 
-  const budgetLedger = new BudgetLedger();
-  // Finance's cost ledger (K10): the gateway refuses an unpriced model before
-  // the request and writes one llm_calls row per provider request after it.
-  const llmCallLedger = new LlmCallLedger(new LlmCallRepository(db));
+  // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
+  // every provider request the gateway refuses an unpriced model and a call whose
+  // worst case would cross the project's or the deployment's cap; after it, one
+  // llm_calls row. The loop reads the same cap to stop at the deployment's.
+  const llmCallRepo = new LlmCallRepository(db);
+  const spendCap = new SpendCap({ ledger: llmCallRepo, projects: projectRepo, caps: config.spendCaps });
+  console.log(
+    `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls)`,
+  );
+  const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
   let llmGateway: LLMGateway;
   try {
     // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
@@ -208,14 +199,9 @@ async function main(): Promise<void> {
     const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
     const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
     gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
-    gwConfig.budget = {
-      maxCostTotal: config.coreLoop.budgetLimitUsd,
-      maxCostPerProvider: gwConfig.budget?.maxCostPerProvider,
-    };
     llmGateway = buildGateway({
       config: gwConfig,
       checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
-      ledger: budgetLedger,
       recording: { kind: "recorded", recorder: llmCallLedger },
       clock: () => new Date(),
     });
@@ -237,7 +223,7 @@ async function main(): Promise<void> {
   const abortController = new AbortController();
 
   const sessionStore: SessionStore = {
-    insert: (sid, tid, brief) => devSessionRepo.insert(sid, tid, brief),
+    insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
     complete: (sid) => devSessionRepo.complete(sid),
     fail: (sid, vr) => devSessionRepo.fail(sid, vr),
   };
@@ -295,7 +281,7 @@ async function main(): Promise<void> {
     return task ? task.projectId : null;
   };
 
-  // The task's project contract: its knowledge graph feeds the project frame.
+  // The task's project contract: its knowledge graph names the entry point.
   const contractSource: ContractSource = {
     async loadForTask(taskId: string): Promise<ProjectContract | null> {
       const projectId = await findTaskProjectId(taskId);
@@ -303,54 +289,15 @@ async function main(): Promise<void> {
     },
   };
 
-  // Project frame — intent (ADR-046): the task's project's current vision,
-  // VERBATIM visionText, never the summary: the paraphrase is the step that
-  // dropped "Go" in Run 36.
+  // The brief's intent: the task's project's current vision, VERBATIM
+  // visionText, never the summary: the paraphrase is the step that dropped "Go"
+  // in Run 36.
   const intentSource: ProjectIntentSource = {
     async loadIntent(taskId: string): Promise<string | null> {
       const projectId = await findTaskProjectId(taskId);
       if (!projectId) return null;
       const vision = await visionRepo.getCurrent(projectId);
       return vision?.visionText ?? null;
-    },
-  };
-
-  // Project frame — last-resort stack derivation (ADR-046). Runs only until the
-  // project has a scaffold or a knowledge graph to read instead, so it is once per
-  // project, not once per task. Laddered like every other structured planning
-  // call, with a validate that
-  // rejects an empty answer so the ladder re-asks instead of returning nothing.
-  const stackSchema = z.object({ stack: z.array(z.string().min(1)) });
-  const stackDeriver: StackDeriver = {
-    async deriveStack(intent: string, scope: StackDerivationScope): Promise<readonly string[]> {
-      const stackLadder = withStructuredLadder(
-        llmGateway.forCall({ projectId: scope.projectId, taskId: scope.taskId, callSite: "stack-derivation" }),
-        { site: "stack-derivation", onAttempt: ladderAttemptSink },
-      );
-      const response = await stackLadder.generateStructured({
-        capability: "Strong",
-        prompt: [
-          `Read this project vision and state the implementation stack it targets.`,
-          ``,
-          `Vision:`,
-          intent,
-          ``,
-          `Return LABELS ONLY — the names of the language, runtime, framework, database and`,
-          `build tool the vision calls for (e.g. "Go", "SQLite", "Cobra"). Never return a`,
-          `command, a file name, a version number, or an explanation.`,
-          `State only what the vision supports. If it names a language, that language is first.`,
-          ``,
-          `IMPORTANT: Respond with ONLY valid JSON, no markdown, no code fences.`,
-          `Use exactly this format: {"stack": ["...", "..."]}`,
-        ].join("\n"),
-        schema: stackSchema,
-        maxTokens: 512,
-        validate: (value) =>
-          value.stack.length > 0
-            ? { ok: true }
-            : { ok: false, errors: ["The stack array is empty; name at least the implementation language."] },
-      });
-      return response.data.stack;
     },
   };
 
@@ -363,7 +310,6 @@ async function main(): Promise<void> {
     knowledgeSource,
     eventSink: devEventSink,
     intentSource,
-    stackDeriver,
     contractSource,
     cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
     llm: llmGateway,
@@ -378,7 +324,10 @@ async function main(): Promise<void> {
             timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
           }),
       },
-      statements: { record: (taskId, statement) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement) },
+      statements: {
+        record: (taskId, statement) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement),
+        current: (projectId) => dbWorkItemRepo.currentEnvironmentStatement(projectId),
+      },
     },
     shutdownSignal: abortController.signal,
   });
@@ -387,13 +336,12 @@ async function main(): Promise<void> {
     config: config.coreLoop,
     workItemRepo,
     eventStore,
-    costRepo,
     failedApproachRepo,
     projectRepo,
     developmentService,
     eventLogger,
     failureRouter,
-    runStateStore: runStateRepo,
+    spendCap,
     clientStops: new ClientStops(createClientStopStore(db)),
     liaisonIntake: new TenderIntake({
       llm: llmGateway,
@@ -411,6 +359,7 @@ async function main(): Promise<void> {
       onAttempt: ladderAttemptSink,
     }),
     planReports: new PlanReports(createPlanReportStore(db)),
+    stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -491,9 +440,12 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 
-  await runnerPromise;
+  const loopStop = await runnerPromise;
+  if (loopStop) {
+    console.error(`FATAL: the continuous runner stopped: ${loopStop.reason}. HTTP stays up; SIGTERM to exit.`);
+  }
   await teardownCellsAtShutdown(cellSubstrate);
-  console.log("Server and continuous runner stopped");
+  console.log(loopStop ? "Continuous runner stopped; HTTP still serving" : "Server and continuous runner stopped");
 }
 
 

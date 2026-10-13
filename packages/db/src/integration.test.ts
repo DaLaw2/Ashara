@@ -9,7 +9,6 @@ import { EventStoreRepository } from "./repositories/event-store.js";
 import { VisionRepository } from "./repositories/vision.js";
 import { ConfigRepository } from "./repositories/config.js";
 import { KnowledgeRepository } from "./repositories/knowledge.js";
-import { CostRepository } from "./repositories/cost.js";
 import { FailedApproachRepository } from "./repositories/failed-approach.js";
 import { ClientRepository } from "./repositories/client.js";
 import { ProjectRepository } from "./repositories/project.js";
@@ -17,7 +16,6 @@ import {
   devSessions,
   domainEvents,
   knowledgeEntries,
-  taskCostHistory,
   failedApproaches,
   modelConfigs,
   providerConfigs,
@@ -40,7 +38,6 @@ const createdVisionIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
 const createdKnowledgeIds: string[] = [];
-const createdCostIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -70,9 +67,6 @@ async function cleanupAll() {
   }
   for (const id of createdKnowledgeIds) {
     await db.execute(sql`DELETE FROM knowledge_entries WHERE id = ${id}`);
-  }
-  for (const id of createdCostIds) {
-    await db.execute(sql`DELETE FROM task_cost_history WHERE id = ${id}`);
   }
   for (const modelId of createdModelIds) {
     await db.execute(sql`DELETE FROM model_configs WHERE model_id = ${modelId}`);
@@ -166,7 +160,8 @@ describe("DevSessionRepository", () => {
 
   test("insert creates a session and it can be read back", async () => {
     const brief = { instructions: "do something" };
-    await repo.insert(sessionId, taskId, brief);
+    const environmentVersion = "e".repeat(64);
+    await repo.insert(sessionId, taskId, brief, environmentVersion);
     createdDevSessionIds.push(sessionId);
 
     const [row] = await db
@@ -180,6 +175,7 @@ describe("DevSessionRepository", () => {
     expect(row.taskId).toBe(taskId);
     expect(row.phase).toBe("Preparing");
     expect(row.brief).toEqual(brief);
+    expect(row.environmentVersion).toBe(environmentVersion);
     expect(row.createdAt).toBeInstanceOf(Date);
     expect(row.updatedAt).toBeInstanceOf(Date);
   });
@@ -366,41 +362,7 @@ describe("KnowledgeRepository", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. CostRepository
-// ---------------------------------------------------------------------------
-
-describe("CostRepository", () => {
-  let repo: CostRepository;
-  const taskId = randomUUID();
-
-  beforeAll(() => {
-    // taskCostHistory.taskId has no FK constraint, so no work item is needed.
-    repo = new CostRepository(db);
-  });
-
-  test("recordTaskCost inserts a cost record and it can be read back", async () => {
-    await repo.recordTaskCost(taskId, "coding", 1500, 500, 0.0045, "test-model-id", true, 1);
-
-    const rows = await db
-      .select()
-      .from(taskCostHistory)
-      .where(sql`${taskCostHistory.taskId} = ${taskId}`);
-
-    expect(rows.length).toBe(1);
-    createdCostIds.push(rows[0].id);
-
-    expect(rows[0].capability).toBe("coding");
-    expect(rows[0].inputTokens).toBe(1500);
-    expect(rows[0].outputTokens).toBe(500);
-    expect(rows[0].actualCostUsd).toBe(0.0045);
-    expect(rows[0].modelId).toBe("test-model-id");
-    expect(rows[0].success).toBe(true);
-    expect(rows[0].attempt).toBe(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 8. FailedApproachRepository
+// 7. FailedApproachRepository
 // ---------------------------------------------------------------------------
 
 describe("FailedApproachRepository", () => {

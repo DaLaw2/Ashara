@@ -1,7 +1,6 @@
 export { LLMGateway } from "./gateway.js";
 export type { ContextualLlm, ContextualTurnLlm, ResolvedModel } from "./gateway.js";
 export type { TurnResult, TurnToolSchema } from "./turn.js";
-export { BudgetLedger } from "./budget-ledger.js";
 export { buildGatewayConfig, toModelConfig } from "./config.js";
 export type { ProviderCredential } from "./config.js";
 export { describeUnmeasuredCost, measureCost, resolveModelsConfigPath } from "./pricing.js";
@@ -15,6 +14,7 @@ export type {
   LlmCallRecorder,
   LlmProviderCall,
   ModelConfig,
+  PendingLlmCall,
   TokenUsage,
   CostMeasurement,
 } from "./types.js";

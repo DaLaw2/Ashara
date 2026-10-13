@@ -50,7 +50,6 @@ export type RoutingProfiles = Record<string, Partial<Record<KnownLLMSite, Routin
 export interface GatewayConfig {
   providers: ProviderConfig[];
   defaultProvider: string;
-  budget?: BudgetConfig;
   /** Static per-site routing playbooks, keyed by enabled-provider combo. */
   routingProfiles?: RoutingProfiles;
   /**
@@ -93,7 +92,6 @@ export interface ThinkingPolicy {
 export const KNOWN_LLM_SITES = [
   "agent-runner",
   "decomposition",
-  "stack-derivation",
   "liaison-intake",
   "roster",
   "escalation",
@@ -202,32 +200,13 @@ export type CostMeasurement =
       readonly missingRates: readonly PricedTokenClass[];
     };
 
-interface BudgetConfig {
-  /** Total spend cap in USD, checked against the in-process BudgetLedger. */
-  maxCostTotal: number;
-  /**
-   * Per-provider spend cap in USD, keyed by lowercase provider name (matches
-   * `ProviderConfig.name`, e.g. "anthropic", "deepseek"). Optional — omit or
-   * leave a provider out of the map to leave it uncapped.
-   *
-   * Checked against the in-process BudgetLedger, which resets to $0 on every
-   * server restart (a restart is a new run) rather than persisting across
-   * restarts.
-   */
-  maxCostPerProvider?: Record<string, number>;
-}
-
-export interface CostSummary {
-  totalCost: number;
-  costByProvider: Record<string, number>;
-}
-
 export interface StructuredRequest<T> {
   capability: CapabilityLevel;
   prompt: string;
   schema: ZodType<T>;
   systemPrompt?: string;
-  maxTokens?: number;
+  /** The output bound sent with the request; Finance prices the call's worst case from it. */
+  maxTokens: number;
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
 }
@@ -273,30 +252,45 @@ export type LlmFinishReason =
   | "no-response"
   | `unrecognized:${string}`;
 
-/** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
-export interface LlmProviderCall {
-  /**
-   * The instant the request was sent. The one instant per call: the gateway's
-   * budget ledger and the cost ledger both price the call at the rates in force
-   * here, so a call that straddles a price-window edge is priced once.
-   */
-  readonly requestedAt: Date;
+/**
+ * One provider request about to be sent, as the pre-call check sees it. Finance
+ * estimates its worst-case cost from `requestBytes` and `maxOutputTokens`.
+ */
+export interface PendingLlmCall {
+  /** Unique per provider request; the recorded call carries the same id. */
+  readonly callId: string;
   readonly context: LlmCallContext;
   readonly provider: string;
   readonly model: ModelConfig;
   readonly operation: LlmCallOperation;
+  /** UTF-8 bytes of everything sent as input: prompt, system text, messages, schema and tool schemas. */
+  readonly requestBytes: number;
+  /** The output bound sent with the request. */
+  readonly maxOutputTokens: number;
+}
+
+/** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
+export interface LlmProviderCall extends PendingLlmCall {
+  /**
+   * The instant the request was sent. The one instant per call: the cost
+   * ledger prices the call at the rates in force here, and so does the cost the
+   * gateway returns, so a call that straddles a price-window edge is priced once.
+   */
+  readonly requestedAt: Date;
   readonly usage: ExtractedUsage | null;
   readonly finishReason: LlmFinishReason;
   readonly outcome: LlmCallOutcome;
 }
 
 /**
- * Supplied by the composition root. `assertPriced` runs before every provider
- * request and throws to refuse it; `record` runs once after every provider
- * request, success or failure, and a throw from it fails the call.
+ * Supplied by the composition root. `assertPriced` is the pre-call check: it
+ * runs before every provider request and throws a `PreCallRefusal` to refuse
+ * it (Finance refuses an unpriced model, and a call whose worst-case cost would
+ * cross a spend cap). `record` runs once after every admitted request, success
+ * or failure, with the same `callId`; a throw from it fails the call.
  */
 export interface LlmCallRecorder {
-  assertPriced(provider: string, model: ModelConfig): void;
+  assertPriced(call: PendingLlmCall): Promise<void> | void;
   record(call: LlmProviderCall): Promise<void>;
 }
 

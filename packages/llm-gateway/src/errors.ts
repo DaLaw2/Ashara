@@ -5,43 +5,6 @@ export class GatewayError extends Error {
   }
 }
 
-export interface BudgetExceededContext {
-  /** Provider name the cap applies to (set for per-provider budget checks). */
-  provider?: string;
-  /** Cost of the call that tripped the check, estimated pre-call. */
-  estimatedCost?: number;
-}
-
-export class BudgetExceededError extends GatewayError {
-  readonly limit: string;
-  readonly spent: number;
-  readonly budget: number;
-  readonly provider?: string;
-  readonly estimatedCost?: number;
-
-  constructor(
-    limit: string,
-    spent: number,
-    budget: number,
-    context?: BudgetExceededContext,
-  ) {
-    const providerPart = context?.provider ? `, provider="${context.provider}"` : "";
-    const estimatePart =
-      context?.estimatedCost !== undefined
-        ? `, estimatedCost=$${context.estimatedCost.toFixed(4)}`
-        : "";
-    super(
-      `Budget exceeded: ${limit} limit of $${budget.toFixed(4)} reached (spent $${spent.toFixed(4)}${estimatePart}${providerPart})`,
-    );
-    this.name = "BudgetExceededError";
-    this.limit = limit;
-    this.spent = spent;
-    this.budget = budget;
-    this.provider = context?.provider;
-    this.estimatedCost = context?.estimatedCost;
-  }
-}
-
 export class ProviderError extends GatewayError {
   readonly provider: string;
 
@@ -386,8 +349,9 @@ export class InvalidRoutingProfiles extends GatewayError {
 
 /**
  * Base for a refusal raised by the call recorder BEFORE a provider request
- * (e.g. Finance's UnpricedModel). The gateway never retries one on a fallback
- * model: a refusal is a configuration gap to fix, not a transient failure.
+ * (Finance's UnpricedModel and BudgetExceeded). The gateway never retries one on
+ * a fallback model: the request was never sent, and another model would meet the
+ * same price list and the same cap.
  */
 export class PreCallRefusal extends GatewayError {
   constructor(message: string, options?: ErrorOptions) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { loadBudgetEnv, parseCapabilityLevel } from "@ashara/shared";
+import { parseCapabilityLevel } from "@ashara/shared";
 import { InvalidGatewayCatalog } from "./errors.js";
 import { PROVIDER_TYPES } from "./types.js";
 import type {
@@ -41,16 +41,14 @@ function parseProviderType(source: string, providerName: string, raw: string): P
  * routing profiles, and provider credentials.
  *
  * The caller owns the credential source: the server resolves each key from
- * its secret store (`provider/<name>/api_key`). Budget config is still read
- * from env (it is deployment tuning, not a secret).
+ * its secret store (`provider/<name>/api_key`). The spend cap is Finance's,
+ * applied by the call recorder before every request.
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
   routingProfiles: RoutingProfiles,
   credentials: readonly ProviderCredential[],
 ): GatewayConfig {
-  const budget = loadBudgetEnv();
-
   const modelsByProvider: Record<string, Record<string, ModelConfig>> = {};
   for (const [id, model] of Object.entries(allModels)) {
     if (!modelsByProvider[model.provider]) {
@@ -85,10 +83,6 @@ export function buildGatewayConfig(
   return {
     providers,
     defaultProvider,
-    budget: {
-      maxCostTotal: budget.total,
-      maxCostPerProvider: budget.perProvider,
-    },
     routingProfiles,
   };
 }

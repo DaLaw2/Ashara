@@ -1,4 +1,4 @@
-import { and, eq, asc, inArray, sql } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import {
   parseWorkItemStatus,
   canTransitionTo,
@@ -89,6 +89,27 @@ export class WorkItemRepository {
       .where(and(eq(workItems.id, id), eq(workItems.workKind, "environment")))
       .returning({ id: workItems.id });
     if (!row) throw new EnvironmentStatementNotRecordable(id);
+  }
+
+  /**
+   * The statement of the project's most recently completed environment task: the stack the
+   * environment on main was chosen for. Null when no environment task has completed with one.
+   */
+  async currentEnvironmentStatement(projectId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ statement: workItems.environmentStatement })
+      .from(workItems)
+      .where(
+        and(
+          eq(workItems.projectId, projectId),
+          eq(workItems.workKind, "environment"),
+          eq(workItems.status, "Completed"),
+          isNotNull(workItems.environmentStatement),
+        ),
+      )
+      .orderBy(desc(workItems.updatedAt), desc(workItems.id))
+      .limit(1);
+    return row?.statement ?? null;
   }
 
   async findById(id: string) {

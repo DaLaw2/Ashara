@@ -22,7 +22,7 @@
 # "escalation" is not a call site of its own: the reliability ladder stamps
 # it on any attempt run at an ESCALATED capability tier, regardless of which
 # site the base attempt used, so every escalated retry (decomposition,
-# stack-derivation, liaison-intake, ...) can be sent to one
+# liaison-intake, roster, ...) can be sent to one
 # deliberately-chosen reliable model.
 #
 # A site's value is either a bare model id (applied regardless of the
@@ -37,8 +37,8 @@
 # A combo with no table below, or an explicitly EMPTY table, is not an error:
 # every site falls through to capability-level logic. A NON-EMPTY table is a
 # curated allocation and must map every known site -- a hole in it would
-# silently escape to capability routing, which is how stack-derivation once
-# reached Anthropic despite the reserve below.
+# silently escape to capability routing, which is how the since-deleted stack
+# derivation site once reached Anthropic despite the reserve below.
 #
 # Within a table, a request whose capability has no entry AND no "default"
 # fails the call (RoutingProfileUnresolved). Boot-enforced for the deployment's
@@ -63,7 +63,6 @@
 "decomposition" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "liaison-intake" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "roster" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"stack-derivation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "escalation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
@@ -87,10 +86,6 @@
 # Roster derivation (s-team-roster-m1): one structured call per tender, the
 # same shape and size as decomposition's.
 "roster" = "deepseek-flash"
-# Stack derivation (ADR-046) is a once-per-project label extraction -- cheap,
-# and keeping it on DeepSeek preserves
-# the Anthropic reserve stated above.
-"stack-derivation" = "deepseek-flash"
 # Sonnet 5.5 replaces Sonnet 4.6 (Decided: owner 2026-10-13, ADR-077).
 "escalation" = "claude-sonnet-5-5"
 

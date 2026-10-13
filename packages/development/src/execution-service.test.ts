@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { PodmanSubstrate } from "@ashara/execution-infra";
+import { z } from "zod";
+import { PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError } from "@ashara/shared";
@@ -23,10 +24,12 @@ const TERMINAL_PHASES = ["Completed", "Failed"] as const;
 class RecordingSessionStore implements SessionStore {
   readonly phases = new Map<string, string>();
   readonly failures = new Map<string, unknown>();
+  readonly environmentVersions = new Map<string, string | null>();
   failOnWrite = false;
 
-  async insert(sessionId: string): Promise<void> {
+  async insert(sessionId: string, _taskId: string, _brief: unknown, environmentVersion: string | null): Promise<void> {
     this.phases.set(sessionId, "Preparing");
+    this.environmentVersions.set(sessionId, environmentVersion);
   }
 
   async complete(sessionId: string): Promise<void> {
@@ -46,7 +49,8 @@ function brief(): AgentBrief {
     {
       taskId: "11111111-1111-4111-8111-111111111111",
       goal: "do the thing",
-      projectFrame: { intent: "a thing", stack: ["Go"], source: "vision-derivation" },
+      intent: "a thing",
+      projectEnvironment: { kind: "to-define" },
       context: "end state: the thing exists",
       deliverables: [],
     },
@@ -55,6 +59,18 @@ function brief(): AgentBrief {
 }
 
 function result(status: ExecutionResult["status"]): ExecutionResult {
+  if (status === "environment_undefined") {
+    return {
+      status,
+      reason: "no environment",
+      detail: `${status} detail`,
+      output: null,
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "no environment", chain: wrapError("development", "resolveCurrentEnvironment", "no environment") },
+      agentInvoked: false,
+    };
+  }
   if (status === "environment_blocked") {
     return {
       status,
@@ -77,6 +93,8 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
   };
 }
 
+const session = { sessionId: "sess", taskId: "task", brief: brief(), environmentVersion: null };
+
 // E2E Run 39: six failure returns, none of which transitioned the session, left
 // 6 rows in Preparing that listActive() reported as live agents. The fix is not
 // six call sites — it is one seam every exit passes through.
@@ -85,12 +103,12 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
       const store = new RecordingSessionStore();
-      await withSessionLifecycle(store, "sess", "task", brief(), async () => result(status));
+      await withSessionLifecycle(store, session, async () => result(status));
 
       const phase = store.phases.get("sess");
       expect(TERMINAL_PHASES).toContain(phase);
@@ -102,7 +120,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
     const store = new RecordingSessionStore();
 
     await expect(
-      withSessionLifecycle(store, "sess", "task", brief(), async () => {
+      withSessionLifecycle(store, session, async () => {
         throw new Error("the attempt threw before an outcome");
       }),
     ).rejects.toThrow("the attempt threw before an outcome");
@@ -117,7 +135,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
 
   test("the failure payload carries the outcome and detail, not just a phase", async () => {
     const store = new RecordingSessionStore();
-    await withSessionLifecycle(store, "sess", "task", brief(), async () => result("blocked"));
+    await withSessionLifecycle(store, session, async () => result("blocked"));
 
     expect(store.failures.get("sess")).toMatchObject({
       passed: false,
@@ -133,7 +151,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
     const store = new RecordingSessionStore();
     store.failOnWrite = true;
 
-    const outcome = await withSessionLifecycle(store, "sess", "task", brief(), async () =>
+    const outcome = await withSessionLifecycle(store, session, async () =>
       result("completed"),
     );
 
@@ -166,6 +184,7 @@ interface Probe {
   readonly sessions: RecordingSessionStore;
   staffed: number;
   modelCalls: number;
+  builds: number;
 }
 
 function serviceOn(
@@ -173,14 +192,13 @@ function serviceOn(
   workdirBase: string,
   turns?: (probe: Probe) => TurnResult,
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
-  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0 };
+  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0 };
   const events: Array<Record<string, unknown>> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: probe.sessions,
     knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
     intentSource: { loadIntent: async () => "build the thing" },
-    stackDeriver: { deriveStack: async () => ["C"] },
     cells: {
       substrate,
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
@@ -204,20 +222,53 @@ function serviceOn(
     },
     attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
     environment: {
+      // Stands for the recorded builder: the version it reports is the one the real code computes
+      // at that commit, and the image is "already built".
       images: {
-        build: async () => {
-          throw new Error("no environment may be built");
+        build: async (request) => {
+          probe.builds++;
+          const { version, commit } = await environmentVersion(request.repoGitDir, request.commit, request.definition);
+          return {
+            projectId: request.projectId,
+            version,
+            commit,
+            imageRef: `localhost/ashara-env-${request.projectId}:${version.slice(0, 16)}`,
+            network: "private",
+            imageId: ENV_IMAGE_ID,
+            reused: true,
+          };
         },
       },
       statements: {
         record: async () => {
           throw new Error("no environment statement may be recorded");
         },
+        current: async () => STATEMENT,
       },
     },
     shutdownSignal: new AbortController().signal,
   });
   return { service, probe, events };
+}
+
+const ENV_IMAGE_ID = `sha256:${"c".repeat(64)}`;
+const STATEMENT = "A POSIX shell environment: the project is a greeting file.";
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await promisify(execFile)("git", args, { cwd });
+  return stdout.trim();
+}
+
+/** Commits a minimal environment definition to the target's main, as a merged Sprint 0 leaves it. */
+async function commitEnvironment(target: string): Promise<void> {
+  await mkdir(join(target, "environment"));
+  await writeFile(
+    join(target, "environment", "environment.toml"),
+    'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n',
+  );
+  await writeFile(join(target, "environment", "Containerfile"), "FROM scratch\n");
+  await git(target, "add", "environment");
+  await git(target, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
 }
 
 const someTask = () => ({
@@ -289,6 +340,43 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(probe.modelCalls).toBe(0);
     expect(existsSync(workdirBase)).toBe(false);
   });
+
+  // s-platform-role-m1 C2: a task after Sprint 0 never falls back to the BaseCell.
+  test("no environment on main: environment_undefined; no build, no cell, no model, no session, no worktree", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noenv-")));
+    scratch.push(root);
+    const target = join(root, "target");
+    const workdirBase = join(root, "work");
+    await mkdir(target);
+    await ensureTargetGitInit(target);
+    const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
+    const substrate = new PodmanSubstrate({
+      podmanPath: "podman",
+      mountRoot: root,
+      runner: async (request) => {
+        if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+      },
+    });
+    const { service, probe, events } = serviceOn(substrate, workdirBase);
+
+    const result = await service.execute(someTask(), target);
+
+    expect(result.status).toBe("environment_undefined");
+    if (result.status !== "environment_undefined") return;
+    expect(result.reason).toContain("no environment is defined on main");
+    expect(result.reason).toContain("environment/environment.toml");
+    expect(result.agentInvoked).toBe(false);
+    expect(result.errorEnvelope.chain.operation).toBe("resolveCurrentEnvironment");
+    expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "resolveCurrentEnvironment" })]);
+    expect(probe.builds).toBe(0);
+    expect(probe.staffed).toBe(0);
+    expect(probe.modelCalls).toBe(0);
+    expect(probe.sessions.phases.size).toBe(0);
+    expect(existsSync(workdirBase)).toBe(false);
+    vi.restoreAllMocks();
+  });
 });
 
 // The isolated-worker run's finding 1: a verifier cell refused by the substrate was routed as a
@@ -333,11 +421,6 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     };
   }
 
-  async function git(cwd: string, ...args: string[]): Promise<string> {
-    const { stdout } = await promisify(execFile)("git", args, { cwd });
-    return stdout.trim();
-  }
-
   async function dispatch(faults: Faults) {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const warns: string[] = [];
@@ -350,8 +433,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     await mkdir(target);
     await writeFile(join(target, "verify.toml"), '[checks]\ngreet = "test -f greet.txt"\n');
     await ensureTargetGitInit(target);
+    await commitEnvironment(target);
     const mainBefore = await git(target, "rev-parse", "main");
     const workdirBase = join(root, "cells", "work");
+    const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
 
     const substrate = new PodmanSubstrate({
       podmanPath: "podman",
@@ -362,6 +447,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
           case "run": {
             const role: Role = args.includes("ashara.role=verifier") ? "verifier" : "developer";
+            started.push({ role, image: args.find((arg) => arg.startsWith("sha256:") || arg.includes("@sha256:")) });
             return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
           }
           case "exec":
@@ -375,7 +461,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     });
     const task = someTask();
     const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
-    const { service, events } = serviceOn(substrate, workdirBase, (probe) => {
+    const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
       if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
@@ -383,8 +469,34 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
-    return { result, events, warns, target, mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "" };
+    return {
+      result, events, warns, target, started, probe, workdirBase, taskId: task.id,
+      mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "",
+    };
   }
+
+  test("an implementation task's cells start from the environment image; the version is recorded with the attempt", async () => {
+    const { result, started, probe, events, workdirBase, taskId } = await dispatch({});
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(probe.builds).toBe(1);
+    expect(started).toEqual([
+      { role: "developer", image: ENV_IMAGE_ID },
+      { role: "verifier", image: ENV_IMAGE_ID },
+    ]);
+    const resolved = events.find((e) => e.event === "environment_resolved");
+    expect(resolved).toMatchObject({ imageId: ENV_IMAGE_ID, version: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    const version = resolved?.["version"];
+    expect([...probe.sessions.environmentVersions.values()]).toEqual([version]);
+
+    const [sessionDir] = await readdir(join(workdirBase, "records", taskId));
+    const conversation = await readFile(join(workdirBase, "records", taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
+    const first: unknown = JSON.parse(conversation.split("\n")[0] ?? "null");
+    expect(first).toMatchObject({ kind: "attempt_started", cellImage: { kind: "environment", version, imageId: ENV_IMAGE_ID } });
+    const { system } = z.object({ system: z.string() }).parse(first);
+    expect(system).toContain(STATEMENT);
+    expect(system).toContain(`version ${String(version)}`);
+  });
 
   test.each([
     { stage: "createCell", errorClass: "CellStartFailed", faults: { startFails: "developer" }, unavailable: "task cell", agentInvoked: false },

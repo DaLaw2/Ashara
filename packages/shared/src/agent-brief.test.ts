@@ -7,7 +7,8 @@ function minimalBrief(): AgentBrief {
   return {
     taskId: "11111111-1111-4111-8111-111111111111",
     goal: "implement the thing",
-    projectFrame: { intent: "a project", stack: ["TypeScript"], source: "vision-derivation" },
+    intent: "a project",
+    projectEnvironment: { kind: "to-define" },
     context: "end state: the thing works",
     deliverables: [],
   };

@@ -101,8 +101,8 @@ export class DecompositionEngine {
         ].join("\n");
 
         // A graph with no stack node is a valid answer: Ashara never picks the
-        // client's stack. Development's ProjectFrame ladder handles that absence
-        // explicitly (its contract-knowledge rung declines and records why).
+        // client's stack. The Sprint 0 task chooses it, and every later task's
+        // brief carries that team's own statement of the environment.
         return this.llm.generateStructured(prompt, ProjectKnowledgeSchema);
     }
 

@@ -1,12 +1,14 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
-import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports } from "./acl/engagement-acl.js";
+import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
-import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
+import type { CoreLoopDeps, LoopStop, TaskResult } from "./types.js";
 import { CoreLoop } from "./core-loop.js";
+
+type SpendCapPort = CoreLoopDeps["spendCap"];
 
 // ---------------------------------------------------------------------------
 // Mock heavy orchestrator modules that CoreLoop.runCycle exercises. We replace
@@ -18,7 +20,7 @@ const mockProcessTask = vi.fn<(
   deps: CoreLoopDeps,
   task: WorkItem,
   runScope: string,
-) => Promise<{ result: TaskResult; costInfo: TaskCostInfo }>>();
+) => Promise<TaskResult>>();
 
 vi.mock("./execution.js", () => ({
   processTask: (deps: CoreLoopDeps, task: WorkItem, runScope: string) =>
@@ -43,14 +45,6 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
     },
   };
 });
-
-vi.mock("./run-state.js", () => ({
-  openRun: async () => ({
-    runId: "run-parallel-test",
-    spendUsd: 0,
-  }),
-  persistRun: async (_store: unknown, state: unknown) => state,
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -90,6 +84,8 @@ function buildDeps(
   planReports: LiaisonPlanReports = { runPending: async () => [] },
   clientStops: LiaisonClientStops = { runPending: async () => [] },
   rosterDerivation: RosterDerivationStep = { runPending: async () => [] },
+  stackChoices: LiaisonStackChoices = { runPending: async () => [] },
+  spendCap: SpendCapPort = { deploymentStop: async () => null, refusalOf: () => null },
 ): CoreLoopDeps {
   const workItemRepo: WorkItemRepository = {
     findById: async () => null,
@@ -110,26 +106,24 @@ function buildDeps(
   const eventStore = {
     publish: async () => {},
   };
-  const costRepo = { recordTaskCost: async () => {}, getTaskCostHistory: async () => [] };
   const projectRepo = { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") };
   const failedApproachRepo = { record: async () => {} };
-  const runStateStore = { load: async () => null, save: async () => {} };
 
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
     workItemRepo,
     eventStore,
-    costRepo,
     failedApproachRepo,
     projectRepo,
     developmentService: {},
-    runStateStore,
+    spendCap,
     failureRouter: {},
     clientStops,
     liaisonIntake,
     rosterDerivation,
     firstPlanning,
     planReports,
+    stackChoices,
   } as unknown as CoreLoopDeps;
 }
 
@@ -160,10 +154,7 @@ describe("CoreLoop batch dispatch parallelism", () => {
       // Simulate meaningful async work so the overlap window is observable
       await new Promise((resolve) => setTimeout(resolve, 50));
       timeline.push({ taskId, event: "end", ts: Date.now() });
-      return {
-        result: { taskId, status: "completed" as const, detail: "ok" },
-        costInfo: { costUsd: 0.01, inputTokens: 100, outputTokens: 50, modelId: "test", attempt: 1 },
-      };
+      return { taskId, status: "completed" as const, detail: "ok" };
     });
 
     const deps = buildDeps();
@@ -190,27 +181,6 @@ describe("CoreLoop batch dispatch parallelism", () => {
     expect(taskBStart!.ts).toBeLessThanOrEqual(taskAEnd!.ts);
   });
 
-  test("budget accumulation happens sequentially after all tasks complete", async () => {
-    const callOrder: string[] = [];
-
-    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
-      callOrder.push(`dispatch:${task.id}`);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      return {
-        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
-        costInfo: { costUsd: 0.05, inputTokens: 100, outputTokens: 50, modelId: "test", attempt: 1 },
-      };
-    });
-
-    const deps = buildDeps();
-    const loop = new CoreLoop(deps);
-    await loop.runCycle();
-
-    // Both dispatch calls must appear in the log
-    const dispatches = callOrder.filter((e) => e.startsWith("dispatch:"));
-    expect(dispatches).toHaveLength(2);
-  });
-
   test("rejected task in batch does not prevent other results from accumulating", async () => {
     let callCount = 0;
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
@@ -218,10 +188,7 @@ describe("CoreLoop batch dispatch parallelism", () => {
       if (callCount === 1) {
         throw new Error("simulated agent crash");
       }
-      return {
-        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
-        costInfo: { costUsd: 0.02, inputTokens: 100, outputTokens: 50, modelId: "test", attempt: 1 },
-      };
+      return { taskId: task.id, status: "completed" as const, detail: "ok" };
     });
 
     const deps = buildDeps();
@@ -241,10 +208,7 @@ describe("CoreLoop tender intake", () => {
     const order: string[] = [];
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       order.push("dispatch");
-      return {
-        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
-        costInfo: { costUsd: 0.01, inputTokens: 1, outputTokens: 1, modelId: "test", attempt: 1 },
-      };
+      return { taskId: task.id, status: "completed" as const, detail: "ok" };
     });
     const runPending = vi.fn(async () => {
       order.push("intake");
@@ -274,10 +238,7 @@ describe("CoreLoop first plan", () => {
     const order: string[] = [];
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       order.push("dispatch");
-      return {
-        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
-        costInfo: { costUsd: 0.01, inputTokens: 1, outputTokens: 1, modelId: "test", attempt: 1 },
-      };
+      return { taskId: task.id, status: "completed" as const, detail: "ok" };
     });
     const step = (name: string) =>
       vi.fn(async () => {
@@ -305,6 +266,108 @@ describe("CoreLoop first plan", () => {
       },
     });
     await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/projects unreachable/);
+    expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+});
+
+class StubRefusal extends Error {
+  constructor(readonly refusal: "project" | "deployment") {
+    super(`stub ${refusal} cap refusal`);
+  }
+}
+
+/** A spend cap whose deployment stop is `stop` once `stopped()` returns true. */
+function stubSpendCap(stopped: () => boolean): SpendCapPort {
+  const stop: LoopStop = { reason: "budget_cap: stub deployment cap" };
+  return {
+    deploymentStop: async () => (stopped() ? stop : null),
+    refusalOf: (error) =>
+      error instanceof StubRefusal
+        ? error.refusal === "project"
+          ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message }
+          : { kind: "deployment", reason: error.message }
+        : null,
+  };
+}
+
+describe("CoreLoop spend cap", () => {
+  test("recorded spend at the deployment cap stops the loop before any LLM step, after the client's stops", async () => {
+    const order: string[] = [];
+    const step = (name: string) =>
+      vi.fn(async () => {
+        order.push(name);
+        return [];
+      });
+
+    const result = await new CoreLoop(
+      buildDeps(
+        { runPending: step("intake") },
+        { runPending: step("plan") },
+        { runPending: step("report") },
+        { runPending: step("stop") },
+        { runPending: step("roster") },
+        undefined,
+        stubSpendCap(() => true),
+      ),
+    ).runCycle();
+
+    expect(order).toEqual(["stop"]);
+    expect(result.stop?.reason).toMatch(/budget_cap/);
+    expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
+  test("a project refusal out of a step ends that step only; the cycle goes on to dispatch", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({
+      taskId: task.id,
+      status: "completed" as const,
+      detail: "ok",
+    }));
+    const roster = vi.fn(async () => []);
+
+    const result = await new CoreLoop(
+      buildDeps(
+        {
+          runPending: async () => {
+            throw new StubRefusal("project");
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        { runPending: roster },
+        undefined,
+        stubSpendCap(() => false),
+      ),
+    ).runCycle();
+
+    expect(roster).toHaveBeenCalledTimes(1);
+    expect(result.stop).toBeNull();
+    expect(result.tasksProcessed).toBe(2);
+  });
+
+  test("a deployment refusal out of a step stops the loop with its reason, before the next step", async () => {
+    let refused = false;
+    const roster = vi.fn(async () => []);
+
+    const result = await new CoreLoop(
+      buildDeps(
+        {
+          runPending: async () => {
+            refused = true;
+            throw new StubRefusal("deployment");
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        { runPending: roster },
+        undefined,
+        stubSpendCap(() => refused),
+      ),
+    ).runCycle();
+
+    expect(result.stop?.reason).toMatch(/budget_cap/);
+    expect(roster).not.toHaveBeenCalled();
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 });

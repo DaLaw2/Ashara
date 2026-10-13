@@ -1,8 +1,8 @@
 /**
- * What one attempt produced, in the shape the orchestrator's budget and failure routing read.
+ * What one attempt produced, in the shape the orchestrator's failure routing reads.
  * Built in-process by Development's M1 adapter from the Workplace attempt's Outcome (story
  * s-isolated-worker-m1); it no longer crosses a process boundary, so it carries no schema.
- * Snake_case is kept because task_cost_history and stored error envelopes already hold it. A type
+ * Snake_case is kept because stored error envelopes already hold it. A type
  * alias, not an interface, so it stays assignable to the envelope's Record<string, unknown>.
  */
 type AgentErrorDetail = {

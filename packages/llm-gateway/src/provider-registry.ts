@@ -168,8 +168,7 @@ export class ProviderRegistry {
    * registered for the enabled-provider combo; an explicitly empty profile
    * (`[routing.profiles."deepseek"]`), which maps no site; or the mapped model
    * is offered only by a provider the CALLER excluded (the provider-error
-   * fallback and the per-provider budget-degrade in gateway.ts), which is
-   * logged. Every other miss in a NON-EMPTY, curated profile throws
+   * fallback in gateway.ts), which is logged. Every other miss in a NON-EMPTY, curated profile throws
    * `RoutingProfileUnresolved`: the site's table has no entry for the
    * requested capability and no `default`, or no enabled provider offers the
    * mapped model at all. A site missing from a non-empty profile cannot reach

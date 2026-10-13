@@ -16,6 +16,20 @@ export function describeInput(input: unknown): string {
 }
 
 /**
+ * What the attempt's cell was started from: the BaseCell (only the task that defines the
+ * environment runs on it) or the image of the project's environment version.
+ */
+export type AttemptCellImage =
+  | { readonly kind: "base-cell"; readonly image: string; readonly digest: string }
+  | {
+      readonly kind: "environment";
+      readonly version: string;
+      readonly commit: string;
+      readonly imageId: string;
+      readonly imageRef: string;
+    };
+
+/**
  * One entry of an attempt's conversation record. Written Z0-side through the sink, never into the
  * worktree; every text field is truncated with an explicit marker.
  */
@@ -28,6 +42,7 @@ export type AttemptRecord =
       readonly role: string;
       readonly provider: string;
       readonly modelId: string;
+      readonly cellImage: AttemptCellImage;
       readonly limits: { readonly maxTurns: number; readonly wallClockMs: number; readonly perCommandTimeoutSeconds: number };
       readonly system: string;
       readonly firstMessage: string;

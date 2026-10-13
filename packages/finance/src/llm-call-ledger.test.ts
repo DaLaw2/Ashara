@@ -8,6 +8,7 @@ import { buildGateway, withStructuredLadder } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
+import { SpendCap } from "./spend-cap.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -72,7 +73,14 @@ function gateway(
   return buildGateway({
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls) },
+    recording: {
+      kind: "recorded",
+      recorder: new LlmCallLedger(
+        calls,
+        // Caps far above anything a stubbed call can cost: this suite is about the rows, not the cap.
+        new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
+      ),
+    },
     clock,
   });
 }
@@ -163,8 +171,8 @@ describe("one llm_calls row per provider call", () => {
     const priced = model({ id: "priced-model" });
 
     const result = await gateway("anthropic", priced)
-      .forCall({ projectId, taskId: null, callSite: "stack-derivation" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .forCall({ projectId, taskId: null, callSite: "roster" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     expect(result.data).toEqual({ greeting: "hi" });
     const rows = await rowsOfThisProject();
@@ -172,7 +180,7 @@ describe("one llm_calls row per provider call", () => {
     const row = rows[0]!;
     expect(row.projectId).toBe(projectId);
     expect(row.taskId).toBeNull();
-    expect(row.callSite).toBe("stack-derivation");
+    expect(row.callSite).toBe("roster");
     expect(row.provider).toBe("anthropic");
     expect(row.model).toBe("priced-model");
     expect(row.inputTokens).toBe(1200);
@@ -210,7 +218,7 @@ describe("one llm_calls row per provider call", () => {
       });
       await gateway("deepseek", deepseek, () => instant)
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
       const [row] = await rowsOfThisProject();
       return row?.costUsd ?? null;
     };
@@ -247,10 +255,9 @@ describe("one llm_calls row per provider call", () => {
     const straddling = gateway("deepseek", deepseek, clock);
     await straddling
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const peakCost = (600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000;
-    expect(straddling.getCostSummary().totalCost).toBeCloseTo(peakCost, 12);
     const [row] = await rowsOfThisProject();
     expect(row?.costUsd).toBeCloseTo(peakCost, 12);
     expect(row?.createdAt.toISOString()).toBe(PEAK.toISOString());
@@ -269,7 +276,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("deepseek", model({ id: "no-cache-rate", cacheReadCostPer1M: null, cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
@@ -292,7 +299,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("deepseek", model({ id: "deepseek-priced", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
@@ -312,7 +319,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("openai", model({ id: "openai-priced", inputCostPer1M: 2, outputCostPer1M: 8, cacheReadCostPer1M: 0.5, cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(600);
@@ -327,7 +334,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("openai", model({ id: "openai-unreported", cacheWriteCostPer1M: null }))
       .forCall({ projectId, taskId: null, callSite: "decomposition" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBeNull();
@@ -347,7 +354,7 @@ describe("one llm_calls row per provider call", () => {
     await expect(
       gateway("anthropic", model({}))
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/stub provider unavailable/);
 
     const rows = await rowsOfThisProject();
@@ -367,7 +374,7 @@ describe("one llm_calls row per provider call", () => {
 
     await gateway("anthropic", model({}))
       .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     const [row] = await rowsOfThisProject();
     expect(row?.outcome).toBe("ok");
@@ -385,7 +392,7 @@ describe("refusals", () => {
 
     const call = gateway("anthropic", model({ id: "free-model", inputCostPer1M: 0, outputCostPer1M: 0 }))
       .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
-      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 
     await expect(call).rejects.toBeInstanceOf(UnpricedModel);
     await expect(call).rejects.toThrow(/free-model.*unpriced.*model_configs/s);
@@ -398,7 +405,7 @@ describe("refusals", () => {
     const recorded = gateway("anthropic", model({}));
 
     await expect(
-      recorded.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
+      recorded.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/without a call context/);
     const contextWithoutProject = { taskId: null, callSite: "liaison-intake" } as const;
     // @ts-expect-error LlmCallContext requires projectId: a call with no project does not typecheck
@@ -555,6 +562,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
         capability: "Strong",
         prompt: "greet",
         schema: GreetingSchema,
+        maxTokens: 512,
         site: callSite,
       });
     const ok = result('{"greeting":"hi"}', "stop", 10, DEEPSEEK_RAW);
@@ -596,7 +604,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     });
   });
 
-  test("a failed generateObject is charged to the budget ledger exactly as llm_calls records it", async () => {
+  test("a failed generateObject is recorded at what the provider billed", async () => {
     await clearRows();
     const anthropicRaw = { input_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     stubModel({ doGenerate: result('{"greeting": "cut off', "length", 4096, anthropicRaw) });
@@ -612,7 +620,6 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     expect(rows[0]).toMatchObject({ outcome: "error", errorKind: "truncated", finishReason: "length" });
     const recorded = rows.reduce((sum, row) => sum + (row.costUsd ?? Number.NaN), 0);
     expect(recorded).toBeCloseTo((1000 * 3 + 4096 * 15) / 1_000_000, 6);
-    expect(gw.getCostSummary().totalCost).toBeCloseTo(recorded, 6);
   });
 
   test("every ladder attempt sends exactly one provider request and writes one row", async () => {
@@ -628,7 +635,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     });
 
     await expect(
-      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema }),
+      laddered.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
     ).rejects.toThrow(/Structured output exhausted/);
 
     expect(attempts).toHaveLength(4);
@@ -636,7 +643,5 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     const rows = await rowsOfThisProject();
     expect(rows).toHaveLength(attempts.length);
     expect(rows.every((row) => row.errorKind === "InvalidJson" && row.finishReason === "stop")).toBe(true);
-    const recorded = rows.reduce((sum, row) => sum + (row.costUsd ?? Number.NaN), 0);
-    expect(gw.getCostSummary().totalCost).toBeCloseTo(recorded, 9);
   });
 });

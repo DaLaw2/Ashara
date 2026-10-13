@@ -3,9 +3,9 @@ import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/e
 import { CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
-import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
+import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { Outcome } from "@ashara/workplace";
+import type { AttemptCellImage, Outcome } from "@ashara/workplace";
 import {
   environmentCheckPassed,
   environmentTestPassed,
@@ -16,12 +16,15 @@ import {
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
 import { DispatchRecords, cellAsRunner, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
+import { resolveCurrentEnvironment } from "./current-environment.js";
+import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runEnvironmentTest, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
 import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
-import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
-import { resolveProjectFrame } from "./project-frame.js";
+import { targetRepo } from "./host-git.js";
+import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
+import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
@@ -59,7 +62,7 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
  * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
  * the attempt itself, the task cell's checks, and the post-merge verifier cell.
  */
-type EnvironmentStage = "probeSubstrate" | "createCell" | "agentAttempt" | "taskVerify" | "substrateGate" | "postMergeVerify";
+type EnvironmentStage = "probeSubstrate" | "resolveEnvironment" | "createCell" | "agentAttempt" | "taskVerify" | "substrateGate" | "postMergeVerify";
 
 interface AgentPart {
   readonly output: AgentOutputJson | null;
@@ -151,12 +154,67 @@ function failedBeforeAgent(taskId: WorkItemId, sessionId: string, operation: str
   };
 }
 
+/**
+ * What a dispatch's cells are started from: the BaseCell only for the Sprint 0 task, whose work is
+ * defining the environment; the current environment version's image for every other task.
+ */
+type DispatchEnvironment =
+  | { readonly kind: "base-cell"; readonly image: string; readonly digest: string }
+  | ({ readonly kind: "environment" } & CurrentEnvironment);
+
+function cellImageOf(environment: DispatchEnvironment): string {
+  return environment.kind === "base-cell" ? environment.image : environment.imageId;
+}
+
+function attemptCellImage(environment: DispatchEnvironment): AttemptCellImage {
+  if (environment.kind === "base-cell") return { kind: "base-cell", image: environment.image, digest: environment.digest };
+  const { version, commit, imageId, imageRef } = environment;
+  return { kind: "environment", version, commit, imageId, imageRef };
+}
+
+function briefEnvironment(environment: DispatchEnvironment): AgentBrief["projectEnvironment"] {
+  if (environment.kind === "base-cell") return { kind: "to-define" };
+  return { kind: "defined", version: environment.version, commit: environment.commit, statement: environment.statement };
+}
+
+/** The version recorded on the dispatch's dev_sessions row; null when its cells ran on the BaseCell. */
+function sessionEnvironmentVersion(environment: DispatchEnvironment): string | null {
+  return environment.kind === "environment" ? environment.version : null;
+}
+
+/**
+ * No environment the task's cells could be built from: Blocked with `environment_undefined`
+ * before anything ran, never a BaseCell fallback (s-platform-role-m1 C2).
+ */
+function environmentUndefined(
+  taskId: WorkItemId,
+  sessionId: string,
+  reason: string,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const chain = wrapError("development", "resolveCurrentEnvironment", reason, { taskId });
+  const summary = `no environment for task ${taskId}: ${reason}; no agent ran and nothing executed`;
+  console.warn(`[${taskId}] ${summary}`);
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, stage: "resolveCurrentEnvironment", reason: summary });
+  return {
+    status: "environment_undefined",
+    reason,
+    detail: summary,
+    output: null,
+    sessionId,
+    attempt: 1,
+    errorEnvelope: { outcome: "blocked", summary, chain },
+    agentInvoked: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Injected dependency interfaces
 // ---------------------------------------------------------------------------
 
 export interface SessionStore {
-  insert(sessionId: string, taskId: string, brief: unknown): Promise<void>;
+  /** `environmentVersion` is the version the dispatch's cells were built from; null on the BaseCell. */
+  insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null): Promise<void>;
   complete(sessionId: string): Promise<void>;
   fail(sessionId: string, verificationResult: unknown): Promise<void>;
 }
@@ -175,7 +233,7 @@ interface CellSubstrate {
 /** The cells every dispatch runs on. */
 interface ExecutionCells {
   readonly substrate: CellSubstrate;
-  /** The image every cell starts from (config/base-cell.toml). */
+  /** The image the Sprint 0 task's cells start from (config/base-cell.toml); no other task uses it. */
   readonly baseCell: BaseCellReference;
   /** The ashara.instance label of every cell this process creates; reconcileOrphans selects on it. */
   readonly instance: string;
@@ -283,7 +341,23 @@ interface EnvironmentBlockedResult {
   readonly agentInvoked: boolean;
 }
 
-export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult;
+/**
+ * The project has no environment the task's cells could be built from (none defined on the
+ * target's main, its image could not be built, or no statement of it is on record). Nothing ran;
+ * the orchestrator parks the item at Blocked with an `environment_undefined` reason.
+ */
+interface EnvironmentUndefinedResult {
+  readonly status: "environment_undefined";
+  readonly reason: string;
+  readonly detail: string;
+  readonly output: null;
+  readonly sessionId: string;
+  readonly attempt: 1;
+  readonly errorEnvelope: ErrorEnvelope;
+  readonly agentInvoked: false;
+}
+
+export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult;
 
 interface AgentExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
@@ -293,17 +367,12 @@ interface AgentExecutionResult {
   /**
    * Always 1 — execute() makes exactly one agent invocation per call. Retrying a
    * failed task is the orchestrator's FailureRouter's job (re-dispatch, tracked via
-   * WorkItem.dispatchCount), not this service's. Kept as a field (rather than
-   * removed) because it still flows into TaskCostInfo.attempt and the
-   * task_cost_history.attempt column downstream.
+   * WorkItem.dispatchCount), not this service's.
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
   /**
-   * Whether the attempt loop was started for this dispatch. The budget reads it
-   * to tell "no agent ran, therefore $0" apart from "an agent ran and we cannot
-   * tell what it cost": the second must never be charged as $0 (Discipline A:
-   * an evidence default in a number that gates dispatch).
+   * Whether the attempt loop was started for this dispatch.
    */
   readonly agentInvoked: boolean;
 }
@@ -340,6 +409,8 @@ interface Dispatch {
   readonly repo: WorkdirInfo["repo"];
   readonly sessionId: string;
   readonly contract: ProjectContract | null;
+  /** What the task cell, its checks and the post-merge verifier cell are started from. */
+  readonly environment: DispatchEnvironment;
   readonly record: DispatchRecord;
 }
 
@@ -372,20 +443,13 @@ export interface DevelopmentServiceDeps {
   readonly knowledgeSource?: KnowledgeSource;
   readonly eventSink?: ExecutionEventSink;
   /**
-   * Supplies the owner's own vision text for a task's project (ADR-046). Absent ⇒
-   * the frame ladder has no intent and every dispatch blocks — deliberately: a
-   * brief with an invented intent is the failure this port exists to prevent.
+   * Supplies the owner's own vision text for a task's project. A task whose project has none
+   * is not dispatched: a brief with an invented intent is the failure this port exists to prevent.
    */
-  readonly intentSource?: ProjectIntentSource;
+  readonly intentSource: ProjectIntentSource;
   /**
-   * Last-resort stack derivation from the vision prose, used only until the
-   * project has a scaffold or a contract knowledge graph to read instead.
-   */
-  readonly stackDeriver?: StackDeriver;
-  /**
-   * Yields the ProjectContract for a task's project; its knowledge graph feeds
-   * the project frame ladder and the entry-point context. Absent (or a null
-   * result) means the project has no contract.
+   * Yields the ProjectContract for a task's project; its knowledge graph feeds the entry-point
+   * context. Absent (or a null result) means the project has no contract.
    */
   readonly contractSource?: ContractSource;
   /**
@@ -400,7 +464,8 @@ export interface DevelopmentServiceDeps {
   readonly attemptPolicy: AttemptPolicy;
   /**
    * The environment substrate (s-platform-role-m1): builds an environment version's image for
-   * build_environment and the substrate gate, and keeps a Sprint 0 task's stack statement.
+   * build_environment, the substrate gate and every later task's cells, and keeps the Sprint 0
+   * task's stack statement.
    */
   readonly environment: {
     readonly images: EnvironmentImages;
@@ -472,6 +537,46 @@ export class DevelopmentService {
       return result;
     }
 
+    // Before the brief, the worktree and any cell: every cell of the task is started from what
+    // this resolves, and a project with nothing to build them from blocks here.
+    let environment: DispatchEnvironment;
+    if (task.taskSpec?.origin === "sprint0") {
+      environment = { kind: "base-cell", image: cells.baseCell.image, digest: cells.baseCell.digest };
+    } else {
+      try {
+        const resolution = await resolveCurrentEnvironment(
+          task.projectId,
+          targetRepo(targetProjectPath),
+          this.deps.environment.images,
+          this.deps.environment.statements,
+        );
+        if (resolution.kind === "undefined") {
+          const result = environmentUndefined(task.id, sessionId, resolution.reason, eventSink);
+          await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+          return result;
+        }
+        environment = { kind: "environment", ...resolution.environment };
+      } catch (e) {
+        const environmentFailure = environmentErrorOf(e);
+        if (environmentFailure !== null) {
+          return substrateBlocked(task.id, sessionId, "resolveEnvironment", environmentFailure, "environment image build", NO_AGENT, eventSink);
+        }
+        const result = failedBeforeAgent(task.id, sessionId, "resolveCurrentEnvironment", e, `the current environment of ${task.id} could not be resolved`);
+        eventSink?.emit({ event: "error", location: "DevelopmentService:resolveCurrentEnvironment", taskId: task.id, attempt: 1, error: result.detail });
+        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+        return result;
+      }
+      eventSink?.emit({
+        event: "environment_resolved",
+        taskId: task.id,
+        version: environment.version,
+        commit: environment.commit,
+        imageId: environment.imageId,
+        imageRef: environment.imageRef,
+        reused: environment.reused,
+      });
+    }
+
     let contract: ProjectContract | null = null;
     try {
       contract = await this.loadContract(task.id);
@@ -481,19 +586,19 @@ export class DevelopmentService {
 
     let brief: AgentBrief;
     try {
-      brief = await this.buildBrief(task, targetProjectPath, contract);
+      brief = await this.buildBrief(task, targetProjectPath, contract, environment);
     } catch (e) {
-      // A missing ProjectFrame is a PLANNING-INPUT gap, not an agent failure
-      // (ADR-046), so the result is `blocked` with the full derivation trace.
-      // The orchestrator nevertheless routes a `blocked` result like `failed`:
-      // the item goes to Failed and through the FailureRouter (executeTask in
-      // orchestrator/src/execution.ts). Only `environment_blocked` parks an
-      // item at Blocked.
-      if (!(e instanceof ProjectFrameUnresolvable)) throw e;
-      const chain = wrapError("development", "resolveProjectFrame", e, { taskId: task.id });
+      // A missing intent is a PLANNING-INPUT gap, not an agent failure, so the
+      // result is `blocked` with the lookup's own detail. The orchestrator
+      // nevertheless routes a `blocked` result like `failed`: the item goes to
+      // Failed and through the FailureRouter (executeTask in
+      // orchestrator/src/execution.ts). Only `environment_blocked` and
+      // `environment_undefined` park an item at Blocked.
+      if (!(e instanceof ProjectIntentUnavailable)) throw e;
+      const chain = wrapError("development", "loadProjectIntent", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
         outcome: "blocked",
-        summary: `project frame unresolvable for ${task.id}: ${chain.message}`,
+        summary: `project intent unavailable for ${task.id}: ${chain.message}`,
         chain,
       };
       eventSink?.emit({
@@ -556,7 +661,7 @@ export class DevelopmentService {
     let cell: Cell;
     try {
       cell = await cells.substrate.createCell({
-        image: cells.baseCell.image,
+        image: cellImageOf(environment),
         project: task.projectId,
         task: task.id,
         role: staff.role,
@@ -573,7 +678,7 @@ export class DevelopmentService {
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     }
-    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, role: staff.role, image: cells.baseCell.image, imageDigest: cells.baseCell.digest });
+    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, role: staff.role, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
     const dispatch: Dispatch = {
       task,
@@ -586,12 +691,15 @@ export class DevelopmentService {
       repo,
       sessionId,
       contract,
+      environment,
       record: { agentInvoked: false },
     };
 
     try {
-      const result = await withSessionLifecycle(this.deps.sessionStore, sessionId, task.id, brief, () =>
-        this.runExecution(dispatch),
+      const result = await withSessionLifecycle(
+        this.deps.sessionStore,
+        { sessionId, taskId: task.id, brief, environmentVersion: sessionEnvironmentVersion(environment) },
+        () => this.runExecution(dispatch),
       );
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
@@ -649,10 +757,11 @@ export class DevelopmentService {
    * `.git` is read-only: Z0 commits the merge in that repository after the checks,
    * so a check able to write its config or hooks would run code on the host.
    */
-  private async withVerifierCell<T>(task: TaskDescriptor, targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>): Promise<T> {
+  private async withVerifierCell<T>(d: Dispatch, targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>): Promise<T> {
     const { cells } = this.deps;
+    const { task } = d;
     const cell = await cells.substrate.createCell({
-      image: cells.baseCell.image,
+      image: cellImageOf(d.environment),
       project: task.projectId,
       task: task.id,
       role: POST_MERGE_VERIFIER_ROLE,
@@ -670,22 +779,15 @@ export class DevelopmentService {
     task: TaskDescriptor,
     targetProjectPath: string | null,
     contract: ProjectContract | null,
+    environment: DispatchEnvironment,
   ): Promise<AgentBrief> {
     const taskSpec = task.taskSpec;
 
     const replanContext = extractReplanContext(task.id, task.blockedReason);
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
 
-    // A ProjectFrameUnresolvable propagates to execute() and blocks the task: a
-    // brief with no stated target is the fail-open this ladder replaces (ADR-046).
-    const projectFrame = await resolveProjectFrame({
-      taskId: task.id,
-      projectId: task.projectId,
-      contract,
-      targetProjectPath,
-      intentSource: this.deps.intentSource,
-      stackDeriver: this.deps.stackDeriver,
-    });
+    // A ProjectIntentUnavailable propagates to execute() and blocks the task.
+    const intent = await loadProjectIntent(this.deps.intentSource, task.id);
 
     const spec: TaskSpec = {
       goal: (typeof taskSpec?.goal === "string" ? taskSpec.goal : task.title),
@@ -708,7 +810,8 @@ export class DevelopmentService {
       {
         taskId: task.id,
         goal: spec.goal,
-        projectFrame,
+        intent,
+        projectEnvironment: briefEnvironment(environment),
         context: taskContext,
         deliverables: spec.deliverables,
         knowledgeContext,
@@ -803,6 +906,7 @@ export class DevelopmentService {
         role: staff.role,
         workKind: task.workKind,
         brief,
+        cellImage: attemptCellImage(d.environment),
         model: staff.model,
         limits: { maxTurns: attemptPolicy.maxTurns, perCommandTimeoutSeconds: attemptPolicy.perCommandTimeoutSeconds },
       },
@@ -866,7 +970,7 @@ export class DevelopmentService {
     } else {
       const verified = await this.verifyTaskOrEnd(d, output);
       if (verified !== null) return verified;
-      postMergeVerify = (path) => this.postMergeChecks(task, path);
+      postMergeVerify = (path) => this.postMergeChecks(d, path);
     }
 
     const finalizeDeps: FinalizeDeps = { eventSink, postMergeVerify };
@@ -1022,12 +1126,13 @@ export class DevelopmentService {
     return { passed, details };
   }
 
-  /** Every other task's post-merge check: its verify checks in a verifier cell from the base image. */
-  private async postMergeChecks(task: TaskDescriptor, targetProjectPath: string): Promise<PostMergeVerdict> {
+  /** Every other task's post-merge check: its verify checks in a verifier cell from the dispatch's image. */
+  private async postMergeChecks(d: Dispatch, targetProjectPath: string): Promise<PostMergeVerdict> {
+    const { task } = d;
     // Per-task verify uses only verify.toml; contract checks are deferred to
     // integration verify (they reference project-wide files that may not exist
     // in this task's worktree).
-    const result = await this.withVerifierCell(task, targetProjectPath, (runCommand) =>
+    const result = await this.withVerifierCell(d, targetProjectPath, (runCommand) =>
       runVerifyCore(
         { workDir: targetProjectPath, gitRoot: targetProjectPath, contractChecks: [] },
         {
@@ -1288,12 +1393,11 @@ export class DevelopmentService {
  */
 export async function withSessionLifecycle(
   sessionStore: SessionStore,
-  sessionId: string,
-  taskId: string,
-  brief: AgentBrief,
+  session: { readonly sessionId: string; readonly taskId: string; readonly brief: AgentBrief; readonly environmentVersion: string | null },
   body: () => Promise<ExecutionResult>,
 ): Promise<ExecutionResult> {
-  await sessionStore.insert(sessionId, taskId, brief);
+  const { sessionId, taskId } = session;
+  await sessionStore.insert(sessionId, taskId, session.brief, session.environmentVersion);
 
   let outcome: ExecutionResult;
   try {

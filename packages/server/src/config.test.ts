@@ -1,28 +1,27 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
-import { BudgetTracker } from "../../orchestrator/src/budget.js";
-import type { TaskCostInfo } from "../../orchestrator/src/types.js";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 
 const TEST_DB_URL = "postgres://localhost:5432/test";
 const TEST_TOKEN = "test-token";
 
-// Finding (a), E2E Run 11: the enforcing spend cap must reach
-// CoreLoopConfig.budgetLimitUsd from the owner's env, and budget exhaustion must
-// register at that value (dispatch pauses at the cap). These tests pin both the plumbing (which env var wins) and
-// the downstream behavior (BudgetTracker.isExhausted at the env cap).
+// Finding (a), E2E Run 11: the owner's cap must reach Finance's deployment cap
+// whichever of its two names the owner set. Finance's enforcement of it is
+// tested against llm_calls in packages/finance/src/spend-cap.test.ts.
 describe("loadServerConfig — budget cap plumbing (finding a)", () => {
   const saved: Record<string, string | undefined> = {};
   const KEYS = [
     "DATABASE_URL",
     "ASHARA_BUDGET_LIMIT_USD",
     "ASHARA_BUDGET_TOTAL",
+    "ASHARA_PROJECT_BUDGET_LIMIT_USD",
   ] as const;
 
   beforeEach(() => {
     for (const key of KEYS) saved[key] = process.env[key];
     delete process.env["ASHARA_BUDGET_LIMIT_USD"];
     delete process.env["ASHARA_BUDGET_TOTAL"];
+    delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
   });
 
   afterEach(() => {
@@ -32,24 +31,24 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     }
   });
 
-  test("ASHARA_BUDGET_TOTAL reaches budgetLimitUsd when ASHARA_BUDGET_LIMIT_USD is unset", () => {
+  test("ASHARA_BUDGET_TOTAL reaches the deployment cap when ASHARA_BUDGET_LIMIT_USD is unset", () => {
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect(config.coreLoop.budgetLimitUsd).toBe(1);
+    expect(config.spendCaps.deploymentUsd).toBe(1);
   });
 
   test("ASHARA_BUDGET_LIMIT_USD wins when both are set", () => {
     process.env["ASHARA_BUDGET_LIMIT_USD"] = "2";
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect(config.coreLoop.budgetLimitUsd).toBe(2);
+    expect(config.spendCaps.deploymentUsd).toBe(2);
   });
 
   test("a blank ASHARA_BUDGET_LIMIT_USD does not mask the ASHARA_BUDGET_TOTAL fallback", () => {
     process.env["ASHARA_BUDGET_LIMIT_USD"] = "   ";
     process.env["ASHARA_BUDGET_TOTAL"] = "1";
     const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect(config.coreLoop.budgetLimitUsd).toBe(1);
+    expect(config.spendCaps.deploymentUsd).toBe(1);
   });
 
   test("refuses to start when neither is set", () => {
@@ -61,54 +60,17 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/not a positive finite number/);
   });
 
-  test("the budget is exhausted at the env cap (ASHARA_BUDGET_TOTAL=1)", () => {
-    process.env["ASHARA_BUDGET_TOTAL"] = "1";
-    const config = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
-    expect(config.coreLoop.budgetLimitUsd).toBe(1);
-
-    const budget = new BudgetTracker(config.coreLoop);
-    // Below the cap: the budget must NOT be exhausted.
-    budget.accumulateCost(measured(0.9293), "Strong", true);
-    expect(budget.isExhausted()).toBe(false);
-
-    // The Run-11 over-run shape: crossing $1 must exhaust the budget.
-    budget.accumulateCost(measured(0.1512), "Strong", true);
-    expect(budget.totalCostUsd).toBeCloseTo(1.0805);
-    expect(budget.isExhausted()).toBe(true);
+  test("an unset project cap is the deployment cap (policy default)", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "3";
+    expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).spendCaps).toEqual({ deploymentUsd: 3, perProjectUsd: 3 });
   });
 
-  // An agent that crashed, timed out, or wrote malformed output reports no cost.
-  // Charging that as $0 is what let the budget under-count real spend; the cap
-  // exists to bound a runaway, and a runaway is exactly the shape that loses its
-  // own cost report.
-  test("an unknown cost is charged, not treated as free", () => {
-    process.env["ASHARA_BUDGET_TOTAL"] = "1";
-    const budget = new BudgetTracker(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop);
-
-    budget.accumulateCost(unknown(), "Strong", false);
-
-    expect(budget.totalCostUsd).toBeGreaterThan(0);
-  });
-
-  test("repeated unknown costs still reach the cap and exhaust the budget", () => {
-    process.env["ASHARA_BUDGET_TOTAL"] = "1";
-    const budget = new BudgetTracker(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop);
-
-    for (let i = 0; i < 50 && !budget.isExhausted(); i += 1) {
-      budget.accumulateCost(unknown(), "Strong", false);
-    }
-
-    expect(budget.isExhausted()).toBe(true);
-  });
-
-  test("no dispatch means a MEASURED zero — an idle cycle never burns budget", () => {
-    process.env["ASHARA_BUDGET_TOTAL"] = "1";
-    const budget = new BudgetTracker(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop);
-
-    budget.accumulateCost(measured(0), "Strong", false);
-
-    expect(budget.totalCostUsd).toBe(0);
-    expect(budget.isExhausted()).toBe(false);
+  test("ASHARA_PROJECT_BUDGET_LIMIT_USD sets the project cap, and an unusable one is refused", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "3";
+    process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"] = "0.5";
+    expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).spendCaps.perProjectUsd).toBe(0.5);
+    process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"] = "none";
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_BUDGET_LIMIT_USD="none"/);
   });
 });
 
@@ -131,10 +93,3 @@ describe("loadDatabaseUrl — policy default", () => {
   });
 });
 
-function measured(costUsd: number): TaskCostInfo {
-  return { costUsd, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
-}
-
-function unknown(): TaskCostInfo {
-  return { costUsd: null, inputTokens: 0, outputTokens: 0, modelId: null, attempt: 1 };
-}

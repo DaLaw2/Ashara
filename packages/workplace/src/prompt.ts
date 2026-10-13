@@ -86,32 +86,34 @@ const ENVIRONMENT_PROMPT = [
 ].join("\n");
 
 /**
- * The project frame first (ADR-046): an agent that reads the task first has committed to a stack
- * before it learns what the project is.
+ * The project's environment, stated in the team's own words: Ashara names no stack, it passes the
+ * environment role's statement through with the version the workspace was built from.
+ */
+function environmentSection(environment: AssignmentBrief["projectEnvironment"]): string {
+  if (environment.kind === "to-define") {
+    return [
+      `## Project environment`,
+      `No environment is defined for this project yet: defining it is this task's work.`,
+    ].join("\n");
+  }
+  return [
+    `## Project environment`,
+    `Your workspace was built from this project's environment, version ${environment.version} (commit ${environment.commit}).`,
+    `The team that defined it stated the stack it chose and why:`,
+    ``,
+    environment.statement,
+    ``,
+    `Work within this environment; it overrides any default you would otherwise assume about language, runtime or layout.`,
+  ].join("\n");
+}
+
+/**
+ * The project first: an agent that reads the task first has committed to a stack before it
+ * learns what the project is and what it is built with.
  */
 function buildTaskPrompt(brief: AssignmentBrief): string {
-  const { intent, stack, source } = brief.projectFrame;
-  const provenance =
-    source === "observed-manifest"
-      ? "observed in the project tree (ground truth: trust it over any assumption)"
-      : source === "contract-knowledge"
-        ? "declared in the project contract (the plan of record for this project)"
-        : "derived from the vision text (an inference: revise it only against files you actually observe)";
-
   const sections = [
-    [
-      `# Project Frame`,
-      `This is what the project IS. It is the owner's decision, not a suggestion, and it`,
-      `overrides any default you would otherwise assume about language, runtime or layout.`,
-      ``,
-      `## Owner's intent (verbatim)`,
-      intent,
-      ``,
-      `## Target stack`,
-      ...stack.map((label) => `- ${label}`),
-      ``,
-      `Source: ${provenance}.`,
-    ].join("\n"),
+    [`# Project`, `## Owner's intent (verbatim)`, brief.intent, ``, environmentSection(brief.projectEnvironment)].join("\n"),
     `# Task\n## Goal\n${brief.goal}`,
   ];
   if (brief.priorAttemptFailure !== undefined) sections.push(`## Prior Attempt Failure\n${brief.priorAttemptFailure}`);

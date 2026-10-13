@@ -1,12 +1,9 @@
-import type { RunState } from "@ashara/shared";
 import type { IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
-import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
-import { BudgetTracker, extractCapability } from "./budget.js";
+import type { CoreLoopDeps, CycleResult, LoopStop, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
-import { openRun, persistRun } from "./run-state.js";
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
 function logIntake(outcome: IntakeOutcome): void {
@@ -37,27 +34,19 @@ function logFirstPlan(outcome: FirstPlanOutcome): void {
   }
 }
 
+type StepRun<T> = { readonly kind: "ran"; readonly outcomes: readonly T[] } | { readonly kind: "stop"; readonly stop: LoopStop };
+
 export class CoreLoop {
   private readonly deps: CoreLoopDeps;
-  private readonly budget: BudgetTracker;
-  private runState: RunState | null = null;
-  private budgetExhaustionReported = false;
 
   constructor(deps: CoreLoopDeps) {
     this.deps = deps;
-    this.budget = new BudgetTracker(deps.config);
   }
 
   async runCycle(): Promise<CycleResult> {
     const { deps } = this;
 
-    await this.budget.ensureLoaded(deps.costRepo);
-    await this.ensureRunOpen();
-
-    let batch: WorkItem[] = [];
-    const results: TaskResult[] = [];
-
-    // The client's stops first, even at the budget cap (no LLM call): a project
+    // The client's stops first, even at the spend cap (no LLM call): a project
     // stopped here is not active, so no step below takes it in, plans it,
     // reports on it or dispatches its tasks. Nothing of this process is running
     // for it now: the previous cycle awaited every task it dispatched.
@@ -65,125 +54,94 @@ export class CoreLoop {
       console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
     }
 
-    // When the budget is exhausted, skip dispatch: the runner idles
-    // at the cap. Read live on every cycle: dispatch spends, so it must not run past
-    // the cap.
-    if (this.budget.isExhausted()) {
-      this.reportBudgetExhaustion();
-    } else {
-      // Tenders first: a project's intake comes before any work on it. Skipped
-      // with dispatch at the budget cap, since intake is an LLM call too.
-      for (const outcome of await deps.liaisonIntake.runPending()) logIntake(outcome);
-
-      // Then a roster for each project with vision v1 and none: first planning
-      // requires one, since every planned task gets its owning role.
-      for (const outcome of await deps.rosterDerivation.runPending()) logRoster(outcome);
-
-      // Then a first plan for each project that has a vision, a roster and no work items,
-      // and the Liaison's report on each recorded planning outcome. Both before
-      // gating, so a plan written this cycle can be dispatched this cycle.
-      // A project whose own record is bad is blocked inside each step, logged at
-      // warn there, and skipped; any other failure throws out of the cycle.
-      for (const outcome of await deps.firstPlanning.runPending()) logFirstPlan(outcome);
-      for (const report of await deps.planReports.runPending()) {
-        if (report.kind !== "project-blocked") {
-          console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
-        }
-      }
-
-      const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo);
-      if (eligible.length > 0) {
-        const graph = await DependencyGraph.load(deps.workItemRepo);
-        const unlockWeights = graph.computeUnlockWeights();
-        batch = PlanningService.select(eligible, deps.config.maxBatchSize, unlockWeights);
-
-        // Pre-check budget for entire batch before dispatching concurrently.
-        // Each task gets its own worktree (workspace.ts creates per-task branches),
-        // so concurrent execution is safe at the process boundary.
-        const budgetedTasks: Array<{ task: WorkItem; capability: string }> = [];
-        for (const task of batch) {
-          if (this.budget.isExhausted()) {
-            console.warn(`[${task.id}] budget limit reached, skipping remaining`);
-            break;
-          }
-          const capability = extractCapability(task);
-          budgetedTasks.push({ task, capability });
-        }
-
-        // Dispatch all concurrently
-        const settled = await Promise.allSettled(
-          budgetedTasks.map(({ task }) => processTask(deps, task)),
-        );
-
-        // Accumulate costs sequentially (budget is in-memory, not concurrent-safe)
-        for (let i = 0; i < settled.length; i++) {
-          const s = settled[i];
-          const { task, capability } = budgetedTasks[i];
-          if (s.status === "fulfilled") {
-            const { result, costInfo } = s.value;
-            this.budget.accumulateCost(costInfo, capability, result.status === "completed");
-            await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
-            results.push(result);
-          } else {
-            results.push(await handleProcessingError(deps, task, s.reason));
-          }
-        }
-        await this.persistRunCounters();
-      }
-
-      const completedCount = results.filter((r) => r.status === "completed").length;
-      const failedCount = results.filter((r) => r.status === "failed").length;
-
-      if (batch.length > 0) {
-        deps.eventLogger?.emit({
-          event: "cycle_complete",
-          tasksProcessed: batch.length,
-          completed: completedCount,
-          failed: failedCount,
-          cumulativeCost: this.budget.totalCostUsd,
-        });
+    // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
+    // Inferred assumption in a new vision version and one report to the client. No LLM call,
+    // so before the spend-cap check.
+    for (const choice of await deps.stackChoices.runPending()) {
+      if (choice.kind !== "project-blocked") {
+        const version = choice.kind === "recorded" ? ` as vision v${choice.visionVersion}` : "";
+        console.log(`[liaison-stack-choice] project ${choice.projectId}: ${choice.kind}${version}`);
       }
     }
 
-    await this.persistRunCounters();
+    // Every step below makes LLM calls, each admitted by Finance's spend cap.
+    const atCap = await deps.spendCap.deploymentStop();
+    if (atCap) return stopped(atCap);
 
-    return { tasksProcessed: batch.length, results };
+    // Tenders first: a project's intake comes before any work on it.
+    const intake = await this.step("liaison-intake", () => deps.liaisonIntake.runPending());
+    if (intake.kind === "stop") return stopped(intake.stop);
+    for (const outcome of intake.outcomes) logIntake(outcome);
+
+    // Then a roster for each project with vision v1 and none: first planning
+    // requires one, since every planned task gets its owning role.
+    const rosters = await this.step("roster", () => deps.rosterDerivation.runPending());
+    if (rosters.kind === "stop") return stopped(rosters.stop);
+    for (const outcome of rosters.outcomes) logRoster(outcome);
+
+    // Then a first plan for each project that has a vision, a roster and no work items,
+    // and the Liaison's report on each recorded planning outcome. Both before
+    // gating, so a plan written this cycle can be dispatched this cycle.
+    // A project whose own record is bad is blocked inside each step, logged at
+    // warn there, and skipped; any other failure throws out of the cycle.
+    const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
+    if (plans.kind === "stop") return stopped(plans.stop);
+    for (const outcome of plans.outcomes) logFirstPlan(outcome);
+    for (const report of await deps.planReports.runPending()) {
+      if (report.kind !== "project-blocked") {
+        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      }
+    }
+
+    const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo);
+    if (eligible.length === 0) return { tasksProcessed: 0, results: [], stop: null };
+
+    const graph = await DependencyGraph.load(deps.workItemRepo);
+    const batch = PlanningService.select(eligible, deps.config.maxBatchSize, graph.computeUnlockWeights());
+
+    // Each task gets its own worktree (workspace.ts creates per-task branches),
+    // so concurrent execution is safe at the process boundary. Every LLM call a
+    // task makes is admitted by the spend cap; a refused call ends that task's
+    // attempt, and a project refusal has already blocked the project.
+    const settled = await Promise.allSettled(batch.map((task) => processTask(deps, task)));
+    const results: TaskResult[] = [];
+    for (const [i, s] of settled.entries()) {
+      const task: WorkItem = batch[i];
+      results.push(s.status === "fulfilled" ? s.value : await handleProcessingError(deps, task, s.reason));
+    }
+
+    const completed = results.filter((r) => r.status === "completed").length;
+    const failed = results.filter((r) => r.status === "failed").length;
+    deps.eventLogger?.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed });
+
+    return { tasksProcessed: batch.length, results, stop: await deps.spendCap.deploymentStop() };
   }
 
   /**
-   * Warns once, on the first cycle that finds the cap spent. The runner keeps
-   * cycling at the cap, so a per-cycle warn would repeat every idle interval.
+   * Runs one step and checks the deployment cap after it. A spend-cap refusal
+   * thrown out of the step ends the step: a project refusal has blocked its
+   * project already, and the step's remaining projects run next cycle; a
+   * deployment refusal stops the loop. Any other error throws out of the cycle.
    */
-  private reportBudgetExhaustion(): void {
-    if (this.budgetExhaustionReported) return;
-    this.budgetExhaustionReported = true;
-    console.warn(
-      `[budget] limit $${this.deps.config.budgetLimitUsd.toFixed(2)} reached at ` +
-        `$${this.budget.totalCostUsd.toFixed(4)} spent; dispatch is paused. Raise ` +
-        `ASHARA_BUDGET_LIMIT_USD and restart to resume.`,
-    );
+  private async step<T>(name: string, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
+    let outcomes: readonly T[] = [];
+    try {
+      outcomes = await run();
+    } catch (err) {
+      const refusal = this.deps.spendCap.refusalOf(err);
+      if (refusal === null) throw err;
+      if (refusal.kind === "project") {
+        console.warn(
+          `[budget_cap] ${name}: project ${refusal.projectId} is blocked at its spend cap; ` +
+            `the step's other projects run next cycle. ${refusal.reason}`,
+        );
+      }
+    }
+    const stop = await this.deps.spendCap.deploymentStop();
+    return stop ? { kind: "stop", stop } : { kind: "ran", outcomes };
   }
+}
 
-  /**
-   * Adopts the durable run record on the first cycle: budget spend resumes where
-   * the previous process left it (Discipline B). Runs once per process — after that the in-memory counters are
-   * authoritative and are written back by persistRunCounters.
-   *
-   * Throws through on a store failure: a cycle that cannot read the run's spend
-   * cannot enforce the cap, and the runner's consecutive-error backoff is the
-   * right response to that, not a dispatch against an assumed zero.
-   */
-  private async ensureRunOpen(): Promise<void> {
-    if (this.runState !== null) return;
-    const state = await openRun(this.deps.runStateStore);
-    this.runState = state;
-    this.budget.adoptSpend(state.spendUsd);
-  }
-
-  private async persistRunCounters(): Promise<void> {
-    if (this.runState === null) return;
-    this.runState = await persistRun(this.deps.runStateStore, this.runState, {
-      spendUsd: this.budget.totalCostUsd,
-    });
-  }
+function stopped(stop: LoopStop): CycleResult {
+  return { tasksProcessed: 0, results: [], stop };
 }

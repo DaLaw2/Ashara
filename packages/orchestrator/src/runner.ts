@@ -1,6 +1,6 @@
 import { listenForEvents } from "@ashara/db";
 import type { PgListener } from "@ashara/db";
-import type { CycleResult } from "./types.js";
+import type { CycleResult, LoopStop } from "./types.js";
 
 /** The one method the runner drives — CoreLoop satisfies it; tests supply a double. */
 export interface CycleRunner {
@@ -36,7 +36,11 @@ export class ContinuousRunner {
     this.config = { ...DEFAULT_RUNNER_CONFIG, ...config };
   }
 
-  async run(signal?: AbortSignal): Promise<void> {
+  /**
+   * Cycles until `signal` aborts or a cycle reports a stop; resolves to that
+   * stop, or `null` when the signal ended the run.
+   */
+  async run(signal?: AbortSignal): Promise<LoopStop | null> {
     console.log("Continuous runner starting");
 
     this.abortController = new AbortController();
@@ -56,6 +60,7 @@ export class ContinuousRunner {
     }
 
     let consecutiveErrors = 0;
+    let stop: LoopStop | null = null;
 
     try {
       while (!mergedSignal.aborted) {
@@ -67,6 +72,12 @@ export class ContinuousRunner {
           const result: CycleResult = await this.coreLoop.runCycle();
           consecutiveErrors = 0;
           console.log(`Cycle complete: ${result.tasksProcessed} tasks processed`);
+
+          if (result.stop) {
+            stop = result.stop;
+            console.error(`Continuous runner stopping: ${result.stop.reason}`);
+            break;
+          }
 
           // A NOTIFY during the cycle skips the wait: the work it announced is picked
           // up by the very next cycle. Only this normal wait honors it — the backoff
@@ -101,6 +112,7 @@ export class ContinuousRunner {
     }
 
     console.log("Continuous runner stopped");
+    return stop;
   }
 
   wake(): void {

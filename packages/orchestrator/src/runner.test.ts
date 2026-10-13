@@ -27,7 +27,7 @@ function scriptedCycles(script: Array<(runner: ContinuousRunner) => CycleResult>
   };
 }
 
-const idle = (): CycleResult => ({ tasksProcessed: 0, results: [] });
+const idle = (): CycleResult => ({ tasksProcessed: 0, results: [], stop: null });
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -85,5 +85,19 @@ describe("ContinuousRunner wakePending", () => {
 
     abort.abort();
     await running;
+  });
+});
+
+describe("ContinuousRunner stop", () => {
+  test("a cycle that reports a stop ends the run with its reason; no further cycle runs", async () => {
+    const stop = { reason: "budget_cap: deployment cap reached" };
+    const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
+    const runner = new ContinuousRunner(cycles.loop, { idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    cycles.bind(runner);
+
+    const ended = await runner.run(new AbortController().signal);
+
+    expect(ended).toEqual(stop);
+    expect(cycles.calls()).toBe(1);
   });
 });

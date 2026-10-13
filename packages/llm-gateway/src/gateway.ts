@@ -1,11 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
-import { BudgetLedger } from "./budget-ledger.js";
 import {
-  BudgetExceededError,
   LlmCallContextMissing,
   LlmCallNotRecorded,
   LlmCallRecorderMissing,
@@ -25,7 +24,6 @@ import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
   CallRecording,
   CostMeasurement,
-  CostSummary,
   ExtractedUsage,
   GatewayConfig,
   KnownLLMSite,
@@ -35,6 +33,7 @@ import type {
   LlmCallOutcome,
   LlmCallRecorder,
   ModelConfig,
+  PendingLlmCall,
   ProviderType,
   StructuredRequest,
   StructuredResponse,
@@ -63,6 +62,32 @@ export interface ContextualTurnLlm {
 /** The recorder and context of one recorded call; `null` on an unrecorded gateway. */
 type CallScope = { readonly recorder: LlmCallRecorder; readonly context: LlmCallContext } | null;
 
+/** A provider request the recorder admitted, to be recorded under the same id; `null` on an unrecorded gateway. */
+type AdmittedCall = { readonly recorder: LlmCallRecorder; readonly pending: PendingLlmCall } | null;
+
+/** What Finance prices a request's worst case from: its input size and its output bound. */
+interface RequestSize {
+  readonly requestBytes: number;
+  readonly maxOutputTokens: number;
+}
+
+/**
+ * The output bound of one agent turn. A turn request carries none of its own,
+ * and an unbounded request has no worst-case cost to check against the cap. 16k
+ * holds one tool call that writes a file of about 50 KB; a turn that needs more
+ * stops at `length`, which the attempt loop reads as a truncated turn.
+ */
+const TURN_MAX_OUTPUT_TOKENS = 16_384;
+
+function utf8Bytes(...parts: readonly (string | undefined)[]): number {
+  return parts.reduce((total, part) => total + (part === undefined ? 0 : Buffer.byteLength(part, "utf8")), 0);
+}
+
+/** The JSON schema generateObject sends with the request, as text, for its size. */
+function schemaText(schema: StructuredRequest<unknown>["schema"]): string {
+  return JSON.stringify(z.toJSONSchema(schema, { unrepresentable: "any" }));
+}
+
 /** The provider and model a request is priced and recorded against, and the adapter type its options are built for. */
 type CallTarget = Pick<ResolvedProvider, "providerName" | "modelConfig" | "providerType">;
 
@@ -85,22 +110,13 @@ function recordedFinishReason(sdkFinishReason: unknown): LlmFinishReason {
 
 export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   private readonly registry: ProviderRegistry;
-  private readonly budgetLedger: BudgetLedger;
-  private readonly budget: GatewayConfig["budget"];
   private readonly recording: CallRecording;
   /** Read once per provider request, before it is sent: that instant prices the call everywhere. */
   private readonly clock: () => Date;
   private readonly thinking: ThinkingPolicy | undefined;
 
-  constructor(
-    config: GatewayConfig,
-    recording: CallRecording,
-    clock: () => Date,
-    ledger: BudgetLedger = new BudgetLedger(),
-  ) {
+  constructor(config: GatewayConfig, recording: CallRecording, clock: () => Date) {
     this.registry = new ProviderRegistry(config);
-    this.budgetLedger = ledger;
-    this.budget = config.budget;
     this.recording = recording;
     this.clock = clock;
     this.thinking = config.thinking;
@@ -112,73 +128,11 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   }
 
   /**
-   * Resolves a provider/model for `capability`/`site` and checks the budget,
-   * degrading ONCE if a per-provider cap trips (routing-profiles story:
-   * fail-degrade instead of fail-call for provider caps, distinct from the
-   * total-budget cap which still fails the call outright). Shared by every
-   * entry point so the degrade logic exists in exactly one place.
+   * The cost of a completed call, priced at `requestedAt`. An unmeasured cost
+   * is logged at `warn`: its llm_calls row counts against the spend cap at the
+   * call's pre-call estimate, never at $0.
    */
-  private resolveWithBudgetDegrade(
-    capability: CapabilityLevel,
-    site: KnownLLMSite | undefined,
-  ): ResolvedProvider {
-    const resolved = this.registry.resolve(capability, [], site);
-    try {
-      this.checkBudget(resolved.providerName);
-      return resolved;
-    } catch (err) {
-      if (!(err instanceof BudgetExceededError) || !err.provider) {
-        throw err;
-      }
-
-      const degraded = this.registry.resolveFallback(capability, err.provider, site);
-      if (!degraded) {
-        throw err;
-      }
-
-      console.warn(
-        `[LLMGateway] provider budget cap tripped (provider=${err.provider}, cap=$${err.budget.toFixed(4)}), ` +
-          `degrading to provider=${degraded.providerName} model=${degraded.modelConfig.id} ` +
-          `for site=${site ?? "none"} (one-hop budget-degrade)`,
-      );
-
-      // Bounded to exactly one hop: re-check WITHOUT catching. If the
-      // degraded provider (or the total budget) also trips here, the typed
-      // BudgetExceededError propagates and the call fails closed.
-      this.checkBudget(degraded.providerName);
-      return degraded;
-    }
-  }
-
-  private checkBudget(provider: string): void {
-    if (!this.budget) return;
-
-    if (this.budgetLedger.isOverBudget(this.budget.maxCostTotal)) {
-      throw new BudgetExceededError(
-        "total",
-        this.budgetLedger.totalSpent(),
-        this.budget.maxCostTotal,
-      );
-    }
-
-    const providerCap = this.budget.maxCostPerProvider?.[provider];
-    if (providerCap !== undefined && this.budgetLedger.isProviderOverBudget(provider, providerCap)) {
-      throw new BudgetExceededError(
-        `provider:${provider}`,
-        this.budgetLedger.providerSpent(provider),
-        providerCap,
-        { provider },
-      );
-    }
-  }
-
-  /**
-   * Charges a completed call, priced at `requestedAt`, to the in-process budget ledger. An unmeasured
-   * cost charges nothing and is logged at `warn`: the gateway ledger has no
-   * pessimistic estimate (that lives in the orchestrator's
-   * `BudgetTracker.unknownCostCharge`), and charging $0 would read as free.
-   */
-  private recordCost(
+  private measuredCost(
     extraction: ExtractedUsage,
     resolved: CallTarget,
     site: string,
@@ -189,11 +143,9 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     if (!cost.measured) {
       console.warn(
         `[LLMGateway] ${describeUnmeasuredCost(cost, resolved.providerName, resolved.modelConfig.id)}, ` +
-          `site=${site}, operation=${operation}; the in-process budget ledger is not charged for this call`,
+          `site=${site}, operation=${operation}; the spend cap counts this call at its pre-call estimate`,
       );
-      return cost;
     }
-    this.budgetLedger.record(cost.totalCost, resolved.providerName);
     return cost;
   }
 
@@ -269,7 +221,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
    * One agent turn: exactly one provider request, one step, one llm_calls row.
    * Tools go out as schemas and come back as calls; nothing is executed and
    * nothing loops (ADR-074 d7). The model is the caller's pinned resolution:
-   * no re-routing, no fallback, no budget degrade (ADR-074 d44), and no SDK
+   * no re-routing, no fallback (ADR-074 d44), and no SDK
    * retry, so every provider request is the row the caller sees.
    *
    * Called by @ashara/workplace runAttempt, whose own production caller is
@@ -284,7 +236,6 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     };
     const site = scope.context.callSite;
     const tools = toSdkTools(request.tools);
-    this.checkBudget(target.providerName);
 
     const params: Parameters<typeof generateText>[0] = {
       model: request.model.model,
@@ -292,17 +243,24 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       messages: [...request.messages],
       tools,
       stopWhen: isStepCount(1),
+      maxOutputTokens: TURN_MAX_OUTPUT_TOKENS,
       maxRetries: 0,
       providerOptions: this.providerOptionsFor(target, site),
       abortSignal: request.abortSignal,
     };
-    const { result, requestedAt } = await this.send(scope, target, site, operation, () => generateText(params));
+    const size: RequestSize = {
+      requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
+      maxOutputTokens: TURN_MAX_OUTPUT_TOKENS,
+    };
+    const { result, requestedAt, admitted } = await this.send(scope, target, site, operation, size, () =>
+      generateText(params),
+    );
 
     // One step, whose usage keeps the raw cache counts that the summed `result.usage` drops.
     const [onlyStep] = result.steps;
     const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
     const recordedReason = recordedFinishReason(result.finishReason);
-    const cost = this.recordCost(extraction, target, site, operation, requestedAt);
+    const cost = this.measuredCost(extraction, target, site, operation, requestedAt);
 
     const parsedCalls = parseToolCalls(result.toolCalls, request.tools);
     const invalidCallIds = new Set(parsedCalls.toolCalls.filter((c) => c.kind === "invalid").map((c) => c.toolCallId));
@@ -314,7 +272,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     ];
     if (issues.length > 0 || !("assistant" in message)) {
       const invalid = new TurnResponseInvalid({ provider: target.providerName, model: target.modelConfig.id, issues });
-      await this.record(scope, target, operation, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
+      await this.record(admitted, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
       throw invalid;
     }
 
@@ -324,7 +282,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       finishReason === "provider_error"
         ? { kind: "error", errorKind: `FinishReason:${String(result.finishReason ?? "missing")}` }
         : OK;
-    await this.record(scope, target, operation, requestedAt, extraction, recordedReason, outcome);
+    await this.record(admitted, requestedAt, extraction, recordedReason, outcome);
 
     return {
       assistant: message.assistant,
@@ -340,7 +298,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   }
 
   private async structured<T>(request: StructuredRequest<T>, scope: CallScope): Promise<StructuredResponse<T>> {
-    const resolved = this.resolveWithBudgetDegrade(request.capability, request.site);
+    const resolved = this.registry.resolve(request.capability, [], request.site);
     return this.withFallback(
       request,
       resolved,
@@ -368,63 +326,67 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
 
   /**
    * Sends ONE provider request and returns its result with the instant it was
-   * sent, which prices it in both ledgers. The recorder's price check runs
-   * first, so a refused model never reaches the network. A request that
-   * throws is charged to the budget ledger for whatever usage it reported and
-   * recorded as an error before the throw continues: the two ledgers see the
-   * same calls.
+   * sent, which prices it. The recorder's pre-call check runs first, so a
+   * refused call (an unpriced model, or a worst-case cost over a spend cap)
+   * never reaches the network. A request that throws is recorded as an error
+   * before the throw continues.
    */
   private async send<R>(
     scope: CallScope,
     resolved: CallTarget,
     site: string,
     operation: LlmCallOperation,
+    size: RequestSize,
     request: () => Promise<R>,
-  ): Promise<{ readonly result: R; readonly requestedAt: Date }> {
-    scope?.recorder.assertPriced(resolved.providerName, resolved.modelConfig);
+  ): Promise<{ readonly result: R; readonly requestedAt: Date; readonly admitted: AdmittedCall }> {
+    const admitted: AdmittedCall = scope
+      ? {
+          recorder: scope.recorder,
+          pending: {
+            callId: randomUUID(),
+            context: scope.context,
+            provider: resolved.providerName,
+            model: resolved.modelConfig,
+            operation,
+            requestBytes: size.requestBytes,
+            maxOutputTokens: size.maxOutputTokens,
+          },
+        }
+      : null;
+    if (admitted) await admitted.recorder.assertPriced(admitted.pending);
     const requestedAt = this.clock();
     try {
-      return { result: await request(), requestedAt };
+      return { result: await request(), requestedAt, admitted };
     } catch (error) {
       const usage = usageOfFailedRequest(error);
-      if (usage) this.recordCost(usage, resolved, site, operation, requestedAt);
+      if (usage) this.measuredCost(usage, resolved, site, operation, requestedAt);
       const failure = failureOfRequest(error);
-      await this.record(scope, resolved, operation, requestedAt, usage, failure.finishReason, failure.outcome, error);
+      await this.record(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
       throw error;
     }
   }
 
-  /** Writes the one row for a provider request. A failed write fails the call (Discipline A). */
+  /** Writes the one row for an admitted provider request. A failed write fails the call (Discipline A). */
   private async record(
-    scope: CallScope,
-    resolved: CallTarget,
-    operation: LlmCallOperation,
+    admitted: AdmittedCall,
     requestedAt: Date,
     usage: ExtractedUsage | null,
     finishReason: LlmFinishReason,
     outcome: LlmCallOutcome,
     providerError?: unknown,
   ): Promise<void> {
-    if (!scope) return;
+    if (!admitted) return;
+    const { recorder, pending } = admitted;
     try {
-      await scope.recorder.record({
-        requestedAt,
-        context: scope.context,
-        provider: resolved.providerName,
-        model: resolved.modelConfig,
-        operation,
-        usage,
-        finishReason,
-        outcome,
-      });
+      await recorder.record({ ...pending, requestedAt, usage, finishReason, outcome });
     } catch (writeError) {
       throw new LlmCallNotRecorded(
         {
-          projectId: scope.context.projectId,
-          callSite: scope.context.callSite,
-          provider: resolved.providerName,
-          model: resolved.modelConfig.id,
-          operation,
+          projectId: pending.context.projectId,
+          callSite: pending.context.callSite,
+          provider: pending.provider,
+          model: pending.model.id,
+          operation: pending.operation,
           callOutcome: outcome.kind === "ok" ? "ok" : `error (${outcome.errorKind})`,
           providerError,
         },
@@ -455,19 +417,27 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       maxRetries: 0,
       providerOptions: this.providerOptionsFor(resolved, site),
     };
-    let sent: { readonly result: Awaited<ReturnType<typeof generateObject>>; readonly requestedAt: Date };
+    const size: RequestSize = {
+      requestBytes: utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema)),
+      maxOutputTokens: request.maxTokens,
+    };
+    let sent: {
+      readonly result: Awaited<ReturnType<typeof generateObject>>;
+      readonly requestedAt: Date;
+      readonly admitted: AdmittedCall;
+    };
     try {
-      sent = await this.send(scope, resolved, site ?? "unknown", operation, () => generateObject(params));
+      sent = await this.send(scope, resolved, site ?? "unknown", operation, size, () => generateObject(params));
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       throw structuredFailureOf(error, resolved, request.maxTokens);
     }
-    const { result, requestedAt } = sent;
+    const { result, requestedAt, admitted } = sent;
 
     const extraction = extractUsage(result.usage);
-    const cost = this.recordCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
+    const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
 
-    await this.record(scope, resolved, operation, requestedAt, extraction, recordedFinishReason(result.finishReason), OK);
+    await this.record(admitted, requestedAt, extraction, recordedFinishReason(result.finishReason), OK);
 
     return {
       data: result.object as T,
@@ -490,15 +460,17 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateText:structured-fallback";
     const site = request.site ?? scope?.context.callSite;
+    const prompt = request.prompt + "\n\nRespond with valid JSON only. No markdown, no explanation.";
     const params: Parameters<typeof generateText>[0] = {
       model: resolved.provider,
-      prompt: request.prompt + "\n\nRespond with valid JSON only. No markdown, no explanation.",
+      prompt,
       system: request.systemPrompt,
       maxOutputTokens: request.maxTokens,
       maxRetries: 0,
       providerOptions: this.providerOptionsFor(resolved, site),
     };
-    const { result, requestedAt } = await this.send(scope, resolved, site ?? "unknown", operation, () =>
+    const size: RequestSize = { requestBytes: utf8Bytes(prompt, request.systemPrompt), maxOutputTokens: request.maxTokens };
+    const { result, requestedAt, admitted } = await this.send(scope, resolved, site ?? "unknown", operation, size, () =>
       generateText(params),
     );
 
@@ -507,11 +479,11 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const [onlyStep] = result.steps;
     const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
     const finishReason = recordedFinishReason(result.finishReason);
-    const cost = this.recordCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
+    const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
 
     const parsed = parseStructuredText(result.text, request.schema);
     if (parsed.ok) {
-      await this.record(scope, resolved, operation, requestedAt, extraction, finishReason, OK);
+      await this.record(admitted, requestedAt, extraction, finishReason, OK);
       return {
         data: parsed.data,
         usage: extraction.usage,
@@ -522,32 +494,25 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     }
 
     if (finishReason === "length") {
-      await this.record(scope, resolved, operation, requestedAt, extraction, finishReason, TRUNCATED);
+      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        maxTokens: request.maxTokens ?? null,
+        maxTokens: request.maxTokens,
         outputTokens: extraction.reported.outputTokens,
         reasoningTokens: extraction.reasoningTokens,
         text: result.text,
       });
     }
-    await this.record(scope, resolved, operation, requestedAt, extraction, finishReason, {
+    await this.record(admitted, requestedAt, extraction, finishReason, {
       kind: "error",
       errorKind: parsed.errorKind,
     });
     throw new SchemaValidationError([...parsed.errors, `Raw LLM response: ${result.text.slice(0, 500)}`]);
   }
 
-  getCostSummary(): CostSummary {
-    return {
-      totalCost: this.budgetLedger.totalSpent(),
-      costByProvider: this.budgetLedger.providerBreakdown(),
-    };
-  }
-
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
-    const resolved = this.resolveWithBudgetDegrade(capability, site);
+    const resolved = this.registry.resolve(capability, [], site);
     return {
       model: resolved.provider,
       modelId: resolved.modelConfig.id,
@@ -601,7 +566,7 @@ function failureOfRequest(error: unknown): { readonly finishReason: LlmFinishRea
 function structuredFailureOf(
   error: NoObjectGeneratedError,
   resolved: CallTarget,
-  maxTokens: number | undefined,
+  maxTokens: number,
 ): SchemaValidationError {
   const text = error.text ?? "";
   if (error.finishReason === "length") {
@@ -609,7 +574,7 @@ function structuredFailureOf(
       {
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        maxTokens: maxTokens ?? null,
+        maxTokens,
         outputTokens: error.usage?.outputTokens ?? null,
         reasoningTokens: error.usage ? extractUsage(error.usage).reasoningTokens : null,
         text,
