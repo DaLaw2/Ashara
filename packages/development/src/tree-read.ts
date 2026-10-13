@@ -1,5 +1,5 @@
 import { constants, type BigIntStats } from "node:fs";
-import { lstat, open, readdir, readlink, realpath } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readlink, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 /**
@@ -182,6 +182,45 @@ export async function listTreeDir(root: string, relPath = ""): Promise<TreeEntry
     name: d.name,
     kind: d.isSymbolicLink() ? "symlink" : d.isDirectory() ? "directory" : d.isFile() ? "file" : "other",
   }));
+}
+
+/**
+ * Writes `content` to `relPath` under `root`, creating missing directories, without following any
+ * link: a symbolic link or a non-directory on the way, or anything but a regular file at the end,
+ * refuses the write. Only for a tree no cell has mounted yet (a checkout Z0 just made), whose
+ * committed content a cell may still have shaped.
+ */
+export async function writeTreeFile(root: string, relPath: string, content: string): Promise<void> {
+  const segments = segmentsOf(root, relPath);
+  if (segments.length === 0) throw new TreePathRefused(root, relPath, null, "the path names the tree root, not a file in it");
+  let current = await realpath(root);
+  for (const [i, segment] of segments.entries()) {
+    current = join(current, segment);
+    const last = i === segments.length - 1;
+    let stats: BigIntStats | null;
+    try {
+      stats = await lstat(current, { bigint: true });
+    } catch (err) {
+      if (errorCode(err) !== "ENOENT") throw err;
+      stats = null;
+    }
+    if (stats?.isSymbolicLink() === true) {
+      throw new TreePathRefused(root, relPath, await linkTarget(current), `${JSON.stringify(current)} is a symbolic link`);
+    }
+    if (last) {
+      if (stats !== null && !stats.isFile()) throw new TreePathRefused(root, relPath, null, `${JSON.stringify(current)} is not a regular file`);
+    } else if (stats === null) {
+      await mkdir(current);
+    } else if (!stats.isDirectory()) {
+      throw new TreePathRefused(root, relPath, null, `${JSON.stringify(current)} is not a directory`);
+    }
+  }
+  const handle = await open(current, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o644);
+  try {
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Whether `relPath` exists under `root` as a directory, checked without following any link. */

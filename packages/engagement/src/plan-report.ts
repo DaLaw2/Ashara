@@ -14,6 +14,8 @@ interface PlanTaskCounts {
   readonly decomposition: number;
   /** The task that sets up the project environment before any other. */
   readonly sprint0: number;
+  /** The tasks in which the checks of a decomposed task are written, one per decomposed task. */
+  readonly checks: number;
   readonly unrecorded: number;
 }
 
@@ -59,9 +61,10 @@ export interface LiaisonPlanReports {
 
 /**
  * A first plan that cannot be reported truthfully: no epic, no task decomposed
- * from the client's goal, not exactly one environment setup task, a task whose
- * producer is not recorded (so it can be neither counted toward the goal nor
- * described as setup), or no record of the ordering hints the plan dropped.
+ * from the client's goal, not exactly one environment setup task, not exactly one
+ * check task per decomposed task, a task whose producer is not recorded (so it can
+ * be neither counted toward the goal nor described as setup), or no record of the
+ * ordering hints the plan dropped.
  */
 class PlanReportUnfounded extends Error {
   constructor(
@@ -73,7 +76,8 @@ class PlanReportUnfounded extends Error {
     const droppedText = dropped.kind === "recorded" ? `${dropped.count} dropped ordering hint(s)` : "no record of dropped ordering hints";
     super(
       `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
-        `${tasks.sprint0} Sprint 0 task(s), ${tasks.unrecorded} task(s) of unrecorded origin and ${droppedText}; ` +
+        `${tasks.sprint0} Sprint 0 task(s), ${tasks.checks} check task(s), ${tasks.unrecorded} task(s) of unrecorded origin ` +
+        `and ${droppedText}; ` +
         `no report is posted`,
     );
     this.name = "PlanReportUnfounded";
@@ -86,16 +90,18 @@ function plural(count: number, noun: string): string {
 
 /**
  * Plain words, only what the plan holds: its epics, the tasks toward what the
- * client asked for, the environment setup stated apart from them, and any
- * ordering between tasks the plan could not keep.
+ * client asked for, the environment setup and the checks stated apart from them,
+ * and any ordering between tasks the plan could not keep.
  */
-function firstPlanReport(epicTitles: readonly string[], goalTasks: number, droppedHints: number): string {
+function firstPlanReport(epicTitles: readonly string[], goalTasks: number, checkTasks: number, droppedHints: number): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
     `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
       `before any of those tasks starts.`,
+    `Before each of those tasks starts, a team member who does not do it writes the checks that decide whether it ` +
+      `is done (${plural(checkTasks, "check task")}). A task counts as done only when its checks pass.`,
   ];
   if (droppedHints > 0) {
     paragraphs.push(
@@ -162,11 +168,12 @@ export class PlanReports implements LiaisonPlanReports {
       due.epicTitles.length === 0 ||
       tasks.decomposition === 0 ||
       tasks.sprint0 !== 1 ||
+      tasks.checks !== tasks.decomposition ||
       tasks.unrecorded > 0 ||
       dropped.kind === "unrecorded"
     ) {
       throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, tasks, dropped);
     }
-    return firstPlanReport(due.epicTitles, tasks.decomposition, dropped.count);
+    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count);
   }
 }

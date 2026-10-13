@@ -102,26 +102,34 @@ export class CoreLoop {
     // Each task gets its own worktree (workspace.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a
     // task makes is admitted by the spend cap; a refused call ends that task's
-    // attempt, and a project refusal has already blocked the project.
+    // attempt and returns the item to Pending: a project refusal has already
+    // blocked the project, and a deployment refusal stops the loop here.
     const settled = await Promise.allSettled(batch.map((task) => processTask(deps, task)));
     const results: TaskResult[] = [];
+    let refusedAtDeployment: LoopStop | null = null;
     for (const [i, s] of settled.entries()) {
       const task: WorkItem = batch[i];
-      results.push(s.status === "fulfilled" ? s.value : await handleProcessingError(deps, task, s.reason));
+      const result = s.status === "fulfilled" ? s.value : await handleProcessingError(deps, task, s.reason);
+      if (result.status === "refused" && result.refusal.kind === "deployment") {
+        refusedAtDeployment ??= { reason: result.refusal.reason };
+      }
+      results.push(result);
     }
 
     const completed = results.filter((r) => r.status === "completed").length;
     const failed = results.filter((r) => r.status === "failed").length;
-    deps.eventLogger?.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed });
+    const refused = results.filter((r) => r.status === "refused").length;
+    deps.eventLogger?.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused });
 
-    return { tasksProcessed: batch.length, results, stop: await deps.spendCap.deploymentStop() };
+    return { tasksProcessed: batch.length, results, stop: refusedAtDeployment ?? (await deps.spendCap.deploymentStop()) };
   }
 
   /**
    * Runs one step and checks the deployment cap after it. A spend-cap refusal
    * thrown out of the step ends the step: a project refusal has blocked its
    * project already, and the step's remaining projects run next cycle; a
-   * deployment refusal stops the loop. Any other error throws out of the cycle.
+   * deployment refusal stops the loop with the refusal's own reason. Any other
+   * error throws out of the cycle.
    */
   private async step<T>(name: string, run: () => Promise<readonly T[]>): Promise<StepRun<T>> {
     let outcomes: readonly T[] = [];
@@ -130,12 +138,11 @@ export class CoreLoop {
     } catch (err) {
       const refusal = this.deps.spendCap.refusalOf(err);
       if (refusal === null) throw err;
-      if (refusal.kind === "project") {
-        console.warn(
-          `[budget_cap] ${name}: project ${refusal.projectId} is blocked at its spend cap; ` +
-            `the step's other projects run next cycle. ${refusal.reason}`,
-        );
-      }
+      if (refusal.kind === "deployment") return { kind: "stop", stop: { reason: refusal.reason } };
+      console.warn(
+        `[budget_cap] ${name}: project ${refusal.projectId} is blocked at its spend cap; ` +
+          `the step's other projects run next cycle. ${refusal.reason}`,
+      );
     }
     const stop = await this.deps.spendCap.deploymentStop();
     return stop ? { kind: "stop", stop } : { kind: "ran", outcomes };

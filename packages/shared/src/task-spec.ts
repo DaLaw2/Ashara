@@ -19,8 +19,10 @@ const storedTaskSpecSchema = z.object({
   // Which producer wrote the task: the decomposition of the client's goal, or the
   // Sprint 0 task decomposition adds to every plan, in which the environment role
   // defines the project environment (story s-platform-role-m1; migration 033
-  // renamed stored 'scaffold'). Absent on rows written before it was recorded.
-  origin: z.enum(["decomposition", "sprint0"]).optional(),
+  // renamed stored 'scaffold'), or the check task decomposition adds for every
+  // decomposed task, in which the check author writes the checks that decide it
+  // (story s-independent-verify-m1). Absent on rows written before it was recorded.
+  origin: z.enum(["decomposition", "sprint0", "check"]).optional(),
   // What checks the task's work: "substrate" means the checks are the
   // environment substrate's own (the definition parses, the image builds, its
   // test command passes), so the task carries none of its own. Absent means no

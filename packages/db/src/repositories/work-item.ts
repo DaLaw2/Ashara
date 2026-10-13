@@ -33,6 +33,14 @@ class EnvironmentStatementNotRecordable extends Error {
   }
 }
 
+/** A dispatch refund for a work item whose dispatch count is already zero: nothing was counted to give back. */
+class DispatchRefundWithoutDispatch extends Error {
+  constructor(readonly workItemId: string) {
+    super(`cannot refund a dispatch of work item ${workItemId}: its dispatch_count is 0, so no dispatch was counted`);
+    this.name = "DispatchRefundWithoutDispatch";
+  }
+}
+
 export class WorkItemRepository {
   constructor(private readonly db: DbHandle) {}
 
@@ -228,6 +236,23 @@ export class WorkItemRepository {
       throw new WorkItemNotFound(id);
     }
     return row.dispatchCount;
+  }
+
+  /**
+   * Takes back one counted dispatch, never below zero, in a single UPDATE: the
+   * dispatch seam counted an attempt that a spend-cap refusal stopped, which is
+   * not an attempt the retry bound should charge. Returns the post-refund value.
+   */
+  async refundDispatchCount(id: string): Promise<number> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ dispatchCount: sql`${workItems.dispatchCount} - 1` })
+      .where(and(eq(workItems.id, id), sql`${workItems.dispatchCount} > 0`))
+      .returning({ dispatchCount: workItems.dispatchCount });
+    if (row) return row.dispatchCount;
+    const [exists] = await this.db.select({ id: workItems.id }).from(workItems).where(eq(workItems.id, id)).limit(1);
+    if (!exists) throw new WorkItemNotFound(id);
+    throw new DispatchRefundWithoutDispatch(id);
   }
 
   async listAll() {

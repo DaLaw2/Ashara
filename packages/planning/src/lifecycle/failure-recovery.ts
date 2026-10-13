@@ -9,7 +9,7 @@ import type { EventPublisher } from "./ports.js";
 export interface FailureRecoveryDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventPublisher: EventPublisher;
-  readonly failureRouter: FailureRouter;
+  readonly failureRouter: Pick<FailureRouter, "route">;
 }
 
 export async function recoverFailedItem(
@@ -55,7 +55,7 @@ export async function recoverFailedItem(
 }
 
 function routeDecision(
-  failureRouter: FailureRouter,
+  failureRouter: Pick<FailureRouter, "route">,
   item: WorkItem,
   failure: RawFailureContext,
   priorAttempts: number,

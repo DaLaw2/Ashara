@@ -30,9 +30,8 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 //
 // The ladder never invokes an LLM directly: the caller injects the per-attempt
 // executor (`call` + `validate`, or a whole `attempt` for the structured wrap).
-// This keeps it a pure combinator — unit-testable with a fake caller, and
-// injectable into verify-core's subprocess-pure judge runner like CommandRunner
-// is (llm-gateway never imports development/planning; consumers depend on it).
+// This keeps it a pure combinator — unit-testable with a fake caller
+// (llm-gateway never imports development/planning; consumers depend on it).
 // ---------------------------------------------------------------------------
 
 const RAW_EXCERPT_LENGTH = 400;

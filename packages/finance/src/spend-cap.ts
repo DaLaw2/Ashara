@@ -106,6 +106,13 @@ export class SpendCap {
   /**
    * Whether the deployment's cap stops the loop: a call it refused in this
    * process, or recorded spend already at the cap, when no call can fit.
+   *
+   * The refusal is remembered for the life of the process on purpose. The caps
+   * are read once at boot (ASHARA_BUDGET_LIMIT_USD), so raising one takes a
+   * restart by design, and a restart starts with no remembered refusal and
+   * re-reads the ledger. Within the process nothing can lift the cap, and the
+   * memory is what stops the loop when the refused call surfaced on a path that
+   * does not route refusals itself (a throw the loop handles as an error).
    */
   async deploymentStop(): Promise<DeploymentStop | null> {
     if (this.deploymentRefusal) return { reason: this.deploymentRefusal.message };

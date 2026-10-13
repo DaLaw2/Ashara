@@ -1,10 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { listTreeDir, readTreeFile, TreePathRefused } from "./tree-read.js";
-import { readVerifyConfig, VerifyConfigParseError } from "./verify-config.js";
+import { listTreeDir, readTreeFile, TreePathRefused, writeTreeFile } from "./tree-read.js";
 
 let base: string;
 let tree: string;
@@ -54,12 +53,22 @@ describe("readTreeFile", () => {
     await expect(readTreeFile(tree, "pipe", 1000)).rejects.toBeInstanceOf(TreePathRefused);
   });
 
-  test("a symlinked verify.toml is a typed parse error caused by the refusal", async () => {
-    await writeFile(join(base, "host-verify.toml"), '[checks]\nleak = "HOST-ONLY-CONTENT"\n');
-    await symlink(join(base, "host-verify.toml"), join(tree, "verify.toml"));
-    const err = await readVerifyConfig(tree).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(VerifyConfigParseError);
-    expect(err instanceof Error ? err.cause : undefined).toBeInstanceOf(TreePathRefused);
+});
+
+describe("writeTreeFile", () => {
+  test("creates missing directories and overwrites a regular file", async () => {
+    await writeTreeFile(tree, "checks/a/run.sh", "first\n");
+    await writeTreeFile(tree, "checks/a/run.sh", "second\n");
+    expect(await readFile(join(tree, "checks", "a", "run.sh"), "utf8")).toBe("second\n");
+  });
+
+  test("never writes through a symlink, at the file or on the way", async () => {
+    await symlink(hostFile, join(tree, "planted"));
+    await symlink(base, join(tree, "up"));
+    await expect(writeTreeFile(tree, "planted", "x")).rejects.toBeInstanceOf(TreePathRefused);
+    await expect(writeTreeFile(tree, "up/host-secret.txt", "x")).rejects.toBeInstanceOf(TreePathRefused);
+    await expect(writeTreeFile(tree, "../host-secret.txt", "x")).rejects.toBeInstanceOf(TreePathRefused);
+    expect(await readFile(hostFile, "utf8")).toBe("HOST-ONLY-CONTENT\n");
   });
 });
 

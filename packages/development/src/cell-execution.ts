@@ -1,14 +1,9 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
-import type { Cell } from "@ashara/execution-infra";
+import { join } from "node:path";
 import type { AgentBrief } from "@ashara/shared";
 import { CONVERSATION_RECORDS_DIR } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
-import type { CommandRunner } from "./verify-core.js";
-
-/** Longest check output kept (the tail, where the failure usually is). */
-const MAX_CHECK_OUTPUT = 2000;
 
 /** Record directory names come from ids; anything else could walk out of workdirBase/records. */
 const RECORD_SEGMENT = /^[A-Za-z0-9._-]{1,128}$/;
@@ -22,25 +17,6 @@ class InvalidRecordPath extends Error {
     this.name = "InvalidRecordPath";
     this.segment = segment;
   }
-}
-
-/**
- * Runs verify checks inside `cell`, which mounts `hostRoot` at its workspace: the host cwd a
- * caller passes is mapped to the same place in the cell (a cwd outside `hostRoot` is refused by
- * the cell as PathOutsideWorkspace). A command that runs out of time, or whose podman client the
- * host had to kill, is a failed check, never a passed one.
- */
-export function cellAsRunner(cell: Pick<Cell, "exec">, hostRoot: string): CommandRunner {
-  return async (command, cwd, timeoutMs) => {
-    const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-    const result = await cell.exec(command, { timeoutSeconds, cwd: relative(hostRoot, cwd) || "." });
-    const combined = `${result.stdout}${result.stderr}`.trim();
-    const tail = combined.length <= MAX_CHECK_OUTPUT ? combined : combined.slice(-MAX_CHECK_OUTPUT);
-    if (result.timedOut || result.exitCode === null) {
-      return { exitCode: result.exitCode === null || result.exitCode === 0 ? 1 : result.exitCode, output: `${tail}\n[timed out after ${timeoutSeconds}s]`.trim() };
-    }
-    return { exitCode: result.exitCode, output: tail };
-  };
 }
 
 export interface TokenTally {
@@ -94,7 +70,8 @@ export function toAgentOutput(outcome: Outcome, modelId: string, tokens: TokenTa
   const totalCost = cost.measured ? cost.totalUsd : cost.measuredUsd;
   const lastToolCall = outcome.lastToolCall?.toolName ?? null;
   const done = outcome.kind === "finished" && outcome.status === "done";
-  const status: AgentOutputJson["status"] = done ? "done" : outcome.kind === "finished" ? "blocked" : "failed";
+  // A refused call stopped the attempt from outside; the agent's approach did not fail.
+  const status: AgentOutputJson["status"] = done ? "done" : outcome.kind === "finished" || outcome.kind === "refused" ? "blocked" : "failed";
   const summary =
     outcome.kind === "finished"
       ? outcome.status === "blocked"

@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import type { ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 import { classifyFailure, shouldEscalate, tryParseEnvelope } from "./failure-classifier.js";
+import { FailureRouter } from "./failure-router.js";
 
 function layer(operation: string, message = "error", context?: Record<string, unknown>, cause?: ErrorLayer): ErrorLayer {
   return { boundary: "development", operation, message, context, cause, timestamp: new Date().toISOString() };
@@ -23,8 +24,16 @@ describe("classifyFailure", () => {
     expect(classifyFailure(envelope(layer("postMergeVerify", "verify failed")))).toBe("TREE_REGRESSION");
   });
 
-  test("VERIFICATION_GAP — verify operation", () => {
-    expect(classifyFailure(envelope(layer("verify", "verify failed")))).toBe("VERIFICATION_GAP");
+  test("a task failing its stored checks post-merge is replanned, not abandoned as a tree regression", () => {
+    const category = classifyFailure(envelope(layer("postMergeTaskChecks", "check exited 1")));
+    expect(category).toBe("VERIFICATION_GAP");
+    const decision = new FailureRouter(2).route({
+      item: { id: "task-1" },
+      failure: { detail: "Post-merge verify failed", raw: {} },
+      priorAttempts: 1,
+      category,
+    });
+    expect(decision).toMatchObject({ action: "replan", attempt: 2 });
   });
 
   test("VERIFICATION_GAP — entryPointRewriteCheck operation", () => {

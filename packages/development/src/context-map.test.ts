@@ -28,7 +28,6 @@ describe("buildContextMap on a cell-written target", () => {
   test("a planted symlink never carries a host file into the brief; a regular file still reads", async () => {
     await writeFile(join(target, "README"), "regular manifest text");
     await symlink(hostFile, join(target, "NOTES"));
-    await symlink(hostFile, join(target, "verify.toml"));
     await mkdir(join(target, "src"));
     await symlink(hostFile, join(target, "src", "main.c"));
 

@@ -23,12 +23,13 @@ interface TaskSpecCore {
 
 /**
  * A planned task's specification. It carries no checks: the decomposer does not
- * author them (ADR-074 addendum 2 d63; the check-author role does, story
- * t-verify-checks-from-plan). Sprint 0 is checked by the environment substrate.
+ * author them (ADR-074 addendum 2 d63). Each decomposed task has a check task in
+ * which the check author writes them; Sprint 0 is checked by the environment substrate.
  */
 export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
-    | (TaskSpecCore & { readonly origin: "decomposition" });
+    | (TaskSpecCore & { readonly origin: "decomposition" })
+    | (TaskSpecCore & { readonly origin: "check" });
 
 /**
  * A `dependsOn` entry the model emitted that named no sibling task, was re-asked

@@ -8,12 +8,13 @@ import {
   PlanningService,
   failWorkItem,
   blockWorkItem,
+  requeueWorkItem,
   takeEvents,
   startWorkItem,
   recoverFailedItem,
 } from "./acl/planning-acl.js";
-import type { DevelopmentService, TaskDescriptor } from "./acl/development-acl.js";
-import type { TaskResult, CoreLoopDeps } from "./types.js";
+import type { TaskDescriptor } from "./acl/development-acl.js";
+import type { TaskResult, CoreLoopDeps, SpendRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
@@ -21,12 +22,13 @@ type EnvironmentBlockedReason = Extract<StoredBlockedReason, { source: "environm
 
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
-  readonly eventStore: EventStoreRepository;
+  readonly eventStore: Pick<EventStoreRepository, "publish">;
+  readonly spendCap: CoreLoopDeps["spendCap"];
 }
 
 async function executeTask(
   deps: ExecutionRoutingDeps,
-  developmentService: DevelopmentService,
+  developmentService: CoreLoopDeps["developmentService"],
   task: WorkItem,
   targetProjectPath: string | null,
 ): Promise<{
@@ -34,10 +36,11 @@ async function executeTask(
   output: AgentOutputJson | null;
   errorEnvelope?: ErrorEnvelope;
   /**
-   * The item was parked at Blocked here (environment unavailable or undefined), so
-   * processTask must not run the failed/blocked recovery ladder on it.
+   * The item was routed here, parked at Blocked (environment unavailable or undefined)
+   * or returned to Pending (a spend-cap refusal), so processTask must not run the
+   * failed/blocked recovery ladder on it.
    */
-  parkedAtBlocked: boolean;
+  routedHere: boolean;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
@@ -79,8 +82,23 @@ async function executeTask(
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
       errorEnvelope: execResult.errorEnvelope,
-      parkedAtBlocked: true,
+      routedHere: true,
     };
+  }
+
+  if (execResult.status === "refused") {
+    const refusal = deps.spendCap.refusalOf(execResult.refusal);
+    if (refusal !== null) {
+      await routeAsRefused(deps, task.id, refusal);
+      return {
+        result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
+        output: execResult.output,
+        errorEnvelope: execResult.errorEnvelope,
+        routedHere: true,
+      };
+    }
+    // A refusal no spend cap made (an unpriced model): a re-dispatch meets the same price
+    // list, so it takes the failure route below, which replans or abandons the item.
   }
 
   if (execResult.status === "completed") {
@@ -100,7 +118,7 @@ async function executeTask(
     return {
       result: completedResult(task.id),
       output: execResult.output,
-      parkedAtBlocked: false,
+      routedHere: false,
     };
   }
 
@@ -111,7 +129,7 @@ async function executeTask(
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
       errorEnvelope: execResult.errorEnvelope,
-      parkedAtBlocked: false,
+      routedHere: false,
     };
   }
 
@@ -119,8 +137,43 @@ async function executeTask(
     result: failedResult(task.id, execResult.detail),
     output: execResult.output,
     errorEnvelope: execResult.errorEnvelope,
-    parkedAtBlocked: false,
+    routedHere: false,
   };
+}
+
+/**
+ * A spend cap refused a model call of this dispatch: no failed approach, so the item
+ * goes back to Pending and the dispatch the seam counted is given back. Finance has
+ * already blocked the project at a project refusal, so the gate skips the item until
+ * the owner returns the project to work; a deployment refusal stops the loop.
+ */
+async function routeAsRefused(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], refusal: SpendRefusal): Promise<void> {
+  const cap = refusal.kind === "project" ? `project ${refusal.projectId}'s spend cap` : "the deployment's spend cap";
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
+  if (!item) {
+    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after a refusal at ${cap}: ${refusal.reason}`);
+    return;
+  }
+  const previousStatus = item.status;
+  try {
+    requeueWorkItem(item);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${taskId}] requeue after a refusal at ${cap} rejected (${e.from} -> Pending); item left at ${e.from}: ${refusal.reason}`);
+    return;
+  }
+  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  // A refund that fails leaves the dispatch counted: the retry bound is then charged one
+  // attempt too many, the conservative direction, so it is logged and the routing stands.
+  let dispatchCount: number | string;
+  try {
+    dispatchCount = await deps.workItemRepo.refundDispatchCount(taskId);
+  } catch (e) {
+    dispatchCount = "not refunded";
+    console.warn(`[${taskId}] the dispatch refused at ${cap} could not be refunded; it stays counted:`, e);
+  }
+  console.warn(`[${taskId}] back to Pending after a refusal at ${cap} (dispatch count ${dispatchCount}): ${refusal.reason}`);
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsRefused");
 }
 
 /**
@@ -192,7 +245,7 @@ async function commitFailure(workItemRepo: WorkItemRepository, taskId: WorkItem[
 }
 
 async function publishBestEffort(
-  eventStore: EventStoreRepository,
+  eventStore: Pick<EventStoreRepository, "publish">,
   workItemId: string,
   events: DomainEvent[],
   site: string,
@@ -285,6 +338,7 @@ export async function processTask(
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
     eventStore: deps.eventStore,
+    spendCap: deps.spendCap,
   };
 
   // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
@@ -301,7 +355,7 @@ export async function processTask(
     result,
     output,
     errorEnvelope: execEnvelope,
-    parkedAtBlocked,
+    routedHere,
   } = await executeTask(
     routingDeps,
     deps.developmentService,
@@ -325,9 +379,9 @@ export async function processTask(
     }
   }
 
-  // An environment-blocked item is already parked at Blocked (or was left where
-  // an owner moved it); no agent ran, so there is nothing to route or salvage.
-  if (parkedAtBlocked) {
+  // An environment-blocked item is already parked at Blocked, a refused one back at
+  // Pending (or either was left where an owner moved it): nothing to route or salvage.
+  if (routedHere) {
     return result;
   }
 

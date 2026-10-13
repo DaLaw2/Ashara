@@ -1,6 +1,7 @@
-import type { EventStoreRepository, FailedApproachRepository, ProjectRepository } from "@ashara/db";
-import type { WorkItemRepository, FailureRouter, FirstPlanning } from "./acl/planning-acl.js";
+import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db";
+import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
+import type { WorkspacePathStore } from "./task-helpers.js";
 import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports, LiaisonStackChoices } from "./acl/engagement-acl.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
@@ -42,7 +43,7 @@ export interface CycleResult {
 }
 
 /** A spend cap refusing an LLM call, as the loop routes it. */
-type SpendRefusal =
+export type SpendRefusal =
   | { readonly kind: "project"; readonly projectId: string; readonly reason: string }
   | { readonly kind: "deployment"; readonly reason: string };
 
@@ -56,13 +57,13 @@ interface SpendCapPort {
   refusalOf(error: unknown): SpendRefusal | null;
 }
 
-export interface TaskResult {
-  readonly taskId: string;
-  readonly status: TaskResultStatus;
-  readonly detail: string;
-}
-
-type TaskResultStatus = "completed" | "failed" | "blocked" | "retrying";
+export type TaskResult =
+  | { readonly taskId: string; readonly status: "completed" | "failed" | "blocked"; readonly detail: string }
+  /**
+   * A model call of the dispatch was refused at a spend cap: the item is back at Pending with its
+   * dispatch refunded. A deployment refusal stops the loop with its reason.
+   */
+  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: SpendRefusal };
 
 export function completedResult(taskId: string): TaskResult {
   return { taskId, status: "completed", detail: "task completed and verified successfully" };
@@ -79,17 +80,17 @@ export function blockedResult(taskId: string, detail: string): TaskResult {
 export interface CoreLoopDeps {
   readonly config: CoreLoopConfig;
   readonly workItemRepo: WorkItemRepository;
-  readonly eventStore: EventStoreRepository;
-  readonly failedApproachRepo: FailedApproachRepository;
+  readonly eventStore: Pick<EventStoreRepository, "publish">;
+  readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;
   /**
    * Holds each project's target workspace path (migration 024) and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
-   * row (migration 025).
+   * row (migration 025). ProjectRepository satisfies it.
    */
-  readonly projectRepo: ProjectRepository;
-  readonly developmentService: DevelopmentService;
+  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1];
+  readonly developmentService: Pick<DevelopmentService, "execute">;
   readonly eventLogger?: EventLogger;
-  readonly failureRouter: FailureRouter;
+  readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
   readonly spendCap: SpendCapPort;
   /**

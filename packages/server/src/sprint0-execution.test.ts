@@ -17,6 +17,7 @@ import {
   EnvironmentBuildRepository,
   LlmCallRepository,
   ProjectRepository,
+  TaskCheckRepository,
   VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
@@ -31,6 +32,7 @@ import type { ModelConfig } from "@ashara/llm-gateway";
 import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "./stack-choice-store.js";
+import { createTaskCheckStore } from "./task-check-store.js";
 
 // Sprint 0 end to end on real podman, real git and the real recorded gateway, with a scripted
 // model: no real LLM call and no skip. The environment role writes a minimal environment, calls
@@ -104,12 +106,25 @@ async function sprint0Task(): Promise<TaskDescriptor> {
   };
 }
 
-/** An implementation task on record, as a first plan writes one after Sprint 0. */
-async function implementationTask(): Promise<TaskDescriptor> {
+/**
+ * An implementation task on record, as a first plan writes it after Sprint 0, with the check its
+ * check task stored for it (s-independent-verify-m1).
+ */
+async function implementationTask(check: string, environmentVersion: string): Promise<TaskDescriptor> {
   const id = createWorkItemId();
+  const checkTaskId = createWorkItemId();
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id)
-    VALUES (${id}, 'Task', 'InProgress', 'Write hello.txt', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()})`);
+    VALUES (${id}, 'Task', 'InProgress', 'Write hello.txt', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}),
+           (${checkTaskId}, 'Task', 'Completed', 'Write the checks for "Write hello.txt"', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()})`);
+  await new TaskCheckRepository(db).append({
+    projectId,
+    taskId: id,
+    checkTaskId,
+    environmentVersion,
+    checks: [{ name: "hello", command: check }],
+    files: [],
+  });
   return { id, projectId, title: "Write hello.txt", dispatchCount: 0, workKind: "implementation", successCriteria: [] };
 }
 
@@ -181,6 +196,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
         current: (id) => workItems.currentEnvironmentStatement(id),
       },
     },
+    checks: createTaskCheckStore(db),
     shutdownSignal: new AbortController().signal,
   });
   try {
@@ -220,6 +236,7 @@ afterAll(async () => {
   const { stdout } = await run("podman", ["images", "-q", "--filter", `label=ashara.project=${projectId}`]);
   const images = [...new Set(stdout.split("\n").filter((id) => id !== ""))];
   if (images.length > 0) await run("podman", ["rmi", "-f", ...images]);
+  await db.execute(sql`DELETE FROM task_checks WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM environment_builds WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id = ${projectId})`);
@@ -296,15 +313,13 @@ describe("Sprint 0", () => {
       .parse((await db.execute(sql`SELECT version, image_id AS "imageId" FROM environment_builds WHERE project_id = ${projectId} AND status = 'succeeded'`)).rows);
     if (build === undefined) throw new Error("no succeeded environment build is on record");
 
-    const task = await implementationTask();
+    const task = await implementationTask("cat /workspace/hello.txt", build.version);
     const sessions = new DevSessionRepository(db);
     const liveImages: string[] = [];
-    const check = "test -f /workspace/hello.txt";
     const { result, events, workdirBase, taskId } = await runTask(
       "flow",
       task,
       [
-        toolCallTurn("write_file", { path: "verify.toml", content: `[checks]\nhello = "${check}"\n` }),
         async () => {
           // The task's cell, inspected while the attempt runs.
           const { stdout } = await run("podman", ["ps", "--filter", `label=ashara.task=${task.id}`, "--format", "json"]);
@@ -324,6 +339,8 @@ describe("Sprint 0", () => {
     expect(liveImages).toEqual([build.imageId.replace(/^sha256:/, "")]);
     expect(events.find((e) => e.event === "environment_resolved")).toMatchObject({ version: build.version, imageId: build.imageId, reused: true });
     expect(events.some((e) => e.event === "post_merge_verify" && e["verdict"] === "passed")).toBe(true);
+    // The implementation attempt was never offered define_check, the environment attempt never was either.
+    expect(sprint0.mock.doGenerateCalls[0]?.tools?.map((tool) => tool.name)).not.toContain("define_check");
 
     // The version is recorded with the attempt and on its dev session.
     const [sessionDir] = await readdir(join(workdirBase, "records", taskId));

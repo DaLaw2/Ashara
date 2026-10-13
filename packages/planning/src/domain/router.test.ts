@@ -22,6 +22,7 @@ function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {
     projectIdsWithStatus: async () => [],
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
+    refundDispatchCount: async () => 0,
     addDependency: async () => {},
     getDependencies: async () => [],
     listAllDependencies: async () => [],

@@ -24,6 +24,8 @@ interface TaskCounts {
   readonly decomposition: number;
   /** The Sprint 0 task decomposition adds to every plan: the project environment. */
   readonly sprint0: number;
+  /** The check task decomposition adds for each task it produced. */
+  readonly checks: number;
   /** Tasks whose task_spec records no origin (written before origin was recorded). */
   readonly unrecorded: number;
 }
@@ -125,6 +127,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,
         sprint0: origins.filter((o) => o === "sprint0").length,
+        checks: origins.filter((o) => o === "check").length,
         unrecorded: origins.filter((o) => o === undefined).length,
       },
       droppedOrderingHints: dropped,

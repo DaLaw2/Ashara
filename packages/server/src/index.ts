@@ -81,6 +81,7 @@ import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
+import { createTaskCheckStore } from "./task-check-store.js";
 import { createRosterStore } from "./roster-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
@@ -329,6 +330,7 @@ async function main(): Promise<void> {
         current: (projectId) => dbWorkItemRepo.currentEnvironmentStatement(projectId),
       },
     },
+    checks: createTaskCheckStore(db),
     shutdownSignal: abortController.signal,
   });
 

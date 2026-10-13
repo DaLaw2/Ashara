@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
+import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError } from "@ashara/shared";
@@ -15,6 +16,7 @@ import { toAgentOutput } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
 import { taskBranchName } from "./merge.js";
+import type { TaskCheckStore, TaskChecks } from "./task-checks.js";
 import { ensureTargetGitInit } from "./workspace.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
@@ -68,7 +70,6 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "no environment", chain: wrapError("development", "resolveCurrentEnvironment", "no environment") },
-      agentInvoked: false,
     };
   }
   if (status === "environment_blocked") {
@@ -80,7 +81,18 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "cell failed", chain: wrapError("development", "agentAttempt", "cell failed") },
-      agentInvoked: true,
+    };
+  }
+  if (status === "refused") {
+    const refusal = new PreCallRefusal("budget_cap: refused");
+    return {
+      status,
+      refusal,
+      detail: `${status} detail`,
+      output: toAgentOutput({ ...base, kind: "refused", error: refusal }, "m", { input: 0, output: 0 }),
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "refused", chain: wrapError("development", "agentAttempt", refusal) },
     };
   }
   return {
@@ -89,7 +101,6 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
     output: null,
     sessionId: "s",
     attempt: 1,
-    agentInvoked: true,
   };
 }
 
@@ -103,7 +114,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -185,19 +196,41 @@ interface Probe {
   staffed: number;
   modelCalls: number;
   builds: number;
+  /** Failure lessons written through the knowledge sink. */
+  findings: number;
+}
+
+/** The checks a check author stored for the task: one that reads the greeting file the agent writes. */
+const STORED_CHECKS: TaskChecks = {
+  checkTaskId: "33333333-3333-4333-8333-333333333333",
+  revision: 1,
+  environmentVersion: "e".repeat(64),
+  checks: [{ name: "greets", command: "cat greet.txt" }],
+  files: [],
+};
+
+function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] = []): TaskCheckStore {
+  return {
+    checkedTasksOf: async () => checkedTasks,
+    append: async () => {
+      throw new Error("no checks may be appended");
+    },
+    latest: async () => stored,
+  };
 }
 
 function serviceOn(
   substrate: PodmanSubstrate,
   workdirBase: string,
   turns?: (probe: Probe) => TurnResult,
+  checks: TaskCheckStore = checkStore(STORED_CHECKS),
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
-  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0 };
+  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0 };
   const events: Array<Record<string, unknown>> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: probe.sessions,
-    knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+    knowledgeSink: { storeFinding: async () => void probe.findings++, storeInsight: async () => {} },
     intentSource: { loadIntent: async () => "build the thing" },
     cells: {
       substrate,
@@ -246,6 +279,7 @@ function serviceOn(
         current: async () => STATEMENT,
       },
     },
+    checks,
     shutdownSignal: new AbortController().signal,
   });
   return { service, probe, events };
@@ -302,7 +336,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(result.status).toBe("environment_blocked");
     if (result.status !== "environment_blocked") return;
     expect(result.unavailable).toBe(`container substrate (${missing})`);
-    expect(result.agentInvoked).toBe(false);
+    expect(result.detail).toContain("no agent ran");
     expect(result.detail).toContain(missing);
     expect(result.errorEnvelope.chain.operation).toBe("probeSubstrate");
     expect(probe.staffed).toBe(0);
@@ -334,7 +368,6 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
 
     expect(result.status).toBe("failed");
     if (result.status !== "failed") return;
-    expect(result.agentInvoked).toBe(false);
     expect(result.errorEnvelope?.chain.operation).toBe("resolveTargetWorkspace");
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
@@ -367,7 +400,6 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     if (result.status !== "environment_undefined") return;
     expect(result.reason).toContain("no environment is defined on main");
     expect(result.reason).toContain("environment/environment.toml");
-    expect(result.agentInvoked).toBe(false);
     expect(result.errorEnvelope.chain.operation).toBe("resolveCurrentEnvironment");
     expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "resolveCurrentEnvironment" })]);
     expect(probe.builds).toBe(0);
@@ -376,6 +408,59 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(probe.sessions.phases.size).toBe(0);
     expect(existsSync(workdirBase)).toBe(false);
     vi.restoreAllMocks();
+  });
+});
+
+// s-independent-verify-m1: no task is verified from nothing, and a check task decides exactly one task.
+describe("a task nothing could decide ends before the agent", () => {
+  const scratch: string[] = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check") {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nochecks-")));
+    scratch.push(root);
+    const target = join(root, "target");
+    await mkdir(target);
+    await ensureTargetGitInit(target);
+    await commitEnvironment(target);
+    const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
+    const substrate = new PodmanSubstrate({
+      podmanPath: "podman",
+      mountRoot: root,
+      runner: async (request) => {
+        if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+      },
+    });
+    const workdirBase = join(root, "work");
+    const { service, probe } = serviceOn(substrate, workdirBase, undefined, checks);
+    const result = await service.execute({ ...someTask(), workKind }, target);
+    return { result, probe, workdirBase };
+  }
+
+  test("an implementation task with no stored checks: failed; no model, no session, no worktree", async () => {
+    const { result, probe, workdirBase } = await dispatchWith(checkStore(null), "implementation");
+
+    expect(result.status).toBe("failed");
+    expect(result.errorEnvelope?.chain.operation).toBe("loadTaskChecks");
+    expect(result.detail).toContain("no checks are stored for task");
+    expect(probe.staffed).toBe(0);
+    expect(probe.modelCalls).toBe(0);
+    expect(probe.sessions.phases.size).toBe(0);
+    expect(existsSync(workdirBase)).toBe(false);
+  });
+
+  test.each([[[]], [["a", "b"]]])("a check task that decides %j tasks: failed before the agent", async (checked) => {
+    const { result, probe } = await dispatchWith(checkStore(null, checked), "check");
+
+    expect(result.status).toBe("failed");
+    expect(result.errorEnvelope?.chain.operation).toBe("resolveCheckedTask");
+    expect(result.detail).toContain("must decide exactly one implementation task");
+    expect(probe.modelCalls).toBe(0);
   });
 });
 
@@ -399,6 +484,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly teardownFails?: boolean;
     /** The model's single turn: run a command (an exec in the developer cell), or write and finish. */
     readonly agentRunsCommand?: boolean;
+    /** The recorder refuses the second turn's call before it is sent, after the first wrote greet.txt. */
+    readonly refusesSecondTurn?: PreCallRefusal;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "") => ({
@@ -431,7 +518,6 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     await mkdir(mountRoot, { recursive: true });
     const target = join(root, "target");
     await mkdir(target);
-    await writeFile(join(target, "verify.toml"), '[checks]\ngreet = "test -f greet.txt"\n');
     await ensureTargetGitInit(target);
     await commitEnvironment(target);
     const mainBefore = await git(target, "rev-parse", "main");
@@ -451,7 +537,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
           }
           case "exec":
-            return faults.execFails !== undefined && faults.execFails === roleOf(args[4]) ? ok("", 125, "Error: OCI runtime error") : ok();
+            return faults.execFails !== undefined && faults.execFails === roleOf(args[4]) ? ok("", 125, "Error: OCI runtime error") : ok("hello\n");
           case "rm":
             return faults.teardownFails === true ? ok("", 1, "Error: container is busy") : ok();
           default:
@@ -462,6 +548,11 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const task = someTask();
     const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
     const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
+      if (faults.refusesSecondTurn !== undefined) {
+        if (probe.modelCalls === 2) throw faults.refusesSecondTurn;
+        writeFileSync(join(workDir, "greet.txt"), "hello\n");
+        return turn("run_command", { command: "true" });
+      }
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
       if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
@@ -502,11 +593,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     { stage: "createCell", errorClass: "CellStartFailed", faults: { startFails: "developer" }, unavailable: "task cell", agentInvoked: false },
     { stage: "createCell", errorClass: "MountPathRejected", faults: { mountRoot: "elsewhere" }, unavailable: "task cell mount", agentInvoked: false },
     { stage: "agentAttempt", errorClass: "CellExecFailed", faults: { execFails: "developer", agentRunsCommand: true }, unavailable: "task cell", agentInvoked: true },
-    { stage: "taskVerify", errorClass: "CellExecFailed", faults: { execFails: "developer" }, unavailable: "task cell", agentInvoked: true },
     { stage: "postMergeVerify", errorClass: "CellStartFailed", faults: { startFails: "verifier" }, unavailable: "verifier cell", agentInvoked: true },
     { stage: "postMergeVerify", errorClass: "CellExecFailed", faults: { execFails: "verifier" }, unavailable: "verifier cell", agentInvoked: true },
-    // The run's own case: the target checkout is outside the substrate's mount root.
-    { stage: "postMergeVerify", errorClass: "MountPathRejected", faults: { mountRoot: "cells" }, unavailable: "verifier cell mount", agentInvoked: true },
   ] satisfies ReadonlyArray<{ stage: string; errorClass: string; faults: Faults; unavailable: string; agentInvoked: boolean }>)(
     "$stage, $errorClass: environment_blocked naming the stage and the class; main untouched",
     async ({ stage, errorClass, faults, unavailable, agentInvoked }) => {
@@ -516,7 +604,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       if (result.status !== "environment_blocked") return;
       expect(result.detail).toContain(`stage ${stage} (${errorClass})`);
       expect(result.unavailable).toContain(unavailable);
-      expect(result.agentInvoked).toBe(agentInvoked);
+      expect(result.detail).toContain(agentInvoked ? "the agent's work is kept on the task branch" : "no agent ran");
       expect(result.errorEnvelope.outcome).toBe("blocked");
       expect(result.errorEnvelope.chain.operation).toBe(stage);
       expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage, errorClass })]);
@@ -524,7 +612,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       // Nothing merged; the agent's work, where there was any, waits on its branch for the retry.
       expect(mainAfter).toBe(mainBefore);
       expect(await git(target, "status", "--porcelain")).toBe("");
-      if (stage === "taskVerify" || stage === "postMergeVerify") expect(branchKept).toBe(true);
+      if (stage === "postMergeVerify") expect(branchKept).toBe(true);
     },
   );
 
@@ -536,6 +624,24 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(mainAfter).not.toBe(mainBefore);
     expect(events.filter((e) => e.event === "cell_teardown_failed")).toHaveLength(2);
     expect(warns.some((w) => w.includes("still on disk"))).toBe(false);
+  });
+
+  // The 509bbbc5 review: a refused turn was transport_exhausted, then "failed" for the FailureRouter.
+  test("a turn refused before it was sent: refused carrying the refusal, never failed; no lesson; partial work kept", async () => {
+    const refusal = new PreCallRefusal("budget_cap: the spend cap of project p is $1.000000");
+    const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({ refusesSecondTurn: refusal });
+
+    expect(result.status, result.detail).toBe("refused");
+    if (result.status !== "refused") return;
+    expect(result.refusal).toBe(refusal);
+    expect(result.detail).toContain("turn 2");
+    expect(result.output.status).toBe("blocked");
+    expect(probe.modelCalls).toBe(2);
+    expect(probe.findings).toBe(0);
+    expect(events.filter((e) => e.event === "task_refused")).toEqual([expect.objectContaining({ errorClass: "PreCallRefusal" })]);
+    expect(events.some((e) => e.event === "task_failed" || e.event === "task_blocked" || e.event === "task_completed")).toBe(false);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(true);
   });
 });
 
@@ -562,6 +668,8 @@ function terminal(kind: FailedKind): Outcome {
       return { ...base, kind, reason: new Error("shutdown") };
     case "environment_failure":
       return { ...base, kind, source: "cell", error: new Error("podman exec failed") };
+    case "refused":
+      return { ...base, kind, error: new PreCallRefusal("budget_cap: refused") };
   }
 }
 
@@ -587,6 +695,12 @@ describe("toAgentOutput", () => {
       expect(output.error_detail).toMatchObject({ model: "m", turn_count: 3, last_tool_call: "run_command" });
     },
   );
+
+  test("refused is blocked, never failed or done, and names the terminal", () => {
+    const output = toAgentOutput(terminal("refused"), "m", { input: 0, output: 0 });
+    expect(output.status).toBe("blocked");
+    expect(output.summary).toContain("refused");
+  });
 
   test("an unmeasured attempt reports only the lower bound and says so", () => {
     const output = toAgentOutput(

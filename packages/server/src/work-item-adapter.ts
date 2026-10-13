@@ -95,6 +95,9 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     async incrementDispatchCount(id) {
       return db.incrementDispatchCount(id);
     },
+    async refundDispatchCount(id) {
+      return db.refundDispatchCount(id);
+    },
     async addDependency(fromId, toId) {
       await db.addDependency(fromId, toId);
     },

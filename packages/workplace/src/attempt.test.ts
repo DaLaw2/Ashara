@@ -4,11 +4,13 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
+import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, CostMeasurement, ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
+import type { CheckDefinition, CheckDefinitionPort } from "./check-definition.js";
 import type { EnvironmentCheckPort, EnvironmentCheckReport } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
@@ -143,6 +145,7 @@ function deps(llm: ContextualTurnLlm, cell: CellBackend, overrides: Partial<Atte
     records: { append: async (record) => void records.push(record) },
     signal: new AbortController().signal,
     environment: null,
+    checks: null,
     ...overrides,
   };
   return { deps: full, records };
@@ -294,6 +297,25 @@ describe("runAttempt", () => {
     expect(outcome.detail).toContain("provider unreachable");
   });
 
+  // The 509bbbc5 review: Finance's BudgetExceeded (a PreCallRefusal) ended the attempt as transport_exhausted.
+  it("ends as refused, carrying the refusal by type, when a turn's call is refused before it is sent", async () => {
+    class CapRefusal extends PreCallRefusal {}
+    const refusal = new CapRefusal("budget_cap: the spend cap of project p is $1.000000");
+    const { llm } = scriptedLlm([
+      () => turn([{ name: "list_directory", input: {} }]),
+      () => {
+        throw refusal;
+      },
+    ]);
+
+    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+
+    expect(outcome).toMatchObject({ kind: "refused", error: refusal, turnsUsed: 2 });
+    // The refused request was never sent: the attempt's cost stays measured.
+    expect(outcome.cost).toEqual({ measured: true, totalUsd: MEASURED.totalCost, turns: 1 });
+    expect(outcome.detail).toContain("refused before it was sent");
+  });
+
   it("marks the attempt unmeasured when the gateway could not price a turn", async () => {
     const unpriced: CostMeasurement = { measured: false, missingCounts: ["cacheReadTokens"], missingRates: [] };
     const { llm } = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "x" } }], { cost: unpriced })]);
@@ -441,6 +463,59 @@ describe("build_environment", () => {
 
     await expect(runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
     await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { environment }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+  });
+});
+
+describe("define_check", () => {
+  function recorder() {
+    const defined: CheckDefinition[] = [];
+    const checks: CheckDefinitionPort = {
+      define(check) {
+        if (defined.some((d) => d.name === check.name)) return { kind: "refused", reason: `a check named ${check.name} is already defined` };
+        defined.push(check);
+        return { kind: "recorded", defined: defined.length };
+      },
+    };
+    return { checks, defined };
+  }
+
+  it("is offered to check work only; implementation and environment attempts never see it", async () => {
+    for (const workKind of ["implementation", "environment", null] as const) {
+      const { llm, requests } = scriptedLlm([
+        () => turn([{ name: "define_check", input: { name: "x", command: "false" } }]),
+        () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+      ]);
+      const environment: EnvironmentCheckPort | null =
+        workKind === "environment" ? { check: async () => ({ kind: "definition_refused", detail: "unused" }) } : null;
+      await runAttempt({ ...assignment(), workKind }, deps(llm, fakeCell().cell, { environment }).deps);
+      expect(Object.keys(requests[0]?.tools ?? {}), String(workKind)).not.toContain("define_check");
+      expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Unknown tool "define_check"') });
+    }
+  });
+
+  it("records each check of a check attempt and tells the model a duplicate name is refused", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt && cat greet.txt" } }]),
+      () => turn([{ name: "define_check", input: { name: "greets", command: "true" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "One check." } }]),
+    ]);
+    const { checks, defined } = recorder();
+
+    const outcome = await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+
+    expect(outcome).toMatchObject({ kind: "finished", status: "done" });
+    expect(Object.keys(requests[0]?.tools ?? {})).toContain("define_check");
+    expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("build_environment");
+    expect(requests[0]?.system).toContain("Every check must FAIL on the project as it is now");
+    expect(defined).toEqual([{ name: "greets", command: "grep -q hello greet.txt && cat greet.txt" }]);
+    expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("already defined") });
+  });
+
+  it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {
+    const { llm } = scriptedLlm([]);
+    const { checks } = recorder();
+    await expect(runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+    await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { checks }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
   });
 });
 

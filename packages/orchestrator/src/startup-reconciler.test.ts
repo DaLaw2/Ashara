@@ -21,6 +21,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     listIdsByStatus: async () => [],
     save: unused("save"),
     incrementDispatchCount: unused("incrementDispatchCount"),
+    refundDispatchCount: unused("refundDispatchCount"),
     addDependency: unused("addDependency"),
     getDependencies: unused("getDependencies"),
     findChildren: unused("findChildren"),

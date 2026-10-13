@@ -143,11 +143,12 @@ export class DecompositionEngine {
 
         // decomposeEpicIntoTasks never returns an empty list (TaskOutputSchema
         // requires one task), so every plan carries its Sprint 0.
-        this.ensureSprint0Task(epic.id, allTasks, dependencyEdges);
+        const sprint0Id = this.ensureSprint0Task(epic.id, allTasks, dependencyEdges);
+        const plannedTasks = addCheckTasks(epic.id, sprint0Id, allTasks, dependencyEdges);
 
         return {
             epic,
-            tasks: allTasks,
+            tasks: plannedTasks,
             dependencyEdges,
             knowledge,
             droppedDependencies,
@@ -170,7 +171,7 @@ export class DecompositionEngine {
         epicId: string,
         tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>,
         dependencyEdges: Array<{ from: string; to: string }>,
-    ): void {
+    ): string {
         const sprint0Id = generateId("task");
         const successCriteria = [
             "environment/environment.toml parses",
@@ -204,6 +205,7 @@ export class DecompositionEngine {
             dependencyEdges.push({ from: task.id, to: sprint0Id });
         }
         tasks.unshift(sprint0Task);
+        return sprint0Id;
     }
 
     /**
@@ -461,6 +463,70 @@ const SPRINT0_DESCRIPTION =
     "Define and commit the project environment: environment/environment.toml (owned paths, containerfile, " +
     "build and test commands) and the files it names; build it with build_environment and finish with a " +
     "one-paragraph statement of the stack you chose and why.";
+
+type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
+
+function bulleted(lines: readonly string[]): string {
+    return lines.length === 0 ? "- (none stated)" : lines.map((line) => `- ${line}`).join("\n");
+}
+
+/**
+ * The check task of one decomposed task (ADR-074 addendum 2 d63): the check author
+ * writes the checks that decide whether it is done, after Sprint 0 and before it
+ * starts. Its text names no stack: the checks are commands of the project environment.
+ */
+function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): PlannedTask {
+    const goal =
+        `Write the checks that decide whether "${task.title}" is done: observable behaviour from its deliverables ` +
+        `and acceptance; each check is a command the project environment can run`;
+    const description = [
+        `${goal}.`,
+        `Deliverables of "${task.title}":\n${bulleted(task.taskSpec.deliverables)}`,
+        `Acceptance of "${task.title}":\n${bulleted(task.successCriteria)}`,
+    ].join("\n\n");
+    const successCriteria = [
+        "every check is defined with define_check",
+        `every check fails on the project as it is now, because "${task.title}" is not done yet`,
+    ];
+    return {
+        id: generateId("task"),
+        level: "task",
+        title: `Write the checks for "${task.title}"`,
+        description,
+        successCriteria,
+        parentId: epicId,
+        dependsOn: [sprint0Id],
+        taskSpec: {
+            goal: description,
+            endState: successCriteria.join("; "),
+            scope: `the checks of "${task.title}"`,
+            deliverables: [
+                `checks of "${task.title}", each defined with define_check as a command the project environment can run`,
+                "the files those checks need",
+            ],
+            capability: "Strong",
+            origin: "check",
+        },
+    };
+}
+
+/**
+ * Gives every decomposed task its check task: the check task depends on Sprint 0 and the
+ * decomposed task depends on its check task. Each check task is placed before its task.
+ */
+function addCheckTasks(
+    epicId: string,
+    sprint0Id: string,
+    tasks: readonly PlannedTask[],
+    dependencyEdges: Array<{ from: string; to: string }>,
+): PlannedTask[] {
+    return tasks.flatMap((task) => {
+        if (task.taskSpec.origin !== "decomposition") return [task];
+        const check = checkTaskFor(epicId, sprint0Id, task);
+        dependencyEdges.push({ from: check.id, to: sprint0Id }, { from: task.id, to: check.id });
+        return [check, task];
+    });
+}
 
 /** Each `dependsOn` entry that names neither a sibling's `ref` nor its exact title. */
 function unresolvedDependencies(rawTasks: readonly RawTask[]): DroppedDependency[] {

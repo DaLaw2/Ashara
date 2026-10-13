@@ -116,6 +116,7 @@ describe("runAttempt on a real cell", () => {
           records: { append: async (record) => void records.push(record) },
           signal: new AbortController().signal,
           environment: null,
+          checks: null,
         },
       );
 

@@ -59,7 +59,7 @@ export async function resolveTargetProjectPath(
  * via `composeRoutedLesson` below.
  */
 export async function recordFailedApproach(
-  failedApproachRepo: FailedApproachRepository,
+  failedApproachRepo: Pick<FailedApproachRepository, "record">,
   workItemRepo: WorkItemRepository,
   task: WorkItem,
   errorDetail: string,

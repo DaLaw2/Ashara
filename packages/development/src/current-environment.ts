@@ -27,6 +27,8 @@ export interface CurrentEnvironment {
   /** Whether the image was already built for this version (no build ran). */
   readonly reused: boolean;
   readonly statement: string;
+  /** The definition's owned paths on main: the environment's files, which no check may touch. */
+  readonly owned: readonly string[];
 }
 
 export type EnvironmentResolution =
@@ -117,6 +119,7 @@ export async function resolveCurrentEnvironment(
       imageRef: built.imageRef,
       reused: built.reused,
       statement,
+      owned: definition.owned,
     },
   };
 }

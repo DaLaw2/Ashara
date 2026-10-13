@@ -62,8 +62,8 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.knowledge.nodes).toEqual([]);
-        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "decomposition"]);
-        expect(result.tasks[2]?.taskSpec.endState).toBe("t2 is observable");
+        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "check", "decomposition", "check", "decomposition"]);
+        expect(result.tasks[4]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
         expect(result.droppedDependencies).toEqual([]);
@@ -82,6 +82,34 @@ describe("DecompositionEngine", () => {
             expect(result.dependencyEdges).toContainEqual({ from: t.id, to: sprint0Id });
         }
         expect(result.tasks.every((t) => !("checks" in t.taskSpec))).toBe(true);
+    });
+
+    test("every decomposed task gets one check task, after Sprint 0 and before the task; its text names no stack", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const sprint0Id = result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id;
+        const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
+        const checks = result.tasks.filter((t) => t.taskSpec.origin === "check");
+        expect(checks).toHaveLength(decomposed.length);
+        for (const implementation of decomposed) {
+            const own = checks.filter((c) => result.dependencyEdges.some((e) => e.from === implementation.id && e.to === c.id));
+            expect(own).toHaveLength(1);
+            const check = own[0];
+            expect(check?.dependsOn).toEqual([sprint0Id]);
+            expect(result.dependencyEdges).toContainEqual({ from: check?.id, to: sprint0Id });
+            expect(check?.title).toBe(`Write the checks for "${implementation.title}"`);
+            expect(check?.taskSpec.goal).toContain(
+                `Write the checks that decide whether "${implementation.title}" is done: observable behaviour from its deliverables ` +
+                    `and acceptance; each check is a command the project environment can run`,
+            );
+            for (const deliverable of implementation.taskSpec.deliverables) expect(check?.taskSpec.goal).toContain(deliverable);
+            for (const criterion of implementation.successCriteria) expect(check?.taskSpec.goal).toContain(criterion);
+        }
+        // No check task decides another check task, and none depends on an implementation task.
+        for (const check of checks) {
+            expect(result.dependencyEdges.filter((e) => e.from === check.id).map((e) => e.to)).toEqual([sprint0Id]);
+        }
     });
 
     test("the task prompt names no stack and demands no file path or command", async () => {

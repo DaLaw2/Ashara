@@ -492,3 +492,34 @@ export const environmentBuilds = pgTable("environment_builds", {
   error: text(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// task_checks (migration 036, Quality): the checks the check author wrote for an
+// implementation task, one row per check, append-only by revision. files is
+// jsonb [{path, content}], parsed by the repository.
+// ---------------------------------------------------------------------------
+
+export const taskChecks = pgTable(
+  "task_checks",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => workItems.id),
+    checkTaskId: uuid("check_task_id")
+      .notNull()
+      .references(() => workItems.id),
+    revision: integer().notNull(),
+    name: text().notNull(),
+    command: text().notNull(),
+    files: jsonb().notNull(),
+    environmentVersion: text("environment_version").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueName: unique("task_checks_unique_name").on(t.taskId, t.revision, t.name),
+  }),
+);

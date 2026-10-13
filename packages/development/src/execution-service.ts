@@ -1,7 +1,8 @@
 import { access } from "node:fs/promises";
+import { join } from "node:path";
 import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/execution-infra";
 import { CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
-import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
+import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -14,7 +15,7 @@ import {
   runAttempt,
 } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
-import { DispatchRecords, cellAsRunner, toAgentOutput } from "./cell-execution.js";
+import { DispatchRecords, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
 import { resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
@@ -28,8 +29,22 @@ import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
-import { runVerifyCore } from "./verify-core.js";
-import type { CommandRunner } from "./verify-core.js";
+import {
+  CheckRecorder,
+  checkBranchName,
+  checkPassed,
+  discardCheckWorkdir,
+  dropCheckBranch,
+  formatCheckRuns,
+  formatChecksForBrief,
+  harvestCheckFiles,
+  headCommit,
+  mainCommit,
+  redRunProblem,
+  runChecksOnCheckout,
+  tentativeMergeCommit,
+} from "./task-checks.js";
+import type { CheckCells, CheckoutOutcome, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
   commitAllChanges,
@@ -60,9 +75,10 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
 
 /**
  * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
- * the attempt itself, the task cell's checks, and the post-merge verifier cell.
+ * the attempt itself, the substrate gate, the red run of a check task's checks on main, and the
+ * post-merge verifier cell.
  */
-type EnvironmentStage = "probeSubstrate" | "resolveEnvironment" | "createCell" | "agentAttempt" | "taskVerify" | "substrateGate" | "postMergeVerify";
+type EnvironmentStage = "probeSubstrate" | "resolveEnvironment" | "createCell" | "agentAttempt" | "substrateGate" | "checkRedRun" | "postMergeVerify";
 
 interface AgentPart {
   readonly output: AgentOutputJson | null;
@@ -109,7 +125,6 @@ function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSi
     sessionId: block.sessionId,
     attempt: 1,
     errorEnvelope: envelope,
-    agentInvoked: block.agentInvoked,
   };
 }
 
@@ -150,7 +165,6 @@ function failedBeforeAgent(taskId: WorkItemId, sessionId: string, operation: str
     sessionId,
     attempt: 1,
     errorEnvelope: envelope,
-    agentInvoked: false,
   };
 }
 
@@ -175,6 +189,36 @@ function attemptCellImage(environment: DispatchEnvironment): AttemptCellImage {
 function briefEnvironment(environment: DispatchEnvironment): AgentBrief["projectEnvironment"] {
   if (environment.kind === "base-cell") return { kind: "to-define" };
   return { kind: "defined", version: environment.version, commit: environment.commit, statement: environment.statement };
+}
+
+/**
+ * What decides a task's work: the environment substrate (Sprint 0), the checks the check author
+ * stored for it (every implementation task), or, for a check task, Z0's red run of the checks it
+ * defines (story s-independent-verify-m1). Resolved before the brief and the worktree.
+ */
+type WorkPlan =
+  | { readonly kind: "substrate" }
+  | { readonly kind: "stored-checks"; readonly stored: TaskChecks }
+  | { readonly kind: "check-authoring"; readonly checkedTaskId: string; readonly environment: CurrentEnvironment };
+
+/** A check task's plan once its throwaway worktree exists. */
+interface CheckAuthoring {
+  readonly kind: "check-authoring";
+  readonly checkedTaskId: string;
+  readonly environment: CurrentEnvironment;
+  readonly branch: string;
+  /** The main commit the worktree started from: the attempt's files are its diff against it. */
+  readonly startCommit: string;
+  readonly recorder: CheckRecorder;
+}
+
+type DispatchWork = Exclude<WorkPlan, { readonly kind: "check-authoring" }> | CheckAuthoring;
+
+/** A task no work plan can be made for: it fails before the agent, with the reason. */
+interface Unplannable {
+  readonly kind: "unplannable";
+  readonly operation: string;
+  readonly reason: string;
 }
 
 /** The version recorded on the dispatch's dev_sessions row; null when its cells ran on the BaseCell. */
@@ -204,7 +248,6 @@ function environmentUndefined(
     sessionId,
     attempt: 1,
     errorEnvelope: { outcome: "blocked", summary, chain },
-    agentInvoked: false,
   };
 }
 
@@ -322,7 +365,7 @@ export interface TaskDescriptor {
  * The outcome of a dispatch the execution substrate could not host: the
  * substrate was unavailable before the attempt (no agent ran, nothing
  * executed), a cell failed under a running attempt (environment_failure), or
- * the task cell's checks or the post-merge verifier cell could not run.
+ * the substrate gate, a check task's red run or the post-merge verifier cell could not run.
  * It is not a task failure (re-dispatching cannot make the substrate appear),
  * so the orchestrator parks the item at Blocked with an
  * `environment_unavailable` reason instead of routing it through the
@@ -338,7 +381,6 @@ interface EnvironmentBlockedResult {
   readonly sessionId: string;
   readonly attempt: 1;
   readonly errorEnvelope: ErrorEnvelope;
-  readonly agentInvoked: boolean;
 }
 
 /**
@@ -354,10 +396,25 @@ interface EnvironmentUndefinedResult {
   readonly sessionId: string;
   readonly attempt: 1;
   readonly errorEnvelope: ErrorEnvelope;
-  readonly agentInvoked: false;
 }
 
-export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult;
+/**
+ * A turn's model call was refused before it was sent (Finance's spend cap or price list), so the
+ * attempt stopped there. Not a task failure and not a lesson: the orchestrator routes it by the
+ * refusal (a spend-cap refusal returns the item to Pending without consuming its dispatch). The
+ * agent's partial work is committed on the task branch for the next dispatch.
+ */
+interface RefusedResult {
+  readonly status: "refused";
+  readonly refusal: PreCallRefusal;
+  readonly detail: string;
+  readonly output: AgentOutputJson;
+  readonly sessionId: string;
+  readonly attempt: 1;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
+export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult | EnvironmentUndefinedResult | RefusedResult;
 
 interface AgentExecutionResult {
   readonly status: "completed" | "failed" | "blocked";
@@ -371,30 +428,7 @@ interface AgentExecutionResult {
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
-  /**
-   * Whether the attempt loop was started for this dispatch.
-   */
-  readonly agentInvoked: boolean;
 }
-
-/**
- * Mutable across the runExecution call so the outer catch can still report
- * whether the attempt had been started when the throw happened: a throw after
- * the model was called is exactly the case where `agentInvoked` must survive
- * the stack unwind.
- */
-interface DispatchRecord {
-  agentInvoked: boolean;
-}
-
-type VerifyTaskOutcome =
-  | {
-      readonly verdict: "passed" | "failed" | "unverified";
-      readonly details?: string;
-      readonly checks?: ReadonlyArray<{ name: string; passed: boolean; output?: string }>;
-    }
-  /** The cell could not run the checks: no verdict on the work at all. */
-  | { readonly verdict: "environment_failed"; readonly error: EnvironmentError };
 
 /** Everything one dispatch holds once its cell is up. */
 interface Dispatch {
@@ -409,13 +443,15 @@ interface Dispatch {
   readonly repo: WorkdirInfo["repo"];
   readonly sessionId: string;
   readonly contract: ProjectContract | null;
-  /** What the task cell, its checks and the post-merge verifier cell are started from. */
+  /** What the task cell, the red-run and gate cells and the post-merge verifier cell are started from. */
   readonly environment: DispatchEnvironment;
-  readonly record: DispatchRecord;
+  readonly work: DispatchWork;
 }
 
 /** The ashara.role label of the post-merge check's cell. */
 const POST_MERGE_VERIFIER_ROLE = "verifier";
+/** The ashara.role label of the cell a check task's checks are red-run in on main. */
+const RED_RUN_ROLE = "ci";
 
 /** How a substrate-checked task's gate ended: passed with the image it tested, or the dispatch's result. */
 type SubstrateGateOutcome =
@@ -471,6 +507,11 @@ export interface DevelopmentServiceDeps {
     readonly images: EnvironmentImages;
     readonly statements: EnvironmentStatementStore;
   };
+  /**
+   * Quality's task checks (s-independent-verify-m1): a check task stores the checks it wrote, and
+   * an implementation task is decided by them. Required: no task is verified without them.
+   */
+  readonly checks: TaskCheckStore;
   /** Aborted on shutdown: an attempt in flight ends as cancelled. */
   readonly shutdownSignal: AbortSignal;
 }
@@ -577,6 +618,25 @@ export class DevelopmentService {
       });
     }
 
+    // Before the brief and any model call: what decides the work. An implementation task with no
+    // stored checks, or a check task that decides no single task, is not dispatched.
+    let plan: WorkPlan;
+    try {
+      const planned = await this.planWork(task, environment);
+      if (planned.kind === "unplannable") {
+        const result = failedBeforeAgent(task.id, sessionId, planned.operation, planned.reason, `no work plan for ${task.id}`);
+        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: result.detail });
+        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+        return result;
+      }
+      plan = planned;
+    } catch (e) {
+      const result = failedBeforeAgent(task.id, sessionId, "planWork", e, `the checks of ${task.id} could not be read`);
+      eventSink?.emit({ event: "error", location: "DevelopmentService:planWork", taskId: task.id, attempt: 1, error: result.detail });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
+    }
+
     let contract: ProjectContract | null = null;
     try {
       contract = await this.loadContract(task.id);
@@ -586,7 +646,7 @@ export class DevelopmentService {
 
     let brief: AgentBrief;
     try {
-      brief = await this.buildBrief(task, targetProjectPath, contract, environment);
+      brief = await this.buildBrief(task, targetProjectPath, contract, environment, plan);
     } catch (e) {
       // A missing intent is a PLANNING-INPUT gap, not an agent failure, so the
       // result is `blocked` with the lookup's own detail. The orchestrator
@@ -614,7 +674,6 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: false,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
@@ -635,12 +694,28 @@ export class DevelopmentService {
       return result;
     }
 
+    // A check task works on a throwaway branch fresh from main, never on a task branch: nothing of
+    // it is merged, and a retry starts again from main.
     let workdir: WorkdirInfo;
-    const branch = taskBranchName(task.id);
+    let work: DispatchWork;
     try {
-      workdir = (await branchExists(targetProjectPath, branch))
-        ? await createWorkdirForRetry(base, targetProjectPath, branch)
-        : await createWorkdir(base, targetProjectPath, branch);
+      if (plan.kind === "check-authoring") {
+        const branch = checkBranchName(task.id);
+        await dropCheckBranch(targetProjectPath, branch);
+        workdir = await createWorkdir(base, targetProjectPath, branch);
+        try {
+          work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: new CheckRecorder() };
+        } catch (e) {
+          await discardCheckWorkdir(workdir.workDir, targetProjectPath, branch);
+          throw e;
+        }
+      } else {
+        const branch = taskBranchName(task.id);
+        workdir = (await branchExists(targetProjectPath, branch))
+          ? await createWorkdirForRetry(base, targetProjectPath, branch)
+          : await createWorkdir(base, targetProjectPath, branch);
+        work = plan;
+      }
     } catch (e) {
       const result = failedBeforeAgent(task.id, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
       eventSink?.emit({
@@ -692,7 +767,7 @@ export class DevelopmentService {
       sessionId,
       contract,
       environment,
-      record: { agentInvoked: false },
+      work,
     };
 
     try {
@@ -704,8 +779,8 @@ export class DevelopmentService {
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
-      // touching its many return sites.
-      if (result.status !== "completed") {
+      // touching its many return sites. A refused call is no lesson about the task.
+      if (result.status !== "completed" && result.status !== "refused") {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       }
       return result;
@@ -731,7 +806,6 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: dispatch.record.agentInvoked,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
@@ -752,27 +826,53 @@ export class DevelopmentService {
   }
 
   /**
-   * Runs `verify` with a runner into a short-lived role=verifier cell that mounts
-   * the target checkout with a shared label (`:z`): two cells may mount it. Its
-   * `.git` is read-only: Z0 commits the merge in that repository after the checks,
-   * so a check able to write its config or hooks would run code on the host.
+   * What decides the task's work. Sprint 0 is checked by the substrate; a check task's checks are
+   * red-run by Z0 and it must decide exactly one implementation task; every other task is decided
+   * by the latest checks stored for it, and with none stored it is unplannable (never verified
+   * from nothing).
    */
-  private async withVerifierCell<T>(d: Dispatch, targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>): Promise<T> {
-    const { cells } = this.deps;
-    const { task } = d;
-    const cell = await cells.substrate.createCell({
-      image: cellImageOf(d.environment),
-      project: task.projectId,
-      task: task.id,
-      role: POST_MERGE_VERIFIER_ROLE,
-      instance: cells.instance,
-      mount: { hostPath: targetProjectPath, shared: true, readOnlyEntries: [".git"] },
-    });
-    try {
-      return await verify(cellAsRunner(cell, targetProjectPath));
-    } finally {
-      await this.teardownCell(task.id, cell);
+  private async planWork(task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
+    if (task.taskSpec?.checkedBy === "substrate") return { kind: "substrate" };
+    if (task.workKind === "check") {
+      if (environment.kind !== "environment") {
+        return { kind: "unplannable", operation: "resolveCheckedTask", reason: `check task ${task.id} has no environment to red-run its checks in` };
+      }
+      const checked = await this.deps.checks.checkedTasksOf(task.id);
+      const [only] = checked;
+      if (checked.length !== 1 || only === undefined) {
+        return {
+          kind: "unplannable",
+          operation: "resolveCheckedTask",
+          reason: `check task ${task.id} must decide exactly one implementation task, but ${checked.length} depend on it [${checked.join(", ")}]`,
+        };
+      }
+      return { kind: "check-authoring", checkedTaskId: only, environment };
     }
+    const stored = await this.deps.checks.latest(task.id);
+    if (stored === null || stored.checks.length === 0) {
+      return {
+        kind: "unplannable",
+        operation: "loadTaskChecks",
+        reason: `no checks are stored for task ${task.id}: its check task has not recorded any, so nothing could decide its work`,
+      };
+    }
+    return { kind: "stored-checks", stored };
+  }
+
+  /** Cells for checks: from the dispatch's environment image, each mounting one throwaway checkout. */
+  private checkCells(d: Dispatch): CheckCells {
+    const scope = this.environmentScope(d);
+    return {
+      targetProjectPath: d.targetProjectPath,
+      createCell: scope.createCell,
+      teardownCell: scope.teardownCell,
+      timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
+    };
+  }
+
+  /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
+  private checkoutDir(d: Dispatch, purpose: "red-run" | "verify"): string {
+    return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
 
   private async buildBrief(
@@ -780,6 +880,7 @@ export class DevelopmentService {
     targetProjectPath: string | null,
     contract: ProjectContract | null,
     environment: DispatchEnvironment,
+    plan: WorkPlan,
   ): Promise<AgentBrief> {
     const taskSpec = task.taskSpec;
 
@@ -805,7 +906,8 @@ export class DevelopmentService {
     // task rather than shipping a degraded one.
     const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
     const formattedTaskSpec = formatTaskSpec(spec);
-    const taskContext = acceptanceSection ? `${formattedTaskSpec}\n\n${acceptanceSection}` : formattedTaskSpec;
+    const specContext = acceptanceSection ? `${formattedTaskSpec}\n\n${acceptanceSection}` : formattedTaskSpec;
+    const taskContext = plan.kind === "stored-checks" ? `${specContext}\n\n${formatChecksForBrief(plan.stored)}` : specContext;
     return createAgentBrief(
       {
         taskId: task.id,
@@ -898,7 +1000,6 @@ export class DevelopmentService {
       records: d.records.dir,
     });
 
-    d.record.agentInvoked = true;
     const outcome = await runAttempt(
       {
         projectId: task.projectId,
@@ -917,6 +1018,7 @@ export class DevelopmentService {
         records: d.records,
         signal: this.deps.shutdownSignal,
         environment: task.workKind === "environment" ? environmentCheckPort(this.environmentScope(d)) : null,
+        checks: d.work.kind === "check-authoring" ? d.work.recorder : null,
       },
     );
     const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
@@ -939,6 +1041,9 @@ export class DevelopmentService {
       return this.endWithoutDone(d, outcome, output);
     }
 
+    // A check may need no file of its own, so a check task is judged by its checks, not its diff.
+    if (d.work.kind === "check-authoring") return this.keepChecks(d, d.work, output);
+
     if (filesChanged.length === 0) {
       eventSink?.emit({
         event: "task_failed",
@@ -958,22 +1063,28 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: { outcome: "failed", summary: "agent produced no file changes", chain, agentOutput: output },
-        agentInvoked: true,
       };
     }
 
-    let postMergeVerify: (path: string) => Promise<PostMergeVerdict>;
-    if (task.taskSpec?.checkedBy === "substrate") {
+    let finalizeDeps: FinalizeDeps;
+    if (d.work.kind === "substrate") {
       const gate = await this.substrateGate(d, outcome.summary, output);
       if (gate.kind === "ended") return gate.result;
-      postMergeVerify = (path) => this.postMergeEnvironmentTest(d, path, gate.tested);
+      finalizeDeps = {
+        eventSink,
+        postMergeOperation: "postMergeVerify",
+        postMergeVerify: (path) => this.postMergeEnvironmentTest(d, path, gate.tested),
+      };
     } else {
-      const verified = await this.verifyTaskOrEnd(d, output);
-      if (verified !== null) return verified;
-      postMergeVerify = (path) => this.postMergeChecks(d, path);
+      const { stored } = d.work;
+      finalizeDeps = {
+        eventSink,
+        postMergeOperation: "postMergeTaskChecks",
+        postMergeVerify: (path) => this.postMergeStoredChecks(d, path, stored),
+      };
     }
 
-    const finalizeDeps: FinalizeDeps = { eventSink, postMergeVerify };
+
     const finalizeResult = await finalizeSuccess(finalizeDeps, d.repo, task, targetProjectPath, 1, {
       entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
     });
@@ -1014,7 +1125,6 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: true,
       };
     }
 
@@ -1033,7 +1143,6 @@ export class DevelopmentService {
       output,
       sessionId,
       attempt: 1,
-      agentInvoked: true,
     };
   }
 
@@ -1102,7 +1211,7 @@ export class DevelopmentService {
       };
       return {
         kind: "ended",
-        result: { status: "failed", detail: envelope.summary, output, sessionId, attempt: 1, errorEnvelope: envelope, agentInvoked: true },
+        result: { status: "failed", detail: envelope.summary, output, sessionId, attempt: 1, errorEnvelope: envelope },
       };
     }
 
@@ -1126,105 +1235,122 @@ export class DevelopmentService {
     return { passed, details };
   }
 
-  /** Every other task's post-merge check: its verify checks in a verifier cell from the dispatch's image. */
-  private async postMergeChecks(d: Dispatch, targetProjectPath: string): Promise<PostMergeVerdict> {
+  /**
+   * Every other task's post-merge check (s-independent-verify-m1): the checks the check author stored
+   * for it, run in a verifier cell from the dispatch's image on a throwaway checkout of the tentative
+   * merge with the stored check files written over it, so whatever the implementer put at those
+   * paths is replaced and it cannot grade itself. Every check must exit 0 with output. A substrate
+   * failure throws, which finalize turns into an environment block.
+   */
+  private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks): Promise<PostMergeVerdict> {
     const { task } = d;
-    // Per-task verify uses only verify.toml; contract checks are deferred to
-    // integration verify (they reference project-wide files that may not exist
-    // in this task's worktree).
-    const result = await this.withVerifierCell(d, targetProjectPath, (runCommand) =>
-      runVerifyCore(
-        { workDir: targetProjectPath, gitRoot: targetProjectPath, contractChecks: [] },
-        {
-          runCommand,
-          log: (event) => this.deps.eventSink?.emit({ ...event, event: "post_merge_verify", taskId: task.id, attempt: 1 }),
-        },
-      ),
+    const commit = await tentativeMergeCommit(targetProjectPath, task.id);
+    const outcome: CheckoutOutcome = await runChecksOnCheckout(
+      this.checkCells(d),
+      POST_MERGE_VERIFIER_ROLE,
+      cellImageOf(d.environment),
+      commit,
+      this.checkoutDir(d, "verify"),
+      stored.checks,
+      stored.files,
     );
-    return { passed: result.verdict === "passed", details: result.tiers.deterministic.details };
+    let passed: boolean;
+    let details: string;
+    if (outcome.kind === "files_refused") {
+      passed = false;
+      details = `the stored check files (revision ${stored.revision}) could not be written over the merged work: ${outcome.detail}`;
+    } else {
+      passed = outcome.runs.length === stored.checks.length && outcome.runs.length > 0 && outcome.runs.every(checkPassed);
+      details = `checks revision ${stored.revision} from check task ${stored.checkTaskId}:\n${formatCheckRuns(outcome.runs, (run) =>
+        checkPassed(run) ? "PASSED" : run.timedOut ? "FAILED: timed out" : run.exitCode !== 0 ? `FAILED: exited ${run.exitCode}` : "FAILED: printed nothing",
+      )}`;
+    }
+    this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: 1, verdict: passed ? "passed" : "failed", revision: stored.revision, details });
+    return { passed, details };
   }
 
-  /** Per-task verify of the worktree in the task cell; null when it passed, else the dispatch's result. */
-  private async verifyTaskOrEnd(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
+  /** A check task's work that cannot be kept: failed with the reason, nothing stored, nothing merged. */
+  private checksRejected(d: Dispatch, output: AgentOutputJson, reason: string): ExecutionResult {
+    const { task, sessionId } = d;
+    const summary = `the checks of check task ${task.id} were rejected: ${reason}`;
+    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: 1, reason: summary });
+    const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });
+    return {
+      status: "failed",
+      detail: summary,
+      output,
+      sessionId,
+      attempt: 1,
+      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output },
+    };
+  }
+
+  /**
+   * Harvests a finished check attempt: its defined checks and the files it added or changed, then
+   * the red run on a fresh checkout of the current main in a CI cell from the environment image.
+   * A check that passes there, or whose command cannot run, rejects the whole set. The kept
+   * revision is appended to Quality's task_checks for the implementation task; the throwaway
+   * branch is discarded either way.
+   */
+  private async keepChecks(d: Dispatch, work: CheckAuthoring, output: AgentOutputJson): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
-    const { task, workDir, targetProjectPath, sessionId } = d;
-    eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
-    const verifyOutcome = await this.verifyTask(task, workDir, cellAsRunner(d.cell, workDir), 1);
+    const { task, sessionId, targetProjectPath } = d;
+    try {
+      const defined = work.recorder.checks();
+      if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check");
+      const harvest = await harvestCheckFiles(d.repo, task.id, work.startCommit, work.environment.owned);
+      if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason);
 
-    if (verifyOutcome.verdict === "environment_failed") {
-      await commitPartialWork(
-        d.repo,
-        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-environment-failed)`,
-      );
-      await cleanupWorkdir(workDir, targetProjectPath);
-      return substrateBlocked(task.id, sessionId, "taskVerify", verifyOutcome.error, "task cell", { output, agentInvoked: true }, eventSink);
-    }
+      let redRun: CheckoutOutcome;
+      try {
+        const main = await mainCommit(targetProjectPath, task.id);
+        redRun = await runChecksOnCheckout(
+          this.checkCells(d),
+          RED_RUN_ROLE,
+          work.environment.imageId,
+          main,
+          this.checkoutDir(d, "red-run"),
+          defined,
+          harvest.files,
+        );
+      } catch (e) {
+        const environmentFailure = environmentErrorOf(e);
+        if (environmentFailure === null) throw e;
+        return substrateBlocked(task.id, sessionId, "checkRedRun", environmentFailure, "CI cell", { output, agentInvoked: true }, eventSink);
+      }
+      if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
+      const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);
+      const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
+      eventSink?.emit({ event: "check_red_run", taskId: task.id, attempt: 1, rejected: problems.map((run) => run.name), report });
+      if (problems.length > 0) return this.checksRejected(d, output, `red run on main:\n${report}`);
 
-    if (verifyOutcome.verdict === "unverified") {
-      // Zero executable checks: a verdict computed from nothing must not read
-      // as success (Discipline A). The orchestrator commits this as Failed and
-      // routes it through the FailureRouter to replan-or-abandon — same path
-      // as a failed verification, bounded by the replan limit. Since the
-      // scaffold task was replaced by Sprint 0 nothing in a plan asks for a
-      // verify.toml, so every task not checked by the substrate ends here until
-      // t-verify-checks-from-plan supplies its checks.
-      eventSink?.emit({
-        event: "task_failed",
-        taskId: task.id,
-        attempt: 1,
-        reason: "verification unverified — no executable checks",
+      const revision = await this.deps.checks.append({
+        projectId: task.projectId,
+        taskId: work.checkedTaskId,
+        checkTaskId: task.id,
+        environmentVersion: work.environment.version,
+        checks: defined,
+        files: harvest.files,
       });
-      await commitPartialWork(
-        d.repo,
-        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-unverified)`,
-      );
-      await cleanupWorkdir(workDir, targetProjectPath);
-      const chain = wrapError("development", "verify", "zero executable checks — task unverified", { taskId: task.id });
-      const envelope: ErrorEnvelope = {
-        outcome: "failed",
-        summary: "verification unverified — no executable checks exist to confirm task output",
-        chain,
-        agentOutput: output,
-      };
+      eventSink?.emit({
+        event: "task_checks_recorded",
+        taskId: task.id,
+        checkedTaskId: work.checkedTaskId,
+        revision,
+        checks: defined.map((check) => check.name),
+        files: harvest.files.map((file) => file.path),
+      });
+      eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
       return {
-        status: "failed",
-        detail: envelope.summary,
+        status: "completed",
+        detail: `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}; each fails on main`,
         output,
         sessionId,
         attempt: 1,
-        errorEnvelope: envelope,
-        agentInvoked: true,
       };
+    } finally {
+      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
     }
-
-    if (verifyOutcome.verdict !== "passed") {
-      eventSink?.emit({
-        event: "task_failed",
-        taskId: task.id,
-        attempt: 1,
-        reason: "verification failed",
-      });
-      await commitPartialWork(
-        d.repo,
-        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-failed)`,
-      );
-      await cleanupWorkdir(workDir, targetProjectPath);
-      const chain = wrapError("development", "verify", verifyOutcome.details ?? "verification failed", {
-        taskId: task.id,
-        checks: verifyOutcome.checks,
-      });
-      return {
-        status: "failed",
-        detail: "verification failed",
-        output,
-        sessionId,
-        attempt: 1,
-        errorEnvelope: { outcome: "failed", summary: verifyOutcome.details ?? "verification failed", chain, agentOutput: output },
-        agentInvoked: true,
-      };
-    }
-
-    return null;
   }
 
   /**
@@ -1234,11 +1360,16 @@ export class DevelopmentService {
    */
   private async endWithoutDone(d: Dispatch, outcome: Outcome, output: AgentOutputJson): Promise<ExecutionResult> {
     const { task, staff, workDir, targetProjectPath, sessionId } = d;
-    await commitPartialWork(
-      d.repo,
-      `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, ${outcome.kind})`,
-    );
-    await cleanupWorkdir(workDir, targetProjectPath);
+    if (d.work.kind === "check-authoring") {
+      // Nothing of a check task is kept for a retry: the next attempt starts again from main.
+      await discardCheckWorkdir(workDir, targetProjectPath, d.work.branch);
+    } else {
+      await commitPartialWork(
+        d.repo,
+        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, ${outcome.kind})`,
+      );
+      await cleanupWorkdir(workDir, targetProjectPath);
+    }
 
     // Discipline C: task, model, turns, last tool call and the terminal's own detail.
     const context = {
@@ -1274,6 +1405,26 @@ export class DevelopmentService {
       );
     }
 
+    if (outcome.kind === "refused") {
+      const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; the partial work is kept on the task branch`;
+      console.warn(`[${task.id}] ${summary}`);
+      this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: 1, errorClass: outcome.error.name, reason: summary });
+      return {
+        status: "refused",
+        refusal: outcome.error,
+        detail: summary,
+        output,
+        sessionId,
+        attempt: 1,
+        errorEnvelope: {
+          outcome: "blocked",
+          summary,
+          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, errorClass: outcome.error.name }),
+          agentOutput: output,
+        },
+      };
+    }
+
     if (outcome.kind === "finished") {
       const chain = wrapError("development", "agentAttempt", outcome.blockedReason ?? outcome.summary, context);
       const envelope: ErrorEnvelope = {
@@ -1289,7 +1440,6 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: true,
       };
     }
 
@@ -1308,70 +1458,7 @@ export class DevelopmentService {
       sessionId,
       attempt: 1,
       errorEnvelope: envelope,
-      agentInvoked: true,
     };
-  }
-
-  private async verifyTask(
-    task: TaskDescriptor,
-    workDir: string,
-    runCommand: CommandRunner,
-    attempt: number,
-  ): Promise<VerifyTaskOutcome> {
-    // Per-task verify uses only verify.toml; contract checks are
-    // deferred to integration verify (they reference project-wide files that may
-    // not exist in this task's worktree).
-    try {
-      const response = await runVerifyCore(
-        { workDir, gitRoot: workDir, contractChecks: [] },
-        {
-          runCommand,
-          log: (event) => this.deps.eventSink?.emit({
-            ...event,
-            event: typeof event["event"] === "string" ? event["event"] : "verify_log",
-            taskId: task.id,
-            attempt,
-          }),
-        },
-      );
-      console.log(
-        `[${task.id}] verify: deterministic=${response.tiers.deterministic.status}, verdict=${response.verdict}`,
-      );
-      this.deps.eventSink?.emit({
-        event: "verify_result",
-        taskId: task.id,
-        attempt,
-        deterministic: response.tiers.deterministic.status,
-        deterministicDetails: response.tiers.deterministic.details,
-        deterministicChecks: response.tiers.deterministic.checks ?? [],
-        verdict: response.verdict,
-      });
-
-      return {
-        verdict: response.verdict,
-        details: response.tiers.deterministic.details,
-        checks: response.tiers.deterministic.checks?.map(c => ({ name: c.name, passed: c.passed, output: c.output })),
-      };
-    } catch (e) {
-      // A substrate that could not run the checks says nothing about the work:
-      // the caller blocks on the environment instead of failing the task.
-      const environmentFailure = environmentErrorOf(e);
-      if (environmentFailure !== null) return { verdict: "environment_failed", error: environmentFailure };
-      // Discipline A: verification unreachable -> false, never true. The agent's
-      // own finish summary is never a verification result.
-      console.warn(
-        `[${task.id}] verify failed, failing closed:`,
-        e,
-      );
-      this.deps.eventSink?.emit({
-        event: "error",
-        location: "DevelopmentService:verifyTask",
-        taskId: task.id,
-        attempt,
-        error: e instanceof Error ? `${e.name}: ${e.message}`.slice(0, 500) : String(e).slice(0, 500),
-      });
-      return { verdict: "failed", details: `verification could not run: ${e instanceof Error ? e.message : String(e)}` };
-    }
   }
 }
 

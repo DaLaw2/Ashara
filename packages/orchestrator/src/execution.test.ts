@@ -49,16 +49,39 @@ function notExercised(label: string): () => never {
 }
 
 /**
+ * Every dep processTask is handed, fully typed: a dep CoreLoopDeps gains and this omits is a
+ * compile error here, never a runtime TypeError. The loop's steps are never run by processTask.
+ */
+function coreLoopDeps(
+  parts: Pick<CoreLoopDeps, "workItemRepo" | "developmentService"> & Partial<Omit<CoreLoopDeps, "eventLogger">>,
+): CoreLoopDeps {
+  return {
+    config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
+    eventStore: { publish: async () => {} },
+    failedApproachRepo: { record: async () => {} },
+    projectRepo: {
+      get: async () => null,
+      recordWorkspacePath: notExercised("recordWorkspacePath"),
+      listActiveIds: notExercised("listActiveIds"),
+      block: notExercised("block"),
+    },
+    failureRouter: { route: notExercised("route") },
+    spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
+    clientStops: { runPending: notExercised("clientStops") },
+    liaisonIntake: { runPending: notExercised("liaisonIntake") },
+    rosterDerivation: { runPending: notExercised("rosterDerivation") },
+    firstPlanning: { runPending: notExercised("firstPlanning") },
+    planReports: { runPending: notExercised("planReports") },
+    stackChoices: { runPending: notExercised("stackChoices") },
+    ...parts,
+  };
+}
+
+/**
  * Builds a CoreLoopDeps mock where the workItemRepo returns a Pending item on
  * the first findById call and an Abandoned item on all subsequent calls —
  * simulating an external actor (HTTP PATCH) moving the item while the agent
  * was executing.
- *
- * CoreLoopDeps references concrete classes from @ashara/db whose private fields
- * prevent structural mocking. We build a plain object with the methods
- * processTask exercises, then widen via `unknown` — the test validates
- * correctness by calling the real function and observing its output, not by
- * satisfying every private field of a repository class.
  */
 interface PreemptionDepsOptions {
   /** Override the agent's execution result status. Default: "failed". */
@@ -101,6 +124,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     projectIdsWithStatus: notExercised("projectIdsWithStatus"),
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
+    refundDispatchCount: notExercised("refundDispatchCount"),
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
@@ -108,37 +132,20 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     withTransaction: notExercised("withTransaction"),
   };
 
-  // Plain objects that satisfy only the methods processTask exercises.
-  // Repository classes have private `db` fields that prevent structural
-  // mocking without instantiation; the `unknown` widening below is the
-  // standard test workaround for class-typed dependency slots.
-  const eventStore = { publish: async () => {} };
-  const projectRepo = {
-    get: async () => null,
-    recordWorkspacePath: notExercised("recordWorkspacePath"),
-  };
-  const failedApproachRepo = { record: async () => {} };
-  const developmentService = {
-    execute: async () => ({
-      status: agentOutcome,
-      detail: agentOutcome === "completed"
-        ? "task completed and verified successfully"
-        : "agent hit turn limit",
-      output: null as AgentOutputJson | null,
-      sessionId: "test-session",
-      attempt: 1,
-      agentInvoked: false,
-    }),
-  };
-
-  const deps = {
-    config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
+  const deps = coreLoopDeps({
     workItemRepo,
-    eventStore,
-    failedApproachRepo,
-    projectRepo,
-    developmentService,
-  } as unknown as CoreLoopDeps;
+    developmentService: {
+      execute: async () => ({
+        status: agentOutcome,
+        detail: agentOutcome === "completed"
+          ? "task completed and verified successfully"
+          : "agent hit turn limit",
+        output: null,
+        sessionId: "test-session",
+        attempt: 1,
+      }),
+    },
+  });
 
   return { deps, warns, logs, savedBlockedReasons };
 }
@@ -235,7 +242,7 @@ describe("processTask post-agent status ladder", () => {
 
     // Override findById to return null after the first call
     let calls = 0;
-    (deps.workItemRepo as WorkItemRepository).findById = async () => {
+    deps.workItemRepo.findById = async () => {
       calls++;
       if (calls === 1) return freshPendingItem();
       return null;
@@ -264,7 +271,6 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     sessionId: "test-session",
     attempt: 1,
     errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
-    agentInvoked: false,
   };
 
   function buildEnvironmentBlockedDeps(execResult: ExecutionResult = probeBlocked): {
@@ -296,6 +302,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       projectIdsWithStatus: notExercised("projectIdsWithStatus"),
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
+      refundDispatchCount: notExercised("refundDispatchCount"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
@@ -303,17 +310,12 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       withTransaction: notExercised("withTransaction"),
     };
 
-    const developmentService = { execute: async () => execResult };
-
-    const deps = {
-      config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
+    const deps = coreLoopDeps({
       workItemRepo,
-      eventStore: { publish: async () => {} },
-        failedApproachRepo: { record: async () => { approaches++; } },
-      projectRepo: { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") },
-      developmentService,
+      developmentService: { execute: async () => execResult },
+      failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
-    } as unknown as CoreLoopDeps;
+    });
 
     return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches };
   }
@@ -372,7 +374,6 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
         chain: { boundary: "development", operation: "postMergeVerify", message: "Post-merge verify could not run", timestamp: new Date().toISOString() },
         agentOutput: output,
       },
-      agentInvoked: true,
     });
 
     const result = await processTask(deps, freshPendingItem());
@@ -403,7 +404,6 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
         summary: detail,
         chain: { boundary: "development", operation: "resolveCurrentEnvironment", message: "no environment", timestamp: new Date().toISOString() },
       },
-      agentInvoked: false,
     });
 
     const result = await processTask(deps, freshPendingItem());
@@ -418,4 +418,117 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
     ).not.toThrow();
   });
+});
+
+// The 509bbbc5 review: a turn refused at a spend cap reached the FailureRouter as a failed attempt.
+describe("a dispatch refused at a spend cap is no failed approach", () => {
+  class StubCapRefusal extends Error {
+    constructor(readonly scope: "project" | "deployment") {
+      super(`budget_cap: the spend cap of ${scope === "project" ? `project ${TEST_PROJECT_ID}` : "the deployment"} would be crossed`);
+      this.name = "BudgetExceeded";
+    }
+  }
+
+  const output: AgentOutputJson = {
+    status: "blocked",
+    summary: "attempt ended as refused",
+    findings: [],
+    error: null,
+    error_detail: { model: "m", turn_count: 2, last_tool_call: "run_command", message: "refused" },
+    total_tokens: { input: 100, output: 10 },
+    total_cost: 0.001,
+    cost_measured: true,
+    turn_count: 2,
+    finish_reason: "error",
+  };
+
+  function buildRefusalDeps(scope: "project" | "deployment") {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let row = freshPendingItem();
+    const statusesWritten: string[] = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const refusal = new StubCapRefusal(scope);
+
+    const workItemRepo: WorkItemRepository = {
+      findById: async () => copy(row),
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        if (row.status !== expectedPreviousStatus) {
+          throw new Error(`pre-image mismatch: stored ${row.status}, expected ${expectedPreviousStatus}`);
+        }
+        statusesWritten.push(item.status);
+        // save writes status and metadata; the dispatch count has its own writers.
+        row = { ...copy(item), dispatchCount: row.dispatchCount };
+      },
+      incrementDispatchCount: async () => {
+        row = { ...row, dispatchCount: row.dispatchCount + 1 };
+        return row.dispatchCount;
+      },
+      refundDispatchCount: async () => {
+        row = { ...row, dispatchCount: row.dispatchCount - 1 };
+        return row.dispatchCount;
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listAllDependencies: notExercised("listAllDependencies"),
+      withTransaction: notExercised("withTransaction"),
+    };
+
+    const deps = coreLoopDeps({
+      workItemRepo,
+      developmentService: {
+        execute: async () => ({
+          status: "refused",
+          refusal,
+          detail: `attempt stopped after 2 turn(s): ${refusal.message}`,
+          output,
+          sessionId: "test-session",
+          attempt: 1,
+          errorEnvelope: {
+            outcome: "blocked",
+            summary: refusal.message,
+            chain: { boundary: "development", operation: "agentAttempt", message: refusal.message, timestamp: new Date().toISOString() },
+          },
+        }),
+      },
+      failedApproachRepo: { record: async () => { approaches++; } },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+      spendCap: {
+        deploymentStop: notExercised("deploymentStop"),
+        refusalOf: (error) =>
+          error instanceof StubCapRefusal
+            ? error.scope === "project"
+              ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message }
+              : { kind: "deployment", reason: error.message }
+            : null,
+      },
+    });
+    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches };
+  }
+
+  test.each(["project", "deployment"] as const)(
+    "refused at the %s cap: back to Pending, dispatch count unchanged, no lesson, no failure router",
+    async (scope) => {
+      const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildRefusalDeps(scope);
+
+      const result = await processTask(deps, freshPendingItem());
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.refusal.kind).toBe(scope);
+      expect(result.refusal.reason).toMatch(/^budget_cap:/);
+      expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+      expect(stored().status).toBe("Pending");
+      expect(stored().dispatchCount).toBe(0);
+      expect(failureRoutes()).toBe(0);
+      expect(failedApproaches()).toBe(0);
+    },
+  );
 });

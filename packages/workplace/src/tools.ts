@@ -3,14 +3,17 @@ import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace } from "@ashar
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
 import type { WorkKind } from "@ashara/shared";
+import type { CheckDefinitionPort } from "./check-definition.js";
 import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { truncateText } from "./records.js";
 
 const MAX_LIST_DEPTH = 5;
 const DEFAULT_LIST_DEPTH = 2;
+const MAX_CHECK_NAME = 100;
 
 const nonEmpty = z.string().min(1);
+const nonBlank = z.string().refine((text) => text.trim() !== "", "must not be blank");
 
 const readFileArgs = z.object({ path: nonEmpty }).strict();
 const writeFileArgs = z.object({ path: nonEmpty, content: z.string() }).strict();
@@ -21,6 +24,9 @@ const listDirectoryArgs = z
 const searchArgs = z.object({ pattern: nonEmpty, path: nonEmpty.optional() }).strict();
 const runCommandArgs = z.object({ command: nonEmpty, timeout_seconds: z.number().int().positive().optional() }).strict();
 const buildEnvironmentArgs = z.object({}).strict();
+const defineCheckArgs = z
+  .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
+  .strict();
 const finishArgs = z.discriminatedUnion("status", [
   z.object({ status: z.literal("done"), summary: nonEmpty }).strict(),
   z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict(),
@@ -130,9 +136,34 @@ const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
 
-/** The tools an attempt offers the model: build_environment only for environment work. */
+/** Only the check author defines checks (the work kind needing "author-checks"). */
+const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
+  description:
+    "Define one check of the task: a shell command run from the workspace root in the project environment. The " +
+    "check passes when the command exits 0 and prints output. Every check must FAIL on the project as it is now. " +
+    "The files you add or change in this workspace are kept with the checks and put back in place whenever they run.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", maxLength: MAX_CHECK_NAME, description: "A short name, unique among this task's checks." },
+      command: { type: "string", description: "The shell command." },
+    },
+    required: ["name", "command"],
+    additionalProperties: false,
+  },
+};
+
+/** The tools an attempt offers the model: build_environment only for environment work, define_check only for check work. */
 export function toolSchemasFor(workKind: WorkKind | null): ToolSchemas {
-  return workKind === "environment" ? { ...TOOL_SCHEMAS, build_environment: BUILD_ENVIRONMENT_SCHEMA } : TOOL_SCHEMAS;
+  switch (workKind) {
+    case "environment":
+      return { ...TOOL_SCHEMAS, build_environment: BUILD_ENVIRONMENT_SCHEMA };
+    case "check":
+      return { ...TOOL_SCHEMAS, define_check: DEFINE_CHECK_SCHEMA };
+    case "implementation":
+    case null:
+      return TOOL_SCHEMAS;
+  }
 }
 
 export type ToolExecution =
@@ -148,6 +179,8 @@ export interface ToolContext {
   readonly tools: ToolSchemas;
   /** Z0's environment check; non-null exactly when the tools include build_environment. */
   readonly environment: EnvironmentCheckPort | null;
+  /** Z0's check recorder; non-null exactly when the tools include define_check. */
+  readonly checks: CheckDefinitionPort | null;
 }
 
 function toolError(message: string): ToolExecution {
@@ -265,6 +298,14 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (context.environment === null) return toolError(`build_environment is not available in this attempt.`);
       const report = await context.environment.check(context.commandTimeoutSeconds);
       return { kind: "result", output: formatEnvironmentCheck(report), isError: !environmentCheckPassed(report) };
+    }
+    case "define_check": {
+      const args = defineCheckArgs.safeParse(input);
+      if (!args.success) return argsError(toolName, args.error);
+      if (context.checks === null) return toolError(`define_check is not available in this attempt.`);
+      const result = context.checks.define({ name: args.data.name.trim(), command: args.data.command });
+      if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
+      return ok(`Defined check ${JSON.stringify(args.data.name.trim())} (${result.defined} defined so far).`);
     }
     case "finish": {
       const args = finishArgs.safeParse(input);

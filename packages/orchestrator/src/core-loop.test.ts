@@ -96,6 +96,7 @@ function buildDeps(
     projectIdsWithStatus: notExercised("projectIdsWithStatus"),
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
+    refundDispatchCount: notExercised("refundDispatchCount"),
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
@@ -103,28 +104,29 @@ function buildDeps(
     withTransaction: notExercised("withTransaction"),
   };
 
-  const eventStore = {
-    publish: async () => {},
-  };
-  const projectRepo = { get: async () => null, recordWorkspacePath: notExercised("recordWorkspacePath") };
-  const failedApproachRepo = { record: async () => {} };
-
+  // Fully typed: a dep CoreLoopDeps gains and this omits is a compile error here, never a
+  // runtime TypeError the runner retries forever.
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
     workItemRepo,
-    eventStore,
-    failedApproachRepo,
-    projectRepo,
-    developmentService: {},
+    eventStore: { publish: async () => {} },
+    failedApproachRepo: { record: async () => {} },
+    projectRepo: {
+      get: async () => null,
+      recordWorkspacePath: notExercised("recordWorkspacePath"),
+      listActiveIds: notExercised("listActiveIds"),
+      block: notExercised("block"),
+    },
+    developmentService: { execute: notExercised("execute") },
     spendCap,
-    failureRouter: {},
+    failureRouter: { route: notExercised("route") },
     clientStops,
     liaisonIntake,
     rosterDerivation,
     firstPlanning,
     planReports,
     stackChoices,
-  } as unknown as CoreLoopDeps;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +274,7 @@ describe("CoreLoop first plan", () => {
 
 class StubRefusal extends Error {
   constructor(readonly refusal: "project" | "deployment") {
-    super(`stub ${refusal} cap refusal`);
+    super(`budget_cap: stub ${refusal} cap refusal`);
   }
 }
 
@@ -369,5 +371,33 @@ describe("CoreLoop spend cap", () => {
     expect(result.stop?.reason).toMatch(/budget_cap/);
     expect(roster).not.toHaveBeenCalled();
     expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
+  test("a task refused at the deployment cap stops the loop with the refusal's reason; one refused at its project's does not", async () => {
+    const reason = "budget_cap: the spend cap of the deployment (every project) is $5.000000";
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) =>
+      task.id === TASK_IDS[0]
+        ? { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project" } }
+        : { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "deployment" as const, reason } },
+    );
+
+    const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => false));
+    const result = await new CoreLoop(deps).runCycle();
+
+    expect(result.tasksProcessed).toBe(2);
+    expect(result.stop).toEqual({ reason });
+  });
+
+  test("tasks refused only at their project's cap leave the loop running", async () => {
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => ({
+      taskId: task.id,
+      status: "refused" as const,
+      detail: "refused",
+      refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project" },
+    }));
+
+    const result = await new CoreLoop(buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => false))).runCycle();
+
+    expect(result.stop).toBeNull();
   });
 });

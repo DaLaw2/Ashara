@@ -41,14 +41,26 @@ export interface PostMergeVerdict {
   readonly details: string;
 }
 
+/**
+ * The operation a post-merge failure is recorded under, which is what planning routes it by.
+ * - "postMergeVerify": the task's own tree already passed this check before the merge (the
+ *   substrate gate), so a failure belongs to the merged tree, not the task (a tree regression).
+ * - "postMergeTaskChecks": the stored checks are the task's first and only verdict; nothing ran
+ *   them on the task's own work before, so a failure is the task's work failing its checks.
+ */
+type PostMergeOperation = "postMergeVerify" | "postMergeTaskChecks";
+
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
+  /** Required: what a post-merge failure means differs by check, and routing reads it from here. */
+  readonly postMergeOperation: PostMergeOperation;
   /**
-   * Checks the target checkout holding the tentative merge in a short-lived cell
-   * that mounts it, torn down after (execution-service): the task's verify checks,
-   * or for a substrate-checked task the environment's test from the image the gate
-   * built. The cell has no network (execution-infra's podman run passes
-   * --network=none). Required, no fallback: there is no host runner.
+   * Checks the tentative merge in a short-lived cell, torn down after (execution-service):
+   * the checks the check author stored for the task, on a throwaway checkout of the merge
+   * with the stored check files written over it, or for a substrate-checked task the
+   * environment's test from the image the gate built, on the target checkout. The cell has
+   * no network (execution-infra's podman run passes --network=none). Required, no
+   * fallback: there is no host runner.
    */
   readonly postMergeVerify: (targetProjectPath: string) => Promise<PostMergeVerdict>;
 }
@@ -166,7 +178,8 @@ export async function finalizeSuccess(
         : "post-merge verification could not run — aborting tentative merge",
       `Post-merge verify could not run: ${detail}`,
       {
-        operation: "postMergeVerify",
+        // A substrate failure is blocked under its stage, never routed; only a check failure says what the operation does.
+        operation: environmentFailure !== null ? "postMergeVerify" : deps.postMergeOperation,
         gateOutput: detail,
         gateContext: { taskId: task.id, attempt, ...(environmentFailure !== null ? { errorClass: environmentFailure.name } : {}) },
       },
@@ -179,9 +192,9 @@ export async function finalizeSuccess(
       task.id,
       targetProjectPath,
       "post-merge verification FAILED — aborting tentative merge",
-      `Post-merge verify failed (same checks, target environment):\n${postMergeVerify.details}`,
+      `Post-merge verify failed:\n${postMergeVerify.details}`,
       {
-        operation: "postMergeVerify",
+        operation: deps.postMergeOperation,
         gateOutput: postMergeVerify.details,
         gateContext: { taskId: task.id, attempt },
       },

@@ -1,8 +1,10 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, TurnResult } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { Assignment } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
+import type { CheckDefinitionPort } from "./check-definition.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { CostTally } from "./outcome.js";
@@ -37,6 +39,16 @@ export interface AttemptDeps {
    * refused for any other, so the tool and its port cannot drift apart.
    */
   readonly environment: EnvironmentCheckPort | null;
+  /** Z0's check recorder behind define_check: required for a check assignment and refused for any other. */
+  readonly checks: CheckDefinitionPort | null;
+}
+
+/** The pre-call refusal `error` is, or carries as a cause; null for any other failure. */
+function preCallRefusalOf(error: unknown): PreCallRefusal | null {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (current instanceof PreCallRefusal) return current;
+  }
+  return null;
 }
 
 class RecordWriteFailed extends Error {
@@ -59,6 +71,14 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
       isEnvironmentWork
         ? "environment: an environment assignment needs Z0's environment check for build_environment"
         : `environment: only an environment assignment may be given Z0's environment check (work kind ${assignment.workKind ?? "none"})`,
+    ]);
+  }
+  const isCheckWork = assignment.workKind === "check";
+  if (isCheckWork !== (deps.checks !== null)) {
+    throw new InvalidAssignment(assignment.taskId, [
+      isCheckWork
+        ? "checks: a check assignment needs Z0's check recorder for define_check"
+        : `checks: only a check assignment may be given Z0's check recorder (work kind ${assignment.workKind ?? "none"})`,
     ]);
   }
   const tools = toolSchemasFor(assignment.workKind);
@@ -156,9 +176,18 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         abortSignal: AbortSignal.any([signal, wallClock.signal]),
       });
     } catch (error) {
-      costs.addUnknown(turn, `the call failed before returning a cost (${errorName(error)})`);
+      const refusal = preCallRefusalOf(error);
+      // A refused request was never sent, so it cost nothing: it is not an unmeasured turn.
+      if (refusal === null) costs.addUnknown(turn, `the call failed before returning a cost (${errorName(error)})`);
       const failed = await record({ kind: "turn_failed", at: clock.now(), turn, errorName: errorName(error), errorMessage: truncateText(errorMessage(error)) });
       if (failed !== null) return recordsFailed(failed);
+      if (refusal !== null) {
+        return conclude({
+          kind: "refused",
+          error: refusal,
+          detail: `turn ${turn} model call to ${assignment.model.provider}/${assignment.model.modelId} was refused before it was sent (${refusal.name}): ${refusal.message}`,
+        });
+      }
       if (wallClock.signal.aborted && !signal.aborted) {
         const elapsedMs = clock.now() - startedAt;
         return conclude({
@@ -228,6 +257,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
               commandTimeoutSeconds: Math.min(limits.perCommandTimeoutSeconds, remainingSeconds),
               tools,
               environment: deps.environment,
+              checks: deps.checks,
             });
 
       if (execution.kind === "finish") {

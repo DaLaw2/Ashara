@@ -1,7 +1,6 @@
 import { EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import { readManifestContext } from "./dispatch-utils.js";
 import { readTreeFile } from "./tree-read.js";
-import { readVerifyConfig } from "./verify-config.js";
 import { buildFileTree } from "./workspace.js";
 
 const ENTRY_POINT_HEAD_LINES = 50;
@@ -55,19 +54,6 @@ export async function buildContextMap(
     } catch (e: unknown) {
       console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
-
-  try {
-    const verifyConfig = await readVerifyConfig(targetProjectPath);
-    if (verifyConfig.checks.length > 0) {
-      const lines = ["## Verification Checks (verify.toml)"];
-      for (const check of verifyConfig.checks) {
-        lines.push(`- ${check.name}: \`${check.command}\``);
-      }
-      sections.push(lines.join("\n"));
-    }
-  } catch (e: unknown) {
-    console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;

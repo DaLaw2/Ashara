@@ -178,18 +178,21 @@ function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
 }
 
 /** The kinds of work a first plan holds, each with the role that owns it. */
-type PlanOwners = Readonly<Record<"environment" | "implementation", { readonly id: string }>>;
+type PlanOwners = Readonly<Record<WorkKind, { readonly id: string }>>;
 
 /**
  * The kind of work a planned task is. Sprint 0 defines the project environment,
- * the environment role's work; every decomposed task is implementation.
+ * the environment role's work; every decomposed task is implementation, and its
+ * check task is the check author's.
  */
-function workKindOf(origin: TaskSpec["origin"]): "environment" | "implementation" {
+function workKindOf(origin: TaskSpec["origin"]): WorkKind {
   switch (origin) {
     case "sprint0":
       return "environment";
     case "decomposition":
       return "implementation";
+    case "check":
+      return "check";
   }
 }
 
@@ -285,6 +288,7 @@ export class FirstPlanner implements FirstPlanning {
     const owners: PlanOwners = {
       environment: ownerOf(roster, "environment"),
       implementation: ownerOf(roster, "implementation"),
+      check: ownerOf(roster, "check"),
     };
 
     let write: FirstPlanWrite;

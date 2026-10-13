@@ -10,6 +10,7 @@ import type { AssignmentBrief } from "./assignment.js";
 export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | null): string {
   const sections = [STATIC_PROMPT];
   if (workKind === "environment") sections.push(ENVIRONMENT_PROMPT);
+  if (workKind === "check") sections.push(CHECK_PROMPT);
   sections.push(buildTaskPrompt(brief));
   return sections.join("\n\n");
 }
@@ -83,6 +84,25 @@ const ENVIRONMENT_PROMPT = [
   `- Use build_environment to build the environment you defined and run its test command. Call it again after`,
   `  each change; finish with status "done" only after it reports PASSED on the files as they are.`,
   `- The finish summary of this task is a one-paragraph statement of the stack you chose and why, not a list of changes.`,
+].join("\n");
+
+/**
+ * Check work writes the checks that decide another task, before that task starts. Nothing of it is
+ * merged: Z0 keeps the checks and their files, and puts them back in place whenever they run.
+ */
+const CHECK_PROMPT = [
+  `# Writing checks`,
+  `You write the checks that decide whether another task is done. That task has not started: what it`,
+  `describes does not exist in the project yet.`,
+  `- Define each check with define_check: a shell command run from the workspace root in the project environment.`,
+  `  A check passes when its command exits 0 and prints output, and fails otherwise.`,
+  `- Each check states observable behaviour from the task's deliverables and acceptance, never how it is built.`,
+  `- Every check must FAIL on the project as it is now. A check that already passes is rejected.`,
+  `- Write any files your checks need (test files, fixtures, scripts) in the workspace. Only the files you add or`,
+  `  change are kept with the checks; nothing of this workspace is merged into the project. They are kept as text,`,
+  `  without their permissions: run a script through its interpreter rather than directly.`,
+  `- Do not change the project environment's own files.`,
+  `- Use run_command to confirm each check fails now, then finish with status "done".`,
 ].join("\n");
 
 /**

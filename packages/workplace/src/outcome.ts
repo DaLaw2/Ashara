@@ -1,4 +1,4 @@
-import type { CostMeasurement } from "@ashara/llm-gateway";
+import type { CostMeasurement, PreCallRefusal } from "@ashara/llm-gateway";
 
 /** A turn whose cost is not known, and why. */
 export interface UnmeasuredTurn {
@@ -51,6 +51,14 @@ export type Outcome =
       readonly kind: "transport_exhausted";
       /** The generateTurn failure itself, typed context intact (no fallback inside an attempt, ADR-074 d44). */
       readonly error: unknown;
+    })
+  | (OutcomeBase & {
+      readonly kind: "refused";
+      /**
+       * The recorder refused a turn's call before it was sent (Finance's spend cap or price list).
+       * Not a failed approach: the caller routes it by the refusal, never as the attempt's failure.
+       */
+      readonly error: PreCallRefusal;
     })
   | (OutcomeBase & {
       readonly kind: "environment_failure";

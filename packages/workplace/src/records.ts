@@ -96,7 +96,7 @@ export function errorMessage(error: unknown): string {
 
 export function toRecordedOutcome(outcome: Outcome): RecordedOutcome {
   const { kind } = outcome;
-  if (kind === "transport_exhausted" || kind === "environment_failure") {
+  if (kind === "transport_exhausted" || kind === "environment_failure" || kind === "refused") {
     const { error, ...rest } = outcome;
     return { ...rest, errorName: errorName(error), errorMessage: errorMessage(error) };
   }

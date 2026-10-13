@@ -218,7 +218,10 @@ export function abandonWorkItem(item: WorkItem, reason: StoredBlockedReason): vo
  * selects only Pending items — and would strand forever. This is a liveness reset,
  * NOT a retry decision: it is deliberately distinct from replanWorkItem (Failed ->
  * Pending) and emits its own `work_item.requeued` event so the audit trail shows a
- * reconciler requeue rather than a planning replan. Guarded to InProgress-only so a
+ * reconciler requeue rather than a planning replan. The dispatch path takes the same
+ * transition when a spend cap refused the attempt's model call: that is no failed
+ * approach either, so the item waits at Pending rather than going through Failed.
+ * Guarded to InProgress-only so a
  * Failed/Blocked item cannot be requeued through this path (those have their own
  * transitions: replanWorkItem / unblockWorkItem).
  */

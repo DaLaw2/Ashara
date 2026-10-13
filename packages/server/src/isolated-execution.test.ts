@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
-import type { SessionStore } from "@ashara/development";
+import type { SessionStore, TaskCheckStore } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
@@ -102,16 +102,29 @@ afterAll(async () => {
 }, 60_000);
 
 describe("a task runs on cells end to end", () => {
-  it("runs the attempt, its checks and the post-merge check in cells, one llm_calls row per turn, and leaves no cell", async () => {
+  it("runs the attempt and its stored checks on the merge in cells, one llm_calls row per turn, and leaves no cell", async () => {
     const workdirBase = join(root, "work");
     const target = join(workdirBase, "projects", "p1");
     await mkdir(target, { recursive: true });
     const taskId = createWorkItemId();
 
-    // /workspace exists only inside a cell: a check that passes on it ran in one.
-    const check = "test -f /workspace/hello.txt && grep -q cell /workspace/hello.txt";
+    // /workspace exists only inside a cell: a check that passes on it ran in one. The check
+    // author stored it before the task started (s-independent-verify-m1).
+    const check = "test -f /workspace/hello.txt && grep cell /workspace/hello.txt";
+    const checks: TaskCheckStore = {
+      checkedTasksOf: async () => [],
+      append: async () => {
+        throw new Error("an implementation task appends no checks");
+      },
+      latest: async () => ({
+        checkTaskId: createWorkItemId(),
+        revision: 1,
+        environmentVersion: "e".repeat(64),
+        checks: [{ name: "hello", command: check }],
+        files: [],
+      }),
+    };
     const script = [
-      toolCallTurn("write_file", { path: "verify.toml", content: `[checks]\nhello = "${check}"\n` }),
       toolCallTurn("write_file", { path: "hello.txt", content: "hello from the cell\n" }),
       toolCallTurn("run_command", { command: "cat hello.txt" }),
       toolCallTurn("finish", { status: "done", summary: "Wrote hello.txt and its check." }),
@@ -176,6 +189,7 @@ describe("a task runs on cells end to end", () => {
           current: async () => "A plain Debian shell environment: the project is one text file.",
         },
       },
+      checks,
       shutdownSignal: new AbortController().signal,
     });
 
@@ -186,17 +200,14 @@ describe("a task runs on cells end to end", () => {
       );
 
       expect(result.status, result.detail).toBe("completed");
-      expect(result.agentInvoked).toBe(true);
-      expect(result.output).toMatchObject({ status: "done", turn_count: 4, cost_measured: true, total_tokens: { input: 4000, output: 200 } });
+      expect(result.output).toMatchObject({ status: "done", turn_count: 3, cost_measured: true, total_tokens: { input: 3000, output: 150 } });
       expect([...sessions.phases.values()]).toEqual(["Completed"]);
 
       // The files the agent wrote in its cell reached the worktree and were merged into main.
       expect(await readFile(join(target, "hello.txt"), "utf8")).toBe("hello from the cell\n");
-      expect(await readFile(join(target, "verify.toml"), "utf8")).toContain(check);
 
-      // The task's checks ran in the task cell, the post-merge check in a verifier cell.
-      const verified = events.find((e) => e.event === "verify_result");
-      expect(verified).toMatchObject({ verdict: "passed", deterministicChecks: [{ name: check, passed: true }] });
+      // The stored check ran in a verifier cell on the merge and passed.
+      expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed", details: expect.stringContaining('Check "hello": PASSED') });
       const created = events.filter((e) => e.event === "cell_created");
       expect(created).toHaveLength(1);
       // Its cells started from the environment version's image, built and recorded for it.
@@ -205,7 +216,6 @@ describe("a task runs on cells end to end", () => {
       expect(created[0]).toMatchObject({ image: resolved?.["imageId"] });
       const recordedBuilds = await db.execute(sql`SELECT status FROM environment_builds WHERE project_id = ${projectId}`);
       expect(recordedBuilds.rows).toEqual([{ status: "succeeded" }]);
-      expect(events.some((e) => e.event === "post_merge_verify" && e["verdict"] === "passed")).toBe(true);
 
       // Every cell of the task is gone.
       expect(await ps(`label=ashara.task=${taskId}`)).toHaveLength(0);
@@ -214,9 +224,9 @@ describe("a task runs on cells end to end", () => {
       const rows = await db.execute(
         sql`SELECT call_site AS "callSite", outcome FROM llm_calls WHERE project_id = ${projectId} AND task_id = ${taskId}`,
       );
-      expect(rows.rows).toHaveLength(4);
+      expect(rows.rows).toHaveLength(3);
       expect(rows.rows.every((row) => row["callSite"] === "agent-runner" && row["outcome"] === "ok")).toBe(true);
-      expect(mock.doGenerateCalls).toHaveLength(4);
+      expect(mock.doGenerateCalls).toHaveLength(3);
 
       // Records sit Z0-side under workdirBase/records/<task>/<session>/; nothing of Ashara's in the worktree.
       const sessionDirs = await readdir(join(workdirBase, "records", taskId));
@@ -224,7 +234,7 @@ describe("a task runs on cells end to end", () => {
       const recordDir = join(workdirBase, "records", taskId, sessionDirs[0] ?? "");
       expect(existsSync(join(recordDir, "brief.json"))).toBe(true);
       const conversation = (await readFile(join(recordDir, "conversation.jsonl"), "utf8")).trim().split("\n");
-      expect(conversation.filter((line) => line.includes('"kind":"turn"'))).toHaveLength(4);
+      expect(conversation.filter((line) => line.includes('"kind":"turn"'))).toHaveLength(3);
       expect(existsSync(join(target, ".ashara"))).toBe(false);
     } finally {
       await substrate.teardownAll();

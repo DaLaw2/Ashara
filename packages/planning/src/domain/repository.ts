@@ -44,6 +44,13 @@ export interface WorkItemRepository {
    * state-machine pre-image guard.
    */
   incrementDispatchCount(id: WorkItemId): Promise<number>;
+  /**
+   * Gives back the dispatch the seam counted when the attempt was refused a model
+   * call before doing any work the retry bound should charge (a spend-cap refusal).
+   * A single `dispatch_count = dispatch_count - 1` UPDATE guarded on a positive
+   * count; returns the new value and throws when no counted dispatch is there to refund.
+   */
+  refundDispatchCount(id: WorkItemId): Promise<number>;
   /** Records that fromId depends on toId — fromId cannot start until toId completes. */
   addDependency(fromId: WorkItemId, toId: WorkItemId): Promise<void>;
   getDependencies(itemId: WorkItemId): Promise<WorkItemId[]>;
