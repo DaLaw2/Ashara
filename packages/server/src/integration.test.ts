@@ -20,11 +20,13 @@ import {
   SecretRepository,
   withPlanningTransaction,
   createProjectWithVision,
+  ClientMessageRepository,
+  createProjectWithTender,
 } from "@ashara/db";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
-import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
@@ -134,6 +136,12 @@ beforeAll(async () => {
       createdVisionIds.push(created.vision.id);
       return created;
     },
+    clientMessageRepo: new ClientMessageRepository(db),
+    createTender: async (projectName, body) => {
+      const created = await createProjectWithTender(db, projectName, body);
+      createdProjectIds.push(created.project.id);
+      return created;
+    },
     configRepo,
     secretStore,
     runner,
@@ -191,6 +199,9 @@ afterAll(async () => {
     await pool.query("DELETE FROM work_items WHERE id = $1", [id]);
   }
   for (const id of createdProjectIds) {
+    // Replies first: in_reply_to references another row of the same table.
+    await pool.query("DELETE FROM client_messages WHERE project_id = $1 AND in_reply_to IS NOT NULL", [id]);
+    await pool.query("DELETE FROM client_messages WHERE project_id = $1", [id]);
     await pool.query("DELETE FROM project_contracts WHERE project_id = $1", [id]);
     await pool.query("DELETE FROM projects WHERE id = $1", [id]);
   }
@@ -532,6 +543,159 @@ describe("Auth middleware", () => {
     const res = await req("GET", "/health", undefined, {});
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("ok");
+  });
+
+  test("a wrong token of the same length and of another length both return 401", async () => {
+    const sameLength = API_TOKEN.slice(0, -1) + (API_TOKEN.endsWith("x") ? "y" : "x");
+    for (const token of [sameLength, `${API_TOKEN}-longer`]) {
+      const res = await req("GET", "/work-items", undefined, {
+        Authorization: `Bearer ${token}`,
+      });
+      expect(res.status).toBe(401);
+    }
+  });
+});
+
+// ===========================================================================
+// 8b. Client channel (K1)
+// ===========================================================================
+
+describe("Client channel", () => {
+  const MessageSchema = z.object({
+    id: z.string(),
+    projectId: z.string(),
+    direction: z.enum(["inbound", "outbound"]),
+    kind: z.string(),
+    body: z.string(),
+    inReplyTo: z.string().nullable(),
+    consumedAt: z.string().nullable(),
+    createdAt: z.string(),
+  });
+  const TenderResponseSchema = z.object({ projectId: z.string(), message: MessageSchema });
+
+  let projectId: string;
+
+  async function rowCount(id: string): Promise<number> {
+    const result = await pool.query("SELECT count(*)::int AS n FROM client_messages WHERE project_id = $1", [id]);
+    return z.object({ n: z.number() }).parse(result.rows[0]).n;
+  }
+
+  beforeAll(async () => {
+    const res = await req("POST", "/tenders", {
+      projectName: `server-intg-tender-${randomUUID().slice(0, 8)}`,
+      body: "Build a ledger for a bakery.",
+    });
+    expect(res.status).toBe(201);
+    const tender = TenderResponseSchema.parse(await res.json());
+    projectId = tender.projectId;
+    expect(tender.message).toMatchObject({ projectId, direction: "inbound", kind: "tender" });
+  });
+
+  test("POST /tenders creates the project row and its tender message together", async () => {
+    const project = await pool.query("SELECT name FROM projects WHERE id = $1", [projectId]);
+    expect(project.rows).toHaveLength(1);
+    const rows = await pool.query("SELECT direction, kind, body FROM client_messages WHERE project_id = $1", [projectId]);
+    expect(rows.rows).toEqual([{ direction: "inbound", kind: "tender", body: "Build a ledger for a bakery." }]);
+  });
+
+  test("an inbound post persists a typed row and returns 201", async () => {
+    const res = await req("POST", `/projects/${projectId}/messages`, { kind: "change", body: "Add VAT." });
+    expect(res.status).toBe(201);
+    const message = MessageSchema.parse(await res.json());
+    const stored = await pool.query(
+      "SELECT project_id, direction, kind, body, in_reply_to FROM client_messages WHERE id = $1",
+      [message.id],
+    );
+    expect(stored.rows).toEqual([
+      { project_id: projectId, direction: "inbound", kind: "change", body: "Add VAT.", in_reply_to: null },
+    ]);
+  });
+
+  test("an outbound kind, a tender, an empty body or an unknown field is rejected with 400", async () => {
+    const before = await rowCount(projectId);
+    for (const body of [
+      { kind: "question", body: "What colour?" },
+      { kind: "report", body: "Done." },
+      { kind: "tender", body: "Another project." },
+      { kind: "change", body: "" },
+      { kind: "change", body: "x", direction: "outbound" },
+    ]) {
+      const res = await req("POST", `/projects/${projectId}/messages`, body);
+      expect(res.status).toBe(400);
+    }
+    expect(await rowCount(projectId)).toBe(before);
+  });
+
+  test("an unauthenticated or wrong-token POST returns 401 and writes nothing", async () => {
+    const before = await rowCount(projectId);
+    for (const headers of [
+      noAuthHeaders(),
+      { Authorization: `Bearer wrong-${API_TOKEN}`, "Content-Type": "application/json" },
+    ]) {
+      const res = await req("POST", `/projects/${projectId}/messages`, { kind: "stop", body: "Stop." }, headers);
+      expect(res.status).toBe(401);
+    }
+    expect(await rowCount(projectId)).toBe(before);
+  });
+
+  test("a post to an unknown project returns 404", async () => {
+    const res = await req("POST", `/projects/${randomUUID()}/messages`, { kind: "stop", body: "Stop." });
+    expect(res.status).toBe(404);
+  });
+
+  test("an answer must reply to a question of the same project", async () => {
+    const question = await new ClientMessageRepository(db).insertOutbound({
+      projectId: parseProjectId(projectId),
+      kind: "question",
+      body: "Which currency?",
+      inReplyTo: null,
+    });
+
+    const answered = await req("POST", `/projects/${projectId}/messages`, {
+      kind: "answer",
+      body: "EUR.",
+      inReplyTo: question.id,
+    });
+    expect(answered.status).toBe(201);
+    expect(MessageSchema.parse(await answered.json()).inReplyTo).toBe(question.id);
+
+    const tenderRow = await pool.query(
+      "SELECT id FROM client_messages WHERE project_id = $1 AND kind = 'tender'",
+      [projectId],
+    );
+    const tenderId = z.object({ id: z.string() }).parse(tenderRow.rows[0]).id;
+    for (const inReplyTo of [tenderId, randomUUID()]) {
+      const res = await req("POST", `/projects/${projectId}/messages`, { kind: "answer", body: "x", inReplyTo });
+      expect(res.status).toBe(400);
+    }
+    const missing = await req("POST", `/projects/${projectId}/messages`, { kind: "answer", body: "x" });
+    expect(missing.status).toBe(400);
+  });
+
+  test("GET lists both directions oldest first, and ?since= keeps only later rows", async () => {
+    const res = await req("GET", `/projects/${projectId}/messages`);
+    expect(res.status).toBe(200);
+    const messages = z.array(MessageSchema).parse(await res.json());
+    expect(messages.map((m) => `${m.direction}:${m.kind}`)).toEqual([
+      "inbound:tender",
+      "inbound:change",
+      "outbound:question",
+      "inbound:answer",
+    ]);
+
+    const since = encodeURIComponent(messages[1].createdAt);
+    const later = await req("GET", `/projects/${projectId}/messages?since=${since}`);
+    expect(later.status).toBe(200);
+    const laterKinds = z.array(MessageSchema).parse(await later.json()).map((m) => m.kind);
+    expect(laterKinds).toEqual(["question", "answer"]);
+
+    const bad = await req("GET", `/projects/${projectId}/messages?since=yesterday`);
+    expect(bad.status).toBe(400);
+  });
+
+  test("a GET of an unknown project returns 404", async () => {
+    const res = await req("GET", `/projects/${randomUUID()}/messages`);
+    expect(res.status).toBe(404);
   });
 });
 

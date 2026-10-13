@@ -21,6 +21,8 @@ import {
   LlmCallRepository,
   withPlanningTransaction,
   createProjectWithVision,
+  ClientMessageRepository,
+  createProjectWithTender,
 } from "@ashara/db";
 import {
   CoreLoop,
@@ -450,6 +452,8 @@ async function main(): Promise<void> {
     visionRepo,
     projectRepo,
     createProject: (name, vision) => createProjectWithVision(db, name, vision),
+    clientMessageRepo: new ClientMessageRepository(db),
+    createTender: (projectName, body) => createProjectWithTender(db, projectName, body),
     configRepo,
     secretStore,
     runner,

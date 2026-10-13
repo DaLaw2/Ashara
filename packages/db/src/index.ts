@@ -10,6 +10,8 @@ export { VisionRepository } from "./repositories/vision.js";
 export type { VisionInput } from "./repositories/vision.js";
 export { ProjectRepository, createProjectWithVision } from "./repositories/project.js";
 export type { CreatedProject } from "./repositories/project.js";
+export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
+export type { CreatedTender } from "./repositories/client-message.js";
 export { EventStoreRepository } from "./repositories/event-store.js";
 export { CostRepository } from "./repositories/cost.js";
 export type { CapabilityCostEstimate } from "./repositories/cost.js";

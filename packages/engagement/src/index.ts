@@ -9,3 +9,9 @@ export {
   alignmentReask,
 } from "./alignment.js";
 export type { AlignmentLLM } from "./alignment.js";
+export {
+  ClientPostSchema,
+  TenderSchema,
+  parseClientMessage,
+  replyTargetProblem,
+} from "./client-message.js";

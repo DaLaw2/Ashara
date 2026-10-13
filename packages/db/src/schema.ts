@@ -13,6 +13,7 @@ import {
   unique,
   index,
   customType,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -321,5 +322,30 @@ export const llmCalls = pgTable(
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// client_messages (migration 016, K1 client channel, Engagement context)
+// ---------------------------------------------------------------------------
+// Direction/kind pairing, non-empty body and "an answer names its question" are
+// CHECKs in the migration; inbound inserts NOTIFY 'ashara_events'.
+
+export const clientMessages = pgTable(
+  "client_messages",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    direction: varchar({ length: 10 }).notNull(),
+    kind: varchar({ length: 10 }).notNull(),
+    body: text().notNull(),
+    inReplyTo: uuid("in_reply_to").references((): AnyPgColumn => clientMessages.id),
+    consumedAt: timestamptz("consumed_at"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),
   }),
 );
