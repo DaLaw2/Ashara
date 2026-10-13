@@ -124,7 +124,11 @@ const INTAKE = {
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first." },
+      // The lead-in repeats the label the client reads before it; intake drops it (transcript 2, N1).
+      assumption: {
+        statement: "Until you answer, the harbour studio opens first.",
+        rationale: "The tender names it first.",
+      },
     },
     {
       text: "How many seats does a class have?",
@@ -265,7 +269,24 @@ describe("first plan", () => {
     const outbound = await outboundOf(projectId);
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.kind).toBe("report");
-    expect(outbound[0]?.body).toMatch(/1 epic .*split into 3 tasks/);
+    // The generic scaffold is stated apart, not counted toward the client's goal.
+    expect(outbound[0]?.body).toMatch(/1 epic \(".*"\), split into 2 tasks for what you asked for\./);
+    expect(outbound[0]?.body).toContain("Before those, 1 standard setup task prepares the project's basic structure");
+  });
+
+  test("each task records which producer wrote it, and no decomposition temp id is stored", async () => {
+    decompositionModel();
+    const projectId = await projectWithVision();
+    await planner().runPending();
+
+    const specs = await db.execute(
+      sql`SELECT title, task_spec AS "taskSpec" FROM work_items WHERE project_id = ${projectId} AND level = 'Task'`,
+    );
+    const rows = z.array(z.object({ title: z.string(), taskSpec: z.record(z.string(), z.unknown()) })).parse(specs.rows);
+    expect(rows.map((r) => `${r.title}: ${String(r.taskSpec["origin"])}`).sort()).toEqual(
+      [`${CLASS_LIST}: decomposition`, `${BOOKING_FORM}: decomposition`, `${SCAFFOLD_TITLE}: scaffold`].sort(),
+    );
+    expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
   });
 
   test("a planned project is never planned again", async () => {
@@ -383,7 +404,13 @@ describe("tender to first plan", () => {
     const outbound = await outboundOf(projectId);
     const questions = outbound.filter((m) => m.kind === "question" && m.inReplyTo === created.message.id);
     expect(questions.map((q) => q.body.split("\n")[0])).toEqual(INTAKE.questions.map((q) => q.text));
-    expect(outbound.filter((m) => m.kind === "report")).toHaveLength(1);
+    for (const question of questions) {
+      expect(question.body.match(/until you answer/gi)).toHaveLength(1);
+    }
+    expect(questions[0]?.body).toContain("Until you answer, we proceed on this assumption: The harbour studio opens first.");
+    const report = outbound.filter((m) => m.kind === "report");
+    expect(report).toHaveLength(1);
+    expect(report[0]?.body).toMatch(/split into 2 tasks for what you asked for\./);
     expect(outbound).toHaveLength(3);
   });
 });

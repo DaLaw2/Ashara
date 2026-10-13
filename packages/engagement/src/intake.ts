@@ -15,7 +15,26 @@ const MAX_QUESTIONS_PER_TENDER = 5;
 /** Failed intake attempts after which the Liaison stops retrying and reports to the client. */
 const MAX_INTAKE_ATTEMPTS = 3;
 
-const AssumptionSchema = z.strictObject({ statement: z.string().min(1), rationale: z.string().min(1) });
+/** What the client reads before a question's assumption; the statement itself never carries it. */
+const ASSUMPTION_LABEL = "Until you answer, we proceed on this assumption:";
+
+// The label's lead-in, alone or with the rest of the label, at the start of a statement.
+const LABEL_LEAD_IN = /^\s*until you answer\b\s*,?\s*(?:we proceed on this assumption\b\s*:?\s*)?/i;
+
+/**
+ * The assumption statement without a lead-in that repeats the label shown before
+ * it (transcript 2, N1: the model wrote "Until you answer, ..." into every
+ * statement, so the client read the phrase twice and the vision stored it).
+ */
+function withoutLabelLeadIn(statement: string): string {
+  const rest = statement.replace(LABEL_LEAD_IN, "").trim();
+  return rest === statement.trim() ? rest : rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+// A statement that is nothing but the lead-in is rejected (and re-asked), never stored empty.
+const AssumptionStatementSchema = z.string().min(1).transform(withoutLabelLeadIn).pipe(z.string().min(1));
+
+const AssumptionSchema = z.strictObject({ statement: AssumptionStatementSchema, rationale: z.string().min(1) });
 
 const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
@@ -148,8 +167,11 @@ function buildIntakePrompt(tender: string): string {
     `  For each: "text" is the question; "whyItMatters" says what gets built differently, or`,
     `  what stops working for the client, depending on the answer; "assumption" is the decision`,
     `  you proceed on until the client answers ("statement") and why the tender makes it the`,
-    `  most defensible choice ("rationale"). The client reads this assumption next to the`,
-    `  question, so it must say plainly what happens if they never answer.`,
+    `  most defensible choice ("rationale"). The client reads the statement after the label`,
+    `  ${JSON.stringify(ASSUMPTION_LABEL)}, and it is also recorded in the vision on its own, so`,
+    `  "statement" is the decision alone, stated plainly as what will be built and what it`,
+    `  means for the client if they never answer. Do not begin it with that label or any`,
+    `  wording like it ("Until you answer", "We assume", "For now").`,
     `- "assumptions": every other decision the tender leaves open that work must proceed on,`,
     `  each with the same "statement" and "rationale". Do not repeat a question's assumption.`,
     ``,
@@ -195,7 +217,7 @@ function questionBody(question: IntakeQuestion): string {
   return [
     question.text,
     `Why it matters: ${question.whyItMatters}`,
-    `Until you answer, we proceed on this assumption: ${question.assumption.statement}`,
+    `${ASSUMPTION_LABEL} ${question.assumption.statement}`,
     `Why this assumption: ${question.assumption.rationale}`,
   ].join("\n\n");
 }

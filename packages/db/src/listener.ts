@@ -1,7 +1,22 @@
 import pg from "pg";
+import { z } from "zod";
 
 export interface PgListener {
-  stop(): void;
+  /** Backend pid of the live LISTEN connection; null while not connected. */
+  backendPid(): number | null;
+  stop(): Promise<void>;
+}
+
+const BackendPidRowSchema = z.object({ pid: z.number().int() });
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function endQuietly(c: pg.Client, context: string): Promise<void> {
+  return c.end().catch((err: unknown) => {
+    console.warn(`[PG listener] ending the ${context} client failed:`, errorMessage(err));
+  });
 }
 
 export async function listenForEvents(
@@ -10,30 +25,60 @@ export async function listenForEvents(
 ): Promise<PgListener> {
   let stopped = false;
   let client: pg.Client | null = null;
+  let pid: number | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let attempt = 0;
 
+  function drop(c: pg.Client, context: string): void {
+    if (client !== c) return;
+    client = null;
+    pid = null;
+    void endQuietly(c, context);
+  }
+
   async function connect(): Promise<void> {
     if (stopped) return;
-    client = new pg.Client({ connectionString: databaseUrl });
+    const c = new pg.Client({ connectionString: databaseUrl });
 
-    client.on("notification", (msg) => {
+    c.on("notification", (msg) => {
       if (msg.channel === "ashara_events" && msg.payload) {
         callback(msg.payload);
       }
     });
 
-    client.on("error", (err: Error) => {
+    // Handlers ignore a client that is no longer the live one, so a dropped client's
+    // late events cannot schedule a second reconnect.
+    c.on("error", (err: Error) => {
+      if (client !== c) return;
       console.warn("[PG listener] connection error, reconnecting:", err.message);
+      drop(c, "errored");
       scheduleReconnect();
     });
 
-    client.on("end", () => {
+    c.on("end", () => {
+      if (client !== c) return;
+      client = null;
+      pid = null;
       if (!stopped) scheduleReconnect();
     });
 
-    await client.connect();
-    await client.query("LISTEN ashara_events");
+    let backendPid: number;
+    try {
+      await c.connect();
+      await c.query("LISTEN ashara_events");
+      const result = await c.query("SELECT pg_backend_pid() AS pid");
+      backendPid = BackendPidRowSchema.parse(result.rows[0]).pid;
+    } catch (e) {
+      await endQuietly(c, "failed");
+      throw e;
+    }
+
+    if (stopped) {
+      await endQuietly(c, "late");
+      return;
+    }
+    client = c;
+    pid = backendPid;
   }
 
   function scheduleReconnect(): void {
@@ -44,11 +89,14 @@ export async function listenForEvents(
       reconnectTimer = null;
       try {
         await connect();
+        if (pid !== null) {
+          console.log(`[PG listener] reconnected after ${attempt} attempt(s) (backend pid ${pid})`);
+        }
         attempt = 0;
       } catch (e) {
         console.warn(
-          `[PG listener] reconnect attempt ${attempt} failed:`,
-          (e as Error).message,
+          `[PG listener] reconnect attempt ${attempt} failed, next in ${Math.min(1000 * 2 ** (attempt + 1), 30_000)}ms:`,
+          errorMessage(e),
         );
         scheduleReconnect();
       }
@@ -58,18 +106,22 @@ export async function listenForEvents(
   try {
     await connect();
   } catch (e) {
-    console.warn(
-      "[PG listener] initial connection failed, will retry:",
-      (e as Error).message,
-    );
+    console.warn("[PG listener] initial connection failed, will retry:", errorMessage(e));
     scheduleReconnect();
   }
 
   return {
-    stop() {
+    backendPid() {
+      return pid;
+    },
+    async stop() {
       stopped = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      client?.end().catch(() => {});
+      reconnectTimer = null;
+      const c = client;
+      client = null;
+      pid = null;
+      if (c) await endQuietly(c, "stopped");
     },
   };
 }

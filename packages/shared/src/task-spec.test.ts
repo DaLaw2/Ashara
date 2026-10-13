@@ -40,7 +40,7 @@ describe("parseStoredTaskSpec", () => {
       scope: "packages/server/src/routes",
       deliverables: ["src/routes/register.ts", "src/routes/register.test.ts"],
       checks: ["POST /api/register returns 201 with valid body"],
-      priorWorkPointers: ["task-scaffold"],
+      origin: "scaffold",
       capability: "Strong",
     };
 
@@ -51,7 +51,7 @@ describe("parseStoredTaskSpec", () => {
     expect(result!.scope).toBe(input.scope);
     expect(result!.deliverables).toEqual(input.deliverables);
     expect(result!.checks).toEqual(input.checks);
-    expect(result!.priorWorkPointers).toEqual(input.priorWorkPointers);
+    expect(result!.origin).toBe(input.origin);
     expect(result!.capability).toBe(input.capability);
   });
 

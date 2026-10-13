@@ -16,8 +16,11 @@ const storedTaskSpecSchema = z.object({
   checks: z.array(z.string()).optional(),
 
   // Decomposition metadata
-  priorWorkPointers: z.array(z.string()).optional(),
   capability: z.string().optional(),
+  // Which producer wrote the task: the decomposition of the client's goal, or the
+  // generic project scaffold decomposition adds to every plan (replaced by story
+  // s-platform-role-m1). Absent on rows written before it was recorded.
+  origin: z.enum(["decomposition", "scaffold"]).optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

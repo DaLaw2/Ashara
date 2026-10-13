@@ -7,6 +7,7 @@ import type {
     DecompositionInput,
     DecompositionResult,
     PriorEpicResult,
+    TaskOrigin,
     TaskSpec,
     WorkItemSpec,
 } from "./decomposition-types.js";
@@ -80,11 +81,7 @@ export class DecompositionEngine {
         return this.decomposeInternal(input);
     }
 
-    generateTaskSpec(task: WorkItemSpec, context: DecompositionInput): TaskSpec {
-        const priorWorkPointers = task.dependsOn.length > 0
-            ? task.dependsOn
-            : context.priorEpicResults?.map((r) => r.epicId) ?? [];
-
+    generateTaskSpec(task: WorkItemSpec, origin: TaskOrigin): TaskSpec {
         return {
             goal: task.goal || task.description || task.title,
             endState: task.endState || this.deriveObservableEndState(task),
@@ -93,8 +90,8 @@ export class DecompositionEngine {
                 ? task.deliverables
                 : this.deriveDeliverables(task),
             checks: task.checks && task.checks.length > 0 ? task.checks : [],
-            priorWorkPointers,
             capability: "Strong",
+            origin,
         };
     }
 
@@ -173,7 +170,7 @@ export class DecompositionEngine {
 
         const tasks = await this.decomposeEpicIntoTasks(epic, knownInput);
         for (const task of tasks) {
-            const taskSpec = this.generateTaskSpec(task, knownInput);
+            const taskSpec = this.generateTaskSpec(task, "decomposition");
             allTasks.push({ ...task, taskSpec });
             for (const dep of task.dependsOn) {
                 dependencyEdges.push({ from: task.id, to: dep });
@@ -181,7 +178,7 @@ export class DecompositionEngine {
         }
 
         if (allTasks.length > 0) {
-            this.ensureScaffoldTask(allTasks, dependencyEdges, knownInput);
+            this.ensureScaffoldTask(allTasks, dependencyEdges);
         }
 
         return {
@@ -205,7 +202,6 @@ export class DecompositionEngine {
     private ensureScaffoldTask(
         tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>,
         dependencyEdges: Array<{ from: string; to: string }>,
-        input: DecompositionInput,
     ): void {
         if (tasks.length === 0) return;
 
@@ -225,7 +221,7 @@ export class DecompositionEngine {
         };
         const scaffoldTask: WorkItemSpec & { taskSpec: TaskSpec } = {
             ...scaffoldBase,
-            taskSpec: this.generateTaskSpec(scaffoldBase, input),
+            taskSpec: this.generateTaskSpec(scaffoldBase, "scaffold"),
         };
 
         for (const task of tasks) {

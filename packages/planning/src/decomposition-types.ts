@@ -23,14 +23,16 @@ export interface WorkItemSpec {
     readonly checks?: string[];
 }
 
+export type TaskOrigin = NonNullable<import("@ashara/shared").StoredTaskSpec["origin"]>;
+
 export interface TaskSpec {
     readonly goal: string;
     readonly endState: string;
     readonly scope: string;
     readonly deliverables: string[];
     readonly checks: string[];
-    readonly priorWorkPointers: string[];
     readonly capability: import("@ashara/shared").CapabilityLevel;
+    readonly origin: TaskOrigin;
 }
 
 export interface DecompositionInput {

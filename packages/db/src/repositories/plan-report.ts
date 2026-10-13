@@ -1,5 +1,5 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, parseStoredTaskSpec, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
 
@@ -8,12 +8,22 @@ import { clientMessages, projects, workItems } from "../schema.js";
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
 
+/** A plan's tasks counted by the producer task_spec.origin records. */
+interface TaskCounts {
+  /** Tasks the decomposition of the client's goal produced. */
+  readonly decomposition: number;
+  /** The generic project scaffold decomposition adds to every plan. */
+  readonly scaffold: number;
+  /** Tasks whose task_spec records no origin (written before origin was recorded). */
+  readonly unrecorded: number;
+}
+
 type DuePlanReportRow =
   | {
       readonly subject: "first-plan";
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
-      readonly taskCount: number;
+      readonly tasks: TaskCounts;
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number };
 
@@ -35,15 +45,20 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of planned) {
     const items = await db
-      .select({ level: workItems.level, title: workItems.title })
+      .select({ level: workItems.level, title: workItems.title, taskSpec: workItems.taskSpec })
       .from(workItems)
       .where(eq(workItems.projectId, row.id))
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    const origins = items.filter((i) => i.level === "Task").map((i) => parseStoredTaskSpec(i.taskSpec)?.origin);
     due.push({
       subject: "first-plan",
       projectId: parseProjectId(row.id),
       epicTitles: items.filter((i) => i.level === "Epic").map((i) => i.title),
-      taskCount: items.filter((i) => i.level === "Task").length,
+      tasks: {
+        decomposition: origins.filter((o) => o === "decomposition").length,
+        scaffold: origins.filter((o) => o === "scaffold").length,
+        unrecorded: origins.filter((o) => o === undefined).length,
+      },
     });
   }
 

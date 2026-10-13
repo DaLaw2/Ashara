@@ -14,7 +14,8 @@ type DuePlanReport =
       readonly subject: "first-plan";
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
-      readonly taskCount: number;
+      /** The plan's tasks by producer, as task_spec.origin records it. */
+      readonly tasks: { readonly decomposition: number; readonly scaffold: number; readonly unrecorded: number };
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number };
 
@@ -37,16 +38,20 @@ export interface LiaisonPlanReports {
 }
 
 /**
- * A first plan recorded with no epic or no task. Decomposition cannot produce
- * one; reporting it would tell the client a plan exists that says nothing.
+ * A first plan that cannot be reported truthfully: no epic, no task decomposed
+ * from the client's goal, or a task whose producer is not recorded (so it can be
+ * neither counted toward the goal nor described as setup).
  */
 class PlanReportUnfounded extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly epics: number,
-    readonly tasks: number,
+    readonly tasks: { readonly decomposition: number; readonly scaffold: number; readonly unrecorded: number },
   ) {
-    super(`project ${projectId} is recorded as planned with ${epics} epic(s) and ${tasks} task(s); no report is posted`);
+    super(
+      `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
+        `${tasks.scaffold} scaffold task(s) and ${tasks.unrecorded} task(s) of unrecorded origin; no report is posted`,
+    );
     this.name = "PlanReportUnfounded";
   }
 }
@@ -55,14 +60,24 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** Plain words, only what the plan holds: its epics and how many tasks. */
-function firstPlanReport(epicTitles: readonly string[], taskCount: number): string {
+/**
+ * Plain words, only what the plan holds: its epics, the tasks toward what the
+ * client asked for, and the generic setup task stated apart from them.
+ */
+function firstPlanReport(epicTitles: readonly string[], goalTasks: number, setupTasks: number): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
-  return [
+  const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
-      `split into ${plural(taskCount, "task")}.`,
-    `When the plan was made, none of its tasks had been started.`,
-  ].join("\n\n");
+      `split into ${plural(goalTasks, "task")} for what you asked for.`,
+  ];
+  if (setupTasks > 0) {
+    paragraphs.push(
+      `Before those, ${plural(setupTasks, "standard setup task")} ${setupTasks === 1 ? "prepares" : "prepare"} ` +
+        `the project's basic structure; ${setupTasks === 1 ? "it is" : "they are"} not specific to your request.`,
+    );
+  }
+  paragraphs.push(`When the plan was made, none of its tasks had been started.`);
+  return paragraphs.join("\n\n");
 }
 
 /**
@@ -91,9 +106,9 @@ export class PlanReports implements LiaisonPlanReports {
 
   private compose(due: DuePlanReport): string {
     if (due.subject === "planning-stopped") return planningStoppedReport(due.attempts);
-    if (due.epicTitles.length === 0 || due.taskCount === 0) {
-      throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, due.taskCount);
+    if (due.epicTitles.length === 0 || due.tasks.decomposition === 0 || due.tasks.unrecorded > 0) {
+      throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, due.tasks);
     }
-    return firstPlanReport(due.epicTitles, due.taskCount);
+    return firstPlanReport(due.epicTitles, due.tasks.decomposition, due.tasks.scaffold);
   }
 }

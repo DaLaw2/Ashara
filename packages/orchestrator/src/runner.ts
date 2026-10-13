@@ -47,7 +47,12 @@ export class ContinuousRunner {
       pgListener = await listenForEvents(this.config.databaseUrl, () => {
         this.wake();
       });
-      console.log("PG listener connected");
+      const pid = pgListener.backendPid();
+      console.log(
+        pid === null
+          ? "PG listener not connected; reconnecting in the background, polling meanwhile"
+          : `PG listener connected (backend pid ${pid})`,
+      );
     }
 
     let consecutiveErrors = 0;
@@ -91,7 +96,7 @@ export class ContinuousRunner {
       }
     } finally {
       if (pgListener) {
-        pgListener.stop();
+        await pgListener.stop();
       }
     }
 
