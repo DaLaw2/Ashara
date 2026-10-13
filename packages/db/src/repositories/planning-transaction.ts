@@ -1,6 +1,5 @@
-import type { Database } from "../connection.js";
-import { WorkItemRepository } from "./work-item.js";
-import { ContractRepository } from "./contract.js";
+import type { WorkItemRepository } from "./work-item.js";
+import type { ContractRepository } from "./contract.js";
 
 /**
  * Repos scoped to ONE shared database transaction (ADR-028 + ADR-029, mig-phase-9).
@@ -13,11 +12,4 @@ import { ContractRepository } from "./contract.js";
 export interface PlanningTransactionRepos {
   readonly workItemRepo: WorkItemRepository;
   readonly contractRepo: ContractRepository;
-}
-
-export async function withPlanningTransaction<T>(
-  db: Database,
-  fn: (repos: PlanningTransactionRepos) => Promise<T>,
-): Promise<T> {
-  return db.transaction((tx) => fn({ workItemRepo: new WorkItemRepository(tx), contractRepo: new ContractRepository(tx) }));
 }

@@ -5,8 +5,10 @@ import { z } from "zod";
  *
  * Every work item carries a run scope that says which run created it. The
  * value is either a runId (UUID from openRun), RUN_SCOPE_AD_HOC for items
- * created outside any orchestrator run (HTTP API), or the migration backfill
- * value "pre-scoping" on rows that existed before the column was added.
+ * created without a run id, or the migration backfill value "pre-scoping" on
+ * rows that existed before the column was added. Today the only work-item
+ * writer is the server's first-plan store, which writes RUN_SCOPE_AD_HOC; no
+ * code path writes a runId.
  *
  * No default: every insert site must supply the value explicitly (Discipline A).
  * The DB column is NOT NULL for exactly this reason — an undefined appearing
@@ -14,11 +16,11 @@ import { z } from "zod";
  */
 
 /**
- * Sentinel for work items created outside any orchestrator run — HTTP API
- * calls (POST /work-items, POST /work-items/bulk) that do not pass through the
- * core loop. Distinct from the "pre-scoping" migration backfill value so
- * "historical data" and "someone poked the API while no run was open" stay two
- * different epistemic states (Discipline A).
+ * Sentinel for work items created without an orchestrator run id — today a
+ * project's first plan, which the server's first-plan store writes without the
+ * loop's run id. Distinct from the "pre-scoping" migration backfill value so
+ * "historical data" and "created outside a run" stay two different epistemic
+ * states (Discipline A).
  */
 export const RUN_SCOPE_AD_HOC = "ad-hoc" as const;
 

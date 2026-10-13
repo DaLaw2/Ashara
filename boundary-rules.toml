@@ -34,7 +34,7 @@ allow = ["shared"]
 allow = ["shared", "llm-gateway"]
 
 [cli]
-allow = ["shared", "llm-gateway", "engagement", "planning"]
+allow = ["shared", "llm-gateway", "engagement"]
 
 [server]
 allow = ["*"]

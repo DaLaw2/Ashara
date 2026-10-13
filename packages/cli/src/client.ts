@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
-import type { SessionPhase, ProjectKnowledge } from "@ashara/shared";
+import type { SessionPhase } from "@ashara/shared";
 import { loadServerEnv } from "@ashara/shared";
 
 // --- Error types ---
@@ -24,32 +24,8 @@ export class ClientError extends Error {
 
 // --- Server-side types (match Rust serde output) ---
 
-export type WorkItemLevel = "Epic" | "Task";
+type WorkItemLevel = "Epic" | "Task";
 type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
-
-/** One node in a bulk hierarchy create. `tempId` is batch-local; `parentId` references another item's `tempId`. */
-export interface BulkWorkItem {
-    readonly tempId: string;
-    readonly level: WorkItemLevel;
-    readonly title: string;
-    readonly description?: string;
-    readonly parentId?: string;
-    readonly taskSpec?: unknown;
-    readonly northStar?: string;
-}
-
-export interface BulkCreateRequest {
-    /** The project returned by createVision; the server rejects a batch without it. */
-    readonly projectId: string;
-    readonly items: BulkWorkItem[];
-    readonly edges: Array<{ readonly from: string; readonly to: string }>;
-    /**
-     * The knowledge graph the decomposition that produced these items derived
-     * (ADR-052). Required — the server rejects a batch without it, because it is
-     * the only statement in this request of what the project is built in.
-     */
-    readonly knowledge: ProjectKnowledge;
-}
 
 export interface WorkItem {
     readonly id: string;
@@ -125,11 +101,6 @@ const CreateVisionResponseSchema = z.object({
     projectId: z.string().uuid(),
 });
 
-const BulkCreateResponseSchema = z.object({
-    tempIdToId: z.record(z.string(), z.string()),
-    created: z.number(),
-});
-
 const SessionInfoSchema = z.object({
     sessionId: z.string(),
     taskId: z.string(),
@@ -159,12 +130,6 @@ export class AsharaClient {
     private authHeaders(): Record<string, string> {
         if (!this.apiToken) return {};
         return { Authorization: `Bearer ${this.apiToken}` };
-    }
-
-    async createWorkItemsBulk(req: BulkCreateRequest): Promise<Record<string, string>> {
-        const response = await this.post("/work-items/bulk", req);
-        const parsed = BulkCreateResponseSchema.parse(await this.parseJson(response));
-        return parsed.tempIdToId;
     }
 
     async listWorkItems(): Promise<WorkItem[]> {

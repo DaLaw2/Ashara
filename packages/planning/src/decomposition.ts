@@ -593,6 +593,7 @@ function generateId(prefix: string): string {
     return `${prefix}-${idCounter.toString().padStart(4, "0")}`;
 }
 
+/** @testseam decomposition.test.ts restarts generated ids per case */
 export function resetIdCounter(): void {
     idCounter = 0;
 }

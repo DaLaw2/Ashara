@@ -71,13 +71,6 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-class NotTested extends Error {
-  constructor(what: string) {
-    super(`web client test: ${what} is not part of this suite`);
-    this.name = "NotTested";
-  }
-}
-
 function appDeps(): AppDeps {
   return {
     workItemRepo: new WorkItemRepository(db),
@@ -92,7 +85,6 @@ function appDeps(): AppDeps {
     configRepo: new ConfigRepository(db),
     secretStore,
     runner: { wake: () => {} },
-    createBulkPlan: () => Promise.reject(new NotTested("bulk planning")),
   };
 }
 

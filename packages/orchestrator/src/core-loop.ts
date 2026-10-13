@@ -1,6 +1,6 @@
 import type { RunState } from "@ashara/shared";
 import type { IntakeOutcome } from "./acl/engagement-acl.js";
-import type { WorkItem } from "./acl/planning-acl.js";
+import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
@@ -13,6 +13,15 @@ function logIntake(outcome: IntakeOutcome): void {
     console.log(
       `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
         `${outcome.questions} question(s) posted`,
+    );
+  }
+}
+
+/** Failures are logged at warn by the planner itself, with their attempt count. */
+function logFirstPlan(outcome: FirstPlanOutcome): void {
+  if (outcome.kind === "planned") {
+    console.log(
+      `[first-plan] project ${outcome.projectId}: first plan written, ${outcome.epics} epic(s), ${outcome.tasks} task(s)`,
     );
   }
 }
@@ -46,6 +55,14 @@ export class CoreLoop {
       // Tenders first: a project's intake comes before any work on it. Skipped
       // with dispatch at the budget cap, since intake is an LLM call too.
       for (const outcome of await deps.liaisonIntake.runPending()) logIntake(outcome);
+
+      // Then a first plan for each project that has a vision and no work items,
+      // and the Liaison's report on each recorded planning outcome. Both before
+      // gating, so a plan written this cycle can be dispatched this cycle.
+      for (const outcome of await deps.firstPlanning.runPending()) logFirstPlan(outcome);
+      for (const report of await deps.planReports.runPending()) {
+        console.log(`[liaison-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+      }
 
       const eligible = await PlanningService.gate(deps.workItemRepo);
       if (eligible.length > 0) {

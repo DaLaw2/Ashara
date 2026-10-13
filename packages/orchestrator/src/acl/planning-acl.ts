@@ -21,6 +21,9 @@ export type { WorkItemRepository } from "@ashara/planning";
 export type { FailureRouter, RawFailureContext } from "@ashara/planning";
 export type { FailureRecoveryDeps } from "@ashara/planning";
 
+// First plan of a project (Delivery, story s-liaison-intake-m1)
+export type { FirstPlanOutcome, FirstPlanning } from "@ashara/planning";
+
 // --- Values (re-exported) ---
 
 // Domain service & graph

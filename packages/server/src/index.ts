@@ -18,7 +18,6 @@ import {
   RunStateRepository,
   SecretRepository,
   LlmCallRepository,
-  withPlanningTransaction,
   createProjectWithVision,
   ClientMessageRepository,
   ClientSessionRepository,
@@ -35,13 +34,13 @@ import {
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import {
   FailureRouter,
-  createBulkPlanWithContract,
+  FirstPlanner,
   classifyFailure,
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
-import { TenderIntake } from "@ashara/engagement";
+import { PlanReports, TenderIntake } from "@ashara/engagement";
 import type {
   StackDerivationScope,
   SessionStore,
@@ -69,7 +68,7 @@ import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/ll
 import { LlmCallLedger } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -88,6 +87,7 @@ import {
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
 import { createIntakeStore } from "./intake-store.js";
+import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers after one second; five failures for one
@@ -429,16 +429,6 @@ async function main(): Promise<void> {
     provisioner,
   });
 
-  // One shared-transaction facade over both the WorkItemRepository (adapted to the
-  // domain shape) and the ContractRepository (ADR-028 + ADR-029), so the bulk-plan
-  // contract write (mig9-t5) shares the work items' fail-safe transaction.
-  const planningTransaction = <T>(
-    fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
-  ): Promise<T> =>
-    withPlanningTransaction(db, ({ workItemRepo: txDbWorkItemRepo, contractRepo }) =>
-      fn({ workItemRepo: adaptWorkItemRepo(txDbWorkItemRepo), contractRepo }),
-    );
-
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
     workItemRepo,
@@ -455,6 +445,12 @@ async function main(): Promise<void> {
       store: createIntakeStore(db),
       onAttempt: ladderAttemptSink,
     }),
+    firstPlanning: new FirstPlanner({
+      llm: llmGateway,
+      store: createFirstPlanStore(db),
+      onAttempt: ladderAttemptSink,
+    }),
+    planReports: new PlanReports(createPlanReportStore(db)),
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -474,15 +470,6 @@ async function main(): Promise<void> {
     configRepo,
     secretStore,
     runner,
-    // Bulk plan creation writes the ProjectContract knowledge in the SAME transaction
-    // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
-    createBulkPlan: (projectId, items, edges, knowledge) =>
-      createBulkPlanWithContract(
-        { withPlanningTransaction: planningTransaction, runScope: RUN_SCOPE_AD_HOC, projectId },
-        items,
-        edges,
-        knowledge,
-      ),
   };
 
   // The web client (ADR-076) authenticates with a session cookie, never the API token.

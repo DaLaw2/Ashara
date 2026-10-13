@@ -16,20 +16,13 @@ export {
   PlanningService,
 } from "./domain/index.js";
 
-export type {
-  WorkItemSpec,
-  DecompositionResult,
-} from "./decomposition-types.js";
-export { DecompositionEngine, resetIdCounter } from "./decomposition.js";
-export type { DecompositionLLM } from "./decomposition.js";
-
 export { FailureRouter } from "./failure-router.js";
 export type { RawFailureContext } from "./failure-router.js";
 
-export { createGatewayDecompositionLLM } from "./gateway-adapters.js";
+export { createBulkPlanWithContract } from "./bulk-plan.js";
 
-export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
-export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "./bulk-plan.js";
+export { FirstPlanner } from "./first-plan.js";
+export type { FirstPlanOutcome, FirstPlanStore, FirstPlanning } from "./first-plan.js";
 
 export {
   classifyFailure,

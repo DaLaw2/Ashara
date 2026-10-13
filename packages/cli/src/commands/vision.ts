@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// vision command — align, decompose, post work items, monitor
+// vision command — align, persist the vision, monitor; the server plans it
 // ---------------------------------------------------------------------------
 
 import { createInterface } from "node:readline";
@@ -9,18 +9,15 @@ import {
     alignmentReask,
 } from "@ashara/engagement";
 import type { AlignmentLLM, AlignmentResult, DirectionInference, DirectionQuestion } from "@ashara/engagement";
-import { DecompositionEngine, resetIdCounter, createGatewayDecompositionLLM } from "@ashara/planning";
-import type { DecompositionLLM, DecompositionResult, WorkItemSpec } from "@ashara/planning";
 import { LLMGateway, buildGateway, loadGatewayConfigFromApi, withStructuredLadder } from "@ashara/llm-gateway";
 import type { GatewayConfig } from "@ashara/llm-gateway";
 import { loadServerEnv } from "@ashara/shared";
 import { AsharaClient } from "../client.js";
-import type { BulkWorkItem, WorkItemLevel } from "../client.js";
 import { monitorProgress } from "../display.js";
 
 // --- Error type ---
 
-type VisionErrorKind = "empty_vision" | "llm_unavailable" | "alignment_failed" | "decomposition_failed" | "server_error";
+type VisionErrorKind = "empty_vision" | "llm_unavailable" | "alignment_failed" | "server_error";
 
 export class VisionError extends Error {
     readonly kind: VisionErrorKind;
@@ -34,28 +31,20 @@ export class VisionError extends Error {
 
 // --- LLM helper: create real LLM from gateway ---
 
-function createLLMFromGateway(gateway: LLMGateway): AlignmentLLM & DecompositionLLM {
-    // Both halves now ride their OWN reliability ladder (mig4-t1 for alignment,
-    // mig-run10 semantic phantom-ref validation for decomposition) -- neither
-    // hits the gateway unwrapped. The old free-text `generate` seam (raw
-    // gateway.complete, naive colon-split parsing) is gone: alignment inference
-    // is a schema-validated structured call, ladder-wrapped here exactly like
-    // decomposition wraps itself internally.
-    const alignmentLLM = createGatewayAlignmentLLM(
+// Alignment rides its own reliability ladder (mig4-t1): a schema-validated
+// structured call, never the gateway unwrapped. Decomposition is the server's
+// (t-server-decomposition-m1); the CLI only aligns.
+function createLLMFromGateway(gateway: LLMGateway): AlignmentLLM {
+    return createGatewayAlignmentLLM(
         withStructuredLadder(gateway, { site: "alignment", attempts: 2, reask: alignmentReask }),
     );
-    const decompositionLLM = createGatewayDecompositionLLM(gateway);
-    return {
-        infer: alignmentLLM.infer,
-        generateStructured: decompositionLLM.generateStructured,
-    };
 }
 
 // Composition-root LLM acquisition (ADR-030). The acquired config always goes
 // through buildGateway: providers configured -> real gateway; zero providers
 // -> NoLLMProvidersConfigured propagates, naming the config sources checked.
 /** @testseam vision.test.ts asserts the fail-closed path with no LLM configured */
-export async function tryCreateLLM(): Promise<AlignmentLLM & DecompositionLLM> {
+export async function tryCreateLLM(): Promise<AlignmentLLM> {
     const serverUrl = process.env.ASHARA_SERVER_URL;
     const apiToken = process.env.ASHARA_API_TOKEN;
 
@@ -140,32 +129,6 @@ function displayQuestions(questions: DirectionQuestion[]): void {
     }
 }
 
-function buildEnrichedNorthStar(
-    visionSummary: string,
-    answers: UserAnswer[],
-): string {
-    const sections = [visionSummary];
-
-    if (answers.length > 0) {
-        const answerContext = answers.map((a) => `${a.question} -> ${a.answer}`).join("\n");
-        sections.push(`User clarifications:\n${answerContext}`);
-    }
-
-    if (sections.length === 1) return visionSummary;
-    return sections.join("\n\n");
-}
-
-// --- Level mapping: decomposition levels -> server levels ---
-
-function toServerLevel(level: WorkItemSpec["level"]): WorkItemLevel {
-    switch (level) {
-        case "epic":
-            return "Epic";
-        case "task":
-            return "Task";
-    }
-}
-
 // --- Alignment helper ---
 
 async function alignVision(visionText: string, llm: AlignmentLLM): Promise<AlignmentResult> {
@@ -177,76 +140,6 @@ async function alignVision(visionText: string, llm: AlignmentLLM): Promise<Align
         const message = err instanceof Error ? err.message : String(err);
         throw new VisionError("alignment_failed", `Alignment failed: ${message}`, { cause: err });
     }
-}
-
-// --- Decomposition helper ---
-
-async function decomposeVision(
-    visionText: string,
-    alignment: AlignmentResult,
-    llm: DecompositionLLM,
-    answers?: UserAnswer[],
-): Promise<DecompositionResult> {
-    const engine = new DecompositionEngine(llm);
-
-    resetIdCounter();
-
-    const enrichedNorthStar = buildEnrichedNorthStar(alignment.visionSummary, answers ?? []);
-
-    const input = {
-        epicTitle: visionText.length > 80 ? visionText.slice(0, 80) : visionText,
-        epicNorthStar: enrichedNorthStar,
-        epicDescription: visionText,
-        conventions: [],
-    };
-
-    try {
-        return await engine.decompose(input);
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new VisionError("decomposition_failed", `Decomposition failed: ${message}`, { cause: err });
-    }
-}
-
-// --- Post work items to server ---
-
-async function postWorkItems(
-    client: AsharaClient,
-    projectId: string,
-    decomposition: DecompositionResult,
-): Promise<void> {
-    // Build the whole hierarchy (epic -> tasks) plus its
-    // dependency edges as ONE transactional request (ADR-029). Items are ordered
-    // parents-before-children and reference each other by decomposition ID
-    // (batch-local tempIds); the server assigns real IDs atomically. A mid-batch
-    // failure rolls the entire plan back instead of leaving a partial graph.
-    const items: BulkWorkItem[] = [];
-
-    items.push({
-        tempId: decomposition.epic.id,
-        level: toServerLevel(decomposition.epic.level),
-        title: decomposition.epic.title,
-        description: decomposition.epic.description,
-        northStar: decomposition.epic.northStar,
-    });
-
-    for (const task of decomposition.tasks) {
-        items.push({
-            tempId: task.id,
-            level: toServerLevel(task.level),
-            title: task.title,
-            description: task.description,
-            parentId: task.parentId,
-            taskSpec: task.taskSpec,
-        });
-    }
-
-    const edges = decomposition.dependencyEdges.map((edge) => ({ from: edge.from, to: edge.to }));
-
-    // The graph travels with the plan that produced it (ADR-052). Before this it
-    // never left the CLI: the server derived a contract from task prose alone and
-    // wrote an empty knowledge graph, so nothing downstream could name the stack.
-    await client.createWorkItemsBulk({ projectId, items, edges, knowledge: decomposition.knowledge });
 }
 
 // --- Main entry ---
@@ -275,7 +168,7 @@ export async function runVision(visionText: string, options: RunVisionOptions): 
     // configuration and on NoLLMProvidersConfigured: alignment requires a real
     // LLM and cannot proceed on a constant answer (Discipline A).
     const llm = await tryCreateLLM();
-    console.log("[ashara] Using real LLM gateway for alignment and decomposition");
+    console.log("[ashara] Using real LLM gateway for alignment");
 
     // 1. Alignment
     console.log("[ashara] Analyzing vision...");
@@ -372,24 +265,12 @@ export async function runVision(visionText: string, options: RunVisionOptions): 
         return 1;
     }
 
-    // 6. Decomposition (with user answers)
-    console.log("[ashara] Decomposing into work items...");
-    const decomposition = await decomposeVision(visionText, alignment, llm, answers);
-    console.log(
-        `[ashara] Created: ${decomposition.tasks.length} tasks`,
-    );
+    // 6. Planning is the server's: the vision just persisted wakes its loop,
+    // which decomposes it into the first plan (t-server-decomposition-m1).
+    // Decomposing here as well would write a second plan for the same project.
+    console.log("[ashara] The server is planning the project from its vision.");
 
-    // 8. Post work items to server
-    console.log("[ashara] Posting work items to server...");
-    try {
-        await postWorkItems(client, projectId, decomposition);
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[ashara] Failed to post work items: ${message}`);
-        return 1;
-    }
-
-    // 9. Monitor progress
+    // 7. Monitor progress
     console.log("[ashara] Execution started. Monitoring...\n");
     const success = await monitorProgress(client);
 

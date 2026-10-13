@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
+import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
@@ -118,39 +119,6 @@ class QuestionIdsMismatch extends Error {
     super(`intake of tender ${tenderId} asked for ${expected} questions to be posted; the store returned ${actual} ids`);
     this.name = "QuestionIdsMismatch";
   }
-}
-
-/**
- * A thrown non-Error as text. JSON.stringify throws on a circular value or a
- * BigInt and returns undefined for a function or symbol; the description must
- * never throw, or the failed attempt it describes would go uncounted.
- */
-function describeNonError(value: unknown): string {
-  let json: string | undefined;
-  try {
-    json = JSON.stringify(value);
-  } catch (stringifyError) {
-    const reason = stringifyError instanceof Error ? stringifyError.message : "unknown reason";
-    const kind = value === null ? "null" : typeof value === "object" ? (value.constructor?.name ?? "object") : typeof value;
-    return `${kind} (not serializable: ${reason})`;
-  }
-  return json ?? String(value);
-}
-
-/** The error chain as one line, every cause's name and message kept. */
-function describeError(err: unknown): string {
-  const parts: string[] = [];
-  let current: unknown = err;
-  while (current !== undefined && parts.length < 8) {
-    if (current instanceof Error) {
-      parts.push(`${current.name}: ${current.message}`);
-      current = current.cause;
-    } else {
-      parts.push(`non-Error thrown: ${describeNonError(current)}`);
-      break;
-    }
-  }
-  return parts.join(" <- caused by ");
 }
 
 function buildIntakePrompt(tender: string): string {
@@ -314,7 +282,7 @@ export class TenderIntake implements LiaisonIntake {
   }
 
   private async fail(tender: OpenTender, err: unknown): Promise<IntakeOutcome> {
-    const error = describeError(err);
+    const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(tender.id, error);
     console.warn(
       `[liaison-intake] tender ${tender.id} (project ${tender.projectId}): attempt ${attempt}/${MAX_INTAKE_ATTEMPTS} failed: ${error}`,

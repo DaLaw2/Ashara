@@ -45,6 +45,13 @@ export const projects = pgTable("projects", {
     .notNull()
     .references(() => clients.id),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
+  // Migration 020: Delivery's first plan of the project. Failed attempts with the
+  // last one's error; the plan transaction stamps first_planned_at, giving up
+  // stamps plan_stopped_at together with status 'blocked'.
+  planAttempts: integer("plan_attempts").notNull().default(0),
+  planLastError: text("plan_last_error"),
+  firstPlannedAt: timestamptz("first_planned_at"),
+  planStoppedAt: timestamptz("plan_stopped_at"),
 });
 
 // ---------------------------------------------------------------------------
@@ -62,9 +69,10 @@ export const workItems = pgTable("work_items", {
   northStar: text("north_star"),
   successCriteria: jsonb("success_criteria"),
   blockedReason: jsonb("blocked_reason"),
-  // Run-scope association (migration 003). Either a runId (UUID from openRun),
-  // "pre-scoping" for rows that existed before this column, or
-  // RUN_SCOPE_AD_HOC for items created outside any orchestrator run (HTTP API).
+  // Run-scope association (migration 003). The column admits a runId (UUID from
+  // openRun), "pre-scoping" for rows that existed before this column, or
+  // RUN_SCOPE_AD_HOC. Today the only writer is the server's first-plan store,
+  // which writes RUN_SCOPE_AD_HOC; no code path writes a runId.
   // No default: every insert site must supply the value explicitly.
   runScope: varchar("run_scope", { length: 50 }).notNull(),
   // No default: every insert names its project (migration 014).
@@ -360,6 +368,8 @@ export const clientMessages = pgTable(
     // Migration 019: failed intake attempts of a tender, with the last one's error.
     intakeAttempts: integer("intake_attempts").notNull().default(0),
     intakeLastError: text("intake_last_error"),
+    // Migration 020: the planning outcome an outbound report tells the client about.
+    reportsOn: varchar("reports_on", { length: 20 }),
   },
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),

@@ -18,13 +18,11 @@ import {
   ProjectRepository,
   ConfigRepository,
   SecretRepository,
-  withPlanningTransaction,
   createProjectWithVision,
   ClientMessageRepository,
   ClientRepository,
   createProjectWithTender,
 } from "@ashara/db";
-import { createBulkPlanWithContract } from "@ashara/planning";
 import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -32,24 +30,6 @@ import type { Database } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
 import { createRoutes } from "./routes.js";
 import type { AppDeps } from "./routes.js";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
-
-function makeCreateBulkPlan(dbHandle: Database): AppDeps["createBulkPlan"] {
-  return (projectId, items, edges, knowledge) =>
-    createBulkPlanWithContract(
-      {
-        withPlanningTransaction: (fn) =>
-          withPlanningTransaction(dbHandle, ({ workItemRepo: w, contractRepo }) =>
-            fn({ workItemRepo: adaptWorkItemRepo(w), contractRepo }),
-          ),
-        runScope: RUN_SCOPE_AD_HOC,
-        projectId,
-      },
-      items,
-      edges,
-      knowledge,
-    );
-}
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;
@@ -148,7 +128,6 @@ beforeAll(async () => {
     configRepo,
     secretStore,
     runner,
-    createBulkPlan: makeCreateBulkPlan(db),
   };
 
   const honoApp = new Hono();
@@ -272,152 +251,6 @@ describe("Work Items", () => {
       status: "Pending",
     });
     expect(res.status).toBe(400);
-  });
-});
-
-// ===========================================================================
-// 3. Work Items Bulk
-// ===========================================================================
-
-describe("Work Items Bulk", () => {
-  // A deliberately non-JS graph: the defect this suite now pins let a Go vision
-  // reach the agent with an empty contract, and "package.json" is what the
-  // downstream readers substituted when nothing stated otherwise.
-  const GO_KNOWLEDGE = {
-    nodes: [
-      { id: "lang-go", kind: "language", label: "Go" },
-      { id: "entry-cli", kind: "entry_point", label: "cmd/jot/main.go", meta: { mountKind: "cli" } },
-    ],
-    edges: [{ from: "entry-cli", to: "lang-go", rel: "uses" }],
-  };
-
-  test("happy path: creates hierarchy + edges atomically, every item in the project", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const projectId = await newProject();
-    const res = await req("POST", "/work-items/bulk", {
-      projectId,
-      items: [
-        { tempId: "epic-1", level: "Epic", title: `bulk-epic-${nonce}` },
-        { tempId: "task-1", level: "Task", title: `bulk-task-1-${nonce}`, parentId: "epic-1" },
-        { tempId: "task-2", level: "Task", title: `bulk-task-2-${nonce}`, parentId: "epic-1" },
-      ],
-      edges: [{ from: "task-2", to: "task-1" }],
-      knowledge: GO_KNOWLEDGE,
-    });
-    expect(res.status).toBe(201);
-
-    const body = await res.json();
-    expect(body.created).toBe(3);
-    const map = body.tempIdToId as Record<string, string>;
-    for (const id of Object.values(map)) createdWorkItemIds.push(id);
-
-    const taskRow = await pool.query("SELECT parent_id FROM work_items WHERE id = $1", [map["task-1"]]);
-    expect(taskRow.rows[0]?.parent_id).toBe(map["epic-1"]);
-
-    const deps = await pool.query(
-      "SELECT 1 FROM dependencies WHERE from_id = $1 AND to_id = $2",
-      [map["task-2"], map["task-1"]],
-    );
-    expect(deps.rowCount).toBe(1);
-
-    const projects = await pool.query(
-      "SELECT DISTINCT project_id FROM work_items WHERE id = ANY($1::uuid[])",
-      [Object.values(map)],
-    );
-    expect(projects.rows).toEqual([{ project_id: projectId }]);
-  });
-
-  test("a batch without a projectId is refused", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const res = await req("POST", "/work-items/bulk", {
-      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-noproj-epic-${nonce}` }],
-      edges: [],
-      knowledge: GO_KNOWLEDGE,
-    });
-    expect(res.status).toBe(400);
-  });
-
-  test("a batch naming an unknown project is refused with nothing persisted", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const res = await req("POST", "/work-items/bulk", {
-      projectId: randomUUID(),
-      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-ghostproj-epic-${nonce}` }],
-      edges: [],
-      knowledge: GO_KNOWLEDGE,
-    });
-    expect(res.status).toBe(404);
-    const survivors = await pool.query(
-      "SELECT count(*)::int AS n FROM work_items WHERE title LIKE $1",
-      [`bulk-ghostproj-%-${nonce}`],
-    );
-    expect(survivors.rows[0].n).toBe(0);
-  });
-
-  // The regression that motivated ADR-052. These items name no HTTP endpoint and
-  // no module path — the normal case for a CLI — which used to return early from
-  // deriveAndWriteContract and drop the graph on the floor. Asserting on the
-  // PERSISTED contract, not on the response, because every layer in between was
-  // individually green while the end-to-end result was an empty graph.
-  test("the posted knowledge graph reaches the persisted contract", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const projectId = await newProject();
-    const res = await req("POST", "/work-items/bulk", {
-      projectId,
-      items: [
-        { tempId: "epic-1", level: "Epic", title: `bulk-kg-epic-${nonce}` },
-        { tempId: "task-1", level: "Task", title: `bulk-kg-task-${nonce}`, parentId: "epic-1" },
-      ],
-      edges: [],
-      knowledge: GO_KNOWLEDGE,
-    });
-    expect(res.status).toBe(201);
-
-    const map = (await res.json()).tempIdToId as Record<string, string>;
-    for (const id of Object.values(map)) createdWorkItemIds.push(id);
-
-    const contract = await pool.query(
-      "SELECT contract FROM project_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1",
-      [projectId],
-    );
-    expect(contract.rowCount).toBe(1);
-    const knowledge = contract.rows[0].contract.knowledge;
-    expect(knowledge.nodes.map((n: { label: string }) => n.label)).toContain("Go");
-  });
-
-  test("a batch with no knowledge graph is refused", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const res = await req("POST", "/work-items/bulk", {
-      projectId: await newProject(),
-      items: [{ tempId: "epic-1", level: "Epic", title: `bulk-nokg-epic-${nonce}` }],
-      edges: [],
-    });
-    expect(res.status).toBe(400);
-
-    const survivors = await pool.query(
-      "SELECT count(*)::int AS n FROM work_items WHERE title LIKE $1",
-      [`bulk-nokg-%-${nonce}`],
-    );
-    expect(survivors.rows[0].n).toBe(0);
-  });
-
-  test("unresolved edge rolls the whole batch back", async () => {
-    const nonce = randomUUID().slice(0, 8);
-    const res = await req("POST", "/work-items/bulk", {
-      projectId: await newProject(),
-      items: [
-        { tempId: "epic-1", level: "Epic", title: `bulk-rb-epic-${nonce}` },
-        { tempId: "task-1", level: "Task", title: `bulk-rb-task-${nonce}`, parentId: "epic-1" },
-      ],
-      edges: [{ from: "task-1", to: "ghost" }],
-      knowledge: GO_KNOWLEDGE,
-    });
-    expect(res.status).toBe(400);
-
-    const survivors = await pool.query(
-      "SELECT count(*)::int AS n FROM work_items WHERE title LIKE $1",
-      [`bulk-rb-%-${nonce}`],
-    );
-    expect(survivors.rows[0].n).toBe(0);
   });
 });
 

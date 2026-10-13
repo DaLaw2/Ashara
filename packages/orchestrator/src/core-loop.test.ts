@@ -1,8 +1,8 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
-import type { LiaisonIntake } from "./acl/engagement-acl.js";
-import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
+import type { LiaisonIntake, LiaisonPlanReports } from "./acl/engagement-acl.js";
+import type { FirstPlanning, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
 import { CoreLoop } from "./core-loop.js";
@@ -82,7 +82,11 @@ function notExercised(label: string): () => never {
   return () => { throw new Error(`${label}: not exercised`); };
 }
 
-function buildDeps(liaisonIntake: LiaisonIntake = { runPending: async () => [] }): CoreLoopDeps {
+function buildDeps(
+  liaisonIntake: LiaisonIntake = { runPending: async () => [] },
+  firstPlanning: FirstPlanning = { runPending: async () => [] },
+  planReports: LiaisonPlanReports = { runPending: async () => [] },
+): CoreLoopDeps {
   const workItemRepo: WorkItemRepository = {
     findById: async () => null,
     save: async () => {},
@@ -116,6 +120,8 @@ function buildDeps(liaisonIntake: LiaisonIntake = { runPending: async () => [] }
     runStateStore,
     failureRouter: {},
     liaisonIntake,
+    firstPlanning,
+    planReports,
   } as unknown as CoreLoopDeps;
 }
 
@@ -251,6 +257,38 @@ describe("CoreLoop tender intake", () => {
       },
     });
     await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/client_messages unreachable/);
+    expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("CoreLoop first plan", () => {
+  test("a cycle runs intake, then first planning, then the Liaison's reports, then dispatch", async () => {
+    const order: string[] = [];
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+      order.push("dispatch");
+      return {
+        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
+        costInfo: { costUsd: 0.01, inputTokens: 1, outputTokens: 1, modelId: "test", attempt: 1 },
+      };
+    });
+    const step = (name: string) =>
+      vi.fn(async () => {
+        order.push(name);
+        return [];
+      });
+
+    await new CoreLoop(buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") })).runCycle();
+
+    expect(order).toEqual(["intake", "plan", "report", "dispatch", "dispatch"]);
+  });
+
+  test("a planning store failure fails the cycle instead of being skipped", async () => {
+    const deps = buildDeps(undefined, {
+      runPending: async () => {
+        throw new Error("projects unreachable");
+      },
+    });
+    await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/projects unreachable/);
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 });

@@ -1,13 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { ProjectId, WorkItemStatus, ProjectKnowledge, StoredBlockedReason } from "@ashara/shared";
-import {
-  createDomainEvent,
-  parseWorkItemStatus,
-  parseProjectId,
-  ProjectKnowledgeSchema,
-  InvalidStatusTransition,
-} from "@ashara/shared";
+import type { WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
+import { parseWorkItemStatus, parseProjectId, InvalidStatusTransition } from "@ashara/shared";
 import {
   WorkItemRepository,
   EventStoreRepository,
@@ -28,8 +22,6 @@ import {
   takeEvents,
 } from "@ashara/planning";
 import type { ContinuousRunner } from "@ashara/orchestrator";
-import { BulkReferenceError } from "@ashara/planning";
-import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
 import { providerApiKeySecretName } from "@ashara/security";
 import {
   listClientMessages,
@@ -57,56 +49,9 @@ export interface AppDeps extends ClientChannelDeps {
   /** Presence only: no route ever reads or returns a secret value. */
   readonly secretStore: { has(name: string): Promise<boolean> };
   readonly runner: Pick<ContinuousRunner, "wake">;
-  /**
-   * Creates a whole bulk plan hierarchy AND its derived ProjectContract in one
-   * transaction (mig9-t5). The composition root wires the transactional facade
-   * (createBulkPlanWithContract); the handler stays thin.
-   */
-  readonly createBulkPlan: (
-    projectId: ProjectId,
-    items: readonly BulkPlanItem[],
-    edges: readonly BulkPlanEdge[],
-    knowledge: ProjectKnowledge,
-  ) => Promise<BulkPlanResult>;
 }
 
 type AppEnv = { Variables: { deps: AppDeps } };
-
-// ---------------------------------------------------------------------------
-// Bulk work-item creation (ADR-029) — the CLI posts an entire plan hierarchy
-// (items + dependency edges) in ONE transactional call instead of sequential,
-// non-atomic HTTP requests. `parentId`/edge endpoints reference a `tempId`
-// local to the batch; the server assigns real IDs and resolves references
-// while creating items in order (parents must precede children).
-// ---------------------------------------------------------------------------
-
-const BulkItemSchema = z.object({
-  tempId: z.string().min(1),
-  level: z.string().min(1),
-  title: z.string().min(1),
-  description: z.string().optional(),
-  parentId: z.string().min(1).optional(),
-  taskSpec: z.record(z.string(), z.unknown()).optional(),
-  northStar: z.string().optional(),
-});
-
-const BulkEdgeSchema = z.object({
-  from: z.string().min(1),
-  to: z.string().min(1),
-});
-
-// `knowledge` is REQUIRED and has no default (ADR-052). It is the project's
-// knowledge graph as the decomposition that produced these items derived it, and
-// it is the only statement anywhere in this request of what the project is built
-// in. A `.default({nodes:[],edges:[]})` here would reinstate exactly the
-// identity-element fail-open this change removes, one layer further out — an old
-// client posting without it must be rejected, not silently planned stackless.
-const BulkCreateSchema = z.object({
-  projectId: z.string().uuid(),
-  items: z.array(BulkItemSchema).min(1),
-  edges: z.array(BulkEdgeSchema).default([]),
-  knowledge: ProjectKnowledgeSchema,
-});
 
 const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
 
@@ -153,47 +98,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
   // Work Items
   // -----------------------------------------------------------------------
-
-  app.post("/work-items/bulk", async (c) => {
-    const { eventStore, createBulkPlan, projectRepo } = c.get("deps");
-
-    const parsed = BulkCreateSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid bulk request", issues: parsed.error.issues }, 400);
-    }
-    const { items, edges, knowledge } = parsed.data;
-    const projectId = parseProjectId(parsed.data.projectId);
-    if (!(await projectRepo.get(projectId))) {
-      return c.json({ error: `project not found: ${projectId}` }, 404);
-    }
-
-    // The whole hierarchy AND its derived ProjectContract commit or roll back as
-    // one unit (mig9-t5). Reference resolution and the contract write happen inside
-    // the transaction, so an unresolved parent/edge OR a contract failure fails
-    // closed: nothing is left persisted.
-    let result: BulkPlanResult;
-    try {
-      result = await createBulkPlan(projectId, items, edges, knowledge);
-    } catch (e) {
-      if (e instanceof BulkReferenceError) {
-        return c.json({ error: e.message }, 400);
-      }
-      throw e;
-    }
-
-    // Audit events published only after the transaction commits (best-effort,
-    // an audit write failure never undoes a committed plan).
-    for (const [, id] of Object.entries(result.tempIdToId)) {
-      const event = createDomainEvent("work_item.created", "server", { work_item_id: id });
-      try {
-        await eventStore.publish(event);
-      } catch (e) {
-        console.warn("failed to publish work_item.created event:", e);
-      }
-    }
-
-    return c.json(result, 201);
-  });
 
   app.get("/work-items", async (c) => {
     const { workItemRepo } = c.get("deps");

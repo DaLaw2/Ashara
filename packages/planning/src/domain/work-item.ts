@@ -27,7 +27,7 @@ export interface WorkItem {
   /**
    * Which run created this item: either a runId (UUID from openRun),
    * "pre-scoping" (migration backfill), or RUN_SCOPE_AD_HOC
-   * (created outside any run, e.g. via the HTTP API). Every insert site
+   * (created without a run id, today a project's first plan). Every insert site
    * must supply this explicitly — there is no default (Discipline A).
    */
   runScope: string;

@@ -9,11 +9,12 @@ import {
 import { amendContractWithRetry } from "./contract-retry.js";
 
 /**
- * Bulk plan creation WITH contract population (mig9-t5, ADR-028/ADR-029). The CLI
- * `ashara vision` initial-epic path posts a whole hierarchy (epic/task + edges)
- * to POST /work-items/bulk; in the SAME transaction as item creation this seeds
- * or amends the project's knowledge graph. Fail-closed: a contract-write failure
- * (or any DB failure) rolls the whole batch back — no partial hierarchy.
+ * Bulk plan creation WITH contract population (mig9-t5, ADR-028/ADR-029). A
+ * project's first plan (FirstPlanner, through the server's first-plan store) is
+ * a whole hierarchy (epic/task + edges); in the SAME transaction as item creation
+ * this seeds or amends the project's knowledge graph. Fail-closed: a
+ * contract-write failure (or any DB failure) rolls the whole batch back — no
+ * partial hierarchy.
  */
 
 export interface BulkPlanItem {
@@ -32,7 +33,7 @@ export interface BulkPlanEdge {
 }
 
 /** A batch reference (parentId or edge endpoint) that names no item in the same batch. */
-export class BulkReferenceError extends Error {
+class BulkReferenceError extends Error {
   constructor(
     readonly reference: string,
     readonly context: "parent" | "edge_from" | "edge_to",

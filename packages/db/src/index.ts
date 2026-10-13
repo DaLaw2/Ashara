@@ -13,6 +13,13 @@ export type { CreatedProject } from "./repositories/project.js";
 export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
 export { recordTenderIntake, closeTenderAfterFailedIntake } from "./repositories/tender-intake.js";
+export {
+  listProjectsAwaitingFirstPlan,
+  withFirstPlanTransaction,
+  recordFirstPlanFailure,
+  stopFirstPlanning,
+} from "./repositories/first-plan.js";
+export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
@@ -27,4 +34,3 @@ export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { NewLlmCall } from "./repositories/llm-call.js";
-export { withPlanningTransaction } from "./repositories/planning-transaction.js";

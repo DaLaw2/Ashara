@@ -20,6 +20,8 @@ export {
 
 export { extractJson } from "./json-utils.js";
 
+export { describeErrorChain } from "./error-chain.js";
+
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
 
