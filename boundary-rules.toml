@@ -55,3 +55,7 @@ allow = ["shared"]
 [workplace]
 # ADR-075 Workplace: the attempt loop in Z0 (each model turn through llm-gateway) with every tool on a cell.
 allow = ["shared", "llm-gateway", "execution-infra"]
+
+[organization]
+# ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Imports only the Shared Kernel.
+allow = ["shared"]
