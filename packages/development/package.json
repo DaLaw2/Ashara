@@ -8,10 +8,6 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "scripts": {
-    "dev": "bun run src/index.ts",
-    "start": "bun run src/index.ts"
-  },
   "dependencies": {
     "@ashara/llm-gateway": "*",
     "@ashara/memory": "*",

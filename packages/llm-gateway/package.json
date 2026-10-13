@@ -8,9 +8,6 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "scripts": {
-    "dev": "bun run src/index.ts"
-  },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.21",
     "@ai-sdk/openai": "4.0.20",
