@@ -33,3 +33,9 @@ export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { NewLlmCall } from "./repositories/llm-call.js";
+export {
+  MIGRATIONS_DIR,
+  MigrationDriftError,
+  assertMigrationsCurrent,
+  runMigrations,
+} from "./migrations.js";

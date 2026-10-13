@@ -23,6 +23,9 @@ import {
   ClientRepository,
   ClientLoginFailureRepository,
   createProjectWithTender,
+  assertMigrationsCurrent,
+  MIGRATIONS_DIR,
+  MigrationDriftError,
 } from "@ashara/db";
 import {
   CoreLoop,
@@ -112,6 +115,24 @@ async function main(): Promise<void> {
   // can be read (ADR-075 C2). Then the database URL from env or policy default.
   const masterKey = loadServerMasterKey(process.env);
   const databaseUrl = loadDatabaseUrl();
+  // Fail closed on schema drift: a database that ran a different draft of a
+  // migration otherwise surfaces only as a runtime query error.
+  try {
+    await assertMigrationsCurrent(databaseUrl, MIGRATIONS_DIR);
+  } catch (err: unknown) {
+    if (err instanceof MigrationDriftError) {
+      throw new ServerStartupRefused(
+        `The database schema does not match migrations/: ${err.message}`,
+        `schema_migrations in ${databaseUrl.replace(/\/\/[^@/]*@/, "//***@")}`,
+        err.kind === "hash_mismatch"
+          ? `Repair the schema by hand to match the committed ${err.filename ?? "file"}, then set its ` +
+            `schema_migrations.content_sha256 to ${err.fileSha256 ?? "the file's sha256"}; never edit an applied migration.`
+          : "Run `just migrate` against this database.",
+        { cause: err },
+      );
+    }
+    throw err;
+  }
   const db = createDb(databaseUrl);
   const secretStore = new SecretStore(new SecretRepository(db), masterKey);
   console.log(`Secret store: master key ${masterKey.id}`);
