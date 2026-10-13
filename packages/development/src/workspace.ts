@@ -1,10 +1,10 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
-import { access, mkdir, readdir, realpath, rm } from "node:fs/promises";
+import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { loadSkipDirs } from "@ashara/shared";
 import { freshWorktreeRepo, initHostRepo, runHostGit, targetRepo, type HostRepo } from "./host-git.js";
+import { listTreeDir, treeHasDirectory } from "./tree-read.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -186,50 +186,64 @@ export async function cleanupWorkdir(workDir: string, targetProjectPath?: string
   }
 }
 
-// Bridge set: used only when the project has no .gitignore. loadSkipDirs is the
-// primary mechanism; this is the last-resort fallback so a project without a
-// gitignore still gets a usable tree listing.
-const FALLBACK_SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", "coverage", ".next", ".turbo", ".cache",
-  "target", "__pycache__", "vendor", "venv", ".venv",
-]);
+interface TreeChild {
+  readonly name: string;
+  readonly isDirectory: boolean;
+}
 
+type ListChildren = (relDir: string) => Promise<readonly TreeChild[]>;
+
+/** Children of every directory named by git's path list, which names files only. */
+async function gitListing(rootDir: string): Promise<ListChildren> {
+  const { stdout } = await runHostGit(targetRepo(rootDir), ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  const dirs = new Map<string, Map<string, boolean>>();
+  for (const path of new Set(stdout.split("\0").filter((p) => p.length > 0))) {
+    const segments = path.split("/");
+    for (let i = 0; i < segments.length; i++) {
+      const parent = segments.slice(0, i).join("/");
+      const children = dirs.get(parent) ?? new Map<string, boolean>();
+      dirs.set(parent, children);
+      children.set(segments[i], i < segments.length - 1 || children.get(segments[i]) === true);
+    }
+  }
+  return async (relDir) => [...(dirs.get(relDir) ?? new Map<string, boolean>())].map(([name, isDirectory]) => ({ name, isDirectory }));
+}
+
+/**
+ * The tree as an agent should see it, with no knowledge of any stack's directory names. In a git
+ * repository the names come from git itself (`ls-files --cached --others --exclude-standard`): the
+ * project's own ignore rules, in full gitignore syntax, decide what is left out, and Z0 opens
+ * nothing in the cell-writable tree. A target that is not yet a repository has declared nothing to
+ * ignore, so every entry is listed, read through tree-read.ts without following any link; the
+ * maxFiles cap bounds the output either way.
+ */
 export async function buildFileTree(
   rootDir: string,
   maxDepth: number,
   maxFiles: number,
 ): Promise<string> {
-  const skipDirs = await loadSkipDirs(rootDir).catch(() => FALLBACK_SKIP_DIRS);
+  const list: ListChildren = (await treeHasDirectory(rootDir, ".git"))
+    ? await gitListing(rootDir)
+    : async (relDir) =>
+        ((await listTreeDir(rootDir, relDir)) ?? []).map((e) => ({ name: e.name, isDirectory: e.kind === "directory" }));
   const paths: string[] = [];
 
-  async function walk(dir: string, depth: number): Promise<void> {
+  async function walk(relDir: string, depth: number): Promise<void> {
     if (depth > maxDepth || paths.length >= maxFiles) return;
-
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const entry of entries) {
+    const children = [...(await list(relDir))].sort((a, b) => a.name.localeCompare(b.name));
+    for (const child of children) {
       if (paths.length >= maxFiles) return;
-
-      const fullPath = join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        if (skipDirs.has(entry.name) || entry.name.startsWith(".")) continue;
-        paths.push(relative(rootDir, fullPath) + "/");
-        await walk(fullPath, depth + 1);
+      const rel = relDir === "" ? child.name : `${relDir}/${child.name}`;
+      if (child.isDirectory) {
+        paths.push(rel + "/");
+        await walk(rel, depth + 1);
       } else {
-        paths.push(relative(rootDir, fullPath));
+        paths.push(rel);
       }
     }
   }
 
-  await walk(rootDir, 0);
+  await walk("", 0);
   return paths.join("\n");
 }
 

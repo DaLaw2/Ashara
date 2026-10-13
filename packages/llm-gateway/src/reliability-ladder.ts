@@ -103,7 +103,7 @@ interface LadderModelAttempts {
  * Terminal typed failure: every validated attempt failed on every tier. Carries
  * enough context to diagnose the failure from the message alone (Discipline C).
  */
-class StructuredOutputExhausted extends GatewayError {
+export class StructuredOutputExhausted extends GatewayError {
   readonly site: string;
   readonly perModel: readonly LadderModelAttempts[];
   readonly lastRawExcerpt: string;

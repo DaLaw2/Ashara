@@ -1,6 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { runHostGit, targetRepo } from "../host-git.js";
+import { readTreeFile } from "../tree-read.js";
 import type { GateResult } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -13,6 +12,7 @@ import type { GateResult } from "./types.js";
 
 const ENTRY_POINT_REWRITE_MIN_LINES = 10;
 const ENTRY_POINT_RETENTION_THRESHOLD = 0.3;
+const ENTRY_POINT_MAX_BYTES = 16 * 1024 * 1024;
 
 function nonBlankTrimmedLines(content: string): string[] {
   return content
@@ -73,10 +73,10 @@ export async function checkEntryPointRewrite(
 
     const { stdout: oldContent } = await runHostGit(targetRepo(targetProjectPath), ["show", `${preSyncHead}:${entryPath}`]);
 
-    let newContent: string;
-    try {
-      newContent = await readFile(join(targetProjectPath, entryPath), "utf-8");
-    } catch {
+    // The checkout is cell-writable: a symlink or an out-of-tree path throws TreePathRefused,
+    // which the catch below turns into a failed gate.
+    const synced = await readTreeFile(targetProjectPath, entryPath, ENTRY_POINT_MAX_BYTES);
+    if (synced.kind === "absent") {
       return {
         passed: false,
         output:
@@ -85,6 +85,13 @@ export async function checkEntryPointRewrite(
           "edit the entry point, do not delete or rewrite it.",
       };
     }
+    if (synced.truncated) {
+      return {
+        passed: false,
+        output: `entry-point-rewrite check failed: ${entryPath} exceeds ${ENTRY_POINT_MAX_BYTES} bytes after the sync and was not compared`,
+      };
+    }
+    const newContent = synced.text;
 
     const oldLines = nonBlankTrimmedLines(oldContent);
     const newLines = nonBlankTrimmedLines(newContent);

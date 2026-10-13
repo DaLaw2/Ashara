@@ -17,6 +17,7 @@ export {
   recordFirstPlanFailure,
   stopFirstPlanning,
 } from "./repositories/first-plan.js";
+export { latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
 export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";

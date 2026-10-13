@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ashara/llm-gateway": "*",
+    "@ashara/organization": "*",
     "@ashara/shared": "*",
     "zod": "4.4.3"
   }

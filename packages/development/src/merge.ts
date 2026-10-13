@@ -1,7 +1,10 @@
-import { access } from "node:fs/promises";
-import { join } from "node:path";
 import type { TaskDescriptor } from "./execution-service.js";
 import { runHostGit, targetRepo } from "./host-git.js";
+
+/** execFile's rejection carries the child's stderr as a string; anything else carries none. */
+function stderrOf(e: unknown): string {
+  return typeof e === "object" && e !== null && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
+}
 
 export type MergeResult =
   | { readonly status: "clean" }
@@ -69,7 +72,7 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
     try {
       await runHostGit(targetRepo(targetPath), args);
     } catch (e) {
-      const stderr = e instanceof Error && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
+      const stderr = stderrOf(e);
       const message = e instanceof Error ? e.message : String(e);
       return {
         status: "error",
@@ -87,7 +90,7 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     return { status: "clean" };
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
-    const stderr = (e as { stderr?: string }).stderr ?? "";
+    const stderr = stderrOf(e);
     console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
     const files = await getConflictingFiles(targetPath);
     if (files.length > 0) return { status: "conflict", files };
@@ -117,7 +120,8 @@ export async function abortMerge(targetPath: string): Promise<void> {
 
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
 export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
-  const mergeHeadExists = await access(join(targetPath, ".git", "MERGE_HEAD")).then(
+  // Asked of git rather than of the filesystem: Z0 reads a target by path only through tree-read.ts.
+  const mergeHeadExists = await runHostGit(targetRepo(targetPath), ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
     () => true,
     () => false,
   );

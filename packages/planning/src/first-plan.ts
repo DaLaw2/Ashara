@@ -1,10 +1,12 @@
 import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
+import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
+import type { WorkKind } from "@ashara/organization";
 import { describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
-import type { DecompositionInput, DecompositionResult, WorkItemSpec } from "./decomposition-types.js";
+import type { DecompositionInput, DecompositionResult, TaskSpec, WorkItemSpec } from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's first plan of a project (story s-liaison-intake-m1, ADR-075): the
@@ -30,6 +32,15 @@ interface ProjectAwaitingPlan {
   readonly userAnswers: unknown;
   readonly planAttempts: number;
   readonly planLastError: string | null;
+  /** The rows of the project's latest roster revision as stored; parsed by Organization. */
+  readonly rosterRows: unknown;
+}
+
+/** Who owns a planned task: its kind of work and the roster role holding the capability that kind needs. */
+interface TaskOwnership {
+  readonly tempId: string;
+  readonly workKind: WorkKind;
+  readonly ownerRoleId: string;
 }
 
 interface FirstPlanWrite {
@@ -37,6 +48,8 @@ interface FirstPlanWrite {
   readonly items: readonly BulkPlanItem[];
   readonly edges: readonly BulkPlanEdge[];
   readonly knowledge: ProjectKnowledge;
+  /** One entry per Task item; an Epic has no owner. */
+  readonly owners: readonly TaskOwnership[];
 }
 
 type FirstPlanCommit =
@@ -157,8 +170,25 @@ function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
   }
 }
 
+/** The kinds of work a first plan holds, each with the role that owns it. */
+type PlanOwners = Readonly<Record<"environment" | "implementation", { readonly id: string }>>;
+
+/**
+ * The kind of work a planned task is. The scaffold sets the project up, which is
+ * the environment's work until t-sprint0-replaces-scaffold replaces it; every
+ * decomposed task is implementation.
+ */
+function workKindOf(origin: TaskSpec["origin"]): "environment" | "implementation" {
+  switch (origin) {
+    case "scaffold":
+      return "environment";
+    case "decomposition":
+      return "implementation";
+  }
+}
+
 /** The decomposition as one bulk plan: the epic first, its tasks after, edges by temp id. */
-function toWrite(projectId: ProjectId, result: DecompositionResult): FirstPlanWrite {
+function toWrite(projectId: ProjectId, result: DecompositionResult, owners: PlanOwners): FirstPlanWrite {
   const items: BulkPlanItem[] = [
     {
       tempId: result.epic.id,
@@ -177,7 +207,11 @@ function toWrite(projectId: ProjectId, result: DecompositionResult): FirstPlanWr
     })),
   ];
   const edges = result.dependencyEdges.map((edge) => ({ from: edge.from, to: edge.to }));
-  return { projectId, items, edges, knowledge: result.knowledge };
+  const taskOwners = result.tasks.map((task): TaskOwnership => {
+    const workKind = workKindOf(task.taskSpec.origin);
+    return { tempId: task.id, workKind, ownerRoleId: owners[workKind].id };
+  });
+  return { projectId, items, edges, knowledge: result.knowledge, owners: taskOwners };
 }
 
 interface FirstPlannerDeps {
@@ -206,7 +240,11 @@ export class FirstPlanner implements FirstPlanning {
       try {
         outcomes.push(await this.plan(project));
       } catch (err) {
-        if (!(err instanceof PlanFailureUnrecorded)) throw err;
+        // A roster that cannot be read or cannot assign an owner is the project's
+        // own record; planning again would not change it.
+        const projectRecord =
+          err instanceof PlanFailureUnrecorded || err instanceof RosterUnreadable || err instanceof WorkKindOwnerUnresolved;
+        if (!projectRecord) throw err;
         outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
       }
     }
@@ -229,10 +267,17 @@ export class FirstPlanner implements FirstPlanning {
       return { kind: "stopped", projectId, attempts: project.planAttempts };
     }
 
+    // Owners are resolved before any LLM call: a plan nobody can own is not attempted.
+    const roster = parseStoredRoster(projectId, project.rosterRows);
+    const owners: PlanOwners = {
+      environment: ownerOf(roster, "environment"),
+      implementation: ownerOf(roster, "implementation"),
+    };
+
     let write: FirstPlanWrite;
     let commit: FirstPlanCommit;
     try {
-      write = toWrite(projectId, await this.decompose(project));
+      write = toWrite(projectId, await this.decompose(project), owners);
       commit = await this.deps.store.writeFirstPlan(write);
     } catch (err) {
       return this.fail(project, err);

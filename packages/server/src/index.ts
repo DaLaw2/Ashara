@@ -41,6 +41,7 @@ import {
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
 import { ClientStops, PlanReports, TenderIntake } from "@ashara/engagement";
+import { RosterDerivation } from "@ashara/organization";
 import type {
   AgentStaffing,
   StackDerivationScope,
@@ -85,6 +86,7 @@ import { loadWebClientAssets } from "./web-client.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
+import { createRosterStore } from "./roster-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -380,6 +382,11 @@ async function main(): Promise<void> {
     liaisonIntake: new TenderIntake({
       llm: llmGateway,
       store: createIntakeStore(db),
+      onAttempt: ladderAttemptSink,
+    }),
+    rosterDerivation: new RosterDerivation({
+      llm: llmGateway,
+      store: createRosterStore(db),
       onAttempt: ladderAttemptSink,
     }),
     firstPlanning: new FirstPlanner({

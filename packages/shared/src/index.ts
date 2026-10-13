@@ -39,8 +39,6 @@ export { ProjectFrameSchema, ProjectFrameUnresolvable } from "./project-frame.js
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
 
-export { loadSkipDirs } from "./gitignore.js";
-
 
 export type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
 export {

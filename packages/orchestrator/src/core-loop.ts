@@ -1,5 +1,6 @@
 import type { RunState } from "@ashara/shared";
 import type { IntakeOutcome } from "./acl/engagement-acl.js";
+import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
@@ -13,6 +14,16 @@ function logIntake(outcome: IntakeOutcome): void {
     console.log(
       `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
         `${outcome.questions} question(s) posted`,
+    );
+  }
+}
+
+/** A blocked project is logged at warn by the roster step itself, with the violations. */
+function logRoster(outcome: RosterOutcome): void {
+  if (outcome.kind === "recorded") {
+    console.log(
+      `[roster] project ${outcome.projectId}: roster revision ${outcome.revision} recorded, ` +
+        `${outcome.roles.length} role(s): ${outcome.roles.join(", ")}`,
     );
   }
 }
@@ -64,7 +75,11 @@ export class CoreLoop {
       // with dispatch at the budget cap, since intake is an LLM call too.
       for (const outcome of await deps.liaisonIntake.runPending()) logIntake(outcome);
 
-      // Then a first plan for each project that has a vision and no work items,
+      // Then a roster for each project with vision v1 and none: first planning
+      // requires one, since every planned task gets its owning role.
+      for (const outcome of await deps.rosterDerivation.runPending()) logRoster(outcome);
+
+      // Then a first plan for each project that has a vision, a roster and no work items,
       // and the Liaison's report on each recorded planning outcome. Both before
       // gating, so a plan written this cycle can be dispatched this cycle.
       // A project whose own record is bad is blocked inside each step, logged at

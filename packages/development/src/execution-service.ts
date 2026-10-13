@@ -1,5 +1,3 @@
-import { join } from "node:path";
-import { readFile } from "node:fs/promises";
 import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/execution-infra";
 import { CellStartFailed, CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
@@ -8,19 +6,17 @@ import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelope
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { Outcome } from "@ashara/workplace";
 import { runAttempt } from "@ashara/workplace";
-import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
+import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
 import { DispatchRecords, cellAsRunner, toAgentOutput } from "./cell-execution.js";
+import { buildContextMap } from "./context-map.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 import { resolveProjectFrame } from "./project-frame.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps } from "./gates/finalize.js";
-import { readVerifyConfig } from "./verify-config.js";
 import { runVerifyCore } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
-import { readManifestContext } from "./dispatch-utils.js";
 import {
-  buildFileTree,
   cleanupWorkdir,
   commitPartialWork,
   createWorkdir,
@@ -595,7 +591,7 @@ export class DevelopmentService {
     };
 
     const contractEntryPoint = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-    const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined);
+    const contextMap = await buildContextMap(targetProjectPath, contractEntryPoint ?? undefined);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
     // createAgentBrief: the compiler checks the shape at this construction site,
@@ -630,92 +626,6 @@ export class DevelopmentService {
     const source = this.deps.contractSource;
     if (!source) return null;
     return await source.loadForTask(taskId);
-  }
-
-  /**
-   * Renders what can be OBSERVED about the target tree. An empty tree returns an
-   * explicit statement of that emptiness rather than "" (ADR-046): "" renders as
-   * no context section at all, which the agent cannot distinguish from a normal
-   * project whose context happened to be omitted — so it proceeds on its prior.
-   * Saying the directory is empty is what makes the frame the only thing known.
-   */
-  private async buildContextMap(
-    targetProjectPath: string | null,
-    contractEntryPointPath?: string,
-  ): Promise<string> {
-    if (!targetProjectPath) return EMPTY_WORKDIR_CONTEXT_MAP;
-
-    const sections: string[] = ["# Project Context"];
-
-    try {
-      const tree = await buildFileTree(targetProjectPath, 4, 200);
-      if (tree) {
-        sections.push("## File Tree\n" + tree);
-      }
-    } catch (e: unknown) {
-      console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    let hasNodeManifest = false;
-    try {
-      const pkgPath = join(targetProjectPath, "package.json");
-      const pkgContent = await readFile(pkgPath, "utf-8");
-      hasNodeManifest = true;
-      // contract-erasing: package.json has a well-known shape (npm spec)
-      const pkg = JSON.parse(pkgContent) as Record<string, unknown>;
-      // contract-erasing: dependencies/devDependencies are Record<string, string>
-      const deps = pkg.dependencies as Record<string, unknown> | undefined;
-      const devDeps = pkg.devDependencies as Record<string, unknown> | undefined; // contract-erasing
-      const depsStr = deps ? Object.keys(deps).join(", ") : "";
-      const devDepsStr = devDeps ? Object.keys(devDeps).join(", ") : "";
-      if (depsStr || devDepsStr) {
-        const depLines = ["## Dependencies"];
-        if (depsStr) depLines.push(`Runtime: ${depsStr}`);
-        if (devDepsStr) depLines.push(`Dev: ${devDepsStr}`);
-        sections.push(depLines.join("\n"));
-      }
-    } catch (e: unknown) {
-      console.warn(`[buildContextMap] Failed to read package.json in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // Target-generality fallback (kl-t2/Q5 gap): package.json is Node-specific.
-    // readManifestContext reads ALL non-dot, non-binary root-level files —
-    // no hardcoded manifest list (Target Generality).
-    if (!hasNodeManifest) {
-      try {
-        const manifestContent = await readManifestContext(targetProjectPath);
-        if (manifestContent) {
-          sections.push(`## Project Manifests\n${manifestContent}`);
-        }
-      } catch (e: unknown) {
-        console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    if (contractEntryPointPath) {
-      try {
-        const content = await readFile(join(targetProjectPath, contractEntryPointPath), "utf-8");
-        const head = content.split("\n").slice(0, 50).join("\n");
-        sections.push(`## Entry Point (${contractEntryPointPath})\n\`\`\`\n${head}\n\`\`\``);
-      } catch (e: unknown) {
-        console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-
-    try {
-      const verifyConfig = await readVerifyConfig(targetProjectPath);
-      if (verifyConfig.checks.length > 0) {
-        const lines = ["## Verification Checks (verify.toml)"];
-        for (const check of verifyConfig.checks) {
-          lines.push(`- ${check.name}: \`${check.command}\``);
-        }
-        sections.push(lines.join("\n"));
-      }
-    } catch (e: unknown) {
-      console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
   }
 
   private async buildKnowledgeContext(task: TaskDescriptor, spec: TaskSpec): Promise<string> {

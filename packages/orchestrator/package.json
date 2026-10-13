@@ -12,6 +12,7 @@
     "@ashara/db": "*",
     "@ashara/development": "*",
     "@ashara/engagement": "*",
+    "@ashara/organization": "*",
     "@ashara/planning": "*",
     "@ashara/shared": "*"
   }

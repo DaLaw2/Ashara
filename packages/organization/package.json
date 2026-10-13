@@ -9,6 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ashara/llm-gateway": "*",
     "@ashara/shared": "*",
     "zod": "4.4.3"
   }

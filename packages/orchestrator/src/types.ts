@@ -8,6 +8,7 @@ import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItemRepository, FailureRouter, FirstPlanning } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports } from "./acl/engagement-acl.js";
+import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
 import type { RunStateStore } from "./run-state.js";
 
@@ -140,7 +141,9 @@ export interface CoreLoopDeps {
   readonly clientStops: LiaisonClientStops;
   /** The Liaison's tender intake, run each cycle before work-item gating. */
   readonly liaisonIntake: LiaisonIntake;
-  /** Delivery's first plan of each project awaiting one, run after intake. */
+  /** Organization's roster for each project with vision v1 and none, run after intake. */
+  readonly rosterDerivation: RosterDerivationStep;
+  /** Delivery's first plan of each project awaiting one (and holding a roster), run after the roster step. */
   readonly firstPlanning: FirstPlanning;
   /** The Liaison's reports on recorded planning outcomes, run after planning. */
   readonly planReports: LiaisonPlanReports;

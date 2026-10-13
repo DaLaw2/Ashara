@@ -83,6 +83,28 @@ describe("validateRoster", () => {
     ]);
   });
 
+  it("rejects two roles sharing an id", () => {
+    const twin = { ...role("implementer", "author-checks"), name: "reviewer" };
+    expect(validateRoster(roster(liaison, platform, implementer, twin))).toEqual([
+      {
+        kind: "duplicate-role-id",
+        id: "implementer",
+        roles: [
+          { id: "implementer", name: "implementer" },
+          { id: "implementer", name: "reviewer" },
+        ],
+      },
+    ]);
+  });
+
+  it("rejects a role with no capabilities rather than reading it as harmless", () => {
+    // @ts-expect-error the type forbids it; the runtime must still fail closed
+    const idle: Role = { id: "idle", name: "idle", responsibility: "nothing", capabilities: [] };
+    expect(validateRoster(roster(liaison, platform, implementer, checkAuthor, idle))).toEqual([
+      { kind: "role-without-capabilities", role: { id: "idle", name: "idle" } },
+    ]);
+  });
+
   it("rejects duplicate role names, ignoring case and surrounding space", () => {
     const twin = { ...role("implementer-2", "write-source"), name: " Implementer " };
     expect(validateRoster(roster(liaison, platform, implementer, twin, checkAuthor))).toEqual([

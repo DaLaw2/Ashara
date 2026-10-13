@@ -91,6 +91,10 @@ export const workItems = pgTable("work_items", {
   // dispatch seam so the retry bound survives a crashed agent or discarded output —
   // decoupled from task_cost_history billing. See CoreLoop.processTask.
   dispatchCount: integer("dispatch_count").notNull().default(0),
+  // Who owns the item (migration 031): its kind of work and the roster role
+  // holding the capability that kind needs. Both or neither; only on a Task.
+  workKind: text("work_kind"),
+  ownerRoleId: uuid("owner_role_id"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
@@ -190,6 +194,29 @@ export const visionDocuments = pgTable(
   },
   (t) => ({
     projectVersionUnique: unique("vision_documents_project_version_unique").on(t.projectId, t.version),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// roster_roles (migration 031): a project's roster, one row per role, append-only
+// ---------------------------------------------------------------------------
+
+export const rosterRoles = pgTable(
+  "roster_roles",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id),
+    revision: integer().notNull(),
+    roleId: uuid("role_id").notNull(),
+    name: text().notNull(),
+    responsibility: text().notNull(),
+    capabilities: text().array().notNull(),
+    visionVersion: integer("vision_version").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqueRole: unique("roster_roles_unique_role").on(t.projectId, t.revision, t.roleId),
   }),
 );
 

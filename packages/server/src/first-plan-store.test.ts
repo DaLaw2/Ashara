@@ -18,11 +18,14 @@ import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { LlmCallLedger } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { RosterDerivation } from "@ashara/organization";
+import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
 import type { ProjectId } from "@ashara/shared";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 import { createIntakeStore } from "./intake-store.js";
+import { createRosterStore } from "./roster-store.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -153,7 +156,36 @@ function reports(): PlanReports {
   return new PlanReports(ours);
 }
 
-async function projectWithVision(userAnswers: unknown[] = []): Promise<ProjectId> {
+const ROSTER = {
+  roles: [
+    { name: "Liaison", responsibility: "Talks to the studio owner.", capabilities: ["client-comms"] },
+    { name: "Platform", responsibility: "Defines how the booking page is built and tested.", capabilities: ["write-environment"] },
+    { name: "Implementer", responsibility: "Builds the booking page.", capabilities: ["write-source"] },
+    { name: "Check author", responsibility: "Writes the checks the booking page must pass.", capabilities: ["author-checks"] },
+  ],
+};
+
+/** One developer who also writes the checks that judge them: validateRoster rejects it. */
+const SELF_JUDGING_ROSTER = {
+  roles: [
+    ROSTER.roles[0],
+    ROSTER.roles[1],
+    { name: "Developer", responsibility: "Builds and checks the page.", capabilities: ["write-source", "author-checks"] },
+  ],
+};
+
+function rosterStep(): RosterDerivation {
+  const store = createRosterStore(db);
+  const ours: RosterStore = {
+    ...store,
+    projectsAwaitingRoster: async () =>
+      (await store.projectsAwaitingRoster()).filter((p) => ourProjects.has(p.projectId)),
+  };
+  return new RosterDerivation({ llm: gateway, store: ours });
+}
+
+/** A project with vision v1 and, unless told otherwise, a roster recorded without a model call. */
+async function projectWithVision(userAnswers: unknown[] = [], withRoster = true): Promise<ProjectId> {
   const project = await new ProjectRepository(db).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
   ourProjects.add(project.id);
   await new VisionRepository(db).create(project.id, {
@@ -163,7 +195,46 @@ async function projectWithVision(userAnswers: unknown[] = []): Promise<ProjectId
     inferences: [{ statement: "Bookings need no account.", rationale: "Walk-in customers book.", status: "Inferred" }],
     userAnswers,
   });
+  if (withRoster) {
+    const [first, ...rest] = ROSTER.roles.map((role) => ({
+      id: randomUUID(),
+      name: role.name,
+      responsibility: role.responsibility,
+      capabilities: z.tuple([z.enum(["client-comms", "write-source", "author-checks", "write-environment"])]).parse(role.capabilities),
+    }));
+    if (first === undefined) throw new Error("ROSTER has no roles");
+    const recorded = await createRosterStore(db).recordRoster({
+      projectId: project.id,
+      visionVersion: 1,
+      revision: 1,
+      roles: [first, ...rest],
+    });
+    expect(recorded).toBe("recorded");
+  }
   return project.id;
+}
+
+const RosterRowSchema = z.object({ roleId: z.string(), name: z.string(), capabilities: z.array(z.string()), revision: z.number() });
+
+async function rosterOf(projectId: ProjectId) {
+  const result = await db.execute(
+    sql`SELECT role_id AS "roleId", name, capabilities, revision FROM roster_roles WHERE project_id = ${projectId} ORDER BY name`,
+  );
+  return z.array(RosterRowSchema).parse(result.rows);
+}
+
+/** Each task's title with its work kind and the name of the role that owns it; an epic shows none. */
+async function ownersOf(projectId: ProjectId): Promise<string[]> {
+  const result = await db.execute(sql`
+    SELECT w.level, w.title, w.work_kind AS "workKind", r.name AS "owner"
+    FROM work_items w
+    LEFT JOIN roster_roles r ON r.project_id = w.project_id AND r.role_id = w.owner_role_id
+    WHERE w.project_id = ${projectId}`);
+  return z
+    .array(z.object({ level: z.string(), title: z.string(), workKind: z.string().nullable(), owner: z.string().nullable() }))
+    .parse(result.rows)
+    .map((row) => `${row.level} ${row.title}: ${row.workKind ?? "-"} / ${row.owner ?? "-"}`)
+    .sort();
 }
 
 const WorkItemRowSchema = z.object({ id: z.string(), level: z.string(), parentId: z.string().nullable() });
@@ -242,6 +313,7 @@ afterAll(async () => {
   const ours = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM project_contracts WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${ours})`);
@@ -297,6 +369,51 @@ describe("first plan", () => {
     expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
   });
 
+  test("each task is owned by the role holding the capability its kind of work needs", async () => {
+    decompositionModel();
+    const projectId = await projectWithVision();
+
+    await planner().runPending();
+
+    const epicTitle = (await ownersOf(projectId)).find((row) => row.startsWith("Epic "));
+    expect(epicTitle).toMatch(/: - \/ -$/);
+    expect((await ownersOf(projectId)).filter((row) => row.startsWith("Task "))).toEqual(
+      [
+        `Task ${CLASS_LIST}: implementation / Implementer`,
+        `Task ${BOOKING_FORM}: implementation / Implementer`,
+        `Task ${SCAFFOLD_TITLE}: environment / Platform`,
+      ].sort(),
+    );
+  });
+
+  test("a plan that would leave a task without an owner writes nothing", async () => {
+    const projectId = await projectWithVision();
+    const store = createFirstPlanStore(db);
+
+    const write = store.writeFirstPlan({
+      projectId,
+      items: [
+        { tempId: "epic-1", level: "Epic", title: "Epic" },
+        { tempId: "task-1", level: "Task", title: "Task", parentId: "epic-1" },
+      ],
+      edges: [],
+      knowledge: KNOWLEDGE,
+      owners: [],
+    });
+
+    await expect(write).rejects.toMatchObject({ name: "FirstPlanTaskUnowned" });
+    expect(await workItemsOf(projectId)).toHaveLength(0);
+  });
+
+  test("a project with a vision and no roster is not planned", async () => {
+    const mock = decompositionModel();
+    const projectId = await projectWithVision([], false);
+
+    expect(await planner().runPending()).toEqual([]);
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    expect(await workItemsOf(projectId)).toHaveLength(0);
+  });
+
   test("a planned project is never planned again", async () => {
     decompositionModel();
     const projectId = await projectWithVision();
@@ -338,6 +455,7 @@ describe("first plan", () => {
       ],
       edges: [{ from: "task-1", to: "ghost" }],
       knowledge: KNOWLEDGE,
+      owners: [],
     });
 
     await expect(write).rejects.toMatchObject({ name: "BulkReferenceError", reference: "ghost" });
@@ -377,6 +495,63 @@ describe("first plan", () => {
   });
 });
 
+describe("roster", () => {
+  test("a valid roster from vision v1 is recorded with its four capability holders", async () => {
+    stubModel({ doGenerate: jsonResult(ROSTER) });
+    const projectId = await projectWithVision([], false);
+
+    const outcomes = await rosterStep().runPending();
+
+    expect(outcomes).toEqual([
+      { kind: "recorded", projectId, revision: 1, roles: ROSTER.roles.map((r) => r.name) },
+    ]);
+    const rows = await rosterOf(projectId);
+    expect(rows.map((r) => `${r.name}: ${r.capabilities.join(",")}`)).toEqual([
+      "Check author: author-checks",
+      "Implementer: write-source",
+      "Liaison: client-comms",
+      "Platform: write-environment",
+    ]);
+    expect(new Set(rows.map((r) => r.revision))).toEqual(new Set([1]));
+    expect(await callSitesOf(projectId)).toEqual(["roster"]);
+    // A project with a roster is not derived again.
+    expect(await rosterStep().runPending()).toEqual([]);
+  });
+
+  test("a roster that breaks a rule is re-asked with the violation named, and the valid one recorded", async () => {
+    let calls = 0;
+    const mock = stubModel({ doGenerate: async () => jsonResult(calls++ === 0 ? SELF_JUDGING_ROSTER : ROSTER) });
+    const projectId = await projectWithVision([], false);
+
+    expect((await rosterStep().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+
+    expect(mock.doGenerateCalls).toHaveLength(2);
+    expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt)).toContain(
+      'Role \\"Developer\\" holds both \\"write-source\\" and \\"author-checks\\"',
+    );
+    expect((await rosterOf(projectId)).map((r) => r.name)).toEqual(["Check author", "Implementer", "Liaison", "Platform"]);
+  });
+
+  test("a model that never gives a valid roster blocks the project with the violations, and nothing is planned", async () => {
+    stubModel({ doGenerate: jsonResult(SELF_JUDGING_ROSTER) });
+    const projectId = await projectWithVision([], false);
+
+    const outcomes = await rosterStep().runPending();
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(await rosterOf(projectId)).toEqual([]);
+    const row = await db.execute(
+      sql`SELECT status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,
+    );
+    const [blocked] = z.array(z.object({ status: z.string(), errorClass: z.string(), reason: z.string() })).parse(row.rows);
+    expect(blocked?.status).toBe("blocked");
+    expect(blocked?.errorClass).toBe("RosterDerivationExhausted");
+    expect(blocked?.reason).toContain('Role "Developer" holds both "write-source" and "author-checks"');
+    expect(await rosterStep().runPending()).toEqual([]);
+    expect(await planner().runPending()).toEqual([]);
+  });
+});
+
 describe("tender to first plan", () => {
   test("a tender taken in by the Liaison is planned by Delivery and reported to the client", async () => {
     const tenderBody = "Booking page for my two pottery studios.";
@@ -395,8 +570,26 @@ describe("tender to first plan", () => {
       { version: 1, visionText: tenderBody },
     ]);
 
+    // Delivery does not plan a project Organization has not staffed.
+    decompositionModel();
+    expect(await planner().runPending()).toEqual([]);
+
+    const rosterModel = stubModel({ doGenerate: jsonResult(ROSTER) });
+    expect((await rosterStep().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
+    // The roster is derived from vision v1: the tender and the assumptions intake recorded.
+    const rosterPrompt = JSON.stringify(rosterModel.doGenerateCalls[0]?.prompt);
+    expect(rosterPrompt).toContain(tenderBody);
+    expect(rosterPrompt).toContain("A class has twelve seats.");
+
     const decomposition = decompositionModel();
     expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 3 }]);
+    expect((await ownersOf(projectId)).filter((row) => row.startsWith("Task "))).toEqual(
+      [
+        `Task ${CLASS_LIST}: implementation / Implementer`,
+        `Task ${BOOKING_FORM}: implementation / Implementer`,
+        `Task ${SCAFFOLD_TITLE}: environment / Platform`,
+      ].sort(),
+    );
     // Delivery plans on the assumptions the open questions adopted, not only the unasked one.
     const prompts = decomposition.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     for (const adopted of ["The harbour studio opens first.", "A class has twelve seats.", "Bookings need no account."]) {
@@ -406,7 +599,7 @@ describe("tender to first plan", () => {
     expect(items.filter((i) => i.level === "Epic")).toHaveLength(1);
     expect(items.filter((i) => i.level === "Task")).toHaveLength(3);
     expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
-    expect(new Set(await callSitesOf(projectId))).toEqual(new Set(["liaison-intake", "decomposition"]));
+    expect(new Set(await callSitesOf(projectId))).toEqual(new Set(["liaison-intake", "roster", "decomposition"]));
 
     expect(await reports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
     const outbound = await outboundOf(projectId);

@@ -1,6 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, TomlDate, TomlError } from "smol-toml";
+import { readTreeFile } from "./tree-read.js";
+
+const VERIFY_TOML_MAX_BYTES = 1024 * 1024;
 
 interface VerifyCheck {
   readonly name: string;
@@ -17,23 +19,14 @@ export class VerifyConfigParseError extends Error {
   readonly key: string | undefined;
   readonly reason: string;
 
-  constructor(filePath: string, key: string | undefined, reason: string) {
+  constructor(filePath: string, key: string | undefined, reason: string, options?: ErrorOptions) {
     const loc = key ? ` key "${key}"` : "";
-    super(`Invalid verify.toml (${filePath})${loc}: ${reason}`);
+    super(`Invalid verify.toml (${filePath})${loc}: ${reason}`, options);
     this.name = "VerifyConfigParseError";
     this.filePath = filePath;
     this.key = key;
     this.reason = reason;
   }
-}
-
-function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    err.code === "ENOENT"
-  );
 }
 
 function parseToml(raw: string, filePath: string) {
@@ -50,18 +43,28 @@ function parseToml(raw: string, filePath: string) {
   }
 }
 
+/**
+ * `projectDir` is a cell-writable tree: a symlinked verify.toml is refused by tree-read.ts and
+ * surfaces as a VerifyConfigParseError whose `cause` is the TreePathRefused.
+ */
 export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig> {
   const filePath = join(projectDir, "verify.toml");
 
   let raw: string;
   try {
-    raw = await readFile(filePath, "utf-8");
+    const read = await readTreeFile(projectDir, "verify.toml", VERIFY_TOML_MAX_BYTES);
+    if (read.kind === "absent") return { checks: [] };
+    if (read.truncated) {
+      throw new VerifyConfigParseError(filePath, undefined, `file exceeds ${VERIFY_TOML_MAX_BYTES} bytes`);
+    }
+    raw = read.text;
   } catch (err: unknown) {
-    if (isEnoent(err)) return { checks: [] };
+    if (err instanceof VerifyConfigParseError) throw err;
     throw new VerifyConfigParseError(
       filePath,
       undefined,
       `cannot read file: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
     );
   }
 

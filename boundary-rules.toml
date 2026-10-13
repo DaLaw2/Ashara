@@ -13,13 +13,15 @@ allow = []
 [orchestrator]
 # planning + development + engagement reachable ONLY through acl/ (enforced by restrict below)
 # db is infrastructure, not a BC boundary
-allow = ["shared", "db", "planning", "development", "engagement"]
+allow = ["shared", "db", "planning", "development", "engagement", "organization"]
 restrict.planning = ["src/acl/*.ts"]
 restrict.development = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
+restrict.organization = ["src/acl/*.ts"]
 
 [planning]
-allow = ["shared", "llm-gateway"]
+# ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind).
+allow = ["shared", "llm-gateway", "organization"]
 
 [development]
 # ADR-075: Execution runs every task on a cell (execution-infra) through the Workplace attempt loop.
@@ -55,5 +57,7 @@ allow = ["shared"]
 allow = ["shared", "llm-gateway", "execution-infra"]
 
 [organization]
-# ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Imports only the Shared Kernel.
-allow = ["shared"]
+# ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Roster derivation is
+# Organization's language, so its structured call on the `roster` site lives here, through llm-gateway
+# like Engagement's and Delivery's own sites.
+allow = ["shared", "llm-gateway"]

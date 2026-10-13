@@ -1,5 +1,6 @@
 import {
   ProjectRepository,
+  latestRosterRoles,
   listDuePlanReports,
   listProjectsAwaitingFirstPlan,
   postPlanReport,
@@ -11,16 +12,27 @@ import type { DbTransaction, createDb } from "@ashara/db";
 import type { PlanReportStore } from "@ashara/engagement";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, type ProjectId } from "@ashara/shared";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
-/** Delivery's first-plan store over projects, vision_documents and work_items. */
+/** An owner was named for a temp id the plan did not write. */
+class OwnedTaskNotPlanned extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly tempId: string,
+  ) {
+    super(`first plan of project ${projectId}: an owner names "${tempId}", which is not an item of the plan`);
+    this.name = "OwnedTaskNotPlanned";
+  }
+}
+
+/** Delivery's first-plan store over projects, vision_documents, roster_roles and work_items. */
 export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlanStore {
   const projects = new ProjectRepository(db);
   return {
     async projectsAwaitingPlan() {
       const rows = await listProjectsAwaitingFirstPlan(db);
-      return rows.map((row) => ({
+      return Promise.all(rows.map(async (row) => ({
         projectId: row.projectId,
         projectName: row.projectName,
         visionVersion: row.vision.version,
@@ -31,13 +43,15 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
         userAnswers: row.vision.userAnswers,
         planAttempts: row.planAttempts,
         planLastError: row.planLastError,
-      }));
+        rosterRows: await latestRosterRoles(db, row.projectId),
+      })));
     },
     async writeFirstPlan(write) {
       // The bulk-plan path runs inside the locked first-plan transaction, so the
-      // items, their edges, the contract and the planned stamp commit together.
-      const result = await withFirstPlanTransaction(db, write.projectId, ({ workItemRepo, contractRepo }) =>
-        createBulkPlanWithContract(
+      // items, their edges, their owners, the contract and the planned stamp
+      // commit together.
+      const result = await withFirstPlanTransaction(db, write.projectId, async ({ workItemRepo, contractRepo }) => {
+        const plan = await createBulkPlanWithContract(
           {
             withPlanningTransaction: (fn) => fn({ workItemRepo: adaptWorkItemRepo(workItemRepo), contractRepo }),
             // The loop's run id is not handed to planning, so the first plan is written
@@ -49,8 +63,14 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
           write.items,
           write.edges,
           write.knowledge,
-        ),
-      );
+        );
+        for (const owner of write.owners) {
+          const id = plan.tempIdToId[owner.tempId];
+          if (id === undefined) throw new OwnedTaskNotPlanned(write.projectId, owner.tempId);
+          await workItemRepo.assignOwner(id, owner.workKind, owner.ownerRoleId);
+        }
+        return plan;
+      });
       return result.kind === "written" ? { kind: "written", created: result.value.created } : result;
     },
     recordFailedAttempt: (projectId, error) => recordFirstPlanFailure(db, projectId, error),

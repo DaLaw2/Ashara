@@ -8,9 +8,9 @@
  * derivation is once per project rather than once per task.
  */
 
-import { readdir } from "node:fs/promises";
 import type { ProjectContract, ProjectFrame, ProjectFrameAttempt, ProjectId, WorkItemId } from "@ashara/shared";
 import { ProjectFrameSchema, ProjectFrameUnresolvable, nodeLabels } from "@ashara/shared";
+import { listTreeDir } from "./tree-read.js";
 
 // MARKER_LABELS deleted: a hardcoded {filename → language} table gave 9 known
 // stacks a shortcut while every unseen stack (Zig, Elixir, COBOL) fell through
@@ -134,7 +134,12 @@ async function observedManifestLabels(
   }
   let entries: readonly string[];
   try {
-    entries = await readdir(targetProjectPath);
+    const listed = await listTreeDir(targetProjectPath);
+    if (listed === null) {
+      attempted.push({ source: "observed-manifest", reason: `${targetProjectPath} does not exist` });
+      return [];
+    }
+    entries = listed.map((e) => e.name);
   } catch (e) {
     attempted.push({
       source: "observed-manifest",

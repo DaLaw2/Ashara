@@ -5,7 +5,18 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import { FirstPlanner } from "./first-plan.js";
 import type { FirstPlanStore } from "./first-plan.js";
 
-function awaiting(projectId: ProjectId, planLastError: string | null) {
+function roleRow(roleId: string, name: string, capabilities: string[]) {
+  return { revision: 1, visionVersion: 1, roleId, name, responsibility: `${name} duties`, capabilities };
+}
+
+const ROSTER_ROWS = [
+  roleRow("00000000-0000-4000-8000-0000000000a1", "Liaison", ["client-comms"]),
+  roleRow("00000000-0000-4000-8000-0000000000a2", "Platform", ["write-environment"]),
+  roleRow("00000000-0000-4000-8000-0000000000a3", "Implementer", ["write-source"]),
+  roleRow("00000000-0000-4000-8000-0000000000a4", "Check author", ["author-checks"]),
+];
+
+function awaiting(projectId: ProjectId, planLastError: string | null, planAttempts = 3, rosterRows: unknown = ROSTER_ROWS) {
   return {
     projectId,
     projectName: "Studio booking",
@@ -15,34 +26,43 @@ function awaiting(projectId: ProjectId, planLastError: string | null) {
     scopeBoundaries: [],
     inferences: [],
     userAnswers: [],
-    planAttempts: 3,
+    planAttempts,
     planLastError,
+    rosterRows,
   };
 }
+
+const notReached = async (): Promise<never> => {
+  throw new Error("must not be reached");
+};
+
+type Blocked = Array<{ projectId: ProjectId; cause: ProjectBlockCause }>;
+
+function storeWith(projects: ReturnType<typeof awaiting>[], blocked: Blocked, stopped: ProjectId[] = []): FirstPlanStore {
+  return {
+    projectsAwaitingPlan: async () => projects,
+    writeFirstPlan: notReached,
+    recordFailedAttempt: notReached,
+    stopPlanning: async (projectId) => {
+      stopped.push(projectId);
+    },
+    blockProject: async (projectId, cause) => {
+      blocked.push({ projectId, cause });
+      return "blocked";
+    },
+  };
+}
+
+const llm: ContextualLlm = { forCall: () => ({ generateStructured: notReached }) };
 
 describe("FirstPlanner per-project failure", () => {
   test("a project at its cap with no recorded error is blocked and the next project is still stopped", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const lying = parseProjectId("00000000-0000-4000-8000-000000000020");
     const capped = parseProjectId("00000000-0000-4000-8000-000000000021");
-    const blocked: Array<{ projectId: ProjectId; cause: ProjectBlockCause }> = [];
+    const blocked: Blocked = [];
     const stopped: ProjectId[] = [];
-    const notReached = async (): Promise<never> => {
-      throw new Error("must not be reached");
-    };
-    const store: FirstPlanStore = {
-      projectsAwaitingPlan: async () => [awaiting(lying, null), awaiting(capped, "Error: decomposition failed")],
-      writeFirstPlan: notReached,
-      recordFailedAttempt: notReached,
-      stopPlanning: async (projectId) => {
-        stopped.push(projectId);
-      },
-      blockProject: async (projectId, cause) => {
-        blocked.push({ projectId, cause });
-        return "blocked";
-      },
-    };
-    const llm: ContextualLlm = { forCall: () => ({ generateStructured: notReached }) };
+    const store = storeWith([awaiting(lying, null), awaiting(capped, "Error: decomposition failed")], blocked, stopped);
 
     const outcomes = await new FirstPlanner({ llm, store }).runPending();
 
@@ -51,5 +71,19 @@ describe("FirstPlanner per-project failure", () => {
       { projectId: lying, cause: { errorClass: "PlanFailureUnrecorded", reason: expect.stringMatching(/^PlanFailureUnrecorded: /) } },
     ]);
     expect(stopped).toEqual([capped]);
+  });
+
+  test("a roster that gives implementation work two owners blocks the project before any model call", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000022");
+    const twoImplementers = [...ROSTER_ROWS, roleRow("00000000-0000-4000-8000-0000000000a5", "Second", ["write-source"])];
+    const blocked: Blocked = [];
+    const store = storeWith([awaiting(projectId, null, 0, twoImplementers)], blocked);
+
+    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(blocked[0]?.cause.errorClass).toBe("RosterUnreadable");
+    expect(blocked[0]?.cause.reason).toMatch(/"write-source".*several roles \("Implementer", "Second"\)/);
   });
 });

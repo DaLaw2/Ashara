@@ -16,6 +16,7 @@
     "@ashara/finance": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/orchestrator": "*",
+    "@ashara/organization": "*",
     "@ashara/planning": "*",
     "@ashara/security": "*",
     "@ashara/shared": "*",

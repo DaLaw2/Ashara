@@ -22,6 +22,38 @@ class ProjectNotAwaitingPlan extends Error {
   }
 }
 
+/** A first plan would commit a task with no owner, or one owned by a role outside the project's latest roster. */
+class FirstPlanTaskUnowned extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly taskIds: readonly string[],
+  ) {
+    super(
+      `cannot stamp the first plan of project ${projectId}: task(s) ${taskIds.join(", ")} have no owner ` +
+        `from the project's latest roster`,
+    );
+    this.name = "FirstPlanTaskUnowned";
+  }
+}
+
+/** The project's tasks whose owner is missing or not a role of its latest roster revision. */
+async function tasksWithoutRosterOwner(db: DbHandle, projectId: ProjectId): Promise<string[]> {
+  const rows = await db
+    .select({ id: workItems.id })
+    .from(workItems)
+    .where(
+      and(
+        eq(workItems.projectId, projectId),
+        eq(workItems.level, "Task"),
+        sql`(${workItems.ownerRoleId} IS NULL OR NOT EXISTS (
+          SELECT 1 FROM roster_roles r
+          WHERE r.project_id = ${projectId} AND r.role_id = ${workItems.ownerRoleId}
+            AND r.revision = (SELECT MAX(l.revision) FROM roster_roles l WHERE l.project_id = ${projectId})))`,
+      ),
+    );
+  return rows.map((row) => row.id);
+}
+
 interface ProjectAwaitingPlanRow {
   readonly projectId: ProjectId;
   readonly projectName: string;
@@ -37,6 +69,8 @@ const awaitingPlan = () =>
     isNull(projects.planStoppedAt),
     sql`EXISTS (SELECT 1 FROM vision_documents v WHERE v.project_id = projects.id)`,
     sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = projects.id)`,
+    // First planning requires a roster (migration 031): every task gets an owner.
+    sql`EXISTS (SELECT 1 FROM roster_roles r WHERE r.project_id = projects.id)`,
   );
 
 /**
@@ -107,6 +141,8 @@ export async function withFirstPlanTransaction<T>(
 
     const [anyItem] = await tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.projectId, projectId)).limit(1);
     if (!anyItem) throw new ProjectNotAwaitingPlan(projectId, "stamp a first plan that wrote no work items");
+    const unowned = await tasksWithoutRosterOwner(tx, projectId);
+    if (unowned.length > 0) throw new FirstPlanTaskUnowned(projectId, unowned);
     await tx.update(projects).set({ firstPlannedAt: sql`now()` }).where(eq(projects.id, projectId));
     return { kind: "written", value };
   });

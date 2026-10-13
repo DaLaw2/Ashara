@@ -11,6 +11,20 @@ import { workItems, dependencies } from "../schema.js";
 
 type WorkItemRow = typeof workItems.$inferSelect;
 
+/** An owner was named for a work item that does not exist or already has one. */
+class WorkItemOwnerNotAssignable extends Error {
+  constructor(
+    readonly workItemId: string,
+    readonly workKind: string,
+    readonly ownerRoleId: string,
+  ) {
+    super(
+      `cannot assign ${workKind} owner ${ownerRoleId} to work item ${workItemId}: no such item, or it already has an owner`,
+    );
+    this.name = "WorkItemOwnerNotAssignable";
+  }
+}
+
 export class WorkItemRepository {
   constructor(private readonly db: DbHandle) {}
 
@@ -41,6 +55,19 @@ export class WorkItemRepository {
   async create(item: typeof workItems.$inferInsert) {
     const [row] = await this.db.insert(workItems).values(item).returning();
     return this.validateRow(row);
+  }
+
+  /**
+   * Records who owns a task (migration 031): its kind of work and the owning
+   * role. Only an item with no owner yet takes one; an owner is never replaced.
+   */
+  async assignOwner(id: string, workKind: string, ownerRoleId: string): Promise<void> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ workKind, ownerRoleId })
+      .where(and(eq(workItems.id, id), sql`${workItems.ownerRoleId} IS NULL`))
+      .returning({ id: workItems.id });
+    if (!row) throw new WorkItemOwnerNotAssignable(id, workKind, ownerRoleId);
   }
 
   async findById(id: string) {

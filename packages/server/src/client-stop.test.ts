@@ -10,6 +10,7 @@ import {
   DEFAULT_DATABASE_URL,
   listDuePlanReports,
   listProjectsAwaitingFirstPlan,
+  listProjectsAwaitingRoster,
   ProjectRepository,
   WorkItemRepository,
 } from "@ashara/db";
@@ -111,6 +112,7 @@ afterAll(async () => {
   const ours = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
   await db.execute(sql`DELETE FROM dev_sessions WHERE task_id IN (SELECT id FROM work_items WHERE project_id IN (${ours}))`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   // Reports reply to the stop they answer: delete replies before what they reply to.
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours}) AND in_reply_to IS NOT NULL`);
@@ -165,41 +167,52 @@ describe("a client's stop", () => {
     expect(await liaison().runPending()).toEqual([]);
   });
 
-  test("a stop not yet consumed already keeps its project out of gating, intake, first planning and reports", async () => {
+  test("a stop not yet consumed already keeps its project out of gating, intake, roster, first planning and reports", async () => {
     // Each reader is shown a project it would admit, so each exclusion is the stop's doing.
     const dispatchable = await projectWith([["Write the parser", "Pending"]]);
-    const { project: awaiting } = await createProjectWithTender(
-      db,
-      clientId,
-      `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`,
-      "Plan it.",
-    );
-    ourProjects.add(awaiting.id);
+    const withVision = async (): Promise<ProjectId> => {
+      const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Plan it.");
+      ourProjects.add(project.id);
+      await db.execute(sql`
+        INSERT INTO vision_documents (project_id, version, vision_text, summary) VALUES (${project.id}, 1, 'v', 'v')`);
+      return project.id;
+    };
+    const unstaffed = await withVision();
+    const awaiting = await withVision();
     await db.execute(sql`
-      INSERT INTO vision_documents (project_id, version, vision_text, summary) VALUES (${awaiting.id}, 1, 'v', 'v')`);
+      INSERT INTO roster_roles (project_id, revision, role_id, name, responsibility, capabilities, vision_version)
+      VALUES (${awaiting}, 1, ${randomUUID()}, 'Implementer', 'Builds it.', ARRAY['write-source'], 1)`);
     const planned = await projectWith([["Ship it", "Pending"]]);
     await db.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${planned.projectId}`);
 
     const gated = async () => (await gate()).map((item) => item.id);
     const tenders = async () => (await createIntakeStore(db).openTenders()).map((tender) => tender.projectId);
+    const toStaff = async () => (await listProjectsAwaitingRoster(db)).map((row) => row.projectId);
     const toPlan = async () => (await listProjectsAwaitingFirstPlan(db)).map((row) => row.projectId);
     const toReport = async () => (await listDuePlanReports(db)).map((row) => row.projectId);
     expect(await gated()).toContain(dispatchable.taskIds[0]);
-    expect(await tenders()).toContain(awaiting.id);
-    expect(await toPlan()).toContain(awaiting.id);
+    expect(await tenders()).toContain(awaiting);
+    expect(await toStaff()).toContain(unstaffed);
+    expect(await toPlan()).toContain(awaiting);
     expect(await toReport()).toContain(planned.projectId);
 
-    for (const projectId of [dispatchable.projectId, awaiting.id, planned.projectId]) {
+    for (const projectId of [dispatchable.projectId, unstaffed, awaiting, planned.projectId]) {
       await sendStop(projectId, "Stop now.");
     }
 
     expect(await gated()).not.toContain(dispatchable.taskIds[0]);
-    expect(await tenders()).not.toContain(awaiting.id);
-    expect(await toPlan()).not.toContain(awaiting.id);
+    expect(await tenders()).not.toContain(awaiting);
+    expect(await toStaff()).not.toContain(unstaffed);
+    expect(await toPlan()).not.toContain(awaiting);
     expect(await toReport()).not.toContain(planned.projectId);
 
-    // The next cycle's stop step then stops all three.
-    expect((await liaison().runPending()).map((outcome) => outcome.kind)).toEqual(["stopped", "stopped", "stopped"]);
+    // The next cycle's stop step then stops all four.
+    expect((await liaison().runPending()).map((outcome) => outcome.kind)).toEqual([
+      "stopped",
+      "stopped",
+      "stopped",
+      "stopped",
+    ]);
   });
 
   test("a blocked project the client stops keeps its blocked cause; nothing merged is said plainly", async () => {

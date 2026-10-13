@@ -2,6 +2,7 @@ import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { LiaisonClientStops, LiaisonIntake, LiaisonPlanReports } from "./acl/engagement-acl.js";
+import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
@@ -87,6 +88,7 @@ function buildDeps(
   firstPlanning: FirstPlanning = { runPending: async () => [] },
   planReports: LiaisonPlanReports = { runPending: async () => [] },
   clientStops: LiaisonClientStops = { runPending: async () => [] },
+  rosterDerivation: RosterDerivationStep = { runPending: async () => [] },
 ): CoreLoopDeps {
   const workItemRepo: WorkItemRepository = {
     findById: async () => null,
@@ -124,6 +126,7 @@ function buildDeps(
     failureRouter: {},
     clientStops,
     liaisonIntake,
+    rosterDerivation,
     firstPlanning,
     planReports,
   } as unknown as CoreLoopDeps;
@@ -266,7 +269,7 @@ describe("CoreLoop tender intake", () => {
 });
 
 describe("CoreLoop first plan", () => {
-  test("a cycle runs client stops, then intake, first planning, the Liaison's reports, then dispatch", async () => {
+  test("a cycle runs client stops, then intake, the roster, first planning, the Liaison's reports, then dispatch", async () => {
     const order: string[] = [];
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       order.push("dispatch");
@@ -282,12 +285,16 @@ describe("CoreLoop first plan", () => {
       });
 
     await new CoreLoop(
-      buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, {
-        runPending: step("stop"),
-      }),
+      buildDeps(
+        { runPending: step("intake") },
+        { runPending: step("plan") },
+        { runPending: step("report") },
+        { runPending: step("stop") },
+        { runPending: step("roster") },
+      ),
     ).runCycle();
 
-    expect(order).toEqual(["stop", "intake", "plan", "report", "dispatch", "dispatch"]);
+    expect(order).toEqual(["stop", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
   test("a planning store failure fails the cycle instead of being skipped", async () => {

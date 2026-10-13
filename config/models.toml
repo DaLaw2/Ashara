@@ -62,6 +62,7 @@
 "agent-runner" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "decomposition" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "liaison-intake" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"roster" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "stack-derivation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "escalation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 
@@ -83,6 +84,9 @@
 # The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
 # the deleted CLI alignment call.
 "liaison-intake" = "deepseek-flash"
+# Roster derivation (s-team-roster-m1): one structured call per tender, the
+# same shape and size as decomposition's.
+"roster" = "deepseek-flash"
 # Stack derivation (ADR-046) is a once-per-project label extraction -- cheap,
 # and keeping it on DeepSeek preserves
 # the Anthropic reserve stated above.
