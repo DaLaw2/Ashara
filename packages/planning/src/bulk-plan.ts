@@ -16,17 +16,16 @@ import {
 
 /**
  * Bulk plan creation WITH contract population (mig9-t5, ADR-028/ADR-029). The CLI
- * `ashara vision` initial-epic path posts a whole hierarchy (epic/story/feature/
- * task + edges) to POST /work-items/bulk. Before this, that path created the work
- * items but wrote NO ProjectContract (the mig8-t2 first-decomposition coverage
- * hole), so a CLI-initiated project started contract-less until leaf-story
- * decomposition eventually fired.
+ * `ashara vision` initial-epic path posts a whole hierarchy (epic/task + edges)
+ * to POST /work-items/bulk. Before this, that path created the work items but
+ * wrote NO ProjectContract (the mig8-t2 first-decomposition coverage hole), so a
+ * CLI-initiated project started contract-less.
  *
  * This moves the bulk logic behind a planning facade so the HTTP handler stays
  * thin, and — in the SAME transaction as item creation — derives the contract
  * fragment the explicit bulk items imply (endpoints/modules from task titles,
- * descriptions and deliverables; intent endpoints from story/feature text) via the
- * SAME deterministic machinery decomposition uses (contract-derivation.ts), then
+ * descriptions and deliverables) via the deterministic machinery in
+ * contract-derivation.ts, then
  * seeds/merges it. No LLM call: the independent spec-derivation pass (mig9-t1)
  * stays in the planning loop where it fires once per project. Fail-closed: a
  * contract-write failure (or any DB failure) rolls the whole batch back — no
@@ -142,14 +141,12 @@ export async function createBulkPlanWithContract(
 /**
  * Derives the contract fragment the created hierarchy implies and seeds it
  * (writeContract) if the project has no contract, else merges it (amendContract) —
- * the SAME seed-once-then-amend protocol decomposition uses. Keyed by the single
+ * the seed-once-then-amend protocol. Keyed by the single
  * project ROOT (the item with no parent); a batch without exactly one root skips
  * the contract (nothing else in the system knows how to key it).
  *
  * The write is gated on WHAT THIS CALL ACTUALLY ADDS — knowledge included — never
- * on the endpoint/module fragment alone. This mirrors the fix ADR-046 already
- * applied to the story path's `writeOrAmendContract`; the copy here was left
- * behind. The old gate returned early whenever the prose regexes found no HTTP
+ * on the endpoint/module fragment alone (ADR-046). The old gate returned early whenever the prose regexes found no HTTP
  * method+path and no module path, which is the NORMAL case for a CLI, a library,
  * or a kernel — so those projects reached `writeContract` with a valid knowledge
  * graph in hand and discarded it on the way past.

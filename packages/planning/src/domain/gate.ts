@@ -18,23 +18,6 @@ export class GateKeeper {
       .filter((item) => item.status === "Pending" && item.level === "Task")
       .filter((item) => isMet(resolution, item.id));
   }
-
-  static async findStoriesNeedingDecomposition(repo: WorkItemRepository): Promise<WorkItem[]> {
-    const items = await repo.listAll();
-    const graph = await DependencyGraph.load(repo);
-    const resolution = graph.resolveDependencies(buildDependencyContext(items));
-
-    const needsDecomp: WorkItem[] = [];
-    for (const story of items) {
-      if (story.status !== "Pending" || story.level !== "Story") continue;
-      if (!isMet(resolution, story.id)) continue;
-      const children = await repo.findChildren(story.id);
-      if (children.length === 0) {
-        needsDecomp.push(story);
-      }
-    }
-    return needsDecomp;
-  }
 }
 
 /**

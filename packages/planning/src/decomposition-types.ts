@@ -1,11 +1,9 @@
 import { z } from "zod";
 import type { ProjectKnowledge } from "@ashara/shared";
 
-export type DecompositionLevel = "epic" | "story" | "feature" | "task";
-
 export interface WorkItemSpec {
     readonly id: string;
-    readonly level: DecompositionLevel;
+    readonly level: "epic" | "task";
     readonly title: string;
     readonly description: string;
     readonly northStar?: string;
@@ -14,9 +12,9 @@ export interface WorkItemSpec {
     readonly dependsOn: string[];
     /**
      * Detailed task metadata the LLM was prompted for (TaskOutputSchema) and
-     * `resolveTasks` carries through unchanged. Absent for epics/stories/features
-     * and for the synthetic scaffold/wiring tasks, which have no LLM output —
-     * `generateTaskSpec` falls back to regex derivation in those cases.
+     * `resolveTasks` carries through unchanged. Absent for the epic and for the
+     * synthetic scaffold task, which has no LLM output — `generateTaskSpec`
+     * falls back to regex derivation in those cases.
      */
     readonly goal?: string;
     readonly endState?: string;
@@ -53,112 +51,29 @@ export interface PriorEpicResult {
     readonly deliveredCapabilities: string[];
 }
 
-/**
- * A minimal summary of a work item that already exists in the project graph
- * (sibling stories' tasks, or anything already created), shown to decomposition
- * prompts so they do not re-emit prerequisites they cannot otherwise see.
- */
-export interface ExistingWorkItemSummary {
-    readonly id: string;
-    readonly title: string;
-    readonly level: string;
-    readonly status: string;
-}
-
 export interface DecompositionResult {
     readonly epic: WorkItemSpec;
-    readonly stories: WorkItemSpec[];
-    readonly features: WorkItemSpec[];
     readonly tasks: Array<WorkItemSpec & { readonly taskSpec: TaskSpec }>;
     readonly dependencyEdges: Array<{ readonly from: string; readonly to: string }>;
     /**
      * The project's knowledge graph (ADR-038), derived by the SAME call that
-     * produced the tasks. Required, and deliberately so: the previous producer
-     * lived in `decomposeLeafStories`, behind a Story-level gate that
-     * `maxDepth: 2` holds permanently shut, while the only other injection point
-     * (`createBulkPlanWithContract`) took it as an optional dependency with zero
-     * suppliers and substituted `{nodes:[],edges:[]}`. Both halves typechecked;
-     * together they made the contract graph structurally unfillable. A required
-     * field on the one type every decomposition path already returns removes the
+     * produced the tasks. Required, and deliberately so: an earlier producer sat
+     * behind a gate that never opened, while `createBulkPlanWithContract` took it
+     * as an optional dependency with zero suppliers and substituted
+     * `{nodes:[],edges:[]}`, which made the contract graph structurally
+     * unfillable. A required field on the type decomposition returns removes the
      * identity element rather than guarding against it (ADR-048 cause A).
      */
     readonly knowledge: ProjectKnowledge;
 }
 
-/**
- * Raised when decomposition cannot state what the project is built in. Fails the
- * whole decomposition closed (Discipline A) rather than emitting tasks alongside
- * an empty graph: an empty graph seeds an empty contract, an empty contract states
- * nothing about the target, and every downstream reader then substitutes its own
- * prior — which is precisely how Runs 36 and 37 built `index.js` + `package.json`
- * for a Go vision.
- */
-export class KnowledgeDerivationError extends Error {
-    readonly context: { readonly visionTitle: string; readonly reason: string };
-
-    constructor(visionTitle: string, reason: string) {
-        super(
-            `Cannot derive the project knowledge graph for vision "${visionTitle}": ${reason}. ` +
-            `Decomposition is refused: tasks without a stated language or runtime leave every ` +
-            `downstream consumer (contract, scaffold, brief, verification) to guess the stack.`,
-        );
-        this.name = "KnowledgeDerivationError";
-        this.context = { visionTitle, reason };
-    }
-}
-
 export interface DecompositionConfig {
     readonly maxTasksPerEpic: number;
-    readonly maxTasksPerStory: number;
-    /**
-     * Depth of the decomposition tree: 2 = Epic -> Tasks directly (skips
-     * Story/Feature layers), 3 = Epic -> Stories -> Tasks, 4 = full
-     * Epic -> Stories -> Features -> Tasks. Forced to 2 by default (coarse
-     * vertical-slice strategy, granularity-debate.md) so a vision produces
-     * tasks instead of the 40-item explosion a full 4-layer fan-out
-     * produces. This is authoritative over any per-vision complexity
-     * classification (see DecompositionEngine.decomposeInternal).
-     */
-    readonly maxDepth: number;
 }
 
 export const DEFAULT_DECOMPOSITION_CONFIG: DecompositionConfig = {
     maxTasksPerEpic: 15,   // was 5 -- budget is the real limit (economy termination)
-    maxTasksPerStory: 8,   // was 4
-    maxDepth: 2,
 };
-
-/**
- * Reads decomposition cap overrides from system_settings (key-value store).
- * Falls back to DEFAULT_DECOMPOSITION_CONFIG for any key absent from the DB.
- * The `getSetting` dependency mirrors ConfigRepository.getSetting so this
- * stays free of a db package import (the Planning BC does not depend on @ashara/db).
- */
-export async function loadDecompositionConfig(
-    getSetting: (key: string) => Promise<string | null>,
-): Promise<Partial<DecompositionConfig>> {
-    const [epicCap, storyCap] = await Promise.all([
-        getSetting("decomposition.maxTasksPerEpic"),
-        getSetting("decomposition.maxTasksPerStory"),
-    ]);
-
-    const result: Record<string, number> = {};
-
-    if (epicCap !== null) {
-        const parsed = Number(epicCap);
-        if (Number.isFinite(parsed) && parsed > 0) {
-            result["maxTasksPerEpic"] = parsed;
-        }
-    }
-    if (storyCap !== null) {
-        const parsed = Number(storyCap);
-        if (Number.isFinite(parsed) && parsed > 0) {
-            result["maxTasksPerStory"] = parsed;
-        }
-    }
-
-    return result;
-}
 
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({

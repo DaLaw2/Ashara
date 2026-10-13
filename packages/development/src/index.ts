@@ -1,5 +1,3 @@
-export { readManifestContext } from "./dispatch-utils.js";
-
 export type { ContractSource } from "./contract-slice.js";
 export type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 export type { ContractAmender, CompletionDeliverables } from "./contract-completion.js";

@@ -30,13 +30,12 @@ function record(overrides: Partial<RunState> = {}): RunState {
     closed: false,
     spendUsd: 0,
     acceptanceAttempts: 0,
-    replanRounds: 0,
     ...overrides,
   };
 }
 
-// Discipline B: the budget, the acceptance-attempt cap and the replan-round cap
-// all used to live only in process memory, so every restart handed out the whole
+// Discipline B: the budget and the acceptance-attempt cap both used to live only
+// in process memory, so every restart handed out the whole
 // budget again. Per-run semantics are preserved by `closed`, not by forgetting.
 describe("openRun — restart resumes, relaunch resets", () => {
   test("no record at all opens a fresh run at zero", async () => {
@@ -52,7 +51,7 @@ describe("openRun — restart resumes, relaunch resets", () => {
 
   test("an OPEN record is adopted — a crashed process does not get the budget twice", async () => {
     const store = new InMemoryRunStateStore(
-      record({ spendUsd: 0.93, acceptanceAttempts: 2, replanRounds: 1 }),
+      record({ spendUsd: 0.93, acceptanceAttempts: 2 }),
     );
 
     const state = await openRun(store);
@@ -60,7 +59,6 @@ describe("openRun — restart resumes, relaunch resets", () => {
     expect(state.runId).toBe("run-1");
     expect(state.spendUsd).toBe(0.93);
     expect(state.acceptanceAttempts).toBe(2);
-    expect(state.replanRounds).toBe(1);
   });
 
   test("a CLOSED record starts a NEW run at zero — a finished run's spend is never resurrected", async () => {
@@ -91,7 +89,7 @@ describe("persistRun / closeRun", () => {
     const store = new InMemoryRunStateStore(null);
     const opened = await openRun(store);
 
-    await persistRun(store, opened, { spendUsd: 0.41, acceptanceAttempts: 1, replanRounds: 0 });
+    await persistRun(store, opened, { spendUsd: 0.41, acceptanceAttempts: 1 });
 
     expect(store.state?.spendUsd).toBe(0.41);
     expect(store.state?.acceptanceAttempts).toBe(1);
@@ -106,7 +104,7 @@ describe("persistRun / closeRun", () => {
     store.saveError = new Error("write failed");
 
     await expect(
-      persistRun(store, opened, { spendUsd: 0.5, acceptanceAttempts: 0, replanRounds: 0 }),
+      persistRun(store, opened, { spendUsd: 0.5, acceptanceAttempts: 0 }),
     ).resolves.toBeDefined();
   });
 

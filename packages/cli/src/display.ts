@@ -96,32 +96,14 @@ function displayStatus(items: WorkItem[], sessions: SessionInfo[], startTime: nu
 
     // Group by level for structured display
     const epics = items.filter((i) => i.level === "Epic");
-    const stories = items.filter((i) => i.level === "Story");
-    const features = items.filter((i) => i.level === "Feature");
     const tasks = items.filter((i) => i.level === "Task");
 
     for (const epic of epics) {
         console.log(`  ${statusIcon(epic.status)} [Epic] ${epic.title} -- ${epic.status}`);
 
-        const childStories = stories.filter((s) => s.parentId === epic.id);
-        for (const story of childStories) {
-            console.log(`    ${statusIcon(story.status)} [Story] ${story.title} -- ${story.status}`);
-
-            const childFeatures = features.filter((f) => f.parentId === story.id);
-            for (const feature of childFeatures) {
-                console.log(`      ${statusIcon(feature.status)} [Feature] ${feature.title} -- ${feature.status}`);
-
-                const childTasks = tasks.filter((t) => t.parentId === feature.id);
-                for (const task of childTasks) {
-                    console.log(`        ${statusIcon(task.status)} [Task] ${task.title} -- ${task.status}`);
-                }
-            }
-
-            // Tasks directly under stories (no feature layer)
-            const directTasks = tasks.filter((t) => t.parentId === story.id);
-            for (const task of directTasks) {
-                console.log(`      ${statusIcon(task.status)} [Task] ${task.title} -- ${task.status}`);
-            }
+        const childTasks = tasks.filter((t) => t.parentId === epic.id);
+        for (const task of childTasks) {
+            console.log(`    ${statusIcon(task.status)} [Task] ${task.title} -- ${task.status}`);
         }
     }
 

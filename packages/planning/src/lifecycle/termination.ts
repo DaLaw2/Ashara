@@ -38,8 +38,7 @@ function isSettled(status: WorkItemStatus): boolean {
 
 export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   const { items, budgetExhausted, openCoverageGaps, completionFigure } = snapshot;
-  const parentsWithChildren = collectParents(items);
-  const counts = tallyCounts(items, parentsWithChildren);
+  const counts = tallyCounts(items);
 
   // Completeness: every item reached Completed or Abandoned. Uses isSettled (not
   // isTerminal) because Completed is not graph-terminal — it keeps the
@@ -56,7 +55,7 @@ export function evaluate(snapshot: TerminationSnapshot): TerminationDecision {
   }
 
   // Liveness: there ARE unsettled items but none can advance — the plan is stuck.
-  if (counts.total > 0 && unsettled > 0 && !hasAdvanceableItem(items, parentsWithChildren)) {
+  if (counts.total > 0 && unsettled > 0 && !hasAdvanceableItem(items)) {
     const { stalled } = classifyStalled(items);
     logCompletionFigure("liveness", completionFigure);
     return { decision: "plan_exhausted", trigger: "liveness", counts, stalled, completionFigure };
@@ -76,29 +75,16 @@ function logCompletionFigure(trigger: string, figure: CompletionFigure | undefin
   }
 }
 
-function collectParents(items: readonly TerminationItemSnapshot[]): ReadonlySet<string> {
-  const parents = new Set<string>();
-  for (const item of items) {
-    if (item.parentId !== undefined) parents.add(item.parentId);
-  }
-  return parents;
-}
-
-function isAdvanceable(item: TerminationItemSnapshot, parentsWithChildren: ReadonlySet<string>): boolean {
+function isAdvanceable(item: TerminationItemSnapshot): boolean {
   if (item.status === "InProgress" && item.level === "Task") return true;
   if (item.status === "Failed") return item.recoverable === true;
   if (item.status !== "Pending") return false;
   if (item.resolution !== "met") return false;
-  if (item.level === "Task") return true;
-  if (item.level === "Story" && !parentsWithChildren.has(item.id)) return true;
-  return false;
+  return item.level === "Task";
 }
 
-function hasAdvanceableItem(
-  items: readonly TerminationItemSnapshot[],
-  parentsWithChildren: ReadonlySet<string>,
-): boolean {
-  return items.some((item) => isAdvanceable(item, parentsWithChildren));
+function hasAdvanceableItem(items: readonly TerminationItemSnapshot[]): boolean {
+  return items.some((item) => isAdvanceable(item));
 }
 
 function classifyStalled(items: readonly TerminationItemSnapshot[]): {
@@ -167,10 +153,7 @@ function classifyCause(item: TerminationItemSnapshot): StalledCause {
   return "stalled_waiting";
 }
 
-function tallyCounts(
-  items: readonly TerminationItemSnapshot[],
-  parentsWithChildren: ReadonlySet<string>,
-): TerminationCounts {
+function tallyCounts(items: readonly TerminationItemSnapshot[]): TerminationCounts {
   let pending = 0;
   let inProgress = 0;
   let completed = 0;
@@ -205,7 +188,7 @@ function tallyCounts(
 
     if (!isTerminal(item.status)) nonTerminal += 1;
     if (item.status === "InProgress" && item.level === "Task") inFlight += 1;
-    if (isAdvanceable(item, parentsWithChildren) && item.status === "Pending") dispatchable += 1;
+    if (isAdvanceable(item) && item.status === "Pending") dispatchable += 1;
   }
 
   return {

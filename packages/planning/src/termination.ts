@@ -77,7 +77,7 @@ export interface TerminationCounts {
   readonly failed: number;
   readonly abandoned: number;
   readonly nonTerminal: number;
-  /** Items the gate/planner could act on this cycle (dispatchable tasks + decomposable stories). */
+  /** Items the gate/planner could act on this cycle (dispatchable tasks). */
   readonly dispatchable: number;
   /** Dispatched leaf tasks awaiting a result (InProgress at Task level). */
   readonly inFlight: number;

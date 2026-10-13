@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, storedBlockedReasonSchema, withSubstitutedBy, withSalvagedResult } from "./blocked-reason.js";
+import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, storedBlockedReasonSchema, withSalvagedResult } from "./blocked-reason.js";
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
@@ -154,18 +154,6 @@ describe("substitutedBy on all variants", () => {
   });
 });
 
-describe("withSubstitutedBy helper", () => {
-  test("augments a variant with substitutedBy, preserving source", () => {
-    const original: StoredBlockedReason = {
-      source: "failure_router",
-      reason: "retry exhausted",
-    };
-    const augmented = withSubstitutedBy(original, "wi-new-123");
-    expect(augmented.source).toBe("failure_router");
-    expect(augmented.substitutedBy).toBe("wi-new-123");
-  });
-});
-
 describe("withSalvagedResult helper", () => {
   test("augments a variant with salvaged fields, preserving source", () => {
     const original: StoredBlockedReason = {
@@ -197,10 +185,11 @@ describe("withSalvagedResult helper", () => {
   });
 
   test("preserves existing substitutedBy when adding salvaged fields", () => {
-    const withSub = withSubstitutedBy(
-      { source: "failure_router", reason: "exhausted" } as StoredBlockedReason,
-      "wi-replacement",
-    );
+    const withSub: StoredBlockedReason = {
+      source: "failure_router",
+      reason: "exhausted",
+      substitutedBy: "wi-replacement",
+    };
     const augmented = withSalvagedResult(withSub, "blocked", "blocked on external");
     expect(augmented.substitutedBy).toBe("wi-replacement");
     expect(augmented.salvagedOutcome).toBe("blocked");

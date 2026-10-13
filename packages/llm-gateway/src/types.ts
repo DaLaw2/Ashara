@@ -78,7 +78,6 @@ export const KNOWN_LLM_SITES = [
   "agent-runner",
   "decomposition",
   "acceptance",
-  "replan",
   "stack-derivation",
   "alignment",
   "escalation",

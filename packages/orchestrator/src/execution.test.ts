@@ -128,7 +128,6 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     visionRepo,
     developmentService,
     acceptanceAttempts: 0,
-    replanRounds: 0,
     runStateStore,
   } as unknown as CoreLoopDeps;
 

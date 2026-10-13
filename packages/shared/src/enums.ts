@@ -1,4 +1,4 @@
-export type WorkItemLevel = "Epic" | "Story" | "Feature" | "Task";
+export type WorkItemLevel = "Epic" | "Task";
 
 export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
@@ -20,7 +20,7 @@ export const TERMINAL_SESSION_PHASES: readonly SessionPhase[] = ["Completed", "F
 // ---------------------------------------------------------------------------
 
 const CAPABILITY_LEVELS: readonly CapabilityLevel[] = ["Frontier", "Strong", "Medium", "Light"] as const;
-const WORK_ITEM_LEVELS: readonly WorkItemLevel[] = ["Epic", "Story", "Feature", "Task"] as const;
+const WORK_ITEM_LEVELS: readonly WorkItemLevel[] = ["Epic", "Task"] as const;
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
     "Pending",
     "InProgress",

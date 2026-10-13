@@ -33,15 +33,12 @@ export type {
   WorkItemSpec,
   DecompositionResult,
 } from "./decomposition-types.js";
-export { loadDecompositionConfig } from "./decomposition-types.js";
 export { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 export type { DecompositionLLM } from "./decomposition.js";
 export { deriveCompletionEndpoint, deriveCompletionModule } from "./contract-derivation.js";
 
 export { FailureRouter } from "./failure-router.js";
 export type { RawFailureContext } from "./failure-router.js";
-
-export { decomposeLeafStories } from "./story-decomposer.js";
 
 export { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
@@ -67,11 +64,6 @@ export type {
   AcceptanceVerdict,
   AcceptanceLLM,
 } from "./acceptance.js";
-
-export { createGatewayReplanLLM } from "./replan-from-vision.js";
-export type { ReplanLLM } from "./replan-from-vision.js";
-
-export { recoverFromAbandoned } from "./liveness-recovery.js";
 
 export {
   classifyFailure,

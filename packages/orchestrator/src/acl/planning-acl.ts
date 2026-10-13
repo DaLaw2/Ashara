@@ -25,9 +25,7 @@ export type { EndpointCoverageGap } from "@ashara/planning";
 export type { CompletionFigure } from "@ashara/planning";
 
 // Engine / LLM port types
-export type { DecompositionEngine } from "@ashara/planning";
 export type { AcceptanceLLM, AcceptanceVerdict, AcceptanceGap } from "@ashara/planning";
-export type { ReplanLLM } from "@ashara/planning";
 
 // Failure / recovery types
 export type { FailureRouter, RawFailureContext } from "@ashara/planning";
@@ -48,9 +46,6 @@ export {
   takeEvents,
 } from "@ashara/planning";
 
-// Story decomposition
-export { decomposeLeafStories } from "@ashara/planning";
-
 // Coverage reconciliation
 export { createCoverageRollupGuard, reconcileCoverage } from "@ashara/planning";
 export { computeCoverageGaps, isBlockingCoverageGap } from "@ashara/planning";
@@ -67,6 +62,3 @@ export { assessProductObservation, buildVisionGaps, buildAcceptanceVerdict, buil
 
 // Completion figure
 export { computeCompletionFigure } from "@ashara/planning";
-
-// Liveness recovery
-export { recoverFromAbandoned } from "@ashara/planning";

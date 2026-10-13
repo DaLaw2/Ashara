@@ -228,9 +228,8 @@ describe("Work Items Bulk", () => {
     const res = await req("POST", "/work-items/bulk", {
       items: [
         { tempId: "epic-1", level: "Epic", title: `bulk-epic-${nonce}` },
-        { tempId: "story-1", level: "Story", title: `bulk-story-${nonce}`, parentId: "epic-1" },
-        { tempId: "task-1", level: "Task", title: `bulk-task-1-${nonce}`, parentId: "story-1" },
-        { tempId: "task-2", level: "Task", title: `bulk-task-2-${nonce}`, parentId: "story-1" },
+        { tempId: "task-1", level: "Task", title: `bulk-task-1-${nonce}`, parentId: "epic-1" },
+        { tempId: "task-2", level: "Task", title: `bulk-task-2-${nonce}`, parentId: "epic-1" },
       ],
       edges: [{ from: "task-2", to: "task-1" }],
       knowledge: GO_KNOWLEDGE,
@@ -238,12 +237,12 @@ describe("Work Items Bulk", () => {
     expect(res.status).toBe(201);
 
     const body = await res.json();
-    expect(body.created).toBe(4);
+    expect(body.created).toBe(3);
     const map = body.tempIdToId as Record<string, string>;
     for (const id of Object.values(map)) createdWorkItemIds.push(id);
 
-    const storyRow = await pool.query("SELECT parent_id FROM work_items WHERE id = $1", [map["story-1"]]);
-    expect(storyRow.rows[0]?.parent_id).toBe(map["epic-1"]);
+    const taskRow = await pool.query("SELECT parent_id FROM work_items WHERE id = $1", [map["task-1"]]);
+    expect(taskRow.rows[0]?.parent_id).toBe(map["epic-1"]);
 
     const deps = await pool.query(
       "SELECT 1 FROM dependencies WHERE from_id = $1 AND to_id = $2",

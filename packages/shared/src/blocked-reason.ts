@@ -5,20 +5,18 @@ import { z } from "zod";
  * Discriminated on `source` — Ashara's own producers form a closed set;
  * a consumer switch that omits a variant is a compile error.
  *
- * `substitutedBy` is optional on ALL variants: liveness-recovery augments
- * any existing blockedReason with a substitute pointer after the fact,
- * regardless of which producer wrote the original.
+ * `substitutedBy` is optional on ALL variants: failure recovery records a
+ * substitute pointer on whichever variant it writes.
  *
  * Open-text fields (reason, detail) stay open strings — they carry
  * LLM-authored or human-authored content, not a closed vocabulary.
  */
 
-// Shared optional fields: liveness-recovery and result salvage can augment
-// any variant after the fact, regardless of which producer wrote the original.
-// `substitutedBy` — liveness-recovery's substitute pointer.
+// Shared optional fields, present on any variant regardless of which producer
+// wrote the original.
+// `substitutedBy` — the equivalent item failure recovery routed the work to.
 // `salvagedOutcome/salvagedDetail/salvagedAt` — a result that returned for an
-// Abandoned item, persisted so cascade-completion and liveness-recovery can see
-// the work was done (or what the failure was) without reopening the terminal status.
+// Abandoned item, persisted so cascade-completion can see the work was done (or what the failure was) without reopening the terminal status.
 const augmentationFields = {
   substitutedBy: z.string().optional(),
   salvagedOutcome: z.enum(["completed", "failed", "blocked"]).optional(),
@@ -116,26 +114,13 @@ export class BlockedReasonCorrupt extends Error {
 }
 
 /**
- * Augments any StoredBlockedReason variant with `substitutedBy`. Used by
- * liveness-recovery when an Abandoned item's work is picked up by a
- * substitute. The spread preserves the original variant's `source`
- * discriminator; the type assertion bridges TypeScript's inability to
- * narrow through object spread on discriminated unions.
- */
-export function withSubstitutedBy(
-  reason: StoredBlockedReason,
-  substitutedBy: string,
-): StoredBlockedReason {
-  return { ...reason, substitutedBy } as StoredBlockedReason;
-}
-
-/**
  * Augments any StoredBlockedReason variant with salvaged-result fields. Used by
  * the orchestrator when an agent returns a result for an item that was preempted
  * to Abandoned during execution. The result (outcome + detail) is persisted on
- * the existing blockedReason so cascade-completion and liveness-recovery can see
- * it without reopening the terminal status. Same spread + assertion pattern as
- * withSubstitutedBy.
+ * the existing blockedReason so cascade-completion can see it without reopening
+ * the terminal status. The spread preserves the original variant's `source`
+ * discriminator; the type assertion bridges TypeScript's inability to narrow
+ * through object spread on discriminated unions.
  */
 export function withSalvagedResult(
   reason: StoredBlockedReason,

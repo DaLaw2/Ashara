@@ -112,8 +112,8 @@ export class LifecycleRouter {
    *  2. Abandoned with a salvaged completed result — the agent succeeded but
    *     the item was preempted to Abandoned during execution. The work is done;
    *     keeping the item terminal is correct, and the salvage makes it visible.
-   *  3. Abandoned with a substitute that itself settled — liveness-recovery
-   *     created a replacement that completed the work under a new id.
+   *  3. Abandoned with a substitute that itself settled — failure recovery
+   *     routed the work to an equivalent item that completed it under a new id.
    *
    * An Abandoned item outside these three cases is genuinely missing work and
    * must not settle its parent — the parent stays incomplete rather than

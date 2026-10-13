@@ -81,7 +81,7 @@ export type { StoredTaskSpec } from "./task-spec.js";
 export { parseStoredTaskSpec } from "./task-spec.js";
 
 export type { StoredBlockedReason } from "./blocked-reason.js";
-export { blockedReasonToRecord, parseStoredBlockedReason, withSubstitutedBy, withSalvagedResult } from "./blocked-reason.js";
+export { blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } from "./blocked-reason.js";
 
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 export { parseStoredSuccessCriteria } from "./success-criteria.js";

@@ -44,7 +44,7 @@ export async function executeTask(
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
   // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
-  // knowledge_entries by the true Epic, not the Story task.parentId points at
+  // knowledge_entries by the true Epic, not whatever task.parentId points at
   // (kl-t2/Q5 — the epic_id mis-write that made recentFindings effectively
   // globally scoped across projects).
   const epicId = await findEpicId(deps.workItemRepo, task);
@@ -167,9 +167,8 @@ async function publishBestEffort(
 
 /**
  * Durably records a returning agent result on an Abandoned work item's
- * blockedReason, so cascade-completion (isSettled) and liveness-recovery can
- * see the work's outcome without reopening the terminal status. Uses the same
- * augmentation pattern as withSubstitutedBy: the existing blockedReason is
+ * blockedReason, so cascade-completion (isSettled) can see the work's outcome
+ * without reopening the terminal status. The existing blockedReason is
  * spread with salvaged fields and saved as an Abandoned → Abandoned metadata
  * write (no status transition, no outbound edge needed).
  *
@@ -284,8 +283,8 @@ export async function processTask(
   // was preempted to Abandoned (by the shutdown reconciler or HTTP PATCH) during
   // execution, executeTask catches the InvalidStatusTransition from routeAsSuccess
   // and returns a completed result. The result's value — "the work is done" — must
-  // be durably recorded on the Abandoned item so cascade-completion (isSettled) and
-  // liveness-recovery can see the work was done without reopening the terminal status.
+  // be durably recorded on the Abandoned item so cascade-completion (isSettled)
+  // can see the work was done without reopening the terminal status.
   if (result.status === "completed") {
     const currentForSalvage = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (currentForSalvage && currentForSalvage.status === "Abandoned") {
@@ -380,8 +379,8 @@ export async function processTask(
         case "Abandoned": {
           // Preempted to Abandoned while the agent was executing. The
           // agent's result has value: persist it on the existing
-          // blockedReason so cascade-completion and liveness-recovery can
-          // see the work's outcome without reopening the terminal status.
+          // blockedReason so cascade-completion can see the work's
+          // outcome without reopening the terminal status.
           const outcomeKind = result.status === "blocked" ? "blocked" as const : "failed" as const;
           await salvagePreemptedResult(deps.workItemRepo, current, outcomeKind, result.detail);
           await recordFailedApproach(

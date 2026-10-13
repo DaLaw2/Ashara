@@ -62,10 +62,6 @@ export class PlanningService {
     return repo.create(item);
   }
 
-  static async findStoriesNeedingDecomposition(repo: WorkItemRepository): Promise<WorkItem[]> {
-    return GateKeeper.findStoriesNeedingDecomposition(repo);
-  }
-
   /**
    * Seeds the initial ProjectContract at version 1 (ADR-028). Fail-closed against a
    * double-seed: the getLatest check is the fast path for an already-seeded project,

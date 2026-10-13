@@ -145,20 +145,14 @@ export function buildEnrichedNorthStar(
     return sections.join("\n\n");
 }
 
-// --- Level mapping: TS decomposition levels -> Rust server levels ---
+// --- Level mapping: decomposition levels -> server levels ---
 
-function toServerLevel(level: string): WorkItemLevel {
+function toServerLevel(level: WorkItemSpec["level"]): WorkItemLevel {
     switch (level) {
         case "epic":
             return "Epic";
-        case "story":
-            return "Story";
-        case "feature":
-            return "Feature";
         case "task":
             return "Task";
-        default:
-            throw new Error(`Unknown work item level "${level}". Valid: epic, story, feature, task`);
     }
 }
 
@@ -200,14 +194,14 @@ export async function decomposeVision(
         return await engine.decompose(input);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new VisionError("decomposition_failed", `Decomposition failed: ${message}`);
+        throw new VisionError("decomposition_failed", `Decomposition failed: ${message}`, { cause: err });
     }
 }
 
 // --- Post work items to server ---
 
 async function postWorkItems(client: AsharaClient, decomposition: DecompositionResult): Promise<void> {
-    // Build the whole hierarchy (epic -> stories -> features -> tasks) plus its
+    // Build the whole hierarchy (epic -> tasks) plus its
     // dependency edges as ONE transactional request (ADR-029). Items are ordered
     // parents-before-children and reference each other by decomposition ID
     // (batch-local tempIds); the server assigns real IDs atomically. A mid-batch
@@ -222,36 +216,14 @@ async function postWorkItems(client: AsharaClient, decomposition: DecompositionR
         northStar: decomposition.epic.northStar,
     });
 
-    for (const story of decomposition.stories) {
-        items.push({
-            tempId: story.id,
-            level: toServerLevel(story.level),
-            title: story.title,
-            description: story.description,
-            parentId: decomposition.epic.id,
-            northStar: story.northStar,
-        });
-    }
-
-    for (const feature of decomposition.features) {
-        items.push({
-            tempId: feature.id,
-            level: toServerLevel(feature.level),
-            title: feature.title,
-            description: feature.description,
-            parentId: feature.parentId,
-        });
-    }
-
     for (const task of decomposition.tasks) {
-        const taskWithSpec = task as WorkItemSpec & { readonly taskSpec?: unknown };
         items.push({
             tempId: task.id,
             level: toServerLevel(task.level),
             title: task.title,
             description: task.description,
             parentId: task.parentId,
-            taskSpec: taskWithSpec.taskSpec,
+            taskSpec: task.taskSpec,
         });
     }
 
@@ -383,7 +355,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
     console.log("[ashara] Decomposing into work items...");
     const decomposition = await decomposeVision(visionText, alignment, llm, answers);
     console.log(
-        `[ashara] Created: ${decomposition.stories.length} stories, ${decomposition.tasks.length} tasks`,
+        `[ashara] Created: ${decomposition.tasks.length} tasks`,
     );
 
     // 8. Post work items to server

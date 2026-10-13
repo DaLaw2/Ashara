@@ -24,7 +24,7 @@ export class ClientError extends Error {
 
 // --- Server-side types (match Rust serde output) ---
 
-export type WorkItemLevel = "Epic" | "Story" | "Feature" | "Task";
+export type WorkItemLevel = "Epic" | "Task";
 export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
 /** One node in a bulk hierarchy create. `tempId` is batch-local; `parentId` references another item's `tempId`. */
@@ -103,7 +103,7 @@ export interface CreateVisionRequest {
 
 const WorkItemSchema = z.object({
     id: z.string(),
-    level: z.enum(["Epic", "Story", "Feature", "Task"]),
+    level: z.enum(["Epic", "Task"]),
     status: z.enum(["Pending", "InProgress", "Completed", "Blocked", "Failed", "Abandoned"]),
     parentId: z.string().nullable(),
     title: z.string(),

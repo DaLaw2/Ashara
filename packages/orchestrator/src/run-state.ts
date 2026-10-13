@@ -3,8 +3,8 @@ import type { RunStateRepository } from "@ashara/db";
 import type { RunState } from "@ashara/shared";
 
 /**
- * The durable half of every per-run cap counter (Discipline B). Spend,
- * acceptance attempts and replan rounds are the same kind of thing — a bound
+ * The durable half of every per-run cap counter (Discipline B). Spend and
+ * acceptance attempts are the same kind of thing — a bound
  * that only means something if it survives a crash-restart of the run it bounds
  * — so they share ONE record and ONE open/close protocol rather than each
  * growing its own persistence.
@@ -14,7 +14,6 @@ export type RunStateStore = Pick<RunStateRepository, "load" | "save">;
 export interface RunCounters {
   readonly spendUsd: number;
   readonly acceptanceAttempts: number;
-  readonly replanRounds: number;
 }
 
 /**
@@ -37,8 +36,8 @@ export async function openRun(store: RunStateStore): Promise<RunState> {
   if (existing && !existing.closed) {
     console.warn(
       `[run-state] resuming run ${existing.runId} opened at ${existing.openedAt}: ` +
-        `$${existing.spendUsd.toFixed(4)} already spent, acceptanceAttempts=${existing.acceptanceAttempts}, ` +
-        `replanRounds=${existing.replanRounds}. The previous process did not close this run.`,
+        `$${existing.spendUsd.toFixed(4)} already spent, acceptanceAttempts=${existing.acceptanceAttempts}. ` +
+        `The previous process did not close this run.`,
     );
     return existing;
   }
@@ -49,7 +48,6 @@ export async function openRun(store: RunStateStore): Promise<RunState> {
     closed: false,
     spendUsd: 0,
     acceptanceAttempts: 0,
-    replanRounds: 0,
   };
   await store.save(opened);
   console.log(`[run-state] opened run ${opened.runId}; per-run counters start at zero`);

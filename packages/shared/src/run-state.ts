@@ -19,7 +19,6 @@ export const runStateSchema = z.object({
   closed: z.boolean(),
   spendUsd: z.number().nonnegative(),
   acceptanceAttempts: z.number().int().nonnegative(),
-  replanRounds: z.number().int().nonnegative(),
 });
 
 export type RunState = z.infer<typeof runStateSchema>;

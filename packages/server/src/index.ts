@@ -29,12 +29,8 @@ import {
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import type { ContractRegistryLookup } from "@ashara/planning";
 import {
-  DecompositionEngine,
-  loadDecompositionConfig,
   FailureRouter,
-  createGatewayDecompositionLLM,
   createGatewayAcceptanceLLM,
-  createGatewayReplanLLM,
   createBulkPlanWithContract,
   deriveCompletionEndpoint,
   deriveCompletionModule,
@@ -208,18 +204,8 @@ async function main(): Promise<void> {
   // (Phase 4 t1, ADR-030 G5): temperature 0, validated attempt on the requested
   // model, escalate ONE capability tier on persistent schema failure, then a
   // typed StructuredOutputExhausted — never silently accept a drifted enum.
-  //
-  // Decomposition gets its OWN ladder (createGatewayDecompositionLLM): it runs a
-  // SEMANTIC phantom-dependsOn-ref validation inside each attempt and re-asks with
-  // the feedback on retry, so a single malformed emission is corrected instead of
-  // exploding the run (mig-run10, the Run-10 "task-0017" phantom-ref blocker).
-  const decompositionLlm = createGatewayDecompositionLLM(llmGateway, ladderAttemptSink);
   const acceptanceLadder = withStructuredLadder(llmGateway, { site: "acceptance", onAttempt: ladderAttemptSink });
   const acceptanceLlm = createGatewayAcceptanceLLM(acceptanceLadder);
-  const replanLadder = withStructuredLadder(llmGateway, { site: "replan", onAttempt: ladderAttemptSink });
-  const replanLlm = createGatewayReplanLLM(replanLadder);
-  const decompositionOverrides = await loadDecompositionConfig((key: string) => configRepo.getSetting(key));
-  const decompositionEngine = new DecompositionEngine(decompositionLlm, decompositionOverrides);
   const failureRouter = new FailureRouter(3);
 
   const sessionStore: SessionStore = {
@@ -392,7 +378,7 @@ async function main(): Promise<void> {
   };
 
   // The ProjectContract is keyed by the project ROOT id (the top of the parent
-  // chain, an epic — see story-decomposer.writeOrAmendContract). Walk parentId up
+  // chain, an epic — see bulk-plan.deriveAndWriteContract). Walk parentId up
   // from any work item to that root; all three contract adapters below share it so
   // the Development/Planning BCs stay free of a db dependency (ADR-027).
   const resolveProjectRootId = async (workItemId: string): Promise<string | null> => {
@@ -558,8 +544,8 @@ async function main(): Promise<void> {
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the
   // domain shape) and the ContractRepository (ADR-028 + ADR-029). Reused by the
-  // core loop's decomposition contract write AND the bulk-plan contract write
-  // (mig9-t5), so both establish the contract in the same fail-safe transaction.
+  // core loop's coverage reconciliation AND the bulk-plan contract write
+  // (mig9-t5), so both write the contract in the same fail-safe transaction.
   const planningTransaction = <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ): Promise<T> =>
@@ -574,14 +560,13 @@ async function main(): Promise<void> {
     costRepo,
     failedApproachRepo,
     visionRepo,
-    decompositionEngine,
     contractRepo,
     developmentService,
     eventLogger,
     failureRouter,
     contractLookup,
-    // Shares one DB transaction between decomposition's work-item creation and
-    // its derived ProjectContract write (ADR-028 + ADR-029, mig-phase-9); the
+    // Shares one DB transaction between coverage reconciliation's work-item
+    // creation and its ProjectContract amend (ADR-028 + ADR-029, mig-phase-9); the
     // work-item half is re-adapted to the domain shape the same way the
     // top-level workItemRepo is (adaptWorkItemRepo).
     withPlanningTransaction: planningTransaction,
@@ -607,8 +592,6 @@ async function main(): Promise<void> {
     // Seeded to 0 and immediately overwritten by CoreLoop from the durable run
     // record on the first cycle (a resumed run keeps its spent attempts).
     acceptanceAttempts: 0,
-    replanLlm,
-    replanRounds: 0,
     runStateStore: runStateRepo,
   };
 

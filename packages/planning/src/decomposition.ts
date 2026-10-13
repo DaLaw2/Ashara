@@ -6,7 +6,6 @@ import type {
     DecompositionConfig,
     DecompositionInput,
     DecompositionResult,
-    ExistingWorkItemSummary,
     PriorEpicResult,
     TaskSpec,
     WorkItemSpec,
@@ -72,9 +71,9 @@ export class DecompositionEngine {
     private readonly llm: DecompositionLLM;
     private readonly config: DecompositionConfig;
 
-    constructor(llm: DecompositionLLM, config?: Partial<DecompositionConfig>) {
+    constructor(llm: DecompositionLLM) {
         this.llm = llm;
-        this.config = { ...DEFAULT_DECOMPOSITION_CONFIG, ...config };
+        this.config = DEFAULT_DECOMPOSITION_CONFIG;
     }
 
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
@@ -105,8 +104,7 @@ export class DecompositionEngine {
 
     /**
      * The single producer of the project knowledge graph. Private on purpose:
-     * the duplicate copy in `decomposeLeafStories` is deleted, so there is one
-     * call site (`decomposeInternal`) and no way to obtain a decomposition whose
+     * there is one call site (`decomposeInternal`) and no way to obtain a decomposition whose
      * graph was never derived.
      */
     private async deriveKnowledge(
@@ -146,13 +144,6 @@ export class DecompositionEngine {
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
-        // Config's maxDepth is authoritative (forced to 2 by default — coarse
-        // vertical-slice strategy) and deliberately ignores any per-vision
-        // complexity classification, which would otherwise fan complex visions
-        // out to 3-4 layers and reproduce the 40-item explosion this strategy
-        // exists to avoid.
-        const maxDepth = this.config.maxDepth;
-
         const epicId = generateId("epic");
         const epic: WorkItemSpec = {
             id: epicId,
@@ -195,8 +186,6 @@ export class DecompositionEngine {
 
         return {
             epic,
-            stories: [],
-            features: [],
             tasks: allTasks,
             dependencyEdges,
             knowledge,
@@ -205,10 +194,8 @@ export class DecompositionEngine {
 
     /**
      * Guarantees exactly one project-level scaffold task exists whenever the decomposition
-     * produces any tasks at all, regardless of whether it fanned out through stories/features
-     * (maxDepth > 2) or went straight from epic to tasks (maxDepth <= 2). Per-story/per-feature
-     * prompts no longer mandate a scaffold (see buildDecomposePrompt), so it must be created
-     * once here instead of once per story.
+     * produces any tasks at all. The task prompt does not mandate a scaffold (see
+     * buildDecomposePrompt), so it is created once here.
      *
      * There is no equivalent `ensureWiringTask` — wiring is not a separate task. Every
      * generated task is a vertical slice that mounts its own deliverable into the entry
@@ -386,7 +373,6 @@ export class DecompositionEngine {
             input.knowledge,
             input.conventions,
             priorContext,
-            [],
             input.epicNorthStar,
             input.manifestContext,
         );
@@ -397,31 +383,6 @@ export class DecompositionEngine {
             (value) => this.validateTaskRefs(value.tasks, taskCap, epic.id),
         );
         return this.resolveTasks(parsed.tasks, taskCap, epic.id);
-    }
-
-    async decomposeStoryIntoTasks(
-        story: WorkItemSpec,
-        input: DecompositionInput,
-        existingItems: ReadonlyArray<ExistingWorkItemSummary> = [],
-    ): Promise<WorkItemSpec[]> {
-        const prompt = this.buildDecomposePrompt(
-            "decompose this story into tasks",
-            story.title,
-            story.description,
-            input.knowledge,
-            input.conventions,
-            undefined,
-            existingItems,
-            undefined,
-            input.manifestContext,
-        );
-
-        const parsed = await this.llm.generateStructured(
-            prompt,
-            TaskOutputSchema,
-            (value) => this.validateTaskRefs(value.tasks, this.config.maxTasksPerStory, story.id),
-        );
-        return this.resolveTasks(parsed.tasks, this.config.maxTasksPerStory, story.id);
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {
@@ -451,18 +412,11 @@ export class DecompositionEngine {
         knowledge: ProjectKnowledge | undefined,
         conventions: string[],
         priorContext?: string,
-        existingItems: ReadonlyArray<ExistingWorkItemSummary> = [],
         northStar?: string,
         manifestContext?: string,
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
-        const isTaskDecomposition = instruction.includes("tasks");
-
-        const jsonFormat = instruction.includes("stories")
-            ? '{"stories": [{"title": "...", "description": "...", "successCriteria": ["..."]}]}'
-            : instruction.includes("features")
-              ? '{"features": [{"title": "...", "description": "...", "successCriteria": ["..."]}]}'
-              : '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "checks": ["..."]}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "checks": ["..."]}]}';
 
         const lines = [
             `${instruction}.`,
@@ -493,31 +447,21 @@ export class DecompositionEngine {
             lines.push(``, `Project manifest files found:`, manifestContext);
         }
 
-        if (existingItems.length > 0) {
-            lines.push(
-                ``,
-                `Existing Work Items (already planned or created elsewhere in this project — these EXIST, do not re-emit them, their prerequisites, or duplicate work already covered; the project scaffold is handled once at the project level, not per story). These are CONTEXT ONLY: never list their ids in "dependsOn" — cross-story ordering is handled at the story level, not by task dependencies:`,
-                ...existingItems.map((i) => `- ${i.id} [${i.level}] ${i.title} (${i.status})`),
-            );
-        }
-
-        if (isTaskDecomposition) {
-            const examples = DECOMPOSITION_EXAMPLES;
-            lines.push(
-                ``,
-                `Task Quality Requirements:`,
-                `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
-                `- Description must name concrete files or modules to create or modify.`,
-                `- successCriteria must include at least one executable verification (e.g., ${examples.checksExample}).`,
-                `- deliverables must list specific file paths (e.g., ${examples.deliverablesExample}) not generic descriptions.`,
-                `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
-                `- scope must name specific directories or modules (e.g., ${examples.scopeExample}) not "the project".`,
-                `- checks must include at least one runnable command to verify completion (e.g., ${examples.checksExample}).`,
-                `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id, and never reference an Existing Work Item id (e.g. "task-0017") — those are context, not dependencies. A "dependsOn" entry that names no "ref" in this response is invalid.`,
-                `- Do not create a project scaffold (manifest, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
-                `- Each task must be a complete vertical slice: implement the feature AND wire it into the application's entry point — registering the route, adding the import, calling the initializer, or whatever the project's stack requires to make the feature reachable — in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
-            );
-        }
+        const examples = DECOMPOSITION_EXAMPLES;
+        lines.push(
+            ``,
+            `Task Quality Requirements:`,
+            `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
+            `- Description must name concrete files or modules to create or modify.`,
+            `- successCriteria must include at least one executable verification (e.g., ${examples.checksExample}).`,
+            `- deliverables must list specific file paths (e.g., ${examples.deliverablesExample}) not generic descriptions.`,
+            `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
+            `- scope must name specific directories or modules (e.g., ${examples.scopeExample}) not "the project".`,
+            `- checks must include at least one runnable command to verify completion (e.g., ${examples.checksExample}).`,
+            `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id. A "dependsOn" entry that names no "ref" in this response is invalid.`,
+            `- Do not create a project scaffold (manifest, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
+            `- Each task must be a complete vertical slice: implement the feature AND wire it into the application's entry point — registering the route, adding the import, calling the initializer, or whatever the project's stack requires to make the feature reachable — in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
+        );
 
         lines.push(
             ``,

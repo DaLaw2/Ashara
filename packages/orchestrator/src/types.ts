@@ -9,9 +9,7 @@ import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   RunSummary,
   TerminationDecision,
-  ReplanLLM,
   WorkItemRepository,
-  DecompositionEngine,
   AcceptanceLLM,
   AcceptanceVerdict,
   FailureRouter,
@@ -22,7 +20,6 @@ import type { EventLogger } from "./event-logger.js";
 import type { RunStateStore } from "./run-state.js";
 
 export interface CoreLoopConfig {
-  readonly repoPath: string;
   readonly workdirBase: string;
   readonly baseBranch: string;
   readonly maxBatchSize: number;
@@ -40,7 +37,6 @@ export interface CoreLoopConfig {
    */
   readonly coverageEnforcing: boolean;
   readonly maxAcceptanceAttempts: number;
-  readonly maxReplanRounds: number;
   readonly maxGapAttempts: number;
 }
 
@@ -52,7 +48,6 @@ export interface CoreLoopConfig {
  * absent here forces every spread to supply it.
  */
 export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
-  repoPath: ".",
   baseBranch: "master",
   maxBatchSize: 2,
   budgetLimitUsd: 5.0,
@@ -63,7 +58,6 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   verifyTimeoutMs: 120_000,
   coverageEnforcing: true,
   maxAcceptanceAttempts: 2,
-  maxReplanRounds: 3,
   maxGapAttempts: 2,
 };
 
@@ -172,18 +166,12 @@ export interface CoreLoopDeps {
   readonly costRepo: CostRepository;
   readonly failedApproachRepo: FailedApproachRepository;
   readonly visionRepo: VisionRepository;
-  readonly decompositionEngine: DecompositionEngine;
   readonly developmentService: DevelopmentService;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRouter;
   /**
-   * Shares one DB transaction between decomposeLeafStories' work-item creation
-   * and its derived ProjectContract write (ADR-028 + ADR-029, mig-phase-9).
-   *
-   * Required (ADR-052). "Tests that don't care about the contract shadow-write
-   * may omit it" stopped being true when decomposeLeafStories began READING the
-   * project's knowledge graph from the contract; omitting it now means planning
-   * against no stated stack.
+   * Shares one DB transaction between coverage reconciliation's work-item
+   * creation and its ProjectContract amend (ADR-028 + ADR-029, mig-phase-9).
    */
   readonly withPlanningTransaction: <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
@@ -213,8 +201,8 @@ export interface CoreLoopDeps {
     readonly contract: ProjectContract | null;
   }) => Promise<ProductObservation>;
   /**
-   * Per-run cap counters. Mutated in-process by the components that enforce them
-   * (termination-snapshot, liveness-handler) and written through to the durable
+   * Per-run cap counter. Mutated in-process by termination-snapshot, which
+   * enforces it, and written through to the durable
    * run record by CoreLoop after every accrual — a cap that only exists in
    * process memory is not a cap (Discipline B), which is what let this one and
    * the budget reset to zero on every restart.
@@ -234,8 +222,6 @@ export interface CoreLoopDeps {
    * without re-probing the product. Same pattern as lastAcceptanceVerdict.
    */
   lastObservation?: ProductObservation;
-  readonly replanLlm?: ReplanLLM;
-  replanRounds: number;
   /** Durable home of every per-run cap counter above, plus the budget's spend. */
   readonly runStateStore: RunStateStore;
 }

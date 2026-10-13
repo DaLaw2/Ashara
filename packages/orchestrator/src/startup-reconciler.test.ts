@@ -21,7 +21,6 @@ function openRunState(runId: string): RunState {
     closed: false,
     spendUsd: 0,
     acceptanceAttempts: 0,
-    replanRounds: 0,
   };
 }
 
@@ -32,7 +31,6 @@ function closedRunState(runId: string): RunState {
     closed: true,
     spendUsd: 0,
     acceptanceAttempts: 0,
-    replanRounds: 0,
   };
 }
 

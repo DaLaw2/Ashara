@@ -297,7 +297,7 @@ export interface CoverageRollupGuardDeps {
 }
 
 /**
- * Builds the rollup HOLD predicate (criterion 2): a parent (story/feature/epic)
+ * Builds the rollup HOLD predicate (criterion 2): a parent (an epic)
  * must NOT settle Completed while its PROJECT has an open coverage gap. Returns
  * `undefined` in observe-only mode, which `LifecycleRouter.cascadeCompletion`
  * treats as "no hold" — the rollback path. Endpoints are project-scoped (the

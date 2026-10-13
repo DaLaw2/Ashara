@@ -40,7 +40,6 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
     DependencyGraph: {
       load: async () => ({ computeUnlockWeights: () => new Map<string, number>() }),
     },
-    decomposeLeafStories: async () => 0,
   };
 });
 
@@ -55,16 +54,11 @@ vi.mock("./post-cycle.js", () => ({
   reconcileCoverageGaps: async () => {},
 }));
 
-vi.mock("./liveness-handler.js", () => ({
-  attemptLivenessRecovery: async () => 0,
-}));
-
 vi.mock("./run-state.js", () => ({
   openRun: async () => ({
     runId: "run-parallel-test",
     spendUsd: 0,
     acceptanceAttempts: 0,
-    replanRounds: 0,
   }),
   persistRun: async (_store: unknown, state: unknown) => state,
 }));
@@ -119,7 +113,6 @@ function buildDeps(): CoreLoopDeps {
     visionRepo,
     developmentService: {},
     acceptanceAttempts: 0,
-    replanRounds: 0,
     runStateStore,
     withPlanningTransaction: async (fn: (repos: unknown) => Promise<unknown>) => fn({}),
     failureRouter: {},

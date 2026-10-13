@@ -32,12 +32,6 @@ export const storedTaskSpecSchema = z.object({
   suggestedApproach: z.string().optional(),
   supersedes: z.string().optional(),
 
-  // Liveness-recovery lifecycle (liveness-recovery.ts via replan-from-vision.ts).
-  // Written by liveness-recovery, read by nothing today — story unwired-surface.
-  approach: z.string().optional(),
-  differentiator: z.string().optional(),
-  substitutesFor: z.string().optional(),
-
   // Artifact context (termination-snapshot.ts gap task creation).
   // A prose snapshot of the project's current state — working/failed endpoints,
   // completed tasks, key files — so a gap task's agent brief knows what already
@@ -60,8 +54,8 @@ export class TaskSpecCorrupt extends Error {
 
 /**
  * Parses a jsonb value from the `task_spec` column. Returns `undefined` for
- * null/undefined — absent taskSpec is a policy default (epics, stories, and
- * HTTP-created tasks may not carry one). THROWS on a non-null value that
+ * null/undefined — absent taskSpec is a policy default (epics and HTTP-created
+ * tasks may not carry one). THROWS on a non-null value that
  * cannot be validated: a corrupt record must not masquerade as absent
  * (Discipline A).
  */

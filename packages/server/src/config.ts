@@ -70,7 +70,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
 
   const coreLoop: CoreLoopConfig = {
     ...DEFAULT_CONFIG,
-    repoPath,
     workdirBase,
     baseBranch,
     asharaSourceDir,

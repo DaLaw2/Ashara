@@ -8,8 +8,8 @@ const RUN_STATE_KEY = "orchestrator.run_state";
 
 /**
  * The one durable home of the per-run cap counters (budget spend, acceptance
- * attempts, replan rounds). Stored as a single system_settings row so the whole
- * record is written atomically — a half-updated run record is a wrong cap.
+ * attempts). Stored as a single system_settings row so the whole record is
+ * written atomically — a half-updated run record is a wrong cap.
  */
 export class RunStateRepository {
   constructor(private readonly db: Database) {}

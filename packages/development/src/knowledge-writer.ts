@@ -75,7 +75,7 @@ export async function storeKnowledge(
   filesChanged: readonly string[],
 ): Promise<void> {
   // task.epicId is the true walked-up Epic id the orchestrator resolves
-  // (kl-t2/Q5); task.parentId (a Story for a Task leaf) is a fallback for
+  // (kl-t2/Q5); task.parentId is a fallback for
   // callers that never set epicId (e.g. tests constructing TaskDescriptor
   // directly), not a substitute in production.
   const epicId = task.epicId ?? task.parentId ?? null;

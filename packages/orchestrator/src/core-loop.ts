@@ -1,13 +1,11 @@
 import type { RunState } from "@ashara/shared";
 import type { WorkItem } from "./acl/planning-acl.js";
-import { PlanningService, DependencyGraph, decomposeLeafStories } from "./acl/planning-acl.js";
-import { readManifestContext } from "./acl/development-acl.js";
+import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { evaluateRunTermination } from "./termination-snapshot.js";
 import { reconcileCoverageGaps } from "./post-cycle.js";
-import { attemptLivenessRecovery } from "./liveness-handler.js";
 import { openRun, persistRun } from "./run-state.js";
 
 export class CoreLoop {
@@ -48,27 +46,12 @@ export class CoreLoop {
     let batch: WorkItem[] = [];
     const results: TaskResult[] = [];
 
-    // When the budget is exhausted, skip decomposition and dispatch for this cycle but
+    // When the budget is exhausted, skip reconciliation and dispatch for this cycle but
     // DO fall through to the termination evaluation below, so the run stops with the
-    // `economy` reason instead of idling forever — the Run-8 failure mode. When budget
-    // remains, run the full decompose → gate → dispatch flow so the
-    // termination snapshot is taken at a quiescent point. Read live on every cycle:
-    // decomposition itself spends, so it must not run past the cap.
+    // `economy` reason instead of idling forever (the Run-8 failure mode). Read live on
+    // every cycle: dispatch spends, so it must not run past the cap.
     if (!this.budget.isExhausted()) {
-      const decomposed = await decomposeLeafStories({
-        workItemRepo: deps.workItemRepo,
-        decompositionEngine: deps.decompositionEngine,
-        repoPath: deps.config.repoPath,
-        readManifestContext,
-        withPlanningTransaction: deps.withPlanningTransaction,
-        runScope,
-      });
-      if (decomposed > 0) {
-        console.log(`Decomposed ${decomposed} leaf stories into tasks`);
-      }
-
-      // Plan reconciliation (mig9-t2, ADR-032 §2): AFTER decomposition (so t1's
-      // spec-derived endpoints are in the contract) and BEFORE the gate, so any
+      // Plan reconciliation (mig9-t2, ADR-032 §2) runs BEFORE the gate, so any
       // proposed coverage task is eligible for dispatch this same cycle. ENFORCING
       // proposes tasks for uncovered declared endpoints; observe-only just logs.
       await reconcileCoverageGaps(deps, runScope);
@@ -125,51 +108,13 @@ export class CoreLoop {
           cumulativeCost: this.budget.totalCostUsd,
         });
       }
-
-      if (batch.length === 0) {
-        const recovered = await attemptLivenessRecovery(deps, runScope);
-        if (recovered > 0) {
-          const retryEligible = await PlanningService.gate(deps.workItemRepo);
-          if (retryEligible.length > 0) {
-            const retryGraph = await DependencyGraph.load(deps.workItemRepo);
-            const retryWeights = retryGraph.computeUnlockWeights();
-            const retryBatch = PlanningService.select(retryEligible, deps.config.maxBatchSize, retryWeights);
-
-            const retryBudgeted: Array<{ task: WorkItem; capability: string }> = [];
-            for (const task of retryBatch) {
-              if (this.budget.isExhausted()) break;
-              const capability = extractCapability(task);
-              retryBudgeted.push({ task, capability });
-            }
-
-            const retrySettled = await Promise.allSettled(
-              retryBudgeted.map(({ task }) => processTask(deps, task)),
-            );
-
-            for (let i = 0; i < retrySettled.length; i++) {
-              const s = retrySettled[i];
-              const { task, capability } = retryBudgeted[i];
-              if (s.status === "fulfilled") {
-                const { result, costInfo } = s.value;
-                this.budget.accumulateCost(costInfo, capability, result.status === "completed");
-                await this.budget.recordTaskCost(deps.costRepo, task.id, capability, costInfo, result.status === "completed");
-                results.push(result);
-              } else {
-                results.push(await handleProcessingError(deps, task, s.reason));
-              }
-            }
-            await this.persistRunCounters();
-          }
-        }
-      }
     }
 
-    // QUIESCENT POINT (Option A quiescence, mig7-t1): decomposition, dispatch and
-    // liveness recovery have all settled this cycle. Assemble a
-    // FRESH snapshot and evaluate termination against it, so the snapshot already
-    // reflects any work those steps created — the liveness verdict cannot race work
-    // about to appear. Completeness (all-terminal) and economy (budget) are
-    // monotone-enough not to need this care; liveness is the one that does.
+    // QUIESCENT POINT (Option A quiescence, mig7-t1): reconciliation and dispatch have
+    // settled this cycle. Assemble a FRESH snapshot and evaluate termination against
+    // it, so the snapshot already reflects any work those steps created — the liveness
+    // verdict cannot race work about to appear. Completeness (all-terminal) and economy
+    // (budget) are monotone-enough not to need this care; liveness is the one that does.
     const termination = await evaluateRunTermination(deps, this.budget.isExhausted(), runScope);
 
     // AFTER the termination evaluation: acceptanceAttempts is incremented inside
@@ -180,8 +125,8 @@ export class CoreLoop {
   }
 
   /**
-   * Adopts the durable run record on the first cycle: budget spend, acceptance
-   * attempts and replan rounds all resume where a killed process left them
+   * Adopts the durable run record on the first cycle: budget spend and acceptance
+   * attempts both resume where a killed process left them
    * (Discipline B). Runs once per process — after that the in-memory counters are
    * authoritative and are written back by persistRunCounters.
    *
@@ -195,7 +140,6 @@ export class CoreLoop {
     this.runState = state;
     this.budget.adoptSpend(state.spendUsd);
     this.deps.acceptanceAttempts = state.acceptanceAttempts;
-    this.deps.replanRounds = state.replanRounds;
   }
 
   private async persistRunCounters(): Promise<void> {
@@ -203,7 +147,6 @@ export class CoreLoop {
     this.runState = await persistRun(this.deps.runStateStore, this.runState, {
       spendUsd: this.budget.totalCostUsd,
       acceptanceAttempts: this.deps.acceptanceAttempts,
-      replanRounds: this.deps.replanRounds,
     });
   }
 }

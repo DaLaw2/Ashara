@@ -10,8 +10,8 @@ const MAX_CONTRACT_RETRY_ATTEMPTS = 3;
  * port, planning/src/domain/service.ts) — each retry re-reads the (now newer)
  * latest version internally. Bounded: after MAX_CONTRACT_RETRY_ATTEMPTS the
  * conflict propagates (Discipline A — fail closed, never loop forever). Shared
- * by story-decomposer.ts and coverage-reconciliation.ts, the two ProjectContract
- * amend sites.
+ * by bulk-plan.ts and coverage-reconciliation.ts, the two ProjectContract amend
+ * sites.
  */
 export async function amendContractWithRetry(
     contractRepo: ContractRepository,
