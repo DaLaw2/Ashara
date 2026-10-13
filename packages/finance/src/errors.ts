@@ -1,6 +1,6 @@
 import { PreCallRefusal } from "@ashara/llm-gateway";
 
-export interface UnpricedModelContext {
+interface UnpricedModelContext {
   readonly provider: string;
   readonly model: string;
   readonly inputCostPer1M: number;

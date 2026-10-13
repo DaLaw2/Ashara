@@ -85,8 +85,30 @@ function textResult(
   };
 }
 
-async function rowsOfThisProject() {
-  return calls.listByProject(projectId);
+const LlmCallRowSchema = z.object({
+  projectId: z.string(),
+  taskId: z.string().nullable(),
+  callSite: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  inputTokens: z.number().int().nullable(),
+  outputTokens: z.number().int().nullable(),
+  cacheReadTokens: z.number().int().nullable(),
+  cacheWriteTokens: z.number().int().nullable(),
+  costUsd: z.number().nullable(),
+  outcome: z.string(),
+  errorKind: z.string().nullable(),
+});
+
+async function rowsOfThisProject(): Promise<z.infer<typeof LlmCallRowSchema>[]> {
+  const result = await db.execute(sql`
+    SELECT project_id AS "projectId", task_id AS "taskId", call_site AS "callSite", provider, model,
+           input_tokens AS "inputTokens", output_tokens AS "outputTokens",
+           cache_read_tokens AS "cacheReadTokens", cache_write_tokens AS "cacheWriteTokens",
+           cost_usd::float8 AS "costUsd", outcome, error_kind AS "errorKind"
+    FROM llm_calls WHERE project_id = ${projectId}
+    ORDER BY created_at, id`);
+  return z.array(LlmCallRowSchema).parse(result.rows);
 }
 
 async function clearRows(): Promise<void> {

@@ -1,11 +1,10 @@
-import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { llmCalls } from "../schema.js";
 
 /** `error` always names its kind; `ok` never carries one (the table's CHECK enforces the same). */
-export type LlmCallOutcomeColumns =
+type LlmCallOutcomeColumns =
   | { readonly outcome: "ok"; readonly errorKind: null }
   | { readonly outcome: "error"; readonly errorKind: string };
 
@@ -23,7 +22,7 @@ export type NewLlmCall = {
   readonly costUsd: number | null;
 } & LlmCallOutcomeColumns;
 
-export type LlmCallRecord = NewLlmCall & {
+type LlmCallRecord = NewLlmCall & {
   readonly id: string;
   readonly createdAt: Date;
 };
@@ -77,14 +76,5 @@ export class LlmCallRepository {
       })
       .returning();
     return toRecord(row);
-  }
-
-  async listByProject(projectId: ProjectId): Promise<LlmCallRecord[]> {
-    const rows = await this.db
-      .select()
-      .from(llmCalls)
-      .where(eq(llmCalls.projectId, projectId))
-      .orderBy(asc(llmCalls.createdAt), asc(llmCalls.id));
-    return rows.map(toRecord);
   }
 }

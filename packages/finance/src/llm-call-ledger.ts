@@ -8,7 +8,7 @@ function isPrice(value: number): boolean {
 }
 
 /** Refuses a model whose input or output price is unset (0), negative or not a number. */
-export function assertPriced(provider: string, model: ModelConfig): void {
+function assertPriced(provider: string, model: ModelConfig): void {
   if (isPrice(model.inputCostPer1M) && isPrice(model.outputCostPer1M)) return;
   throw new UnpricedModel({
     provider,
@@ -25,7 +25,7 @@ export function assertPriced(provider: string, model: ModelConfig): void {
  * every input token at one rate, so the split into cache classes cannot move
  * the total and the unreported split is passed as 0 to the arithmetic only.
  */
-export function costOf(call: LlmProviderCall): number | null {
+function costOf(call: LlmProviderCall): number | null {
   const reported = call.usage?.reported;
   if (!reported || reported.inputTokens === null || reported.outputTokens === null) return null;
   if (call.model.supportsCaching && (reported.cacheReadTokens === null || reported.cacheWriteTokens === null)) {
@@ -41,7 +41,7 @@ export function costOf(call: LlmProviderCall): number | null {
 }
 
 /** Maps one provider call to its llm_calls row. Every unreported count stays `null`. */
-export function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
+function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
   const outcome =
     call.outcome.kind === "ok"
       ? { outcome: "ok" as const, errorKind: null }
