@@ -35,7 +35,6 @@ export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { NewLlmCall } from "./repositories/llm-call.js";
-/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export {
   MIGRATIONS_DIR,

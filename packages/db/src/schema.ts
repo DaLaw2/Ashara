@@ -53,6 +53,9 @@ export const projects = pgTable("projects", {
   planLastError: text("plan_last_error"),
   firstPlannedAt: timestamptz("first_planned_at"),
   planStoppedAt: timestamptz("plan_stopped_at"),
+  // Migration 033: the ordering hints the first plan's decomposition dropped,
+  // stamped with first_planned_at; NULL on a project planned before it.
+  planDroppedDependencies: jsonb("plan_dropped_dependencies"),
   // Migration 024: the target workspace Delivery works in. Minted once on first
   // dispatch, then never rewritten.
   workspacePath: text("workspace_path"),
@@ -95,6 +98,9 @@ export const workItems = pgTable("work_items", {
   // holding the capability that kind needs. Both or neither; only on a Task.
   workKind: text("work_kind"),
   ownerRoleId: uuid("owner_role_id"),
+  // Migration 033: a Sprint 0 task's stack statement, written when its substrate
+  // gate passed. Only on environment work.
+  environmentStatement: text("environment_statement"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

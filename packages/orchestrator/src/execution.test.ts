@@ -25,6 +25,7 @@ function freshPendingItem(): WorkItem {
     runScope: RUN_SCOPE,
     projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
+    workKind: "implementation",
     createdAt: now,
     updatedAt: now,
     events: [],

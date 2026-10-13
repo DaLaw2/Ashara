@@ -6,6 +6,7 @@ import type {
     DecompositionConfig,
     DecompositionInput,
     DecompositionResult,
+    DroppedDependency,
     PriorEpicResult,
     TaskSpec,
     WorkItemSpec,
@@ -132,7 +133,7 @@ export class DecompositionEngine {
         );
         const knownInput: DecompositionInput = { ...input, knowledge };
 
-        const tasks = await this.decomposeEpicIntoTasks(epic, knownInput);
+        const { tasks, droppedDependencies } = await this.decomposeEpicIntoTasks(epic, knownInput);
         for (const task of tasks) {
             allTasks.push(task);
             for (const dep of task.dependsOn) {
@@ -140,64 +141,69 @@ export class DecompositionEngine {
             }
         }
 
-        if (allTasks.length > 0) {
-            this.ensureScaffoldTask(allTasks, dependencyEdges);
-        }
+        // decomposeEpicIntoTasks never returns an empty list (TaskOutputSchema
+        // requires one task), so every plan carries its Sprint 0.
+        this.ensureSprint0Task(epic.id, allTasks, dependencyEdges);
 
         return {
             epic,
             tasks: allTasks,
             dependencyEdges,
             knowledge,
+            droppedDependencies,
         };
     }
 
     /**
-     * Guarantees exactly one project-level scaffold task exists whenever the decomposition
-     * produces any tasks at all. The task prompt does not mandate a scaffold (see
-     * buildDecomposePrompt), so it is created once here.
+     * Adds the plan's one Sprint 0 task (ADR-074 addendum 2 d62-d63): the
+     * environment role defines and builds the project environment, choosing the
+     * stack, before any implementation task runs, so every other task depends on
+     * it. Its text names no stack: choosing one is the task's own work. It carries
+     * no checks of its own; the environment substrate checks it.
      *
      * There is no equivalent `ensureWiringTask` — wiring is not a separate task. Every
-     * generated task is a vertical slice that mounts its own deliverable into the entry
-     * point in the same session (see buildDecomposePrompt's Task Quality Requirements),
-     * so no dedicated integration task exists to be starved by the dispatch queue.
+     * generated task is a vertical slice that makes its own outcome reachable in the
+     * same session (see buildDecomposePrompt's Task Quality Requirements), so no
+     * dedicated integration task exists to be starved by the dispatch queue.
      */
-    private ensureScaffoldTask(
+    private ensureSprint0Task(
+        epicId: string,
         tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>,
         dependencyEdges: Array<{ from: string; to: string }>,
     ): void {
-        if (tasks.length === 0) return;
-
-        const scaffoldId = generateId("task");
-        const description = `Initialize the project with the correct manifest file, entry point, and directory structure for its tech stack. Install dependencies. Create a verify.toml at the project root with a [checks] section listing the verification commands for this project. All other tasks depend on this.`;
-        const successCriteria = ["Project installs dependencies and starts with the scaffold in place", "verify.toml exists with at least one check entry"];
-        const scaffoldTask: WorkItemSpec & { taskSpec: TaskSpec } = {
-            id: scaffoldId,
+        const sprint0Id = generateId("task");
+        const successCriteria = [
+            "environment/environment.toml parses",
+            "the environment it defines builds",
+            "the environment's test command passes in a fresh cell and prints output",
+        ];
+        const sprint0Task: WorkItemSpec & { taskSpec: TaskSpec } = {
+            id: sprint0Id,
             level: "task",
-            title: `Create project scaffold: manifest, entry point, directory structure`,
-            // Names NO stack (ADR-046): the ProjectFrame carries the target and is
-            // rendered ahead of the task, so restating it in an LLM-authored
-            // description can only duplicate it — or, when derivation was weak,
-            // contradict it with the model's default (ADR-045's prescriptive drift).
-            description,
+            title: SPRINT0_TITLE,
+            description: SPRINT0_DESCRIPTION,
             successCriteria,
-            parentId: tasks[0].parentId,
+            parentId: epicId,
             dependsOn: [],
             taskSpec: {
-                goal: description,
+                goal: SPRINT0_DESCRIPTION,
                 endState: successCriteria.join("; "),
-                scope: "The project root: its manifest, entry point, directory structure and verify.toml",
-                deliverables: ["The project manifest", "The entry point", "verify.toml with a [checks] section"],
-                checks: [],
+                scope: "environment/environment.toml and the files it names",
+                deliverables: [
+                    "environment/environment.toml naming the owned paths, the containerfile, and the build and test commands",
+                    "the files environment/environment.toml names",
+                    "a one-paragraph statement of the stack chosen and why",
+                ],
                 capability: "Strong",
-                origin: "scaffold",
+                origin: "sprint0",
+                checkedBy: "substrate",
             },
         };
 
         for (const task of tasks) {
-            dependencyEdges.push({ from: task.id, to: scaffoldId });
+            dependencyEdges.push({ from: task.id, to: sprint0Id });
         }
-        tasks.unshift(scaffoldTask);
+        tasks.unshift(sprint0Task);
     }
 
     /**
@@ -210,28 +216,12 @@ export class DecompositionEngine {
         if (rawTasks.length > cap) {
             return { ok: false, errors: [new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId }).message] };
         }
-        const refs = new Set<string>();
-        const titles = new Set<string>();
-        for (const t of rawTasks) {
-            if (t.ref) refs.add(t.ref);
-            titles.add(t.title);
-        }
-
-        const errors: string[] = [];
-        for (const t of rawTasks) {
-            for (const dep of t.dependsOn) {
-                if (refs.has(dep) || titles.has(dep)) continue;
-                errors.push(
-                    new UnresolvableDependencyError({
-                        dependentTaskTitle: t.title,
-                        unresolvedRef: dep,
-                        availableRefs: [...refs],
-                        availableTitles: [...titles],
-                        parentId,
-                    }).message,
-                );
-            }
-        }
+        const availableRefs = rawTasks.flatMap((t) => (t.ref ? [t.ref] : []));
+        const availableTitles = rawTasks.map((t) => t.title);
+        const errors = unresolvedDependencies(rawTasks).map(
+            (unresolved) =>
+                new UnresolvableDependencyError({ ...unresolved, availableRefs, availableTitles, parentId }).message,
+        );
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
     }
 
@@ -276,9 +266,8 @@ export class DecompositionEngine {
                 endState: raw.endState,
                 scope: raw.scope,
                 deliverables: raw.deliverables,
-                checks: raw.checks,
                 capability: "Strong",
-                origin: "decomposition",
+                origin: "decomposition" as const,
             },
         }));
     }
@@ -311,7 +300,10 @@ export class DecompositionEngine {
     private async decomposeEpicIntoTasks(
         epic: WorkItemSpec,
         input: DecompositionInput,
-    ): Promise<Array<WorkItemSpec & { taskSpec: TaskSpec }>> {
+    ): Promise<{
+        readonly tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>;
+        readonly droppedDependencies: readonly DroppedDependency[];
+    }> {
         const taskCap = this.config.maxTasksPerEpic;
         const priorContext = this.buildPriorContext(input.priorEpicResults);
         const prompt = this.buildDecomposePrompt(
@@ -326,12 +318,28 @@ export class DecompositionEngine {
             taskCap,
         );
 
+        // Every unresolvable edge a rejected attempt carried. The re-ask tells the
+        // model to drop what it cannot express (gateway-adapters.ts), so an edge
+        // the accepted answer no longer carries is recorded here instead of vanishing.
+        const unresolvedSeen = new Map<string, DroppedDependency>();
         const parsed = await this.llm.generateStructured(
             prompt,
             TaskOutputSchema,
-            (value) => this.validateTasks(value.tasks, taskCap, epic.id),
+            (value) => {
+                for (const unresolved of unresolvedDependencies(value.tasks)) {
+                    unresolvedSeen.set(JSON.stringify([unresolved.dependentTaskTitle, unresolved.unresolvedRef]), unresolved);
+                }
+                return this.validateTasks(value.tasks, taskCap, epic.id);
+            },
         );
-        return this.resolveTasks(parsed.tasks, taskCap, epic.id);
+        // A ref that now resolves on the same task is kept, not dropped. An edge
+        // re-expressed under a different ref cannot be told apart from a drop, so
+        // it is listed: the record errs toward stating a drop.
+        const droppedDependencies = [...unresolvedSeen.values()].filter(
+            (seen) =>
+                !parsed.tasks.some((t) => t.title === seen.dependentTaskTitle && t.dependsOn.includes(seen.unresolvedRef)),
+        );
+        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id), droppedDependencies };
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {
@@ -366,7 +374,7 @@ export class DecompositionEngine {
         taskCap: number,
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "checks": ["..."]}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."]}]}';
 
         const lines = [
             `${instruction}.`,
@@ -404,16 +412,15 @@ export class DecompositionEngine {
             `Task Quality Requirements:`,
             `- Emit at most ${taskCap} tasks. A response with more is rejected, not truncated: merge related work instead.`,
             `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
-            `- Description must name concrete files or modules to create or modify.`,
-            `- successCriteria must include at least one executable verification (e.g., ${examples.checksExample}).`,
+            `- Describe each task by what the product does when it is finished, in the client's terms.`,
+            `- successCriteria are observable outcomes a user of the product could confirm (e.g., ${examples.successExample}).`,
             `- endState, scope and deliverables are required for every task; a task missing any of them is rejected.`,
-            `- deliverables must list specific file paths (e.g., ${examples.deliverablesExample}) not generic descriptions.`,
+            `- deliverables are observable outcomes (e.g., ${examples.deliverablesExample}), not generic descriptions.`,
             `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
-            `- scope must name specific directories or modules (e.g., ${examples.scopeExample}) not "the project".`,
-            `- checks must include at least one runnable command to verify completion (e.g., ${examples.checksExample}).`,
+            `- scope names the part of the product the task covers (e.g., ${examples.scopeExample}) not "the project".`,
             `- Give each task a short unique "ref" (e.g. "t1", "auth-mw"). In "dependsOn", list ONLY the "ref" values of OTHER tasks in THIS response that must complete first. Never paraphrase a title, never invent an id. A "dependsOn" entry that names no "ref" in this response is invalid.`,
-            `- Do not create a project scaffold (manifest, entry point, directory structure) as a separate task — that is a project-level task created once, outside this decomposition.`,
-            `- Each task must be a complete vertical slice: implement the feature AND make it reachable from the project's entry point, in whatever way the project's own structure requires, in the same task. Do not create a separate "wiring" or "integration" task — every task self-integrates by editing the entry point itself. Example: "${examples.verticalSliceExample}"`,
+            `- The project environment, including its technology choices, is set up once by a separate first task before these, outside this decomposition. Plan only the product's behavior here.`,
+            `- Each task must be a complete vertical slice: build the behavior AND make it reachable by the product's users in the same task. Do not create a separate "wiring" or "integration" task. Example: "${examples.verticalSliceExample}"`,
         );
 
         lines.push(
@@ -428,23 +435,44 @@ export class DecompositionEngine {
 
 }
 
+// Stack-free on purpose: nothing here names a file, a path, a command or a
+// technology, because the stack is chosen in Sprint 0, after this plan.
 interface ContextExamples {
     readonly titleExample: string;
+    readonly successExample: string;
     readonly deliverablesExample: string;
     readonly endStateExample: string;
     readonly scopeExample: string;
-    readonly checksExample: string;
     readonly verticalSliceExample: string;
 }
 
 const DECOMPOSITION_EXAMPLES: ContextExamples = {
     titleExample: '"Create the user registration feature with validation"',
-    deliverablesExample: '"the relevant source files for this feature"',
-    endStateExample: '"the feature works as specified and passes verification"',
-    scopeExample: "\"the directories containing this feature's source files\"",
-    checksExample: "\"the project's build and test commands pass\"",
-    verticalSliceExample: "Implement the feature, wire it into the entry point, and verify it works end-to-end.",
+    successExample: '"a visitor who registers with an email address already in use is told so and no second account exists"',
+    deliverablesExample: '"a visitor can register with an email address and then sign in"',
+    endStateExample: '"a registered user can sign in and sees their own account"',
+    scopeExample: '"user registration and sign-in"',
+    verticalSliceExample: "Build the registration behavior and make it reachable by visitors, end to end.",
 };
+
+const SPRINT0_TITLE = "Define and commit the project environment";
+
+const SPRINT0_DESCRIPTION =
+    "Define and commit the project environment: environment/environment.toml (owned paths, containerfile, " +
+    "build and test commands) and the files it names; build it with build_environment and finish with a " +
+    "one-paragraph statement of the stack you chose and why.";
+
+/** Each `dependsOn` entry that names neither a sibling's `ref` nor its exact title. */
+function unresolvedDependencies(rawTasks: readonly RawTask[]): DroppedDependency[] {
+    const known = new Set<string>();
+    for (const t of rawTasks) {
+        if (t.ref) known.add(t.ref);
+        known.add(t.title);
+    }
+    return rawTasks.flatMap((t) =>
+        t.dependsOn.filter((dep) => !known.has(dep)).map((dep) => ({ dependentTaskTitle: t.title, unresolvedRef: dep })),
+    );
+}
 
 let idCounter = 0;
 

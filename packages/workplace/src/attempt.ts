@@ -3,13 +3,14 @@ import type { CellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, TurnResult } from "@ashara/llm-gateway";
 import type { Assignment } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
-import { AttemptWallClockExhausted, ProviderErrorFinish } from "./errors.js";
+import type { EnvironmentCheckPort } from "./environment-check.js";
+import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { CostTally } from "./outcome.js";
 import type { LastToolCall, Outcome, Terminal } from "./outcome.js";
 import { FIRST_MESSAGE, buildSystemPrompt } from "./prompt.js";
 import { describeInput, errorMessage, errorName, toRecordedOutcome, truncateText } from "./records.js";
 import type { AttemptRecord, AttemptRecordSink } from "./records.js";
-import { TOOL_SCHEMAS, executeTool } from "./tools.js";
+import { executeTool, toolSchemasFor } from "./tools.js";
 
 /**
  * The routing site agent work is tagged with today (llm-gateway KNOWN_LLM_SITES, config/models.toml):
@@ -31,6 +32,11 @@ export interface AttemptDeps {
   readonly records: AttemptRecordSink;
   /** Aborting it ends the attempt as cancelled, the in-flight model call included. */
   readonly signal: AbortSignal;
+  /**
+   * Z0's environment check behind build_environment: required for an environment assignment and
+   * refused for any other, so the tool and its port cannot drift apart.
+   */
+  readonly environment: EnvironmentCheckPort | null;
 }
 
 class RecordWriteFailed extends Error {
@@ -47,11 +53,20 @@ class RecordWriteFailed extends Error {
  */
 export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Promise<Outcome> {
   const limits = resolveLimits(assignment);
+  const isEnvironmentWork = assignment.workKind === "environment";
+  if (isEnvironmentWork !== (deps.environment !== null)) {
+    throw new InvalidAssignment(assignment.taskId, [
+      isEnvironmentWork
+        ? "environment: an environment assignment needs Z0's environment check for build_environment"
+        : `environment: only an environment assignment may be given Z0's environment check (work kind ${assignment.workKind ?? "none"})`,
+    ]);
+  }
+  const tools = toolSchemasFor(assignment.workKind);
   const { clock, signal } = deps;
   const startedAt = clock.now();
   const deadline = startedAt + limits.wallClockMs;
   const llm = deps.llm.forCall({ projectId: assignment.projectId, taskId: assignment.taskId, callSite: AGENT_CALL_SITE });
-  const system = buildSystemPrompt(assignment.brief);
+  const system = buildSystemPrompt(assignment.brief, assignment.workKind);
   const messages: ModelMessage[] = [{ role: "user", content: FIRST_MESSAGE }];
   const costs = new CostTally();
   let turnsUsed = 0;
@@ -136,7 +151,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         model: assignment.model,
         system,
         messages,
-        tools: TOOL_SCHEMAS,
+        tools,
         abortSignal: AbortSignal.any([signal, wallClock.signal]),
       });
     } catch (error) {
@@ -210,6 +225,8 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
           : await executeTool(call.toolName, call.input, {
               cell: deps.cell,
               commandTimeoutSeconds: Math.min(limits.perCommandTimeoutSeconds, remainingSeconds),
+              tools,
+              environment: deps.environment,
             });
 
       if (execution.kind === "finish") {

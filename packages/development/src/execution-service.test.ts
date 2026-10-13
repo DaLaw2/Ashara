@@ -48,7 +48,6 @@ function brief(): AgentBrief {
       goal: "do the thing",
       projectFrame: { intent: "a thing", stack: ["Go"], source: "vision-derivation" },
       context: "end state: the thing exists",
-      constraints: [],
       deliverables: [],
     },
     "test",
@@ -204,6 +203,18 @@ function serviceOn(
       },
     },
     attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
+    environment: {
+      images: {
+        build: async () => {
+          throw new Error("no environment may be built");
+        },
+      },
+      statements: {
+        record: async () => {
+          throw new Error("no environment statement may be recorded");
+        },
+      },
+    },
     shutdownSignal: new AbortController().signal,
   });
   return { service, probe, events };
@@ -215,6 +226,7 @@ const someTask = () => ({
   title: "t",
   dispatchCount: 0,
   successCriteria: [],
+  workKind: "implementation" as const,
 });
 
 describe("a dispatch that cannot run in a cell ends before anything runs", () => {

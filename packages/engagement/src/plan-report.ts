@@ -9,14 +9,25 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
 
+/** The plan's tasks by producer, as task_spec.origin records it. */
+interface PlanTaskCounts {
+  readonly decomposition: number;
+  /** The task that sets up the project environment before any other. */
+  readonly sprint0: number;
+  readonly unrecorded: number;
+}
+
+/** Ordering hints between tasks that decomposition dropped; unrecorded for a plan written before they were recorded. */
+type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
+
 /** A recorded planning outcome the client has not been told about. */
 type DuePlanReport =
   | {
       readonly subject: "first-plan";
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
-      /** The plan's tasks by producer, as task_spec.origin records it. */
-      readonly tasks: { readonly decomposition: number; readonly scaffold: number; readonly unrecorded: number };
+      readonly tasks: PlanTaskCounts;
+      readonly droppedOrderingHints: DroppedOrderingHints;
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
   /** A first plan the store could not read back (a work item that does not parse). */
@@ -48,18 +59,22 @@ export interface LiaisonPlanReports {
 
 /**
  * A first plan that cannot be reported truthfully: no epic, no task decomposed
- * from the client's goal, or a task whose producer is not recorded (so it can be
- * neither counted toward the goal nor described as setup).
+ * from the client's goal, not exactly one environment setup task, a task whose
+ * producer is not recorded (so it can be neither counted toward the goal nor
+ * described as setup), or no record of the ordering hints the plan dropped.
  */
 class PlanReportUnfounded extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly epics: number,
-    readonly tasks: { readonly decomposition: number; readonly scaffold: number; readonly unrecorded: number },
+    readonly tasks: PlanTaskCounts,
+    readonly dropped: DroppedOrderingHints,
   ) {
+    const droppedText = dropped.kind === "recorded" ? `${dropped.count} dropped ordering hint(s)` : "no record of dropped ordering hints";
     super(
       `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
-        `${tasks.scaffold} scaffold task(s) and ${tasks.unrecorded} task(s) of unrecorded origin; no report is posted`,
+        `${tasks.sprint0} Sprint 0 task(s), ${tasks.unrecorded} task(s) of unrecorded origin and ${droppedText}; ` +
+        `no report is posted`,
     );
     this.name = "PlanReportUnfounded";
   }
@@ -71,18 +86,21 @@ function plural(count: number, noun: string): string {
 
 /**
  * Plain words, only what the plan holds: its epics, the tasks toward what the
- * client asked for, and the generic setup task stated apart from them.
+ * client asked for, the environment setup stated apart from them, and any
+ * ordering between tasks the plan could not keep.
  */
-function firstPlanReport(epicTitles: readonly string[], goalTasks: number, setupTasks: number): string {
+function firstPlanReport(epicTitles: readonly string[], goalTasks: number, droppedHints: number): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
+    `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
+      `before any of those tasks starts.`,
   ];
-  if (setupTasks > 0) {
+  if (droppedHints > 0) {
     paragraphs.push(
-      `Before those, ${plural(setupTasks, "standard setup task")} ${setupTasks === 1 ? "prepares" : "prepare"} ` +
-        `the project's basic structure; ${setupTasks === 1 ? "it is" : "they are"} not specific to your request.`,
+      `${plural(droppedHints, "ordering hint")} ${droppedHints === 1 ? "was" : "were"} dropped while planning: ` +
+        `the plan does not keep that order between its tasks.`,
     );
   }
   paragraphs.push(`When the plan was made, none of its tasks had been started.`);
@@ -139,9 +157,16 @@ export class PlanReports implements LiaisonPlanReports {
 
   private compose(due: ReportableDue): string {
     if (due.subject === "planning-stopped") return planningStoppedReport(due.attempts);
-    if (due.epicTitles.length === 0 || due.tasks.decomposition === 0 || due.tasks.unrecorded > 0) {
-      throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, due.tasks);
+    const { tasks, droppedOrderingHints: dropped } = due;
+    if (
+      due.epicTitles.length === 0 ||
+      tasks.decomposition === 0 ||
+      tasks.sprint0 !== 1 ||
+      tasks.unrecorded > 0 ||
+      dropped.kind === "unrecorded"
+    ) {
+      throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, tasks, dropped);
     }
-    return firstPlanReport(due.epicTitles, due.tasks.decomposition, due.tasks.scaffold);
+    return firstPlanReport(due.epicTitles, tasks.decomposition, dropped.count);
   }
 }

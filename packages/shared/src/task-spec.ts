@@ -13,14 +13,19 @@ const storedTaskSpecSchema = z.object({
   endState: z.string().optional(),
   scope: z.string().optional(),
   deliverables: z.array(z.string()).optional(),
-  checks: z.array(z.string()).optional(),
 
   // Decomposition metadata
   capability: z.string().optional(),
   // Which producer wrote the task: the decomposition of the client's goal, or the
-  // generic project scaffold decomposition adds to every plan (replaced by story
-  // s-platform-role-m1). Absent on rows written before it was recorded.
-  origin: z.enum(["decomposition", "scaffold"]).optional(),
+  // Sprint 0 task decomposition adds to every plan, in which the environment role
+  // defines the project environment (story s-platform-role-m1; migration 033
+  // renamed stored 'scaffold'). Absent on rows written before it was recorded.
+  origin: z.enum(["decomposition", "sprint0"]).optional(),
+  // What checks the task's work: "substrate" means the checks are the
+  // environment substrate's own (the definition parses, the image builds, its
+  // test command passes), so the task carries none of its own. Absent means no
+  // producer has said.
+  checkedBy: z.enum(["substrate"]).optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

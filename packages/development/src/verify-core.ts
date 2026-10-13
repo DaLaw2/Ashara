@@ -60,7 +60,6 @@ type VerifyLogFn = (event: Record<string, unknown>) => void;
 export interface CoreVerifyInput {
   readonly workDir: string;
   readonly gitRoot: string;
-  readonly checks: string[];
   /**
    * Executable checks extracted from the contract's knowledge-graph `check`
    * nodes. These are LLM-derived at decomposition time and carry the command
@@ -68,8 +67,8 @@ export interface CoreVerifyInput {
    * language list, so a PHP or Zig target works with zero code changes.
    *
    * Merge order: verify.toml (agent-observed reality) > contractChecks
-   * (LLM-derived intent) > taskSpec checks (decomposition NL). A check
-   * already present in a higher-priority source is not re-added.
+   * (LLM-derived intent). A check already present in verify.toml is not
+   * re-added.
    */
   readonly contractChecks: readonly string[];
 }
@@ -117,8 +116,7 @@ function assertValidVerifyPath(value: string, field: "workDir" | "gitRoot"): voi
 // ---------------------------------------------------------------------------
 
 /**
- * Run the deterministic checks (verify.toml first, then contract and task-spec
- * checks). `passed` is exactly the deterministic tier's outcome; nothing else
+ * Run the deterministic checks (verify.toml first, then contract checks). `passed` is exactly the deterministic tier's outcome; nothing else
  * feeds it. Ashara prepares no toolchain: whatever a check needs must already be
  * in the cell (s-platform-role-m1 builds images from the committed environment).
  *
@@ -168,14 +166,12 @@ export async function runVerifyCore(
   // Merge order (documented, not implicit):
   //   1. verify.toml — agent-observed reality, authoritative
   //   2. contractChecks — LLM-derived from knowledge-graph check nodes
-  //   3. taskSpec checks (input.checks) — decomposition NL, fill gaps
   //
-  // Per-task verification passes empty arrays for contractChecks and
-  // input.checks — those reference project-wide files that may not exist in
-  // a task's worktree. Only verify.toml (written by the agent in the
-  // worktree) is authoritative at per-task scope. Contract and taskSpec
-  // checks are deferred to integration verify, which runs against the full
-  // merged tree.
+  // Per-task verification passes an empty contractChecks — those reference
+  // project-wide files that may not exist in a task's worktree. Only
+  // verify.toml (written by the agent in the worktree) is authoritative at
+  // per-task scope. Contract checks are deferred to integration verify,
+  // which runs against the full merged tree.
   const seen = new Set<string>();
   const allChecks: string[] = [];
 
@@ -192,7 +188,6 @@ export async function runVerifyCore(
     addUnique(configChecks);
   }
   addUnique(contractChecks);
-  addUnique(input.checks);
 
   if (allChecks.length === 0) {
     const details = "no executable checks — unverified";

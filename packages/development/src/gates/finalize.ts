@@ -15,8 +15,6 @@ import {
   taskBranchName,
   tentativeMerge,
 } from "../merge.js";
-import { runVerifyCore } from "../verify-core.js";
-import type { CommandRunner, CoreVerifyResult } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
 
@@ -37,15 +35,22 @@ export interface FinalizeContractInfo {
   readonly entryPointPath: string | null;
 }
 
+/** The post-merge check's verdict on the target checkout holding the tentative merge. */
+export interface PostMergeVerdict {
+  readonly passed: boolean;
+  readonly details: string;
+}
+
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
   /**
-   * Runs `verify` with a runner into a short-lived role=verifier cell that mounts
-   * the target checkout, and tears the cell down after (execution-service). The
-   * cell has no network (execution-infra's podman run passes --network=none).
-   * Required, no fallback: there is no host runner.
+   * Checks the target checkout holding the tentative merge in a short-lived cell
+   * that mounts it, torn down after (execution-service): the task's verify checks,
+   * or for a substrate-checked task the environment's test from the image the gate
+   * built. The cell has no network (execution-infra's podman run passes
+   * --network=none). Required, no fallback: there is no host runner.
    */
-  readonly withVerifierCell: <T>(targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>) => Promise<T>;
+  readonly postMergeVerify: (targetProjectPath: string) => Promise<PostMergeVerdict>;
 }
 
 async function abortAndFail(
@@ -143,30 +148,9 @@ export async function finalizeSuccess(
     };
   }
 
-  // Per-task verify uses only verify.toml; contract and taskSpec checks are
-  // deferred to integration verify (they reference project-wide files that
-  // may not exist in this task's worktree).
-  let postMergeVerify: CoreVerifyResult;
+  let postMergeVerify: PostMergeVerdict;
   try {
-    postMergeVerify = await deps.withVerifierCell(targetProjectPath, (runCommand) =>
-      runVerifyCore(
-        {
-          workDir: targetProjectPath,
-          gitRoot: targetProjectPath,
-          checks: [],
-          contractChecks: [],
-        },
-        {
-          runCommand,
-          log: (event) => deps.eventSink?.emit({
-            ...event,
-            event: "post_merge_verify",
-            taskId: task.id,
-            attempt,
-          }),
-        },
-      ),
-    );
+    postMergeVerify = await deps.postMergeVerify(targetProjectPath);
   } catch (e) {
     // The verifier cell could not be created or the checks could not run: the
     // merge is unverified, so it is aborted (Discipline A). A substrate failure
@@ -190,15 +174,15 @@ export async function finalizeSuccess(
     );
   }
 
-  if (postMergeVerify.verdict !== "passed") {
+  if (!postMergeVerify.passed) {
     return abortAndFail(
       task.id,
       targetProjectPath,
       "post-merge verification FAILED — aborting tentative merge",
-      `Post-merge verify failed (same checks, target environment):\n${postMergeVerify.tiers.deterministic.details}`,
+      `Post-merge verify failed (same checks, target environment):\n${postMergeVerify.details}`,
       {
         operation: "postMergeVerify",
-        gateOutput: postMergeVerify.tiers.deterministic.details,
+        gateOutput: postMergeVerify.details,
         gateContext: { taskId: task.id, attempt },
       },
     );

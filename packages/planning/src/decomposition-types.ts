@@ -12,16 +12,33 @@ export interface WorkItemSpec {
     readonly dependsOn: string[];
 }
 
-type TaskOrigin = NonNullable<import("@ashara/shared").StoredTaskSpec["origin"]>;
-
-export interface TaskSpec {
+interface TaskSpecCore {
     readonly goal: string;
     readonly endState: string;
     readonly scope: string;
+    /** Observable outcomes, never file paths: the stack is not chosen until Sprint 0. */
     readonly deliverables: string[];
-    readonly checks: string[];
     readonly capability: import("@ashara/shared").CapabilityLevel;
-    readonly origin: TaskOrigin;
+}
+
+/**
+ * A planned task's specification. It carries no checks: the decomposer does not
+ * author them (ADR-074 addendum 2 d63; the check-author role does, story
+ * t-verify-checks-from-plan). Sprint 0 is checked by the environment substrate.
+ */
+export type TaskSpec =
+    | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
+    | (TaskSpecCore & { readonly origin: "decomposition" });
+
+/**
+ * A `dependsOn` entry the model emitted that named no sibling task, was re-asked
+ * with the ladder's "drop any dependency you cannot express" instruction, and is
+ * not carried by the accepted answer. The plan holds no edge for it; it is
+ * recorded so the drop is stated, not silent.
+ */
+export interface DroppedDependency {
+    readonly dependentTaskTitle: string;
+    readonly unresolvedRef: string;
 }
 
 export interface DecompositionInput {
@@ -56,6 +73,8 @@ export interface DecompositionResult {
      * identity element rather than guarding against it (ADR-048 cause A).
      */
     readonly knowledge: ProjectKnowledge;
+    /** Every ordering hint the re-ask dropped; empty when none was. */
+    readonly droppedDependencies: readonly DroppedDependency[];
 }
 
 export interface DecompositionConfig {
@@ -108,7 +127,6 @@ export const TaskOutputSchema = z.object({
         endState: z.string().trim().min(1),
         scope: z.string().trim().min(1),
         deliverables: z.array(z.string().trim().min(1)).min(1),
-        checks: z.array(z.string()).default([]),
     })).min(1),
 });
 

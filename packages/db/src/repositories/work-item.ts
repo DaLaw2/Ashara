@@ -25,6 +25,14 @@ class WorkItemOwnerNotAssignable extends Error {
   }
 }
 
+/** A stack statement was given for a work item that does not exist or is not environment work. */
+class EnvironmentStatementNotRecordable extends Error {
+  constructor(readonly workItemId: string) {
+    super(`cannot record an environment statement on work item ${workItemId}: no such item, or it is not environment work`);
+    this.name = "EnvironmentStatementNotRecordable";
+  }
+}
+
 export class WorkItemRepository {
   constructor(private readonly db: DbHandle) {}
 
@@ -68,6 +76,19 @@ export class WorkItemRepository {
       .where(and(eq(workItems.id, id), sql`${workItems.ownerRoleId} IS NULL`))
       .returning({ id: workItems.id });
     if (!row) throw new WorkItemOwnerNotAssignable(id, workKind, ownerRoleId);
+  }
+
+  /**
+   * Keeps a Sprint 0 task's statement of the stack it chose and why (migration 033).
+   * Only environment work takes one; a later attempt's statement replaces it.
+   */
+  async recordEnvironmentStatement(id: string, statement: string): Promise<void> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ environmentStatement: statement })
+      .where(and(eq(workItems.id, id), eq(workItems.workKind, "environment")))
+      .returning({ id: workItems.id });
+    if (!row) throw new EnvironmentStatementNotRecordable(id);
   }
 
   async findById(id: string) {

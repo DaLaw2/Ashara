@@ -48,29 +48,34 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
     },
     async writeFirstPlan(write) {
       // The bulk-plan path runs inside the locked first-plan transaction, so the
-      // items, their edges, their owners, the contract and the planned stamp
-      // commit together.
-      const result = await withFirstPlanTransaction(db, write.projectId, async ({ workItemRepo, contractRepo }) => {
-        const plan = await createBulkPlanWithContract(
-          {
-            withPlanningTransaction: (fn) => fn({ workItemRepo: adaptWorkItemRepo(workItemRepo), contractRepo }),
-            // The loop's run id is not handed to planning, so the first plan is written
-            // under RUN_SCOPE_AD_HOC. This is the only work-item writer, and nothing
-            // reads run_scope beyond parsing it.
-            runScope: RUN_SCOPE_AD_HOC,
-            projectId: write.projectId,
-          },
-          write.items,
-          write.edges,
-          write.knowledge,
-        );
-        for (const owner of write.owners) {
-          const id = plan.tempIdToId[owner.tempId];
-          if (id === undefined) throw new OwnedTaskNotPlanned(write.projectId, owner.tempId);
-          await workItemRepo.assignOwner(id, owner.workKind, owner.ownerRoleId);
-        }
-        return plan;
-      });
+      // items, their edges, their owners, the contract and the planned stamp with
+      // the dropped ordering hints commit together.
+      const result = await withFirstPlanTransaction(
+        db,
+        write.projectId,
+        write.droppedDependencies,
+        async ({ workItemRepo, contractRepo }) => {
+          const plan = await createBulkPlanWithContract(
+            {
+              withPlanningTransaction: (fn) => fn({ workItemRepo: adaptWorkItemRepo(workItemRepo), contractRepo }),
+              // The loop's run id is not handed to planning, so the first plan is written
+              // under RUN_SCOPE_AD_HOC. This is the only work-item writer, and nothing
+              // reads run_scope beyond parsing it.
+              runScope: RUN_SCOPE_AD_HOC,
+              projectId: write.projectId,
+            },
+            write.items,
+            write.edges,
+            write.knowledge,
+          );
+          for (const owner of write.owners) {
+            const id = plan.tempIdToId[owner.tempId];
+            if (id === undefined) throw new OwnedTaskNotPlanned(write.projectId, owner.tempId);
+            await workItemRepo.assignOwner(id, owner.workKind, owner.ownerRoleId);
+          }
+          return plan;
+        },
+      );
       return result.kind === "written" ? { kind: "written", created: result.value.created } : result;
     },
     recordFailedAttempt: (projectId, error) => recordFirstPlanFailure(db, projectId, error),

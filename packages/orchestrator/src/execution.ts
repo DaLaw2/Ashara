@@ -61,6 +61,7 @@ async function executeTask(
     blockedReason: task.blockedReason,
     epicId,
     dispatchCount: task.dispatchCount,
+    workKind: task.workKind,
     successCriteria: task.successCriteria ?? [],
   };
 

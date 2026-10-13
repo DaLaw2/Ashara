@@ -1,12 +1,17 @@
 import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import type { WorkKind } from "@ashara/organization";
 import { describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel, WorkKind } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
-import type { DecompositionInput, DecompositionResult, TaskSpec, WorkItemSpec } from "./decomposition-types.js";
+import type {
+  DecompositionInput,
+  DecompositionResult,
+  DroppedDependency,
+  TaskSpec,
+  WorkItemSpec,
+} from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's first plan of a project (story s-liaison-intake-m1, ADR-075): the
@@ -50,6 +55,8 @@ interface FirstPlanWrite {
   readonly knowledge: ProjectKnowledge;
   /** One entry per Task item; an Epic has no owner. */
   readonly owners: readonly TaskOwnership[];
+  /** Ordering hints the decomposition dropped, recorded with the plan so its report states them. */
+  readonly droppedDependencies: readonly DroppedDependency[];
 }
 
 type FirstPlanCommit =
@@ -174,13 +181,12 @@ function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
 type PlanOwners = Readonly<Record<"environment" | "implementation", { readonly id: string }>>;
 
 /**
- * The kind of work a planned task is. The scaffold sets the project up, which is
- * the environment's work until t-sprint0-replaces-scaffold replaces it; every
- * decomposed task is implementation.
+ * The kind of work a planned task is. Sprint 0 defines the project environment,
+ * the environment role's work; every decomposed task is implementation.
  */
 function workKindOf(origin: TaskSpec["origin"]): "environment" | "implementation" {
   switch (origin) {
-    case "scaffold":
+    case "sprint0":
       return "environment";
     case "decomposition":
       return "implementation";
@@ -211,7 +217,14 @@ function toWrite(projectId: ProjectId, result: DecompositionResult, owners: Plan
     const workKind = workKindOf(task.taskSpec.origin);
     return { tempId: task.id, workKind, ownerRoleId: owners[workKind].id };
   });
-  return { projectId, items, edges, knowledge: result.knowledge, owners: taskOwners };
+  return {
+    projectId,
+    items,
+    edges,
+    knowledge: result.knowledge,
+    owners: taskOwners,
+    droppedDependencies: result.droppedDependencies,
+  };
 }
 
 interface FirstPlannerDeps {
@@ -283,6 +296,12 @@ export class FirstPlanner implements FirstPlanning {
       return this.fail(project, err);
     }
     if (commit.kind === "already-planned") return { kind: "already-planned", projectId };
+    for (const dropped of write.droppedDependencies) {
+      console.warn(
+        `[first-plan] project ${projectId}: ordering hint dropped: "${dropped.dependentTaskTitle}" named ` +
+          `"${dropped.unresolvedRef}", which is no task of the plan; no edge was written for it`,
+      );
+    }
     const epics = write.items.filter((item) => item.level === "Epic").length;
     return { kind: "planned", projectId, epics, tasks: commit.created - epics };
   }

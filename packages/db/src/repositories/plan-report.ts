@@ -1,4 +1,5 @@
 import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   parseProjectId,
   parseWorkItemJsonb,
@@ -9,6 +10,7 @@ import {
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
+import type { DroppedPlanDependency } from "./first-plan.js";
 import { noOpenStop } from "./project.js";
 
 // The Liaison's reports on planning outcomes (migration 020). A report is due
@@ -20,10 +22,35 @@ type PlanReportSubject = "first-plan" | "planning-stopped";
 interface TaskCounts {
   /** Tasks the decomposition of the client's goal produced. */
   readonly decomposition: number;
-  /** The generic project scaffold decomposition adds to every plan. */
-  readonly scaffold: number;
+  /** The Sprint 0 task decomposition adds to every plan: the project environment. */
+  readonly sprint0: number;
   /** Tasks whose task_spec records no origin (written before origin was recorded). */
   readonly unrecorded: number;
+}
+
+/** How many ordering hints the plan dropped; unrecorded on a project planned before migration 033. */
+type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
+
+const DroppedPlanDependenciesSchema: z.ZodType<DroppedPlanDependency[]> = z.array(
+  z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() }),
+);
+
+/** projects.plan_dropped_dependencies holds something other than migration 033's list. */
+class PlanDroppedDependenciesCorrupt extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly issues: string,
+  ) {
+    super(`project ${projectId}: plan_dropped_dependencies does not parse: ${issues}`);
+    this.name = "PlanDroppedDependenciesCorrupt";
+  }
+}
+
+function droppedOrderingHints(projectId: ProjectId, raw: unknown): DroppedOrderingHints {
+  if (raw === null) return { kind: "unrecorded" };
+  const parsed = DroppedPlanDependenciesSchema.safeParse(raw);
+  if (!parsed.success) throw new PlanDroppedDependenciesCorrupt(projectId, z.prettifyError(parsed.error));
+  return { kind: "recorded", count: parsed.data.length };
 }
 
 type DuePlanReportRow =
@@ -32,9 +59,13 @@ type DuePlanReportRow =
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
       readonly tasks: TaskCounts;
+      readonly droppedOrderingHints: DroppedOrderingHints;
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
-  /** A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt). */
+  /**
+   * A planned project with a work item whose jsonb does not parse (WorkItemRowCorrupt), or whose
+   * recorded dropped ordering hints do not (PlanDroppedDependenciesCorrupt).
+   */
   | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
 const unreported = (subject: PlanReportSubject) =>
@@ -56,7 +87,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   const due: DuePlanReportRow[] = [];
 
   const planned = await db
-    .select({ id: projects.id })
+    .select({ id: projects.id, droppedDependencies: projects.planDroppedDependencies })
     .from(projects)
     .where(and(eq(projects.status, "active"), isNotNull(projects.firstPlannedAt), unreported("first-plan"), noOpenStop(projects.id)))
     .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -76,12 +107,14 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
     const projectId = parseProjectId(row.id);
     let origins: Array<string | undefined>;
+    let dropped: DroppedOrderingHints;
     try {
       origins = items.map((i) => ({ level: i.level, spec: parseWorkItemJsonb(i).taskSpec }))
         .filter((i) => i.level === "Task")
         .map((i) => i.spec?.origin);
+      dropped = droppedOrderingHints(projectId, row.droppedDependencies);
     } catch (err) {
-      if (!(err instanceof WorkItemRowCorrupt)) throw err;
+      if (!(err instanceof WorkItemRowCorrupt) && !(err instanceof PlanDroppedDependenciesCorrupt)) throw err;
       due.push({ subject: "first-plan-unreadable", projectId, cause: projectBlockCause(err) });
       continue;
     }
@@ -91,9 +124,10 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       epicTitles: items.filter((i) => i.level === "Epic").map((i) => i.title),
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,
-        scaffold: origins.filter((o) => o === "scaffold").length,
+        sprint0: origins.filter((o) => o === "sprint0").length,
         unrecorded: origins.filter((o) => o === undefined).length,
       },
+      droppedOrderingHints: dropped,
     });
   }
 

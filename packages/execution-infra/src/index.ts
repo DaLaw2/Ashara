@@ -15,11 +15,10 @@ export {
 export { CellExecFailed } from "./errors.js";
 export { initHostRepo, runHostGit } from "./host-git.js";
 export type { HostRepo } from "./host-git.js";
-/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
-export { environmentVersion, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
-/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export { parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
 export type { EnvironmentDefinition } from "./environment.js";
 /** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
+export { environmentVersion } from "./environment.js";
 export { buildEnvironmentImage } from "./environment-build.js";
-/** @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1) */
-export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+export type { BuiltEnvironment, EnvironmentBuildRequest } from "./environment-build.js";
+export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, PodmanCommandFailed } from "./errors.js";

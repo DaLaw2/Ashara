@@ -264,6 +264,8 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
   readonly exitCode: number | null;
   readonly timedOut: boolean;
   readonly logTail: string;
+  /** Whether the log was longer than logTail, which is then only its end. */
+  readonly logTruncated: boolean;
   readonly detail: string;
 
   constructor(
@@ -272,6 +274,7 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
     exitCode: number | null,
     timedOut: boolean,
     logTail: string,
+    logTruncated: boolean,
     detail: string,
     options?: ErrorOptions,
   ) {
@@ -286,6 +289,7 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
     this.exitCode = exitCode;
     this.timedOut = timedOut;
     this.logTail = logTail;
+    this.logTruncated = logTruncated;
     this.detail = detail;
   }
 }

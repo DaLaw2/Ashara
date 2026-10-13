@@ -1,4 +1,4 @@
-import { CellExecFailed, CellStartFailed, SubstrateUnavailable } from "@ashara/execution-infra";
+import { CellExecFailed, CellStartFailed, PodmanCommandFailed, SubstrateUnavailable } from "@ashara/execution-infra";
 
 /**
  * execution-infra's MountPathRejected, recognised by its own name and typed fields because the
@@ -17,7 +17,7 @@ interface MountRefusal extends Error {
  * CellTeardownFailed is not one: no stage ends on it (execution-service's teardownCell logs it and
  * leaves the cell to teardownAll and reconcileOrphans).
  */
-export type EnvironmentError = SubstrateUnavailable | CellStartFailed | CellExecFailed | MountRefusal;
+export type EnvironmentError = SubstrateUnavailable | CellStartFailed | CellExecFailed | PodmanCommandFailed | MountRefusal;
 
 function isMountRefusal(e: Error): e is MountRefusal {
   return (
@@ -30,7 +30,14 @@ function isMountRefusal(e: Error): e is MountRefusal {
 
 /** The environment error `e` is, or null: decided by class (MountPathRejected by its name and fields), never by a message. */
 export function environmentErrorOf(e: unknown): EnvironmentError | null {
-  if (e instanceof SubstrateUnavailable || e instanceof CellStartFailed || e instanceof CellExecFailed) return e;
+  if (
+    e instanceof SubstrateUnavailable ||
+    e instanceof CellStartFailed ||
+    e instanceof CellExecFailed ||
+    e instanceof PodmanCommandFailed
+  ) {
+    return e;
+  }
   if (e instanceof Error && isMountRefusal(e)) return e;
   return null;
 }
@@ -38,6 +45,7 @@ export function environmentErrorOf(e: unknown): EnvironmentError | null {
 /** What was unavailable, named for the operator; `cell` names the cell the stage ran on. */
 export function unavailableOf(e: EnvironmentError, cell: string): string {
   if (e instanceof SubstrateUnavailable) return `container substrate (${e.binary})`;
+  if (e instanceof PodmanCommandFailed) return `container substrate (podman ${e.operation})`;
   if (e instanceof CellStartFailed || e instanceof CellExecFailed) return cell;
   return `${cell} mount (${e.hostPath})`;
 }

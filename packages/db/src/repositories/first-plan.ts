@@ -109,18 +109,26 @@ export async function listProjectsAwaitingFirstPlan(db: DbHandle): Promise<Proje
   }));
 }
 
+/** A `dependsOn` entry a first plan's decomposition dropped (migration 033). */
+export interface DroppedPlanDependency {
+  readonly dependentTaskTitle: string;
+  readonly unresolvedRef: string;
+}
+
 type FirstPlanTransaction<T> =
   | { readonly kind: "written"; readonly value: T }
   | { readonly kind: "already-planned" };
 
 /**
  * Runs the plan write in one transaction with the project row locked, then
- * stamps first_planned_at. If the project no longer awaits a plan when the lock
- * is held (work items appeared, or an outcome was stamped), nothing is written.
+ * stamps first_planned_at together with the ordering hints the plan dropped. If
+ * the project no longer awaits a plan when the lock is held (work items
+ * appeared, or an outcome was stamped), nothing is written.
  */
 export async function withFirstPlanTransaction<T>(
   db: Database,
   projectId: ProjectId,
+  droppedDependencies: readonly DroppedPlanDependency[],
   fn: (repos: PlanningTransactionRepos) => Promise<T>,
 ): Promise<FirstPlanTransaction<T>> {
   return db.transaction(async (tx) => {
@@ -143,7 +151,10 @@ export async function withFirstPlanTransaction<T>(
     if (!anyItem) throw new ProjectNotAwaitingPlan(projectId, "stamp a first plan that wrote no work items");
     const unowned = await tasksWithoutRosterOwner(tx, projectId);
     if (unowned.length > 0) throw new FirstPlanTaskUnowned(projectId, unowned);
-    await tx.update(projects).set({ firstPlannedAt: sql`now()` }).where(eq(projects.id, projectId));
+    await tx
+      .update(projects)
+      .set({ firstPlannedAt: sql`now()`, planDroppedDependencies: droppedDependencies })
+      .where(eq(projects.id, projectId));
     return { kind: "written", value };
   });
 }

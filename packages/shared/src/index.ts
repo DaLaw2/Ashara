@@ -71,6 +71,9 @@ export { WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./wor
 
 export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 
+export type { WorkKind } from "./work-kind.js";
+export { WORK_KINDS, parseWorkKind } from "./work-kind.js";
+
 export type { ContractRepository } from "./repository-ports.js";
 
 export { CONVERSATION_RECORDS_DIR } from "./workspace-layout.js";

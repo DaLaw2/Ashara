@@ -3,5 +3,4 @@ export interface TaskSpec {
   readonly endState: string;
   readonly scope: string;
   readonly deliverables: string[];
-  readonly checks: string[];
 }

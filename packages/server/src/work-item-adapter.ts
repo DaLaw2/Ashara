@@ -6,6 +6,7 @@ import {
   parseWorkItemJsonb,
   parseRunScope,
   parseProjectId,
+  parseWorkKind,
 } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "@ashara/planning";
 
@@ -35,6 +36,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     runScope: parseRunScope(row.runScope),
     projectId: parseProjectId(row.projectId),
     dispatchCount: row.dispatchCount,
+    workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
     events: [],

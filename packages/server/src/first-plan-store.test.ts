@@ -261,14 +261,25 @@ async function edgesOf(projectId: ProjectId): Promise<string[]> {
     .sort();
 }
 
-const SCAFFOLD_TITLE = "Create project scaffold: manifest, entry point, directory structure";
+const SPRINT0_TITLE = "Define and commit the project environment";
 
-/** t2 depends on t1, and every decomposed task depends on the scaffold decomposition adds. */
+/** t2 depends on t1, and every decomposed task depends on the Sprint 0 task decomposition adds. */
 const EXPECTED_EDGES = [
   `${BOOKING_FORM} -> ${CLASS_LIST}`,
-  `${BOOKING_FORM} -> ${SCAFFOLD_TITLE}`,
-  `${CLASS_LIST} -> ${SCAFFOLD_TITLE}`,
+  `${BOOKING_FORM} -> ${SPRINT0_TITLE}`,
+  `${CLASS_LIST} -> ${SPRINT0_TITLE}`,
 ].sort();
+
+/** The ordering hints recorded as dropped with the project's first plan. */
+async function droppedOf(projectId: ProjectId) {
+  const result = await db.execute(
+    sql`SELECT plan_dropped_dependencies AS "dropped" FROM projects WHERE id = ${projectId}`,
+  );
+  const [row] = z
+    .array(z.object({ dropped: z.array(z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() })) }))
+    .parse(result.rows);
+  return row?.dropped;
+}
 
 async function callSitesOf(projectId: ProjectId): Promise<string[]> {
   const result = await db.execute(sql`SELECT call_site AS "callSite" FROM llm_calls WHERE project_id = ${projectId}`);
@@ -330,7 +341,7 @@ describe("first plan", () => {
 
     const outcomes = await planner().runPending();
 
-    // Two decomposed tasks plus the scaffold task decomposition always adds.
+    // Two decomposed tasks plus the Sprint 0 task decomposition always adds.
     expect(outcomes).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 3 }]);
     const items = await workItemsOf(projectId);
     const epics = items.filter((i) => i.level === "Epic");
@@ -349,9 +360,32 @@ describe("first plan", () => {
     const outbound = await outboundOf(projectId);
     expect(outbound).toHaveLength(1);
     expect(outbound[0]?.kind).toBe("report");
-    // The generic scaffold is stated apart, not counted toward the client's goal.
+    // Sprint 0 is stated apart, not counted toward the client's goal.
     expect(outbound[0]?.body).toMatch(/1 epic \(".*"\), split into 2 tasks for what you asked for\./);
-    expect(outbound[0]?.body).toContain("Before those, 1 standard setup task prepares the project's basic structure");
+    expect(outbound[0]?.body).toContain("First, the team sets up the project environment");
+    expect(outbound[0]?.body).not.toContain("ordering hint");
+    expect(await droppedOf(projectId)).toEqual([]);
+  });
+
+  test("an ordering hint the re-ask drops is recorded with the plan and stated in its report", async () => {
+    let taskCalls = 0;
+    stubModel({
+      doGenerate: async (options) => {
+        if (JSON.stringify(options.prompt).includes("structured knowledge graph")) return jsonResult(KNOWLEDGE);
+        taskCalls += 1;
+        const [classList, bookingForm] = TASKS.tasks;
+        // First answer names a task it never wrote; the corrected one drops that edge.
+        return jsonResult(taskCalls === 1 ? { tasks: [classList, { ...bookingForm, dependsOn: ["t1", "payments"] }] } : TASKS);
+      },
+    });
+    const projectId = await projectWithVision();
+
+    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 3 }]);
+
+    expect(await droppedOf(projectId)).toEqual([{ dependentTaskTitle: BOOKING_FORM, unresolvedRef: "payments" }]);
+    expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
+    expect(await reports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
+    expect((await outboundOf(projectId))[0]?.body).toContain("1 ordering hint was dropped while planning");
   });
 
   test("each task records which producer wrote it, and no decomposition temp id is stored", async () => {
@@ -364,7 +398,7 @@ describe("first plan", () => {
     );
     const rows = z.array(z.object({ title: z.string(), taskSpec: z.record(z.string(), z.unknown()) })).parse(specs.rows);
     expect(rows.map((r) => `${r.title}: ${String(r.taskSpec["origin"])}`).sort()).toEqual(
-      [`${CLASS_LIST}: decomposition`, `${BOOKING_FORM}: decomposition`, `${SCAFFOLD_TITLE}: scaffold`].sort(),
+      [`${CLASS_LIST}: decomposition`, `${BOOKING_FORM}: decomposition`, `${SPRINT0_TITLE}: sprint0`].sort(),
     );
     expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
   });
@@ -381,7 +415,7 @@ describe("first plan", () => {
       [
         `Task ${CLASS_LIST}: implementation / Implementer`,
         `Task ${BOOKING_FORM}: implementation / Implementer`,
-        `Task ${SCAFFOLD_TITLE}: environment / Platform`,
+        `Task ${SPRINT0_TITLE}: environment / Platform`,
       ].sort(),
     );
   });
@@ -399,6 +433,7 @@ describe("first plan", () => {
       edges: [],
       knowledge: KNOWLEDGE,
       owners: [],
+      droppedDependencies: [],
     });
 
     await expect(write).rejects.toMatchObject({ name: "FirstPlanTaskUnowned" });
@@ -456,6 +491,7 @@ describe("first plan", () => {
       edges: [{ from: "task-1", to: "ghost" }],
       knowledge: KNOWLEDGE,
       owners: [],
+      droppedDependencies: [],
     });
 
     await expect(write).rejects.toMatchObject({ name: "BulkReferenceError", reference: "ghost" });
@@ -587,7 +623,7 @@ describe("tender to first plan", () => {
       [
         `Task ${CLASS_LIST}: implementation / Implementer`,
         `Task ${BOOKING_FORM}: implementation / Implementer`,
-        `Task ${SCAFFOLD_TITLE}: environment / Platform`,
+        `Task ${SPRINT0_TITLE}: environment / Platform`,
       ].sort(),
     );
     // Delivery plans on the assumptions the open questions adopted, not only the unasked one.
@@ -612,6 +648,7 @@ describe("tender to first plan", () => {
     const report = outbound.filter((m) => m.kind === "report");
     expect(report).toHaveLength(1);
     expect(report[0]?.body).toMatch(/split into 2 tasks for what you asked for\./);
+    expect(report[0]?.body).toContain("First, the team sets up the project environment");
     expect(outbound).toHaveLength(3);
   });
 });

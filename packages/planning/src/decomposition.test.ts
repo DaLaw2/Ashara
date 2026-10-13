@@ -62,10 +62,74 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.knowledge.nodes).toEqual([]);
-        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["scaffold", "decomposition", "decomposition"]);
+        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "decomposition"]);
         expect(result.tasks[2]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
+        expect(result.droppedDependencies).toEqual([]);
+    });
+
+    test("a plan has exactly one Sprint 0 task, checked by the substrate, that every other task depends on; no task carries checks", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const sprint0 = result.tasks.filter((t) => t.taskSpec.origin === "sprint0");
+        expect(sprint0).toHaveLength(1);
+        const sprint0Id = sprint0[0]?.id;
+        expect(sprint0[0]?.taskSpec).toMatchObject({ checkedBy: "substrate" });
+        expect(sprint0[0]?.dependsOn).toEqual([]);
+        for (const t of result.tasks.filter((t) => t.id !== sprint0Id)) {
+            expect(result.dependencyEdges).toContainEqual({ from: t.id, to: sprint0Id });
+        }
+        expect(result.tasks.every((t) => !("checks" in t.taskSpec))).toBe(true);
+    });
+
+    test("the task prompt names no stack and demands no file path or command", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        await new DecompositionEngine(llm).decompose(INPUT);
+
+        const prompt = seen.prompts[1] ?? "";
+        expect(prompt).toContain("Plan only the product's behavior here.");
+        const forbidden = [
+            /file path/i, /\bfiles?\b/i, /director(y|ies)/i, /\bcommands?\b/i, /runnable/i, /executable/i,
+            /entry point/i, /manifest/i, /verify\.toml/i, /"checks"/, /\bnpm\b/i, /cargo/i, /package\.json/i,
+            /python/i, /typescript/i, /javascript/i, /\bnode\b/i, /\bjava\b/i, /\bphp\b/i, /\bgo\b/i, /rust/i,
+            /docker/i, /react/i, /\bsql\b/i, /\bsrc\//i,
+        ];
+        expect(forbidden.filter((pattern) => pattern.test(prompt)).map(String)).toEqual([]);
+    });
+
+    test("an edge the re-ask drops is recorded on the plan, and a ref it then fixes is not", async () => {
+        const answers = [
+            // Rejected: "ghost" and "t9" name no task.
+            { tasks: [task("t1", { dependsOn: ["ghost"] }), task("t2", { dependsOn: ["t9"] })] },
+            // Accepted: "ghost" dropped; "t9" fixed by emitting a task with that ref.
+            { tasks: [task("t1"), task("t2", { dependsOn: ["t9"] }), task("t9")] },
+        ];
+        const llm: DecompositionLLM = {
+            async generateStructured<T>(
+                prompt: string,
+                schema: ZodType<T>,
+                validate?: (value: T) => StructuredValidation,
+            ): Promise<T> {
+                seen.prompts.push(prompt);
+                if (prompt.includes("structured knowledge graph")) return schema.parse({ nodes: [], edges: [] });
+                for (const answer of answers) {
+                    const value = schema.parse(answer);
+                    const verdict = validate ? validate(value) : { ok: true as const };
+                    seen.verdicts.push(verdict);
+                    if (verdict.ok) return value;
+                }
+                throw new Error("scripted answers exhausted");
+            },
+        };
+
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        expect(seen.verdicts.map((v) => v.ok)).toEqual([false, true]);
+        expect(result.droppedDependencies).toEqual([{ dependentTaskTitle: "Task t1", unresolvedRef: "ghost" }]);
+        const byTitle = new Map(result.tasks.map((t) => [t.title, t.id]));
+        expect(result.dependencyEdges).toContainEqual({ from: byTitle.get("Task t2"), to: byTitle.get("Task t9") });
     });
 
     test("states the per-epic cap and rejects an over-cap response instead of truncating it", async () => {

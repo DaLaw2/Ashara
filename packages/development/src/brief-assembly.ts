@@ -9,7 +9,7 @@ import type { TaskSpec } from "./types.js";
  * The context map for a working directory with no files in it (ADR-046). An
  * empty string would render as no context section at all — indistinguishable to
  * the agent from a normal project — so emptiness is stated instead of implied.
- * The scaffold task always sees this: its tree is empty by construction.
+ * The Sprint 0 task sees this on a new project: it runs before any other task.
  */
 export const EMPTY_WORKDIR_CONTEXT_MAP = [
   "# Project Context",
@@ -34,16 +34,12 @@ export function formatTaskSpec(spec: TaskSpec): string {
         "",
         "## Deliverables",
         ...spec.deliverables.map((d, i) => `${i + 1}. ${d}`),
-        "",
-        "## Verification Checks",
-        ...spec.checks.map((c) => `- ${c}`),
     ].join("\n");
 }
 
 /**
  * Renders success criteria as a brief section the agent reads as its acceptance
- * target. Distinct from Verification Checks: criteria are prose the agent aims
- * for; checks are commands the runner executes. Returns "" when the list is
+ * target: prose the agent aims for, not commands anything executes. Returns "" when the list is
  * empty — an absent section, not a fabricated one (Discipline A).
  */
 export function formatAcceptanceCriteria(criteria: readonly string[]): string {

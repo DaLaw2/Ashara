@@ -1,3 +1,4 @@
+import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
 
 /**
@@ -6,8 +7,11 @@ import type { AssignmentBrief } from "./assignment.js";
  * commits), no stack literal, the cell's isolation is stated, and the attempt ends only through
  * the finish tool.
  */
-export function buildSystemPrompt(brief: AssignmentBrief): string {
-  return [STATIC_PROMPT, buildTaskPrompt(brief)].join("\n\n");
+export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | null): string {
+  const sections = [STATIC_PROMPT];
+  if (workKind === "environment") sections.push(ENVIRONMENT_PROMPT);
+  sections.push(buildTaskPrompt(brief));
+  return sections.join("\n\n");
 }
 
 export const FIRST_MESSAGE = "Begin the task. Use your tools; call finish when you are done or blocked.";
@@ -70,6 +74,18 @@ const STATIC_PROMPT = [
 ].join("\n\n");
 
 /**
+ * Environment work defines how the project is built and tested; it names no stack: choosing one is
+ * the work. Its finish summary is the statement of that choice, which Z0 keeps on the task.
+ */
+const ENVIRONMENT_PROMPT = [
+  `# Defining the environment`,
+  `You define the environment every later task of this project works in.`,
+  `- Use build_environment to build the environment you defined and run its test command. Call it again after`,
+  `  each change; finish with status "done" only after it reports PASSED on the files as they are.`,
+  `- The finish summary of this task is a one-paragraph statement of the stack you chose and why, not a list of changes.`,
+].join("\n");
+
+/**
  * The project frame first (ADR-046): an agent that reads the task first has committed to a stack
  * before it learns what the project is.
  */
@@ -108,9 +124,6 @@ function buildTaskPrompt(brief: AssignmentBrief): string {
       `## Deliverables (Required)\nYou are DONE when all deliverables exist and pass checks:\n` +
         brief.deliverables.map((d) => `- [ ] ${d}`).join("\n"),
     );
-  }
-  if (brief.constraints.length > 0) {
-    sections.push(`## Constraints (Must Follow)\n${brief.constraints.map((c) => `- ${c}`).join("\n")}`);
   }
   if (brief.contextMap !== undefined && brief.contextMap.trim() !== "") {
     sections.push(`## Project Context Map\n${brief.contextMap}`);

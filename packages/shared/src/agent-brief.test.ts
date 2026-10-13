@@ -9,7 +9,6 @@ function minimalBrief(): AgentBrief {
     goal: "implement the thing",
     projectFrame: { intent: "a project", stack: ["TypeScript"], source: "vision-derivation" },
     context: "end state: the thing works",
-    constraints: [],
     deliverables: [],
   };
 }

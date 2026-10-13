@@ -57,7 +57,6 @@ function toRecord(row: EnvironmentBuildRow): EnvironmentBuildRecord {
 /**
  * Execution Infrastructure's environment builds (migration 032). Implements execution-infra's
  * EnvironmentBuildRecorder; the composition root supplies it.
- * @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1)
  */
 export class EnvironmentBuildRepository {
   constructor(private readonly db: DbHandle) {}

@@ -44,6 +44,9 @@ interface TaskRow {
   readonly blockedReason?: unknown;
 }
 
+/** The environment task every reportable first plan holds. */
+const SPRINT0: TaskRow = { taskSpec: { origin: "sprint0", checkedBy: "substrate" } };
+
 const jsonb = (value: unknown) => (value === undefined ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`);
 
 /** A project with one epic and one task per row given; planned when `planned`. */
@@ -63,7 +66,10 @@ async function projectWith(handle: Handle, tasks: readonly TaskRow[], planned: b
       VALUES (${taskId}, 'Task', ${task.status ?? "Pending"}, ${epicId}, ${`Task ${taskId}`}, ${jsonb(task.taskSpec)},
               ${jsonb(task.successCriteria)}, ${jsonb(task.blockedReason)}, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
   }
-  if (planned) await handle.execute(sql`UPDATE projects SET first_planned_at = now() WHERE id = ${project.id}`);
+  if (planned) {
+    await handle.execute(sql`
+      UPDATE projects SET first_planned_at = now(), plan_dropped_dependencies = '[]'::jsonb WHERE id = ${project.id}`);
+  }
   return { projectId: project.id, taskIds };
 }
 
@@ -143,9 +149,9 @@ afterAll(async () => {
 
 describe("one project's bad record in a cycle", () => {
   test("an unfounded first plan blocks only its project; the healthy project is reported and gated in the same cycle", async () => {
-    const healthy = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }], true);
+    const healthy = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }, SPRINT0], true);
     // A task with no recorded origin: the Liaison cannot report the plan truthfully.
-    const bad = await projectWith(db, [{ taskSpec: { goal: "Set up the studio list." } }], true);
+    const bad = await projectWith(db, [{ taskSpec: { goal: "Set up the studio list." } }, SPRINT0], true);
 
     // The cycle's order: the Liaison's reports, then gating.
     const outcomes = await reports(db).runPending();
@@ -197,7 +203,7 @@ describe("one project's bad record in a cycle", () => {
 
   test("a corrupt row in a planned project blocks it at reporting instead of failing every project's reports", async () => {
     await inRolledBackTransaction(async (tx) => {
-      const founded = await projectWith(tx, [{ taskSpec: { origin: "decomposition" } }], true);
+      const founded = await projectWith(tx, [{ taskSpec: { origin: "decomposition" } }, SPRINT0], true);
       const corrupt = await projectWith(tx, [{ taskSpec: { origin: "decomposition" }, successCriteria: "not a list" }], true);
 
       const outcomes = await reports(tx).runPending();

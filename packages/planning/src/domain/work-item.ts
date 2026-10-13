@@ -7,6 +7,7 @@ import {
   type StoredTaskSpec,
   type StoredBlockedReason,
   type StoredSuccessCriteria,
+  type WorkKind,
   createWorkItemId,
   createDomainEvent,
   canTransitionTo,
@@ -40,6 +41,11 @@ export interface WorkItem {
    * The FailureRouter reads this as the retry-bound signal — decoupled from billing.
    */
   dispatchCount: number;
+  /**
+   * The kind of work a Task is (migration 031), set with its owner when the plan is
+   * written. null on an Epic and on a task planned before owners were assigned.
+   */
+  workKind: WorkKind | null;
   createdAt: Date;
   updatedAt: Date;
   events: DomainEvent[];
@@ -70,6 +76,7 @@ export function createPendingWorkItem(
     runScope,
     projectId,
     dispatchCount: 0,
+    workKind: null,
     createdAt: now,
     updatedAt: now,
     events: [],

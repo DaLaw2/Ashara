@@ -60,7 +60,7 @@ interface EnvironmentBuildRecorder {
   recordFailed(build: FailedEnvironmentBuild): Promise<unknown>;
 }
 
-interface EnvironmentBuildRequest {
+export interface EnvironmentBuildRequest {
   readonly projectId: ProjectId;
   /** The target repository's git dir, read for committed objects only. */
   readonly repoGitDir: string;
@@ -75,14 +75,24 @@ interface EnvironmentBuildDeps {
   readonly timeoutMs: number;
 }
 
-interface BuiltEnvironment extends EnvironmentBuildIdentity {
-  readonly imageId: string;
-  /** True when an image already built for this project and version was used as is. */
-  readonly reused: boolean;
+/** The last LOG_TAIL_CHARS characters of a build's log, and whether anything before them was cut. */
+interface BuildLogTail {
+  readonly text: string;
+  readonly truncated: boolean;
 }
+
+export type BuiltEnvironment = EnvironmentBuildIdentity & { readonly imageId: string } & (
+    /** An image already built for this project and version was used as is: no build ran, so there is no log. */
+    | { readonly reused: true }
+    | { readonly reused: false; readonly log: BuildLogTail }
+  );
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function tailOf(log: string): BuildLogTail {
+  return log.length <= LOG_TAIL_CHARS ? { text: log, truncated: false } : { text: log.slice(-LOG_TAIL_CHARS), truncated: true };
 }
 
 function sha256(text: string): string {
@@ -120,7 +130,6 @@ async function existingImageId(substrate: PodmanSubstrate, imageRef: string, pro
 /**
  * Builds the project's environment image from the owned files at `commit` and nothing else, or
  * reuses the image already built for this version when its succeeded build is on record.
- * @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1)
  */
 export async function buildEnvironmentImage(request: EnvironmentBuildRequest, deps: EnvironmentBuildDeps): Promise<BuiltEnvironment> {
   const issues: string[] = [];
@@ -145,15 +154,16 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
   }
 
   const fail = async (exitCode: number | null, timedOut: boolean, log: string, detail: string, cause?: unknown): Promise<never> => {
+    const tail = tailOf(log);
     const error = new EnvironmentBuildFailed(
-      request.projectId, snapshot.version, exitCode, timedOut, log.slice(-LOG_TAIL_CHARS), detail,
+      request.projectId, snapshot.version, exitCode, timedOut, tail.text, tail.truncated, detail,
       cause === undefined ? undefined : { cause },
     );
     try {
       await deps.recorder.recordFailed({ ...identity, logDigest: sha256(log), error: error.message });
     } catch (recordErr) {
       throw new EnvironmentBuildFailed(
-        request.projectId, snapshot.version, exitCode, timedOut, log.slice(-LOG_TAIL_CHARS),
+        request.projectId, snapshot.version, exitCode, timedOut, tail.text, tail.truncated,
         `${detail}; recording the failed build also failed: ${messageOf(recordErr)}`,
         { cause: error },
       );
@@ -199,7 +209,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       return await fail(result.exitCode, false, log, `podman build succeeded but wrote no valid image id: ${messageOf(err)}`, err);
     }
     await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(log) });
-    return { ...identity, imageId, reused: false };
+    return { ...identity, imageId, reused: false, log: tailOf(log) };
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

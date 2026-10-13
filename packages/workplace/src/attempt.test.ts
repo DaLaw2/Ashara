@@ -9,6 +9,7 @@ import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
+import type { EnvironmentCheckPort, EnvironmentCheckReport } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import type { AttemptRecord } from "./records.js";
@@ -119,12 +120,12 @@ function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
     projectId: parseProjectId("00000000-0000-4000-8000-000000000001"),
     taskId: createWorkItemId(),
     role: "worker",
+    workKind: "implementation",
     model,
     brief: {
       goal: "Write hello.txt",
       projectFrame: { intent: "A greeting file", stack: ["Plain text"], source: "contract-knowledge" },
       context: "An empty workspace.",
-      constraints: [],
       deliverables: ["hello.txt"],
     },
     limits: { maxTurns: 10, perCommandTimeoutSeconds: 60, ...limits },
@@ -139,6 +140,7 @@ function deps(llm: ContextualTurnLlm, cell: CellBackend, overrides: Partial<Atte
     clock: { now: () => Date.now() },
     records: { append: async (record) => void records.push(record) },
     signal: new AbortController().signal,
+    environment: null,
     ...overrides,
   };
   return { deps: full, records };
@@ -353,6 +355,93 @@ describe("runAttempt", () => {
   });
 });
 
+describe("build_environment", () => {
+  const tested: EnvironmentCheckReport = {
+    kind: "tested",
+    version: "v".repeat(64),
+    imageRef: "localhost/ashara-env-p:vvvv",
+    build: { kind: "built", log: { text: "STEP 1/1: FROM base", truncated: false } },
+    test: { command: "echo ok", exitCode: 0, timedOut: false, stdout: { text: "ok\n", truncated: false }, stderr: { text: "", truncated: false } },
+  };
+
+  function port(report: EnvironmentCheckReport) {
+    const timeouts: number[] = [];
+    const environment: EnvironmentCheckPort = {
+      async check(testTimeoutSeconds) {
+        timeouts.push(testTimeoutSeconds);
+        return report;
+      },
+    };
+    return { environment, timeouts };
+  }
+
+  it("is offered only to environment work, and an implementation attempt's call to it is refused", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "build_environment", input: {} }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+    ]);
+    const { cell } = fakeCell();
+
+    await runAttempt(assignment(), deps(llm, cell).deps);
+
+    expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("build_environment");
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({
+      type: "error-text",
+      value: expect.stringContaining('Unknown tool "build_environment"'),
+    });
+  });
+
+  it("returns the version, build log and test output to the environment role's model", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "build_environment", input: {} }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "A shell-only environment, because nothing more is needed." } }]),
+    ]);
+    const { cell } = fakeCell();
+    const { environment, timeouts } = port(tested);
+
+    const outcome = await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, cell, { environment }).deps);
+
+    expect(outcome).toMatchObject({ kind: "finished", status: "done" });
+    expect(Object.keys(requests[0]?.tools ?? {})).toContain("build_environment");
+    expect(requests[0]?.system).toContain("statement of the stack you chose and why");
+    expect(timeouts).toEqual([60]);
+    const [result] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(result).toMatchObject({ type: "text", value: expect.stringContaining(`Environment version ${"v".repeat(64)}`) });
+    expect(result).toMatchObject({ value: expect.stringContaining("Test stdout:\nok") });
+    expect(result).toMatchObject({ value: expect.stringContaining("Verdict: PASSED") });
+  });
+
+  it("a test that prints nothing or a failed build is a tool error the model can act on, not a crash", async () => {
+    const silent: EnvironmentCheckReport = { ...tested, test: { ...tested.test, stdout: { text: "", truncated: false } } };
+    const failed: EnvironmentCheckReport = {
+      kind: "build_failed",
+      version: "v".repeat(64),
+      detail: "podman build exited 1",
+      log: { text: "Error: no such image", truncated: true },
+    };
+    for (const [report, expected] of [
+      [silent, "FAILED: the test command printed nothing"],
+      [failed, "Build log (truncated: only its end is shown):\nError: no such image"],
+    ] as const) {
+      const { llm, requests } = scriptedLlm([
+        () => turn([{ name: "build_environment", input: {} }]),
+        () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails." } }]),
+      ]);
+      const { environment } = port(report);
+      await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+      expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining(expected) });
+    }
+  });
+
+  it("refuses an environment assignment without Z0's check, and the check for any other work", async () => {
+    const { llm } = scriptedLlm([]);
+    const { environment } = port(tested);
+
+    await expect(runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+    await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { environment }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+  });
+});
+
 describe("workplace boundaries", () => {
   it("no production file reaches the host filesystem or spawns a host process", async () => {
     const dir = fileURLToPath(new URL(".", import.meta.url));
@@ -365,7 +454,7 @@ describe("workplace boundaries", () => {
   });
 
   it("the system prompt tells the agent nothing about git", () => {
-    const prompt = buildSystemPrompt(assignment().brief);
+    const prompt = buildSystemPrompt(assignment().brief, "implementation");
     expect(prompt).not.toMatch(/\bgit\b/i);
     expect(prompt).toContain("A greeting file");
   });

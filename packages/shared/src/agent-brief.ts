@@ -13,7 +13,7 @@ import { ProjectFrameSchema } from "./project-frame.js";
  *  - FRAME: `projectFrame`, what the project IS (owner intent verbatim, the target stack as labels,
  *    and where that stack was derived from). Required and rendered first: it is the one thing the
  *    agent cannot discover for itself and would otherwise fill in from its training prior (ADR-046).
- *  - BINDING: `taskId`, `goal`, `context`, `constraints`, `deliverables`, `priorAttemptFailure`,
+ *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`,
  *    `knowledgeContext`: the instruction, its requirements and prior lessons.
  *  - SUPPLEMENTARY: `contextMap`, reference rendered after the binding sections.
  */
@@ -23,7 +23,6 @@ const AgentBriefSchema = z
     goal: z.string().min(1),
     projectFrame: ProjectFrameSchema,
     context: z.string().min(1),
-    constraints: z.array(z.string()),
     deliverables: z.array(z.string()),
     knowledgeContext: z.string().optional(),
     contextMap: z.string().optional(),

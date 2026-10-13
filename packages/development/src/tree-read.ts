@@ -9,8 +9,6 @@ import { isAbsolute, join } from "node:path";
  * lstat'ed and a symbolic link anywhere refuses the read; the final file is opened with
  * O_NOFOLLOW and O_NONBLOCK (a planted FIFO must not hang Z0), and the opened file and every
  * component are re-checked against what was lstat'ed, so a swap during the read is refused too.
- *
- * @testseam tree-read.test.ts and context-map.test.ts assert the typed refusal
  */
 export class TreePathRefused extends Error {
   constructor(

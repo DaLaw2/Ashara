@@ -1,14 +1,11 @@
-import type { ProjectId } from "@ashara/shared";
+import { WORK_KINDS } from "@ashara/shared";
+import type { ProjectId, WorkKind } from "@ashara/shared";
 import type { CapabilityClass, Role, RoleRef, Roster, RosterViolation } from "./roster.js";
 import { ref } from "./roster.js";
 
 // Who owns a WorkKind (ADR-075 context map: Organization is upstream of Delivery).
 // The owner is the role holding the capability the kind of work needs; M1 assigns
 // deterministically, so that capability must have exactly one holder.
-
-const WORK_KINDS = ["environment", "implementation", "check"] as const;
-
-export type WorkKind = (typeof WORK_KINDS)[number];
 
 const CAPABILITY_FOR: Readonly<Record<WorkKind, CapabilityClass>> = {
   environment: "write-environment",

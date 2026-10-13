@@ -97,12 +97,12 @@ describe("runAttempt on a real cell", () => {
           projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
           taskId,
           role: "worker",
+          workKind: "implementation",
           model: gateway.resolveModel("Strong", "agent-runner"),
           brief: {
             goal: "Write src/hello.txt",
             projectFrame: { intent: "A greeting file", stack: ["Plain text"], source: "contract-knowledge" },
             context: "An empty workspace.",
-            constraints: [],
             deliverables: ["src/hello.txt"],
           },
           limits: { maxTurns: 5, perCommandTimeoutSeconds: 30 },
@@ -113,6 +113,7 @@ describe("runAttempt on a real cell", () => {
           clock: { now: () => Date.now() },
           records: { append: async (record) => void records.push(record) },
           signal: new AbortController().signal,
+          environment: null,
         },
       );
 

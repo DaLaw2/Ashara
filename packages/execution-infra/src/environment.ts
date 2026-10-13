@@ -68,7 +68,6 @@ function messageOf(err: unknown): string {
 
 /**
  * Parses `environment/environment.toml` text. `source` names where it was read from, for the error.
- * @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1)
  */
 export function parseEnvironmentDefinition(text: string, source: string): EnvironmentDefinition {
   let raw: unknown;
@@ -101,7 +100,6 @@ async function resolveCommit(gitDir: string, rev: string): Promise<string> {
 
 /**
  * Reads and parses the definition as committed at `commit` (never from a work tree).
- * @testseam adopted by t-dispatch-by-env-version (s-platform-role-m1)
  */
 export async function readEnvironmentDefinition(gitDir: string, commit: string): Promise<EnvironmentDefinition> {
   const hash = await resolveCommit(gitDir, commit);

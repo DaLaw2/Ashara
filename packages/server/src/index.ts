@@ -20,6 +20,7 @@ import {
   ClientSessionRepository,
   ClientRepository,
   ClientLoginFailureRepository,
+  EnvironmentBuildRepository,
   createProjectWithTender,
   assertMigrationsCurrent,
   MIGRATIONS_DIR,
@@ -53,7 +54,7 @@ import type {
   ProjectIntentSource,
   StackDeriver,
 } from "@ashara/development";
-import { PodmanSubstrate, loadBaseCell } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
 import {
   BudgetLedger,
   buildGateway,
@@ -109,6 +110,9 @@ const ATTEMPT_POLICY = {
 };
 // Interim: s-team-roster-m1 replaces this with the roster's role for the task.
 const AGENT_ROLE = "developer";
+// Wall clock of one `podman build` of an environment version (build_environment and the
+// Sprint 0 gate); the podman client is killed after it.
+const ENVIRONMENT_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
 const CLIENT_LOGIN_THROTTLE = {
   windowSeconds: 15 * 60,
@@ -253,6 +257,7 @@ async function main(): Promise<void> {
     mountRoot: config.coreLoop.workdirBase,
   });
   const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
+  const environmentBuildRepo = new EnvironmentBuildRepository(db);
   const baseCell = await loadBaseCell();
   console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
 
@@ -364,6 +369,17 @@ async function main(): Promise<void> {
     llm: llmGateway,
     staffing,
     attemptPolicy: ATTEMPT_POLICY,
+    environment: {
+      images: {
+        build: (request) =>
+          buildEnvironmentImage(request, {
+            substrate: cellSubstrate,
+            recorder: environmentBuildRepo,
+            timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
+          }),
+      },
+      statements: { record: (taskId, statement) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement) },
+    },
     shutdownSignal: abortController.signal,
   });
 

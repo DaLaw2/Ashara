@@ -69,6 +69,7 @@ function pendingTask(id: WorkItemId, title: string): WorkItem {
     runScope: "run-parallel-test",
     projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
+    workKind: "implementation",
     createdAt: now,
     updatedAt: now,
     events: [],

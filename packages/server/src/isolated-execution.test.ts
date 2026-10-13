@@ -146,12 +146,24 @@ describe("a task runs on cells end to end", () => {
       llm: gateway,
       staffing: { staff: () => ({ role: "developer", model: gateway.resolveModel("Strong", "agent-runner") }) },
       attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
+      environment: {
+        images: {
+          build: async () => {
+            throw new Error("an implementation task builds no environment");
+          },
+        },
+        statements: {
+          record: async () => {
+            throw new Error("an implementation task records no environment statement");
+          },
+        },
+      },
       shutdownSignal: new AbortController().signal,
     });
 
     try {
       const result = await service.execute(
-        { id: taskId, projectId, title: "Write hello.txt", dispatchCount: 0, successCriteria: [] },
+        { id: taskId, projectId, title: "Write hello.txt", dispatchCount: 0, workKind: "implementation", successCriteria: [] },
         target,
       );
 

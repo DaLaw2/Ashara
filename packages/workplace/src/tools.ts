@@ -2,6 +2,9 @@ import { z } from "zod";
 import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
+import type { WorkKind } from "@ashara/shared";
+import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
+import type { EnvironmentCheckPort } from "./environment-check.js";
 import { truncateText } from "./records.js";
 
 const MAX_LIST_DEPTH = 5;
@@ -17,6 +20,7 @@ const listDirectoryArgs = z
   .strict();
 const searchArgs = z.object({ pattern: nonEmpty, path: nonEmpty.optional() }).strict();
 const runCommandArgs = z.object({ command: nonEmpty, timeout_seconds: z.number().int().positive().optional() }).strict();
+const buildEnvironmentArgs = z.object({}).strict();
 const finishArgs = z.discriminatedUnion("status", [
   z.object({ status: z.literal("done"), summary: nonEmpty }).strict(),
   z.object({ status: z.literal("blocked"), summary: nonEmpty, blockedReason: nonEmpty }).strict(),
@@ -26,8 +30,10 @@ type FinishArgs = z.infer<typeof finishArgs>;
 
 const pathProperty = { type: "string", description: "Path relative to the workspace root." } as const;
 
+type ToolSchemas = Readonly<Record<string, TurnToolSchema>>;
+
 /** What the model sees: description and input schema only; the loop executes every call. */
-export const TOOL_SCHEMAS: Readonly<Record<string, TurnToolSchema>> = {
+const TOOL_SCHEMAS: ToolSchemas = {
   read_file: {
     description:
       "Read the contents of a file. You MUST read a file before editing it: you need its exact current text.",
@@ -115,6 +121,20 @@ export const TOOL_SCHEMAS: Readonly<Record<string, TurnToolSchema>> = {
   },
 };
 
+/** Only the role that defines the environment can build it (the work kind needing "write-environment"). */
+const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
+  description:
+    "Build the environment defined in environment/environment.toml from the workspace's current files, then run " +
+    "its test command in a fresh workspace started from the built image. Returns the environment version, the " +
+    "build log and the test output. Only the image build can reach the network.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+/** The tools an attempt offers the model: build_environment only for environment work. */
+export function toolSchemasFor(workKind: WorkKind | null): ToolSchemas {
+  return workKind === "environment" ? { ...TOOL_SCHEMAS, build_environment: BUILD_ENVIRONMENT_SCHEMA } : TOOL_SCHEMAS;
+}
+
 export type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
@@ -124,6 +144,10 @@ export interface ToolContext {
   readonly cell: CellBackend;
   /** The per-command bound for this call: the attempt's limit, cut further by the wall clock left. */
   readonly commandTimeoutSeconds: number;
+  /** The tools offered to the model this attempt; a call to any other is refused. */
+  readonly tools: ToolSchemas;
+  /** Z0's environment check; non-null exactly when the tools include build_environment. */
+  readonly environment: EnvironmentCheckPort | null;
 }
 
 function toolError(message: string): ToolExecution {
@@ -177,6 +201,9 @@ function countOccurrences(text: string, needle: string): { readonly count: numbe
 
 async function runTool(toolName: string, input: unknown, context: ToolContext): Promise<ToolExecution> {
   const { cell } = context;
+  if (!Object.hasOwn(context.tools, toolName)) {
+    return toolError(`Unknown tool "${toolName}". Available tools: ${Object.keys(context.tools).join(", ")}.`);
+  }
   switch (toolName) {
     case "read_file": {
       const args = readFileArgs.safeParse(input);
@@ -232,13 +259,20 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       }
       return formatRun(result, timeoutSeconds);
     }
+    case "build_environment": {
+      const args = buildEnvironmentArgs.safeParse(input);
+      if (!args.success) return argsError(toolName, args.error);
+      if (context.environment === null) return toolError(`build_environment is not available in this attempt.`);
+      const report = await context.environment.check(context.commandTimeoutSeconds);
+      return { kind: "result", output: formatEnvironmentCheck(report), isError: !environmentCheckPassed(report) };
+    }
     case "finish": {
       const args = finishArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       return { kind: "finish", args: args.data };
     }
     default:
-      return toolError(`Unknown tool "${toolName}". Available tools: ${Object.keys(TOOL_SCHEMAS).join(", ")}.`);
+      return toolError(`Unknown tool "${toolName}". Available tools: ${Object.keys(context.tools).join(", ")}.`);
   }
 }
 

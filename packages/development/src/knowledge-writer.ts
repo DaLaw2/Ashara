@@ -24,7 +24,7 @@ export interface KnowledgeSink {
  * found none) — the predicate that closes the cross-project leak Q5
  * identified (`recentFindings` previously had no scope predicate at all).
  * `queryText` is embedder-free lexical signal derived from the task's own
- * spec (title + goal + endState + scope + deliverables + checks), letting the
+ * spec (title + goal + endState + scope + deliverables), letting the
  * port rank same-epic rows by relevance to THIS task instead of returning an
  * identical top-N to every task in the epic (Q3b).
  */
@@ -56,7 +56,7 @@ export interface KnowledgeSource {
  * this definition.
  */
 export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
-  return [title, spec.goal, spec.endState, spec.scope, ...spec.deliverables, ...spec.checks]
+  return [title, spec.goal, spec.endState, spec.scope, ...spec.deliverables]
     .filter((part) => part.length > 0)
     .join(" ");
 }

@@ -42,6 +42,7 @@ function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkI
     updatedAt: new Date(),
     events: [],
     ...overrides,
+    workKind: overrides.workKind ?? null,
   };
 }
 

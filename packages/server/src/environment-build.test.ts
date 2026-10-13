@@ -115,7 +115,11 @@ describe("environment image build", () => {
       { projectId, repoGitDir: gitDir, commit: "main", definition },
       { substrate, recorder: builds, timeoutMs: 120_000 },
     );
-    expect(again).toEqual({ ...built, reused: true });
+    // A reuse runs no build, so it carries no log; everything else is the first build's.
+    expect(built.reused ? null : built.log.truncated).toBe(false);
+    const { reused: _reused, ...identity } = again;
+    expect(again.reused).toBe(true);
+    expect(built).toMatchObject(identity);
     expect(await rows()).toHaveLength(1);
 
     const workspace = await mkdtemp(join(root, "ws-"));
