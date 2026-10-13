@@ -60,14 +60,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // No default: every run dispatches paid agents, so the cap is the owner's explicit consent to spend.
   const budgetLimitUsd = parseBudgetLimit(rawBudgetLimit);
 
-  // Coverage reconciliation is ENFORCING by default (mig9-t2, ADR-032 §2). The
-  // rollback: ASHARA_COVERAGE_ENFORCING=0 (or "false") switches to observe-only —
-  // gaps are logged and reported but never block a rollup.
-  const coverageEnforcing = !(
-    process.env["ASHARA_COVERAGE_ENFORCING"] === "0" ||
-    process.env["ASHARA_COVERAGE_ENFORCING"]?.toLowerCase() === "false"
-  );
-
   const coreLoop: CoreLoopConfig = {
     ...DEFAULT_CONFIG,
     workdirBase,
@@ -75,7 +67,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     asharaSourceDir,
     maxBatchSize,
     budgetLimitUsd,
-    coverageEnforcing,
   };
 
   return {

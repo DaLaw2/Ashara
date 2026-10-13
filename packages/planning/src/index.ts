@@ -1,7 +1,6 @@
 export type {
   WorkItem,
   WorkItemRepository,
-  CoverageHold,
 } from "./domain/index.js";
 export {
   startWorkItem,
@@ -23,17 +22,11 @@ export type {
 } from "./decomposition-types.js";
 export { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 export type { DecompositionLLM } from "./decomposition.js";
-export { deriveCompletionEndpoint, deriveCompletionModule } from "./contract-derivation.js";
 
 export { FailureRouter } from "./failure-router.js";
 export type { RawFailureContext } from "./failure-router.js";
 
 export { createGatewayDecompositionLLM } from "./gateway-adapters.js";
-
-export {
-  reconcileCoverage,
-  createCoverageRollupGuard,
-} from "./coverage-reconciliation.js";
 
 export { createBulkPlanWithContract, BulkReferenceError } from "./bulk-plan.js";
 export type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "./bulk-plan.js";
@@ -44,8 +37,5 @@ export {
   tryParseEnvelope,
 } from "./failure-classifier.js";
 
-export type {
-  ContractRegistryLookup,
-  FailureRecoveryDeps,
-} from "./lifecycle/index.js";
+export type { FailureRecoveryDeps } from "./lifecycle/index.js";
 export { recoverFailedItem } from "./lifecycle/index.js";

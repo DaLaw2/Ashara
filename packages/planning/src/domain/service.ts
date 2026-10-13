@@ -13,7 +13,7 @@ import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
 import { TaskSelector } from "./select.js";
-import { LifecycleRouter, type CoverageHold } from "./router.js";
+import { LifecycleRouter } from "./router.js";
 import { applyContractDelta } from "./contract-merge.js";
 import { ContractAlreadyExists, ContractNotFound } from "./errors.js";
 
@@ -34,9 +34,8 @@ export class PlanningService {
     repo: WorkItemRepository,
     taskId: WorkItemId,
     success: boolean,
-    coverageHold?: CoverageHold,
   ): Promise<DomainEvent[]> {
-    return LifecycleRouter.route(repo, taskId, success, coverageHold);
+    return LifecycleRouter.route(repo, taskId, success);
   }
 
   static async activateAncestors(
@@ -95,10 +94,9 @@ export class PlanningService {
 
   /**
    * Merges an additive delta onto the project's latest contract and writes the
-   * result as version latest+1 (ADR-028). A divergent redeclaration (endpoint ref at
-   * a new path, module path with a new purpose) throws ContractConflict and leaves
-   * the prior version intact. Read-latest → validate → insert is transactional, so a
-   * rejection or injected failure rolls back cleanly and no version is skipped.
+   * result as version latest+1 (ADR-028). Read-latest → merge → insert is
+   * transactional, so an injected failure rolls back cleanly and no version is
+   * skipped.
    *
    * Retry contract: if a concurrent amend already took version latest+1, this throws
    * ContractVersionConflict (not a raw driver error). That is the RETRYABLE signal —

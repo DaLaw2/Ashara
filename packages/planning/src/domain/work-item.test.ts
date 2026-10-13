@@ -1,7 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import {
-  TERMINAL_STATUSES,
   RUN_SCOPE_AD_HOC,
   canTransitionTo,
   InvalidStatusTransition,
@@ -82,12 +81,9 @@ describe("canTransitionTo — Failed recovery transitions", () => {
 });
 
 describe("state-machine totality", () => {
-  test("every non-terminal status has at least one exit", () => {
-    for (const from of ALL_STATUSES) {
-      if (TERMINAL_STATUSES.has(from)) continue;
-      const exits = ALL_STATUSES.filter((to) => canTransitionTo(from, to));
-      expect(exits.length, `${from} has no outbound transition`).toBeGreaterThan(0);
-    }
+  test("Abandoned is the only status with no exit", () => {
+    const terminal = ALL_STATUSES.filter((from) => !ALL_STATUSES.some((to) => canTransitionTo(from, to)));
+    expect(terminal).toEqual(["Abandoned"]);
   });
 
   test("every status is either terminal or reachable — no declared-but-unwritable state", () => {
@@ -268,12 +264,6 @@ describe("abandonWorkItem", () => {
 describe("Completed re-entry", () => {
   test("canTransitionTo('Completed', 'Pending') returns true", () => {
     expect(canTransitionTo("Completed", "Pending")).toBe(true);
-  });
-
-  test("TERMINAL_STATUSES contains only Abandoned, not Completed", () => {
-    expect(TERMINAL_STATUSES.has("Abandoned")).toBe(true);
-    expect(TERMINAL_STATUSES.has("Completed")).toBe(false);
-    expect(TERMINAL_STATUSES.size).toBe(1);
   });
 });
 

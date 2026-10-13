@@ -16,11 +16,10 @@
 // Domain types
 export type { WorkItem } from "@ashara/planning";
 export type { WorkItemRepository } from "@ashara/planning";
-export type { CoverageHold } from "@ashara/planning";
 
 // Failure / recovery types
 export type { FailureRouter, RawFailureContext } from "@ashara/planning";
-export type { ContractRegistryLookup, FailureRecoveryDeps } from "@ashara/planning";
+export type { FailureRecoveryDeps } from "@ashara/planning";
 
 // --- Values (re-exported) ---
 
@@ -34,9 +33,6 @@ export {
   requeueWorkItem,
   takeEvents,
 } from "@ashara/planning";
-
-// Coverage reconciliation
-export { createCoverageRollupGuard, reconcileCoverage } from "@ashara/planning";
 
 // Failure recovery
 export { recoverFailedItem } from "@ashara/planning";

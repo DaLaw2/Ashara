@@ -2,18 +2,13 @@ import path from "node:path";
 import { join } from "node:path";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
 import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
-import type { ContractSource } from "./contract-slice.js";
-import { formatContractSlice } from "./contract-slice.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 import { resolveProjectFrame } from "./project-frame.js";
-import type { ContractAmender } from "./contract-completion.js";
-import { selectModulePaths } from "./contract-completion.js";
-import { deriveEndpoints } from "./gates/endpoints.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
@@ -178,6 +173,16 @@ interface VerifyTaskOutcome {
 // DevelopmentService
 // ---------------------------------------------------------------------------
 
+/**
+ * Port that yields the current ProjectContract for the project a task belongs to,
+ * or null when the project has no contract. Injected so the BC stays free of any
+ * db dependency (ADR-027); the composition root resolves task → project → latest
+ * contract.
+ */
+export interface ContractSource {
+  loadForTask(taskId: string): Promise<ProjectContract | null>;
+}
+
 export interface DevelopmentServiceDeps {
   readonly config: DevelopmentConfig;
   readonly sessionStore: SessionStore;
@@ -198,19 +203,11 @@ export interface DevelopmentServiceDeps {
    */
   readonly stackDeriver?: StackDeriver;
   /**
-   * Yields the ProjectContract for a task's project so the brief can carry a
-   * task-relevant slice — reuse-only modules, endpoints to expose, wiring to
-   * preserve (mig-phase-9 t3). Optional: absent (or null result) leaves the brief
-   * unchanged, exactly as before contracts existed.
+   * Yields the ProjectContract for a task's project; its knowledge graph feeds
+   * the project frame ladder and the entry-point context. Absent (or a null
+   * result) means the project has no contract.
    */
   readonly contractSource?: ContractSource;
-  /**
-   * Records a completed task's actual deliverables (mounted endpoints, created
-   * modules) onto the project contract via the amend protocol (mig9-t4). Optional
-   * and applied fail-soft — a contract-less project or an amend failure never
-   * un-completes a task that passed its gates.
-   */
-  readonly contractAmender?: ContractAmender;
   readonly provisioner?: Provisioner;
   readonly provisionedEnv?: ProvisionedEnv;
 }
@@ -407,8 +404,6 @@ export class DevelopmentService {
     const replanContext = extractReplanContext(task.id, task.blockedReason);
     const priorAttemptFailure = replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
 
-    const contractSlice = contract ? await this.renderContractSlice(contract, task.id) : undefined;
-
     // A ProjectFrameUnresolvable propagates to execute() and blocks the task: a
     // brief with no stated target is the fail-open this ladder replaces (ADR-046).
     const projectFrame = await resolveProjectFrame({
@@ -429,7 +424,7 @@ export class DevelopmentService {
     };
 
     const contractEntryPoint = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-    const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
+    const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
     // createAgentBrief: the compiler checks the shape at this construction site,
@@ -450,7 +445,6 @@ export class DevelopmentService {
         knowledgeContext,
         contextMap,
         ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
-        ...(contractSlice !== undefined ? { contractSlice } : {}),
       },
       "development:buildBrief",
     );
@@ -469,31 +463,6 @@ export class DevelopmentService {
   }
 
   /**
-   * Renders the brief slice for an already-loaded contract. Returns undefined
-   * when the contract has nothing to say to this task, so the brief is left
-   * byte-identical in every contract-less case.
-   */
-  private async renderContractSlice(contract: ProjectContract, taskId: string): Promise<string | undefined> {
-    try {
-      const siblingDeclarers = [
-        ...new Set(
-          contract.endpoints
-            .map((e) => e.declaredBy)
-            .filter((id): id is string => id !== undefined && id !== taskId),
-        ),
-      ];
-      const completedTaskIds =
-        siblingDeclarers.length > 0
-          ? await this.deps.contractSource?.loadCompletedTaskIds?.(siblingDeclarers)
-          : undefined;
-      return formatContractSlice(contract, taskId, completedTaskIds);
-    } catch (e) {
-      console.warn(`[${taskId}] contract slice render failed; proceeding without it:`, e);
-      return undefined;
-    }
-  }
-
-  /**
    * Renders what can be OBSERVED about the target tree. An empty tree returns an
    * explicit statement of that emptiness rather than "" (ADR-046): "" renders as
    * no context section at all, which the agent cannot distinguish from a normal
@@ -503,14 +472,13 @@ export class DevelopmentService {
   private async buildContextMap(
     targetProjectPath: string | null,
     contractEntryPointPath?: string,
-    contractExcludePaths?: readonly string[],
   ): Promise<string> {
     if (!targetProjectPath) return EMPTY_WORKDIR_CONTEXT_MAP;
 
     const sections: string[] = ["# Project Context"];
 
     try {
-      const tree = await buildFileTree(targetProjectPath, 4, 200, contractExcludePaths);
+      const tree = await buildFileTree(targetProjectPath, 4, 200);
       if (tree) {
         sections.push("## File Tree\n" + tree);
       }
@@ -895,7 +863,6 @@ export class DevelopmentService {
 
     await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
     await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
-    await this.amendContractOnCompletion(task, targetProjectPath, filesChanged);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
     return {
@@ -971,40 +938,6 @@ export class DevelopmentService {
         error: String(e).slice(0, 500),
       });
       return { verdict: "failed" };
-    }
-  }
-
-  /**
-   * Records what this completed task actually delivered onto the project contract
-   * (mig9-t4): concrete endpoints derived from the synced target tree plus the
-   * created source modules from its diff. Fail-SOFT (Discipline C): the task has
-   * already passed its gates and been marked complete, so an amend failure — a
-   * contract-less project, a divergent-redeclaration conflict, a transient DB error
-   * — is logged with context and swallowed, never allowed to un-complete the task.
-   */
-  private async amendContractOnCompletion(
-    task: TaskDescriptor,
-    targetProjectPath: string | null,
-    filesChanged: readonly string[],
-  ): Promise<void> {
-    const amender = this.deps.contractAmender;
-    if (!amender || !targetProjectPath) return;
-    try {
-      const contract = await this.loadContract(task.id);
-      const entryPointPath = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-      const contractLanguage = contract ? nodeLabel(contract.knowledge, "language") ?? null : null;
-      const { endpoints } = await deriveEndpoints(targetProjectPath, entryPointPath, contractLanguage);
-      const modulePaths = selectModulePaths(filesChanged, entryPointPath);
-      if (endpoints.length === 0 && modulePaths.length === 0) return;
-      await amender.amendOnCompletion(task.id, {
-        endpoints: endpoints.map((e) => ({ method: e.method, path: e.path })),
-        modulePaths,
-      });
-    } catch (e) {
-      console.warn(
-        `[${task.id}] contract completion amend failed; task stays completed (fail-soft):`,
-        e,
-      );
     }
   }
 }

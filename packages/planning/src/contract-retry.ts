@@ -9,9 +9,7 @@ const MAX_CONTRACT_RETRY_ATTEMPTS = 3;
  * version (ContractVersionConflict is the documented RETRYABLE signal on the
  * port, planning/src/domain/service.ts) — each retry re-reads the (now newer)
  * latest version internally. Bounded: after MAX_CONTRACT_RETRY_ATTEMPTS the
- * conflict propagates (Discipline A — fail closed, never loop forever). Shared
- * by bulk-plan.ts and coverage-reconciliation.ts, the two ProjectContract amend
- * sites.
+ * conflict propagates (Discipline A — fail closed, never loop forever).
  */
 export async function amendContractWithRetry(
     contractRepo: ContractRepository,

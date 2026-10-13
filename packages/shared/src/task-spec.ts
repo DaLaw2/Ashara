@@ -3,8 +3,7 @@ import { z } from "zod";
 /**
  * Published Language: the persisted task specification stored in the jsonb
  * `task_spec` column. All fields optional — not every level carries a spec,
- * and different origins populate different subsets. Origin membership is open
- * (`origin: z.string().optional()`); the key set is closed — every lifecycle
+ * and different producers populate different subsets. The key set is closed — every lifecycle
  * extension is a declared field, so a producer writing an undeclared key is a
  * compile error, not a silent `unknown`.
  */
@@ -19,12 +18,6 @@ export const storedTaskSpecSchema = z.object({
   // Decomposition metadata
   priorWorkPointers: z.array(z.string()).optional(),
   capability: z.string().optional(),
-
-  // Origin marker — open string, NOT an enum. Known value as of writing:
-  // "coverage-reconciliation". New origins appear without code changes; this
-  // field is read by dispatch selection (TaskSelector), not by a switch that
-  // needs exhaustiveness.
-  origin: z.string().optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

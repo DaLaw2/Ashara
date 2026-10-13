@@ -7,13 +7,8 @@ export interface VerifyCheck {
   readonly command: string;
 }
 
-export interface VerifyStartConfig {
-  readonly command: string;
-}
-
 export interface VerifyConfig {
   readonly checks: readonly VerifyCheck[];
-  readonly start?: VerifyStartConfig;
 }
 
 export class VerifyConfigParseError extends Error {
@@ -102,35 +97,7 @@ export async function readVerifyConfig(projectDir: string): Promise<VerifyConfig
     checks = parsedChecks;
   }
 
-  const startSection = parsed["start"];
-  let start: VerifyStartConfig | undefined;
-  if (startSection !== undefined) {
-    if (
-      typeof startSection !== "object" ||
-      startSection === null ||
-      Array.isArray(startSection) ||
-      startSection instanceof TomlDate
-    ) {
-      throw new VerifyConfigParseError(
-        filePath,
-        undefined,
-        "[start] must be a TOML table, not an array or primitive",
-      );
-    }
-    const command = (startSection as Record<string, unknown>)["command"];
-    if (typeof command !== "string") {
-      throw new VerifyConfigParseError(
-        filePath,
-        "start.command",
-        command === undefined
-          ? "[start] section requires a \"command\" key"
-          : `expected a string command, got ${typeof command}`,
-      );
-    }
-    start = { command };
-  }
-
-  return { checks, ...(start !== undefined ? { start } : {}) };
+  return { checks };
 }
 
 /**

@@ -43,7 +43,6 @@ describe("parseStoredTaskSpec", () => {
       checks: ["POST /api/register returns 201 with valid body"],
       priorWorkPointers: ["task-scaffold"],
       capability: "Strong",
-      origin: "coverage-reconciliation",
     };
 
     const result = parseStoredTaskSpec(input);
@@ -55,7 +54,6 @@ describe("parseStoredTaskSpec", () => {
     expect(result!.checks).toEqual(input.checks);
     expect(result!.priorWorkPointers).toEqual(input.priorWorkPointers);
     expect(result!.capability).toBe(input.capability);
-    expect(result!.origin).toBe(input.origin);
   });
 
   test("empty object is valid (all fields optional)", () => {
@@ -66,7 +64,6 @@ describe("parseStoredTaskSpec", () => {
   test("closed schema strips undeclared keys (no passthrough)", () => {
     const input = {
       goal: "Fix the bug",
-      origin: "coverage-reconciliation",
       experimentalMetric: 0.95,
       customTag: "hotfix-urgent",
     };
@@ -75,16 +72,9 @@ describe("parseStoredTaskSpec", () => {
     expect(result).toBeDefined();
     // Declared fields survive
     expect(result!.goal).toBe("Fix the bug");
-    expect(result!.origin).toBe("coverage-reconciliation");
     // Undeclared keys are stripped — the key set is closed
     expect((result as Record<string, unknown>)["experimentalMetric"]).toBeUndefined();
     expect((result as Record<string, unknown>)["customTag"]).toBeUndefined();
-  });
-
-  test("origin accepts an unrecognised string (open domain, not an enum)", () => {
-    const result = parseStoredTaskSpec({ origin: "future-origin-nobody-planned" });
-    expect(result).toBeDefined();
-    expect(result!.origin).toBe("future-origin-nobody-planned");
   });
 
   test("capability accepts an unrecognised string (open domain, not an enum)", () => {

@@ -15,24 +15,6 @@ export class CycleDetected extends PlanningError {
   }
 }
 
-export type ContractConflictKind = "endpoint-divergence" | "module-purpose-divergence";
-
-export class ContractConflict extends PlanningError {
-  constructor(
-    public readonly conflictKind: ContractConflictKind,
-    public readonly identity: string,
-    public readonly existing: unknown,
-    public readonly incoming: unknown,
-  ) {
-    super(
-      `Contract conflict (${conflictKind}) on "${identity}": ` +
-        `existing=${JSON.stringify(existing)} incoming=${JSON.stringify(incoming)}`,
-      "CONTRACT_CONFLICT",
-    );
-    this.name = "ContractConflict";
-  }
-}
-
 export class ContractAlreadyExists extends PlanningError {
   constructor(public readonly projectId: string) {
     super(

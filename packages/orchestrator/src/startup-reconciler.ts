@@ -25,7 +25,6 @@ export interface ReconcileSummary {
   readonly orphansErrored: number;
   readonly failedReplanned: number;
   readonly failedAbandoned: number;
-  readonly failedSubstituted: number;
   readonly failedErrored: number;
   readonly worktreesCleaned: number;
   readonly sessionsTerminalized: number;
@@ -36,7 +35,6 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
   let orphansErrored = 0;
   let failedReplanned = 0;
   let failedAbandoned = 0;
-  let failedSubstituted = 0;
   let failedErrored = 0;
 
   const orphans = await deps.workItemRepo.findByStatus("InProgress");
@@ -64,7 +62,6 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     try {
       const action = await recoverFailedItem(recoveryDeps, failed, reconstructFailure(failed));
       if (action === "replan") failedReplanned += 1;
-      else if (action === "substitute") failedSubstituted += 1;
       else failedAbandoned += 1;
     } catch (error) {
       failedErrored += 1;
@@ -84,7 +81,6 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     orphansErrored,
     failedReplanned,
     failedAbandoned,
-    failedSubstituted,
     failedErrored,
     worktreesCleaned,
     sessionsTerminalized,
@@ -92,7 +88,7 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
   console.log(
     `[startup-reconciler] orphans requeued=${orphansRequeued} errored=${orphansErrored}; ` +
       `parked Failed routed=${parkedFailed.length} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
-      `substitute=${failedSubstituted} errored=${failedErrored}); ` +
+      `errored=${failedErrored}); ` +
       `sessions terminalized=${sessionsTerminalized}; ` +
       `worktrees cleaned=${worktreesCleaned}`,
   );

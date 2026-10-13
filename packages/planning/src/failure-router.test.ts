@@ -4,10 +4,9 @@ import type { FailureRouteInput } from "./failure-router.js";
 
 function makeInput(overrides: Partial<FailureRouteInput> = {}): FailureRouteInput {
   return {
-    item: { id: "task-1", title: "Test task" },
+    item: { id: "task-1" },
     failure: { detail: "something failed", raw: {} },
     priorAttempts: 1,
-    planState: { candidates: [] },
     category: "VERIFICATION_GAP",
     ...overrides,
   };
@@ -49,22 +48,6 @@ describe("FailureRouter", () => {
       if (decision.action === "abandon") {
         expect(decision.reason).toContain("tree regression");
       }
-    });
-
-    test("substitute takes priority over tree-regression abandon", () => {
-      const router = new FailureRouter(2);
-      const decision = router.route(makeInput({
-        priorAttempts: 1,
-        category: "TREE_REGRESSION",
-        planState: {
-          candidates: [
-            { id: "task-2", title: "Test task", status: "Completed" },
-          ],
-        },
-      }));
-      // A completed equivalent already delivers this work — substitute,
-      // regardless of category
-      expect(decision.action).toBe("substitute");
     });
   });
 

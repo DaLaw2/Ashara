@@ -1,4 +1,4 @@
-import type { ContractInput, ProjectId, WorkItemId, ContractDelta, ProjectKnowledge, StoredTaskSpec, ContractRepository } from "@ashara/shared";
+import type { WorkItemId, ProjectKnowledge, StoredTaskSpec, ContractRepository } from "@ashara/shared";
 import { parseProjectId, parseWorkItemLevel } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import {
@@ -7,29 +7,13 @@ import {
   ContractAlreadyExists,
 } from "./domain/index.js";
 import { amendContractWithRetry } from "./contract-retry.js";
-import {
-  deriveContractFragment,
-  toContractDelta,
-  type DerivedTask,
-  type DerivedTextSource,
-} from "./contract-derivation.js";
 
 /**
  * Bulk plan creation WITH contract population (mig9-t5, ADR-028/ADR-029). The CLI
  * `ashara vision` initial-epic path posts a whole hierarchy (epic/task + edges)
- * to POST /work-items/bulk. Before this, that path created the work items but
- * wrote NO ProjectContract (the mig8-t2 first-decomposition coverage hole), so a
- * CLI-initiated project started contract-less.
- *
- * This moves the bulk logic behind a planning facade so the HTTP handler stays
- * thin, and — in the SAME transaction as item creation — derives the contract
- * fragment the explicit bulk items imply (endpoints/modules from task titles,
- * descriptions and deliverables) via the deterministic machinery in
- * contract-derivation.ts, then
- * seeds/merges it. No LLM call: the independent spec-derivation pass (mig9-t1)
- * stays in the planning loop where it fires once per project. Fail-closed: a
- * contract-write failure (or any DB failure) rolls the whole batch back — no
- * partial hierarchy, no work items without their contract.
+ * to POST /work-items/bulk; in the SAME transaction as item creation this seeds
+ * or amends the project's knowledge graph. Fail-closed: a contract-write failure
+ * (or any DB failure) rolls the whole batch back — no partial hierarchy.
  */
 
 export interface BulkPlanItem {
@@ -77,8 +61,8 @@ export interface CreateBulkPlanDeps {
 }
 
 /**
- * Creates the whole bulk hierarchy and its dependency edges, then derives and
- * writes the ProjectContract, all in one transaction. Reference resolution runs
+ * Creates the whole bulk hierarchy and its dependency edges, then writes the
+ * ProjectContract knowledge, all in one transaction. Reference resolution runs
  * inside the transaction so an unresolved parent/edge fails closed with nothing
  * persisted.
  *
@@ -139,17 +123,13 @@ export async function createBulkPlanWithContract(
 }
 
 /**
- * Derives the contract fragment the created hierarchy implies and seeds it
- * (writeContract) if the project has no contract, else merges it (amendContract) —
- * the seed-once-then-amend protocol. Keyed by the single
- * project ROOT (the item with no parent); a batch without exactly one root skips
- * the contract (nothing else in the system knows how to key it).
- *
- * The write is gated on WHAT THIS CALL ACTUALLY ADDS — knowledge included — never
- * on the endpoint/module fragment alone (ADR-046). The old gate returned early whenever the prose regexes found no HTTP
- * method+path and no module path, which is the NORMAL case for a CLI, a library,
- * or a kernel — so those projects reached `writeContract` with a valid knowledge
- * graph in hand and discarded it on the way past.
+ * Seeds the knowledge graph (writeContract) if the project has no contract, else
+ * merges it (amendContract) — the seed-once-then-amend protocol. Keyed by the
+ * single project ROOT (the item with no parent); a batch without exactly one root
+ * skips the contract (nothing else in the system knows how to key it). The write
+ * is gated on what this call actually adds: knowledge merges by KIND
+ * (applyContractDelta), so a delta carrying only kinds already present is a no-op
+ * and must not mint a contract version (ADR-046).
  */
 async function deriveAndWriteContract(
   contractRepo: ContractRepository,
@@ -160,58 +140,20 @@ async function deriveAndWriteContract(
   if (roots.length !== 1) return;
   const root = roots[0]!;
 
-  const tasks: DerivedTask[] = created
-    .filter((item) => item.level === "Task")
-    .map((item) => ({ id: item.id, title: item.title, description: derivationText(item) }));
-  const intentSources: DerivedTextSource[] = created
-    .filter((item) => item.level !== "Task")
-    .map((item) => ({ title: item.title, description: item.description ?? "" }));
-
-  const fragment = deriveContractFragment(intentSources, tasks);
-  const hasFragment = fragment.endpoints.length > 0 || fragment.modules.length > 0;
-
   const projectId = parseProjectId(root.id);
   const existing = await contractRepo.getLatest(projectId);
   if (!existing) {
-    if (!hasFragment && knowledge.nodes.length === 0) return;
-    const body: ContractInput = {
-      knowledge,
-      endpoints: fragment.endpoints,
-      modules: fragment.modules,
-      mounts: [],
-    };
+    if (knowledge.nodes.length === 0) return;
     try {
-      await PlanningService.writeContract(contractRepo, projectId, body);
+      await PlanningService.writeContract(contractRepo, projectId, { knowledge });
       return;
     } catch (e) {
       if (!(e instanceof ContractAlreadyExists)) throw e;
     }
   }
 
-  // Knowledge merges by KIND (applyContractDelta): a kind the base already has is
-  // never overwritten, so a delta carrying only kinds already present is a no-op
-  // and must not mint a contract version.
   const establishedKinds = new Set((existing?.knowledge.nodes ?? []).map((n) => n.kind));
-  const knowledgeAddsKind = knowledge.nodes.some((n) => !establishedKinds.has(n.kind));
-  if (!hasFragment && !knowledgeAddsKind) return;
+  if (!knowledge.nodes.some((n) => !establishedKinds.has(n.kind))) return;
 
-  await amendContractWithRetry(contractRepo, projectId, { ...toContractDelta(fragment), knowledge });
+  await amendContractWithRetry(contractRepo, projectId, { knowledge });
 }
-
-/**
- * The text a task contributes to endpoint/module derivation: its description plus
- * the file paths its taskSpec.deliverables name (so "src/routes/register.ts" and
- * "POST /api/register endpoint" deliverables feed the derivation, matching the
- * mig9-t5 guidance that task specs/deliverables surface endpoints/modules).
- */
-function derivationText(item: WorkItem): string {
-  const parts: string[] = [item.description ?? ""];
-  const deliverables = item.taskSpec?.deliverables;
-  if (deliverables) {
-    for (const entry of deliverables) {
-      parts.push(entry);
-    }
-  }
-  return parts.join(" ");
-}
-

@@ -4,11 +4,11 @@ import { CycleDetected } from "./errors.js";
 
 /**
  * How a work item's dependencies resolve (migration Phase 6, ADR-029):
- *  - `met`     — every dependency is Completed or satisfied by a completed substitute.
+ *  - `met`     — every dependency is Completed or has a Completed equivalent.
  *  - `waiting` — at least one dependency is still in flight (Pending/InProgress/Failed);
  *                a Failed dependency counts as waiting because recovery may replan it.
  *  - `blocked` — at least one dependency is permanently unsatisfiable (an Abandoned
- *                item with no completed substitute, directly or transitively), so the
+ *                item, directly or transitively), so the
  *                item can never become dispatchable and must be routed as
  *                blocked-with-reason rather than waiting forever.
  */
@@ -19,17 +19,14 @@ export interface DependencyItemView {
   readonly status: WorkItemStatus;
   readonly title: string;
   readonly parentId?: string;
-  /** An explicit substitute recorded on an Abandoned item (blockedReason.substitutedBy). */
-  readonly substitutedBy?: string;
 }
 
-/** Read model the graph consults to resolve dependency satisfaction and substitution. */
+/** Read model the graph consults to resolve dependency satisfaction. */
 export interface DependencyContext {
   get(id: string): DependencyItemView | undefined;
   /**
    * Returns the id of a Completed item equivalent to (`parentId`, `title`) other than
-   * `excludeId`, or undefined. Equivalence fallback = exact same-parent + same-title
-   * (normalized); the contract-registry upgrade is Phase 9 (ADR-028).
+   * `excludeId`, or undefined. Equivalence = exact same-parent + same-title (normalized).
    */
   findCompletedEquivalent(parentId: string | undefined, title: string, excludeId: string): string | undefined;
 }
@@ -139,7 +136,7 @@ export class DependencyGraph {
     let hasPending = false;
     const blockedBy = new Set<string>();
     for (const dep of deps) {
-      const state = this.classifyDependency(dep, ctx, memo, undefined, active);
+      const state = this.classifyDependency(dep, ctx, memo, active);
       if (state.kind === "unsatisfiable") {
         for (const cause of state.blockedBy) blockedBy.add(cause);
       } else if (state.kind === "pending") {
@@ -158,13 +155,8 @@ export class DependencyGraph {
     dep: string,
     ctx: DependencyContext,
     memo: Map<string, DependencyResolutionResult>,
-    substitutionVisited?: Set<string>,
     resolving?: Set<string>,
   ): DepState {
-    const visited = substitutionVisited ?? new Set<string>();
-    if (visited.has(dep)) return { kind: "unsatisfiable", blockedBy: [dep] };
-    visited.add(dep);
-
     const view = ctx.get(dep);
     if (!view) return { kind: "pending" };
 
@@ -174,12 +166,7 @@ export class DependencyGraph {
       return { kind: "satisfied" };
     }
 
-    if (view.status === "Abandoned") {
-      if (view.substitutedBy !== undefined) {
-        return this.classifyDependency(view.substitutedBy, ctx, memo, visited, resolving);
-      }
-      return { kind: "unsatisfiable", blockedBy: [dep] };
-    }
+    if (view.status === "Abandoned") return { kind: "unsatisfiable", blockedBy: [dep] };
 
     // Pending / InProgress / Failed / Blocked may still progress — unless the
     // dependency is itself transitively blocked by an Abandoned item.

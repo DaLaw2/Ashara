@@ -6,7 +6,6 @@ import {
   type DependencyItemView,
   type DependencyResolutionResult,
 } from "./dependency.js";
-import { extractSubstitutedBy } from "./substitution.js";
 
 export class GateKeeper {
   static async filterAvailable(repo: WorkItemRepository): Promise<WorkItem[]> {
@@ -35,7 +34,6 @@ function buildDependencyContext(items: WorkItem[]): DependencyContext {
       status: item.status,
       title: item.title,
       parentId: item.parentId,
-      substitutedBy: extractSubstitutedBy(item.blockedReason),
     });
     if (item.status === "Completed") {
       const key = equivalenceKey(item.parentId, item.title);

@@ -25,12 +25,9 @@ import {
   reconcileOnStartup,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
-import type { ContractRegistryLookup } from "@ashara/planning";
 import {
   FailureRouter,
   createBulkPlanWithContract,
-  deriveCompletionEndpoint,
-  deriveCompletionModule,
   classifyFailure,
   shouldEscalate,
   tryParseEnvelope,
@@ -44,8 +41,6 @@ import type {
   AgentSpawnOptions,
   ExecutionEventSink,
   ContractSource,
-  ContractAmender,
-  CompletionDeliverables,
   ProjectIntentSource,
   StackDeriver,
 } from "@ashara/development";
@@ -61,10 +56,9 @@ import {
   withStructuredLadder,
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
-import type { WorkItemId, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, HttpMethodSchema, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
+import type { WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
+import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
-import { PlanningService } from "@ashara/planning";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
@@ -379,20 +373,11 @@ async function main(): Promise<void> {
     return current.id;
   };
 
-  // Brief slice (mig9-t3): the task-relevant read of the contract.
+  // The task's project contract: its knowledge graph feeds the project frame.
   const contractSource: ContractSource = {
     async loadForTask(taskId: string): Promise<ProjectContract | null> {
       const rootId = await resolveProjectRootId(taskId);
       return rootId ? contractRepo.getLatest(parseProjectId(rootId)) : null;
-    },
-    // Sibling-visibility gate (granularity-debate.md §3.A): a handful of ids per
-    // call (one per coarse task), so per-id findById is simpler than adding a
-    // bulk repository query for this alone.
-    async loadCompletedTaskIds(taskIds: readonly string[]): Promise<ReadonlySet<string>> {
-      const items = await Promise.all(taskIds.map((id) => workItemRepo.findById(id as WorkItemId)));
-      return new Set(
-        items.filter((item): item is NonNullable<typeof item> => item?.status === "Completed").map((item) => item.id),
-      );
     },
   };
 
@@ -453,64 +438,6 @@ async function main(): Promise<void> {
     },
   };
 
-  // FailureRouter substitution (mig9-t4): the contract read that lets recovery find
-  // a substitute by the module/endpoint registry, not just by title.
-  const contractLookup: ContractRegistryLookup = {
-    async loadForItem(item): Promise<ProjectContract | null> {
-      const rootId = await resolveProjectRootId(item.id);
-      return rootId ? contractRepo.getLatest(parseProjectId(rootId)) : null;
-    },
-  };
-
-  // Completion amend (mig9-t4): shape the observed deliverables into a ContractDelta
-  // (endpoint-ref derivation is a contract concern that lives here, not in the
-  // Development BC) and apply it version-race-safe. Skips silently when the project
-  // has no contract; the caller invokes this fail-soft.
-  const contractAmender: ContractAmender = {
-    async amendOnCompletion(taskId: string, deliverables: CompletionDeliverables): Promise<void> {
-      const rootId = await resolveProjectRootId(taskId);
-      if (!rootId) return;
-      const projectId = parseProjectId(rootId);
-      const existingContract = await contractRepo.getLatest(projectId);
-      if (!existingContract) return; // contract-less project — nothing to amend
-
-      // AMEND FILLS, NEVER CONTESTS (Run-10 blocker #2): deriveCompletionEndpoint
-      // echoes the DECLARED method+path for an already-declared ref (stamping only
-      // declaredBy) — the declared path is the spec, delivery just confirms coverage.
-      // A route the agent spelled slightly differently can never conflict the amend
-      // and leave the coverage gap falsely open; a genuinely new endpoint is added
-      // with its normalized path.
-      const endpoints = deliverables.endpoints
-        .map((e) => {
-          const method = HttpMethodSchema.safeParse(e.method);
-          if (!method.success) return null;
-          return deriveCompletionEndpoint(existingContract.endpoints, { method: method.data, path: e.path }, taskId);
-        })
-        .filter((e): e is NonNullable<typeof e> => e !== null);
-      // Same fill-not-contest treatment for modules (Run-10 blocker #5):
-      // deriveCompletionModule echoes the DECLARED purpose for an already-registered
-      // path (stamping only providerWorkItem) so a completion amend can never trip
-      // `module-purpose-divergence` against the decomposition-authored purpose.
-      const modules = deliverables.modulePaths.map((path) =>
-        deriveCompletionModule(existingContract.modules, { path }, taskId),
-      );
-      const delta: ContractDelta = { endpoints, modules };
-
-      // Bounded retry on the RETRYABLE version-conflict signal (a concurrent amend
-      // took latest+1); any other error (e.g. a divergent-redeclaration conflict)
-      // propagates to the fail-soft caller.
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await PlanningService.amendContract(contractRepo, projectId, delta);
-          return;
-        } catch (e) {
-          if (!(e instanceof ContractVersionConflict)) throw e;
-        }
-      }
-      throw new Error(`contract completion amend exhausted version-conflict retries for project ${projectId}`);
-    },
-  };
-
   const developmentService = new DevelopmentService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
@@ -525,14 +452,12 @@ async function main(): Promise<void> {
     intentSource,
     stackDeriver,
     contractSource,
-    contractAmender,
     provisioner,
   });
 
   // One shared-transaction facade over both the WorkItemRepository (adapted to the
-  // domain shape) and the ContractRepository (ADR-028 + ADR-029). Reused by the
-  // core loop's coverage reconciliation AND the bulk-plan contract write
-  // (mig9-t5), so both write the contract in the same fail-safe transaction.
+  // domain shape) and the ContractRepository (ADR-028 + ADR-029), so the bulk-plan
+  // contract write (mig9-t5) shares the work items' fail-safe transaction.
   const planningTransaction = <T>(
     fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
   ): Promise<T> =>
@@ -547,16 +472,9 @@ async function main(): Promise<void> {
     costRepo,
     failedApproachRepo,
     visionRepo,
-    contractRepo,
     developmentService,
     eventLogger,
     failureRouter,
-    contractLookup,
-    // Shares one DB transaction between coverage reconciliation's work-item
-    // creation and its ProjectContract amend (ADR-028 + ADR-029, mig-phase-9); the
-    // work-item half is re-adapted to the domain shape the same way the
-    // top-level workItemRepo is (adaptWorkItemRepo).
-    withPlanningTransaction: planningTransaction,
     runStateStore: runStateRepo,
   };
 
@@ -571,7 +489,7 @@ async function main(): Promise<void> {
     visionRepo,
     configRepo,
     runner,
-    // Bulk plan creation writes the derived ProjectContract in the SAME transaction
+    // Bulk plan creation writes the ProjectContract knowledge in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
     createBulkPlan: (items, edges, knowledge) =>
       createBulkPlanWithContract({ withPlanningTransaction: planningTransaction, runScope: RUN_SCOPE_AD_HOC }, items, edges, knowledge),

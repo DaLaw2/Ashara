@@ -16,32 +16,6 @@ export type RawFailureContext = z.infer<typeof rawFailureContextSchema>;
 
 export interface FailureRouterItem {
   readonly id: string;
-  readonly title: string;
-  readonly parentId?: string;
-  /**
-   * Contract-registry keys this item PROMISED (mig9-t4): the module paths and
-   * endpoint refs the ProjectContract attributes to it (providerWorkItem /
-   * declaredBy). The caller derives them from the contract; a contract-less item
-   * carries none and the router falls back to title equivalence.
-   */
-  readonly registryKeys?: readonly string[];
-}
-
-/**
- * The slice of plan state the router reasons over. `candidates` are the failed
- * item's siblings (same parent). A completed one is an equivalent when it delivers
- * the SAME contract-registry key the failed item promised (mig9-t4, the primary
- * signal) or — for contract-less plans — carries an equivalent title (Run-8 F3
- * fallback). `registryKeys` is what each candidate delivered, same derivation as
- * the item's.
- */
-export interface FailurePlanState {
-  readonly candidates: ReadonlyArray<{
-    id: string;
-    title: string;
-    status: string;
-    registryKeys?: readonly string[];
-  }>;
 }
 
 export interface FailureRouteInput {
@@ -55,7 +29,6 @@ export interface FailureRouteInput {
    * bound of N caps the item at N dispatches before it must switch or abandon.
    */
   readonly priorAttempts: number;
-  readonly planState: FailurePlanState;
   /**
    * Classified failure category from the ErrorEnvelope (failure-classifier.ts).
    * The router consults it before applying the replan bound: TREE_REGRESSION
@@ -71,16 +44,10 @@ export interface FailureRouteInput {
 /**
  * A typed recovery decision. Every branch carries the raw failure context so the
  * orchestrator can attach it to the mutated record (replan) or the terminal
- * reason (abandon/substitute) — the context never gets dropped at the boundary.
+ * reason (abandon) — the context never gets dropped at the boundary.
  */
 export type FailureDecision =
   | { readonly action: "replan"; readonly attempt: number; readonly failure: RawFailureContext }
-  | {
-      readonly action: "substitute";
-      readonly equivalentId: string;
-      readonly reason: string;
-      readonly failure: RawFailureContext;
-    }
   | {
       readonly action: "abandon";
       readonly reason: string;
@@ -125,16 +92,13 @@ export class FailureContextError extends FailureRouterError {
  * an undecidable input throws rather than silently leaving the item stuck.
  *
  * Rule ladder (first match wins):
- *   1. substitute — a completed sibling with an equivalent title already delivers
- *      this work; the failed item is a duplicate, so no attempt is worth spending.
- *   2. replan    — attempts remain under the bound; retry, carrying the raw
+ *   1. replan  — attempts remain under the bound; retry, carrying the raw
  *      failure context forward so the next attempt is informed (never identical).
- *   3. abandon   — the bound is reached with no equivalent; terminate so the
- *      item's dependents stop waiting on a task that will not complete.
+ *   2. abandon — the bound is reached; terminate so the item's dependents stop
+ *      waiting on a task that will not complete.
  *
- * The bound guarantees "bounded retries then switch": after `maxReplanAttempts`
- * the router must pick a different strategy (substitute) or abandon — it can
- * never emit an unbounded run of identical replans.
+ * After `maxReplanAttempts` the router abandons — it can never emit an unbounded
+ * run of identical replans.
  */
 export class FailureRouter {
   private readonly maxReplanAttempts: number;
@@ -152,16 +116,6 @@ export class FailureRouter {
       throw new FailureContextError(input.item.id, parsed.error.issues);
     }
     const failure = parsed.data;
-
-    const equivalent = this.findEquivalent(input);
-    if (equivalent) {
-      return {
-        action: "substitute",
-        equivalentId: equivalent.id,
-        reason: equivalent.reason,
-        failure,
-      };
-    }
 
     // Zero-replan bound for tree regressions: the post-merge verification
     // failed against the merged tree, not against the task's own changes.
@@ -230,57 +184,4 @@ export class FailureRouter {
       }
     }
   }
-
-  /**
-   * Finds a completed sibling that already delivers this failed item's work, in
-   * two ordered passes — both fail-closed (a candidate must be Completed):
-   *   1. registry equivalence (primary): a completed candidate whose registry keys
-   *      (module paths / endpoint refs) are a SUPERSET of everything this failed
-   *      item promised. Requiring FULL coverage — not just one shared key — is what
-   *      distinguishes a genuine duplicate (its twin delivers all of it) from a mere
-   *      co-editor of shared wiring (e.g. two routes both touching src/routes/index.ts):
-   *      the co-editor covers the shared aggregator but NOT the failed item's own
-   *      unique deliverable, so it is not a superset and never substitutes. Without
-   *      this, a completed loginTask would falsely satisfy a failed registerTask and
-   *      the register endpoint would silently never exist — the Run-9 class this guards.
-   *   2. title equivalence (fallback): same normalized title — retained so
-   *      contract-less plans (no registry keys) keep their Run-8 behavior.
-   */
-  private findEquivalent(
-    input: FailureRouteInput,
-  ): { id: string; title: string; reason: string } | null {
-    const completed = input.planState.candidates.filter(
-      (candidate) => candidate.id !== input.item.id && candidate.status === "Completed",
-    );
-
-    const targetKeys = [...new Set(input.item.registryKeys ?? [])];
-    if (targetKeys.length > 0) {
-      for (const candidate of completed) {
-        const candidateKeys = new Set(candidate.registryKeys ?? []);
-        if (targetKeys.every((key) => candidateKeys.has(key))) {
-          return {
-            id: candidate.id,
-            title: candidate.title,
-            reason: `completed item ${candidate.id} ("${candidate.title}") already delivers every registry entry this item promised (${targetKeys.join(", ")})`,
-          };
-        }
-      }
-    }
-
-    const targetTitle = normalizeTitle(input.item.title);
-    for (const candidate of completed) {
-      if (normalizeTitle(candidate.title) === targetTitle) {
-        return {
-          id: candidate.id,
-          title: candidate.title,
-          reason: `equivalent completed item ${candidate.id} ("${candidate.title}") already satisfies this deliverable`,
-        };
-      }
-    }
-    return null;
-  }
-}
-
-function normalizeTitle(title: string): string {
-  return title.trim().toLowerCase();
 }

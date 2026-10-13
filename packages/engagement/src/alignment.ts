@@ -51,8 +51,7 @@ function excerpt(text: string): string {
 }
 
 /**
- * Binds the inference call to a structured provider. Mirrors
- * `createGatewaySpecDerivationLLM` (spec-derivation.ts): the composition root
+ * Binds the inference call to a structured provider. The composition root
  * wraps the gateway in the reliability ladder ONCE (`withStructuredLadder`,
  * see `alignmentReask` below) and hands the wrapped provider here, so ladder
  * exhaustion surfaces as a typed `StructuredOutputExhausted` rather than a

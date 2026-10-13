@@ -3,13 +3,12 @@ import type { DomainEvent } from "@ashara/shared";
 import { wrapError, InvalidStatusTransition, withSalvagedResult, canTransitionTo } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { WorkItem, WorkItemRepository, CoverageHold, RawFailureContext } from "./acl/planning-acl.js";
+import type { WorkItem, WorkItemRepository, RawFailureContext } from "./acl/planning-acl.js";
 import {
   PlanningService,
   failWorkItem,
   takeEvents,
   startWorkItem,
-  createCoverageRollupGuard,
   recoverFailedItem,
 } from "./acl/planning-acl.js";
 import type { DevelopmentService, TaskDescriptor, ProvisionedEnv } from "./acl/development-acl.js";
@@ -21,12 +20,6 @@ import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRout
 export interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: EventStoreRepository;
-  /**
-   * Coverage HOLD (mig9-t2): consulted during cascade-completion so a parent does
-   * not settle Completed while its project has an open contract coverage gap.
-   * Undefined in observe-only mode (no hold).
-   */
-  readonly coverageHold?: CoverageHold;
 }
 
 export async function executeTask(
@@ -109,7 +102,7 @@ export async function executeTask(
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
-  const events = await PlanningService.route(deps.workItemRepo, task.id, true, deps.coverageHold);
+  const events = await PlanningService.route(deps.workItemRepo, task.id, true);
   for (const event of events) {
     await deps.eventStore.publish(event);
   }
@@ -247,7 +240,6 @@ export async function processTask(
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
     eventStore: deps.eventStore,
-    coverageHold: buildCoverageHold(deps),
   };
 
   // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
@@ -305,7 +297,7 @@ export async function processTask(
     // not a dependency wait; dependency Blocked status is only reachable via
     // the HTTP PATCH path). Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates
-    // (abandon/substitute) rather than sitting in Failed and deadlocking its
+    // (abandon) rather than sitting in Failed and deadlocking its
     // dependents (Run-8 C2, migration Phase 6).
     if (!current) {
       console.warn(
@@ -329,12 +321,11 @@ export async function processTask(
               workItemRepo: deps.workItemRepo,
               eventPublisher: deps.eventStore,
               failureRouter: deps.failureRouter,
-              contractLookup: deps.contractLookup,
             },
             current,
             failure,
           );
-          // Every FailureRouter decision here (replan/abandon/substitute) means
+          // Every FailureRouter decision here (replan/abandon) means
           // this dispatch attempt did not succeed (kl-t1): capture it as a
           // failed_approaches lesson so a later brief sees WHY, closing the gap
           // where only a THROWN orchestrator error (the catch block below) ever
@@ -477,7 +468,6 @@ export async function handleProcessingError(
               workItemRepo: deps.workItemRepo,
               eventPublisher: deps.eventStore,
               failureRouter: deps.failureRouter,
-              contractLookup: deps.contractLookup,
             },
             current,
             { detail: chain.message, raw: { ...envelope } },
@@ -524,14 +514,4 @@ export async function handleProcessingError(
   }
 
   return result;
-}
-
-/** The coverage HOLD predicate for this cycle, or undefined (no repo / observe-only). */
-function buildCoverageHold(deps: CoreLoopDeps): CoverageHold | undefined {
-  if (!deps.contractRepo) return undefined;
-  return createCoverageRollupGuard({
-    workItemRepo: deps.workItemRepo,
-    contractRepo: deps.contractRepo,
-    enforcing: deps.config.coverageEnforcing,
-  });
 }

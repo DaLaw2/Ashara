@@ -29,21 +29,14 @@ export type {
   ContractBody,
   ContractInput,
   ContractDelta,
-  Endpoint,
-  ContractModule,
-  Mount,
   ProjectContract,
 } from "./contract.js";
 export {
-  HttpMethodSchema,
   ProjectKnowledgeSchema,
   ContractBodySchema,
   ContractDeltaSchema,
-  nodesByKind,
   nodeByKind,
-  nodeLabel,
   nodeLabels,
-  normalizePath,
 } from "./contract.js";
 
 export type { ProjectFrame, ProjectFrameAttempt } from "./project-frame.js";
@@ -64,7 +57,6 @@ export {
 } from "./error-envelope.js";
 
 export {
-  TERMINAL_STATUSES,
   canTransitionTo,
   InvalidStatusTransition,
   WorkItemNotFound,
@@ -90,4 +82,3 @@ export type { ContractRepository } from "./repository-ports.js";
 
 export { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath } from "./workspace-layout.js";
 
-export { TargetPackageJsonSchema } from "./target-package-json.js";

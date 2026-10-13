@@ -427,8 +427,7 @@ export class DecompositionEngine {
 
         // Carries any answers/assumptions captured during alignment (ADR-019)
         // into the decomposition prompt itself, not just onto the output
-        // epic's `northStar` field -- mirrors the same conditional pattern
-        // already used by `buildSpecDerivationPrompt` (spec-derivation.ts).
+        // epic's `northStar` field.
         if (northStar && northStar.trim().length > 0) {
             lines.push(`North Star: ${northStar}`);
         }

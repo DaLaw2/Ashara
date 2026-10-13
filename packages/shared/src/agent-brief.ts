@@ -25,7 +25,7 @@ import { ProjectFrameSchema } from "./project-frame.js";
  *    required here is what turns seven silent degradations into one compile error
  *    plus one parse error, on both sides of the process seam.
  *  - BINDING — `taskId`, `goal`, `context`, `tools`, `constraints`,
- *    `deliverables`, `contractSlice`, `priorAttemptFailure`,
+ *    `deliverables`, `priorAttemptFailure`,
  *    `knowledgeContext`: the task instruction, requirements the agent must
  *    satisfy, and prior lessons. `knowledgeContext` is rendered alongside
  *    `priorAttemptFailure` (before task context) so failure lessons carry
@@ -55,7 +55,6 @@ export const AgentBriefSchema = z
     // Binding, conditional. Non-empty when present: the producer only emits
     // these when it has real content, so an empty string is a malformed brief.
     priorAttemptFailure: z.string().min(1).optional(),
-    contractSlice: z.string().min(1).optional(),
     // Per-task binary unblock: the orchestrator can selectively allow binaries
     // that are otherwise in DEFAULT_BLOCKED_BINARIES (e.g. "docker" for a
     // container-provisioning task). The agent-runner filters blockedBinaries

@@ -5,20 +5,15 @@ import { z } from "zod";
  * Discriminated on `source` — Ashara's own producers form a closed set;
  * a consumer switch that omits a variant is a compile error.
  *
- * `substitutedBy` is optional on ALL variants: failure recovery records a
- * substitute pointer on whichever variant it writes.
- *
  * Open-text fields (reason, detail) stay open strings — they carry
  * LLM-authored or human-authored content, not a closed vocabulary.
  */
 
 // Shared optional fields, present on any variant regardless of which producer
 // wrote the original.
-// `substitutedBy` — the equivalent item failure recovery routed the work to.
 // `salvagedOutcome/salvagedDetail/salvagedAt` — a result that returned for an
 // Abandoned item, persisted so cascade-completion can see the work was done (or what the failure was) without reopening the terminal status.
 const augmentationFields = {
-  substitutedBy: z.string().optional(),
   salvagedOutcome: z.enum(["completed", "failed", "blocked"]).optional(),
   salvagedDetail: z.string().optional(),
   salvagedAt: z.string().optional(),
@@ -53,7 +48,7 @@ const replanSchema = z.object({
   ...augmentationFields,
 });
 
-/** FailureRouter abandon/substitute decisions (failure-recovery.ts). */
+/** FailureRouter abandon decisions (failure-recovery.ts). */
 const failureRouterSchema = z.object({
   source: z.literal("failure_router"),
   reason: z.string(),

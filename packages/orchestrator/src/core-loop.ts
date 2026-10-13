@@ -4,7 +4,6 @@ import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
-import { reconcileCoverageGaps } from "./post-cycle.js";
 import { openRun, persistRun } from "./run-state.js";
 
 export class CoreLoop {
@@ -18,45 +17,21 @@ export class CoreLoop {
     this.budget = new BudgetTracker(deps.config);
   }
 
-  /**
-   * The runId of the currently open run. Derived from `runState`, which is
-   * set by `ensureRunOpen` and is never null after that. A throw here means
-   * a work-item creation path ran before `ensureRunOpen` — that is a bug,
-   * not a fallback case. The value is passed explicitly to every function
-   * that stamps it onto a work item, so `""` is unrepresentable: there is
-   * no field to seed it into.
-   */
-  private get currentRunScope(): string {
-    if (!this.runState) {
-      throw new Error(
-        "currentRunScope accessed before ensureRunOpen — " +
-          "a work item cannot be created until the run is open",
-      );
-    }
-    return this.runState.runId;
-  }
-
   async runCycle(): Promise<CycleResult> {
     const { deps } = this;
 
     await this.budget.ensureLoaded(deps.costRepo);
     await this.ensureRunOpen();
-    const runScope = this.currentRunScope;
 
     let batch: WorkItem[] = [];
     const results: TaskResult[] = [];
 
-    // When the budget is exhausted, skip reconciliation and dispatch: the runner idles
+    // When the budget is exhausted, skip dispatch: the runner idles
     // at the cap. Read live on every cycle: dispatch spends, so it must not run past
     // the cap.
     if (this.budget.isExhausted()) {
       this.reportBudgetExhaustion();
     } else {
-      // Plan reconciliation (mig9-t2, ADR-032 §2) runs BEFORE the gate, so any
-      // proposed coverage task is eligible for dispatch this same cycle. ENFORCING
-      // proposes tasks for uncovered declared endpoints; observe-only just logs.
-      await reconcileCoverageGaps(deps, runScope);
-
       const eligible = await PlanningService.gate(deps.workItemRepo);
       if (eligible.length > 0) {
         const graph = await DependencyGraph.load(deps.workItemRepo);

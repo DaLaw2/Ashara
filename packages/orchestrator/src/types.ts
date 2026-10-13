@@ -4,13 +4,8 @@ import type {
   VisionRepository,
   CostRepository,
 } from "@ashara/db";
-import type { ContractRepository } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type {
-  WorkItemRepository,
-  FailureRouter,
-  ContractRegistryLookup,
-} from "./acl/planning-acl.js";
+import type { WorkItemRepository, FailureRouter } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { EventLogger } from "./event-logger.js";
 import type { RunStateStore } from "./run-state.js";
@@ -25,12 +20,6 @@ export interface CoreLoopConfig {
   readonly asharaSourceDir: string;
   readonly decompositionTimeoutMs: number;
   readonly verifyTimeoutMs: number;
-  /**
-   * Coverage reconciliation mode (mig9-t2, ADR-032 §2). `true` (default) ENFORCES:
-   * uncovered declared endpoints are proposed as tasks and the rollup holds over open
-   * gaps. `false` is the observe-only rollback: gaps are logged but never block.
-   */
-  readonly coverageEnforcing: boolean;
 }
 
 /**
@@ -49,7 +38,6 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   asharaSourceDir: ".",
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
-  coverageEnforcing: true,
 };
 
 export interface CycleResult {
@@ -141,26 +129,6 @@ export interface CoreLoopDeps {
   readonly developmentService: DevelopmentService;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRouter;
-  /**
-   * Shares one DB transaction between coverage reconciliation's work-item
-   * creation and its ProjectContract amend (ADR-028 + ADR-029, mig-phase-9).
-   */
-  readonly withPlanningTransaction: <T>(
-    fn: (repos: { workItemRepo: WorkItemRepository; contractRepo: ContractRepository }) => Promise<T>,
-  ) => Promise<T>;
-  /**
-   * Resolves a failed item's ProjectContract so the FailureRouter can substitute
-   * by the module/endpoint registry, not just by title (mig9-t4). Optional — the
-   * composition root wires it; without it, recovery uses title equivalence.
-   */
-  readonly contractLookup?: ContractRegistryLookup;
-  /**
-   * The ProjectContract repository (read + amend), for coverage reconciliation
-   * (mig9-t2): computing open coverage gaps, proposing coverage tasks, and holding
-   * rollups over open gaps.
-   * Optional — absent, reconciliation is skipped (no contract to reconcile).
-   */
-  readonly contractRepo?: ContractRepository;
   /** Durable home of the budget's spend. */
   readonly runStateStore: RunStateStore;
 }

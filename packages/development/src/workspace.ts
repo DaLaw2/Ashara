@@ -188,10 +188,9 @@ export async function cleanupWorkdir(workDir: string, targetProjectPath?: string
   }
 }
 
-// Bridge set: used only when the caller has no contractExcludePaths AND the
-// project has no .gitignore. loadSkipDirs is the primary mechanism; this is
-// the last-resort fallback so a project with neither gitignore nor contract
-// still gets a usable tree listing.
+// Bridge set: used only when the project has no .gitignore. loadSkipDirs is the
+// primary mechanism; this is the last-resort fallback so a project without a
+// gitignore still gets a usable tree listing.
 const FALLBACK_SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", "coverage", ".next", ".turbo", ".cache",
   "target", "__pycache__", "vendor", "venv", ".venv",
@@ -201,11 +200,8 @@ export async function buildFileTree(
   rootDir: string,
   maxDepth: number,
   maxFiles: number,
-  contractExcludePaths?: readonly string[],
 ): Promise<string> {
-  const skipDirs = contractExcludePaths && contractExcludePaths.length > 0
-    ? new Set([".git", ...contractExcludePaths])
-    : await loadSkipDirs(rootDir).catch(() => FALLBACK_SKIP_DIRS);
+  const skipDirs = await loadSkipDirs(rootDir).catch(() => FALLBACK_SKIP_DIRS);
   const paths: string[] = [];
 
   async function walk(dir: string, depth: number): Promise<void> {

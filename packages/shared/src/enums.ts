@@ -21,7 +21,7 @@ export const TERMINAL_SESSION_PHASES: readonly SessionPhase[] = ["Completed", "F
 
 const CAPABILITY_LEVELS: readonly CapabilityLevel[] = ["Frontier", "Strong", "Medium", "Light"] as const;
 const WORK_ITEM_LEVELS: readonly WorkItemLevel[] = ["Epic", "Task"] as const;
-export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
+const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
     "Pending",
     "InProgress",
     "Completed",

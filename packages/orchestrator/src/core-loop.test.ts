@@ -42,10 +42,6 @@ vi.mock("./acl/planning-acl.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./post-cycle.js", () => ({
-  reconcileCoverageGaps: async () => {},
-}));
-
 vi.mock("./run-state.js", () => ({
   openRun: async () => ({
     runId: "run-parallel-test",
@@ -115,7 +111,6 @@ function buildDeps(): CoreLoopDeps {
     visionRepo,
     developmentService: {},
     runStateStore,
-    withPlanningTransaction: async (fn: (repos: unknown) => Promise<unknown>) => fn({}),
     failureRouter: {},
   } as unknown as CoreLoopDeps;
 }

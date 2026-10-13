@@ -84,7 +84,6 @@ describe("source variant round-trips", () => {
       attempts: 3,
       lastFailure: { detail: "gate failed", raw: {} },
       detail: "error detail",
-      substitutedBy: "wi-abc-123",
     };
     const result = parseStoredBlockedReason(input);
     expect(result).toBeDefined();
@@ -93,7 +92,6 @@ describe("source variant round-trips", () => {
       expect(result!.reason).toBe("retry_budget_exhausted");
       expect(result!.attempts).toBe(3);
       expect(result!.detail).toBe("error detail");
-      expect(result!.substitutedBy).toBe("wi-abc-123");
     }
   });
 
@@ -110,19 +108,6 @@ describe("source variant round-trips", () => {
     const record = result as Record<string, unknown>;
     expect(record["note"]).toBe("abandoned via API");
     expect(record["customField"]).toBe("user-data");
-  });
-});
-
-describe("substitutedBy on all variants", () => {
-  test("substitutedBy is accepted on a non-api variant", () => {
-    const input = {
-      source: "task_failed",
-      reason: "task_failed",
-      substitutedBy: "wi-replacement",
-    };
-    const result = parseStoredBlockedReason(input);
-    expect(result).toBeDefined();
-    expect(result!.substitutedBy).toBe("wi-replacement");
   });
 });
 
@@ -154,17 +139,6 @@ describe("withSalvagedResult helper", () => {
     expect(parsed!.salvagedAt).toBeDefined();
     expect(parsed!.source).toBe("task_failed");
   });
-
-  test("preserves existing substitutedBy when adding salvaged fields", () => {
-    const withSub: StoredBlockedReason = {
-      source: "failure_router",
-      reason: "exhausted",
-      substitutedBy: "wi-replacement",
-    };
-    const augmented = withSalvagedResult(withSub, "blocked", "blocked on external");
-    expect(augmented.substitutedBy).toBe("wi-replacement");
-    expect(augmented.salvagedOutcome).toBe("blocked");
-  });
 });
 
 describe("storedBlockedReasonSchema", () => {
@@ -181,14 +155,12 @@ describe("blockedReasonToRecord", () => {
       reason: "retry exhausted",
       attempts: 3,
       lastFailure: { detail: "gate failed" },
-      substitutedBy: "wi-replacement",
     };
     const record = blockedReasonToRecord(reason);
     expect(record["source"]).toBe("failure_router");
     expect(record["reason"]).toBe("retry exhausted");
     expect(record["attempts"]).toBe(3);
     expect(record["lastFailure"]).toEqual({ detail: "gate failed" });
-    expect(record["substitutedBy"]).toBe("wi-replacement");
   });
 
   test("preserves passthrough fields on api variant", () => {

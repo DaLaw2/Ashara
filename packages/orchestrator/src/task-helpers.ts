@@ -102,7 +102,7 @@ export async function recordFailedApproach(
 
 /**
  * Deterministic "lesson" text for a FailureRouter-routed failure (kl-t1): every
- * decision — replan, abandon, or substitute (itself an abandon variant) — means
+ * decision — replan or abandon — means
  * this dispatch attempt did not succeed, so each is worth a lesson, composed with
  * zero LLM calls from data already in scope (no distillation — deferred by story
  * decision). Provenance-bearing: names the task, the action taken, and the
@@ -111,14 +111,11 @@ export async function recordFailedApproach(
  */
 export function composeRoutedLesson(
   title: string,
-  action: "replan" | "abandon" | "substitute",
+  action: "replan" | "abandon",
   attempts: number,
   detail: string,
 ): string {
-  const verb =
-    action === "abandon" ? "abandoned"
-    : action === "substitute" ? "abandoned as a duplicate of an equivalent completed item"
-    : "replanned for another attempt";
+  const verb = action === "abandon" ? "abandoned" : "replanned for another attempt";
   return `Task '${title}' was ${verb} after ${attempts} attempt(s): ${detail}`;
 }
 

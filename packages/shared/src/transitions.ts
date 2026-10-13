@@ -1,5 +1,4 @@
 import type { WorkItemStatus } from "./enums.js";
-import { WORK_ITEM_STATUSES } from "./enums.js";
 
 /**
  * Published Language: the WorkItem state-machine contract.
@@ -29,8 +28,8 @@ import { WORK_ITEM_STATUSES } from "./enums.js";
  *
  * `Completed -> Pending` has no traverser: its only one, reopenWorkItem, was
  * removed, and unblock/replan/requeue each pin a different from-status. The edge
- * is kept because removing it makes Completed terminal, which changes every
- * TERMINAL_STATUSES consumer; that is an owner decision. Its intended traverser
+ * is kept because removing it makes Completed terminal; that is an owner
+ * decision. Its intended traverser
  * is story c-change-handling (reopened items).
  */
 const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
@@ -41,11 +40,6 @@ const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = 
   Completed: ["Pending"],
   Abandoned: [],
 };
-
-/** Derived, never hand-listed: a status is terminal exactly when it has no exits. */
-export const TERMINAL_STATUSES: ReadonlySet<WorkItemStatus> = new Set(
-  WORK_ITEM_STATUSES.filter((status) => OUTBOUND_TRANSITIONS[status].length === 0),
-);
 
 export function canTransitionTo(
   from: WorkItemStatus,
