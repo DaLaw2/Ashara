@@ -14,4 +14,5 @@ export { FailedApproachRepository } from "./repositories/failed-approach.js";
 export { ConfigRepository } from "./repositories/config.js";
 export { RunStateRepository } from "./repositories/run-state.js";
 export { ContractRepository } from "./repositories/contract.js";
+export { SecretRepository } from "./repositories/secret.js";
 export { withPlanningTransaction } from "./repositories/planning-transaction.js";

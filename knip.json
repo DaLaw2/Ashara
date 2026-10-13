@@ -4,7 +4,7 @@
   "includeEntryExports": true,
   "workspaces": {
     ".": {
-      "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts"],
+      "entry": ["scripts/check-boundaries.ts", "scripts/check-docs.ts", "scripts/secret-key-init.ts", "scripts/secret.ts"],
       "project": ["scripts/**/*.ts", "!scripts/**/*.test.ts"],
       "vitest": false
     },

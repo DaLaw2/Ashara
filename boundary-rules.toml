@@ -40,3 +40,7 @@ allow = ["*"]
 
 [llm-gateway]
 allow = ["shared"]
+
+[security]
+# ADR-075 S1: db holds the ciphertext rows; the master key stays outside it.
+allow = ["db"]
