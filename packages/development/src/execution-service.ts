@@ -5,11 +5,8 @@ import type { WorkItemId, AgentBrief, ProjectContract, ProjectFrame, ErrorEnvelo
 import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, nodeLabel, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { LLMGateway } from "@ashara/llm-gateway";
-import type { IndexCoverage, RetrievalResult } from "@ashara/memory";
-import { describeIndexShortfall } from "@ashara/memory";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
-import type { ProjectProfile } from "./brief-assembly.js";
-import { buildBriefWithRetry, formatAcceptanceCriteria, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
+import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ContractSource } from "./contract-slice.js";
 import { formatContractSlice } from "./contract-slice.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
@@ -73,10 +70,6 @@ export interface AgentSpawnOptions {
   readonly taskId: string;
   readonly dispatchCount: number;
   readonly blockedReason?: StoredBlockedReason;
-}
-
-export interface ConventionsExtractor {
-  extract(workDir: string): Promise<string | null>;
 }
 
 export interface ExecutionEventSink {
@@ -191,9 +184,7 @@ export interface DevelopmentServiceDeps {
   readonly knowledgeSink: KnowledgeSink;
   readonly knowledgeSource?: KnowledgeSource;
   readonly agentInvoker: AgentInvoker;
-  readonly conventionsExtractor: ConventionsExtractor;
   readonly llmGateway: LLMGateway | null;
-  readonly retrieveFn: (query: string, mentionedSymbols?: string[]) => Promise<RetrievalResult[]>;
   readonly eventSink?: ExecutionEventSink;
   /**
    * Supplies the owner's own vision text for a task's project (ADR-046). Absent ⇒
@@ -220,12 +211,6 @@ export interface DevelopmentServiceDeps {
    * un-completes a task that passed its gates.
    */
   readonly contractAmender?: ContractAmender;
-  /**
-   * Refreshes the retrieval index over the target checkout and reports what it
-   * could cover. Absent ⇒ retrieval runs against an empty index, which every
-   * brief then says out loud rather than passing off as "nothing relevant".
-   */
-  readonly populateIndex?: (targetPath: string) => IndexCoverage;
   readonly provisioner?: Provisioner;
   readonly provisionedEnv?: ProvisionedEnv;
 }
@@ -417,7 +402,6 @@ export class DevelopmentService {
     targetProjectPath: string | null,
     contract: ProjectContract | null,
   ): Promise<AgentBrief> {
-    const { retrieveFn } = this.deps;
     const taskSpec = task.taskSpec;
 
     const replanContext = extractReplanContext(task.id, task.blockedReason);
@@ -426,10 +410,8 @@ export class DevelopmentService {
 
     const contractSlice = contract ? await this.renderContractSlice(contract, task.id) : undefined;
 
-    // OUTSIDE the try/catch below: a ProjectFrameUnresolvable must propagate to
-    // execute() and block the task. Degrading to the basic brief here would ship
-    // the agent a brief with no stated target — precisely the fail-open this
-    // ladder replaces (ADR-046).
+    // A ProjectFrameUnresolvable propagates to execute() and blocks the task: a
+    // brief with no stated target is the fail-open this ladder replaces (ADR-046).
     const projectFrame = await resolveProjectFrame({
       taskId: task.id,
       contract,
@@ -448,69 +430,32 @@ export class DevelopmentService {
     };
 
     const contractEntryPoint = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-    const { contextMap, greenfield } = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
+    const contextMap = await this.buildContextMap(targetProjectPath, contractEntryPoint ?? undefined, contract?.excludePaths);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
-    this.refreshIndex(task.id, targetProjectPath);
-
-    try {
-      const { brief, qualityGate } = await buildBriefWithRetry(
-        spec,
-        accountingProfile(projectFrame),
-        retrieveFn,
-        {},
-        contextMap,
-        knowledgeContext,
-        greenfield,
-      );
-      // The gate's verdict used to be discarded, so a brief that failed every
-      // retry shipped indistinguishably from one that passed first try.
-      if (!qualityGate.passed) {
-        console.warn(
-          `[${task.id}] brief quality gate FAILED after retries (${qualityGate.failedChecks.join(", ")}): ` +
-            `relevance=${qualityGate.checks.relevance.detail} | economy=${qualityGate.checks.economy.detail}`,
-        );
-      }
-      this.deps.eventSink?.emit({
-        event: "brief_quality_gate",
+    // createAgentBrief: the compiler checks the shape at this construction site,
+    // and the Zod parse underneath throws on a malformed brief, which blocks the
+    // task rather than shipping a degraded one.
+    const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
+    const formattedTaskSpec = formatTaskSpec(spec);
+    const taskContext = acceptanceSection ? `${formattedTaskSpec}\n\n${acceptanceSection}` : formattedTaskSpec;
+    return createAgentBrief(
+      {
         taskId: task.id,
-        passed: qualityGate.passed,
-        failedChecks: [...qualityGate.failedChecks],
-        relevance: qualityGate.checks.relevance.detail,
-        economy: qualityGate.checks.economy.detail,
-      });
-      // createAgentBrief: the compiler checks the shape at this construction
-      // site (Layer 1 — a misspelt or omitted field is a TS error), and the Zod
-      // parse runs underneath as defence-in-depth (Layer 2). The finding-g field
-      // drop that motivated the shared schema is now caught at compile time, not
-      // just at runtime.
-      const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
-      const taskContext = acceptanceSection
-        ? `${brief.taskSpec}\n\n${acceptanceSection}`
-        : brief.taskSpec;
-      return createAgentBrief(
-        {
-          taskId: task.id,
-          goal: spec.goal,
-          projectFrame,
-          context: taskContext,
-          tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
-          constraints: spec.checks,
-          deliverables: spec.deliverables,
-          ...(taskSpec !== undefined ? { task_spec: { checks: stringArrayOrEmpty(taskSpec.checks) } } : {}),
-          codeContext: brief.codeContext,
-          knowledgeContext: brief.knowledgeContext,
-          contextMap: brief.contextMap,
-          ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
-          ...(contractSlice !== undefined ? { contractSlice } : {}),
-          ...(artifactContext !== undefined ? { artifactContext } : {}),
-        },
-        "development:buildBrief",
-      );
-    } catch (e) {
-      console.warn(`[${task.id}] brief assembly failed, falling back to basic brief:`, e);
-      return buildBasicBrief(task, projectFrame, priorAttemptFailure, contractSlice, artifactContext);
-    }
+        goal: spec.goal,
+        projectFrame,
+        context: taskContext,
+        tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
+        constraints: spec.checks,
+        deliverables: spec.deliverables,
+        knowledgeContext,
+        contextMap,
+        ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
+        ...(contractSlice !== undefined ? { contractSlice } : {}),
+        ...(artifactContext !== undefined ? { artifactContext } : {}),
+      },
+      "development:buildBrief",
+    );
   }
 
   /**
@@ -561,17 +506,15 @@ export class DevelopmentService {
     targetProjectPath: string | null,
     contractEntryPointPath?: string,
     contractExcludePaths?: readonly string[],
-  ): Promise<{ contextMap: string; greenfield: boolean }> {
-    if (!targetProjectPath) return { contextMap: EMPTY_WORKDIR_CONTEXT_MAP, greenfield: true };
+  ): Promise<string> {
+    if (!targetProjectPath) return EMPTY_WORKDIR_CONTEXT_MAP;
 
     const sections: string[] = ["# Project Context"];
-    let hasFileTree = false;
 
     try {
       const tree = await buildFileTree(targetProjectPath, 4, 200, contractExcludePaths);
       if (tree) {
         sections.push("## File Tree\n" + tree);
-        hasFileTree = true;
       }
     } catch (e: unknown) {
       console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
@@ -636,15 +579,7 @@ export class DevelopmentService {
       console.warn(`[buildContextMap] Failed to read verify.toml in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    try {
-      const conventions = await this.deps.conventionsExtractor.extract(targetProjectPath);
-      if (conventions) sections.push("## Conventions\n" + conventions);
-    } catch (e: unknown) {
-      console.warn(`[buildContextMap] Failed to extract conventions for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    const contextMap = sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
-    return { contextMap, greenfield: !hasFileTree };
+    return sections.length > 1 ? sections.join("\n\n") : EMPTY_WORKDIR_CONTEXT_MAP;
   }
 
   private async buildKnowledgeContext(task: TaskDescriptor, spec: TaskSpec): Promise<string> {
@@ -1074,37 +1009,6 @@ export class DevelopmentService {
       );
     }
   }
-
-  /**
-   * Refreshes the retrieval index immediately before the brief that reads it.
-   *
-   * It used to run once per process, only from the task-completed path: a run
-   * whose first task failed never indexed at all, and every later task retrieved
-   * against the snapshot taken after task 1. Indexing here instead is both
-   * fresher and unconditional — `indexDirectory` is content-hashed, so a pass
-   * over an unchanged tree re-reads files but rebuilds nothing.
-   */
-  private refreshIndex(taskId: string, targetProjectPath: string | null): void {
-    if (!targetProjectPath || !this.deps.populateIndex) return;
-    try {
-      const coverage = this.deps.populateIndex(targetProjectPath);
-      const shortfall = describeIndexShortfall(coverage, targetProjectPath);
-      if (shortfall !== null) console.warn(`[${taskId}] ${shortfall}`);
-      this.deps.eventSink?.emit({
-        event: "index_coverage",
-        taskId,
-        filesSeen: coverage.filesSeen,
-        filesIndexed: coverage.filesIndexed,
-        parsableExtensions: [...coverage.parsableExtensions],
-        unparsable: coverage.unparsable.slice(0, 5),
-        parseFailures: coverage.failures.length,
-        ...(shortfall !== null ? { shortfall } : {}),
-      });
-    } catch (e) {
-      console.warn(`[${taskId}] codebase index population failed:`, e);
-    }
-  }
-
 }
 
 /**
@@ -1170,65 +1074,6 @@ async function closeSession(taskId: string, sessionId: string, write: () => Prom
       e,
     );
   }
-}
-
-/**
- * The ProjectProfile that {@link buildBriefWithRetry} needs for cache-prefix token
- * accounting. It is NEVER rendered into the brief the agent reads (only its size
- * counts toward the prefix budget), so it carries the frame's stack labels and no
- * commands: what to run is the agent's call, declared in verify.toml (ADR-043/045).
- */
-function accountingProfile(frame: ProjectFrame): ProjectProfile {
-  return {
-    name: "project",
-    techStack: [...frame.stack],
-    buildCommand: "",
-    testCommand: "",
-    lintCommand: "",
-    conventions: [],
-    moduleBoundaries: "",
-  };
-}
-
-function buildBasicBrief(
-  task: TaskDescriptor,
-  projectFrame: ProjectFrame,
-  priorAttemptFailure?: string,
-  contractSlice?: string,
-  artifactContext?: string,
-): AgentBrief {
-  const spec = task.taskSpec;
-  const shortGoal = typeof spec?.goal === "string" ? spec.goal : task.title;
-  const deliverables = stringArrayOrEmpty(spec?.deliverables);
-  const goalParts = [task.title];
-  if (shortGoal !== task.title) goalParts.push(shortGoal);
-  if (deliverables.length > 0) goalParts.push(`Deliverables: ${deliverables.join(", ")}`);
-  const goal = goalParts.join(". ");
-  const endState = typeof spec?.endState === "string" ? spec.endState : `Implement: ${task.title}`;
-
-  const constraints = stringArrayOrEmpty(spec?.checks);
-
-  const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
-  const context = acceptanceSection
-    ? `End state: ${endState}\n\n${acceptanceSection}`
-    : `End state: ${endState}`;
-
-  return createAgentBrief(
-    {
-      taskId: task.id,
-      goal,
-      projectFrame,
-      context,
-      tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
-      constraints,
-      deliverables,
-      ...(spec !== undefined ? { task_spec: { checks: stringArrayOrEmpty(spec.checks) } } : {}),
-      ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
-      ...(contractSlice !== undefined ? { contractSlice } : {}),
-      ...(artifactContext !== undefined ? { artifactContext } : {}),
-    },
-    "development:buildBasicBrief",
-  );
 }
 
 /** Narrows an untyped jsonb value to a `string[]`, dropping non-string members. */

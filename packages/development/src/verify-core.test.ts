@@ -9,7 +9,7 @@ import type { ToolchainResult } from "./project-toolchain.js";
 
 // ---------------------------------------------------------------------------
 // GIT-SAFETY (a, mig-phase-2 t2): workDir/gitRoot are required and validated
-// at the single choke point both adapters (verify.ts, inline-verify.ts) route
+// at runVerifyCore, the single choke point every verify caller routes
 // through. A request that omits/mis-supplies either must fail closed with a
 // typed error BEFORE any command runs — never fall back to the ambient cwd.
 // ---------------------------------------------------------------------------

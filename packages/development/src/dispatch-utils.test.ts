@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { readManifestContext, buildAutoProfile, buildProjectContext } from "./dispatch-utils.js";
+import { readManifestContext } from "./dispatch-utils.js";
 
 let dir: string;
 
@@ -115,54 +115,5 @@ describe("readManifestContext", () => {
     const match = result!.match(/--- big\.json ---\n([\s\S]*?)\n--- end ---/);
     expect(match).toBeTruthy();
     expect(match![1].length).toBeLessThanOrEqual(500);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// buildAutoProfile
-// ---------------------------------------------------------------------------
-
-describe("buildAutoProfile", () => {
-  test("lists root files as techStack without a hardcoded table", async () => {
-    await writeFile(join(dir, "composer.json"), "{}");
-    await writeFile(join(dir, "README.md"), "# Hello");
-    const profile = await buildAutoProfile(dir);
-    expect(profile.techStack).toContain("composer.json");
-    expect(profile.techStack).toContain("README.md");
-  });
-
-  test("skips dotfiles and directories", async () => {
-    await writeFile(join(dir, ".gitignore"), "node_modules");
-    await mkdir(join(dir, "src"));
-    await writeFile(join(dir, "go.mod"), "module example.com/app");
-    const profile = await buildAutoProfile(dir);
-    expect(profile.techStack).toContain("go.mod");
-    expect(profile.techStack).not.toContain(".gitignore");
-    expect(profile.techStack).not.toContain("src");
-  });
-
-  test("returns empty techStack for empty directory", async () => {
-    const profile = await buildAutoProfile(dir);
-    expect(profile.techStack).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// buildProjectContext
-// ---------------------------------------------------------------------------
-
-describe("buildProjectContext", () => {
-  test("does not render a # Tech Stack section", async () => {
-    await writeFile(join(dir, "Cargo.toml"), '[package]\nname = "x"');
-    await writeFile(join(dir, "package.json"), "{}");
-    const result = await buildProjectContext(dir);
-    expect(result).not.toContain("# Tech Stack");
-  });
-
-  test("still renders project structure listing", async () => {
-    await writeFile(join(dir, "Cargo.toml"), '[package]\nname = "x"');
-    const result = await buildProjectContext(dir);
-    expect(result).toContain("# Project Structure");
-    expect(result).toContain("Cargo.toml");
   });
 });

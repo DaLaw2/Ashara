@@ -15,18 +15,11 @@ export interface ToolSchema {
     readonly required: readonly string[];
 }
 
-export interface ToolPromptContext {
-    readonly language?: string;
-    readonly buildCommand?: string;
-    readonly testCommand?: string;
-    readonly lintCommand?: string;
-}
-
 export interface ToolDefinition {
     readonly name: string;
     readonly description: string;
     readonly inputSchema: ToolSchema;
-    readonly prompt?: (ctx?: ToolPromptContext) => string;
+    readonly prompt?: () => string;
 }
 
 export interface ToolResult {

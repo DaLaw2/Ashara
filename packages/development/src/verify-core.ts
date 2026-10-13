@@ -10,15 +10,13 @@ import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
 // ---------------------------------------------------------------------------
 // Shared verify check library (Phase 2, mig-phase-2).
 //
-// Single implementation behind both the in-process development verify() and the
-// out-of-process agent-runner runInlineVerify() adapters. The agent runs in a
-// subprocess, so this library is pure functions plus an injected command
-// runner — no shared runtime state.
+// Single implementation behind the host-side verify callers (execution-service
+// and the post-merge gate): pure functions plus an injected command runner — no
+// shared runtime state.
 //
 // Containment is structural: each caller injects a CommandRunner (required,
-// no fallback). Host-side callers inject a runner built from the Provisioner
-// abstraction (provisionerAsRunner). The agent-runner injects
-// defaultRunCommand because it is already inside the agent container.
+// no fallback), built from the Provisioner abstraction (provisionerAsRunner)
+// or, with no provisioner wired, defaultRunCommand.
 // The absence of a fallback is the mechanism: a caller that forgets to
 // inject a runner gets a compile error, not silent host execution.
 //
@@ -87,8 +85,8 @@ export interface CoreVerifyDeps {
   /**
    * How to execute deterministic check commands (npm test, cargo check, etc.).
    * Required — no fallback. Host-side callers inject a runner built from the
-   * Provisioner abstraction; the in-container agent-runner injects
-   * defaultRunCommand explicitly. The absence of a default is the mechanism:
+   * Provisioner abstraction, or defaultRunCommand explicitly when no
+   * provisioner is wired. The absence of a default is the mechanism:
    * a forgotten injection is a compile error, not silent host execution
    * (Discipline A: the identity element is unavailable).
    */
@@ -98,8 +96,8 @@ export interface CoreVerifyDeps {
    * go mod download). Required — no fallback. Separate from runCommand
    * because preparation needs network access (to fetch dependencies) while
    * checks do not. Host-side callers inject a Provisioner-backed runner
-   * with network enabled; the agent-runner injects defaultRunCommand (the
-   * agent container already has network for this purpose).
+   * with network enabled, or defaultRunCommand explicitly when no
+   * provisioner is wired.
    *
    * The split is here because the decision "preparation needs network"
    * belongs to the caller, not to the runner.

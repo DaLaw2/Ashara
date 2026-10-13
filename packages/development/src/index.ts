@@ -1,17 +1,8 @@
-export {
-  buildAutoProfile,
-  buildProjectContext,
-  createRetrievalFn,
-  readManifestContext,
-} from "./dispatch-utils.js";
-
-export type { ProjectProfile } from "./brief-assembly.js";
-export { formatProjectProfile } from "./brief-assembly.js";
+export { readManifestContext } from "./dispatch-utils.js";
 
 export type { ContractSource } from "./contract-slice.js";
 export type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 export type { ContractAmender, CompletionDeliverables } from "./contract-completion.js";
-export { runVerifyCore } from "./verify-core.js";
 export { defaultRunCommand } from "./check-runner.js";
 
 export { observeProduct } from "./gates/observe.js";
@@ -22,7 +13,6 @@ export type {
   SessionStore,
   AgentInvoker,
   AgentSpawnOptions,
-  ConventionsExtractor,
   ExecutionEventSink,
   TaskDescriptor,
 } from "./execution-service.js";

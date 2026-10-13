@@ -21,21 +21,16 @@ restrict.development = ["src/acl/*.ts"]
 allow = ["shared", "llm-gateway"]
 
 [development]
-allow = ["shared", "llm-gateway", "memory"]
+allow = ["shared", "llm-gateway"]
 
 [agent-runner]
-# development reachable ONLY through the ACL (ADR-044 Phase 6)
-allow = ["shared", "llm-gateway", "development"]
-restrict.development = ["src/acl/development-acl.ts"]
+allow = ["shared", "llm-gateway"]
 
 [db]
 allow = ["shared"]
 
 [engagement]
 allow = ["shared", "llm-gateway"]
-
-[memory]
-allow = []
 
 [cli]
 allow = ["shared", "llm-gateway", "engagement", "planning"]

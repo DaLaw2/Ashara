@@ -7,10 +7,9 @@ import { ProjectFrameSchema } from "./project-frame.js";
  * ADR-013; ADR-033 §5). It lives in the Shared Kernel so BOTH sides of the
  * cross-process seam parse the SAME schema, instead of a producer type erased
  * to `Record<string, unknown>` and a hand-rolled consumer validator that
- * silently dropped fields. That erasure was finding-g: `knowledgeContext`,
- * `codeContext`, and `contextMap` were assembled at cost and then dropped by the
- * consumer, so the knowledge AND retrieval subsystems never reached any agent
- * prompt through Run 11 (triple-verified). With every seam field explicit here,
+ * silently dropped fields. That erasure was finding-g: `knowledgeContext` and
+ * `contextMap` were assembled at cost and then dropped by the consumer, so they
+ * never reached any agent prompt through Run 11 (triple-verified). With every seam field explicit here,
  * a producer field not in the schema is a compile error (the producer returns
  * `AgentBrief`) or a parse error (`.strict()`), never an invisible drop.
  *
@@ -31,29 +30,11 @@ import { ProjectFrameSchema } from "./project-frame.js";
  *    satisfy, and prior lessons. `knowledgeContext` is rendered alongside
  *    `priorAttemptFailure` (before task context) so failure lessons carry
  *    the same weight as explicit failure context.
- *  - SUPPLEMENTARY — `codeContext`, `contextMap`: retrieved code and the
- *    project context map. Useful reference rendered after the binding
- *    sections.
+ *  - SUPPLEMENTARY — `contextMap`: the project context map. Useful reference
+ *    rendered after the binding sections.
  *
- * `task_spec` — INCLUDED, consciously. It is not rendered into the system
- * prompt, but the agent-runner reads `task_spec.checks` off `brief.json` to
- * seed inline verification. Declared as a typed object with only the consumed
- * field (`checks`); the producer constructs this field explicitly (normalising
- * the optional `StoredTaskSpec.checks` into a required `string[]`), and
- * unrecognized keys from the full `StoredTaskSpec` never reach this schema.
- * This is deliberate: only what the consumer reads crosses the process seam.
- * `checks` is REQUIRED within `task_spec`: the producer normalises
- * `StoredTaskSpec.checks ?? []` at the construction site, so the "no checks
- * stated" case is an explicit empty array, never an absent field. The consumer
- * falls back to `[]` ONLY when `task_spec` itself is absent (a task with no
- * spec at all), not when `checks` is missing — that second case is now a parse
- * error. Natural-language constraints must never reach the executable check
- * pipeline (constraint ≠ check). `goal` and `endState` are read from the
- * domain `WorkItem.taskSpec` before the brief is assembled, not from this
- * field.
- *
- * Arrays default to `[]` when absent (a Rust-era fallback stub brief may omit
- * them); a present-but-wrong-typed array is a parse error, not a silent `[]`
+ * Arrays default to `[]` when absent (a legacy brief.json read back by the
+ * consumer may omit them); a present-but-wrong-typed array is a parse error, not a silent `[]`
  * (the old `as string[]` fail-soft). `.strict()`: an unexpected producer field
  * fails the parse rather than riding along invisibly.
  */
@@ -70,19 +51,7 @@ export const AgentBriefSchema = z
     // Binding tier — prior lessons rendered alongside priorAttemptFailure.
     knowledgeContext: z.string().optional(),
     // Supplementary tier — reference context rendered after binding sections.
-    codeContext: z.string().optional(),
     contextMap: z.string().optional(),
-    // Typed passthrough — only `checks` is consumed (by inline verify in
-    // agent-runner); the producer constructs this object explicitly with the
-    // normalised checks array. Not `.strict()`: the inner object is the
-    // producer's construction, not an external boundary, and strictness would
-    // couple it to the full StoredTaskSpec shape for no gain — undeclared fields
-    // never arrive because the producer constructs only `{ checks }`.
-    task_spec: z
-      .object({
-        checks: z.array(z.string()),
-      })
-      .optional(),
     // Binding, conditional. Non-empty when present: the producer only emits
     // these when it has real content, so an empty string is a malformed brief.
     priorAttemptFailure: z.string().min(1).optional(),
@@ -138,7 +107,7 @@ export class InvalidAgentBriefError extends Error {
  * producer: omission is a compile error, not a silent default. The `.default()`
  * clauses still serve the CONSUMER (the `unknown` entry point), where a
  * legacy/degraded brief might omit them. Fields that are `.optional()` in the
- * schema (`knowledgeContext`, `codeContext`, `task_spec`, etc.) remain
+ * schema (`knowledgeContext`, `contextMap`, etc.) remain
  * legitimately omittable.
  *
  * For untrusted input crossing a process boundary (agent-runner reading

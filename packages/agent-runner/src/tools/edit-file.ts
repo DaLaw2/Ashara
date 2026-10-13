@@ -42,8 +42,10 @@ export class EditFileExecutor implements ToolExecutor {
         }
 
         const oldText = input["old_text"];
-        if (typeof oldText !== "string") {
-            return { success: false, output: "", error: "Missing or invalid 'old_text' parameter." };
+        // An empty old_text matches at every index: the occurrence count below would
+        // never advance, so it is rejected before the scan.
+        if (typeof oldText !== "string" || oldText.length === 0) {
+            return { success: false, output: "", error: "Missing, invalid or empty 'old_text' parameter." };
         }
 
         const newText = input["new_text"];
@@ -63,12 +65,13 @@ export class EditFileExecutor implements ToolExecutor {
         try {
             const content = await readFile(resolved, "utf-8");
 
-            // Count occurrences
             let count = 0;
+            let matchIndex = -1;
             let searchFrom = 0;
             while (true) {
                 const idx = content.indexOf(oldText, searchFrom);
                 if (idx === -1) break;
+                if (count === 0) matchIndex = idx;
                 count++;
                 searchFrom = idx + oldText.length;
             }
@@ -89,7 +92,8 @@ export class EditFileExecutor implements ToolExecutor {
                 };
             }
 
-            const updated = content.replace(oldText, newText);
+            // Spliced by index: String.replace would interpret `$&`, `$1` etc. in new_text.
+            const updated = content.slice(0, matchIndex) + newText + content.slice(matchIndex + oldText.length);
             await writeFile(resolved, updated, "utf-8");
 
             const oldLines = oldText.split("\n").length;

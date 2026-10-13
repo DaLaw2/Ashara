@@ -4,10 +4,11 @@ import { z } from "zod";
 // Provisioner — the domain-facing port for substrate-agnostic environment
 // management (ADR-071, story p0-isolation, criterion C7).
 //
-// The Provisioner interface is the ONLY surface agent-runner and the
-// orchestrator see. Whether the substrate is podman, docker, firecracker,
-// or a plain subprocess is an implementation detail of the adapter that
-// implements this interface. No substrate-specific type appears here.
+// The Provisioner interface is the ONLY surface its consumers outside this
+// package (the server composition root) see. Whether the substrate is
+// podman, docker, firecracker, or a plain subprocess is an implementation
+// detail of the adapter that implements this interface. No
+// substrate-specific type appears here.
 //
 // Target Generality: Toolchain is { name, version? } — open, not an enum.
 // PHP, Zig, Elixir, COBOL work with zero code changes.

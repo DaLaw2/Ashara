@@ -13,7 +13,6 @@
     "@ashara/db": "*",
     "@ashara/development": "*",
     "@ashara/llm-gateway": "*",
-    "@ashara/memory": "*",
     "@ashara/orchestrator": "*",
     "@ashara/planning": "*",
     "@ashara/shared": "*",

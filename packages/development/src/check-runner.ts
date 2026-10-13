@@ -9,14 +9,12 @@ import { readVerifyConfig } from "./verify-config.js";
 // ---------------------------------------------------------------------------
 // Deterministic check execution (Phase 2, mig-phase-2).
 //
-// Single implementation behind both the in-process development verify() and the
-// out-of-process agent-runner runInlineVerify() adapters — pure functions plus
-// an injected CommandRunner, no shared runtime state.
+// Single implementation behind the host-side verify callers — pure functions
+// plus an injected CommandRunner, no shared runtime state.
 //
 // Containment is structural, not enumerative: callers inject a CommandRunner
 // built from the Provisioner abstraction (provisionerAsRunner in
-// execution-service.ts). The in-container path (agent-runner) injects
-// defaultRunCommand because it is already inside the agent container.
+// execution-service.ts).
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_LENGTH = 2000;

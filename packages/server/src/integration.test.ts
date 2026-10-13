@@ -14,7 +14,6 @@ import {
   ConfigRepository,
   withPlanningTransaction,
 } from "@ashara/db";
-import { initParser } from "@ashara/memory";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
@@ -86,12 +85,6 @@ async function req(
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   pool = db.$client;
-
-  try {
-    await initParser();
-  } catch (e: unknown) {
-    console.warn(`[integration.test] initParser failed (tree-sitter may not be available): ${e instanceof Error ? e.message : String(e)}`);
-  }
 
   const workItemRepo = new WorkItemRepository(db);
   const eventStore = new EventStoreRepository(db);

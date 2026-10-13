@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tool as aiTool, jsonSchema } from "ai";
 import type { ToolSet } from "ai";
-import type { RegisteredTool, ToolDefinition, ToolExecutor, ToolPromptContext, ToolResult, ToolSchema } from "./types.js";
+import type { RegisteredTool, ToolDefinition, ToolExecutor, ToolResult, ToolSchema } from "./types.js";
 import { readFileTool, ReadFileExecutor } from "./read-file.js";
 import { writeFileTool, WriteFileExecutor } from "./write-file.js";
 import { editFileTool, EditFileExecutor } from "./edit-file.js";
@@ -40,11 +40,11 @@ export class ToolRegistry {
         return [...this.tools.keys()];
     }
 
-    collectPrompts(ctx?: ToolPromptContext): string[] {
+    collectPrompts(): string[] {
         const prompts: string[] = [];
         for (const tool of this.tools.values()) {
             if (tool.definition.prompt) {
-                prompts.push(tool.definition.prompt(ctx));
+                prompts.push(tool.definition.prompt());
             }
         }
         return prompts.sort();
@@ -114,10 +114,13 @@ function buildExecuteFn(
             return JSON.stringify({ type: "error", message });
         }
 
+        // A failed command's output (compiler errors, test failures) is what the
+        // agent needs to diagnose it, so it travels with the error message.
         if (!result.success) {
             return JSON.stringify({
                 type: "error",
                 message: result.error ?? "Tool execution failed",
+                ...(result.output.length > 0 ? { output: result.output.slice(0, maxChars) } : {}),
             });
         }
 
@@ -210,4 +213,4 @@ export function createDefaultRegistry(workingDir?: string, config?: RegistryConf
 
 export { buildSanitizedEnv } from "./sanitized-env.js";
 export type { CommandPolicyConfig } from "./command-policy.js";
-export type { RegisteredTool, ToolDefinition, ToolPromptContext } from "./types.js";
+export type { RegisteredTool, ToolDefinition } from "./types.js";

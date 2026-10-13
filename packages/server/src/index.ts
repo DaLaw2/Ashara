@@ -43,7 +43,6 @@ import {
   tryParseEnvelope,
 } from "@ashara/planning";
 import {
-  createRetrievalFn,
   DevelopmentService,
   observeProduct,
   defaultRunCommand,
@@ -54,7 +53,6 @@ import type {
   KnowledgeSource,
   AgentInvoker,
   AgentSpawnOptions,
-  ConventionsExtractor,
   ExecutionEventSink,
   ContractSource,
   ContractAmender,
@@ -62,7 +60,7 @@ import type {
   ProjectIntentSource,
   StackDeriver,
 } from "@ashara/development";
-import { buildSanitizedEnv, extractProjectConventions } from "@ashara/agent-runner";
+import { buildSanitizedEnv } from "@ashara/agent-runner";
 import {
   BudgetLedger,
   buildGateway,
@@ -74,9 +72,6 @@ import {
   withStructuredLadder,
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
-import { createInProcessGraphClient } from "@ashara/memory";
-import type { GraphClient } from "@ashara/memory";
-import { CodebaseIndexer, initParser } from "@ashara/memory";
 import type { WorkItemId, ProjectContract, ContractDelta, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, HttpMethodSchema, nodeByKind, RUN_SCOPE_AD_HOC, ContractVersionConflict } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
@@ -209,19 +204,6 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  // Initialize tree-sitter parser and codebase indexer
-  let parserReady = false;
-  try {
-    await initParser();
-    parserReady = true;
-  } catch (e) {
-    console.warn("Failed to initialize tree-sitter parser:", e);
-  }
-  const indexer = new CodebaseIndexer();
-
-  // In-process GraphClient: avoids HTTP round-trips for server-side retrieval.
-  const inProcessGraphClient: GraphClient = createInProcessGraphClient(indexer);
-
   // Route ALL structured planning calls through the shared reliability ladder
   // (Phase 4 t1, ADR-030 G5): temperature 0, validated attempt on the requested
   // model, escalate ONE capability tier on persistent schema failure, then a
@@ -239,8 +221,6 @@ async function main(): Promise<void> {
   const decompositionOverrides = await loadDecompositionConfig((key: string) => configRepo.getSetting(key));
   const decompositionEngine = new DecompositionEngine(decompositionLlm, decompositionOverrides);
   const failureRouter = new FailureRouter(3);
-
-  const retrieveFn = await createRetrievalFn(inProcessGraphClient);
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief) => devSessionRepo.insert(sid, tid, brief),
@@ -399,10 +379,6 @@ async function main(): Promise<void> {
         clearTimeout(timer);
       }
     },
-  };
-
-  const conventionsExtractor: ConventionsExtractor = {
-    extract: (workDir) => extractProjectConventions(workDir),
   };
 
   const knowledgeSource: KnowledgeSource = {
@@ -571,17 +547,12 @@ async function main(): Promise<void> {
     knowledgeSink,
     knowledgeSource,
     agentInvoker,
-    conventionsExtractor,
     llmGateway,
-    retrieveFn,
     eventSink: devEventSink,
     intentSource,
     stackDeriver,
     contractSource,
     contractAmender,
-    // No extension list here: the indexer derives its file set from the grammars
-    // the parser actually loaded, and reports what it could not cover.
-    populateIndex: parserReady ? (targetPath) => indexer.indexDirectory(targetPath) : undefined,
     provisioner,
   });
 

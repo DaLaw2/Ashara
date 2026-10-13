@@ -35,13 +35,7 @@ export const runCommandTool: ToolDefinition = {
         },
         required: ["command"],
     },
-    prompt: (ctx) => {
-        const lines = ["Use run_command for build, test, lint, and other shell operations."];
-        if (ctx?.buildCommand) lines.push(`Build: ${ctx.buildCommand}`);
-        if (ctx?.testCommand) lines.push(`Test: ${ctx.testCommand}`);
-        if (ctx?.lintCommand) lines.push(`Lint: ${ctx.lintCommand}`);
-        return lines.join("\n");
-    },
+    prompt: () => "Use run_command for build, test, lint, and other shell operations.",
 } as const;
 
 export class RunCommandExecutor implements ToolExecutor {

@@ -12,14 +12,8 @@ import {
 import type { ResolvedModel } from "@ashara/llm-gateway";
 import { AgentConversation } from "./conversation.js";
 import { createDefaultRegistry } from "./tools/index.js";
-import type { ToolPromptContext } from "./tools/types.js";
 import { OutputCollector } from "./output.js";
 import type { AgentOutput } from "./output.js";
-import { createProfileAdapter } from "./acl/development-acl.js";
-import type { ProjectProfilePort } from "./acl/development-acl.js";
-import { enrichBrief } from "./brief-builder.js";
-import { runInlineVerify } from "./inline-verify.js";
-import type { InlineVerifyResult } from "./inline-verify.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -58,54 +52,23 @@ export class AgentRunner {
     constructor(
         private readonly gateway: RunnerGateway,
         private readonly config: RunnerConfig,
-        private readonly profiles: ProjectProfilePort = createProfileAdapter(),
     ) {}
 
     async run(): Promise<AgentOutput> {
         // 1. Read and validate brief
         const briefRaw = await readFile(this.config.briefPath, "utf-8");
-        const baseBrief = validateBrief(JSON.parse(briefRaw));
+        const brief = validateBrief(JSON.parse(briefRaw));
 
-        // 2. Enrich brief with project context
-        let brief: AgentBrief;
-        try {
-            brief = await enrichBrief(baseBrief, this.config.workingDir, this.profiles);
-            console.log(`[agent-runner] brief enriched with project context from ${this.config.workingDir}`);
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(`[agent-runner] brief enrichment failed, using base brief: ${msg}`);
-            brief = baseBrief;
-        }
-
-        // 3. Build project profile for tool prompt context. The LANGUAGE comes from
-        // the brief's frame, never from detection: detection yields marker FILENAMES,
-        // so a Rust project used to be told its language was "Cargo.toml" (ADR-046).
-        // Detection still supplies the commands, which are observed facts about the
-        // tree rather than claims about what the project is.
-        const frameStack: string[] = [...brief.projectFrame.stack];
-        let toolPromptCtx: ToolPromptContext | undefined;
-        try {
-            const profile = await this.profiles.buildAutoProfile(this.config.workingDir);
-            toolPromptCtx = {
-                language: frameStack[0],
-                buildCommand: profile.buildCommand,
-                testCommand: profile.testCommand,
-                lintCommand: profile.lintCommand,
-            };
-        } catch {
-            toolPromptCtx = undefined;
-        }
-
-        // 4. Create tool registry with working directory, threading per-task
+        // 2. Create tool registry with working directory, threading per-task
         // binary overrides from the brief (e.g. allowedBinaries: ["docker"])
         const registry = createDefaultRegistry(this.config.workingDir, {
             allowedBinaries: brief.allowedBinaries,
         });
 
-        // 5. Resolve model, build system prompt
+        // 3. Resolve model, build system prompt
         const capability = this.config.capability;
         const resolved = this.gateway.resolveModel(capability, "agent-runner");
-        const toolPrompts = registry.collectPrompts(toolPromptCtx);
+        const toolPrompts = registry.collectPrompts();
         const staticSystemPrompt = buildStaticSystemPrompt(toolPrompts);
         const dynamicSystemPrompt = buildDynamicSystemPrompt(brief);
 
@@ -116,7 +79,7 @@ export class AgentRunner {
             `capability=${capability}, tools=${[...allowed].join(", ")}`,
         );
 
-        // 6. Create and run conversation — goal is the task instruction (always non-empty)
+        // 4. Create and run conversation — goal is the task instruction (always non-empty)
         const conversationLogPath = join(this.config.workingDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
 
         const conversation = new AgentConversation(resolved.model, registry, {
@@ -130,39 +93,10 @@ export class AgentRunner {
 
         const result = await conversation.run(brief.goal);
 
-        // 6. Collect output
+        // 5. Collect and write output
         const collector = new OutputCollector(this.config.workingDir);
         const output = await collector.collect(result);
-
-        // 7. Run inline verification — task_spec absence is a named case, not
-        // a silent [] (Discipline A: the identity element must be unavailable).
-        let verifyResult: InlineVerifyResult | null = null;
-        if (brief.task_spec) {
-            try {
-                verifyResult = await runInlineVerify(
-                    this.config.workingDir,
-                    brief.task_spec.checks,
-                    [], // agent-runner has no contract context; contracts live on the host side
-                );
-                console.log(`[agent-runner] inline verify: verdict=${verifyResult.verdict}`);
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[agent-runner] inline verify failed: ${msg}`);
-            }
-        } else {
-            console.log(`[agent-runner] inline verify skipped: no task_spec in brief`);
-        }
-
-        // 8. Write output to file (include verify results)
-        const outputPath = resolve(this.config.outputPath);
-        await collector.writeOutput(output, outputPath);
-
-        if (verifyResult) {
-            const outputJson = JSON.parse(await readFile(outputPath, "utf-8"));
-            outputJson.verify = verifyResult;
-            const { writeFile: writeFileAsync } = await import("node:fs/promises");
-            await writeFileAsync(outputPath, JSON.stringify(outputJson, null, 2) + "\n", "utf-8");
-        }
+        await collector.writeOutput(output, resolve(this.config.outputPath));
 
         return output;
     }
@@ -361,19 +295,13 @@ export function buildDynamicSystemPrompt(brief: AgentBrief): string {
 }
 
 /**
- * Supplementary prompt sections (ADR-033 §5): retrieved code and the project
- * context map. knowledgeContext is promoted to the binding tier (rendered
- * alongside priorAttemptFailure, before task instructions) so prior lessons
- * carry the same weight as failure context. Code context and the project
- * context map remain here — useful reference, but not directives. Each section
- * is emitted only when its field is present and non-empty.
+ * Supplementary prompt section (ADR-033 §5): the project context map. It is
+ * reference, not a directive, so it renders after the binding sections, and
+ * only when present and non-empty.
  */
 function formatSupplementarySections(brief: AgentBrief): string[] {
     const sections: string[] = [];
 
-    if (brief.codeContext && brief.codeContext.trim().length > 0) {
-        sections.push(`## Retrieved Code Context\n${brief.codeContext}`);
-    }
     if (brief.contextMap && brief.contextMap.trim().length > 0) {
         sections.push(`## Project Context Map\n${brief.contextMap}`);
     }
