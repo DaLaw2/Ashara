@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { ConfigRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import {
-  calculateCost,
+  LLMGateway,
   loadRoutingProfilesFromToml,
+  measureCost,
   resolveModelsConfigPath,
   toModelConfig,
 } from "@ashara/llm-gateway";
@@ -63,9 +64,27 @@ describe("the model catalog", () => {
     const model = toModelConfig("model_configs", row);
 
     // Wednesday 2026-10-14: 09:59 UTC is outside the window, 10:00 is its first minute.
-    const peak = calculateCost(1000, 100, 400, 0, model, new Date("2026-10-14T09:59:00Z"));
-    const offPeak = calculateCost(1000, 100, 400, 0, model, new Date("2026-10-14T10:00:00Z"));
-    expect(peak?.totalCost).toBeCloseTo((600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000, 12);
-    expect(offPeak?.totalCost).toBeCloseTo((600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000, 12);
+    const reported = { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 400, cacheWriteTokens: 0 };
+    const peak = measureCost(reported, model, new Date("2026-10-14T09:59:00Z"));
+    const offPeak = measureCost(reported, model, new Date("2026-10-14T10:00:00Z"));
+    if (!peak.measured || !offPeak.measured) return expect.unreachable("both instants are priced");
+    expect(peak.totalCost).toBeCloseTo((600 * 0.3 + 400 * 0.006 + 100 * 1.2) / 1_000_000, 12);
+    expect(offPeak.totalCost).toBeCloseTo((600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000, 12);
+  });
+
+  test("capability routing over the Anthropic catalog resolves Strong to the current Sonnet, claude-sonnet-5-5", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const models = (await repo.listModelConfigs())
+      .filter((m) => m.providerName === "anthropic")
+      .map((m) => toModelConfig("model_configs", m));
+    const gateway = new LLMGateway(
+      {
+        providers: [{ name: "anthropic", apiKey: "unused", models, enabled: true }],
+        defaultProvider: "anthropic",
+      },
+      { kind: "unrecorded", reason: "resolution only: no request is sent" },
+    );
+
+    expect(gateway.resolveModel("Strong", "decomposition").modelId).toBe("claude-sonnet-5-5");
   });
 });

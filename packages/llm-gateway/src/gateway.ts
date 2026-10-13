@@ -13,13 +13,13 @@ import {
   ProviderError,
   SchemaValidationError,
 } from "./errors.js";
-import { calculateCost } from "./pricing.js";
+import { describeUnmeasuredCost, measureCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
 import type {
   CallRecording,
-  CostBreakdown,
+  CostMeasurement,
   CostSummary,
   ExtractedUsage,
   GatewayConfig,
@@ -135,55 +135,27 @@ export class LLMGateway implements ContextualLlm {
   }
 
   /**
-   * Records the cost of a completed call in the gateway's in-process budget
-   * ledger.  When usage is unmeasured, no entry is written — the gateway
-   * ledger cannot produce a pessimistic estimate (the capability-based
-   * estimator lives in the orchestrator's `BudgetTracker.unknownCostCharge`),
-   * and recording $0 would be the identity-element defect this change exists
-   * to eliminate.
+   * Charges a completed call to the in-process budget ledger. An unmeasured
+   * cost charges nothing and is logged at `warn`: the gateway ledger has no
+   * pessimistic estimate (that lives in the orchestrator's
+   * `BudgetTracker.unknownCostCharge`), and charging $0 would read as free.
    */
-  private recordCost(extraction: ExtractedUsage, model: ModelConfig, provider: string): CostBreakdown {
-    if (!extraction.measured) {
-      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false };
-    }
-    const cost = calculateCost(
-      extraction.usage.inputTokens,
-      extraction.usage.outputTokens,
-      extraction.usage.cacheReadTokens,
-      extraction.usage.cacheWriteTokens,
-      model,
-      new Date(),
-    );
-    if (cost === null) {
-      return { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false };
-    }
-    this.budgetLedger.record(cost.totalCost, provider);
-    return { ...cost, measured: true };
-  }
-
-  /**
-   * Discipline C structured warning for unmeasured usage (Discipline A: the
-   * throw that used to live here was strictly worse — it lost the first call's
-   * accounting AND discarded a successful completion AND paid for a fallback
-   * retry). Logs at `warn` with the provider, model, site, operation, and
-   * which SDK fields were absent.
-   */
-  private warnUnmeasuredUsage(
+  private recordCost(
     extraction: ExtractedUsage,
-    provider: string,
-    model: string,
+    resolved: ResolvedProvider,
     site: string,
-    operation: string,
-  ): void {
-    if (extraction.measured) return;
-    console.warn(
-      `[LLMGateway] unmeasured usage: provider=${provider}, model=${model}, ` +
-        `site=${site}, operation=${operation}, ` +
-        `missingFields=[${extraction.missingFields.join(", ")}]. ` +
-        `Token counts are zero-filled; the cost for this call is an estimate, ` +
-        `not a measurement. The orchestrator's pessimistic charge path ` +
-        `(BudgetTracker.unknownCostCharge) handles the real budget accounting.`,
-    );
+    operation: LlmCallOperation,
+  ): CostMeasurement {
+    const cost = measureCost(extraction.reported, resolved.modelConfig, new Date());
+    if (!cost.measured) {
+      console.warn(
+        `[LLMGateway] ${describeUnmeasuredCost(cost, resolved.providerName, resolved.modelConfig.id)}, ` +
+          `site=${site}, operation=${operation}; the in-process budget ledger is not charged for this call`,
+      );
+      return cost;
+    }
+    this.budgetLedger.record(cost.totalCost, resolved.providerName);
+    return cost;
   }
 
   /**
@@ -349,9 +321,8 @@ export class LLMGateway implements ContextualLlm {
     };
     const result = await this.send(scope, resolved, operation, () => generateObject(params));
 
-    const extraction = extractUsage(result.usage, result.providerMetadata);
-    this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", operation);
-    const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
+    const extraction = extractUsage(result.usage);
+    const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation);
 
     await this.record(scope, resolved, operation, extraction, OK);
 
@@ -397,9 +368,11 @@ export class LLMGateway implements ContextualLlm {
       const result = await this.send(scope, resolved, operation, () => generateText(params));
       lastRawResponse = result.text;
 
-      const extraction = extractUsage(result.usage, result.providerMetadata);
-      this.warnUnmeasuredUsage(extraction, resolved.providerName, resolved.modelConfig.id, request.site ?? "unknown", operation);
-      const cost = this.recordCost(extraction, resolved.modelConfig, resolved.providerName);
+      // `result.usage` sums the steps and drops each step's raw usage; with no
+      // tools there is one step, whose usage keeps it.
+      const [onlyStep] = result.steps;
+      const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
+      const cost = this.recordCost(extraction, resolved, request.site ?? "unknown", operation);
 
       const jsonText = extractJson(result.text);
       let parsed: unknown;
@@ -461,27 +434,32 @@ function isNeverRetried(error: unknown): boolean {
 /** A structured-output failure still reports what the provider billed; any other throw reports nothing. */
 function usageOfFailedRequest(error: unknown): ExtractedUsage | null {
   if (NoObjectGeneratedError.isInstance(error) && error.usage) {
-    return extractUsage(error.usage, undefined);
+    return extractUsage(error.usage);
   }
   return null;
 }
 
-// Raw Anthropic usage, as @ai-sdk/anthropic 4.0.72 copies it into
-// providerMetadata.anthropic.usage (dist/index.js, the `anthropicMetadata`
-// object). The camelCase cache keys exist only per-iteration, not at top level.
-const AnthropicMetadataSchema = z.looseObject({
-  usage: z.looseObject({
-    cache_read_input_tokens: z.number().int().nonnegative().nullish(),
-    cache_creation_input_tokens: z.number().int().nonnegative().nullish(),
-  }),
-});
-
-// @ai-sdk/deepseek 3.0.59 copies the response's prompt_cache_hit_tokens and
-// prompt_cache_miss_tokens into providerMetadata.deepseek (dist/index.js,
-// doGenerate's providerMetadata). The package declares no type for it.
-const DeepSeekMetadataSchema = z.looseObject({
-  promptCacheHitTokens: z.number().int().nonnegative().nullish(),
-  promptCacheMissTokens: z.number().int().nonnegative().nullish(),
+/*
+ * The provider's wire-format usage, which the AI SDK keeps as `usage.raw` on
+ * one response (`asLanguageModelUsage`, ai 7.0.128) and drops when it sums
+ * steps. Read by wire format, not by provider name, so every endpoint served
+ * through `createOpenAI` reads the same way:
+ * - Anthropic Messages: `cache_read_input_tokens`, `cache_creation_input_tokens`.
+ * - DeepSeek chat: `prompt_cache_hit_tokens` (no cache-write class).
+ * - OpenAI Chat Completions: `prompt_tokens_details.cached_tokens` / `.cache_write_tokens`.
+ * - OpenAI Responses: `input_tokens_details.cached_tokens` / `.cache_write_tokens`.
+ * The SDK's normalised `inputTokenDetails` cannot replace this: each installed
+ * converter writes the cache-read count as `?? 0` (Anthropic the write count
+ * too), so an unreported count arrives as 0 and would price as "no cache hit".
+ */
+const tokenCount = z.number().int().nonnegative().nullish();
+const CacheDetailsSchema = z.looseObject({ cached_tokens: tokenCount, cache_write_tokens: tokenCount }).nullish();
+const RawUsageSchema = z.looseObject({
+  cache_read_input_tokens: tokenCount,
+  cache_creation_input_tokens: tokenCount,
+  prompt_cache_hit_tokens: tokenCount,
+  prompt_tokens_details: CacheDetailsSchema,
+  input_tokens_details: CacheDetailsSchema,
 });
 
 interface ReportedCache {
@@ -489,108 +467,50 @@ interface ReportedCache {
   readonly write: number | null;
 }
 
-/**
- * Cache token counts the provider reported, `null` for each it did not. The
- * AI SDK's own `inputTokenDetails` zero-fills a missing count, so it cannot
- * tell "no cache hit" from "not reported"; the raw provider metadata can.
- */
-function reportedCache(
-  providerMetadata: Record<string, Record<string, unknown>> | undefined,
-  inputTokens: number | undefined,
-): ReportedCache {
-  const anthropic = AnthropicMetadataSchema.safeParse(providerMetadata?.["anthropic"]);
-  if (anthropic.success) {
-    return {
-      read: anthropic.data.usage.cache_read_input_tokens ?? null,
-      write: anthropic.data.usage.cache_creation_input_tokens ?? null,
-    };
-  }
-  const deepseek = DeepSeekMetadataSchema.safeParse(providerMetadata?.["deepseek"]);
-  if (deepseek.success) {
-    const hit = deepseek.data.promptCacheHitTokens ?? null;
-    const miss = deepseek.data.promptCacheMissTokens ?? null;
-    // DeepSeek bills no cache-write class: when hits plus misses account for
-    // every input token, there were no write tokens. Otherwise it is unknown.
-    const accounted = hit !== null && miss !== null && inputTokens !== undefined && hit + miss === inputTokens;
-    return { read: hit, write: accounted ? 0 : null };
-  }
-  return { read: null, write: null };
+/** Cache token counts the provider reported; `null` for each it did not, and both when `raw` is absent or malformed. */
+function reportedCache(raw: unknown): ReportedCache {
+  const parsed = RawUsageSchema.safeParse(raw);
+  if (!parsed.success) return { read: null, write: null };
+  const u = parsed.data;
+  return {
+    read:
+      u.cache_read_input_tokens ??
+      u.prompt_cache_hit_tokens ??
+      u.prompt_tokens_details?.cached_tokens ??
+      u.input_tokens_details?.cached_tokens ??
+      null,
+    write:
+      u.cache_creation_input_tokens ??
+      u.prompt_tokens_details?.cache_write_tokens ??
+      u.input_tokens_details?.cache_write_tokens ??
+      null,
+  };
 }
 
 /**
- * Extracts token usage from the SDK response, returning a discriminated
- * `ExtractedUsage` that separates measured from unmeasured values.
- *
- * Two levels of absence:
- * - **Object-level** (`sdkUsage` is falsy): unreachable per the AI SDK's types
- *   (`LanguageModelUsage` is non-optional on every result type). A defensive
- *   guard remains because the SDK is a trust boundary and TypeScript types
- *   cannot be enforced at runtime. Handled identically to field-level absence.
- * - **Field-level** (`inputTokens` or `outputTokens` is undefined): documented
- *   in the SDK contract (`inputTokens: number | undefined`).
- *   This is the branch that fires in practice.
- *
- * Neither branch throws. The throw that used to live here (MissingUsageError)
- * was caught by `withFallback`, which discarded the successful completion,
- * lost its cost accounting, and paid for a second call — strictly worse than
- * the `?? 0` it replaced. `usage` zero-fills for arithmetic; `reported` keeps
- * every unreported count `null`.
+ * Splits the SDK's usage into what the provider reported, `null` where it did
+ * not, and a zero-filled copy for tallies. An absent usage object (unreachable
+ * per the AI SDK's types, guarded across the trust boundary) reports nothing.
+ * Never throws: a throw here was caught by `withFallback`, which discarded a
+ * successful completion and paid for a second call. An unreported count leaves
+ * the cost unmeasured, which `measureCost` names and every caller logs.
  */
 export function extractUsage(
-  sdkUsage: { inputTokens?: number; outputTokens?: number } | undefined,
-  // contract-erasing: providerMetadata carries provider-specific fields, parsed by Zod in reportedCache
-  providerMetadata: Record<string, Record<string, unknown>> | undefined,
+  sdkUsage: { inputTokens?: number; outputTokens?: number; raw?: unknown } | undefined,
 ): ExtractedUsage {
-  // Object-level absence: unreachable per SDK types, guarded defensively
-  // across the trust boundary. Not a separate error class — the same
-  // "unmeasured" treatment applies, and adding a throw for the unreachable
-  // case is exactly the defect this change removes.
-  if (!sdkUsage) {
-    return {
-      measured: false,
-      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-      reported: { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheWriteTokens: null },
-      missingFields: ["sdkUsageObject"],
-    };
-  }
-
-  const cache = reportedCache(providerMetadata, sdkUsage.inputTokens);
+  const cache = reportedCache(sdkUsage?.raw);
   const reported = {
-    inputTokens: sdkUsage.inputTokens ?? null,
-    outputTokens: sdkUsage.outputTokens ?? null,
+    inputTokens: sdkUsage?.inputTokens ?? null,
+    outputTokens: sdkUsage?.outputTokens ?? null,
     cacheReadTokens: cache.read,
     cacheWriteTokens: cache.write,
   };
-
-  // Field-level absence: documented in the SDK contract.
-  // Guard structure uses direct undefined checks so TypeScript narrows the
-  // fields to `number` on the happy path without non-null assertions.
-  if (sdkUsage.inputTokens === undefined || sdkUsage.outputTokens === undefined) {
-    const missingFields: string[] = [];
-    if (sdkUsage.inputTokens === undefined) missingFields.push("inputTokens");
-    if (sdkUsage.outputTokens === undefined) missingFields.push("outputTokens");
-    // POLICY default: structural placeholders inside measured:false — the
-    // discriminant carries the signal, not the zeros (see JSDoc above).
-    return {
-      measured: false,
-      usage: {
-        inputTokens: sdkUsage.inputTokens ?? 0,
-        outputTokens: sdkUsage.outputTokens ?? 0,
-        cacheReadTokens: cache.read ?? 0,
-        cacheWriteTokens: cache.write ?? 0,
-      },
-      reported,
-      missingFields,
-    };
-  }
-
+  // Zero-filled for tallies only; `reported` keeps every null, and only it prices a call.
   const usage: TokenUsage = {
-    inputTokens: sdkUsage.inputTokens,
-    outputTokens: sdkUsage.outputTokens,
-    // Zero-filled for the in-process budget arithmetic only; `reported` keeps the null.
-    cacheReadTokens: cache.read ?? 0,
-    cacheWriteTokens: cache.write ?? 0,
+    inputTokens: reported.inputTokens ?? 0,
+    outputTokens: reported.outputTokens ?? 0,
+    cacheReadTokens: reported.cacheReadTokens ?? 0,
+    cacheWriteTokens: reported.cacheWriteTokens ?? 0,
   };
-
-  return { measured: true, usage, reported };
+  return { usage, reported };
 }

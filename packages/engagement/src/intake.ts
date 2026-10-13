@@ -15,15 +15,20 @@ const MAX_QUESTIONS_PER_TENDER = 5;
 /** Failed intake attempts after which the Liaison stops retrying and reports to the client. */
 const MAX_INTAKE_ATTEMPTS = 3;
 
+const AssumptionSchema = z.strictObject({ statement: z.string().min(1), rationale: z.string().min(1) });
+
 const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
   scopeBoundaries: z.array(z.string().min(1)).min(1),
-  assumptions: z.array(z.strictObject({ statement: z.string().min(1), rationale: z.string().min(1) })),
   // Over the cap is rejected, never truncated: a dropped question would be a
-  // question the client was never asked and no record says was cut.
+  // question the client was never asked and no record says was cut. Each question
+  // carries the assumption adopted until it is answered: a later answer is a change
+  // request against that assumption, so a question without one has nothing to change.
   questions: z
-    .array(z.strictObject({ text: z.string().min(1), whyItMatters: z.string().min(1) }))
+    .array(z.strictObject({ text: z.string().min(1), whyItMatters: z.string().min(1), assumption: AssumptionSchema }))
     .max(MAX_QUESTIONS_PER_TENDER),
+  /** Assumptions work proceeds on without asking the client. */
+  assumptions: z.array(AssumptionSchema),
 });
 
 type IntakeResponse = z.infer<typeof IntakeResponseSchema>;
@@ -39,6 +44,8 @@ interface OpenTender {
 
 /** An Inferred assumption: what work proceeds on until the client says otherwise. */
 interface InferredAssumption {
+  /** Stable within the vision: the open question adopting it, and a later change request, name it. */
+  readonly key: string;
   readonly statement: string;
   readonly rationale: string;
   readonly status: "Inferred";
@@ -48,6 +55,8 @@ interface OpenQuestion {
   readonly messageId: string;
   readonly text: string;
   readonly whyItMatters: string;
+  /** The key of the inference adopted until this question is answered. */
+  readonly assumptionKey: string;
 }
 
 /** Vision v1 as intake writes it. */
@@ -61,7 +70,7 @@ interface IntakeVision {
 
 interface IntakeWrite {
   readonly tender: OpenTender;
-  /** Question bodies as posted to the client, in order. */
+  /** Question bodies as posted to the client, most impactful first; the store keeps this order. */
   readonly questions: readonly string[];
   readonly vision: (questionMessageIds: readonly string[]) => IntakeVision;
 }
@@ -126,7 +135,7 @@ function buildIntakePrompt(tender: string): string {
     `You are the Liaison of a software contractor. A client has sent the tender below.`,
     `Read it and prepare the first version of the project's vision. Work starts now on what`,
     `you record here; the client may answer your questions later, and an answer then changes`,
-    `the plan through a change request.`,
+    `the plan through a change request against the assumption that question names.`,
     ``,
     `Tender:`,
     JSON.stringify(tender),
@@ -135,25 +144,38 @@ function buildIntakePrompt(tender: string): string {
     `- "summary": what the client wants built, in a few sentences, in the tender's own terms.`,
     `- "scopeBoundaries": what is in scope and what is explicitly out of scope, one item per`,
     `  string, each grounded in the tender.`,
-    `- "assumptions": every decision the tender leaves open that work must proceed on. For each,`,
-    `  "statement" is the decision you will proceed with, and "rationale" is why the tender makes`,
-    `  it the most defensible choice.`,
-    `- "questions": at most ${MAX_QUESTIONS_PER_TENDER} questions to the client, fewer when fewer matter.`,
-    `  Ask only where a wrong assumption would change what gets built, and for each such`,
-    `  question also record the assumption you proceed on until it is answered. "whyItMatters"`,
-    `  says what changes depending on the answer.`,
+    `- "questions": at most ${MAX_QUESTIONS_PER_TENDER} questions to the client, most impactful first.`,
+    `  For each: "text" is the question; "whyItMatters" says what gets built differently, or`,
+    `  what stops working for the client, depending on the answer; "assumption" is the decision`,
+    `  you proceed on until the client answers ("statement") and why the tender makes it the`,
+    `  most defensible choice ("rationale"). The client reads this assumption next to the`,
+    `  question, so it must say plainly what happens if they never answer.`,
+    `- "assumptions": every other decision the tender leaves open that work must proceed on,`,
+    `  each with the same "statement" and "rationale". Do not repeat a question's assumption.`,
     ``,
-    `Rules:`,
+    `How to choose the questions:`,
+    `- First consider every unknown the tender leaves open. For each, ask: if my assumption is`,
+    `  wrong, does the deliverable get built differently, or fail to work for the client at`,
+    `  all? Only an unknown where the answer is yes may become a question.`,
+    `- Rank those unknowns by what a wrong assumption would cost the client: one that could make`,
+    `  the deliverable unusable where the client will use it outranks one that changes a detail`,
+    `  of its output. Ask the highest-ranked ones, most impactful first.`,
+    `- Ask fewer questions when fewer matter. The limit is a ceiling, not a target; an empty`,
+    `  question list is correct when nothing open would change what gets built.`,
+    `- When the tender states a constraint on where or how the deliverable must run or be used,`,
+    `  consider what about that constraint is still unknown and could make the deliverable fail`,
+    `  there. Do not settle such an unknown silently with an assumption: ask about it.`,
     `- Every question must name something specific to THIS tender. Never ask a generic`,
-    `  checklist question that could be put to any project.`,
+    `  checklist question that could be put to any project, and never ask about a feature the`,
+    `  tender gives no sign of wanting.`,
     `- Do not choose or suggest a technology, language, framework or platform the tender does`,
     `  not name. If the tender names one, record it as stated, not as an assumption.`,
-    `- An empty question list is correct when nothing open would change what gets built.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
     `Use exactly this format: {"summary": "...", "scopeBoundaries": ["..."], ` +
-      `"assumptions": [{"statement": "...", "rationale": "..."}], ` +
-      `"questions": [{"text": "...", "whyItMatters": "..."}]}`,
+      `"questions": [{"text": "...", "whyItMatters": "...", ` +
+      `"assumption": {"statement": "...", "rationale": "..."}}], ` +
+      `"assumptions": [{"statement": "...", "rationale": "..."}]}`,
   ].join("\n");
 }
 
@@ -166,8 +188,31 @@ function intakeReask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
-function questionBody(question: IntakeResponse["questions"][number]): string {
-  return `${question.text}\n\nWhy it matters: ${question.whyItMatters}`;
+type IntakeQuestion = IntakeResponse["questions"][number];
+
+/** What the client reads: the question, why it matters, and what Ashara does if they stay silent. */
+function questionBody(question: IntakeQuestion): string {
+  return [
+    question.text,
+    `Why it matters: ${question.whyItMatters}`,
+    `Until you answer, we proceed on this assumption: ${question.assumption.statement}`,
+    `Why this assumption: ${question.assumption.rationale}`,
+  ].join("\n\n");
+}
+
+/** Question i's assumption is A(i+1); the unasked assumptions are numbered after the questions'. */
+function assumptionKey(index: number): string {
+  return `A${index + 1}`;
+}
+
+/** Every assumption of the intake, keyed: the questions' first, in question order, then the unasked ones. */
+function inferencesOf(response: IntakeResponse): InferredAssumption[] {
+  return [...response.questions.map((q) => q.assumption), ...response.assumptions].map((a, i) => ({
+    key: assumptionKey(i),
+    statement: a.statement,
+    rationale: a.rationale,
+    status: "Inferred",
+  }));
 }
 
 /**
@@ -264,17 +309,13 @@ export class TenderIntake implements LiaisonIntake {
         visionText: tender.body,
         summary: response.summary,
         scopeBoundaries: response.scopeBoundaries,
-        inferences: response.assumptions.map((a) => ({
-          statement: a.statement,
-          rationale: a.rationale,
-          status: "Inferred" as const,
-        })),
+        inferences: inferencesOf(response),
         openQuestions: response.questions.map((q, i) => {
           const messageId = questionMessageIds[i];
           if (questionMessageIds.length !== response.questions.length || messageId === undefined) {
             throw new QuestionIdsMismatch(tender.id, response.questions.length, questionMessageIds.length);
           }
-          return { messageId, text: q.text, whyItMatters: q.whyItMatters };
+          return { messageId, text: q.text, whyItMatters: q.whyItMatters, assumptionKey: assumptionKey(i) };
         }),
       }),
     };

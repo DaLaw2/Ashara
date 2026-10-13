@@ -8,7 +8,7 @@ export {
   toModelConfig,
 } from "./config.js";
 export type { GatewayCatalog, ProviderCredential } from "./config.js";
-export { calculateCost, resolveModelsConfigPath } from "./pricing.js";
+export { describeUnmeasuredCost, measureCost, resolveModelsConfigPath } from "./pricing.js";
 export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { buildGateway } from "./build-gateway.js";
 export { withStructuredLadder } from "./reliability-ladder.js";
@@ -20,5 +20,5 @@ export type {
   LlmProviderCall,
   ModelConfig,
   TokenUsage,
-  CostBreakdown,
+  CostMeasurement,
 } from "./types.js";

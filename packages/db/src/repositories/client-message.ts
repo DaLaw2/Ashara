@@ -67,7 +67,29 @@ export class ClientMessageRepository {
   }
 
   /**
-   * Both directions, oldest first; `since` keeps only rows created strictly after
+   * Questions posted together in reply to one message, in the order given: each
+   * row records its 1-based position (migration 022), since rows written in one
+   * transaction share a created_at.
+   */
+  async insertQuestions(
+    projectId: ProjectId,
+    inReplyTo: string,
+    bodies: readonly string[],
+  ): Promise<ClientMessageRow[]> {
+    const rows: ClientMessageRow[] = [];
+    for (const [i, body] of bodies.entries()) {
+      const [row] = await this.db
+        .insert(clientMessages)
+        .values({ projectId, direction: "outbound", kind: "question", body, inReplyTo, position: i + 1 })
+        .returning();
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
+   * Both directions, oldest first, questions posted together in their recorded
+   * position (migration 022); `since` keeps only rows created strictly after
    * it. created_at is compared at millisecond precision, the precision of a
    * returned createdAt, so passing back the last row's createdAt excludes that row.
    */
@@ -80,7 +102,7 @@ export class ClientMessageRepository {
       .select()
       .from(clientMessages)
       .where(after ? and(byProject, after) : byProject)
-      .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+      .orderBy(asc(clientMessages.createdAt), asc(clientMessages.position), asc(clientMessages.id));
   }
 
   /** Inbound tenders not yet consumed, oldest first: the Liaison's intake queue. */

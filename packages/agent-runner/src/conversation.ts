@@ -2,8 +2,8 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
-import type { ModelConfig, CostBreakdown, TokenUsage } from "@ashara/llm-gateway";
-import { extractUsage, calculateCost } from "@ashara/llm-gateway";
+import type { CostMeasurement, ModelConfig, TokenUsage } from "@ashara/llm-gateway";
+import { describeUnmeasuredCost, extractUsage, measureCost } from "@ashara/llm-gateway";
 import { ASHARA_CONTROL_DIR } from "@ashara/shared";
 import type { ToolRegistry } from "./tools/index.js";
 import type { ToolResult } from "./tools/types.js";
@@ -71,14 +71,15 @@ export class AgentConversation {
     private readonly model: LanguageModel;
     private readonly toolRegistry: ToolRegistry;
     private readonly config: ConversationConfig;
-    private readonly modelConfig: ModelConfig | undefined;
+    /** Required: without the model's rates no step can be priced, and an unpriced step must not read as $0. */
+    private readonly modelConfig: ModelConfig;
     private conversationLogInitialized = false;
 
     constructor(
         model: LanguageModel,
         toolRegistry: ToolRegistry,
         config: Partial<ConversationConfig> & Pick<ConversationConfig, "staticSystemPrompt">,
-        modelConfig?: ModelConfig,
+        modelConfig: ModelConfig,
     ) {
         this.model = model;
         this.toolRegistry = toolRegistry;
@@ -165,11 +166,15 @@ export class AgentConversation {
                 stopWhen: isStepCount(maxTurns),
 
                 onStepEnd: (stepResult) => {
-                    const cost = this.recordStepCost(stepResult.usage, stepResult.providerMetadata);
+                    const cost = this.recordStepCost(
+                        stepResult.usage,
+                        stepResult.model.provider,
+                        stepResult.stepNumber,
+                    );
                     totalInput += cost.usage.inputTokens;
                     totalOutput += cost.usage.outputTokens;
-                    totalCost += cost.cost.totalCost;
-                    if (!cost.cost.measured) allCostsMeasured = false;
+                    if (cost.cost.measured) totalCost += cost.cost.totalCost;
+                    else allCostsMeasured = false;
 
                     lastModel = `${stepResult.model.provider}:${stepResult.model.modelId}`;
 
@@ -244,40 +249,19 @@ export class AgentConversation {
     // -----------------------------------------------------------------------
 
     private recordStepCost(
-        sdkUsage: { inputTokens?: number; outputTokens?: number } | undefined,
-        providerMetadata: Record<string, Record<string, unknown>> | undefined,
-    ): { usage: TokenUsage; cost: CostBreakdown } {
-        const extraction = extractUsage(sdkUsage, providerMetadata);
-        if (!this.modelConfig || !extraction.measured) {
-            return {
-                usage: extraction.usage,
-                cost: {
-                    inputCost: 0,
-                    outputCost: 0,
-                    cacheSavings: 0,
-                    totalCost: 0,
-                    measured: extraction.measured,
-                },
-            };
+        sdkUsage: { inputTokens?: number; outputTokens?: number; raw?: unknown },
+        provider: string,
+        stepNumber: number,
+    ): { usage: TokenUsage; cost: CostMeasurement } {
+        const extraction = extractUsage(sdkUsage);
+        const cost = measureCost(extraction.reported, this.modelConfig, new Date());
+        if (!cost.measured) {
+            console.warn(
+                `[AgentConversation] ${describeUnmeasuredCost(cost, provider, this.modelConfig.id)}, ` +
+                    `step=${stepNumber + 1}; the run's cost is reported as unmeasured`,
+            );
         }
-        const cost = calculateCost(
-            extraction.usage.inputTokens,
-            extraction.usage.outputTokens,
-            extraction.usage.cacheReadTokens,
-            extraction.usage.cacheWriteTokens,
-            this.modelConfig,
-            new Date(),
-        );
-        if (cost === null) {
-            return {
-                usage: extraction.usage,
-                cost: { inputCost: 0, outputCost: 0, cacheSavings: 0, totalCost: 0, measured: false },
-            };
-        }
-        return {
-            usage: extraction.usage,
-            cost: { ...cost, measured: true },
-        };
+        return { usage: extraction.usage, cost };
     }
 
     // -----------------------------------------------------------------------

@@ -81,6 +81,7 @@ function intakeResponse(questionCount: number) {
     questions: Array.from({ length: questionCount }, (_, i) => ({
       text: `Question ${i + 1} about the pottery studios?`,
       whyItMatters: `It changes booking rule ${i + 1}.`,
+      assumption: { statement: `Booking rule ${i + 1} is the studio's usual one.`, rationale: `The tender implies rule ${i + 1}.` },
     })),
   };
 }
@@ -106,8 +107,10 @@ async function tender(body: string): Promise<{ projectId: ProjectId; tenderId: s
 const VisionRowSchema = z.object({
   version: z.number(),
   visionText: z.string(),
-  inferences: z.array(z.object({ statement: z.string(), rationale: z.string(), status: z.string() })),
-  openQuestions: z.array(z.object({ messageId: z.string(), text: z.string(), whyItMatters: z.string() })),
+  inferences: z.array(z.object({ key: z.string(), statement: z.string(), rationale: z.string(), status: z.string() })),
+  openQuestions: z.array(
+    z.object({ messageId: z.string(), text: z.string(), whyItMatters: z.string(), assumptionKey: z.string() }),
+  ),
 });
 
 async function visions(projectId: ProjectId): Promise<z.infer<typeof VisionRowSchema>[]> {
@@ -178,16 +181,40 @@ describe("Liaison tender intake", () => {
     expect(others).toHaveLength(0);
     expect(vision?.version).toBe(1);
     expect(vision?.visionText).toBe("Booking page for my two pottery studios.");
-    expect(vision?.inferences.map((a) => a.status)).toEqual(["Inferred", "Inferred"]);
+    // Three questions' assumptions plus the two unasked ones, all Inferred.
+    expect(vision?.inferences.map((a) => a.status)).toEqual(Array(5).fill("Inferred"));
+    expect(new Set(vision?.inferences.map((a) => a.key)).size).toBe(5);
 
     const messages = await messagesOf(projectId);
     const questions = messages.filter((m) => m.direction === "outbound" && m.kind === "question");
     expect(questions).toHaveLength(3);
     expect(questions.every((q) => q.inReplyTo === tenderId)).toBe(true);
-    expect(vision?.openQuestions.map((q) => q.messageId).sort()).toEqual(questions.map((q) => q.id).sort());
+    expect(vision?.openQuestions.map((q) => q.messageId)).toEqual(questions.map((q) => q.id));
     expect(messages.find((m) => m.id === tenderId)?.consumedAt).toBeInstanceOf(Date);
 
+    // Each open question names its assumption, and the client reads it in the question.
+    for (const [i, open] of (vision?.openQuestions ?? []).entries()) {
+      const adopted = vision?.inferences.find((a) => a.key === open.assumptionKey);
+      expect(adopted?.statement).toBe(`Booking rule ${i + 1} is the studio's usual one.`);
+      expect(questions[i]?.body).toContain(`Question ${i + 1} about the pottery studios?`);
+      expect(questions[i]?.body).toContain(`we proceed on this assumption: ${adopted?.statement}`);
+    }
+
     expect(await callSitesOf(projectId)).toEqual(["liaison-intake"]);
+  });
+
+  test("five questions posted in one transaction come back in the order the Liaison ranked them", async () => {
+    stubModel({ doGenerate: jsonResult(intakeResponse(5)) });
+    const { projectId } = await tender("Booking page with a waiting list.");
+
+    await intake().runPending();
+
+    const questions = (await messagesOf(projectId)).filter((m) => m.kind === "question");
+    expect(new Set(questions.map((q) => q.createdAt.getTime())).size).toBe(1);
+    expect(questions.map((q) => q.position)).toEqual([1, 2, 3, 4, 5]);
+    expect(questions.map((q) => q.body.split("\n")[0])).toEqual(
+      [1, 2, 3, 4, 5].map((n) => `Question ${n} about the pottery studios?`),
+    );
   });
 
   test("seven questions are rejected, not capped: nothing is written and the attempt is counted", async () => {

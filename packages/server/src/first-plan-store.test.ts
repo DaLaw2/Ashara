@@ -121,8 +121,16 @@ const INTAKE = {
   scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
   assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book." }],
   questions: [
-    { text: "Which studio opens first?", whyItMatters: "It orders the work." },
-    { text: "How many seats does a class have?", whyItMatters: "It sets the booking limit." },
+    {
+      text: "Which studio opens first?",
+      whyItMatters: "It orders the work.",
+      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first." },
+    },
+    {
+      text: "How many seats does a class have?",
+      whyItMatters: "It sets the booking limit.",
+      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels." },
+    },
   ],
 };
 
@@ -357,8 +365,13 @@ describe("tender to first plan", () => {
       { version: 1, visionText: tenderBody },
     ]);
 
-    decompositionModel();
+    const decomposition = decompositionModel();
     expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 3 }]);
+    // Delivery plans on the assumptions the open questions adopted, not only the unasked one.
+    const prompts = decomposition.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    for (const adopted of ["The harbour studio opens first.", "A class has twelve seats.", "Bookings need no account."]) {
+      expect(prompts.some((p) => p.includes(adopted))).toBe(true);
+    }
     const items = await workItemsOf(projectId);
     expect(items.filter((i) => i.level === "Epic")).toHaveLength(1);
     expect(items.filter((i) => i.level === "Task")).toHaveLength(3);
@@ -367,7 +380,8 @@ describe("tender to first plan", () => {
 
     expect(await reports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
     const outbound = await outboundOf(projectId);
-    expect(outbound.filter((m) => m.kind === "question" && m.inReplyTo === created.message.id)).toHaveLength(2);
+    const questions = outbound.filter((m) => m.kind === "question" && m.inReplyTo === created.message.id);
+    expect(questions.map((q) => q.body.split("\n")[0])).toEqual(INTAKE.questions.map((q) => q.text));
     expect(outbound.filter((m) => m.kind === "report")).toHaveLength(1);
     expect(outbound).toHaveLength(3);
   });

@@ -45,3 +45,51 @@ describe("TenderIntake failure accounting", () => {
     expect(recorded[0]).toMatch(/non-Error thrown: Object \(not serializable: .*circular/i);
   });
 });
+
+describe("TenderIntake response schema", () => {
+  test("a question that does not carry the assumption adopted until it is answered is rejected", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const response = (question: Record<string, unknown>) => ({
+      summary: "A booking page.",
+      scopeBoundaries: ["In: booking"],
+      questions: [question],
+      assumptions: [],
+    });
+    const question = { text: "Which studio?", whyItMatters: "It sets the rules." };
+    const assumption = { statement: "The larger studio.", rationale: "The tender names it first." };
+    const verdicts: boolean[] = [];
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          verdicts.push(
+            request.schema.safeParse(response(question)).success,
+            request.schema.safeParse(response({ ...question, assumption })).success,
+          );
+          throw new Error("stop after the schema check");
+        },
+      }),
+    };
+    const store: IntakeStore = {
+      openTenders: async () => [
+        {
+          id: "tender-2",
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000002"),
+          body: "A booking page.",
+          intakeAttempts: 0,
+          intakeLastError: null,
+        },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake: async () => {
+        throw new Error("recordIntake must not be reached");
+      },
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => 1,
+      closeFailedTender: async () => {},
+    };
+
+    await new TenderIntake({ llm, store }).runPending();
+
+    expect(verdicts.slice(0, 2)).toEqual([false, true]);
+  });
+});

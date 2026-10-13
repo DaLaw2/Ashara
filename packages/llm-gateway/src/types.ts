@@ -132,61 +132,44 @@ export interface TokenUsage {
 }
 
 /**
- * Discriminated union returned by `extractUsage`: a `TokenUsage` paired with
- * a tag that separates provider-reported values from absent ones.
- *
- * When `measured` is `false`, the inner `usage` fields are zero-filled and
- * `missingFields` names which SDK fields were absent. Downstream cost paths
- * must treat the `false` branch as "unknown cost" — the zero-filled token
- * counts are structural placeholders, not measurements.
- *
- * A wrapper around `TokenUsage` rather than a boolean-on-`TokenUsage` so that
- * existing consumers of the inner type (`emitLogRecord`, `calculateCost`,
- * agent-runner accumulation) compile unchanged. The "absence must not be
- * expressible as a number" invariant lives in the wrapper's discriminant, not
- * in the inner numeric fields.
+ * Returned by `extractUsage`. `reported` is what the provider stated, each
+ * count `null` when it did not; only it may price a call (`measureCost`).
+ * `usage` zero-fills the same counts for token tallies and logs.
  */
-export type ExtractedUsage = MeasuredUsage | UnmeasuredUsage;
-
-interface MeasuredUsage {
-  readonly measured: true;
+export interface ExtractedUsage {
   readonly usage: TokenUsage;
   readonly reported: ReportedTokens;
 }
 
-interface UnmeasuredUsage {
-  readonly measured: false;
-  readonly usage: TokenUsage;
-  readonly reported: ReportedTokens;
-  readonly missingFields: readonly string[];
-}
-
-/**
- * The token counts the provider actually reported, each `null` when it did not.
- * `TokenUsage` zero-fills for its arithmetic consumers; this is what a record of
- * the call may state as measured.
- */
-interface ReportedTokens {
+export interface ReportedTokens {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly cacheReadTokens: number | null;
   readonly cacheWriteTokens: number | null;
 }
 
-export interface CostBreakdown {
-  inputCost: number;
-  outputCost: number;
-  cacheSavings: number;
-  totalCost: number;
-  /**
-   * `true` when the cost was calculated from provider-reported token counts;
-   * `false` when the usage was absent and the numeric fields are zero-filled
-   * placeholders. Downstream cost paths must map `measured === false` to a
-   * null cost (i.e. `TaskCostInfo.costUsd = null`) so the orchestrator's
-   * `unknownCostCharge` fires — the zeros are structural, not a measurement.
-   */
-  readonly measured: boolean;
-}
+/** A token class that enters a call's price. */
+export type PricedTokenClass = keyof ReportedTokens;
+
+/**
+ * A call's cost in USD, or why it is unmeasured: the classes whose count the
+ * provider did not report though the model bills them, and the classes with
+ * reported tokens the model has no rate for. An unmeasured cost carries no
+ * number, so no consumer can read it as 0.
+ */
+export type CostMeasurement =
+  | {
+      readonly measured: true;
+      readonly inputCost: number;
+      readonly outputCost: number;
+      readonly cacheSavings: number;
+      readonly totalCost: number;
+    }
+  | {
+      readonly measured: false;
+      readonly missingCounts: readonly PricedTokenClass[];
+      readonly missingRates: readonly PricedTokenClass[];
+    };
 
 interface BudgetConfig {
   /** Total spend cap in USD, checked against the in-process BudgetLedger. */
@@ -221,7 +204,7 @@ export interface StructuredRequest<T> {
 export interface StructuredResponse<T> {
   data: T;
   usage: TokenUsage;
-  cost: CostBreakdown;
+  cost: CostMeasurement;
   provider: string;
   model: string;
 }

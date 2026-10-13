@@ -17,6 +17,7 @@ const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
+vi.mock("@ai-sdk/openai", () => ({ createOpenAI: () => () => stub.model }));
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 const NONCE = randomUUID().slice(0, 8);
@@ -49,7 +50,7 @@ const PEAK = new Date("2026-10-14T02:30:00Z");
 const OFF_PEAK = new Date("2026-10-14T12:00:00Z");
 
 function gateway(
-  providerName: "anthropic" | "deepseek",
+  providerName: "anthropic" | "deepseek" | "openai",
   modelConfig: ModelConfig,
   clock: () => Date = () => PEAK,
 ): LLMGateway {
@@ -78,20 +79,21 @@ function stubModel(doGenerate: ConstructorParameters<typeof MockLanguageModelV4>
   return mock;
 }
 
+/** `raw` is the provider's wire-format usage, which the AI SDK passes through as `usage.raw`. */
 function textResult(
   text: string,
   usage: { input: number | undefined; output: number | undefined },
-  providerMetadata?: Record<string, Record<string, number>>,
+  raw?: Record<string, number | Record<string, number>>,
 ) {
   return {
     content: [{ type: "text" as const, text }],
     usage: {
       inputTokens: { total: usage.input, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: usage.output, text: usage.output, reasoning: undefined },
+      raw,
     },
     finishReason: { unified: "stop" as const, raw: "stop" },
     warnings: [],
-    providerMetadata,
   };
 }
 
@@ -145,12 +147,11 @@ describe("one llm_calls row per provider call", () => {
   test("a successful call writes one row with the project, model, tokens and calculated cost", async () => {
     await clearRows();
     stubModel({
-      doGenerate: {
-        ...textResult('{"greeting":"hi"}', { input: 1200, output: 80 }),
-        providerMetadata: {
-          anthropic: { usage: { input_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 } },
-        },
-      },
+      doGenerate: textResult('{"greeting":"hi"}', { input: 1200, output: 80 }, {
+        input_tokens: 200,
+        cache_read_input_tokens: 900,
+        cache_creation_input_tokens: 100,
+      }),
     });
     const priced = model({ id: "priced-model" });
 
@@ -196,7 +197,8 @@ describe("one llm_calls row per provider call", () => {
       await clearRows();
       stubModel({
         doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 100 }, {
-          deepseek: { promptCacheHitTokens: 400, promptCacheMissTokens: 600 },
+          prompt_cache_hit_tokens: 400,
+          prompt_cache_miss_tokens: 600,
         }),
       });
       await gateway("deepseek", deepseek, () => instant)
@@ -210,11 +212,14 @@ describe("one llm_calls row per provider call", () => {
     expect(await costAt(OFF_PEAK)).toBeCloseTo((600 * 0.15 + 400 * 0.003 + 100 * 0.6) / 1_000_000, 9);
   });
 
-  test("reported cache tokens of a class the model has no rate for give a NULL cost", async () => {
+  test("reported cache tokens of a class the model has no rate for give a NULL cost, logged at warn", async () => {
     await clearRows();
+    const warn = vi.mocked(console.warn);
+    warn.mockClear();
     stubModel({
       doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 40 }, {
-        deepseek: { promptCacheHitTokens: 700, promptCacheMissTokens: 300 },
+        prompt_cache_hit_tokens: 700,
+        prompt_cache_miss_tokens: 300,
       }),
     });
 
@@ -225,13 +230,19 @@ describe("one llm_calls row per provider call", () => {
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
     expect(row?.costUsd).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[LlmCallLedger\] cost unmeasured: provider=deepseek, model=no-cache-rate, .*no rate=\[cacheReadTokens\].*cost_usd is NULL/,
+      ),
+    );
   });
 
-  test("DeepSeek cache hits are measured from its provider metadata", async () => {
+  test("DeepSeek cache hits are measured from its raw usage", async () => {
     await clearRows();
     stubModel({
       doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 40 }, {
-        deepseek: { promptCacheHitTokens: 700, promptCacheMissTokens: 300 },
+        prompt_cache_hit_tokens: 700,
+        prompt_cache_miss_tokens: 300,
       }),
     });
 
@@ -241,8 +252,44 @@ describe("one llm_calls row per provider call", () => {
 
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBe(700);
-    expect(row?.cacheWriteTokens).toBe(0);
-    expect(row?.costUsd).not.toBeNull();
+    expect(row?.cacheWriteTokens).toBeNull();
+    expect(row?.costUsd).toBeCloseTo((300 * 3 + 700 * 0.3 + 40 * 15) / 1_000_000, 9);
+  });
+
+  test("an OpenAI Responses call with cached input is measured at the cache-read rate", async () => {
+    await clearRows();
+    stubModel({
+      doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 40 }, {
+        input_tokens: 1000,
+        output_tokens: 40,
+        input_tokens_details: { cached_tokens: 600 },
+      }),
+    });
+
+    await gateway("openai", model({ id: "openai-priced", inputCostPer1M: 2, outputCostPer1M: 8, cacheReadCostPer1M: 0.5, cacheWriteCostPer1M: null }))
+      .forCall({ projectId, taskId: null, callSite: "decomposition" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+
+    const [row] = await rowsOfThisProject();
+    expect(row?.cacheReadTokens).toBe(600);
+    expect(row?.costUsd).toBeCloseTo((400 * 2 + 600 * 0.5 + 40 * 8) / 1_000_000, 9);
+  });
+
+  test("a call that does not report a cache class the model bills is NULL, logged at warn", async () => {
+    await clearRows();
+    const warn = vi.mocked(console.warn);
+    warn.mockClear();
+    stubModel({ doGenerate: textResult('{"greeting":"hi"}', { input: 1000, output: 40 }, { prompt_tokens: 1000 }) });
+
+    await gateway("openai", model({ id: "openai-unreported", cacheWriteCostPer1M: null }))
+      .forCall({ projectId, taskId: null, callSite: "decomposition" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema });
+
+    const [row] = await rowsOfThisProject();
+    expect(row?.cacheReadTokens).toBeNull();
+    expect(row?.costUsd).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[LLMGateway\] cost unmeasured: .*counts=\[cacheReadTokens\]/));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[LlmCallLedger\] cost unmeasured: .*counts=\[cacheReadTokens\]/));
   });
 
   test("a provider error writes one 'error' row per provider request and no success row", async () => {

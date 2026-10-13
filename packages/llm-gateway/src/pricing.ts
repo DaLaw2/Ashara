@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { CapabilityLevel } from "@ashara/shared";
 import { loadModelsConfigPathEnvOverride } from "@ashara/shared";
 import { resolveAsharaRoot } from "./paths.js";
-import type { ModelConfig, TokenRates } from "./types.js";
+import type { CostMeasurement, ModelConfig, PricedTokenClass, ReportedTokens, TokenRates } from "./types.js";
 
 export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Light: 0,
@@ -39,36 +39,64 @@ function ratesAt(model: ModelConfig, at: Date): TokenRates {
   return window ? window.rates : model;
 }
 
-/** The rate for `tokens` of one cache class; `null` when there are tokens but the model bills no such class. */
-function cacheRate(tokens: number, rate: number | null): number | null {
-  if (tokens === 0) return 0;
-  return rate;
+type CachePrice = { readonly tokens: number; readonly rate: number } | "missing-count" | "missing-rate";
+
+/**
+ * One cache class's tokens and rate. A class the model bills must be reported:
+ * unreported, its split from plain input is unknown. A class the model does
+ * not bill is plain input when unreported, and unpriceable when reported.
+ */
+function cachePrice(reported: number | null, rate: number | null): CachePrice {
+  if (reported === null) return rate === null ? { tokens: 0, rate: 0 } : "missing-count";
+  if (reported === 0) return { tokens: 0, rate: 0 };
+  return rate === null ? "missing-rate" : { tokens: reported, rate };
 }
 
 /**
- * The USD cost of one call made at `at`, or `null` when a reported cache
- * class has no rate for this model. `inputTokens` includes both cache classes.
- * The caller supplies `at`: the rate depends on it, and this function reads no clock.
+ * The USD cost of one call made at `at` from the counts its provider reported,
+ * or the classes that leave it unmeasured. `inputTokens` includes both cache
+ * classes. The caller supplies `at`: the rate depends on it, and this function
+ * reads no clock.
  */
-export function calculateCost(
-  inputTokens: number,
-  outputTokens: number,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-  model: ModelConfig,
-  at: Date,
-): { inputCost: number; outputCost: number; cacheSavings: number; totalCost: number } | null {
+export function measureCost(reported: ReportedTokens, model: ModelConfig, at: Date): CostMeasurement {
   const rates = ratesAt(model, at);
-  const readRate = cacheRate(cacheReadTokens, rates.cacheReadCostPer1M);
-  const writeRate = cacheRate(cacheWriteTokens, rates.cacheWriteCostPer1M);
-  if (readRate === null || writeRate === null) return null;
+  const missingCounts: PricedTokenClass[] = [];
+  const missingRates: PricedTokenClass[] = [];
+  if (reported.inputTokens === null) missingCounts.push("inputTokens");
+  if (reported.outputTokens === null) missingCounts.push("outputTokens");
+  const read = cachePrice(reported.cacheReadTokens, rates.cacheReadCostPer1M);
+  const write = cachePrice(reported.cacheWriteTokens, rates.cacheWriteCostPer1M);
+  if (read === "missing-count") missingCounts.push("cacheReadTokens");
+  if (read === "missing-rate") missingRates.push("cacheReadTokens");
+  if (write === "missing-count") missingCounts.push("cacheWriteTokens");
+  if (write === "missing-rate") missingRates.push("cacheWriteTokens");
+  if (
+    reported.inputTokens === null ||
+    reported.outputTokens === null ||
+    typeof read === "string" ||
+    typeof write === "string"
+  ) {
+    return { measured: false, missingCounts, missingRates };
+  }
 
-  const standardInputTokens = inputTokens - cacheReadTokens - cacheWriteTokens;
+  const standardInputTokens = reported.inputTokens - read.tokens - write.tokens;
   const inputCost =
-    (standardInputTokens * rates.inputCostPer1M + cacheReadTokens * readRate + cacheWriteTokens * writeRate) /
-    1_000_000;
-  const outputCost = (outputTokens / 1_000_000) * rates.outputCostPer1M;
-  const cacheSavings = (cacheReadTokens / 1_000_000) * (rates.inputCostPer1M - readRate);
+    (standardInputTokens * rates.inputCostPer1M + read.tokens * read.rate + write.tokens * write.rate) / 1_000_000;
+  const outputCost = (reported.outputTokens / 1_000_000) * rates.outputCostPer1M;
+  const cacheSavings = (read.tokens / 1_000_000) * (rates.inputCostPer1M - read.rate);
 
-  return { inputCost, outputCost, cacheSavings, totalCost: inputCost + outputCost };
+  return { measured: true, inputCost, outputCost, cacheSavings, totalCost: inputCost + outputCost };
+}
+
+/** The `warn` line for a call whose cost is unmeasured: which classes lack a count and which lack a rate. */
+export function describeUnmeasuredCost(
+  cost: Extract<CostMeasurement, { measured: false }>,
+  provider: string,
+  model: string,
+): string {
+  return (
+    `cost unmeasured: provider=${provider}, model=${model}, ` +
+    `unreported counts=[${cost.missingCounts.join(", ")}], ` +
+    `reported tokens with no rate=[${cost.missingRates.join(", ")}]`
+  );
 }

@@ -393,6 +393,8 @@ export const clientMessages = pgTable(
     intakeLastError: text("intake_last_error"),
     // Migration 020: the planning outcome an outbound report tells the client about.
     reportsOn: varchar("reports_on", { length: 20 }),
+    // Migration 022: an outbound question's 1-based rank among those posted with it.
+    position: integer(),
   },
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),

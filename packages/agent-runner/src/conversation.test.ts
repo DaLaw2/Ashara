@@ -1,5 +1,6 @@
 import { describe, expect, test, vi, beforeEach } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
+import type { ModelConfig } from "@ashara/llm-gateway";
 import { AgentConversation } from "./conversation.js";
 import { ToolRegistry } from "./tools/index.js";
 import type { ToolResult } from "./tools/types.js";
@@ -9,8 +10,22 @@ import type { ToolResult } from "./tools/types.js";
 // ---------------------------------------------------------------------------
 
 const USAGE = {
-    inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
+    inputTokens: { total: 100, noCache: 70, cacheRead: 20, cacheWrite: 10 },
     outputTokens: { total: 50, text: 50, reasoning: undefined },
+    raw: { input_tokens: 70, output_tokens: 50, cache_read_input_tokens: 20, cache_creation_input_tokens: 10 },
+};
+
+const MODEL_CONFIG: ModelConfig = {
+    id: "test-model",
+    apiModelId: "test-model",
+    provider: "anthropic",
+    capabilityLevel: "Strong",
+    inputCostPer1M: 3,
+    outputCostPer1M: 15,
+    maxContextTokens: 100_000,
+    cacheReadCostPer1M: 0.3,
+    cacheWriteCostPer1M: 3.75,
+    priceWindows: [],
 };
 
 function toolCallResult(name: string, id: string) {
@@ -80,7 +95,7 @@ describe("AgentConversation — native FC path", () => {
             staticSystemPrompt: "test",
             maxTurns: 5,
             workingDir: "/workspace",
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
@@ -107,7 +122,7 @@ describe("AgentConversation — native FC path", () => {
             staticSystemPrompt: "test",
             maxTurns: 8,
             workingDir: "/workspace",
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
@@ -144,7 +159,7 @@ describe("AgentConversation — costMeasured propagation", () => {
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
             maxTurns: 5,
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
@@ -189,7 +204,7 @@ describe("AgentConversation — costMeasured propagation", () => {
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
             maxTurns: 5,
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
@@ -221,7 +236,7 @@ describe("AgentConversation — error handling", () => {
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
             maxTurns: 5,
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
@@ -241,11 +256,60 @@ describe("AgentConversation — error handling", () => {
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
             maxTurns: 5,
-        });
+        }, MODEL_CONFIG);
 
         const result = await conversation.run("Create a project");
 
         expect(result.finishReason).toBe("error");
         expect(result.finalMessage).toBe("Agent completed without using any tools");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Step pricing
+// ---------------------------------------------------------------------------
+
+describe("AgentConversation — step pricing", () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    function twoStepModel(): MockLanguageModelV4 {
+        let callCount = 0;
+        return new MockLanguageModelV4({
+            doGenerate: async () => {
+                callCount++;
+                return callCount === 1 ? toolCallResult("write_file", "tc-1") : textResult("done");
+            },
+        });
+    }
+
+    test("cache tokens are priced at the model's cache rates", async () => {
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const result = await new AgentConversation(twoStepModel(), createMockRegistry(), {
+            staticSystemPrompt: "test",
+            maxTurns: 5,
+        }, MODEL_CONFIG).run("Create a project");
+
+        expect(result.costMeasured).toBe(true);
+        expect(result.totalCost).toBeCloseTo(2 * (70 * 3 + 20 * 0.3 + 10 * 3.75 + 50 * 15) / 1_000_000, 12);
+        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("cost unmeasured"));
+    });
+
+    test("a reported cache class with no rate leaves the run unmeasured and logs it at warn", async () => {
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const result = await new AgentConversation(twoStepModel(), createMockRegistry(), {
+            staticSystemPrompt: "test",
+            maxTurns: 5,
+        }, { ...MODEL_CONFIG, cacheReadCostPer1M: null }).run("Create a project");
+
+        expect(result.costMeasured).toBe(false);
+        expect(warn).toHaveBeenCalledWith(
+            expect.stringMatching(/cost unmeasured: provider=mock-provider, model=test-model, .*no rate=\[cacheReadTokens\]/),
+        );
     });
 });

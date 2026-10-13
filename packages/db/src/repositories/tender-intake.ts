@@ -21,7 +21,7 @@ class IntakeVisionNotFirst extends Error {
 interface TenderIntakeWrite {
   readonly tenderId: string;
   readonly projectId: ProjectId;
-  /** Outbound question bodies, posted in this order. */
+  /** Outbound question bodies, posted with their positions in this order. */
   readonly questions: readonly string[];
   /** The vision v1 document, given the ids of the posted questions in the same order. */
   readonly vision: (questionIds: readonly string[]) => VisionInput;
@@ -46,16 +46,8 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
     const existing = await visions.getCurrent(write.projectId);
     if (existing) return { kind: "vision-exists", visionVersion: existing.version };
 
-    const questionIds: string[] = [];
-    for (const body of write.questions) {
-      const question = await messages.insertOutbound({
-        projectId: write.projectId,
-        kind: "question",
-        body,
-        inReplyTo: write.tenderId,
-      });
-      questionIds.push(question.id);
-    }
+    const questions = await messages.insertQuestions(write.projectId, write.tenderId, write.questions);
+    const questionIds = questions.map((q) => q.id);
     const vision = await visions.create(write.projectId, write.vision(questionIds));
     if (vision.version !== 1) throw new IntakeVisionNotFirst(write.projectId, write.tenderId, vision.version);
     return { kind: "recorded", visionId: vision.id, questionIds };

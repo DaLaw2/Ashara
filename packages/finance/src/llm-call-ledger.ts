@@ -1,5 +1,5 @@
 import type { LlmCallRepository, NewLlmCall } from "@ashara/db";
-import { calculateCost } from "@ashara/llm-gateway";
+import { describeUnmeasuredCost, measureCost } from "@ashara/llm-gateway";
 import type { LlmCallRecorder, LlmProviderCall, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 
@@ -19,28 +19,21 @@ function assertPriced(provider: string, model: ModelConfig): void {
 }
 
 /**
- * The count of one cache class to price, or `null` when it is unknown. A class
- * the model bills at its own rate must be reported: unreported, its split from
- * plain input is unknown. A class the model does not bill is plain input.
- */
-function cacheCount(reported: number | null, rate: number | null): number | null {
-  if (reported !== null) return reported;
-  return rate === null ? 0 : null;
-}
-
-/**
- * The call's cost in USD at the rates in force at `at`, or `null` when a count
- * that enters the price was not reported, or a reported cache class has no
- * rate for this model. Never 0 for an unknown cost.
+ * The call's cost in USD at the rates in force at `at`, or `null` when it is
+ * unmeasured. Never 0 for an unknown cost. A request that produced no usage
+ * report (it threw) is NULL without a log line: its error is the record. Any
+ * other NULL is logged at `warn` with the classes that left it unmeasured.
  */
 function costOf(call: LlmProviderCall, at: Date): number | null {
-  const reported = call.usage?.reported;
-  if (!reported || reported.inputTokens === null || reported.outputTokens === null) return null;
-  const cacheRead = cacheCount(reported.cacheReadTokens, call.model.cacheReadCostPer1M);
-  const cacheWrite = cacheCount(reported.cacheWriteTokens, call.model.cacheWriteCostPer1M);
-  if (cacheRead === null || cacheWrite === null) return null;
-  const cost = calculateCost(reported.inputTokens, reported.outputTokens, cacheRead, cacheWrite, call.model, at);
-  return cost === null ? null : cost.totalCost;
+  if (call.usage === null) return null;
+  const cost = measureCost(call.usage.reported, call.model, at);
+  if (cost.measured) return cost.totalCost;
+  console.warn(
+    `[LlmCallLedger] ${describeUnmeasuredCost(cost, call.provider, call.model.id)}, ` +
+      `project=${call.context.projectId}, callSite=${call.context.callSite}, operation=${call.operation}; ` +
+      `llm_calls.cost_usd is NULL`,
+  );
+  return null;
 }
 
 /** Maps one provider call made at `at` to its llm_calls row. Every unreported count stays `null`. */
