@@ -27,5 +27,16 @@ export type DbHandle = Database | DbTransaction;
 
 export function createDb(databaseUrl: string) {
   const pool = new pg.Pool({ connectionString: databaseUrl });
+  // pg-pool emits 'error' when an IDLE pooled client loses its connection (database restart,
+  // pg_terminate_backend, network drop) and has already evicted that client. Without a listener the
+  // emit throws and reaches the server's fatal uncaughtException path, so an unreachable database
+  // would kill the process. An outage is not process corruption: the next query rejects and the
+  // caller's own retry or block path handles it (Discipline A).
+  pool.on("error", (err: Error) => {
+    const code = "code" in err ? String(err.code) : "none";
+    console.warn(
+      `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${err.message}`,
+    );
+  });
   return drizzle(pool, { schema });
 }

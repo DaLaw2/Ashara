@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { Readable } from "node:stream";
 import { ProcessSpawnFailed } from "./errors.js";
 
 export interface ProcessRequest {
@@ -10,6 +11,11 @@ export interface ProcessRequest {
   /** Host-side backstop: SIGKILL the child after this long. */
   readonly killAfterMs?: number;
   readonly maxOutputBytes: number;
+  /**
+   * Policy default false. True opens a fourth pipe, the child's fd 3, read into `statusReport`:
+   * a channel the child's stdout and stderr cannot reach and output caps cannot truncate.
+   */
+  readonly statusChannel?: boolean;
 }
 
 export interface ProcessResult {
@@ -22,6 +28,8 @@ export interface ProcessResult {
   readonly killedByHost: boolean;
   /** Writing stdin failed (e.g. EPIPE because the child exited without reading it). */
   readonly stdinError: string | null;
+  /** What the child wrote to fd 3 ("" when nothing); null when no status channel was requested. */
+  readonly statusReport: string | null;
 }
 
 /** Runs one binary with an argv array; never a shell. Rejects only with ProcessSpawnFailed. */
@@ -51,13 +59,19 @@ class CappedBuffer {
   }
 }
 
+/** A status report is a few bytes; anything longer is not one, and is cut here. */
+const MAX_STATUS_BYTES = 64;
+
 export const spawnProcess: ProcessRunner = (request) =>
   new Promise<ProcessResult>((resolve, reject) => {
     const child = spawn(request.file, [...request.args], {
       env: { ...request.env },
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: request.statusChannel === true ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
       shell: false,
     });
+    const statusStream = request.statusChannel === true ? child.stdio[3] : null;
+    const status = new CappedBuffer(MAX_STATUS_BYTES);
+    if (statusStream instanceof Readable) statusStream.on("data", (chunk: Buffer) => status.push(chunk));
     const stdout = new CappedBuffer(request.maxOutputBytes);
     const stderr = new CappedBuffer(request.maxOutputBytes);
     let killedByHost = false;
@@ -98,6 +112,7 @@ export const spawnProcess: ProcessRunner = (request) =>
         stderrTruncated: stderr.truncated,
         killedByHost,
         stdinError,
+        statusReport: statusStream instanceof Readable ? status.text() : null,
       });
     });
 

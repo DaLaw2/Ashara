@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { runHostGit } from "@ashara/execution-infra";
 import type { TaskDescriptor } from "./execution-service.js";
 import { targetRepo } from "./host-git.js";
@@ -113,10 +114,34 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
   }
 }
 
-export async function commitMerge(targetPath: string, taskId: string): Promise<void> {
+/** A git object id as `rev-parse` prints it: SHA-1 or SHA-256, lowercase hex (migration 041's CHECK). */
+const CommitIdSchema = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
+
+/** `git rev-parse HEAD` after the merge commit printed something that is not one object id. */
+class MergeCommitUnreadable extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly targetPath: string,
+    readonly stdout: string,
+  ) {
+    super(`merge of task ${taskId} in ${targetPath} was committed, but rev-parse HEAD printed no commit id: ${JSON.stringify(stdout.slice(0, 200))}`);
+    this.name = "MergeCommitUnreadable";
+  }
+}
+
+/**
+ * Commits the staged merge on main and returns the merge commit, read back from git: the task's
+ * merge record (migration 041). A commit id that cannot be read throws, so the task is never
+ * completed without its record.
+ */
+export async function commitMerge(targetPath: string, taskId: string): Promise<string> {
   await runHostGit(targetRepo(targetPath), ["commit", "-m", `merge: task ${taskId}`]);
   // Branch deletion deferred to cleanupWorkdir — worktree must be removed first
   // (git refuses to delete a branch that has an active worktree).
+  const { stdout } = await runHostGit(targetRepo(targetPath), ["rev-parse", "HEAD"]);
+  const commit = CommitIdSchema.safeParse(stdout.trim());
+  if (!commit.success) throw new MergeCommitUnreadable(taskId, targetPath, stdout);
+  return commit.data;
 }
 
 export async function abortMerge(targetPath: string): Promise<void> {

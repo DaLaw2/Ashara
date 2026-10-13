@@ -53,6 +53,9 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
           eq(workItems.workKind, "environment"),
           eq(workItems.status, "Completed"),
           isNotNull(workItems.environmentStatement),
+          // The report tells the client the environment is set up: only a task whose merge is
+          // on record (migration 041) did that, not one an operator marked Completed.
+          isNotNull(workItems.mergeCommit),
         ),
       )
       .orderBy(desc(workItems.updatedAt), desc(workItems.id))

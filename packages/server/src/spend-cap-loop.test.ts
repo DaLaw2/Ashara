@@ -91,6 +91,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
       save: notExercised("save"),
       incrementDispatchCount: notExercised("incrementDispatchCount"),
       refundDispatchCount: notExercised("refundDispatchCount"),
+      recordMergeCommit: notExercised("recordMergeCommit"),
       addDependency: notExercised("addDependency"),
       getDependencies: notExercised("getDependencies"),
       findChildren: notExercised("findChildren"),
@@ -196,6 +197,7 @@ const run = promisify(execFile);
 function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
   const ok = (stdout = "") => ({
     exitCode: 0, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null,
+    statusReport: null,
   });
   return new PodmanSubstrate({
     podmanPath: "podman",
@@ -209,7 +211,7 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
         // Every command exits 1: the stored check, red-run again on the BaseCell (its version differs
         // from the check's), still fails on main, so the dispatch reaches the model.
         case "exec":
-          return { ...ok(), exitCode: 1 };
+          return { ...ok(), exitCode: 1, statusReport: "1\n" };
         case "rm":
           return ok();
         default:

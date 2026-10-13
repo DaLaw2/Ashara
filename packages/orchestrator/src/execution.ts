@@ -230,6 +230,11 @@ async function executeTask(
   }
 
   if (execResult.status === "completed") {
+    if (execResult.delivered.kind === "merged") {
+      // The merge record first, whatever the item's status now (a preempted item merged all the
+      // same): a write that throws leaves the task not Completed (Discipline A).
+      await deps.workItemRepo.recordMergeCommit(task.id, execResult.delivered.mergeCommit);
+    }
     try {
       await routeAsSuccess(deps, task);
     } catch (e) {

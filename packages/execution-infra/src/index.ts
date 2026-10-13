@@ -9,6 +9,7 @@ export {
   CellTeardownFailed,
   CellToolFailed,
   InvalidCellRequest,
+  MountPathRejected,
   PathOutsideWorkspace,
   SubstrateUnavailable,
 } from "./errors.js";

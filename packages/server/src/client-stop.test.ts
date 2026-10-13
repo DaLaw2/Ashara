@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -36,10 +36,12 @@ let clientId: string;
 const ourProjects = new Set<string>();
 
 /**
- * A tendered project with one Epic and one Task per entry, `[title, status]`,
- * plus, for `merged` entries, the dev session a merge closes Completed.
+ * A tendered project with one Epic and one Task per entry, `[title, status]`. A `merged` entry
+ * has its merge commit recorded by the production writer, and its dev session left in Preparing,
+ * as a failed fail-soft terminal write leaves it; a `session-only` entry has a dev session closed
+ * Completed and no merge record (a check task completes so, merging nothing).
  */
-async function projectWith(tasks: ReadonlyArray<readonly [string, string, "merged"?]>) {
+async function projectWith(tasks: ReadonlyArray<readonly [string, string, ("merged" | "session-only")?]>) {
   const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build it.");
   ourProjects.add(project.id);
   const epicId = randomUUID();
@@ -53,7 +55,11 @@ async function projectWith(tasks: ReadonlyArray<readonly [string, string, "merge
     await db.execute(sql`
       INSERT INTO work_items (id, level, status, parent_id, title, run_scope, project_id)
       VALUES (${taskId}, 'Task', ${status}, ${epicId}, ${title}, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
-    if (merged) {
+    if (merged === "merged") {
+      await new WorkItemRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"));
+      await db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Preparing')`);
+    }
+    if (merged === "session-only") {
       await db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Completed')`);
     }
   }
@@ -132,16 +138,18 @@ describe("a client's stop", () => {
     const stopped = await projectWith([
       ["Count words in a file", "Completed", "merged"],
       ["Marked done by hand", "Completed"],
+      ["Write the checks", "Completed", "session-only"],
+      ["Merged, then cancelled", "Abandoned", "merged"],
       ["Count lines too", "Pending"],
     ]);
     const other = await projectWith([["Parse the config", "Pending"]]);
-    expect((await gate()).map((item) => item.id).sort()).toEqual([stopped.taskIds[2], other.taskIds[0]].sort());
+    expect((await gate()).map((item) => item.id).sort()).toEqual([stopped.taskIds[4], other.taskIds[0]].sort());
     const stop = await sendStop(stopped.projectId, "Budget moved to another project.");
 
     const outcomes = await liaison().runPending();
 
     expect(outcomes).toEqual([
-      { kind: "stopped", reported: true, merged: 1, stopId: stop.id, projectId: stopped.projectId },
+      { kind: "stopped", reported: true, merged: 2, stopId: stop.id, projectId: stopped.projectId },
     ]);
     expect(await projectRow(stopped.projectId)).toEqual({ status: "stopped", errorClass: null, reason: null });
     expect(await projectRow(other.projectId)).toEqual({ status: "active", errorClass: null, reason: null });
@@ -150,9 +158,12 @@ describe("a client's stop", () => {
     const reports = await stopReports(stopped.projectId);
     expect(reports).toHaveLength(1);
     expect(reports[0]).toContain("stopped at your request");
+    // Exactly the tasks whose merge commit is on record: not the attempt log, not task status.
     expect(reports[0]).toContain('"Count words in a file"');
+    expect(reports[0]).toContain('"Merged, then cancelled"');
     expect(reports[0]).not.toContain("Count lines too");
     expect(reports[0]).not.toContain("Marked done by hand");
+    expect(reports[0]).not.toContain("Write the checks");
     expect(reports[0]).not.toMatch(/plan (is )?complete/i);
     expect(await stopReports(other.projectId)).toEqual([]);
 

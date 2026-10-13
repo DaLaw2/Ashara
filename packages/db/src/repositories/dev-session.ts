@@ -11,6 +11,12 @@ class DispatchEvidenceUnread extends Error {
   }
 }
 
+/**
+ * dev_sessions is an attempt log: when each attempt opened and how it ended (`phase`, and on a
+ * failure the end's outcome and detail in verification_result). It holds no verdict on the task
+ * and no record of what was merged, which is work_items.merge_commit (migration 041): its terminal
+ * write is fail-soft (withSessionLifecycle), so no report or decision reads it as delivery.
+ */
 export class DevSessionRepository {
   constructor(private readonly db: Database) {}
 
@@ -29,18 +35,17 @@ export class DevSessionRepository {
     await this.db
       .update(devSessions)
       .set({
-        verificationResult: { passed: true },
         phase: "Completed",
         updatedAt: new Date(),
       })
       .where(eq(devSessions.id, sessionId));
   }
 
-  async fail(sessionId: string, verificationResult: unknown) {
+  async fail(sessionId: string, attemptEnd: unknown) {
     await this.db
       .update(devSessions)
       .set({
-        verificationResult,
+        verificationResult: attemptEnd,
         phase: "Failed",
         updatedAt: new Date(),
       })

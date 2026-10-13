@@ -22,7 +22,17 @@ const OTHER_ID = "b".repeat(64);
 const IMAGE = "docker.io/library/debian:12-slim@sha256:" + "c".repeat(64);
 
 function ok(stdout = "", exitCode: number | null = 0): ProcessResult {
-  return { exitCode, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+  return { exitCode, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
+}
+
+/** An exec whose in-cell wrapper reported the command's own status on fd 3. */
+function ran(stdout = "", exitCode = 0): ProcessResult {
+  return { ...ok(stdout, exitCode), statusReport: `${exitCode}\n` };
+}
+
+/** An exec that ended with no status report: the substrate's own failure. */
+function unreported(exitCode: number, stderr = ""): ProcessResult {
+  return { ...ok("", exitCode), stderr, statusReport: "" };
 }
 
 function recorder(responses: Array<ProcessResult | Error>) {
@@ -155,25 +165,54 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[2]?.args).toEqual(["rm", "-f", "--ignore", name]);
   });
 
-  it("execs under timeout in the workspace and reports timeouts", async () => {
-    const { requests, substrate } = recorder([ok(ID), ok("out"), { ...ok("", 124) }]);
+  it("execs argv under timeout and the status wrapper in the workspace", async () => {
+    const { requests, substrate } = recorder([ok(ID), ran("out"), ran("", 124)]);
     const cell = await substrate.createCell(spec);
     const result = await cell.exec(["cat", "--", "./a"], { timeoutSeconds: 30, stdin: "in", cwd: "src" });
-    expect(requests[1]?.args).toEqual(["exec", "-i", "-w", "/workspace/src", ID, "timeout", "-k", "5", "30", "cat", "--", "./a"]);
+    expect(requests[1]?.args).toEqual([
+      "exec", "-i", "--preserve-fds=1", "-w", "/workspace/src", ID,
+      "sh", "-c",
+      "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }; " +
+        'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; s=$?; printf \'%s\\n\' "$s" >&3; exit "$s"',
+      "ashara-exec", "5", "30",
+      "cat", "--", "./a",
+    ]);
+    expect(requests[1]?.statusChannel).toBe(true);
     expect(requests[1]?.stdin).toBe("in");
     expect(result).toMatchObject({ exitCode: 0, stdout: "out", timedOut: false });
 
-    // 124 before the deadline is the command's own exit code, not a timeout.
+    // 124 the command reported itself is its own exit code, not a timeout.
     const early = await cell.exec(["sh", "-c", "exit 124"], { timeoutSeconds: 30 });
-    expect(early.timedOut).toBe(false);
+    expect(early).toMatchObject({ exitCode: 124, timedOut: false });
   });
 
-  it("distinguishes a substrate exec failure from a failing command", async () => {
-    const { substrate } = recorder([ok(ID), ok("", 125)]);
+  it("a command that exits 125 is the command's result; an exit with no status report is the substrate's failure", async () => {
+    const { substrate } = recorder([
+      ok(ID),
+      ran("", 125),
+      unreported(125, "Error: no container with name or ID found"),
+      { ...ran("", 3), exitCode: 125 },
+      { ...ok("", 0), statusReport: "zero\n" },
+    ]);
     const cell = await substrate.createCell(spec);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(CellExecFailed);
+    expect(await cell.exec(["sh", "-c", "exit 125"], { timeoutSeconds: 1 })).toMatchObject({ exitCode: 125, timedOut: false });
+
+    const podmanFailed = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
+    expect(podmanFailed).toBeInstanceOf(CellExecFailed);
+    if (!(podmanFailed instanceof CellExecFailed)) return;
+    expect(podmanFailed).toMatchObject({ exitCode: 125, stderr: "Error: no container with name or ID found", argv: ["true"] });
+
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+  });
+
+  it("refuses a malformed exec request before podman runs", async () => {
+    const { requests, substrate } = recorder([ok(ID)]);
+    const cell = await substrate.createCell(spec);
     await expect(cell.exec(["true"], { timeoutSeconds: 0 })).rejects.toBeInstanceOf(InvalidCellRequest);
+    await expect(cell.exec(["-x"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(InvalidCellRequest);
     await expect(cell.exec(["true"], { timeoutSeconds: 1, cwd: "../x" })).rejects.toBeInstanceOf(PathOutsideWorkspace);
+    expect(requests).toHaveLength(1);
   });
 
   it("throws a typed teardown failure instead of swallowing it", async () => {

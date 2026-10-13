@@ -46,6 +46,7 @@ function run(items: WorkItem[], checks: ParkedExitChecks, saveRefused = false) {
     },
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     refundDispatchCount: notExercised("refundDispatchCount"),
+    recordMergeCommit: notExercised("recordMergeCommit"),
     addDependency: notExercised("addDependency"),
     getDependencies: notExercised("getDependencies"),
     findChildren: notExercised("findChildren"),

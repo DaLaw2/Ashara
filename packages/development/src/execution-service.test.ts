@@ -149,6 +149,16 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "no owner", chain: wrapError("development", "assignAgent", "no owner") },
     };
   }
+  if (status === "completed") {
+    return {
+      status,
+      delivered: { kind: "merged", mergeCommit: "0123456789abcdef0123456789abcdef01234567" },
+      detail: `${status} detail`,
+      output: toAgentOutput({ ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null }, "m", { input: 0, output: 0 }),
+      sessionId: "s",
+      attempt: 1,
+    };
+  }
   if (status === "interrupted") {
     return {
       status,
@@ -202,7 +212,6 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
 
     expect(store.phases.get("sess")).toBe("Failed");
     expect(store.failures.get("sess")).toMatchObject({
-      passed: false,
       outcome: "errored",
       detail: "the attempt threw before an outcome",
     });
@@ -213,7 +222,6 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
     await withSessionLifecycle(store, session, async () => result("blocked"));
 
     expect(store.failures.get("sess")).toMatchObject({
-      passed: false,
       outcome: "blocked",
       detail: "blocked detail",
     });
@@ -451,7 +459,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const { service, probe, events } = serviceOn(substrate, workdirBase);
@@ -488,7 +496,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const unresolved = { kind: "owner-unresolved", ownerRoleId: null, rosterRevision: 1, reason: "the work item has no owner role" } as const;
@@ -535,7 +543,7 @@ describe("a task nothing could decide ends before the agent", () => {
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const workdirBase = join(root, "work");
@@ -612,9 +620,11 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly checkWork?: boolean;
   }
 
-  const ok = (stdout = "", exitCode = 0, stderr = "") => ({
-    exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null,
+  const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
+    exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null, statusReport,
   });
+  /** An exec the in-cell wrapper reported the command's own status for. */
+  const ran = (stdout: string, exitCode = 0) => ok(stdout, exitCode, "", `${exitCode}\n`);
   const ids: Record<Role, string> = { developer: "a".repeat(64), verifier: "b".repeat(64), ci: "d".repeat(64) };
   const roleOf = (id: string | undefined): Role | undefined =>
     id === ids.developer ? "developer" : id === ids.verifier ? "verifier" : id === ids.ci ? "ci" : undefined;
@@ -665,9 +675,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
           }
           case "exec": {
-            const role = roleOf(args[4]);
-            if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error");
-            return role === "ci" ? ok("hello\n", faults.ciExit ?? 0) : ok("hello\n");
+            const role = roleOf(args[5]);
+            // No status report: podman exec itself failed, the command never ran.
+            if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
+            return role === "ci" ? ran("hello\n", faults.ciExit ?? 0) : ran("hello\n");
           }
           case "rm":
             return faults.teardownFails === true ? ok("", 1, "Error: container is busy") : ok();
@@ -790,6 +801,15 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(result.detail).toContain(agentInvoked ? "the agent's work is kept on the task branch" : "no agent ran");
       expect(result.errorEnvelope.outcome).toBe("blocked");
       expect(result.errorEnvelope.chain.operation).toBe(stage);
+      // The blocked chain keeps the typed error itself: its class and its own fields, not a string.
+      const origin = result.errorEnvelope.chain.cause;
+      expect(origin).toMatchObject({ boundary: "origin", operation: errorClass, context: expect.objectContaining({ errorClass }) });
+      if (errorClass === "CellExecFailed") {
+        expect(origin?.context).toMatchObject({ exitCode: 125, stderr: "Error: OCI runtime error", argv: expect.any(Array), cellId: expect.any(String) });
+      }
+      if (errorClass === "MountPathRejected") {
+        expect(origin?.context).toMatchObject({ hostPath: expect.any(String), mountRoot: expect.any(String), reason: expect.any(String) });
+      }
       expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage, errorClass })]);
       expect(events.some((e) => e.event === "task_failed" || e.event === "gate_failed" || e.event === "task_completed")).toBe(false);
       // Nothing merged; the agent's work, where there was any, waits on its branch for the retry.
@@ -849,6 +869,16 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.status, result.detail).toBe("completed");
     expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
     expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ storedVersion: "e".repeat(64), trusted: true });
+  });
+
+  // t-env-failure-precision: a check's own exit 125 was podman exec's failure code, so the red run blocked.
+  test("a stored check that itself exits 125 on main is a failing check, never an environment failure", async () => {
+    const { result, events, started } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 125 });
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
+    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: true });
+    expect(events.some((e) => e.event === "task_blocked")).toBe(false);
   });
 
   // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.

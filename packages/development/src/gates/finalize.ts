@@ -1,7 +1,7 @@
 import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
-import { environmentErrorOf } from "../environment-failure.js";
+import { environmentErrorOf, typedErrorLayer } from "../environment-failure.js";
 import type { EnvironmentError } from "../environment-failure.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
 import { targetRepo } from "../host-git.js";
@@ -41,7 +41,8 @@ export class VerificationInfrastructureFault extends Error {
 const POST_MERGE_CHECK_RUN = "postMergeCheckRun";
 
 export type FinalizeResult =
-  | { readonly success: true }
+  /** `mergeCommit`: the commit the merge made on main, read back from git; the task's merge record. */
+  | { readonly success: true; readonly mergeCommit: string }
   | {
       readonly success: false;
       readonly gateFailureContext: string;
@@ -99,7 +100,7 @@ async function abortAndFail(
   failedLogMessage: string,
   gateFailureContext: string,
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
-  errorLayerInfo: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
+  errorLayerInfo: { operation: string; gateOutput: string | ErrorLayer; gateContext?: Record<string, unknown> },
   environmentFailure: EnvironmentError | null = null,
   infrastructureFault: VerificationInfrastructureFault | null = null,
 ): Promise<FinalizeResult> {
@@ -206,7 +207,8 @@ export async function finalizeSuccess(
         targetProjectPath,
         `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
         `Post-merge verify could not run: ${detail}`,
-        { operation: "postMergeVerify", gateOutput: detail, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
+        // The typed error itself is the cause, its class and fields intact, never a flattened string.
+        { operation: "postMergeVerify", gateOutput: typedErrorLayer(environmentFailure), gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
         environmentFailure,
       );
     }
@@ -216,7 +218,7 @@ export async function finalizeSuccess(
       targetProjectPath,
       `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
       `Post-merge verify could not run: ${fault.message}`,
-      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault.message, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      { operation: POST_MERGE_CHECK_RUN, gateOutput: typedErrorLayer(fault), gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
       null,
       fault,
     );
@@ -296,13 +298,13 @@ export async function finalizeSuccess(
     );
   }
 
-  await commitMerge(targetProjectPath, task.id);
-  console.log(`[${task.id}] merge committed to main`);
+  const mergeCommit = await commitMerge(targetProjectPath, task.id);
+  console.log(`[${task.id}] merge committed to main as ${mergeCommit}`);
 
   // The dev_sessions terminal write lives in DevelopmentService.withSessionLifecycle,
   // the one seam every outcome passes through. It used to happen here, on the success
   // path only, which is precisely how six failure returns came to have none.
-  return { success: true };
+  return { success: true, mergeCommit };
 }
 
 // ---------------------------------------------------------------------------

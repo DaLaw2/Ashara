@@ -32,10 +32,36 @@ const KILL_GRACE_SECONDS = 5;
 const HOST_BACKSTOP_SECONDS = 30;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const PODMAN_ADMIN_TIMEOUT_MS = 120_000;
-/** podman exec's own failure code; anything else is the command's exit status. */
-const PODMAN_EXEC_ERROR = 125;
-const TIMEOUT_EXIT = 124;
-const TIMEOUT_KILL_EXIT = 137;
+/**
+ * The exit statuses a cell's timeout(1) ends with when it fires: GNU's 124, and 137 after its
+ * SIGKILL; busybox's timeout (alpine:3.20) leaves the killed child's 143 (SIGTERM).
+ */
+const TIMEOUT_EXITS: ReadonlySet<number> = new Set([124, 137, 143]);
+
+/**
+ * Every exec runs `sh -c EXEC_WRAPPER ashara-exec <grace> <seconds> <argv...>` with podman's
+ * --preserve-fds=1, so the host's fourth pipe is fd 3 in the cell. The wrapper runs
+ * `timeout -k <grace> <seconds> argv` with fd 3 closed, then writes its exit status to fd 3. A
+ * command's own status therefore arrives on a channel closed to the command and beyond the output
+ * caps, and an exit with no report is podman's or the wrapper's own failure: exit codes alone
+ * cannot tell them apart, since 125 is both podman exec's own failure and a status any command
+ * may return.
+ *
+ * timeout(1) sits inside the wrapper, never around it: busybox's timeout signals only its own
+ * child, so with the wrapper as that child the signal ended the wrapper and left argv running in
+ * the cell after the exec reported a timeout. Here timeout's child is argv itself (an external
+ * program found on PATH, never a shell builtin), as with timeout alone, and the wrapper outlives
+ * it to report 124, 137 or 143. A missing timeout(1) exits without a report.
+ */
+const EXEC_WRAPPER =
+  "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }; " +
+  'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; s=$?; printf \'%s\\n\' "$s" >&3; exit "$s"';
+const EXEC_WRAPPER_NAME = "ashara-exec";
+const statusReportSchema = z
+  .string()
+  .regex(/^(0|[1-9][0-9]{0,2})\n$/)
+  .transform(Number)
+  .refine((status) => status <= 255);
 
 const labelValue = z
   .string()
@@ -223,6 +249,7 @@ class PodmanCell implements Cell {
   async exec(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
     const issues: string[] = [];
     if (argv.length === 0 || argv[0] === "") issues.push("argv must name a command");
+    if (argv[0]?.startsWith("-") === true) issues.push(`argv[0] must name a command, not an option: ${JSON.stringify(argv[0])}`);
     if (!Number.isInteger(options.timeoutSeconds) || options.timeoutSeconds <= 0) {
       issues.push(`timeoutSeconds must be a positive integer, got ${options.timeoutSeconds}`);
     }
@@ -231,8 +258,8 @@ class PodmanCell implements Cell {
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
     const args = [
-      "exec", "-i", "-w", workdir, this.id,
-      "timeout", "-k", String(KILL_GRACE_SECONDS), String(options.timeoutSeconds),
+      "exec", "-i", "--preserve-fds=1", "-w", workdir, this.id,
+      "sh", "-c", EXEC_WRAPPER, EXEC_WRAPPER_NAME, String(KILL_GRACE_SECONDS), String(options.timeoutSeconds),
       ...argv,
     ];
     const startedAt = Date.now();
@@ -241,6 +268,7 @@ class PodmanCell implements Cell {
       result = await this.substrate.run(args, {
         stdin: options.stdin,
         killAfterMs: (options.timeoutSeconds + KILL_GRACE_SECONDS + HOST_BACKSTOP_SECONDS) * 1000,
+        statusChannel: true,
       });
     } catch (err) {
       throw new CellExecFailed(this.id, argv, null, "", "the substrate could not run podman exec", { cause: err });
@@ -253,25 +281,45 @@ class PodmanCell implements Cell {
     if (result.exitCode === null) {
       throw new CellExecFailed(this.id, argv, null, result.stderr, `podman exec ended by signal ${result.signal ?? "unknown"}`);
     }
-    if (result.exitCode === PODMAN_EXEC_ERROR) {
-      // 125 is ambiguous: podman exec's own failure, timeout(1)'s own failure, and a command that
-      // exits 125 all look the same here. Fail closed: treat it as a substrate failure.
+    const exitCode = result.exitCode;
+    if (options.stdin !== undefined && result.stdinError !== null) {
+      throw new CellExecFailed(this.id, argv, exitCode, result.stderr, `stdin was not fully delivered: ${result.stdinError}`);
+    }
+    if (result.statusReport === "") {
+      // The wrapper never reported: podman exec, a missing sh or timeout(1), or a cell removed
+      // mid-run failed before or while running the command. timeout(1) never ends the wrapper.
       throw new CellExecFailed(
         this.id,
         argv,
-        result.exitCode,
+        exitCode,
         result.stderr,
-        "exit 125 is podman exec's or timeout's own failure code, and also a status the command itself may return; " +
-          "the three cannot be told apart, so it is treated as a substrate failure (fail-closed)",
+        `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command: ` +
+          "podman exec, the wrapper's sh or its timeout(1) failed before or while running it",
       );
     }
-    if (options.stdin !== undefined && result.stdinError !== null) {
-      throw new CellExecFailed(this.id, argv, result.exitCode, result.stderr, `stdin was not fully delivered: ${result.stdinError}`);
+    const report = statusReportSchema.safeParse(result.statusReport);
+    if (!report.success) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        exitCode,
+        result.stderr,
+        `the in-cell wrapper's status report is malformed: ${JSON.stringify(result.statusReport)}`,
+      );
     }
-    const timedOut =
-      (result.exitCode === TIMEOUT_EXIT || result.exitCode === TIMEOUT_KILL_EXIT) &&
-      elapsedMs >= options.timeoutSeconds * 1000;
-    return { ...streams(result), exitCode: result.exitCode, timedOut };
+    if (report.data !== exitCode) {
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        exitCode,
+        result.stderr,
+        `the command exited ${report.data} in the cell but podman exec exited ${exitCode}`,
+      );
+    }
+    if (TIMEOUT_EXITS.has(exitCode) && elapsedMs >= options.timeoutSeconds * 1000) {
+      return { ...streams(result), exitCode, timedOut: true };
+    }
+    return { ...streams(result), exitCode, timedOut: false };
   }
 
   async teardown(): Promise<void> {
@@ -317,7 +365,7 @@ export class PodmanSubstrate {
    */
   async run(
     args: readonly string[],
-    extra: Pick<ProcessRequest, "stdin" | "killAfterMs"> = { killAfterMs: PODMAN_ADMIN_TIMEOUT_MS },
+    extra: Pick<ProcessRequest, "stdin" | "killAfterMs" | "statusChannel"> = { killAfterMs: PODMAN_ADMIN_TIMEOUT_MS },
   ): Promise<ProcessResult> {
     try {
       return await this.runner({

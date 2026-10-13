@@ -66,6 +66,19 @@ describe("target scaffold", () => {
   });
 });
 
+describe("the merge record", () => {
+  test("commitMerge returns the merge commit now at main, whose second parent is the task branch", async () => {
+    await commitOnTaskBranch("task/one", { "a.txt": "a\n" });
+    const branchTip = await git(target, "rev-parse", "task/one");
+    await tentativeMerge(target, "task/one");
+
+    const mergeCommit = await commitMerge(target, "one");
+
+    expect(mergeCommit).toBe(await git(target, "rev-parse", "main"));
+    expect(await git(target, "rev-parse", `${mergeCommit}^2`)).toBe(branchTip);
+  });
+});
+
 describe("merge queue vs. build residue in the main checkout", () => {
   test("a tracked build artifact rebuilt by post-merge verify blocks the next merge", async () => {
     await commitOnTaskBranch("task/one", { "main.go": "package main\n", jot: "binary-v1" });

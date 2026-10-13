@@ -23,6 +23,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     save: unused("save"),
     incrementDispatchCount: unused("incrementDispatchCount"),
     refundDispatchCount: unused("refundDispatchCount"),
+    recordMergeCommit: unused("recordMergeCommit"),
     addDependency: unused("addDependency"),
     getDependencies: unused("getDependencies"),
     findChildren: unused("findChildren"),
@@ -90,7 +91,7 @@ describe("reconcileOnStartup — dev_session crash orphans", () => {
     await reconcileOnStartup(deps);
 
     expect(failStaleCalls[0]?.reason).toMatchObject({
-      passed: false,
+      outcome: "abandoned",
       resolvedBy: "startup-reconciler",
     });
   });

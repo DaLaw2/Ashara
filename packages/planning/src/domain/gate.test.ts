@@ -28,6 +28,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     refundDispatchCount: async () => 0,
+    recordMergeCommit: async () => {},
     addDependency: async () => {},
     getDependencies: async () => [],
     listDependenciesByProject: async (projectId) => edges.filter((e) => projectOf(e.fromId) === projectId),

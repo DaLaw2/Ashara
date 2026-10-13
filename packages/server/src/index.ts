@@ -87,6 +87,7 @@ import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
+import { createFatalExit, describeErrorChain, reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
 import { createAgentStaffing } from "./staffing.js";
 
@@ -119,6 +120,10 @@ const CLIENT_LOGIN_THROTTLE = {
   perSource: 20,
 };
 
+// Policy: how long a fatal error waits for the graceful shutdown (cancelled attempts,
+// cell removal, pool close) before the process exits without it.
+const FATAL_SHUTDOWN_DEADLINE_MS = 30_000;
+
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential
   // can be read (ADR-075 C2). Then the database URL from env or policy default.
@@ -132,11 +137,8 @@ async function main(): Promise<void> {
     if (err instanceof MigrationDriftError) {
       throw new ServerStartupRefused(
         `The database schema does not match migrations/: ${err.message}`,
-        `schema_migrations in ${databaseUrl.replace(/\/\/[^@/]*@/, "//***@")}`,
-        err.kind === "hash_mismatch"
-          ? `Repair the schema by hand to match the committed ${err.filename ?? "file"}, then set its ` +
-            `schema_migrations.content_sha256 to ${err.fileSha256 ?? "the file's sha256"}; never edit an applied migration.`
-          : "Run `just migrate` against this database.",
+        `schema_migrations in ${redactedDatabaseUrl(databaseUrl)}`,
+        driftFixes(err),
         { cause: err },
       );
     }
@@ -420,26 +422,23 @@ async function main(): Promise<void> {
   });
 
   // Startup reconciliation (Discipline B) — MUST run before the runner starts
-  // cycling. A prior process may have crashed mid-dispatch (this project's history
-  // IS the serve+spawn crash), leaving items InProgress with no owning agent, or
-  // Failed with no recovery routed. Reset orphans to Pending and route parked Failed
-  // items through the same FailureRouter policy so the gate (Pending-only) sees the
-  // recovered work on the first cycle. Idempotent, and per-item fail-closed inside;
-  // if the whole pass throws (e.g. DB unreachable), log and let the runner surface
-  // the same connectivity failure through its own error handling rather than block
-  // boot here.
-  try {
-    await reconcileOnStartup({
-      workItemRepo,
-      projects: projectRepo,
-      eventStore,
-      failureRouter,
-      devSessionStore: devSessionRepo,
-      workdirBase: config.coreLoop.workdirBase,
-    });
-  } catch (e) {
-    console.warn("Startup reconciliation failed; starting runner anyway:", e);
-  }
+  // cycling. A prior process may have crashed mid-dispatch, leaving items InProgress
+  // with no owning agent, or Failed with no recovery routed. Reset orphans to Pending
+  // and route parked Failed items through the same FailureRouter policy so the gate
+  // (Pending-only) sees the recovered work on the first cycle. Idempotent, and
+  // per-item fail-closed inside; a pass that throws as a whole refuses the start.
+  await reconcileOrRefuse(
+    () =>
+      reconcileOnStartup({
+        workItemRepo,
+        projects: projectRepo,
+        eventStore,
+        failureRouter,
+        devSessionStore: devSessionRepo,
+        workdirBase: config.coreLoop.workdirBase,
+      }),
+    `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${config.coreLoop.workdirBase}`,
+  );
 
   // Cells a previous process of this instance leaked, removed before any dispatch.
   await reconcileCellsAtStartup(cellSubstrate, cellInstance);
@@ -454,25 +453,63 @@ async function main(): Promise<void> {
   console.log(`Ashara server listening on port ${config.port}`);
   console.log("Continuous runner started in background");
 
-  let shuttingDown = false;
-  const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log("Shutting down...");
-    // The abort cancels every attempt in flight; each dispatch then tears its
-    // own cells down, and the drain below removes whatever is left.
-    abortController.abort();
-    server.close();
+  // One shutdown, shared by SIGTERM/SIGINT and the fatal-error exit: stop accepting
+  // requests, cancel and drain the runner, remove every cell, close the pool.
+  let shutdownRun: Promise<void> | null = null;
+  const shutdown = (): Promise<void> => {
+    shutdownRun ??= (async () => {
+      console.log("Shutting down...");
+      // The abort cancels every attempt in flight; each dispatch then tears its
+      // own cells down, and the drain below removes whatever is left.
+      abortController.abort();
+      server.close();
+      await runnerPromise;
+      await teardownCellsAtShutdown(cellSubstrate);
+      await db.$client.end();
+    })();
+    return shutdownRun;
   };
+  fatalExit.setShutdown(shutdown);
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 
   const loopStop = await runnerPromise;
-  if (loopStop) {
+  if (loopStop && !abortController.signal.aborted) {
     console.error(`FATAL: the continuous runner stopped: ${loopStop.reason}. HTTP stays up; SIGTERM to exit.`);
+    await teardownCellsAtShutdown(cellSubstrate);
+    console.log("Continuous runner stopped; HTTP still serving");
+    return;
   }
-  await teardownCellsAtShutdown(cellSubstrate);
-  console.log(loopStop ? "Continuous runner stopped; HTTP still serving" : "Server and continuous runner stopped");
+  await shutdown();
+  console.log("Server and continuous runner stopped");
+}
+
+function redactedDatabaseUrl(databaseUrl: string): string {
+  return databaseUrl.replace(/\/\/[^@/]*@/, "//***@");
+}
+
+/** One repair per drifted file: the operator sees every file to fix, not the first. */
+function driftFixes(err: MigrationDriftError): string {
+  return err.drifts
+    .map((d) => {
+      switch (d.kind) {
+        case "hash_mismatch":
+          return (
+            `repair the schema by hand to match the committed ${d.filename}, then set its ` +
+            `schema_migrations.content_sha256 to ${d.fileSha256}; never edit an applied migration`
+          );
+        case "applied_without_file":
+          return `restore ${d.filename} under the name it ran as; never rename or delete an applied migration`;
+        case "not_applied":
+        case "hash_unrecorded":
+        case "tracking_table_missing":
+          return "run `just migrate` against this database";
+        case "no_migration_files":
+          return "check out the repository's migrations/ directory";
+      }
+    })
+    .filter((fix, i, all) => all.indexOf(fix) === i)
+    .join("; ");
 }
 
 
@@ -502,19 +539,20 @@ function determineCapability(dispatchCount: number, blockedReason: StoredBlocked
   return "Strong";
 }
 
-process.on("uncaughtException", (err: Error) => {
-  console.error("Uncaught exception:", err);
+const fatalExit = createFatalExit({
+  deadlineMs: FATAL_SHUTDOWN_DEADLINE_MS,
+  exit: (code) => process.exit(code),
+  log: (line) => console.error(line),
 });
-
-process.on("unhandledRejection", (err: unknown) => {
-  console.error("Unhandled rejection:", err);
-});
+process.on("uncaughtException", (err: Error) => fatalExit.onFatal("uncaughtException", err));
+process.on("unhandledRejection", (err: unknown) => fatalExit.onFatal("unhandledRejection", err));
 
 main().catch((e: unknown) => {
   if (e instanceof ServerStartupRefused) {
-    console.error(`FATAL: server refused to start. ${e.message}`);
+    const cause = e.cause === undefined ? "" : `\n  caused by: ${describeErrorChain(e.cause)}`;
+    console.error(`FATAL: server refused to start. ${e.message}${cause}`);
   } else {
-    console.error("Fatal error:", e);
+    console.error(`Fatal error:\n${describeErrorChain(e)}`);
   }
   process.exit(1);
 });

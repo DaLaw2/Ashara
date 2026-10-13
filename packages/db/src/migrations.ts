@@ -10,6 +10,11 @@ import { z } from "zod";
 // table that records whether it ran.
 const TRACKING_TABLE = "schema_migrations";
 
+// The session-level advisory lock every migration run holds from connect to end, so two
+// runners against one database serialize instead of racing on the same pending file.
+// A fixed literal: every runner, in every process, must name the same key.
+const MIGRATION_LOCK_KEY = 7_212_345_501;
+
 /** The repository's migrations/ directory, anchored to this module's location. */
 export const MIGRATIONS_DIR = fileURLToPath(new URL("../../../migrations/", import.meta.url));
 
@@ -39,17 +44,31 @@ function extractPgDiagnostics(err: unknown): PgDiagnostics | undefined {
   };
 }
 
-/** A migration file's SQL failed to apply; the transaction was rolled back. */
-class MigrationApplyError extends Error {
-  readonly filename: string;
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+type TransactionOperation = "apply" | "backfill_hashes";
+
+/**
+ * A migration transaction failed and was rolled back. The original error is the `cause`;
+ * a ROLLBACK that also failed is attached as `rollbackError`, never in the original's place.
+ */
+class MigrationTransactionError extends Error {
+  readonly operation: TransactionOperation;
+  readonly filenames: readonly string[];
   readonly pg: PgDiagnostics | undefined;
-  readonly rollbackFailed: boolean;
+  readonly rollbackError: unknown;
 
-  constructor(filename: string, cause: unknown, rollbackFailed: boolean) {
-    const baseMessage = cause instanceof Error ? cause.message : String(cause);
-    const pgDiag = extractPgDiagnostics(cause);
-
-    const parts = [`Migration failed [${filename}]: ${baseMessage}`];
+  constructor(args: {
+    operation: TransactionOperation;
+    filenames: readonly string[];
+    cause: unknown;
+    rollbackError: unknown;
+  }) {
+    const pgDiag = extractPgDiagnostics(args.cause);
+    const label = args.operation === "apply" ? "Migration failed" : "Migration hash backfill failed";
+    const parts = [`${label} [${args.filenames.join(", ")}]: ${messageOf(args.cause)}`];
     if (pgDiag?.code) parts.push(`code=${pgDiag.code}`);
     if (pgDiag?.position) parts.push(`position=${pgDiag.position}`);
     if (pgDiag?.detail) parts.push(`detail: ${pgDiag.detail}`);
@@ -58,63 +77,71 @@ class MigrationApplyError extends Error {
     if (pgDiag?.schema) parts.push(`schema=${pgDiag.schema}`);
     if (pgDiag?.table) parts.push(`table=${pgDiag.table}`);
     if (pgDiag?.constraint) parts.push(`constraint=${pgDiag.constraint}`);
-    if (rollbackFailed) parts.push("ROLLBACK ALSO FAILED — database state unknown");
+    if (args.rollbackError !== undefined) {
+      parts.push(`ROLLBACK ALSO FAILED (${messageOf(args.rollbackError)}): database state unknown, inspect it before retrying`);
+    }
 
-    super(parts.join(" | "), { cause });
-    this.name = "MigrationApplyError";
-    this.filename = filename;
+    super(parts.join(" | "), { cause: args.cause });
+    this.name = "MigrationTransactionError";
+    this.operation = args.operation;
+    this.filenames = args.filenames;
     this.pg = pgDiag;
-    this.rollbackFailed = rollbackFailed;
+    this.rollbackError = args.rollbackError;
   }
 }
 
-type MigrationDriftKind =
-  | "hash_mismatch"
-  | "not_applied"
-  | "hash_unrecorded"
-  | "applied_without_file"
-  | "tracking_table_missing"
-  | "no_migration_files";
+/**
+ * One disagreement between migrations/ and schema_migrations. The two kinds that name no
+ * file describe the whole directory or the whole table.
+ */
+type MigrationDrift =
+  | {
+      readonly kind: "hash_mismatch";
+      readonly filename: string;
+      readonly storedSha256: string;
+      readonly fileSha256: string;
+    }
+  | { readonly kind: "not_applied" | "hash_unrecorded" | "applied_without_file"; readonly filename: string }
+  | { readonly kind: "tracking_table_missing" | "no_migration_files" };
+
+type NonEmpty<T> = readonly [T, ...T[]];
+
+function describeDrift(drift: MigrationDrift): string {
+  switch (drift.kind) {
+    case "hash_mismatch":
+      return (
+        `[${drift.filename}] applied content differs from the file: stored sha256=${drift.storedSha256}, ` +
+        `file sha256=${drift.fileSha256}. The database ran a different draft of this migration; repair the ` +
+        "schema by hand or write a new migration, never edit an applied one"
+      );
+    case "not_applied":
+      return `[${drift.filename}] file exists but is not applied; run \`just migrate\``;
+    case "hash_unrecorded":
+      return `[${drift.filename}] applied, but no content hash is recorded; run \`just migrate\` once to backfill hashes`;
+    case "applied_without_file":
+      return `[${drift.filename}] recorded as applied, but no such file exists; it was renamed or deleted after it ran`;
+    case "tracking_table_missing":
+      return `table ${TRACKING_TABLE} does not exist; run \`just migrate\``;
+    case "no_migration_files":
+      return "the migrations directory holds no .sql file, so no schema can be vouched for";
+  }
+}
 
 /**
  * The database's applied migrations disagree with the files in migrations/.
  * Fail closed: the schema the code believes in is not the schema that exists.
+ * Every drift found is listed, in filename order, never only the first.
  */
 export class MigrationDriftError extends Error {
-  readonly kind: MigrationDriftKind;
-  readonly filename: string | undefined;
+  readonly drifts: NonEmpty<MigrationDrift>;
   readonly migrationsDir: string;
-  readonly storedSha256: string | undefined;
-  readonly fileSha256: string | undefined;
 
-  constructor(args: {
-    kind: MigrationDriftKind;
-    filename: string | undefined;
-    migrationsDir: string;
-    storedSha256?: string;
-    fileSha256?: string;
-  }) {
-    const subject = args.filename === undefined ? "" : ` [${args.filename}]`;
-    const detail: Record<MigrationDriftKind, string> = {
-      hash_mismatch:
-        `applied content differs from the file: stored sha256=${args.storedSha256 ?? "?"}, ` +
-        `file sha256=${args.fileSha256 ?? "?"}. The database ran a different draft of this ` +
-        "migration; repair the schema by hand or write a new migration, never edit an applied one",
-      not_applied: "file exists but is not applied; run `just migrate`",
-      hash_unrecorded:
-        "applied, but no content hash is recorded; run `just migrate` once to backfill hashes",
-      applied_without_file:
-        "recorded as applied, but no such file exists; it was renamed or deleted after it ran",
-      tracking_table_missing: `table ${TRACKING_TABLE} does not exist; run \`just migrate\``,
-      no_migration_files: "the migrations directory holds no .sql file, so no schema can be vouched for",
-    };
-    super(`Migration drift (${args.kind})${subject}: ${detail[args.kind]} | dir=${args.migrationsDir}`);
+  constructor(drifts: NonEmpty<MigrationDrift>, migrationsDir: string) {
+    const kinds = [...new Set(drifts.map((d) => d.kind))].join(", ");
+    super(`Migration drift (${kinds}): ${drifts.map(describeDrift).join("; ")} | dir=${migrationsDir}`);
     this.name = "MigrationDriftError";
-    this.kind = args.kind;
-    this.filename = args.filename;
-    this.migrationsDir = args.migrationsDir;
-    this.storedSha256 = args.storedSha256;
-    this.fileSha256 = args.fileSha256;
+    this.drifts = drifts;
+    this.migrationsDir = migrationsDir;
   }
 }
 
@@ -137,9 +164,22 @@ function readMigrationFiles(migrationsDir: string): MigrationFile[] {
       };
     });
   if (files.length === 0) {
-    throw new MigrationDriftError({ kind: "no_migration_files", filename: undefined, migrationsDir });
+    throw new MigrationDriftError([{ kind: "no_migration_files" }], migrationsDir);
   }
   return files;
+}
+
+/**
+ * A client that has lost its connection while idle emits 'error'; without a listener that
+ * event kills the process. The loss itself surfaces as the next query's rejection.
+ */
+async function connectClient(databaseUrl: string): Promise<pg.Client> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  client.on("error", (err: Error) => {
+    console.warn(`[migrate] WARN: the migration connection reported an error while idle: ${err.message}`);
+  });
+  await client.connect();
+  return client;
 }
 
 const AppliedRowSchema = z.object({
@@ -153,7 +193,7 @@ async function readApplied(client: pg.Client): Promise<Map<string, string | null
   return new Map(rows.map((r) => [r.filename, r.content_sha256]));
 }
 
-/** First drift between files and applied rows, in filename order; `undefined` when none. */
+/** Every drift between files and applied rows, in filename order; `undefined` when none. */
 function findDrift(
   files: readonly MigrationFile[],
   applied: ReadonlyMap<string, string | null>,
@@ -161,56 +201,48 @@ function findDrift(
   opts: { readonly pendingIsDrift: boolean },
 ): MigrationDriftError | undefined {
   const fileNames = new Set(files.map((f) => f.filename));
-  const orphan = [...applied.keys()].sort().find((name) => !fileNames.has(name));
-  if (orphan !== undefined) {
-    return new MigrationDriftError({ kind: "applied_without_file", filename: orphan, migrationsDir });
-  }
+  const drifts: MigrationDrift[] = [...applied.keys()]
+    .filter((name) => !fileNames.has(name))
+    .map((filename) => ({ kind: "applied_without_file", filename }));
   for (const file of files) {
     if (!applied.has(file.filename)) {
-      if (opts.pendingIsDrift) {
-        return new MigrationDriftError({ kind: "not_applied", filename: file.filename, migrationsDir });
-      }
+      if (opts.pendingIsDrift) drifts.push({ kind: "not_applied", filename: file.filename });
       continue;
     }
     const stored = applied.get(file.filename);
     if (stored === null || stored === undefined) {
-      return new MigrationDriftError({ kind: "hash_unrecorded", filename: file.filename, migrationsDir });
-    }
-    if (stored !== file.sha256) {
-      return new MigrationDriftError({
-        kind: "hash_mismatch",
-        filename: file.filename,
-        migrationsDir,
-        storedSha256: stored,
-        fileSha256: file.sha256,
-      });
+      drifts.push({ kind: "hash_unrecorded", filename: file.filename });
+    } else if (stored !== file.sha256) {
+      drifts.push({ kind: "hash_mismatch", filename: file.filename, storedSha256: stored, fileSha256: file.sha256 });
     }
   }
-  return undefined;
+  drifts.sort((a, b) => ("filename" in a ? a.filename : "").localeCompare("filename" in b ? b.filename : ""));
+  const [first, ...rest] = drifts;
+  return first === undefined ? undefined : new MigrationDriftError([first, ...rest], migrationsDir);
 }
 
-async function applyMigration(client: pg.Client, file: MigrationFile): Promise<void> {
+/**
+ * Runs `body` inside BEGIN/COMMIT. On failure the transaction is rolled back, and the error
+ * thrown carries the body's error as its cause; a failing ROLLBACK is attached beside it.
+ */
+async function inTransaction(
+  client: pg.Client,
+  operation: TransactionOperation,
+  filenames: readonly string[],
+  body: () => Promise<void>,
+): Promise<void> {
   try {
     await client.query("BEGIN");
-    await client.query(file.sql);
-    await client.query(
-      `INSERT INTO ${TRACKING_TABLE} (filename, content_sha256) VALUES ($1, $2)`,
-      [file.filename, file.sha256],
-    );
+    await body();
     await client.query("COMMIT");
   } catch (err: unknown) {
-    let rollbackFailed = false;
+    let rollbackError: unknown = undefined;
     try {
       await client.query("ROLLBACK");
     } catch (rollbackErr: unknown) {
-      rollbackFailed = true;
-      const detail = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-      console.warn(
-        `[migrate] WARN: ROLLBACK failed for ${file.filename}: ${detail}. ` +
-          "Database state may be inconsistent — inspect manually before retrying.",
-      );
+      rollbackError = rollbackErr;
     }
-    throw new MigrationApplyError(file.filename, err, rollbackFailed);
+    throw new MigrationTransactionError({ operation, filenames, cause: err, rollbackError });
   }
 }
 
@@ -224,6 +256,7 @@ interface MigrationRunResult {
  * Apply pending migrations in filename order, each in its own transaction, after
  * checking every already-applied file's content hash. A mismatch, or a recorded
  * migration with no file, throws MigrationDriftError before anything is applied.
+ * The whole run holds a database-wide advisory lock, so concurrent runs serialize.
  *
  * Rows applied before hashes were tracked carry a NULL hash; they are backfilled
  * with the current file's hash once, with a warning: the runner cannot know whether
@@ -231,9 +264,10 @@ interface MigrationRunResult {
  */
 export async function runMigrations(databaseUrl: string, migrationsDir: string): Promise<MigrationRunResult> {
   const files = readMigrationFiles(migrationsDir);
-  const client = new pg.Client({ connectionString: databaseUrl });
-  await client.connect();
+  const client = await connectClient(databaseUrl);
   try {
+    // Held until client.end(): a session-level lock is released when its session closes.
+    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
     await client.query(`
       CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE} (
         filename TEXT PRIMARY KEY,
@@ -245,20 +279,15 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
     const applied = await readApplied(client);
     const backfill = files.filter((f) => applied.has(f.filename) && applied.get(f.filename) === null);
     if (backfill.length > 0) {
-      await client.query("BEGIN");
-      try {
+      await inTransaction(client, "backfill_hashes", backfill.map((f) => f.filename), async () => {
         for (const file of backfill) {
           await client.query(
             `UPDATE ${TRACKING_TABLE} SET content_sha256 = $2 WHERE filename = $1 AND content_sha256 IS NULL`,
             [file.filename, file.sha256],
           );
-          applied.set(file.filename, file.sha256);
         }
-        await client.query("COMMIT");
-      } catch (err: unknown) {
-        await client.query("ROLLBACK");
-        throw err;
-      }
+      });
+      for (const file of backfill) applied.set(file.filename, file.sha256);
       console.warn(
         `[migrate] WARN: backfilled content hashes for ${backfill.length} migration(s) applied before ` +
           `hashes were tracked: ${backfill.map((f) => f.filename).join(", ")}. The hash recorded is ` +
@@ -271,7 +300,13 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
 
     const pending = files.filter((f) => !applied.has(f.filename));
     for (const file of pending) {
-      await applyMigration(client, file);
+      await inTransaction(client, "apply", [file.filename], async () => {
+        await client.query(file.sql);
+        await client.query(`INSERT INTO ${TRACKING_TABLE} (filename, content_sha256) VALUES ($1, $2)`, [
+          file.filename,
+          file.sha256,
+        ]);
+      });
     }
     return {
       applied: pending.map((f) => f.filename),
@@ -286,31 +321,32 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
 /**
  * Read-only startup check: every file in migrationsDir is applied with a matching
  * content hash, and nothing is recorded that has no file. Throws MigrationDriftError
- * naming the first missing or mismatched file.
+ * naming every missing, unhashed or mismatched file.
  */
 export async function assertMigrationsCurrent(databaseUrl: string, migrationsDir: string): Promise<void> {
   const files = readMigrationFiles(migrationsDir);
-  const client = new pg.Client({ connectionString: databaseUrl });
-  await client.connect();
+  const client = await connectClient(databaseUrl);
   try {
     const exists = await client.query(`SELECT to_regclass($1) IS NOT NULL AS present`, [TRACKING_TABLE]);
     const present = z.array(z.object({ present: z.boolean() })).length(1).parse(exists.rows)[0]?.present;
     if (present !== true) {
-      throw new MigrationDriftError({ kind: "tracking_table_missing", filename: undefined, migrationsDir });
+      throw new MigrationDriftError([{ kind: "tracking_table_missing" }], migrationsDir);
     }
     const hasHashColumn = await client.query(
       `SELECT 1 FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'content_sha256'`,
       [TRACKING_TABLE],
     );
+    let applied: Map<string, string | null>;
     if (hasHashColumn.rowCount === 0) {
-      throw new MigrationDriftError({
-        kind: "hash_unrecorded",
-        filename: files[0]?.filename,
-        migrationsDir,
-      });
+      // A table from before hashes were tracked: every row it records is unhashed.
+      const result = await client.query(`SELECT filename FROM ${TRACKING_TABLE}`);
+      const rows = z.array(z.object({ filename: z.string() })).parse(result.rows);
+      applied = new Map(rows.map((r) => [r.filename, null]));
+    } else {
+      applied = await readApplied(client);
     }
-    const drift = findDrift(files, await readApplied(client), migrationsDir, { pendingIsDrift: true });
+    const drift = findDrift(files, applied, migrationsDir, { pendingIsDrift: true });
     if (drift !== undefined) throw drift;
   } finally {
     await client.end();

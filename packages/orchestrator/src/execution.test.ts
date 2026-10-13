@@ -14,6 +14,19 @@ const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001");
 // service, lifecycle router, and processTask itself all operate on what looks
 // like the same row.
 const ITEM_ID: WorkItemId = createWorkItemId();
+const MERGE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const COMPLETED_OUTPUT: AgentOutputJson = {
+  status: "done",
+  summary: "done",
+  findings: [],
+  error: null,
+  error_detail: null,
+  total_tokens: { input: 1, output: 1 },
+  total_cost: 0,
+  cost_measured: true,
+  turn_count: 1,
+  finish_reason: "completed",
+};
 
 function freshPendingItem(): WorkItem {
   const now = new Date();
@@ -100,11 +113,13 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   warns: string[];
   logs: string[];
   savedBlockedReasons: StoredBlockedReason[];
+  mergeRecords: Array<{ id: WorkItemId; commit: string }>;
 } {
   const agentOutcome = options?.agentOutcome ?? "failed";
   const warns: string[] = [];
   const logs: string[] = [];
   const savedBlockedReasons: StoredBlockedReason[] = [];
+  const mergeRecords: Array<{ id: WorkItemId; commit: string }> = [];
   vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
     warns.push(args.map(String).join(" "));
   });
@@ -130,6 +145,9 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
     refundDispatchCount: notExercised("refundDispatchCount"),
+    recordMergeCommit: async (id, commit) => {
+      mergeRecords.push({ id, commit });
+    },
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],
@@ -140,19 +158,27 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
   const deps = coreLoopDeps({
     workItemRepo,
     developmentService: {
-      execute: async () => ({
-        status: agentOutcome,
-        detail: agentOutcome === "completed"
-          ? "task completed and verified successfully"
-          : "agent hit turn limit",
-        output: null,
-        sessionId: "test-session",
-        attempt: 1,
-      }),
+      execute: async () =>
+        agentOutcome === "completed"
+          ? {
+              status: agentOutcome,
+              delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
+              detail: "task completed and verified successfully",
+              output: COMPLETED_OUTPUT,
+              sessionId: "test-session",
+              attempt: 1,
+            }
+          : {
+              status: agentOutcome,
+              detail: "agent hit turn limit",
+              output: null,
+              sessionId: "test-session",
+              attempt: 1,
+            },
     },
   });
 
-  return { deps, warns, logs, savedBlockedReasons };
+  return { deps, warns, logs, savedBlockedReasons, mergeRecords };
 }
 
 afterEach(() => {
@@ -184,7 +210,7 @@ describe("processTask post-agent status ladder", () => {
   });
 
   test("preempted-to-Abandoned item with completed result salvages the result", async () => {
-    const { deps, logs, savedBlockedReasons } = buildPreemptionDeps({
+    const { deps, logs, savedBlockedReasons, mergeRecords } = buildPreemptionDeps({
       agentOutcome: "completed",
     });
     const task = freshPendingItem();
@@ -193,6 +219,8 @@ describe("processTask post-agent status ladder", () => {
 
     // The completed agent result is still returned
     expect(result.status).toBe("completed");
+    // The merge happened on main, so its record is kept although the item was preempted.
+    expect(mergeRecords).toEqual([{ id: ITEM_ID, commit: MERGE_COMMIT }]);
 
     // The salvage must produce a structured log
     const salvageLog = logs.find((l) => l.includes("salvaged preempted result"));
@@ -308,6 +336,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       refundDispatchCount: notExercised("refundDispatchCount"),
+      recordMergeCommit: notExercised("recordMergeCommit"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
@@ -544,6 +573,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
+      recordMergeCommit: notExercised("recordMergeCommit"),
       create: notExercised("create"),
       listByProject: notExercised("listByProject"),
       findByProjectAndStatus: notExercised("findByProjectAndStatus"),
@@ -688,6 +718,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
+      recordMergeCommit: notExercised("recordMergeCommit"),
       create: notExercised("create"),
       listByProject: notExercised("listByProject"),
       findByProjectAndStatus: notExercised("findByProjectAndStatus"),
@@ -836,6 +867,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
         return row.dispatchCount;
       },
+      recordMergeCommit: notExercised("recordMergeCommit"),
       create: notExercised("create"),
       listByProject: notExercised("listByProject"),
       findByProjectAndStatus: notExercised("findByProjectAndStatus"),
@@ -930,5 +962,91 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     expect(blocks).toEqual([]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
+  });
+});
+
+// t-stop-report-from-merge-record: what the client is told was merged comes from the work item's
+// merge record, written before the task is completed.
+describe("a completed dispatch records its merge before the task is Completed", () => {
+  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["developmentService"]["execute"]>>;
+
+  function buildMergeDeps(execResult: ExecutionResult, mergeWrite: (commit: string) => Promise<void>): {
+    deps: CoreLoopDeps;
+    stored: () => WorkItem;
+    writes: string[];
+  } {
+    let row = freshPendingItem();
+    const writes: string[] = [];
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const workItemRepo: WorkItemRepository = {
+      findById: async () => copy(row),
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        if (row.status !== expectedPreviousStatus) {
+          throw new Error(`pre-image mismatch: stored ${row.status}, expected ${expectedPreviousStatus}`);
+        }
+        writes.push(item.status);
+        row = copy(item);
+      },
+      recordMergeCommit: async (_id, commit) => {
+        await mergeWrite(commit);
+        writes.push(`merge ${commit}`);
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      incrementDispatchCount: async () => 1,
+      refundDispatchCount: notExercised("refundDispatchCount"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
+      withTransaction: notExercised("withTransaction"),
+    };
+    const deps = coreLoopDeps({ workItemRepo, developmentService: { execute: async () => execResult } });
+    return { deps, stored: () => row, writes };
+  }
+
+  const merged: ExecutionResult = {
+    status: "completed",
+    delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
+    detail: "task completed and verified successfully",
+    output: COMPLETED_OUTPUT,
+    sessionId: "test-session",
+    attempt: 1,
+  };
+
+  test("the merge commit is recorded, then the task is Completed", async () => {
+    const { deps, stored, writes } = buildMergeDeps(merged, async () => {});
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(writes).toEqual(["InProgress", `merge ${MERGE_COMMIT}`, "Completed"]);
+    expect(stored().status).toBe("Completed");
+  });
+
+  test("a failed merge-record write fails closed: the task is not Completed", async () => {
+    const { deps, stored, writes } = buildMergeDeps(merged, async () => {
+      throw new Error("connection reset while writing merge_commit");
+    });
+
+    await expect(processTask(deps, freshPendingItem())).rejects.toThrow("connection reset while writing merge_commit");
+
+    expect(writes).toEqual(["InProgress"]);
+    expect(stored().status).toBe("InProgress");
+  });
+
+  test("a check task merges nothing, so no merge is recorded for it", async () => {
+    const { deps, stored, writes } = buildMergeDeps(
+      { ...merged, delivered: { kind: "checks-recorded", revision: 1 } },
+      notExercised("recordMergeCommit"),
+    );
+
+    await processTask(deps, freshPendingItem());
+
+    expect(writes).toEqual(["InProgress", "Completed"]);
+    expect(stored().status).toBe("Completed");
   });
 });

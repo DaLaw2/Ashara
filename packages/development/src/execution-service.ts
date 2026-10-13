@@ -24,7 +24,7 @@ import { resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runPostMergeEnvironmentCommands, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
-import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
+import { environmentErrorOf, typedErrorLayer, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
 import { targetRepo } from "./host-git.js";
 import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
@@ -194,7 +194,7 @@ function substrateBlocked(
       stage,
       errorClass: e.name,
       message: e.message,
-      chain: chain ?? wrapError("development", stage, e, { taskId: task.id, unavailable, errorClass: e.name }),
+      chain: chain ?? wrapError("development", stage, typedErrorLayer(e), { taskId: task.id, unavailable, errorClass: e.name }),
       unavailable,
       ...agent,
     },
@@ -227,7 +227,7 @@ function redRunBlocked(
       stage: "checkRedRun",
       errorClass: fault.name,
       message: fault.message,
-      chain: wrapError("development", "checkRedRun", fault, { taskId, unavailable, errorClass: fault.name }),
+      chain: wrapError("development", "checkRedRun", typedErrorLayer(fault), { taskId, unavailable, errorClass: fault.name }),
       unavailable,
       ...agent,
     },
@@ -419,11 +419,16 @@ function ownerUnresolved(
 // Injected dependency interfaces
 // ---------------------------------------------------------------------------
 
+/**
+ * The dev_sessions attempt log: when an attempt opened and how it ended. Not a verdict on the
+ * task and not a record of what was merged (that is the work item's merge commit, migration
+ * 041): its terminal write is fail-soft, so nothing is decided on it.
+ */
 export interface SessionStore {
   /** `environmentVersion` is the version the dispatch's cells were built from; null on the BaseCell. */
   insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null): Promise<void>;
   complete(sessionId: string): Promise<void>;
-  fail(sessionId: string, verificationResult: unknown): Promise<void>;
+  fail(sessionId: string, attemptEnd: unknown): Promise<void>;
 }
 
 export interface ExecutionEventSink {
@@ -698,6 +703,7 @@ interface OwnerUnresolvedResult {
 
 export type ExecutionResult =
   | AgentExecutionResult
+  | CompletedResult
   | EnvironmentBlockedResult
   | EnvironmentUndefinedResult
   | RefusedResult
@@ -708,7 +714,7 @@ export type ExecutionResult =
   | InterruptedResult;
 
 interface AgentExecutionResult {
-  readonly status: "completed" | "failed" | "blocked";
+  readonly status: "failed" | "blocked";
   readonly detail: string;
   readonly output: AgentOutputJson | null;
   readonly sessionId: string;
@@ -718,6 +724,25 @@ interface AgentExecutionResult {
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
+}
+
+/**
+ * What a completed task delivered. A merging task's record is the merge commit Z0 made on main,
+ * which the orchestrator records on the work item before completing it; a check task merges
+ * nothing, it records checks for the task they decide.
+ */
+type Delivery =
+  | { readonly kind: "merged"; readonly mergeCommit: string }
+  | { readonly kind: "checks-recorded"; readonly revision: number };
+
+interface CompletedResult {
+  readonly status: "completed";
+  readonly delivered: Delivery;
+  readonly detail: string;
+  readonly output: AgentOutputJson;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope?: undefined;
 }
 
 /** Everything one dispatch holds once its cell is up. */
@@ -1479,6 +1504,7 @@ export class DevelopmentService {
     await storeKnowledge(this.deps.knowledgeSink, task, output, workChanged);
     return {
       status: "completed",
+      delivered: { kind: "merged", mergeCommit: finalizeResult.mergeCommit },
       detail: "task completed and verified successfully",
       output,
       sessionId,
@@ -1574,7 +1600,7 @@ export class DevelopmentService {
             stage: "branchWork",
             errorClass: fault.name,
             message: fault.message,
-            chain: wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name }),
+            chain: wrapError("development", "branchWork", typedErrorLayer(fault), { taskId: task.id, errorClass: fault.name }),
             unavailable: `verification infrastructure (${fault.step})`,
             output,
             agentWork: "kept",
@@ -1616,7 +1642,7 @@ export class DevelopmentService {
           stage: "ownershipGate",
           errorClass: fault.name,
           message: fault.message,
-          chain: wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name }),
+          chain: wrapError("development", "ownershipGate", typedErrorLayer(fault), { taskId: task.id, errorClass: fault.name }),
           unavailable: `verification infrastructure (${fault.step})`,
           output,
           agentWork: "kept",
@@ -2048,6 +2074,7 @@ export class DevelopmentService {
       eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
       return {
         status: "completed",
+        delivered: { kind: "checks-recorded", revision },
         detail: `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}; each fails on main`,
         output,
         sessionId,
@@ -2110,7 +2137,7 @@ export class DevelopmentService {
           stage: "agentAttempt",
           errorClass,
           message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
-          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
+          chain: wrapError("development", "agentAttempt", typedErrorLayer(outcome.error), { ...context, source: outcome.source, errorClass }),
           unavailable,
           output,
           agentWork: agentWorkOf(d.work),
@@ -2269,7 +2296,6 @@ export async function withSessionLifecycle(
   } catch (e) {
     await closeSession(taskId, sessionId, () =>
       sessionStore.fail(sessionId, {
-        passed: false,
         outcome: "errored",
         detail: e instanceof Error ? e.message : String(e),
       }),
@@ -2282,7 +2308,6 @@ export async function withSessionLifecycle(
   } else {
     await closeSession(taskId, sessionId, () =>
       sessionStore.fail(sessionId, {
-        passed: false,
         outcome: outcome.status,
         detail: outcome.detail,
         ...(outcome.errorEnvelope !== undefined ? { errorEnvelope: outcome.errorEnvelope } : {}),

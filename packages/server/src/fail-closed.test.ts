@@ -1,0 +1,78 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { createFatalExit, reconcileOrRefuse } from "./fail-closed.js";
+import { ServerStartupRefused } from "./secrets.js";
+
+const FAIL_CLOSED_MODULE = fileURLToPath(new URL("./fail-closed.ts", import.meta.url));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("fatal exit", () => {
+  test("a rejection after boot, in a real process, runs the shutdown and exits non-zero with the cause chain", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ashara-fatal-"));
+    try {
+      const script = join(dir, "entry.ts");
+      writeFileSync(
+        script,
+        `import { createFatalExit } from ${JSON.stringify(FAIL_CLOSED_MODULE)};
+const fatal = createFatalExit({ deadlineMs: 5000, exit: (c) => process.exit(c), log: (l) => console.error(l) });
+process.on("uncaughtException", (e) => fatal.onFatal("uncaughtException", e));
+process.on("unhandledRejection", (e) => fatal.onFatal("unhandledRejection", e));
+fatal.setShutdown(async () => { console.log("SHUTDOWN-RAN"); });
+setInterval(() => {}, 1000);
+void Promise.reject(new Error("outer failure", { cause: new Error("inner root cause") }));
+`,
+      );
+      const run = spawnSync(process.execPath, ["--import", "tsx", script], { encoding: "utf-8", timeout: 20_000 });
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain("SHUTDOWN-RAN");
+      expect(run.stderr).toContain("unhandledRejection");
+      expect(run.stderr).toContain("outer failure");
+      expect(run.stderr).toContain("inner root cause");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a shutdown that hangs is cut off at the deadline and the exit is still non-zero", () => {
+    vi.useFakeTimers();
+    const exit = vi.fn<(code: number) => void>();
+    const lines: string[] = [];
+    const fatal = createFatalExit({ deadlineMs: 1000, exit, log: (l) => lines.push(l) });
+    fatal.setShutdown(() => new Promise<void>(() => {}));
+
+    fatal.onFatal("uncaughtException", new Error("boom"));
+    expect(exit).not.toHaveBeenCalled();
+    fatal.onFatal("unhandledRejection", new Error("second"));
+    vi.advanceTimersByTime(1000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("did not finish within 1000ms");
+  });
+
+  test("before the shutdown exists the exit is immediate", () => {
+    const exit = vi.fn<(code: number) => void>();
+    createFatalExit({ deadlineMs: 1000, exit, log: () => {} }).onFatal("uncaughtException", new Error("during boot"));
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("startup reconciliation", () => {
+  test("a reconcile that throws refuses the start and keeps the original as cause", async () => {
+    const original = new Error("connect ECONNREFUSED 127.0.0.1:5432");
+    const refused: unknown = await reconcileOrRefuse(() => Promise.reject(original), "work items").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(ServerStartupRefused);
+    if (!(refused instanceof ServerStartupRefused)) return;
+    expect(refused.cause).toBe(original);
+    expect(refused.message).toContain("ECONNREFUSED");
+  });
+});

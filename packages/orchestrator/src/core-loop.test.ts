@@ -95,6 +95,7 @@ function buildDeps(
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
     refundDispatchCount: notExercised("refundDispatchCount"),
+    recordMergeCommit: notExercised("recordMergeCommit"),
     addDependency: notExercised("addDependency"),
     getDependencies: async () => [],
     findChildren: async () => [],

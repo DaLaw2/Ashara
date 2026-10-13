@@ -366,7 +366,12 @@ describe("Sprint 0", () => {
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
     // Sprint 0 itself ran on the BaseCell.
     expect(sprint0.events.find((e) => e.event === "cell_created")).toMatchObject({ image: base.image, cellImage: { kind: "base-cell" } });
-    // What the orchestrator does on a completed result.
+    // What the orchestrator does on a completed result: the merge record, then Completed.
+    if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
+    const mergeCommit = sprint0.result.delivered.mergeCommit;
+    const { stdout: mainHead } = await run("git", ["-C", sprint0.target, "rev-parse", "main"]);
+    expect(mainHead.trim()).toBe(mergeCommit);
+    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, mergeCommit);
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
 
     // The version Sprint 0's gate tested: earlier tests of this project built other versions.

@@ -110,6 +110,9 @@ export const workItems = pgTable("work_items", {
   environmentStatementVersion: text("environment_statement_version"),
   // Migration 040: when the item last entered Blocked, kept by a trigger; NULL while not Blocked.
   blockedAt: timestamptz("blocked_at"),
+  // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
+  // the only record of what was merged. NULL when nothing of the task was merged.
+  mergeCommit: text("merge_commit"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

@@ -51,6 +51,13 @@ export interface WorkItemRepository {
    * count; returns the new value and throws when no counted dispatch is there to refund.
    */
   refundDispatchCount(id: WorkItemId): Promise<number>;
+  /**
+   * Records the merge commit Z0's merge step made on the target's main for the task (migration
+   * 041): the one record of what was merged, which reports to the client read. Throws when the
+   * item does not exist; the caller writes it before completing the task, so a failed write
+   * leaves the task not Completed.
+   */
+  recordMergeCommit(id: WorkItemId, commit: string): Promise<void>;
   /** Records that fromId depends on toId — fromId cannot start until toId completes. */
   addDependency(fromId: WorkItemId, toId: WorkItemId): Promise<void>;
   getDependencies(itemId: WorkItemId): Promise<WorkItemId[]>;

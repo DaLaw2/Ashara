@@ -61,24 +61,33 @@ describe("migration content hashes", () => {
     writeFileSync(join(dir, "003_c.sql"), "CREATE TABLE c (id int);");
 
     const onMigrate = await driftOf(runMigrations(url, dir));
-    expect(onMigrate.kind).toBe("hash_mismatch");
-    expect(onMigrate.filename).toBe("002_b.sql");
-    expect(onMigrate.storedSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(onMigrate.fileSha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(onMigrate.storedSha256).not.toBe(onMigrate.fileSha256);
+    expect(onMigrate.drifts).toHaveLength(1);
+    const mismatch = onMigrate.drifts[0];
+    if (mismatch.kind !== "hash_mismatch") throw new Error(`expected hash_mismatch, got ${mismatch.kind}`);
+    expect(mismatch.filename).toBe("002_b.sql");
+    expect(mismatch.storedSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(mismatch.fileSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(mismatch.storedSha256).not.toBe(mismatch.fileSha256);
     // Nothing pending was applied after the drift was found.
     const c = await admin("SELECT to_regclass('c') IS NOT NULL AS present");
     expect(z.object({ present: z.boolean() }).parse(c.rows[0]).present).toBe(false);
 
-    expect((await driftOf(assertMigrationsCurrent(url, dir))).kind).toBe("hash_mismatch");
+    const onStart = await driftOf(assertMigrationsCurrent(url, dir));
+    expect(onStart.drifts.map((d) => d.kind)).toEqual(["hash_mismatch", "not_applied"]);
   });
 
-  test("startup check names the first unapplied file", async () => {
+  test("the drift error names every drifted file, not the first", async () => {
     await runMigrations(url, dir);
+    writeFileSync(join(dir, "001_a.sql"), "CREATE TABLE a (id int, extra text);");
+    writeFileSync(join(dir, "002_b.sql"), "CREATE TABLE b (id int, extra text);");
     writeFileSync(join(dir, "003_c.sql"), "CREATE TABLE c (id int);");
     const drift = await driftOf(assertMigrationsCurrent(url, dir));
-    expect(drift.kind).toBe("not_applied");
-    expect(drift.filename).toBe("003_c.sql");
+    expect(drift.drifts.map((d) => ("filename" in d ? `${d.kind}:${d.filename}` : d.kind))).toEqual([
+      "hash_mismatch:001_a.sql",
+      "hash_mismatch:002_b.sql",
+      "not_applied:003_c.sql",
+    ]);
+    for (const name of ["001_a.sql", "002_b.sql", "003_c.sql"]) expect(drift.message).toContain(name);
   });
 
   test("rows from before hashes were tracked are backfilled once, with a warning", async () => {
@@ -87,7 +96,12 @@ describe("migration content hashes", () => {
       CREATE TABLE a (id int);
       INSERT INTO schema_migrations (filename) VALUES ('001_a.sql');
     `);
-    expect((await driftOf(assertMigrationsCurrent(url, dir))).kind).toBe("hash_unrecorded");
+    // No hash column at all: every recorded file is unhashed, and each one is named.
+    const unhashed = await driftOf(assertMigrationsCurrent(url, dir));
+    expect(unhashed.drifts.map((d) => ("filename" in d ? `${d.kind}:${d.filename}` : d.kind))).toEqual([
+      "hash_unrecorded:001_a.sql",
+      "not_applied:002_b.sql",
+    ]);
 
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -105,5 +119,45 @@ describe("migration content hashes", () => {
       warn.mockRestore();
     }
     await assertMigrationsCurrent(url, dir);
+  });
+});
+
+describe("migration runner robustness", () => {
+  test("two concurrent runs serialize: one applies, the other finds nothing pending", async () => {
+    // The sleep holds the first run inside 001 long enough for the second to reach it unlocked.
+    writeFileSync(join(dir, "001_a.sql"), "SELECT pg_sleep(0.5); CREATE TABLE a (id int);");
+    const results = await Promise.all([runMigrations(url, dir), runMigrations(url, dir)]);
+    const applied = results.map((r) => r.applied.length).sort();
+    expect(applied).toEqual([0, 2]);
+    await assertMigrationsCurrent(url, dir);
+  });
+
+  test("a migration whose ROLLBACK also fails reports the original error, the rollback failure beside it", async () => {
+    await runMigrations(url, dir);
+    // Terminating its own backend fails the migration and leaves no connection to roll back on.
+    writeFileSync(join(dir, "003_c.sql"), "SELECT pg_terminate_backend(pg_backend_pid());");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let err: unknown;
+    try {
+      err = await runMigrations(url, dir).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+    if (!(err instanceof Error)) throw new Error(`expected an Error, got ${String(err)}`);
+    expect(err.name).toBe("MigrationTransactionError");
+    expect(err.message).toContain("[003_c.sql]");
+    expect(err.message).toContain("ROLLBACK ALSO FAILED");
+    const cause: unknown = err.cause;
+    if (!(cause instanceof Error)) throw new Error(`expected the original error as cause, got ${String(cause)}`);
+    expect(cause.message).toMatch(/terminat/i);
+    expect(err.message).toContain(cause.message);
+    const rollbackError: unknown = "rollbackError" in err ? err.rollbackError : undefined;
+    if (!(rollbackError instanceof Error)) throw new Error(`expected rollbackError, got ${String(rollbackError)}`);
+    expect(rollbackError).not.toBe(cause);
+    const row = await admin("SELECT count(*)::int AS n FROM schema_migrations WHERE filename = '003_c.sql'");
+    expect(z.object({ n: z.number() }).parse(row.rows[0]).n).toBe(0);
   });
 });

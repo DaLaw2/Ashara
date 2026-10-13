@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { loadBaseCell } from "./base-cell.js";
 import { createCellBackend } from "./cell-backend.js";
-import { BaseCellConfigInvalid, SubstrateUnavailable } from "./errors.js";
+import { BaseCellConfigInvalid, CellExecFailed, SubstrateUnavailable } from "./errors.js";
 import { PodmanSubstrate } from "./podman.js";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
@@ -146,6 +146,44 @@ describe("cell on real podman", () => {
     expect(await readFile(join(tree, ".git"), "utf8")).toBe(`gitdir: ${hostGitDir}\n`);
     expect(await readFile(join(tree, "work.txt"), "utf8")).toBe("ok\n");
   });
+
+  it("a command's own exit 125 is its result; a cell removed under a running exec is CellExecFailed", async () => {
+    const base = await loadBaseCell();
+    const cell = await substrate.createCell({
+      image: base.image,
+      project: "proj-cell-test",
+      task: `${task}-exit`,
+      role: "ci",
+      instance,
+      mount: { hostPath: workspace },
+    });
+    try {
+      const check = await cell.exec(["sh", "-c", "echo checked; echo why >&2; exit 125"], { timeoutSeconds: 10 });
+      expect(check).toMatchObject({ exitCode: 125, stdout: "checked\n", stderr: "why\n", timedOut: false });
+      // The status channel is closed to the command: it cannot write a report of its own.
+      const forged = await cell.exec(["sh", "-c", "echo 0 >&3; exit 7"], { timeoutSeconds: 10 });
+      expect(forged.exitCode).toBe(7);
+      expect((await cell.exec(["cat"], { timeoutSeconds: 10, stdin: "piped" })).stdout).toBe("piped");
+      expect((await cell.exec(["exit", "3"], { timeoutSeconds: 10 })).exitCode).toBe(127);
+
+      // A timed-out command, even one that ignores SIGTERM, is gone from the cell when the exec returns.
+      const stubborn = await cell.exec(["sh", "-c", "trap '' TERM; sleep 30"], { timeoutSeconds: 1 });
+      expect(stubborn).toMatchObject({ exitCode: 137, timedOut: true });
+      const left = await run("podman", ["exec", cell.id, "sh", "-c", "cat /proc/[0-9]*/cmdline | tr '\\0' ' '"]);
+      expect(left.stdout).not.toContain("sleep 30");
+
+      const running = cell.exec(["sleep", "20"], { timeoutSeconds: 30 }).catch((e: unknown) => e);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await run("podman", ["rm", "-f", "-t", "0", cell.id]);
+      const removed = await running;
+      expect(removed).toBeInstanceOf(CellExecFailed);
+      if (!(removed instanceof CellExecFailed)) return;
+      expect(removed.cellId).toBe(cell.id);
+      expect(removed.argv).toEqual(["sleep", "20"]);
+    } finally {
+      await cell.teardown();
+    }
+  }, 60_000);
 
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();

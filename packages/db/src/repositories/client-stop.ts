@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
@@ -76,12 +76,12 @@ export async function recordClientStop(
       throw new ProjectStatusUnknown(stop.projectId, existing?.status ?? null);
     }
 
-    // A Task is merged when one of its dev sessions closed Completed: that write
-    // follows only a completed DevelopmentService outcome, which only
-    // finalizeSuccess produces, after it commits the merge (with no target
-    // workspace it fails). Task status is not the evidence: an operator can set a
-    // Task Completed over the HTTP API with nothing merged, and a Task preempted
-    // to Abandoned may have merged before the preemption.
+    // A Task is merged when its merge record holds the commit Z0's merge step made
+    // on main (migration 041), written before the Task is completed. Neither task
+    // status nor the dev_sessions attempt log is the evidence: an operator can set
+    // a Task Completed over the HTTP API with nothing merged, a Task preempted to
+    // Abandoned may have merged before the preemption, and a session's terminal
+    // write is fail-soft.
     const merged = await tx
       .select({ title: workItems.title })
       .from(workItems)
@@ -89,7 +89,7 @@ export async function recordClientStop(
         and(
           eq(workItems.projectId, stop.projectId),
           eq(workItems.level, "Task"),
-          sql`EXISTS (SELECT 1 FROM dev_sessions d WHERE d.task_id = ${workItems.id} AND d.phase = 'Completed')`,
+          isNotNull(workItems.mergeCommit),
         ),
       )
       .orderBy(asc(workItems.updatedAt), asc(workItems.id));

@@ -99,6 +99,9 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     async refundDispatchCount(id) {
       return db.refundDispatchCount(id);
     },
+    async recordMergeCommit(id, commit) {
+      await db.recordMergeCommit(id, commit);
+    },
     async addDependency(fromId, toId) {
       await db.addDependency(fromId, toId);
     },

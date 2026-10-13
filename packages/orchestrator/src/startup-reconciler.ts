@@ -148,7 +148,6 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
 async function terminalizeOrphanedSessions(deps: StartupReconcilerDeps): Promise<number> {
   try {
     const count = await deps.devSessionStore.failStale({
-      passed: false,
       outcome: "abandoned",
       detail: "session was still non-terminal at process start; its agent did not survive the previous process",
       resolvedBy: RESOLVED_BY,

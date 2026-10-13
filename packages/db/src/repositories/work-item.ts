@@ -101,6 +101,21 @@ export class WorkItemRepository {
   }
 
   /**
+   * Records the merge commit Z0 made on the target's main for the task (migration 041), the one
+   * record of what was merged. Written before the task is moved to Completed, so a failed write
+   * leaves it not Completed. A later merge of the same task (re-opened and merged again)
+   * replaces it: the newer commit is on main after the older one.
+   */
+  async recordMergeCommit(id: string, commit: string): Promise<void> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ mergeCommit: commit })
+      .where(eq(workItems.id, id))
+      .returning({ id: workItems.id });
+    if (!row) throw new WorkItemNotFound(id);
+  }
+
+  /**
    * The statement of the project's most recently completed environment task that recorded it for
    * `version`: the stack that version was chosen for. Null when no environment task did.
    */
