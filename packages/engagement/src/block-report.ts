@@ -38,6 +38,8 @@ type DueBlockReport =
       readonly taskId: string;
       readonly title: string;
       readonly reason: StoredBlockedReason | undefined;
+      /** Open tasks that depend on it, directly or through others: the work its block holds back. */
+      readonly waiting: number;
     }
   /** A blocked task the store could not read back (its blocked_reason does not parse). */
   | { readonly subject: "task-blocked-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
@@ -178,6 +180,7 @@ function taskCause(reason: StoredBlockedReason | undefined): string {
     case "orchestrator_error":
     case "replan":
     case "failure_router":
+    case "operator_unblock":
       return "it hit a problem the team has to look at";
   }
 }
@@ -196,10 +199,17 @@ function taskExit(exit: BlockedExit): string {
   }
 }
 
-function taskBlockedReport(title: string, reason: StoredBlockedReason | undefined): string {
+/** What the block does to the rest of the project, from its dependency graph (third run N10). */
+function taskImpact(waiting: number): string {
+  if (waiting === 0) return "The rest of the project goes on.";
+  const tasks = waiting === 1 ? "1 other task depends" : `${waiting} other tasks depend`;
+  return `${tasks} on it, directly or through other tasks, and ${waiting === 1 ? "waits" : "wait"} until it goes on.`;
+}
+
+function taskBlockedReport(title: string, reason: StoredBlockedReason | undefined, waiting: number): string {
   return [
     `The task "${title}" is paused: ${taskCause(reason)}.`,
-    `${taskExit(blockedExitOf(reason))} The rest of the project goes on.`,
+    `${taskExit(blockedExitOf(reason))} ${taskImpact(waiting)}`,
   ].join("\n\n");
 }
 
@@ -243,7 +253,7 @@ export class BlockReports implements LiaisonBlockReports, LiaisonCheckDisputes {
           break;
         }
         case "task-blocked": {
-          const kind = await this.store.postTaskReport(due.taskId, taskBlockedReport(due.title, due.reason));
+          const kind = await this.store.postTaskReport(due.taskId, taskBlockedReport(due.title, due.reason, due.waiting));
           outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
           break;
         }

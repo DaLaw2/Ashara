@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
+import { EnvironmentBuildFailed, PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
@@ -98,10 +98,12 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "stale", chain: wrapError("development", "revalidateTaskChecks", "stale") },
     };
   }
-  if (status === "environment_change_needed") {
+  if (status === "environment_change_requested") {
     return {
       status,
       paths: ["environment/Containerfile"],
+      need: "s",
+      diff: "",
       detail: `${status} detail`,
       output: toAgentOutput({ ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null }, "m", { input: 0, output: 0 }),
       sessionId: "s",
@@ -188,7 +190,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   // returns, it is one of these, so this is the proof that a new return site
   // cannot leak. Adding a member to the union without adding it here is a
   // compile error, not a silent gap.
-  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_needed", "interrupted"];
+  const ALL_STATUSES: ReadonlyArray<ExecutionResult["status"]> = ["completed", "failed", "blocked", "environment_blocked", "environment_undefined", "refused", "checks_stale", "environment_change_requested", "interrupted"];
 
   for (const status of ALL_STATUSES) {
     test(`a "${status}" return leaves the session in a terminal phase`, async () => {
@@ -272,8 +274,14 @@ interface Probe {
   findings: number;
   /** The environment version the last build reported. */
   version: string | null;
+  /** Statements recorded through the store, with the version each holds for. */
+  readonly recorded: Array<{ readonly taskId: string; readonly statement: string; readonly version: string }>;
+  /** Every build after the first fails as the builder reports a failed image build. */
+  rebuildFails: boolean;
   /** Every model request, as sent. */
   readonly requests: unknown[];
+  /** The version each environment image prune was asked to keep. */
+  readonly prunes: string[];
 }
 
 /** The roster role the test's tasks are owned by: a UUID id, as roster_roles stores it, and a name. */
@@ -303,6 +311,7 @@ function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] =
     checkFilesOf: async () => checkFiles,
     completedOf: async () => ({ checked: [], unchecked: [] }),
     checkedTasksOf: async () => checkedTasks,
+    storedOfProject: async () => [],
     append: async () => {
       throw new Error("no checks may be appended");
     },
@@ -318,7 +327,9 @@ function serviceOn(
   shutdownSignal: AbortSignal = new AbortController().signal,
   staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string } = "owned",
 ): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
-  const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [] };
+  const probe: Probe = {
+    sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0, builds: 0, findings: 0, version: null, requests: [], recorded: [], rebuildFails: false, prunes: [],
+  };
   const events: Array<Record<string, unknown>> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
@@ -355,6 +366,9 @@ function serviceOn(
         build: async (request) => {
           probe.builds++;
           const { version, commit } = await environmentVersion(request.repoGitDir, request.commit, request.definition);
+          if (probe.rebuildFails && probe.builds > 1) {
+            throw new EnvironmentBuildFailed(request.projectId, version, 1, false, "step 2/2: missing package\n", false, "the image build exited 1");
+          }
           probe.version = version;
           return {
             projectId: request.projectId,
@@ -366,11 +380,13 @@ function serviceOn(
             reused: true,
           };
         },
+        prune: async (_projectId, keepVersion) => {
+          probe.prunes.push(keepVersion);
+          return { removed: [], kept: [] };
+        },
       },
       statements: {
-        record: async () => {
-          throw new Error("no environment statement may be recorded");
-        },
+        record: async (taskId, statement, version) => void probe.recorded.push({ taskId, statement, version }),
         forVersion: async () => STATEMENT,
       },
     },
@@ -388,15 +404,20 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-/** Commits a minimal environment definition to the target's main, as a merged Sprint 0 leaves it. */
-async function commitEnvironment(target: string): Promise<void> {
+/**
+ * Commits a minimal environment definition to the target's main, as a merged Sprint 0 leaves it;
+ * with `ownedFiles`, the definition also owns those single files outside environment/.
+ */
+async function commitEnvironment(target: string, ownedFiles: Readonly<Record<string, string>> = {}): Promise<void> {
   await mkdir(join(target, "environment"));
+  const owned = ["environment/", ...Object.keys(ownedFiles)].map((path) => JSON.stringify(path)).join(", ");
   await writeFile(
     join(target, "environment", "environment.toml"),
-    'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n',
+    `owned = [${owned}]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n`,
   );
   await writeFile(join(target, "environment", "Containerfile"), "FROM scratch\n");
-  await git(target, "add", "environment");
+  for (const [path, content] of Object.entries(ownedFiles)) await writeFile(join(target, path), content);
+  await git(target, "add", "environment", ...Object.keys(ownedFiles));
   await git(target, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
 }
 
@@ -529,7 +550,7 @@ describe("a task nothing could decide ends before the agent", () => {
     for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check") {
+  async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check" | "environment") {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nochecks-")));
     scratch.push(root);
@@ -562,6 +583,19 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
     expect(existsSync(workdirBase)).toBe(false);
+  });
+
+  test("an environment task's images are pruned when it ends, however it ends, keeping main's version (third run N12)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { result, probe } = await dispatchWith(checkStore(null), "environment");
+
+    expect(result.status).toBe("failed");
+    expect(probe.prunes).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)]);
+  });
+
+  test("an implementation task prunes nothing", async () => {
+    const { probe } = await dispatchWith(checkStore(null), "implementation");
+    expect(probe.prunes).toEqual([]);
   });
 
   test.each([[[]], [["a", "b"]]])("a check task that decides %j tasks: failed before the agent", async (checked) => {
@@ -618,6 +652,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly checkFiles?: readonly StoredCheckFile[];
     /** The task is a check task deciding one implementation task; an implementation task when absent. */
     readonly checkWork?: boolean;
+    /** Single files outside environment/ the environment owns on main, with their content. */
+    readonly ownedFiles?: Readonly<Record<string, string>>;
+    /** A build of an environment version other than main's fails. */
+    readonly rebuildFails?: boolean;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
@@ -654,7 +692,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const target = join(root, "target");
     await mkdir(target);
     await ensureTargetGitInit(target);
-    await commitEnvironment(target);
+    await commitEnvironment(target, faults.ownedFiles);
     const mainBefore = await git(target, "rev-parse", "main");
     const workdirBase = join(root, "cells", "work");
     const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
@@ -738,6 +776,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       }
       return turn("finish", { status: "done", summary: "wrote greet.txt" });
     }, stored, shutdown?.signal);
+    probe.rebuildFails = faults.rebuildFails === true;
 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
@@ -983,22 +1022,64 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   describe("the ownership gate: an implementer's branch touches only what its role may write", () => {
     const CHECK_FILE: StoredCheckFile = { taskId: "44444444-4444-4444-8444-444444444444", path: "checks/greet.sh" };
 
-    test("a branch changing environment/Containerfile only: environment_change_needed naming it; nothing merged, no verifier", async () => {
+    // third-run N7: the refusal's only exit was an operator editing main.
+    test("a branch changing environment/Containerfile: an environment change is requested with the need and the diff; branch deleted, nothing merged", async () => {
       const { result, events, started, probe, mainBefore, mainAfter, branchKept } = await dispatch({
         agentAlsoWrites: { "environment/Containerfile": "FROM scratch\nRUN true\n" },
         checkFiles: [CHECK_FILE],
       });
 
-      expect(result.status, result.detail).toBe("environment_change_needed");
-      if (result.status !== "environment_change_needed") return;
+      expect(result.status, result.detail).toBe("environment_change_requested");
+      if (result.status !== "environment_change_requested") return;
       expect(result.paths).toEqual(["environment/Containerfile"]);
-      expect(result.detail).toContain("environment files belong to the platform role; request an environment change");
-      expect(result.errorEnvelope.outcome).toBe("blocked");
+      expect(result.need).toBe("wrote greet.txt");
+      expect(result.diff).toContain("+RUN true");
+      expect(result.diff).not.toContain("greet.txt");
+      expect(result.detail).toContain("environment/ belongs to the platform role");
       expect(result.errorEnvelope.chain.operation).toBe("ownershipGate");
       expect(started.map((s) => s.role)).toEqual(["developer"]);
-      expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage: "ownershipGate" })]);
+      expect(events.filter((e) => e.event === "environment_change_requested")).toEqual([expect.objectContaining({ paths: ["environment/Containerfile"] })]);
       expect(events.some((e) => e.event === "task_failed" || e.event === "gate_failed" || e.event === "task_completed")).toBe(false);
       expect(probe.modelCalls).toBe(1);
+      expect(probe.findings).toBe(0);
+      expect(mainAfter).toBe(mainBefore);
+      expect(branchKept).toBe(false);
+    });
+
+    // ADR-074 addendum 2 d66 a: an owned single file outside environment/ is versioned, not fenced.
+    test("a branch changing an owned file outside environment/: the merge's environment is rebuilt, its build and test pass, it merges and carries the statement", async () => {
+      const { result, events, started, probe, mainBefore, mainAfter, taskId } = await dispatch({
+        ownedFiles: { "manifest.txt": "dependencies: none\n" },
+        agentAlsoWrites: { "manifest.txt": "dependencies: greeter\n" },
+      });
+
+      expect(result.status, result.detail).toBe("completed");
+      expect(mainAfter).not.toBe(mainBefore);
+      expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
+      const resolved = events.find((e) => e.event === "environment_resolved")?.["version"];
+      const rebuilt = events.find((e) => e.event === "environment_rebuilt");
+      expect(rebuilt).toMatchObject({ from: resolved, to: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(rebuilt?.["to"]).not.toBe(resolved);
+      expect(probe.builds).toBe(2);
+      // The rebuilt environment's build and test, then the suites, each in a verifier cell from the new image.
+      expect(started.map((s) => s.role)).toEqual(["developer", "verifier", "verifier"]);
+      expect(probe.recorded).toEqual([{ taskId, statement: STATEMENT, version: rebuilt?.["to"] }]);
+      expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
+    });
+
+    test("a branch changing an owned file whose rebuilt image cannot be built: failed with the build output; nothing merged, no statement", async () => {
+      const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({
+        ownedFiles: { "manifest.txt": "dependencies: none\n" },
+        agentAlsoWrites: { "manifest.txt": "dependencies: greeter\n" },
+        rebuildFails: true,
+      });
+
+      expect(result.status, result.detail).toBe("failed");
+      expect(result.detail).toContain("The merge changes files the environment owns outside environment/");
+      expect(result.detail).toContain("the image build exited 1");
+      expect(result.detail).toContain("step 2/2: missing package");
+      expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed" });
+      expect(probe.recorded).toEqual([]);
       expect(mainAfter).toBe(mainBefore);
       expect(branchKept).toBe(true);
     });
@@ -1013,7 +1094,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(result.detail).toContain(`checks/greet.sh (checks of task ${CHECK_FILE.taskId})`);
       expect(result.detail).toContain("check files belong to the check author");
       expect(result.detail).toContain("environment/Containerfile");
-      expect(result.detail).toContain("environment files belong to the platform role");
+      expect(result.detail).toContain("environment/ belongs to the platform role");
       expect(result.errorEnvelope?.chain.operation).toBe("ownershipGate");
       expect(started.map((s) => s.role)).toEqual(["developer"]);
       expect(events.filter((e) => e.event === "gate_failed")).toHaveLength(1);
@@ -1022,11 +1103,28 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     });
 
     test("a branch clear of both: the gate passes and the work merges", async () => {
-      const { result, events, mainBefore, mainAfter } = await dispatch({ agentAlsoWrites: { "src/greet.sh": "cat greet.txt\n" }, checkFiles: [CHECK_FILE] });
+      const { result, events, probe, mainBefore, mainAfter } = await dispatch({ agentAlsoWrites: { "src/greet.sh": "cat greet.txt\n" }, checkFiles: [CHECK_FILE] });
 
       expect(result.status, result.detail).toBe("completed");
       expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
+      expect(events.some((e) => e.event === "environment_rebuilt")).toBe(false);
+      expect(probe.recorded).toEqual([]);
       expect(mainAfter).not.toBe(mainBefore);
+    });
+
+    // ADR-074 addendum 2 d66 c: the brief names what the gate refuses before work starts.
+    test("the implementer's brief names the protected paths, the stored check files and the owned files it may change", async () => {
+      const { result, workdirBase, taskId } = await dispatch({ ownedFiles: { "manifest.txt": "dependencies: none\n" }, checkFiles: [CHECK_FILE] });
+
+      expect(result.status, result.detail).toBe("completed");
+      const [sessionDir] = await readdir(join(workdirBase, "records", taskId));
+      const conversation = await readFile(join(workdirBase, "records", taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
+      const { system } = z.object({ system: z.string() }).parse(JSON.parse(conversation.split("\n")[0] ?? "null"));
+      expect(system).toContain("# Protected paths");
+      expect(system).toContain("- environment/ belongs to the platform role");
+      expect(system).toContain("The stored check files belong to the check author who wrote them: checks/greet.sh.");
+      expect(system).toContain("The environment's other owned files (manifest.txt) are not protected: you may change them.");
+      expect(system).toContain("Z0 opens an environment task for the platform role");
     });
   });
 });

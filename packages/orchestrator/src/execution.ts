@@ -23,6 +23,7 @@ import {
   recoverFailedItem,
   exitStaleChecks,
   exitDisputedCheck,
+  requestEnvironmentChange,
 } from "./acl/planning-acl.js";
 import type { TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
@@ -37,7 +38,6 @@ type ParkedReason = Extract<
       | "environment_undefined"
       | "checks_stale"
       | "check_disputed"
-      | "environment_change_needed"
       | "owner_unresolved"
       | "merge_unrecorded";
   }
@@ -87,6 +87,14 @@ interface DisputedCheckResult {
   readonly detail: string;
 }
 
+/** An implementer's finished work that changed paths under environment/, as development returned it. */
+interface EnvironmentChangeResult {
+  readonly paths: readonly string[];
+  readonly need: string;
+  readonly diff: string;
+  readonly detail: string;
+}
+
 interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
@@ -95,6 +103,7 @@ interface ExecutionRoutingDeps {
   readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
   readonly checkDisputes: CoreLoopDeps["checkDisputes"];
   readonly disputeReports: CoreLoopDeps["disputeReports"];
+  readonly environmentOwner: CoreLoopDeps["environmentOwner"];
 }
 
 async function executeTask(
@@ -141,11 +150,12 @@ async function executeTask(
 
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
-  if (execResult.status === "environment_change_needed") {
-    // Not a failure to retry: no implementer may change environment files, so a replan would meet
-    // the same refusal (ADR-074 addendum 2 d63). Parked at Blocked naming the paths, for the
-    // operator; the operator's unblock deletes the task's branch, so it restarts from main.
-    await routeAsParked(deps, task.id, { source: "environment_change_needed", paths: [...execResult.paths], reason: execResult.detail });
+  if (execResult.status === "environment_change_requested") {
+    // Not a failure to retry: only environment work may change environment/, so a replan would
+    // meet the same refusal. An environment task is opened for the platform role and the item
+    // waits on it, within a bound (ADR-074 addendum 2 d66 b); its branch is already deleted, so it
+    // restarts from main once the environment has changed.
+    await routeAsEnvironmentChange(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -370,9 +380,7 @@ async function routeAsParked(
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   const what =
-    reason.source === "environment_change_needed"
-      ? `environment change needed for ${reason.paths.join(", ")}`
-      : reason.source === "environment_unavailable"
+    reason.source === "environment_unavailable"
       ? `${reason.unavailable} unavailable`
       : reason.source === "checks_stale"
         ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
@@ -560,6 +568,80 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
   console.warn(`[${task.id}] blocked, check ${JSON.stringify(dispute.check.name)} disputed and check task ${dispute.checkTaskId} cannot be reopened: ${exit.why}`);
 }
 
+/**
+ * The exit of an item whose implementer changed paths under environment/ (planning's
+ * requestEnvironmentChange). How many environment tasks were already opened for it is read from
+ * its dependencies, a durable count; the owner is the role doing the project's environment work.
+ * Within the bound the new environment task, the item's dependency on it and the item back at
+ * Pending are written in one transaction, and the dispatch is given back (the work was not tried
+ * and found wanting); past the bound, or with no owner, the item is parked at Blocked, which the
+ * Liaison reports.
+ */
+async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: EnvironmentChangeResult): Promise<void> {
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
+  if (!item) {
+    console.warn(`[${task.id}] work item vanished before its environment change could be routed (${request.detail})`);
+    return;
+  }
+  let opened = 0;
+  for (const dependencyId of await deps.workItemRepo.getDependencies(task.id)) {
+    const dependency = await PlanningService.findWorkItem(deps.workItemRepo, dependencyId);
+    if (dependency?.taskSpec?.origin === "environment-change") opened++;
+  }
+  let owner: Awaited<ReturnType<ExecutionRoutingDeps["environmentOwner"]>>;
+  try {
+    owner = await deps.environmentOwner(task.projectId);
+  } catch (e) {
+    owner = { kind: "none", why: `the project's roster could not be read: ${describeErrorChain(e)}` };
+  }
+  const previousStatus = item.status;
+  let exit: ReturnType<typeof requestEnvironmentChange>;
+  try {
+    exit = requestEnvironmentChange(item, request, { opened, owner });
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${task.id}] environment-change exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${request.detail})`);
+    return;
+  }
+
+  if (exit.kind !== "opened") {
+    try {
+      await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+    } catch (e) {
+      if (!(e instanceof InvalidStatusTransition)) throw e;
+      console.warn(`[${task.id}] environment-change park rejected (${e.from} -> Blocked); item left at ${e.from}`);
+      return;
+    }
+    console.warn(
+      `[${task.id}] blocked, environment change needed for ${request.paths.join(", ")}: ` +
+        (exit.kind === "bound" ? `past the bound of ${exit.bound} environment task(s)` : `no environment task can be opened: ${exit.why}`),
+    );
+    await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
+    return;
+  }
+
+  const environment = exit.environment;
+  try {
+    await deps.workItemRepo.withTransaction(async (tx) => {
+      await PlanningService.createWorkItem(tx, environment);
+      await tx.addDependency(item.id, environment.id);
+      await PlanningService.saveWorkItem(tx, item, previousStatus);
+    });
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    // An owner moved the item during the dispatch: nothing was written, the environment task included.
+    console.warn(`[${task.id}] environment-change exit rejected (${e.from} -> Pending); item left at ${e.from}, no environment task opened`);
+    return;
+  }
+  await publishBestEffort(deps.eventStore, environment.id, takeEvents(environment), "execution.routeAsEnvironmentChange");
+  await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
+  const dispatchCount = await refundBestEffort(deps, task.id, "an environment change request");
+  console.warn(
+    `[${task.id}] needs a change under environment/ (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
+      `(${opened + 1} for this task), item back at Pending waiting on it (dispatch count ${dispatchCount})`,
+  );
+}
+
 /** The check task a stale revision names; null when the stored id is no work item's. */
 async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: string): Promise<WorkItem | null> {
   let id: WorkItem["id"];
@@ -709,6 +791,7 @@ export async function processTask(
     projects: deps.projectRepo,
     checkDisputes: deps.checkDisputes,
     disputeReports: deps.disputeReports,
+    environmentOwner: deps.environmentOwner,
   };
   const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
   if (workspace.kind === "rejected") {

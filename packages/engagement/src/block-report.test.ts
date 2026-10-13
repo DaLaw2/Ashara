@@ -73,7 +73,7 @@ describe("task block reports name the task's exit", () => {
   ];
 
   test.each(cases)("$reason.source", async ({ reason, exit }) => {
-    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Add the export button", reason }]);
+    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Add the export button", reason, waiting: 0 }]);
 
     await reports.runPending();
 
@@ -81,6 +81,29 @@ describe("task block reports name the task's exit", () => {
     expect(posted[0].body).toContain(`The task "Add the export button" is paused`);
     expect(posted[0].body).toContain(exit);
     expect(posted[0].body).not.toMatch(INTERNAL);
+  });
+});
+
+describe("a task block report says what waits on the task (third run N10)", () => {
+  const reason: StoredBlockedReason = { source: "environment_change_needed", paths: ["main.go"], reason: "x" };
+
+  test("with no open dependent, the rest of the project goes on", async () => {
+    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 0 }]);
+    await reports.runPending();
+    expect(posted[0].body).toContain("The rest of the project goes on.");
+  });
+
+  test("with open dependents, it says how many wait and never that the rest goes on", async () => {
+    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 6 }]);
+    await reports.runPending();
+    expect(posted[0].body).toContain("6 other tasks depend on it, directly or through other tasks, and wait until it goes on.");
+    expect(posted[0].body).not.toContain("The rest of the project goes on");
+  });
+
+  test("one dependent is named in the singular", async () => {
+    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 1 }]);
+    await reports.runPending();
+    expect(posted[0].body).toContain("1 other task depends on it, directly or through other tasks, and waits until it goes on.");
   });
 });
 

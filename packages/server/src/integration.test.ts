@@ -211,12 +211,13 @@ describe("Work Items", () => {
   }
 
   const ENVIRONMENT_EDITS = { source: "environment_change_needed", paths: ["environment/environment.toml"], reason: "edited" };
+  const UNBLOCK = { by: "operator-a", note: "the environment now builds the product" };
 
   test("unblocking a task refused for environment edits deletes its branch first, so it restarts from main", async () => {
     const task = await blockedTask(ENVIRONMENT_EDITS);
     discardedBranches.length = 0;
 
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
 
     expect(res.status).toBe(200);
     expect(discardedBranches).toEqual([{ projectId: task.projectId, taskId: task.id }]);
@@ -227,7 +228,7 @@ describe("Work Items", () => {
     const task = await blockedTask(ENVIRONMENT_EDITS);
     branchDiscardFails = true;
     try {
-      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
       expect(res.status).toBe(409);
       expect((await res.json()).error).toContain("stays Blocked");
     } finally {
@@ -240,18 +241,43 @@ describe("Work Items", () => {
     const mergeCommit = "0123456789abcdef0123456789abcdef01234567";
     const task = await blockedTask({ source: "merge_unrecorded", mergeCommit, reason: "connection reset" });
 
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
 
     expect(res.status).toBe(409);
     expect((await res.json()).error).toContain(mergeCommit);
     expect(await statusOf(task.id)).toBe("Blocked");
   });
 
+  test("an unblock with no who or why is refused, and the task stays Blocked (third run N11)", async () => {
+    const task = await blockedTask({ source: "api", note: "held by hand" });
+    for (const reason of [undefined, { by: "operator-a" }, { by: " ", note: "x" }]) {
+      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("reason.by");
+    }
+    expect(await statusOf(task.id)).toBe("Blocked");
+  });
+
+  test("an unblock records who, the note and the cleared block on the Pending task, for its next brief", async () => {
+    const task = await blockedTask(ENVIRONMENT_EDITS);
+
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
+
+    expect(res.status).toBe(200);
+    const row = await pool.query("SELECT blocked_reason FROM work_items WHERE id = $1", [task.id]);
+    expect(row.rows[0]?.blocked_reason).toMatchObject({
+      source: "operator_unblock",
+      unblockedBy: "operator-a",
+      note: "the environment now builds the product",
+      previous: ENVIRONMENT_EDITS,
+    });
+  });
+
   test("unblocking any other block keeps the task's branch", async () => {
     const task = await blockedTask({ source: "api", note: "held by hand" });
     discardedBranches.length = 0;
 
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending" });
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
 
     expect(res.status).toBe(200);
     expect(discardedBranches).toEqual([]);

@@ -46,6 +46,8 @@ type DueBlockReportRow =
       readonly taskId: string;
       readonly title: string;
       readonly reason: StoredBlockedReason | undefined;
+      /** Open tasks (neither Completed nor Abandoned) that depend on it, directly or through others. */
+      readonly waiting: number;
     }
   /** A blocked task whose blocked_reason does not parse: that project's bad record. */
   | { readonly subject: "task-blocked-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
@@ -193,9 +195,27 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
       due.push({ subject: "task-blocked-unreadable", projectId, cause: projectBlockCause(err) });
       continue;
     }
-    due.push({ subject: "task-blocked", projectId, taskId: row.id, title: row.title, reason });
+    due.push({ subject: "task-blocked", projectId, taskId: row.id, title: row.title, reason, waiting: await openDependentsOf(db, row.id) });
   }
   return due;
+}
+
+/**
+ * The open tasks that depend on `taskId` through any chain of dependencies: the work its block
+ * holds back. UNION, not UNION ALL, so a dependency cycle ends the recursion.
+ */
+async function openDependentsOf(db: DbHandle, taskId: string): Promise<number> {
+  const result = await db.execute(sql`
+    WITH RECURSIVE dependents(id) AS (
+      SELECT d.from_id FROM dependencies d WHERE d.to_id = ${taskId}
+      UNION
+      SELECT d.from_id FROM dependencies d JOIN dependents ON d.to_id = dependents.id
+    )
+    SELECT count(*)::int AS "waiting" FROM work_items w
+    WHERE w.id IN (SELECT id FROM dependents) AND w.id <> ${taskId}
+      AND w.status NOT IN ('Completed', 'Abandoned')`);
+  const [row] = z.tuple([z.object({ waiting: z.number().int().nonnegative() })]).parse(result.rows);
+  return row.waiting;
 }
 
 async function insertReport(tx: DbHandle, projectId: string, body: string): Promise<string> {

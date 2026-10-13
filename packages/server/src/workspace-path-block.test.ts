@@ -139,10 +139,10 @@ describe("a project whose workspace path is refused", () => {
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
-        images: { build: notExercised("build") },
+        images: { build: notExercised("build"), prune: notExercised("prune") },
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
-      checks: { checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), append: notExercised("append"), latest: notExercised("latest") },
+      checks: { checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), storedOfProject: notExercised("storedOfProject"), append: notExercised("append"), latest: notExercised("latest") },
       shutdownSignal: new AbortController().signal,
     });
 
@@ -173,6 +173,7 @@ describe("a project whose workspace path is refused", () => {
       disputeReports: { blockOnDisputes: notExercised("disputeReports") },
       blockReports: { runPending: async () => [] },
       parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+      environmentOwner: notExercised("environmentOwner"),
     });
 
     const cycle = await loop.runCycle();

@@ -10,6 +10,7 @@ import {
   type WorkKind,
   createWorkItemId,
   createDomainEvent,
+  blockedReasonToRecord,
   canTransitionTo,
   InvalidStatusTransition,
 } from "@ashara/shared";
@@ -46,6 +47,12 @@ export interface WorkItem {
    * written. null on an Epic and on a task planned before owners were assigned.
    */
   workKind: WorkKind | null;
+  /**
+   * The roster role that owns a Task (migration 031), as stored; undefined when the row has none.
+   * Written on create only for a task created with its owner (requestEnvironmentChange): a
+   * planned task's owner is assigned after its creation by the plan store.
+   */
+  ownerRoleId?: string;
   createdAt: Date;
   updatedAt: Date;
   events: DomainEvent[];
@@ -172,22 +179,39 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
  * guard (enforced again at save()); the method adds the method-level invariant so a
  * caller cannot, say, drive an InProgress item (with a live agent) back to Pending
  * through unblock. See "Aggregates own their invariants" (CLAUDE.md DDD).
+ *
+ * An operator's unblock (third run N11) records who and why: the Pending item carries an
+ * `operator_unblock` reason naming them, their note and the block they cleared, which the next
+ * attempt's brief states, and the event carries the same. An automatic exit clears the reason.
  */
-export function unblockWorkItem(item: WorkItem): void {
+export function unblockWorkItem(item: WorkItem, by: WorkItemUnblock): void {
   // A merge_unrecorded item's work is merged: Pending would re-dispatch it (completeRecordedMerge is its exit).
   if (item.status !== "Blocked" || item.blockedReason?.source === "merge_unrecorded" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
+  const previous = item.blockedReason === undefined ? null : blockedReasonToRecord(item.blockedReason);
+  const at = new Date();
   item.status = "Pending";
-  item.blockedReason = undefined;
-  item.updatedAt = new Date();
+  item.blockedReason =
+    by.kind === "operator"
+      ? { source: "operator_unblock", unblockedBy: by.by, note: by.note, unblockedAt: at.toISOString(), previous }
+      : undefined;
+  item.updatedAt = at;
   item.events.push(
     createDomainEvent("work_item.unblocked", "planning", {
       work_item_id: item.id,
       level: item.level,
+      unblocked_by: by.kind === "operator" ? by.by : "automatic exit",
+      note: by.kind === "operator" ? by.note : `the cause of its ${previous === null ? "unrecorded" : String(previous["source"])} block cleared`,
+      previous_blocked_reason: previous,
     }),
   );
 }
+
+/** Who returns a Blocked item to Pending: an operator, by name and with a note, or its automatic exit. */
+type WorkItemUnblock =
+  | { readonly kind: "operator"; readonly by: string; readonly note: string }
+  | { readonly kind: "exit-cleared" };
 
 /**
  * Recovers a Failed item back to Pending so it re-enters planning (FailureRouter's

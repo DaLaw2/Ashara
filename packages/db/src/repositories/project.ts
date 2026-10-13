@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql, type AnyColumn } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { parseProjectId, type ProjectBlockCause, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 import { projectBlocks, projects } from "../schema.js";
@@ -119,6 +119,20 @@ export class ProjectRepository {
       .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy)))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id));
+  }
+
+  /** Every project with a target workspace, whatever its status: what startup prunes environment images of. */
+  async listWithWorkspace(): Promise<Array<{ readonly id: ProjectId; readonly workspacePath: string }>> {
+    const rows = await this.db
+      .select({ id: projects.id, workspacePath: projects.workspacePath })
+      .from(projects)
+      .where(isNotNull(projects.workspacePath))
+      .orderBy(asc(projects.createdAt), asc(projects.id));
+    const listed: Array<{ readonly id: ProjectId; readonly workspacePath: string }> = [];
+    for (const row of rows) {
+      if (row.workspacePath !== null) listed.push({ id: parseProjectId(row.id), workspacePath: row.workspacePath });
+    }
+    return listed;
   }
 
   /**

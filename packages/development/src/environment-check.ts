@@ -6,6 +6,7 @@ import type {
   CellSpec,
   EnvironmentBuildRequest,
   EnvironmentDefinition,
+  EnvironmentImagePrune,
   HostRepo,
 } from "@ashara/execution-infra";
 import {
@@ -46,13 +47,23 @@ const MAIN_BRANCH = "main";
 /** Builds (or reuses) the image of an environment version; the composition root wires execution-infra's builder. */
 export interface EnvironmentImages {
   build(request: EnvironmentBuildRequest): Promise<BuiltEnvironment>;
+  /**
+   * Removes the project's images of every version but `keepVersion` (null: main defines none)
+   * that no container uses; only images labelled ashara.managed are touched.
+   */
+  prune(projectId: ProjectId, keepVersion: string): Promise<EnvironmentImagePrune>;
 }
 
-/** The Sprint 0 statement (the stack chosen and why), kept on its work item with the version it was tested on. */
+/**
+ * The team's statement of the stack (chosen and why), kept on a work item with the version it holds
+ * for: an environment task's own statement with the version its gate tested, or, for an
+ * implementation whose verified merge changed the environment's owned files, the statement of the
+ * version it ran on with the version the merge produced (ADR-074 addendum 2 d66 a).
+ */
 export interface EnvironmentStatementStore {
   record(taskId: WorkItemId, statement: string, version: string): Promise<void>;
   /**
-   * The statement of the project's most recently completed environment task that recorded it for
+   * The statement of the project's most recently completed environment or implementation task that recorded it for
    * `version`, or null when none did.
    */
   forVersion(projectId: ProjectId, version: string): Promise<string | null>;
@@ -308,8 +319,10 @@ export async function runSubstrateGate(scope: EnvironmentCheckScope, testTimeout
 }
 
 /**
- * The Sprint 0 post-merge check: the gate's own run, `build` then `test` from the gate's image on a
- * fresh checkout of `commit` (the tentative merge), leaving it clean. It must be the same run: a
+ * The post-merge run of an environment: `build` then `test` from `tested`'s image on a fresh
+ * checkout of `commit` (the tentative merge), leaving it clean. For an environment task it is the
+ * gate's own run again; for an implementation whose merge changed the environment's owned files,
+ * the run of the environment rebuilt from the merge (ADR-074 addendum 2 d66 a). It must be the same run: a
  * `test` that reads what `build` produced passes the gate, so `test` alone here would fail every
  * such environment after the merge. The cell has no network; a substrate failure throws.
  */

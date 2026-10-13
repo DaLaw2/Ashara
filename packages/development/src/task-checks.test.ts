@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { CheckRun } from "@ashara/workplace";
-import { CheckRecorder, formatChecksForBrief, redRunPreview, redRunProblem } from "./task-checks.js";
+import { CheckRecorder, formatChecksForBrief, formatProjectChecksForCheckAuthor, redRunPreview, redRunProblem } from "./task-checks.js";
 import type { TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
@@ -78,5 +78,44 @@ describe("the implementer's brief of its checks", () => {
     );
     expect(brief).toContain("[truncated: 1000 of 9000 characters not shown]");
     expect(brief).toContain("#### checks/last.txt (1 characters)\n[not shown:");
+  });
+});
+
+// Third run N8: independent check authors fixed incompatible output formats for the same line.
+describe("the check author's brief of the project's stored checks", () => {
+  const task = (taskId: string, title: string, files: TaskChecks["files"]) => ({
+    taskId,
+    title,
+    checkTaskId: `check-of-${taskId}`,
+    revision: 1,
+    environmentVersion: "v",
+    checks: [{ name: `${taskId}-check`, command: `sh checks/${taskId}.sh` }],
+    files,
+  });
+
+  test("names every stored check by task, with its command and files, and the rule not to contradict them", () => {
+    const brief = formatProjectChecksForCheckAuthor([
+      task("t1", "Print month totals", [{ path: "checks/t1.sh", content: "./tool in.csv | grep -qx '2024-01: 12.50'\n" }]),
+      task("t2", "Print the grand total", []),
+    ]);
+    expect(brief).toContain("must not contradict them");
+    expect(brief).toContain(`### Task "Print month totals" (t1)`);
+    expect(brief).toContain("- t1-check: `sh checks/t1.sh`");
+    expect(brief).toContain("#### checks/t1.sh");
+    expect(brief).toContain("grep -qx '2024-01: 12.50'");
+    expect(brief).toContain(`### Task "Print the grand total" (t2)`);
+  });
+
+  test("files share one cap across tasks, every cut marked", () => {
+    const brief = formatProjectChecksForCheckAuthor([
+      task("t1", "a", [{ path: "checks/a.txt", content: "x".repeat(8000) }, { path: "checks/b.txt", content: "y".repeat(8000) }]),
+      task("t2", "b", [{ path: "checks/c.txt", content: "z".repeat(9000) }, { path: "checks/d.txt", content: "w" }]),
+    ]);
+    expect(brief).toContain("[truncated: 1000 of 9000 characters not shown]");
+    expect(brief).toContain("#### checks/d.txt (1 characters)\n[not shown:");
+  });
+
+  test("with nothing stored yet it says so", () => {
+    expect(formatProjectChecksForCheckAuthor([])).toContain("None: no other task of this project has stored checks yet.");
   });
 });

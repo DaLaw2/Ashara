@@ -349,6 +349,63 @@ describe("the client's answers", () => {
     expect((await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report")).toHaveLength(0);
   });
 
+  test("two answers of one project in one cycle: each is read against the vision as the other left it (third run N9)", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [first, second] = questionIds;
+    if (first === undefined || second === undefined) throw new Error("intake posted fewer than two questions");
+    const firstAnswer = await answer(projectId, first, "Yes, harbour first.");
+    const secondAnswer = await answer(projectId, second, "Yes, twelve seats.");
+    const mock = pipelineModel({ verdict: "confirms" });
+
+    const outcomes = await answers().runPending();
+
+    expect(outcomes).toEqual([
+      { kind: "stated", answerId: firstAnswer, projectId, assumptionKey: "A1", verdict: "confirms", visionVersion: 2, replanRequested: false },
+      { kind: "stated", answerId: secondAnswer, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
+    ]);
+    // One paid reading per answer: none was discarded.
+    expect(mock.doGenerateCalls).toHaveLength(2);
+    const v3 = (await visionsOf(projectId))[2];
+    expect(v3?.inferences.filter((a) => a.status === "Stated").map((a) => a.key)).toEqual(["A1", "A2"]);
+    expect(v3?.openQuestions).toEqual([]);
+  });
+
+  test("a vision version written between the reading and its write: composed again on it, the reading not paid for twice", async () => {
+    const { projectId, questionIds } = await intakenProject();
+    const [, second] = questionIds;
+    if (second === undefined) throw new Error("intake posted no second question");
+    const answerId = await answer(projectId, second, "Yes, twelve seats.");
+    const mock = pipelineModel({ verdict: "confirms" });
+    const store = createAnswerStore(db);
+    let raced = false;
+    const racing: AnswerStore = {
+      ...store,
+      openAnswers: ours(() => store.openAnswers()),
+      recordAnswer: async (write) => {
+        if (!raced) {
+          raced = true;
+          // Another writer appends a version that leaves this question and its assumption as they were.
+          await db.execute(sql`
+            INSERT INTO vision_documents (project_id, version, vision_text, summary, inferences, scope_boundaries,
+                                          confirmed_directions, open_questions, change_reason)
+            SELECT project_id, version + 1, vision_text, summary, inferences, scope_boundaries, confirmed_directions,
+                   open_questions, 'a concurrent writer'
+              FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
+        }
+        return store.recordAnswer(write);
+      },
+    };
+
+    const outcomes = await new ClientAnswers({ llm: gateway, store: racing }).runPending();
+
+    expect(outcomes).toEqual([
+      { kind: "stated", answerId, projectId, assumptionKey: "A2", verdict: "confirms", visionVersion: 3, replanRequested: false },
+    ]);
+    expect(mock.doGenerateCalls).toHaveLength(1);
+    expect((await visionsOf(projectId)).map((v) => v.version)).toEqual([1, 2, 3]);
+    expect((await visionsOf(projectId))[1]?.changeReason).toBe("a concurrent writer");
+  });
+
   test("an answer that cannot be read three times leaves it unconsumed and blocks the project", async () => {
     const { projectId, questionIds } = await intakenProject();
     const [first] = questionIds;

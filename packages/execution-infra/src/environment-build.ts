@@ -127,6 +127,92 @@ async function existingImageId(substrate: PodmanSubstrate, imageRef: string, pro
   return `sha256:${image.Id}`;
 }
 
+const imageListSchema = z.array(
+  z.object({
+    Id: z.string().regex(/^[0-9a-f]{64}$/),
+    Labels: z.record(z.string(), z.string()).nullable().optional(),
+  }),
+);
+const containerListSchema = z.array(z.object({ Id: z.string().min(1), ImageID: z.string() }));
+
+/** One image pruning left in place, and why. */
+interface KeptImage {
+  readonly imageId: string;
+  readonly version: string | null;
+  readonly why: "current-version" | "in-use" | "no-version-label" | "remove-failed";
+  readonly detail?: string;
+}
+
+/** What one prune of a project's environment images did. */
+export interface EnvironmentImagePrune {
+  readonly removed: readonly { readonly imageId: string; readonly version: string }[];
+  readonly kept: readonly KeptImage[];
+}
+
+async function podmanJson(substrate: PodmanSubstrate, operation: string, args: readonly string[]): Promise<unknown> {
+  const result = await substrate.run(args);
+  if (result.exitCode !== 0) throw new PodmanCommandFailed(operation, args, result.exitCode, result.stderr.trim() || "(no stderr)");
+  try {
+    return JSON.parse(result.stdout);
+  } catch (err) {
+    throw new PodmanCommandFailed(operation, args, result.exitCode, `invalid JSON: ${messageOf(err)}`);
+  }
+}
+
+/**
+ * Removes the project's environment images of every version other than `keepVersion` (main's
+ * current one) that no container uses, live or stopped (third run
+ * N12: every build_environment call left a tagged image). Only images labelled ashara.managed=1
+ * and ashara.project=<projectId> are selected, and both labels are checked again on what podman
+ * returns, so a change in its filter semantics removes nothing of anyone else's. An image that
+ * cannot be removed is kept and reported; a podman failure listing images or containers throws.
+ */
+export async function pruneEnvironmentImages(
+  substrate: PodmanSubstrate,
+  projectId: ProjectId,
+  keepVersion: string,
+): Promise<EnvironmentImagePrune> {
+  const tag = projectTagSchema.safeParse(projectId);
+  if (!tag.success) throw new InvalidCellRequest("pruneEnvironmentImages", tag.error.issues.map((issue) => issue.message));
+
+  const listArgs = ["images", "--filter", `label=${LABEL_MANAGED}=1`, "--filter", `label=${LABEL_PROJECT}=${projectId}`, "--format", "json"];
+  const images = imageListSchema.safeParse(await podmanJson(substrate, "images", listArgs));
+  if (!images.success) throw new PodmanCommandFailed("images", listArgs, 0, `unexpected shape: ${images.error.message}`);
+  const foreign = images.data.filter((image) => image.Labels?.[LABEL_MANAGED] !== "1" || image.Labels[LABEL_PROJECT] !== projectId);
+  if (foreign.length > 0) {
+    throw new PodmanCommandFailed(
+      "images", listArgs, 0,
+      `the label filter returned ${foreign.length} image(s) without both labels (${foreign.map((image) => image.Id).join(", ")}); refusing to remove anything`,
+    );
+  }
+
+  const psArgs = ["ps", "-a", "--format", "json"];
+  const containers = containerListSchema.safeParse(await podmanJson(substrate, "ps", psArgs));
+  if (!containers.success) throw new PodmanCommandFailed("ps", psArgs, 0, `unexpected shape: ${containers.error.message}`);
+  const inUse = new Set(containers.data.map((container) => container.ImageID.replace(/^sha256:/, "")));
+
+  const removed: Array<{ readonly imageId: string; readonly version: string }> = [];
+  const kept: KeptImage[] = [];
+  // podman lists an image once per name: each is judged once.
+  const seen = new Set<string>();
+  for (const image of images.data) {
+    if (seen.has(image.Id)) continue;
+    seen.add(image.Id);
+    const version = image.Labels?.[LABEL_ENV_VERSION] ?? null;
+    if (version === null) kept.push({ imageId: image.Id, version, why: "no-version-label" });
+    else if (version === keepVersion) kept.push({ imageId: image.Id, version, why: "current-version" });
+    else if (inUse.has(image.Id)) kept.push({ imageId: image.Id, version, why: "in-use" });
+    else {
+      // Without --force: podman refuses an image a container started meanwhile, and it stays.
+      const rmArgs = ["image", "rm", image.Id];
+      const result = await substrate.run(rmArgs);
+      if (result.exitCode === 0) removed.push({ imageId: image.Id, version });
+      else kept.push({ imageId: image.Id, version, why: "remove-failed", detail: `exit ${result.exitCode ?? "none"}: ${result.stderr.trim() || "(no stderr)"}` });
+    }
+  }
+  return { removed, kept };
+}
+
 /**
  * Builds the project's environment image from the owned files at `commit` and nothing else, or
  * reuses the image already built for this version when its succeeded build is on record.

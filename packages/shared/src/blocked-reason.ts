@@ -99,10 +99,12 @@ const checksStaleSchema = z.object({
 });
 
 /**
- * An implementation task's finished work changed files the environment owns, and nothing else it
- * was refused for: environment files belong to the platform role, so the work needs an environment
- * change no implementer may make (ADR-074 addendum 2 d63: in M1 such a task is Blocked, not
- * retried). `paths` names the environment-owned paths its branch changed; nothing was merged.
+ * An implementation task's finished work changed paths under `environment/`, the platform role's,
+ * and no environment task was opened for it (ADR-074 addendum 2 d66 b): the task already had the
+ * bound of environment tasks opened for it, or none could be opened (no role of the roster does
+ * environment work). Below the bound, the environment task is opened and the task waits on it at
+ * Pending instead. `paths` names the paths its branch changed under `environment/`; nothing was
+ * merged and the branch was deleted.
  */
 const environmentChangeNeededSchema = z.object({
   source: z.literal("environment_change_needed"),
@@ -198,6 +200,21 @@ const supersededSchema = z.object({
 });
 
 /**
+ * An operator returned a Blocked task to Pending (PATCH /work-items/:id/status): who, why, and
+ * the block they cleared. Written only on the Pending item, like `replan`, so the next attempt's
+ * brief says what was refused before and what the operator changed (third run N11). `previous`
+ * is the cleared reason as stored, null when the item was Blocked with none.
+ */
+const operatorUnblockSchema = z.object({
+  source: z.literal("operator_unblock"),
+  unblockedBy: z.string().min(1),
+  note: z.string().min(1),
+  unblockedAt: z.string().min(1),
+  previous: z.record(z.string(), z.unknown()).nullable(),
+  ...augmentationFields,
+});
+
+/**
  * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
  * caller-supplied fields — the user content is open-world.
  */
@@ -223,6 +240,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   supersededSchema,
+  operatorUnblockSchema,
   apiSchema,
 ]);
 
@@ -286,6 +304,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "superseded":
+    case "operator_unblock":
     case "api":
       return { ...reason };
   }
@@ -309,7 +328,7 @@ export type BlockedExit =
 
 /**
  * The exit of a Blocked item's stored reason. The sources written only on Failed, Abandoned or
- * Pending items (task_failed, orchestrator_error, replan, failure_router, superseded) and a Blocked item with
+ * Pending items (task_failed, orchestrator_error, replan, failure_router, superseded, operator_unblock) and a Blocked item with
  * no reason have no cause that clears by itself: the operator decides.
  */
 export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedExit {
@@ -333,6 +352,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "replan":
     case "failure_router":
     case "superseded":
+    case "operator_unblock":
       return { kind: "operator" };
   }
   const _: never = reason;

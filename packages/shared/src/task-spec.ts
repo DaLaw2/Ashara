@@ -21,8 +21,11 @@ const storedTaskSpecSchema = z.object({
   // defines the project environment (story s-platform-role-m1; migration 033
   // renamed stored 'scaffold'), or the check task decomposition adds for every
   // decomposed task, in which the check author writes the checks that decide it
-  // (story s-independent-verify-m1). Absent on rows written before it was recorded.
-  origin: z.enum(["decomposition", "sprint0", "check"]).optional(),
+  // (story s-independent-verify-m1), or the environment task Z0 opens when an
+  // implementation's work needs a change under environment/, in which the
+  // environment role makes it (ADR-074 addendum 2 d66 b). Absent on rows written
+  // before it was recorded.
+  origin: z.enum(["decomposition", "sprint0", "check", "environment-change"]).optional(),
   // What checks the task's work: "substrate" means the checks are the
   // environment substrate's own (the definition parses, the image builds, its
   // test command passes), so the task carries none of its own. Absent means no

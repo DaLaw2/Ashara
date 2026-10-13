@@ -29,7 +29,7 @@ export {
 export { listDueBlockReports, postProjectBlockReport, postTaskBlockedReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
-export { listOpenAnswers, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
+export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";

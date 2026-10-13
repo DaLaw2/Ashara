@@ -24,7 +24,7 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import { StackChoiceReports } from "@ashara/engagement";
 import type { SessionStore, TaskDescriptor } from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
@@ -202,7 +202,10 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },
     environment: {
-      images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
+      images: {
+        build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }),
+        prune: (projectId, keepVersion) => pruneEnvironmentImages(substrate, projectId, keepVersion),
+      },
       statements: {
         record: (taskId, statement, version) => workItems.recordEnvironmentStatement(taskId, statement, version),
         forVersion: (id, version) => workItems.environmentStatementFor(id, version),
@@ -486,8 +489,99 @@ describe("Sprint 0", () => {
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-am", "implementer"], { cwd: chosen.target });
     const moved = await runTask("flow", await implementationTask("cat /workspace/third.txt", build.version), [], memorySessions);
     expect(moved.result.status, moved.result.detail).toBe("environment_undefined");
-    expect(moved.result.detail).toContain("no completed environment task recorded a statement for that version");
+    expect(moved.result.detail).toContain("recorded a statement for that version: no merge Ashara verified produced it");
     expect(moved.result.detail).not.toContain(build.version);
     expect(moved.mock.doGenerateCalls).toHaveLength(0);
+  }, 600_000);
+
+  // third-run-2026-10-14 N7 and ADR-074 addendum 2 d66: an owned single file outside environment/ is
+  // versioned, not fenced; only environment/ is protected, and a change there is requested, not parked.
+  it("an implementation changing an owned file merges once the rebuilt environment's build and test pass; the next dispatch runs on that version", async () => {
+    const owned = ["environment/", "manifest.txt"];
+    const sprint0 = await runSprint0("owned", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("cat manifest.txt", { owned }) }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("write_file", { path: "manifest.txt", content: "dependencies: none\n" }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
+    ]);
+    expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
+    if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
+    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit);
+    await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
+    const gated = /Environment version ([0-9a-f]{64})/.exec(String(sprint0.events.find((e) => e.event === "substrate_gate_result")?.["output"]))?.[1];
+    if (gated === undefined) throw new Error("the gate reported no environment version");
+
+    const changed = await runTask(
+      "owned",
+      await implementationTask("cat /workspace/hello.txt", gated),
+      [
+        toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" }),
+        toolCallTurn("write_file", { path: "manifest.txt", content: "dependencies: greeter\n" }),
+        toolCallTurn("finish", { status: "done", summary: "Wrote hello.txt and added the greeter dependency." }),
+      ],
+      memorySessions,
+    );
+    expect(changed.result.status, changed.result.detail).toBe("completed");
+    expect(changed.events.find((e) => e.event === "ownership_gate")).toMatchObject({ verdict: "clean" });
+    const rebuilt = changed.events.find((e) => e.event === "environment_rebuilt");
+    expect(rebuilt).toMatchObject({ from: gated, to: expect.stringMatching(/^[0-9a-f]{64}$/), reused: false });
+    const version = String(rebuilt?.["to"]);
+    expect(version).not.toBe(gated);
+    // The rebuilt image is recorded, and its build and test ran on the merge before the suites.
+    const builds = z
+      .array(z.object({ status: z.string() }))
+      .parse((await db.execute(sql`SELECT status FROM environment_builds WHERE project_id = ${projectId} AND version = ${version}`)).rows);
+    expect(builds).toEqual([{ status: "succeeded" }]);
+    const verdict = changed.events.find((e) => e.event === "post_merge_verify");
+    expect(verdict).toMatchObject({ verdict: "passed" });
+    expect(String(verdict?.["details"])).toContain(`version ${gated} becomes ${version}`);
+    expect(String(verdict?.["details"])).toContain("dependencies: greeter");
+    expect(await readFile(join(changed.target, "manifest.txt"), "utf8")).toBe("dependencies: greeter\n");
+    // The new version carries the statement of the one it was built from, on the implementation's own row.
+    const carried = z
+      .array(z.object({ statement: z.string().nullable(), version: z.string().nullable() }))
+      .parse((await db.execute(sql`SELECT environment_statement AS "statement", environment_statement_version AS "version"
+                                   FROM work_items WHERE id = ${changed.taskId}`)).rows);
+    expect(carried).toEqual([{ statement: STATEMENT, version }]);
+
+    if (changed.result.status !== "completed" || changed.result.delivered.kind !== "merged") throw new Error("the implementation did not merge");
+    await new WorkItemRepository(db).recordMergeCommit(changed.taskId, changed.result.delivered.mergeCommit);
+    await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${changed.taskId}`);
+
+    const next = await runTask(
+      "owned",
+      await implementationTask("cat /workspace/next.txt", version),
+      [toolCallTurn("write_file", { path: "next.txt", content: "next\n" }), toolCallTurn("finish", { status: "done", summary: "Wrote next.txt." })],
+      memorySessions,
+    );
+    expect(next.result.status, next.result.detail).toBe("completed");
+    expect(next.events.find((e) => e.event === "environment_resolved")).toMatchObject({ version, reused: true });
+    expect(next.events.some((e) => e.event === "environment_rebuilt")).toBe(false);
+  }, 600_000);
+
+  it("an implementation changing a file under environment/ requests an environment change: nothing merged, its branch deleted", async () => {
+    const { stdout: mainBefore } = await run("git", ["-C", join(root, "owned", "projects", "p"), "rev-parse", "main"]);
+    const { result, events, target, taskId } = await runTask(
+      "owned",
+      await implementationTask("cat /workspace/fourth.txt", "0".repeat(64)),
+      [
+        toolCallTurn("write_file", { path: "fourth.txt", content: "fourth\n" }),
+        toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),
+        toolCallTurn("finish", { status: "done", summary: "The greeter needs a RUN step in the image." }),
+      ],
+      memorySessions,
+    );
+
+    expect(result.status, result.detail).toBe("environment_change_requested");
+    if (result.status !== "environment_change_requested") return;
+    expect(result.paths).toEqual(["environment/Containerfile"]);
+    expect(result.need).toBe("The greeter needs a RUN step in the image.");
+    expect(result.diff).toContain("+RUN true");
+    expect(events.some((e) => e.event === "post_merge_verify")).toBe(false);
+    expect(existsSync(join(target, "fourth.txt"))).toBe(false);
+    const { stdout: branches } = await run("git", ["-C", target, "branch", "--list", `task/${taskId}`]);
+    expect(branches.trim()).toBe("");
+    const { stdout: mainAfter } = await run("git", ["-C", target, "rev-parse", "main"]);
+    expect(mainAfter).toBe(mainBefore);
   }, 600_000);
 });

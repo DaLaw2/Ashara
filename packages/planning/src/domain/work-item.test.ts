@@ -109,7 +109,7 @@ describe("state-machine totality", () => {
     const item = createPendingWorkItem("Task", "merged-task", "test-run", TEST_PROJECT_ID);
     blockWorkItem(item, merged);
     takeEvents(item);
-    expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
+    expect(() => unblockWorkItem(item, { kind: "exit-cleared" })).toThrow(InvalidStatusTransition);
     expect(() => completeWorkItem(item)).toThrow(InvalidStatusTransition);
     completeRecordedMerge(item);
     expect(item.status).toBe("Completed");
@@ -183,12 +183,33 @@ describe("method-level preconditions guard the shared -> Pending edge", () => {
 
   test("unblockWorkItem accepts only a Blocked item", () => {
     const blocked = seedBlocked();
-    unblockWorkItem(blocked);
+    unblockWorkItem(blocked, { kind: "exit-cleared" });
     expect(blocked.status).toBe("Pending");
+    expect(blocked.blockedReason).toBeUndefined();
+  });
+
+  test("an operator's unblock records who, their note and the block it cleared, on the item and its event (third run N11)", () => {
+    const item = createPendingWorkItem("Task", "refused-task", "test-run", TEST_PROJECT_ID);
+    const refused: StoredBlockedReason = { source: "environment_change_needed", paths: ["main.go"], reason: "main.go is the environment's" };
+    blockWorkItem(item, refused);
+    takeEvents(item);
+
+    unblockWorkItem(item, { kind: "operator", by: "operator-a", note: "moved main.go out of the environment's owned set" });
+
+    expect(item.status).toBe("Pending");
+    expect(item.blockedReason).toMatchObject({
+      source: "operator_unblock",
+      unblockedBy: "operator-a",
+      note: "moved main.go out of the environment's owned set",
+      previous: refused,
+    });
+    const [event] = takeEvents(item);
+    expect(event?.eventType).toBe("work_item.unblocked");
+    expect(event?.payload).toMatchObject({ unblocked_by: "operator-a", note: "moved main.go out of the environment's owned set", previous_blocked_reason: refused });
   });
 
   test("unblockWorkItem throws on an InProgress item (the transition-widening leak)", () => {
-    expect(() => unblockWorkItem(seedInProgress())).toThrow(InvalidStatusTransition);
+    expect(() => unblockWorkItem(seedInProgress(), { kind: "exit-cleared" })).toThrow(InvalidStatusTransition);
   });
 
   test("replanWorkItem throws on an InProgress item (retry intent, not a requeue)", () => {

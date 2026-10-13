@@ -7,8 +7,11 @@ import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNo
 import { runHostGitObjects } from "./host-git.js";
 
 const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
-/** The one owned entry Ashara requires: the definition itself lives under it. */
-const ENVIRONMENT_DIR = "environment/";
+/**
+ * The one owned entry Ashara requires: the definition itself lives under it. It is also the only
+ * protected path of the environment: only environment work may change it (ADR-074 addendum 2 d66 a).
+ */
+export const ENVIRONMENT_DIR = "environment/";
 
 /** Why `path` is not a normalized repo-relative path, or null. A trailing "/" names a directory. */
 function repoPathProblem(path: string): string | null {
@@ -68,13 +71,17 @@ const DEFINITION_FIELD_RULES: Readonly<Record<keyof typeof definitionFields, str
   owned:
     `array of repository paths: ${JSON.stringify(ENVIRONMENT_DIR)} (required, the one owned directory) plus individual ` +
     `files outside it (for example a dependency manifest or .gitignore), each without a trailing "/". No other ` +
-    `directory can be owned: an entry that is a directory in the committed tree is refused.`,
+    `directory can be owned: an entry that is a directory in the committed tree is refused. Only ` +
+    `${JSON.stringify(ENVIRONMENT_DIR)} is protected: later implementation tasks may change an owned file outside it, ` +
+    `and every such change builds the environment again from the merged files, whose build and test must pass before ` +
+    `it is merged. Own a file outside ${JSON.stringify(ENVIRONMENT_DIR)} only when the image is built from it.`,
   containerfile: "path of the container build file, inside an owned path; the image is built from the owned files only.",
   build: "shell command that builds the project; it must exit 0.",
   test:
     "shell command that proves the toolchain builds and runs; it must exit 0 within its time limit and print " +
-    "non-empty output. Product behaviour is verified by the check author's checks, never by this command: it is " +
-    "an owned path's, so no later task can extend it.",
+    "non-empty output. Product behaviour is verified by the check author's checks, never by this command: the " +
+    `command lives in ${ENVIRONMENT_DEFINITION_PATH}, which only environment work may change, so no implementation ` +
+    "task can extend it.",
 };
 
 const definitionSchema = z

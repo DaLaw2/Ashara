@@ -1,4 +1,5 @@
 import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db";
+import type { ProjectId } from "@ashara/shared";
 import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService, Replanning } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
@@ -158,7 +159,16 @@ export interface CoreLoopDeps {
   readonly blockReports: LiaisonBlockReports;
   /** What the automatic exits of Blocked tasks read; re-checked every cycle before the gate. */
   readonly parkedExits: ParkedExitChecks;
+  /**
+   * The roster role doing a project's environment work, from its latest roster: the owner of the
+   * environment task an implementation's request opens (ADR-074 addendum 2 d66 b). `none`, with
+   * why, when the roster names no such role; a roster that cannot be read throws.
+   */
+  readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
 }
+
+/** Who does a project's environment work, as the latest roster says. */
+type EnvironmentOwner = { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };
 
 /** One dispute of a stored check, as an implementer's attempt ended with it. */
 interface CheckDisputeEntry {

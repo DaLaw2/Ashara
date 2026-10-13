@@ -27,7 +27,7 @@ export interface CurrentEnvironment {
   readonly imageRef: string;
   /** Whether the image was already built for this version (no build ran). */
   readonly reused: boolean;
-  /** The statement recorded with this version when the environment task that produced it merged. */
+  /** The statement recorded with this version when the task that produced it merged. */
   readonly statement: string;
   /** The definition's `test` command on main: run on every post-merge checkout, from this image. */
   readonly test: string;
@@ -72,7 +72,7 @@ interface EnvironmentBuildLookup {
 
 /**
  * The exit of a task Blocked with `environment_undefined`: true when the environment version on
- * the target's main now has the statement an environment task recorded for it and a succeeded
+ * the target's main now has the statement a merged task recorded for it and a succeeded
  * image build, so a dispatch would resolve it without building. Anything else is false, the task
  * stays Blocked: no main, no definition, no statement, no succeeded build. Reads committed objects
  * only, like resolveCurrentEnvironment; a git or store failure throws.
@@ -96,6 +96,51 @@ export async function currentEnvironmentBuilt(
   }
   if ((await statements.forVersion(projectId, version)) === null) return false;
   return builds.hasSucceeded(projectId, version);
+}
+
+/**
+ * Removes the project's environment images that main's current environment version does not use
+ * and no container uses (third run N12), after an environment task ends and at startup. When main
+ * cannot be read, or its environment cannot be resolved, nothing is removed: which version is
+ * current is unknown. Cleanup never fails its caller: any failure is logged at warn, and the
+ * next environment task's end or startup tries again.
+ */
+export async function pruneStaleEnvironmentImages(
+  projectId: ProjectId,
+  targetProjectPath: string,
+  images: Pick<EnvironmentImages, "prune">,
+): Promise<void> {
+  try {
+    const repo = hostRepoOf(targetProjectPath);
+    const main = await mainCommit(repo);
+    if ("problem" in main) {
+      console.warn(`[environment-images] project ${projectId}: not pruned, the current version is unknown: ${main.problem}`);
+      return;
+    }
+    let keep: string;
+    try {
+      const definition = await readEnvironmentDefinition(repo.gitDir, main.commit);
+      keep = (await environmentVersion(repo.gitDir, main.commit, definition)).version;
+    } catch (err) {
+      if (!(err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved)) throw err;
+      // Both classes also carry transient git failures (an unreadable file, a failed ls-tree), so an
+      // unresolved environment is not evidence that main defines none: keep every image.
+      console.warn(`[environment-images] project ${projectId}: not pruned, main's environment is unresolved: ${err.message}`);
+      return;
+    }
+    const pruned = await images.prune(projectId, keep);
+    const failed = pruned.kept.filter((image) => image.why === "remove-failed");
+    console.log(
+      `[environment-images] project ${projectId}: kept version ${keep}; removed ${pruned.removed.length} ` +
+        `image(s)${pruned.removed.length > 0 ? ` [${pruned.removed.map((image) => image.version.slice(0, 16)).join(", ")}]` : ""}, ` +
+        `kept ${pruned.kept.length}`,
+    );
+    for (const image of failed) {
+      console.warn(`[environment-images] project ${projectId}: image ${image.imageId} could not be removed: ${image.detail ?? "(no detail)"}`);
+    }
+  } catch (err) {
+    console.warn(`[environment-images] project ${projectId}: pruning failed; the next environment task's end or startup retries:`, err);
+  }
 }
 
 /**
@@ -129,13 +174,14 @@ export async function resolveCurrentEnvironment(
   }
 
   // The statement belongs to a version, not to the project: one an environment task recorded for
-  // another version (or none at all, as when a non-environment commit moved the version) says
+  // another version (or none at all, as when a commit Ashara did not verify moved the version) says
   // nothing about the stack this version was chosen for.
   const statement = await statements.forVersion(projectId, version);
   if (statement === null) {
     return undefinedBecause(
-      `environment version ${version} is on ${MAIN} at ${commit}, but no completed environment task recorded a statement ` +
-        `for that version: the version was not produced by an environment task`,
+      `environment version ${version} is on ${MAIN} at ${commit}, but no completed environment task or verified ` +
+        `implementation merge recorded a statement ` +
+        `for that version: no merge Ashara verified produced it`,
     );
   }
 

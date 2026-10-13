@@ -17,6 +17,8 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 const MAX_ANSWER_ATTEMPTS = 3;
+/** Writes of one answer per cycle: the first, and one more composed against the state that moved it. */
+const MAX_ANSWER_WRITES = 2;
 
 /** An inbound answer not yet consumed, as the answer store reads it. */
 interface OpenAnswer {
@@ -46,15 +48,24 @@ interface AnswerWrite {
   readonly replanReport: string | null;
 }
 
+/** What recording an answer did; "moved" wrote nothing: what it was composed against changed meanwhile. */
+type AnswerRecording =
+  | { readonly kind: "recorded" }
+  | { readonly kind: "already-consumed" }
+  | { readonly kind: "moved"; readonly detail: string };
+
 /** Engagement's persistence port for answers. Each write method is one transaction. */
 export interface AnswerStore {
   openAnswers(): Promise<readonly OpenAnswer[]>;
+  /** The answer as openAnswers lists it, with its project's vision as it is now; null when no longer listed. */
+  openAnswer(answerId: string): Promise<OpenAnswer | null>;
   /**
    * Consumes the answer and, together with it, appends the vision version and
    * flags the project for replanning with its report; an answer already consumed
-   * gets nothing new.
+   * gets nothing new. A write composed against a vision version or a plan state
+   * that is no longer current writes nothing and returns "moved".
    */
-  recordAnswer(write: AnswerWrite): Promise<"recorded" | "already-consumed">;
+  recordAnswer(write: AnswerWrite): Promise<AnswerRecording>;
   /** Counts a failed attempt with its error; returns the count after it. */
   recordFailedAttempt(answerId: string, error: string): Promise<number>;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
@@ -75,6 +86,13 @@ export type AnswerOutcome =
   /** The answer neither confirms nor changes its assumption: it is consumed and the vision is unchanged. */
   | { readonly kind: "not-an-answer"; readonly answerId: string; readonly projectId: ProjectId }
   | { readonly kind: "already-consumed"; readonly answerId: string; readonly projectId: ProjectId }
+  /** Listed at the cycle's start, but consumed or its project stopped before it was read: nothing was done. */
+  | { readonly kind: "not-open"; readonly answerId: string; readonly projectId: ProjectId }
+  /**
+   * Its project's record moved under every write this cycle tried: nothing was written, no attempt is
+   * counted, and the answer is read again next cycle.
+   */
+  | { readonly kind: "moved"; readonly answerId: string; readonly projectId: ProjectId; readonly detail: string }
   | { readonly kind: "failed"; readonly answerId: string; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
   | { readonly kind: "project-blocked"; readonly answerId: string; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
 
@@ -211,7 +229,14 @@ export class ClientAnswers implements LiaisonAnswers {
    */
   async runPending(): Promise<readonly AnswerOutcome[]> {
     const outcomes: AnswerOutcome[] = [];
-    for (const answer of await this.deps.store.openAnswers()) {
+    for (const listed of await this.deps.store.openAnswers()) {
+      // Read again now: an answer of the same project read earlier this cycle may have written a
+      // vision version, and an answer read against the version before it would be discarded.
+      const answer = await this.deps.store.openAnswer(listed.id);
+      if (answer === null) {
+        outcomes.push({ kind: "not-open", answerId: listed.id, projectId: listed.projectId });
+        continue;
+      }
       try {
         outcomes.push(await this.read(answer));
       } catch (err) {
@@ -235,37 +260,52 @@ export class ClientAnswers implements LiaisonAnswers {
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
       throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError ?? "(none recorded)");
     }
-    const context = contextOf(answer);
+    let context = contextOf(answer);
+    let reading = await this.interpret(context);
+    if (reading.kind === "failed") return reading.outcome;
 
-    let reading: AnswerReading;
-    try {
-      reading = await this.interpret(context);
-    } catch (err) {
-      if (isPreCallRefusal(err)) throw err;
-      return this.fail(answer, err);
+    for (let written = 1; ; written++) {
+      const write = composeWrite(context, reading.reading);
+      const recorded = await this.deps.store.recordAnswer(write);
+      if (recorded.kind === "already-consumed") return { kind: recorded.kind, ...base };
+      if (recorded.kind === "recorded") return recordedOutcome(context, reading.reading, write);
+      if (written >= MAX_ANSWER_WRITES) {
+        console.warn(
+          `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): its project's record moved under ` +
+            `${written} writes this cycle; nothing written, read again next cycle: ${recorded.detail}`,
+        );
+        return { kind: "moved", ...base, detail: recorded.detail };
+      }
+      const fresh = await this.deps.store.openAnswer(answer.id);
+      if (fresh === null) return { kind: "not-open", ...base };
+      const moved = contextOf(fresh);
+      // The reading answers a question about one assumption: while both read the same, it holds
+      // against the new version as it did against the old, and is not paid for again.
+      if (!readingStillApplies(context, moved)) {
+        console.warn(
+          `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): ${recorded.detail}; the question or its ` +
+            `assumption changed, so the answer is read again against vision v${moved.vision.version}`,
+        );
+        reading = await this.interpret(moved);
+        if (reading.kind === "failed") return reading.outcome;
+      }
+      context = moved;
     }
-
-    const write = composeWrite(context, reading);
-    const kind = await this.deps.store.recordAnswer(write);
-    if (kind === "already-consumed") return { kind, ...base };
-    if (reading.verdict === "does-not-answer") {
-      console.warn(
-        `[liaison-answer] answer ${answer.id} (project ${answer.projectId}) neither confirms nor changes ` +
-          `assumption ${context.question.assumptionKey}; consumed, vision unchanged`,
-      );
-      return { kind: "not-an-answer", ...base };
-    }
-    return {
-      kind: "stated",
-      ...base,
-      assumptionKey: context.question.assumptionKey,
-      verdict: reading.verdict,
-      visionVersion: context.vision.version + 1,
-      replanRequested: write.replanReport !== null,
-    };
   }
 
-  private async interpret(context: AnswerContext): Promise<AnswerReading> {
+  /** One paid reading of the answer; a failure is counted (and blocks at the cap), a spend-cap refusal throws. */
+  private async interpret(
+    context: AnswerContext,
+  ): Promise<{ readonly kind: "read"; readonly reading: AnswerReading } | { readonly kind: "failed"; readonly outcome: AnswerOutcome }> {
+    try {
+      return { kind: "read", reading: await this.callModel(context) };
+    } catch (err) {
+      if (isPreCallRefusal(err)) throw err;
+      return { kind: "failed", outcome: await this.fail(context.answer, err) };
+    }
+  }
+
+  private async callModel(context: AnswerContext): Promise<AnswerReading> {
     const provider = withStructuredLadder(
       // The answer is read at the Liaison's intake site: it is the Liaison taking in client input.
       this.deps.llm.forCall({ projectId: context.answer.projectId, taskId: null, callSite: "liaison-intake" }),
@@ -296,6 +336,36 @@ export class ClientAnswers implements LiaisonAnswers {
     if (attempt >= MAX_ANSWER_ATTEMPTS) throw new AnswerReadingExhausted(answer.id, attempt, error);
     return { kind: "failed", answerId: answer.id, projectId: answer.projectId, attempt, error };
   }
+}
+
+/** What a recorded answer did, as the cycle reports it. */
+function recordedOutcome(context: AnswerContext, reading: AnswerReading, write: AnswerWrite): AnswerOutcome {
+  const { answer } = context;
+  const base = { answerId: answer.id, projectId: answer.projectId };
+  if (reading.verdict === "does-not-answer") {
+    console.warn(
+      `[liaison-answer] answer ${answer.id} (project ${answer.projectId}) neither confirms nor changes ` +
+        `assumption ${context.question.assumptionKey}; consumed, vision unchanged`,
+    );
+    return { kind: "not-an-answer", ...base };
+  }
+  return {
+    kind: "stated",
+    ...base,
+    assumptionKey: context.question.assumptionKey,
+    verdict: reading.verdict,
+    visionVersion: context.vision.version + 1,
+    replanRequested: write.replanReport !== null,
+  };
+}
+
+/** Whether a reading of the answer against `before` reads the same against `after`: same question, same assumption. */
+function readingStillApplies(before: AnswerContext, after: AnswerContext): boolean {
+  return (
+    before.question.text === after.question.text &&
+    before.question.assumptionKey === after.question.assumptionKey &&
+    before.assumption.statement === after.assumption.statement
+  );
 }
 
 /** The question the answer replies to, open in the current vision, and the assumption it adopted. */

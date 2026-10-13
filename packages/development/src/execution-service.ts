@@ -1,7 +1,17 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/execution-infra";
-import { CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
+import type { BaseCellReference, BuiltEnvironment, Cell, CellSpec, EnvironmentDefinition, SubstrateInfo } from "@ashara/execution-infra";
+import {
+  CellTeardownFailed,
+  ENVIRONMENT_DIR,
+  EnvironmentBuildFailed,
+  EnvironmentDefinitionInvalid,
+  EnvironmentVersionUnresolved,
+  SubstrateUnavailable,
+  createCellBackend,
+  environmentVersion,
+  readEnvironmentDefinition,
+} from "@ashara/execution-infra";
 import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
@@ -20,7 +30,7 @@ import {
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
 import { DispatchRecords, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
-import { resolveCurrentEnvironment } from "./current-environment.js";
+import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runPostMergeEnvironmentCommands, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
@@ -40,6 +50,7 @@ import {
   discardCheckWorkdir,
   dropCheckBranch,
   formatChecksForBrief,
+  formatProjectChecksForCheckAuthor,
   harvestCheckFiles,
   headCommit,
   mainCommit,
@@ -62,7 +73,7 @@ import {
   WorktreeCommitIncomplete,
 } from "./workspace.js";
 import type { WorkdirInfo } from "./workspace.js";
-import { branchExists, taskBranchName } from "./merge.js";
+import { branchExists, discardTaskBranch, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
@@ -245,6 +256,16 @@ class PostMergeEnvironmentMissing extends Error {
     this.name = "PostMergeEnvironmentMissing";
   }
 }
+
+/**
+ * The environment a tentative merge is verified in: the dispatch's own version, unchanged; a new
+ * version the merge produced, rebuilt and its build and test passed (`details` says so); or none
+ * the merge can be verified in, which refuses it (`details` says why).
+ */
+type MergedEnvironment =
+  | { readonly kind: "unchanged"; readonly version: string; readonly test: string; readonly image: string }
+  | { readonly kind: "rebuilt"; readonly version: string; readonly test: string; readonly image: string; readonly statement: string; readonly details: string }
+  | { readonly kind: "refused"; readonly details: string };
 
 /**
  * The post-merge verdict on suites run in order (the environment's test, then `regressionCount`
@@ -669,14 +690,22 @@ interface DisputedResult {
 }
 
 /**
- * The implementer's finished work changed environment-owned paths and nothing else the ownership
- * gate refuses: it needs an environment change no implementer may make (ADR-074 addendum 2 d63).
- * Nothing was merged; the branch is kept. The orchestrator parks the item at Blocked naming the
- * paths, never routes it through the FailureRouter, whose replan would meet the same refusal.
+ * The implementer's finished work changed paths under `environment/` and nothing else the ownership
+ * gate refuses: it needs an environment change, which only the platform role makes (ADR-074
+ * addendum 2 d66 b). Nothing was merged, and the task branch is deleted, so the task's next
+ * dispatch starts a fresh branch from main once the environment has changed. Not the task's
+ * failure and no lesson: the orchestrator opens an environment task carrying `need` and `diff`
+ * and the item waits on it (bounded per implementation task), never routing it through the
+ * FailureRouter.
  */
-interface EnvironmentChangeNeededResult {
-  readonly status: "environment_change_needed";
+interface EnvironmentChangeRequestedResult {
+  readonly status: "environment_change_requested";
+  /** The paths under `environment/` the branch changed. */
   readonly paths: readonly string[];
+  /** The implementer's own statement of what it needs: its finish summary. */
+  readonly need: string;
+  /** The branch's diff of `environment/` against where it left main; a cut is marked. */
+  readonly diff: string;
   readonly detail: string;
   readonly output: AgentOutputJson;
   readonly sessionId: string;
@@ -709,7 +738,7 @@ export type ExecutionResult =
   | RefusedResult
   | ChecksStaleResult
   | DisputedResult
-  | EnvironmentChangeNeededResult
+  | EnvironmentChangeRequestedResult
   | OwnerUnresolvedResult
   | InterruptedResult;
 
@@ -844,6 +873,18 @@ export class DevelopmentService {
    * Z0 owns (host-git.ts) and the merge a place to land.
    */
   async execute(task: TaskDescriptor, targetProjectPath: string): Promise<ExecutionResult> {
+    try {
+      return await this.executeTask(task, targetProjectPath);
+    } finally {
+      // Every build_environment call leaves an image (third run N12): once the environment task
+      // ends, however it ends, only main's current version and images in use are kept.
+      if (task.workKind === "environment") {
+        await pruneStaleEnvironmentImages(task.projectId, targetProjectPath, this.deps.environment.images);
+      }
+    }
+  }
+
+  private async executeTask(task: TaskDescriptor, targetProjectPath: string): Promise<ExecutionResult> {
     const { config, eventSink, cells } = this.deps;
     const sessionId = createSessionId();
     const base = config.workdirBase;
@@ -954,7 +995,7 @@ export class DevelopmentService {
       // nevertheless routes a `blocked` result like `failed`: the item goes to
       // Failed and through the FailureRouter (executeTask in
       // orchestrator/src/execution.ts). Only `environment_blocked`, `environment_undefined`,
-      // `owner_unresolved`, `environment_change_needed` and stale checks past their exit park an
+      // `owner_unresolved` and stale checks past their exit park an
       // item at Blocked.
       if (!(e instanceof ProjectIntentUnavailable)) throw e;
       const chain = wrapError("development", "loadProjectIntent", e, { taskId: task.id });
@@ -1085,13 +1126,14 @@ export class DevelopmentService {
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
       // path inside runExecution, is what closes the success-only gap without
       // touching its many return sites. A refused call, stale stored checks (the check task's to
-      // rewrite, no model ran), a disputed check (the check author's to answer) and a shutdown are
-      // no lesson about the task.
+      // rewrite, no model ran), a disputed check (the check author's to answer), a requested
+      // environment change (the platform role's to make) and a shutdown are no lesson about the task.
       if (
         result.status !== "completed" &&
         result.status !== "refused" &&
         result.status !== "checks_stale" &&
         result.status !== "disputed" &&
+        result.status !== "environment_change_requested" &&
         result.status !== "interrupted"
       ) {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -1146,8 +1188,9 @@ export class DevelopmentService {
    */
   private async planWork(task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
     if (task.taskSpec?.checkedBy === "substrate") return { kind: "substrate" };
-    // Environment work is decided by the substrate gate alone (in M1, Sprint 0's): stored checks
-    // and the implementer's ownership gate would refuse the very files it exists to write.
+    // Environment work (Sprint 0, and every environment task an implementation requested) is decided
+    // by the substrate gate alone: stored checks and the implementer's ownership gate would refuse
+    // the very files it exists to write.
     if (task.workKind === "environment") {
       return {
         kind: "unplannable",
@@ -1195,7 +1238,7 @@ export class DevelopmentService {
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
   private checkoutDir(
     d: Dispatch,
-    purpose: "red-run" | "verify" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
+    purpose: "red-run" | "verify" | "post-merge-checks" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
   ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
@@ -1232,7 +1275,23 @@ export class DevelopmentService {
     const acceptanceSection = formatAcceptanceCriteria(task.successCriteria);
     const formattedTaskSpec = formatTaskSpec(spec);
     const specContext = acceptanceSection ? `${formattedTaskSpec}\n\n${acceptanceSection}` : formattedTaskSpec;
-    const taskContext = plan.kind === "stored-checks" ? `${specContext}\n\n${formatChecksForBrief(plan.stored)}` : specContext;
+    let taskContext = specContext;
+    if (plan.kind === "stored-checks") taskContext = `${specContext}\n\n${formatChecksForBrief(plan.stored)}`;
+    if (plan.kind === "check-authoring") {
+      const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
+      taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}`;
+    }
+    const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
+    // Named before work starts (ADR-074 addendum 2 d66 c): what the ownership gate refuses, and
+    // the owned files whose change rebuilds the environment.
+    const protectedPaths: AgentBrief["protectedPaths"] =
+      environment.kind === "environment"
+        ? {
+            environment: ENVIRONMENT_DIR,
+            checkFiles: [...new Set((await this.deps.checks.checkFilesOf(task.projectId)).map((file) => file.path))].sort(),
+            ownedFiles: environment.owned.filter((entry) => entry !== ENVIRONMENT_DIR),
+          }
+        : undefined;
     return createAgentBrief(
       {
         taskId: task.id,
@@ -1244,6 +1303,8 @@ export class DevelopmentService {
         knowledgeContext,
         contextMap,
         ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
+        ...(operatorUnblock !== undefined ? { operatorUnblock } : {}),
+        ...(protectedPaths !== undefined ? { protectedPaths } : {}),
       },
       "development:buildBrief",
     );
@@ -1612,29 +1673,24 @@ export class DevelopmentService {
   }
 
   /**
-   * Separation of duties (s-platform-role-m1, sprint0-run D5), before the tentative merge: the task
-   * branch's changes since it left main may not touch the current environment's owned paths (the
-   * platform role's) nor any stored check file of the project (the check author's). Only
-   * environment paths: environment_change_needed, Blocked, since no retry can make them the
-   * implementer's. Any check file: failed with the paths and the rule. Nothing is merged either
-   * way and the branch is kept. Z0's own git failing blocks for the operator. Null when clean.
+   * Separation of duties (s-platform-role-m1, sprint0-run D5; ADR-074 addendum 2 d66), before the
+   * tentative merge: the task branch's changes since it left main may not touch `environment/`
+   * (the platform role's) nor any stored check file of the project (the check author's). Other
+   * owned files of the environment may change: the post-merge verification rebuilds it. Only
+   * `environment/` paths: environment_change_requested with the implementer's need and the diff of
+   * those paths; the task branch is deleted so the next dispatch starts fresh from main. Any check
+   * file: failed with the paths and the rule, the branch kept. Nothing is merged either way. Z0's
+   * own git failing blocks for the operator. Null when clean.
    */
   private async ownershipGate(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
-    let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
-    try {
-      // Fail closed: without the environment's owned set there is nothing to hold the branch to.
-      if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
-      const checkFiles = await this.deps.checks.checkFilesOf(task.projectId);
-      verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), d.environment.owned, checkFiles);
-    } catch (e) {
-      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the ownership gate could not run");
+    const blockOn = (e: unknown, step: string): ExecutionResult => {
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
         return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { output, agentWork: "kept" }, eventSink);
       }
-      const fault = new VerificationInfrastructureFault(task.id, "ownership gate", { cause: e });
+      const fault = new VerificationInfrastructureFault(task.id, step, { cause: e });
       return environmentBlocked(
         {
           task,
@@ -1649,19 +1705,40 @@ export class DevelopmentService {
         },
         eventSink,
       );
+    };
+    let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
+    try {
+      // Fail closed: a task decided by stored checks dispatched without an environment has no
+      // rebuild to accept an owned-file change against.
+      if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
+      const checkFiles = await this.deps.checks.checkFilesOf(task.projectId);
+      verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), checkFiles);
+    } catch (e) {
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the ownership gate could not run");
+      return blockOn(e, "ownership gate");
     }
     eventSink?.emit({ event: "ownership_gate", taskId: task.id, attempt: task.attempt, verdict: verdict.kind });
     if (verdict.kind === "clean") return null;
 
     await cleanupWorkdir(workDir, targetProjectPath);
     const summary = `ownership gate refused the work of ${task.id}: ${verdict.reason}`;
-    if (verdict.kind === "environment_change_needed") {
+    if (verdict.kind === "environment_change") {
+      // The branch holds work made on the environment that is about to change: the next dispatch
+      // starts again from main, which then carries the environment task's change.
+      try {
+        await discardTaskBranch(targetProjectPath, task.id);
+      } catch (e) {
+        return blockOn(e, "discard the task branch for an environment change");
+      }
+      const need = output.summary.trim() === "" ? "(the implementer's finish summary is empty: it stated no need)" : output.summary;
       const chain = wrapError("development", "ownershipGate", verdict.reason, { taskId: task.id, environmentPaths: verdict.paths });
       console.warn(`[${task.id}] ${summary}`);
-      eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "ownershipGate", reason: summary });
+      eventSink?.emit({ event: "environment_change_requested", taskId: task.id, attempt: task.attempt, paths: verdict.paths, reason: summary });
       return {
-        status: "environment_change_needed",
+        status: "environment_change_requested",
         paths: verdict.paths,
+        need,
+        diff: verdict.diff,
         detail: summary,
         output,
         sessionId,
@@ -1753,8 +1830,12 @@ export class DevelopmentService {
   }
 
   /**
-   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d), in one
-   * verifier cell from the dispatch's image on a throwaway checkout of the tentative merge, in order:
+   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d, d66 a).
+   * First the merge's own environment (mergedEnvironment): when the work changed an owned file
+   * outside `environment/`, the merge's version is rebuilt and its build and test must pass, and
+   * that version's image and test replace the dispatch's below; the merge passing records the
+   * dispatch's statement for that version. Then, in one verifier cell from that image on a
+   * throwaway checkout of the tentative merge, in order:
    * the environment definition's `test`; the latest stored checks of every implementation task of
    * the project already Completed, each with its files written over the checkout; then this task's
    * own stored checks with theirs, so whatever the implementer put at those paths is replaced and it
@@ -1763,7 +1844,8 @@ export class DevelopmentService {
    * check must exit 0 with output; any failure fails this task naming the suite and the check, and
    * an earlier task's check that fails is this task's regression. Sequential, each check bounded by
    * the per-command timeout: the run takes at most (1 + every check counted) x that timeout, plus
-   * the cell's start and teardown. A substrate failure throws, which finalize turns into an
+   * the cell's start and teardown, plus, for a rebuilt environment, its image build (bounded by the
+   * builder) and its build and test (2 x that timeout). A substrate failure throws, which finalize turns into an
    * environment block.
    */
   private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks): Promise<PostMergeVerdict> {
@@ -1772,15 +1854,22 @@ export class DevelopmentService {
     let suites: readonly CheckSuite[];
     let earlier: readonly CompletedTaskChecks[];
     let unchecked: readonly string[];
+    let merged: MergedEnvironment;
     try {
       if (d.environment.kind !== "environment") {
         throw new PostMergeEnvironmentMissing(task.id);
+      }
+      const commit = await tentativeMergeCommit(targetProjectPath, task.id);
+      merged = await this.mergedEnvironment(d, d.environment, commit);
+      if (merged.kind === "refused") {
+        this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: task.attempt, verdict: "failed", revision: stored.revision, details: merged.details });
+        return { passed: false, details: merged.details };
       }
       const completed = await this.deps.checks.completedOf(task.projectId, task.id);
       earlier = completed.checked;
       unchecked = completed.unchecked;
       suites = [
-        { label: `the environment's test (version ${d.environment.version})`, checks: [{ name: "environment test", command: d.environment.test }], files: [] },
+        { label: `the environment's test (version ${merged.version})`, checks: [{ name: "environment test", command: merged.test }], files: [] },
         ...earlier.map((prior) => ({
           label: `earlier task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
           checks: prior.checks,
@@ -1788,13 +1877,12 @@ export class DevelopmentService {
         })),
         { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files },
       ];
-      const commit = await tentativeMergeCommit(targetProjectPath, task.id);
       runs = await runSuitesOnCheckout(
         this.checkCells(d),
         POST_MERGE_VERIFIER_ROLE,
-        cellImageOf(d.environment),
+        merged.image,
         commit,
-        this.checkoutDir(d, "verify"),
+        this.checkoutDir(d, "post-merge-checks"),
         suites,
       );
     } catch (e) {
@@ -1802,7 +1890,11 @@ export class DevelopmentService {
       throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
     }
     const checkCount = suites.reduce((sum, suite) => sum + suite.checks.length, 0);
-    const suitesRun = suitesVerdict(suites, runs, earlier.length);
+    const suitesVerdictRun = suitesVerdict(suites, runs, earlier.length);
+    const suitesRun: PostMergeVerdict =
+      merged.kind === "rebuilt"
+        ? { passed: suitesVerdictRun.passed, details: `${merged.details}\n${suitesVerdictRun.details}` }
+        : suitesVerdictRun;
     // A task completed with no stored check has nothing to re-run: skipping it is stated, never
     // silent, and never a block (no transition could ever give a Completed task checks, so every
     // later merge of the project would block on it with no exit).
@@ -1827,7 +1919,82 @@ export class DevelopmentService {
       boundSeconds: checkCount * this.deps.attemptPolicy.perCommandTimeoutSeconds,
       details: verdict.details,
     });
+    if (verdict.passed && merged.kind === "rebuilt") {
+      // The version this merge produces is the stack the team stated, with files a verified merge
+      // changed: it carries that statement, so the next dispatch resolves it (current-environment.ts).
+      try {
+        await this.deps.environment.statements.record(task.id, merged.statement, merged.version);
+      } catch (e) {
+        throw new VerificationInfrastructureFault(task.id, `record the environment statement for rebuilt version ${merged.version}`, { cause: e });
+      }
+    }
     return verdict;
+  }
+
+  /**
+   * The environment of the tentative merge `commit` (ADR-074 addendum 2 d66 a): its definition and
+   * version read from the merge's committed objects. The same version as the dispatch's: its image
+   * and test. Another one (the work changed an owned file outside `environment/`): its image is
+   * built and recorded, and its `build` then `test` run on a fresh checkout of the merge in a
+   * verifier cell from it, which must pass and leave the checkout clean. A definition the merge
+   * leaves unreadable, an image that cannot be built and a failed build or test refuse the merge
+   * with what failed, the task's failure. A substrate failure throws.
+   */
+  private async mergedEnvironment(d: Dispatch, current: CurrentEnvironment, commit: string): Promise<MergedEnvironment> {
+    const { task } = d;
+    const gitDir = targetRepo(d.targetProjectPath).gitDir;
+    const refused = (details: string): MergedEnvironment => ({ kind: "refused", details });
+    let definition: EnvironmentDefinition;
+    let version: string;
+    try {
+      definition = await readEnvironmentDefinition(gitDir, commit);
+      version = (await environmentVersion(gitDir, commit, definition)).version;
+    } catch (e) {
+      if (e instanceof EnvironmentDefinitionInvalid || e instanceof EnvironmentVersionUnresolved) {
+        return refused(`The merge leaves no environment that can be built (it was version ${current.version}): ${e.message}`);
+      }
+      throw e;
+    }
+    if (version === current.version) return { kind: "unchanged", version, test: current.test, image: current.imageId };
+
+    const change = `The merge changes files the environment owns outside ${ENVIRONMENT_DIR}: version ${current.version} becomes ${version}`;
+    let built: BuiltEnvironment;
+    try {
+      built = await this.deps.environment.images.build({ projectId: task.projectId, repoGitDir: gitDir, commit, definition });
+    } catch (e) {
+      if (e instanceof EnvironmentBuildFailed) {
+        return refused(
+          `${change}, and its image could not be built: ${e.detail}\nBuild log${e.logTruncated ? " (its end)" : ""}:\n${e.logTail.trim() || "(empty)"}`,
+        );
+      }
+      if (e instanceof EnvironmentVersionUnresolved) return refused(`${change}, and it cannot be built: ${e.message}`);
+      throw e;
+    }
+    if (built.version !== version) {
+      throw new VerificationInfrastructureFault(task.id, "rebuild the merge's environment", {
+        cause: `version ${version} was resolved at ${commit}, but the image was built for ${built.version}`,
+      });
+    }
+    this.deps.eventSink?.emit({
+      event: "environment_rebuilt",
+      taskId: task.id,
+      attempt: task.attempt,
+      from: current.version,
+      to: version,
+      imageId: built.imageId,
+      imageRef: built.imageRef,
+      reused: built.reused,
+    });
+    const commands = await runPostMergeEnvironmentCommands(
+      this.environmentScope(d),
+      POST_MERGE_VERIFIER_ROLE,
+      { version, imageRef: built.imageRef, definition },
+      commit,
+      this.deps.attemptPolicy.perCommandTimeoutSeconds,
+    );
+    const ran = `the rebuilt environment's build and test (version ${version}) on the merge:\n${formatEnvironmentCommands(commands)}`;
+    if (!environmentCommandsPassed(commands)) return refused(`${change}, and ${ran}`);
+    return { kind: "rebuilt", version, test: definition.test, image: built.imageId, statement: current.statement, details: `${change}; ${ran}` };
   }
 
   /**
@@ -2393,6 +2560,27 @@ function innermostLayer(layer: ErrorLayer): ErrorLayer {
     current = current.cause;
   }
   return current;
+}
+
+/** Longest part of a cleared block's stored reason the brief shows. */
+const MAX_UNBLOCKED_REASON_CHARS = 4000;
+
+/**
+ * An operator's unblock, for the next attempt's brief (third run N11): without it the retry is
+ * never told why it was refused, and repeats the same refusal. The cleared reason is shown as
+ * stored (it came back from jsonb), cut with a marker past its bound.
+ */
+function formatOperatorUnblock(unblock: Extract<StoredBlockedReason, { source: "operator_unblock" }>): string {
+  const lines = [`Unblocked by ${unblock.unblockedBy} at ${unblock.unblockedAt}.`, `Operator's note: ${unblock.note}`, ``];
+  if (unblock.previous === null) {
+    lines.push(`The block it cleared had no recorded reason.`);
+  } else {
+    const text = JSON.stringify(unblock.previous, null, 2);
+    const shown = text.length <= MAX_UNBLOCKED_REASON_CHARS ? text : text.slice(0, MAX_UNBLOCKED_REASON_CHARS);
+    lines.push(`The block it cleared, as recorded:`, "```json", shown, "```");
+    if (shown.length < text.length) lines.push(`[truncated: ${text.length - shown.length} of ${text.length} characters not shown]`);
+  }
+  return lines.join("\n");
 }
 
 function formatPriorAttemptFailure(ctx: ReplanContext): string {

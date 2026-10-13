@@ -20,6 +20,8 @@ export type AssignmentBrief = Pick<
   | "knowledgeContext"
   | "contextMap"
   | "priorAttemptFailure"
+  | "operatorUnblock"
+  | "protectedPaths"
 >;
 
 /** The roster role an attempt works as: the task's owner, by its roster id and name. */

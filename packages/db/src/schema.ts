@@ -108,7 +108,8 @@ export const workItems = pgTable("work_items", {
   workKind: text("work_kind"),
   ownerRoleId: uuid("owner_role_id"),
   // Migration 033: a Sprint 0 task's stack statement, written when its substrate
-  // gate passed. Only on environment work.
+  // gate passed. On environment work, and (migration 043) on an implementation whose
+  // verified merge produced a new environment version.
   environmentStatement: text("environment_statement"),
   // Migration 037: the environment version the statement was tested on; a later task's
   // statement is chosen by it. NULL on a statement recorded before 037.

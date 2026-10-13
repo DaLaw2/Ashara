@@ -41,9 +41,9 @@ import {
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
-import { DevelopmentService, discardTaskBranch } from "@ashara/development";
+import { DevelopmentService, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
-import { RosterDerivation } from "@ashara/organization";
+import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
   AgentStaffing,
   SessionStore,
@@ -52,8 +52,9 @@ import type {
   ExecutionEventSink,
   ContractSource,
   ProjectIntentSource,
+  EnvironmentImages,
 } from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import {
   buildGateway,
   buildGatewayConfig,
@@ -314,6 +315,16 @@ async function main(): Promise<void> {
     },
   };
 
+  const environmentImages: EnvironmentImages = {
+    build: (request) =>
+      buildEnvironmentImage(request, {
+        substrate: cellSubstrate,
+        recorder: environmentBuildRepo,
+        timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
+      }),
+    prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
+  };
+
   const developmentService = new DevelopmentService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
@@ -329,14 +340,7 @@ async function main(): Promise<void> {
     staffing,
     attemptPolicy: ATTEMPT_POLICY,
     environment: {
-      images: {
-        build: (request) =>
-          buildEnvironmentImage(request, {
-            substrate: cellSubstrate,
-            recorder: environmentBuildRepo,
-            timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
-          }),
-      },
+      images: environmentImages,
       statements: {
         record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
         forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
@@ -390,6 +394,16 @@ async function main(): Promise<void> {
     blockReports,
     disputeReports: blockReports,
     parkedExits: createParkedExitChecks(db),
+    // The environment task an implementation needs is owned by the role doing environment work.
+    async environmentOwner(projectId) {
+      const roster = parseStoredRoster(projectId, await latestRosterRoles(db, projectId));
+      try {
+        return { kind: "role", roleId: ownerOf(roster, "environment").id };
+      } catch (e) {
+        if (!(e instanceof WorkKindOwnerUnresolved)) throw e;
+        return { kind: "none", why: e.message };
+      }
+    },
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -449,6 +463,12 @@ async function main(): Promise<void> {
 
   // Cells a previous process of this instance leaked, removed before any dispatch.
   await reconcileCellsAtStartup(cellSubstrate, cellInstance);
+
+  // Environment images an earlier process left of versions main no longer uses (third run N12).
+  // Pruning never fails the start: each project's failure is logged and retried next time.
+  for (const project of await projectRepo.listWithWorkspace()) {
+    await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages);
+  }
 
   const runnerPromise = runner.run(abortController.signal);
 

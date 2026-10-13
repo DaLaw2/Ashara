@@ -16,9 +16,9 @@ export {
 export { CellExecFailed } from "./errors.js";
 export { initHostRepo, runHostGit } from "./host-git.js";
 export type { HostRepo } from "./host-git.js";
-export { environmentDefinitionRules, ownedPathsCover, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
+export { ENVIRONMENT_DIR, environmentDefinitionRules, ownedPathsCover, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
 export type { EnvironmentDefinition } from "./environment.js";
 export { environmentVersion } from "./environment.js";
-export { buildEnvironmentImage } from "./environment-build.js";
-export type { BuiltEnvironment, EnvironmentBuildRequest } from "./environment-build.js";
+export { buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
+export type { BuiltEnvironment, EnvironmentBuildRequest, EnvironmentImagePrune } from "./environment-build.js";
 export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, PodmanCommandFailed } from "./errors.js";

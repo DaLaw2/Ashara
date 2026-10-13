@@ -13,6 +13,8 @@ export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | n
   const sections = [STATIC_PROMPT];
   if (workKind === "environment") sections.push(ENVIRONMENT_PROMPT);
   if (workKind === "check") sections.push(CHECK_PROMPT);
+  const protectedPaths = protectedPathsSection(brief, workKind);
+  if (protectedPaths !== null) sections.push(protectedPaths);
   sections.push(buildTaskPrompt(brief));
   return sections.join("\n\n");
 }
@@ -89,10 +91,47 @@ const ENVIRONMENT_PROMPT = [
     `  after each change; finish with status "done" only after it reports PASSED on the files as they are.`,
     `- Finish with a statement: one paragraph on the stack you chose and why. The client reads it; it lists no files.`,
     `  Say what the environment's test covers: it proves the toolchain builds and runs; product behaviour is verified`,
-    `  by the check author's checks. Never promise that later tasks extend the test: they cannot change its files.`,
+    `  by the check author's checks. Never promise that later tasks extend the test: its command is in environment/,`,
+    `  which only environment work may change.`,
   ].join("\n"),
   environmentDefinitionRules(),
 ].join("\n\n");
+
+/**
+ * The paths Z0 refuses the work for changing, named before work starts (ADR-074 addendum 2 d66 c),
+ * for every task that does not define the environment itself; null when the brief carries none
+ * (the BaseCell) or the task is environment work, which may change environment/.
+ */
+function protectedPathsSection(brief: AssignmentBrief, workKind: WorkKind | null): string | null {
+  const paths = brief.protectedPaths;
+  if (paths === undefined || workKind === "environment") return null;
+  const checkFiles = paths.checkFiles.length === 0 ? "none is stored yet" : paths.checkFiles.join(", ");
+  const ownedFiles = paths.ownedFiles.length === 0 ? "none" : paths.ownedFiles.join(", ");
+  const lines = [
+    `# Protected paths`,
+    `Z0 checks your finished work against these paths, whatever else it holds:`,
+    `- ${paths.environment} belongs to the platform role, who defines the project environment.`,
+    `- The stored check files belong to the check author who wrote them: ${checkFiles}.`,
+  ];
+  if (workKind === "check") {
+    lines.push(
+      `None of your check files may be a file the environment owns: ${paths.environment} or ${ownedFiles}. Nothing of`,
+      `your workspace is merged, so do not change the project's files for your checks either.`,
+    );
+    return lines.join("\n");
+  }
+  lines.push(
+    `- Work that changes a stored check file fails, and nothing of it is merged.`,
+    `- If your task needs a change under ${paths.environment}, make it in your workspace and say in your finish summary`,
+    `  what you need and why. Nothing of your work is merged then: Z0 opens an environment task for the platform role`,
+    `  carrying your summary and your changes under ${paths.environment}, and your task starts again from the project`,
+    `  as that task leaves it.`,
+    `The environment's other owned files (${ownedFiles}) are not protected: you may change them. A change to one`,
+    `builds the environment again from your merged work, and the merge is accepted only when that environment's build`,
+    `and test and every check that verification runs pass on it.`,
+  );
+  return lines.join("\n");
+}
 
 /**
  * Check work writes the checks that decide another task, before that task starts. Nothing of it is
@@ -118,6 +157,9 @@ const CHECK_PROMPT = [
   `  whenever they run; nothing of this workspace is merged into the project. They are kept as text, without their`,
   `  permissions: run a script through its interpreter rather than directly.`,
   `- Do not change the project environment's own files.`,
+  `- The checks already stored for other tasks of this project, with their files, are in the Context below. Every`,
+  `  check of the project runs on the same product once all its tasks are merged, so yours must not contradict`,
+  `  them: where they fix an output, its format, a file or a name, require the same; do not fix it differently.`,
   `- When every check fails now for the right reason, finish with status "done": they are all red-run again then.`,
 ].join("\n");
 
@@ -172,6 +214,13 @@ function buildTaskPrompt(brief: AssignmentBrief): string {
     `# Task\n## Goal\n${brief.goal}`,
   ];
   if (brief.priorAttemptFailure !== undefined) sections.push(`## Prior Attempt Failure\n${brief.priorAttemptFailure}`);
+  if (brief.operatorUnblock !== undefined) {
+    sections.push(
+      `## Why this task was blocked, and what the operator changed\n` +
+        `This task was blocked and an operator has returned it to work. Read why it was blocked and the operator's ` +
+        `note before you start: work that repeats what was refused is refused again.\n\n${brief.operatorUnblock}`,
+    );
+  }
   if (brief.knowledgeContext !== undefined && brief.knowledgeContext.trim() !== "") {
     sections.push(`## Prior Knowledge & Lessons\n${brief.knowledgeContext}`);
   }

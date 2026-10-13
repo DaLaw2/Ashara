@@ -142,7 +142,7 @@ async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: 
 
 async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   const source = item.blockedReason?.source ?? "none";
-  unblockWorkItem(item);
+  unblockWorkItem(item, { kind: "exit-cleared" });
   try {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {

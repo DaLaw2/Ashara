@@ -15,6 +15,8 @@ export {
 
 export { exitDisputedCheck, exitStaleChecks } from "./stale-checks.js";
 
+export { requestEnvironmentChange } from "./environment-change.js";
+
 export type { WorkItemRepository } from "./repository.js";
 
 export { ContractAlreadyExists } from "./errors.js";

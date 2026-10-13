@@ -45,6 +45,11 @@ export interface CompletedTaskChecks extends TaskChecks {
   readonly taskId: string;
 }
 
+/** The latest checks of one task of the project, with its title, as a check author is shown them. */
+interface ProjectTaskChecks extends CompletedTaskChecks {
+  readonly title: string;
+}
+
 /** A stored check file of a task of the project: its path, and the task whose checks hold it. */
 export interface StoredCheckFile {
   readonly taskId: string;
@@ -73,6 +78,11 @@ export interface TaskCheckStore {
   completedOf(projectId: ProjectId, exceptTaskId: WorkItemId): Promise<CompletedTasksChecks>;
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
+  /**
+   * The latest checks of every other task of the project that has any (Abandoned tasks left out),
+   * with its title: what a check author must not contradict.
+   */
+  storedOfProject(projectId: ProjectId, exceptTaskId: string): Promise<readonly ProjectTaskChecks[]>;
   /** Appends one revision of the task's checks; returns the revision. */
   append(write: {
     readonly projectId: ProjectId;
@@ -476,19 +486,48 @@ function checkFilesForBrief(files: readonly CheckFile[]): string {
     `is at their paths. Do not create, change or delete a file at any of these paths: the ownership gate refuses work`,
     `that touches one, and the task fails.`,
   ];
-  let budget = MAX_BRIEF_CHECK_FILES_CHARS;
+  const budget = { left: MAX_BRIEF_CHECK_FILES_CHARS };
+  lines.push(...checkFileLines(files, budget, "####"));
+  return lines.join("\n");
+}
+
+/** The files, each cut to what is left of the shared `budget` (which it spends); every cut is marked. */
+function checkFileLines(files: readonly CheckFile[], budget: { left: number }, heading: string): string[] {
+  const lines: string[] = [];
   for (const file of files) {
-    const limit = Math.min(MAX_BRIEF_CHECK_FILE_CHARS, budget);
+    const limit = Math.min(MAX_BRIEF_CHECK_FILE_CHARS, budget.left);
     if (limit <= 0) {
-      lines.push(`#### ${file.path} (${file.content.length} characters)`, `[not shown: the check files exceed ${MAX_BRIEF_CHECK_FILES_CHARS} characters together; it is not in your workspace]`);
+      lines.push(`${heading} ${file.path} (${file.content.length} characters)`, `[not shown: the check files exceed ${MAX_BRIEF_CHECK_FILES_CHARS} characters together; it is not in your workspace]`);
       continue;
     }
     const shown = file.content.length <= limit ? file.content : file.content.slice(0, limit);
-    budget -= shown.length;
-    lines.push(`#### ${file.path} (${file.content.length} characters)`, "````", shown, "````");
+    budget.left -= shown.length;
+    lines.push(`${heading} ${file.path} (${file.content.length} characters)`, "````", shown, "````");
     if (shown.length < file.content.length) {
       lines.push(`[truncated: ${file.content.length - shown.length} of ${file.content.length} characters not shown]`);
     }
+  }
+  return lines;
+}
+
+/**
+ * Every check already stored in the project, as the check author's brief states them (third run
+ * N8): independent authors fixed incompatible output formats for the same line, and nothing showed
+ * one author the other's checks. The rule is stated; a contradiction that still slips through is
+ * disputed by the implementer that meets it. Files share one size cap, every cut marked.
+ */
+export function formatProjectChecksForCheckAuthor(stored: readonly ProjectTaskChecks[]): string {
+  const lines = [
+    `## Checks already stored in this project`,
+    `Every check below runs on the same product as yours once all its tasks are merged: a task whose work breaks an`,
+    `earlier task's checks is refused as a regression. Your checks must not contradict them: where they fix an output,`,
+    `its format, a file or a name, require the same. Do not create or change a file at any of their paths.`,
+  ];
+  if (stored.length === 0) return [...lines, ``, `None: no other task of this project has stored checks yet.`].join("\n");
+  const budget = { left: MAX_BRIEF_CHECK_FILES_CHARS };
+  for (const task of stored) {
+    lines.push(``, `### Task "${task.title}" (${task.taskId})`, ...task.checks.map((check) => `- ${check.name}: \`${check.command}\``));
+    lines.push(...checkFileLines(task.files, budget, "####"));
   }
   return lines.join("\n");
 }

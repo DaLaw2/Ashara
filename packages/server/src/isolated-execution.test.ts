@@ -12,7 +12,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import type { SessionStore, TaskCheckStore } from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
@@ -115,6 +115,7 @@ describe("a task runs on cells end to end", () => {
       checkFilesOf: async () => [],
       completedOf: async () => ({ checked: [], unchecked: [] }),
       checkedTasksOf: async () => [],
+      storedOfProject: async () => [],
       append: async () => {
         throw new Error("an implementation task appends no checks");
       },
@@ -183,7 +184,10 @@ describe("a task runs on cells end to end", () => {
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
-        images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
+        images: {
+          build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }),
+          prune: (projectId, keepVersion) => pruneEnvironmentImages(substrate, projectId, keepVersion),
+        },
         statements: {
           record: async () => {
             throw new Error("an implementation task records no environment statement");

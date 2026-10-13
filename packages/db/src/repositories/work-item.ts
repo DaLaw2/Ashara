@@ -25,10 +25,10 @@ class WorkItemOwnerNotAssignable extends Error {
   }
 }
 
-/** A stack statement was given for a work item that does not exist or is not environment work. */
+/** A stack statement was given for a work item that does not exist or is neither environment nor implementation work. */
 class EnvironmentStatementNotRecordable extends Error {
   constructor(readonly workItemId: string) {
-    super(`cannot record an environment statement on work item ${workItemId}: no such item, or it is not environment work`);
+    super(`cannot record an environment statement on work item ${workItemId}: no such item, or it is neither environment nor implementation work`);
     this.name = "EnvironmentStatementNotRecordable";
   }
 }
@@ -87,15 +87,17 @@ export class WorkItemRepository {
   }
 
   /**
-   * Keeps a Sprint 0 task's statement of the stack it chose and why (migration 033), with the
-   * environment version its substrate gate tested (migration 037). Only environment work takes
-   * one; a later attempt's statement replaces it.
+   * Keeps a statement of the stack (migration 033) with the environment version it holds for
+   * (migration 037): an environment task's own, with the version its substrate gate tested; or
+   * (migration 043) on an implementation whose verified merge changed the environment's owned
+   * files, the statement of the version it ran on, with the version its merge produced. Only
+   * environment and implementation work take one; a later attempt's statement replaces it.
    */
   async recordEnvironmentStatement(id: string, statement: string, version: string): Promise<void> {
     const [row] = await this.db
       .update(workItems)
       .set({ environmentStatement: statement, environmentStatementVersion: version })
-      .where(and(eq(workItems.id, id), eq(workItems.workKind, "environment")))
+      .where(and(eq(workItems.id, id), inArray(workItems.workKind, ["environment", "implementation"])))
       .returning({ id: workItems.id });
     if (!row) throw new EnvironmentStatementNotRecordable(id);
   }
@@ -116,8 +118,9 @@ export class WorkItemRepository {
   }
 
   /**
-   * The statement of the project's most recently completed environment task that recorded it for
-   * `version`: the stack that version was chosen for. Null when no environment task did.
+   * The statement of the project's most recently completed task that recorded it for `version`
+   * (an environment task, or an implementation whose verified merge produced that version): the
+   * stack that version was chosen for. Null when none did.
    */
   async environmentStatementFor(projectId: string, version: string): Promise<string | null> {
     const [row] = await this.db
@@ -126,7 +129,7 @@ export class WorkItemRepository {
       .where(
         and(
           eq(workItems.projectId, projectId),
-          eq(workItems.workKind, "environment"),
+          inArray(workItems.workKind, ["environment", "implementation"]),
           eq(workItems.status, "Completed"),
           eq(workItems.environmentStatementVersion, version),
           isNotNull(workItems.environmentStatement),

@@ -92,6 +92,7 @@ function coreLoopDeps(
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     blockReports: { runPending: notExercised("blockReports") },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+    environmentOwner: notExercised("environmentOwner"),
     ...parts,
   };
 }
@@ -455,47 +456,6 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
   });
 
 
-  // ADR-074 addendum 2 d63: an implementer needing an environment change is Blocked in M1, not retried blindly.
-  test("environment change needed: Blocked naming the paths, never Failed, no failed approach, no failure router", async () => {
-    const detail = "ownership gate refused the work of t: environment files belong to the platform role; ...";
-    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
-      status: "environment_change_needed",
-      paths: ["environment/Containerfile"],
-      detail,
-      output: {
-        status: "done",
-        summary: "wrote greet.sh and the Containerfile",
-        findings: [],
-        error: null,
-        error_detail: null,
-        total_tokens: { input: 100, output: 10 },
-        total_cost: 0.0006,
-        cost_measured: true,
-        turn_count: 4,
-        finish_reason: "completed",
-      },
-      sessionId: "test-session",
-      attempt: 1,
-      errorEnvelope: {
-        outcome: "blocked",
-        summary: detail,
-        chain: { boundary: "development", operation: "ownershipGate", message: detail, timestamp: new Date().toISOString() },
-      },
-    });
-
-    const result = await processTask(deps, freshPendingItem());
-
-    expect(result.status).toBe("blocked");
-    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
-    expect(failureRoutes()).toBe(0);
-    expect(failedApproaches()).toBe(0);
-    const reason = stored().blockedReason;
-    expect(reason).toMatchObject({ source: "environment_change_needed", paths: ["environment/Containerfile"], reason: detail });
-    expect(() =>
-      parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
-    ).not.toThrow();
-  });
-
   // s-team-roster-m1: an item no roster role owns blocks; no default role works it.
   test("no owner role: Blocked with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
     const detail = "no roster role can work task t: the work item has no owner role; no agent ran and nothing executed";
@@ -800,6 +760,152 @@ describe("a disputed check: the check task is reopened with the dispute and the 
     expect(check().status).toBe("Completed");
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
+  });
+});
+
+// docs/investigations/third-run-2026-10-14.md N7: a refused environment edit's only exit was an
+// operator editing main. ADR-074 addendum 2 d66 b: Z0 opens an environment task and the item waits.
+describe("an environment change requested: an environment task is opened and the item waits on it", () => {
+  const ROLE_ID = "55555555-5555-4555-8555-555555555555";
+  const detail = "ownership gate refused the work of t: environment/ belongs to the platform role; ...";
+  const need = "the greeter needs the jq package in the image";
+  const diff = "--- a/environment/Containerfile\n+++ b/environment/Containerfile\n+RUN apk add jq\n";
+
+  function buildEnvironmentChangeDeps(priorChanges: number, owner: Awaited<ReturnType<CoreLoopDeps["environmentOwner"]>>) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rows = new Map<string, WorkItem>([[ITEM_ID, freshPendingItem()]]);
+    const edges: Array<{ readonly from: string; readonly to: string }> = [];
+    for (let n = 1; n <= priorChanges; n++) {
+      const prior: WorkItem = {
+        ...freshPendingItem(),
+        id: createWorkItemId(),
+        title: `Environment change ${n} for task ${ITEM_ID}`,
+        status: "Completed",
+        workKind: "environment",
+        taskSpec: { origin: "environment-change", checkedBy: "substrate" },
+      };
+      rows.set(prior.id, prior);
+      edges.push({ from: ITEM_ID, to: prior.id });
+    }
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const rowOf = (id: string): WorkItem => {
+      const row = rows.get(id);
+      if (row === undefined) throw new Error(`no row ${id}`);
+      return row;
+    };
+    const workItemRepo: WorkItemRepository = {
+      findById: async (id) => {
+        const row = rows.get(id);
+        return row === undefined ? null : copy(row);
+      },
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        const row = rowOf(item.id);
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        rows.set(item.id, { ...copy(item), dispatchCount: row.dispatchCount });
+      },
+      create: async (item) => {
+        rows.set(item.id, copy(item));
+        return copy(item);
+      },
+      incrementDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
+        return row.dispatchCount + 1;
+      },
+      refundDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+        return row.dispatchCount - 1;
+      },
+      recordMergeCommit: notExercised("recordMergeCommit"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      addDependency: async (from, to) => void edges.push({ from, to }),
+      getDependencies: async (id) => edges.filter((edge) => edge.from === id).map((edge) => edge.to as WorkItemId),
+      findChildren: async () => [],
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
+      withTransaction: async (fn) => fn(workItemRepo),
+    };
+    const deps = coreLoopDeps({
+      workItemRepo,
+      developmentService: {
+        execute: async () => ({
+          status: "environment_change_requested",
+          paths: ["environment/Containerfile"],
+          need,
+          diff,
+          detail,
+          output: { ...COMPLETED_OUTPUT, summary: need },
+          sessionId: "test-session",
+          attempt: 1,
+          errorEnvelope: {
+            outcome: "blocked",
+            summary: detail,
+            chain: { boundary: "development", operation: "ownershipGate", message: detail, timestamp: new Date().toISOString() },
+          },
+        }),
+      },
+      environmentOwner: async () => owner,
+      failedApproachRepo: { record: async () => { approaches++; } },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+    });
+    const opened = () => [...rows.values()].filter((row) => row.id !== ITEM_ID && row.status === "Pending");
+    return { deps, item: () => rowOf(ITEM_ID), opened, edges, routed: () => routed, approaches: () => approaches };
+  }
+
+  test("within the bound: a Pending environment task owned by the environment role, with the need and the diff; the item waits on it, its dispatch given back", async () => {
+    const { deps, item, opened, edges, routed, approaches } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: undefined });
+    const [environment] = opened();
+    expect(opened()).toHaveLength(1);
+    expect(environment).toMatchObject({
+      level: "Task",
+      workKind: "environment",
+      ownerRoleId: ROLE_ID,
+      projectId: TEST_PROJECT_ID,
+      title: `Environment change 1 for task ${ITEM_ID}`,
+      taskSpec: { origin: "environment-change", checkedBy: "substrate" },
+    });
+    expect(environment?.taskSpec?.scope).toContain(need);
+    expect(environment?.taskSpec?.scope).toContain("+RUN apk add jq");
+    expect(edges).toEqual([{ from: ITEM_ID, to: environment?.id }]);
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
+
+  test("past the bound of two: Blocked with environment_change_needed naming the paths; no third environment task", async () => {
+    const { deps, item, opened, routed, approaches } = buildEnvironmentChangeDeps(2, { kind: "role", roleId: ROLE_ID });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(opened()).toEqual([]);
+    expect(item().status).toBe("Blocked");
+    const reason = item().blockedReason;
+    expect(reason).toMatchObject({ source: "environment_change_needed", paths: ["environment/Containerfile"] });
+    if (reason?.source !== "environment_change_needed") return;
+    expect(reason.reason).toContain("the bound of 2");
+    expect(reason.reason).toContain(need);
+    expect(() => parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason })).not.toThrow();
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
+
+  test("no role does environment work: Blocked with environment_change_needed saying why; nothing opened", async () => {
+    const { deps, item, opened } = buildEnvironmentChangeDeps(0, { kind: "none", why: "no role holds write-environment" });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(opened()).toEqual([]);
+    expect(item()).toMatchObject({ status: "Blocked", blockedReason: { source: "environment_change_needed" } });
+    expect(JSON.stringify(item().blockedReason)).toContain("no role holds write-environment");
   });
 });
 

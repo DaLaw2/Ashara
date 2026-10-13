@@ -22,7 +22,7 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import type { TaskDescriptor } from "@ashara/development";
 import { BlockReports } from "@ashara/engagement";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway } from "@ashara/llm-gateway";
@@ -164,7 +164,10 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     },
     attemptPolicy: { maxTurns: 6, perCommandTimeoutSeconds: 60, toolTimeoutSeconds: 30 },
     environment: {
-      images: { build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }) },
+      images: {
+        build: (request) => buildEnvironmentImage(request, { substrate, recorder: builds, timeoutMs: 120_000 }),
+        prune: (projectId, keepVersion) => pruneEnvironmentImages(substrate, projectId, keepVersion),
+      },
       statements: {
         record: async () => {
           throw new Error("no environment statement is recorded here");
@@ -293,6 +296,11 @@ describe("independent verification", () => {
     ]);
 
     expect(result.status, result.detail).toBe("completed");
+    // Third run N8: the author sees the project's stored checks, the earlier task's included.
+    expect(promptText(mock)).toContain("Checks already stored in this project");
+    expect(promptText(mock)).toContain('### Task \\"Write hello.txt\\"');
+    expect(promptText(mock)).toContain("- says hello: `sh checks/hello.sh`");
+    expect(promptText(mock)).toContain("#### checks/hello.sh");
     const afterFirst = JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null);
     expect(afterFirst).toContain('Defined check \\"says hi\\"');
     expect(afterFirst).toContain("exit code: 2");

@@ -136,6 +136,27 @@ export class TaskCheckRepository {
     return [...paths.values()];
   }
 
+  /**
+   * The latest checks of every task of the project that has any, except `exceptTaskId` and tasks
+   * Abandoned (their checks never run again), each with its task's title, oldest task first. What
+   * a check author is shown so the checks it writes do not contradict them (third run N8).
+   */
+  async storedOfProject(projectId: string, exceptTaskId: string): Promise<Array<TaskChecksRecord & { readonly title: string }>> {
+    const tasks = await this.db
+      .selectDistinct({ id: workItems.id, title: workItems.title, createdAt: workItems.createdAt })
+      .from(taskChecks)
+      .innerJoin(workItems, eq(workItems.id, taskChecks.taskId))
+      .where(and(eq(taskChecks.projectId, projectId), ne(workItems.id, exceptTaskId), ne(workItems.status, "Abandoned")))
+      .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    const stored: Array<TaskChecksRecord & { readonly title: string }> = [];
+    for (const task of tasks) {
+      const record = await this.latest(task.id);
+      if (record === null) throw new TaskChecksCorrupt(task.id, 0, "a task_checks row names it, but no revision of it reads back");
+      stored.push({ ...record, title: task.title });
+    }
+    return stored;
+  }
+
   /** Appends the checks as the task's next revision; returns that revision. */
   async append(write: NewTaskChecks): Promise<number> {
     if (write.checks.length === 0) throw new TaskChecksEmpty(write.taskId);

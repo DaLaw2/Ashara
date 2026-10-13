@@ -38,6 +38,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     projectId: parseProjectId(row.projectId),
     dispatchCount: row.dispatchCount,
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
+    ...(row.ownerRoleId !== null ? { ownerRoleId: row.ownerRoleId } : {}),
     createdAt: row.createdAt ?? new Date(),
     updatedAt: row.updatedAt ?? new Date(),
     events: [],
@@ -59,6 +60,9 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
         successCriteria: item.successCriteria ?? null,
         runScope: item.runScope,
         projectId: item.projectId,
+        // Both or neither (work_items_owner_whole): a task created with its owner carries both.
+        workKind: item.workKind,
+        ownerRoleId: item.ownerRoleId ?? null,
       });
       return rowToWorkItem(row);
     },

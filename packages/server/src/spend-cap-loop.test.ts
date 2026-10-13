@@ -120,6 +120,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     blockReports: { runPending: async () => [] },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+    environmentOwner: notExercised("environmentOwner"),
     ...parts,
   };
 }
@@ -280,13 +281,14 @@ describe("a turn refused at the project's spend cap", () => {
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },
       attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
       environment: {
-        images: { build: notExercised("build") },
+        images: { build: notExercised("build"), prune: notExercised("prune") },
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
       checks: {
         checkFilesOf: notExercised("checkFilesOf"),
         completedOf: notExercised("completedOf"),
         checkedTasksOf: notExercised("checkedTasksOf"),
+        storedOfProject: notExercised("storedOfProject"),
         append: notExercised("append"),
         latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), checks: [{ name: "noop", command: "true" }], files: [] }),
       },

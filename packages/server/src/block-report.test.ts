@@ -201,6 +201,33 @@ describe("a blocked task is told once per time it is blocked", () => {
     expect(bodies[1]).toContain("resumes by itself once the project's build and test environment is ready");
   });
 
+  test("the report counts the open work that depends on the task, through any chain (third run N10)", async () => {
+    const projectId = await newProject();
+    const blocked = await blockedTask(projectId, { source: "environment_change_needed", paths: ["main.go"], reason: "edited" });
+    const task = async (status: string): Promise<string> => {
+      const id = randomUUID();
+      await db.execute(sql`
+        INSERT INTO work_items (id, level, status, title, run_scope, project_id)
+        VALUES (${id}, 'Task', ${status}, 'Dependent', ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+      return id;
+    };
+    const dependsOn = (from: string, to: string) => db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${from}, ${to})`);
+    const direct = await task("Pending");
+    const transitive = await task("Pending");
+    const done = await task("Completed");
+    await dependsOn(direct, blocked);
+    await dependsOn(transitive, direct);
+    await dependsOn(done, blocked);
+    // A cycle back to the blocked task ends the walk and is not counted twice.
+    await dependsOn(blocked, transitive);
+
+    await reports().runPending();
+
+    const [body] = await messagesOf(projectId);
+    expect(body).toContain("2 other tasks depend on it, directly or through other tasks, and wait until it goes on.");
+    expect(body).not.toContain("The rest of the project goes on");
+  });
+
   test("a blocked project's tasks wait for its own report; an unreadable blocked task blocks its project", async () => {
     const quiet = await newProject();
     await blockedTask(quiet, { source: "api" });

@@ -49,6 +49,9 @@ type AppEnv = { Variables: { deps: AppDeps } };
 
 const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
 
+/** An operator's unblock: who, and what they changed. Other fields of `reason` are ignored. */
+const UnblockReasonSchema = z.object({ by: z.string().trim().min(1), note: z.string().trim().min(1) });
+
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -138,6 +141,20 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
               409,
             );
           } else {
+            // An operator's unblock is on the record: who, and what they changed (third run N11).
+            const unblock = UnblockReasonSchema.safeParse(body.reason);
+            if (!unblock.success) {
+              if (previousStatus !== "Blocked") throw new InvalidStatusTransition(item.id, previousStatus, "Pending");
+              return c.json(
+                {
+                  error:
+                    `cannot unblock ${item.id}: an unblock needs reason.by (who unblocks) and reason.note (what was ` +
+                    "changed so the block does not recur); both are recorded and the note is told to the next attempt",
+                  issues: unblock.error.issues,
+                },
+                400,
+              );
+            }
             // An item refused for environment edits restarts from main, never on the branch that
             // holds them (discardTaskBranch). The branch goes first: a failure leaves it Blocked.
             if (item.blockedReason?.source === "environment_change_needed") {
@@ -154,7 +171,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
                 );
               }
             }
-            unblockWorkItem(item);
+            unblockWorkItem(item, { kind: "operator", by: unblock.data.by, note: unblock.data.note });
           }
           break;
         case "Abandoned": {

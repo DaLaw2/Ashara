@@ -42,6 +42,7 @@ export {
   takeEvents,
   exitStaleChecks,
   exitDisputedCheck,
+  requestEnvironmentChange,
 } from "@ashara/planning";
 
 // Failure recovery

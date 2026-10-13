@@ -131,6 +131,7 @@ function buildDeps(
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     blockReports: { runPending: async () => [] },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+    environmentOwner: notExercised("environmentOwner"),
   };
 }
 

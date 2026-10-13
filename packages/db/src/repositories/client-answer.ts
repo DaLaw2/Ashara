@@ -36,6 +36,20 @@ interface OpenAnswerRow {
  * listed, as for tenders.
  */
 export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
+  return openAnswerRows(db, null);
+}
+
+/**
+ * One answer as listOpenAnswers lists it, read now with its project's current vision: what the
+ * Liaison reads it against, so an answer read after another answer of its project wrote a vision
+ * version sees that version. null when it is no longer listed (consumed, or its project stopped).
+ */
+export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<OpenAnswerRow | null> {
+  const [row] = await openAnswerRows(db, answerId);
+  return row ?? null;
+}
+
+async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<OpenAnswerRow[]> {
   const rows = await db
     .select({
       id: clientMessages.id,
@@ -56,6 +70,7 @@ export async function listOpenAnswers(db: DbHandle): Promise<OpenAnswerRow[]> {
         isNull(clientMessages.consumedAt),
         eq(projects.status, "active"),
         noOpenStop(clientMessages.projectId),
+        answerId === null ? undefined : eq(clientMessages.id, answerId),
       ),
     )
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
@@ -147,9 +162,27 @@ interface AnswerWrite {
  * In one transaction, with the project row locked (the first-plan transaction
  * locks it too): the answer consumed, the vision version appended, and for a
  * replanning request the project flagged and the report posted. An answer
- * already consumed gets nothing new ("already-consumed").
+ * already consumed gets nothing new ("already-consumed"). One composed against a
+ * state that no longer holds (another answer of the project wrote a vision version
+ * first, or the first plan was written meanwhile) is rolled back whole and returned
+ * as "moved", for the Liaison to compose again against the current state.
  */
-export async function recordClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded" | "already-consumed"> {
+export async function recordClientAnswer(db: Database, write: AnswerWrite): Promise<AnswerRecording> {
+  try {
+    return { kind: await writeClientAnswer(db, write) };
+  } catch (err) {
+    if (err instanceof AnswerContextMoved) return { kind: "moved", detail: err.message };
+    throw err;
+  }
+}
+
+/** What recording an answer did; "moved" wrote nothing, and `detail` says what moved. */
+type AnswerRecording =
+  | { readonly kind: "recorded" }
+  | { readonly kind: "already-consumed" }
+  | { readonly kind: "moved"; readonly detail: string };
+
+function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {
     const [project] = await tx
       .select({ firstPlannedAt: projects.firstPlannedAt })
