@@ -1,5 +1,5 @@
 import { asc, eq, sql } from "drizzle-orm";
-import type { Database } from "../connection.js";
+import type { DbHandle } from "../connection.js";
 import { secrets } from "../schema.js";
 
 /** One encrypted secret as stored. Plaintext never reaches this layer. */
@@ -12,7 +12,7 @@ export interface EncryptedSecretRow {
 }
 
 export class SecretRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: DbHandle) {}
 
   async upsert(row: EncryptedSecretRow): Promise<void> {
     await this.db

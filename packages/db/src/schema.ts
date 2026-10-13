@@ -161,11 +161,12 @@ export const failedApproaches = pgTable("failed_approaches", {
 // provider_configs
 // ---------------------------------------------------------------------------
 
+// Provider API keys live in the secret store as provider/<name>/api_key, never
+// here (ADR-075 C2); migration 013 drops the plaintext api_key column.
 export const providerConfigs = pgTable("provider_configs", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   name: text().notNull().unique(),
   providerType: text("provider_type").notNull(),
-  apiKey: text("api_key"),
   baseUrl: text("base_url"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),

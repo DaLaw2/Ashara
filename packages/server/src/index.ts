@@ -16,6 +16,7 @@ import {
   FailedApproachRepository,
   ContractRepository,
   RunStateRepository,
+  SecretRepository,
   withPlanningTransaction,
 } from "@ashara/db";
 import {
@@ -55,7 +56,8 @@ import {
   NoLLMProvidersConfigured,
   withStructuredLadder,
 } from "@ashara/llm-gateway";
-import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig, ProviderCredential } from "@ashara/llm-gateway";
+import type { GatewayCatalog, LadderAttemptEvent, LLMCallRecord, ModelConfig } from "@ashara/llm-gateway";
+import { SecretStore } from "@ashara/security";
 import type { WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, parseProjectId, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
@@ -72,11 +74,22 @@ import {
   ContainerSpawnError,
 } from "./container-spawn.js";
 import { PodmanProvisioner } from "./podman-provisioner.js";
+import {
+  ServerStartupRefused,
+  buildProviderKeyEnv,
+  loadApiToken,
+  loadServerMasterKey,
+  resolveProviderCredentials,
+} from "./secrets.js";
 
 async function main(): Promise<void> {
-  // Phase 1: bootstrap — database URL from env or policy default.
+  // Phase 1: the master key, before anything else — without it no credential
+  // can be read (ADR-075 C2). Then the database URL from env or policy default.
+  const masterKey = loadServerMasterKey(process.env);
   const databaseUrl = loadDatabaseUrl();
   const db = createDb(databaseUrl);
+  const secretStore = new SecretStore(new SecretRepository(db), masterKey);
+  console.log(`Secret store: master key ${masterKey.id}`);
 
   const dbWorkItemRepo = new DbWorkItemRepository(db);
   const eventStore = new EventStoreRepository(db);
@@ -91,20 +104,9 @@ async function main(): Promise<void> {
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
 
-  // Phase 2: API token from the database (systemSettings). Fail-closed:
-  // a missing token means the server cannot authenticate any request. The
-  // error names the table and key so the operator knows where to INSERT.
-  const apiToken = await configRepo.getSetting("api_token");
-  if (!apiToken) {
-    console.error(
-      "FATAL: api_token not found in system_settings table. " +
-        "The server cannot start without an API token.\n" +
-        "  looked in: system_settings WHERE key = 'api_token'\n" +
-        "  how to fix: INSERT INTO system_settings (key, value) " +
-        "VALUES ('api_token', '<your-token>');",
-    );
-    process.exit(1);
-  }
+  // Phase 2: API token from the secret store (ADR-075 C4). Fail-closed: a
+  // missing token means the server cannot authenticate any request.
+  const apiToken = await loadApiToken(secretStore);
 
   const config = loadServerConfig(databaseUrl, apiToken);
 
@@ -151,17 +153,11 @@ async function main(): Promise<void> {
         supportsCaching: row.supportsCaching,
       };
     }
-    // Provider credentials from the database — the env path is gone from the
-    // server (Discipline D). The agent-runner subprocess still reads keys from
-    // its own environment (packages/agent-runner/src/runner.ts:522 →
-    // loadGatewayCatalogFromFile → buildConfigFromCatalog → loadProviderKeys);
-    // those env vars are injected from DB data at container spawn time below.
+    // Provider keys from the secret store, one per provider_configs row
+    // (ADR-075 C2). The agent-runner subprocess still reads keys from its own
+    // environment; buildProviderKeyEnv fills it from the store at spawn time.
     const dbProviderRows = await configRepo.listProviderConfigs();
-    const credentials: ProviderCredential[] = dbProviderRows.map((row) => ({
-      name: row.name,
-      apiKey: row.apiKey,
-      baseUrl: row.baseUrl,
-    }));
+    const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
     const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
     const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
     gwConfig.budget = {
@@ -170,7 +166,7 @@ async function main(): Promise<void> {
     };
     llmGateway = buildGateway({
       config: gwConfig,
-      checkedSources: ["provider_configs.api_key (database)"],
+      checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
       ledger: budgetLedger,
       logSink: llmLogSink,
     });
@@ -202,24 +198,9 @@ async function main(): Promise<void> {
       knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
   };
 
-  // Provider name → env var name mapping for container key injection.
-  // The agent-runner subprocess reads keys from its own process.env via
-  // loadProviderKeys() (packages/agent-runner/src/runner.ts:522 →
-  // loadGatewayCatalogFromFile → buildConfigFromCatalog → loadProviderKeys).
-  // The server reads keys from the database and injects them into the
-  // container environment using these names.
-  const PROVIDER_KEY_ENV_MAP: Readonly<Record<string, string>> = {
-    anthropic: "ANTHROPIC_API_KEY",
-    openai: "OPENAI_API_KEY",
-    deepseek: "DEEPSEEK_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    xai: "XAI_API_KEY",
-    google: "GOOGLE_API_KEY",
-  };
-
-  // Build the gateway catalog and provider key env vars at spawn time from
-  // the DB. Fresh per spawn so config changes between dispatches are picked
-  // up. The catalog carries no secrets; keys travel as container env vars.
+  // Build the gateway catalog and provider key env vars at spawn time. Fresh
+  // per spawn so config changes between dispatches are picked up. The catalog
+  // carries no secrets; keys travel as agent-runner env vars.
   interface SpawnData {
     readonly catalog: GatewayCatalog;
     readonly providerKeyEnv: Record<string, string>;
@@ -249,18 +230,8 @@ async function main(): Promise<void> {
       })),
     };
 
-    // Inject provider API keys from the database into env vars for the
-    // container. The agent-runner reads these via loadProviderKeys().
-    const providerKeyEnv: Record<string, string> = {};
-    for (const row of providerRows) {
-      const envName = PROVIDER_KEY_ENV_MAP[row.name];
-      if (envName && row.apiKey) {
-        providerKeyEnv[envName] = row.apiKey;
-      }
-      if (row.name === "local" && row.baseUrl) {
-        providerKeyEnv["LOCAL_LLM_URL"] = row.baseUrl;
-      }
-    }
+    // Story s-isolated-worker-m1 removes this host env injection (loop moves to Z0).
+    const providerKeyEnv = await buildProviderKeyEnv(secretStore, providerRows);
 
     return { catalog, providerKeyEnv };
   }
@@ -488,6 +459,7 @@ async function main(): Promise<void> {
     devSessionRepo,
     visionRepo,
     configRepo,
+    secretStore,
     runner,
     // Bulk plan creation writes the ProjectContract knowledge in the SAME transaction
     // as the work items (mig9-t5) — a contract failure rolls the whole batch back.
@@ -585,7 +557,11 @@ process.on("unhandledRejection", (err: unknown) => {
   console.error("Unhandled rejection:", err);
 });
 
-main().catch((e) => {
-  console.error("Fatal error:", e);
+main().catch((e: unknown) => {
+  if (e instanceof ServerStartupRefused) {
+    console.error(`FATAL: server refused to start. ${e.message}`);
+  } else {
+    console.error("Fatal error:", e);
+  }
   process.exit(1);
 });

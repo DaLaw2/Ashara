@@ -306,7 +306,7 @@ export class ProviderMissingBaseUrl extends GatewayError {
     const howToFix =
       `Set base_url for provider "${provider}" in the provider_configs table ` +
       `(e.g. UPDATE provider_configs SET base_url = 'https://...' WHERE name = '${provider}'), ` +
-      `or disable the provider by removing its api_key.`;
+      `or disable the provider by removing its key (secret provider/${provider}/api_key).`;
     super(
       `Provider "${provider}" has no base_url configured. Without a base_url, ` +
         `the AI SDK defaults to https://api.openai.com/v1 — traffic would silently ` +

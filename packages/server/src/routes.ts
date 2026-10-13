@@ -32,6 +32,7 @@ import {
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { BulkReferenceError } from "@ashara/planning";
 import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/planning";
+import { providerApiKeySecretName } from "@ashara/security";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables
@@ -43,6 +44,8 @@ export interface AppDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly configRepo: ConfigRepository;
+  /** Presence only: no route ever reads or returns a secret value. */
+  readonly secretStore: { has(name: string): Promise<boolean> };
   readonly runner: ContinuousRunner;
   /**
    * Creates a whole bulk plan hierarchy AND its derived ProjectContract in one
@@ -390,19 +393,19 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     return c.json(models);
   });
 
+  // Reports whether a key is stored, never the key (ADR-075 C2).
   app.get("/config/providers", async (c) => {
-    const { configRepo } = c.get("deps");
+    const { configRepo, secretStore } = c.get("deps");
     const rows = await configRepo.listProviderConfigs();
 
-    const configs = rows.map((row) => {
-      const baseUrl = row.baseUrl ?? null;
-      return {
+    const configs = await Promise.all(
+      rows.map(async (row) => ({
         name: row.name,
         providerType: row.providerType,
-        baseUrl,
-        apiKey: row.apiKey ?? null,
-      };
-    });
+        baseUrl: row.baseUrl ?? null,
+        hasKey: await secretStore.has(providerApiKeySecretName(row.name)),
+      })),
+    );
     return c.json(configs);
   });
 

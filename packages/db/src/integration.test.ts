@@ -18,7 +18,6 @@ import {
   failedApproaches,
   modelConfigs,
   providerConfigs,
-  systemSettings,
   visionDocuments,
 } from "./schema.js";
 
@@ -37,7 +36,6 @@ const createdEventIds: string[] = [];
 const createdVisionIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
-const createdSettingKeys: string[] = [];
 const createdKnowledgeIds: string[] = [];
 const createdCostIds: string[] = [];
 const createdFailedApproachTaskIds: string[] = [];
@@ -65,9 +63,6 @@ async function cleanupAll() {
   }
   for (const id of createdCostIds) {
     await db.execute(sql`DELETE FROM task_cost_history WHERE id = ${id}`);
-  }
-  for (const key of createdSettingKeys) {
-    await db.execute(sql`DELETE FROM system_settings WHERE key = ${key}`);
   }
   for (const modelId of createdModelIds) {
     await db.execute(sql`DELETE FROM model_configs WHERE model_id = ${modelId}`);
@@ -270,13 +265,13 @@ describe("ConfigRepository", () => {
     await db.insert(providerConfigs).values({
       name: testProviderName,
       providerType: "openai-compatible",
-      apiKey: "sk-test-key-12345",
       baseUrl: "http://localhost:11434/v1",
     });
     const providers = await repo.listProviderConfigs();
     const provider = providers.find((p) => p.name === testProviderName);
     expect(provider?.providerType).toBe("openai-compatible");
-    expect(provider?.apiKey).toBe("sk-test-key-12345");
+    expect(provider?.baseUrl).toBe("http://localhost:11434/v1");
+    expect(provider).not.toHaveProperty("apiKey");
 
     createdModelIds.push(testModelId);
     await db.insert(modelConfigs).values({
@@ -291,17 +286,6 @@ describe("ConfigRepository", () => {
     const model = models.find((m) => m.modelId === testModelId);
     expect(model?.providerName).toBe(testProviderName);
     expect(model?.capability).toBe("Strong");
-  });
-
-  test("getSetting returns the value for an existing key", async () => {
-    const key = `test-getsetting-${randomUUID().slice(0, 8)}`;
-    createdSettingKeys.push(key);
-    await db.insert(systemSettings).values({ key, value: "hello" });
-    expect(await repo.getSetting(key)).toBe("hello");
-  });
-
-  test("getSetting returns null for a missing key", async () => {
-    expect(await repo.getSetting("nonexistent-key-xyz")).toBeNull();
   });
 });
 

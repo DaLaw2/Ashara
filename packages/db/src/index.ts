@@ -1,4 +1,5 @@
 export { DEFAULT_DATABASE_URL, createDb } from "./connection.js";
+export type { DbTransaction } from "./connection.js";
 
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";

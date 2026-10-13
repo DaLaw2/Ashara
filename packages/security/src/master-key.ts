@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
 import { z } from "zod";
-import { SecretKeyFileInvalid } from "./errors.js";
+import { InvalidMasterKeyLength, SecretKeyFileInvalid } from "./errors.js";
 
 const KEY_BYTES = 32;
 const KEY_FILE_ENV = "ASHARA_SECRET_KEY_FILE";
@@ -23,7 +23,7 @@ export class MasterKey {
 
   constructor(bytes: Buffer) {
     if (bytes.length !== KEY_BYTES) {
-      throw new RangeError(`MasterKey needs ${KEY_BYTES} bytes, got ${bytes.length}`);
+      throw new InvalidMasterKeyLength(KEY_BYTES, bytes.length);
     }
     this.#bytes = Buffer.from(bytes);
     this.id = keyIdOf(this.#bytes);
@@ -77,10 +77,17 @@ export function generateKeyFileContent(): { content: string; keyId: string } {
 
 const INIT_HINT = "Create one with `npx tsx scripts/secret-key-init.ts`.";
 
+/**
+ * The file is opened once and every check runs against that descriptor, so the
+ * file that was checked is the file that is read: a path swapped between a
+ * stat and a read cannot slip a different file past the permission check.
+ * O_NONBLOCK keeps a FIFO at the path from hanging the open; it has no effect
+ * on a regular file.
+ */
 export function loadMasterKey(keyFilePath: string): MasterKey {
-  let stat: fs.Stats;
+  let fd: number;
   try {
-    stat = fs.statSync(keyFilePath);
+    fd = fs.openSync(keyFilePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   } catch (err: unknown) {
     const code = errnoCode(err);
     if (code === "ENOENT") {
@@ -89,10 +96,19 @@ export function loadMasterKey(keyFilePath: string): MasterKey {
     throw new SecretKeyFileInvalid(
       keyFilePath,
       "unreadable",
-      `stat failed (${code ?? "unknown error"})`,
+      `open failed (${code ?? "unknown error"})`,
       "Check that the path and its parent directories are accessible to this user.",
     );
   }
+  try {
+    return readKeyFromDescriptor(fd, keyFilePath);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readKeyFromDescriptor(fd: number, keyFilePath: string): MasterKey {
+  const stat = fs.fstatSync(fd);
   if (!stat.isFile()) {
     throw new SecretKeyFileInvalid(keyFilePath, "not-a-file", "path is not a regular file", INIT_HINT);
   }
@@ -108,7 +124,7 @@ export function loadMasterKey(keyFilePath: string): MasterKey {
 
   let raw: string;
   try {
-    raw = fs.readFileSync(keyFilePath, "utf-8");
+    raw = fs.readFileSync(fd, "utf-8");
   } catch (err: unknown) {
     throw new SecretKeyFileInvalid(
       keyFilePath,

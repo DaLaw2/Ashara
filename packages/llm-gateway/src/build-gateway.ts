@@ -7,8 +7,10 @@ import { KNOWN_LLM_SITES } from "./types.js";
 import type { GatewayConfig, LLMCallRecord } from "./types.js";
 
 const HOW_TO_FIX =
-  "Set an api_key in the provider_configs table for at least one provider " +
-  "(e.g. UPDATE provider_configs SET api_key = '...' WHERE name = 'anthropic').";
+  "Store an API key for at least one provider listed in provider_configs: " +
+  "`read -rs V && printf '%s' \"$V\" | npx tsx scripts/secret.ts put provider/<name>/api_key` " +
+  "(a process that loads its config over HTTP or from a catalog file reads the key from its " +
+  "environment instead, e.g. ANTHROPIC_API_KEY).";
 
 const ROUTING_PROFILE_HOW_TO_FIX =
   "Map the missing site(s) in this combo's [routing.profiles] table, or empty " +

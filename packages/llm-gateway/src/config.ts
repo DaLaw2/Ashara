@@ -13,8 +13,7 @@ import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles } from
 
 /**
  * A provider's credentials for gateway configuration. Decoupled from the
- * source: the server passes DB-sourced data; the CLI and agent-runner pass
- * env-sourced data.
+ * source: the server resolves keys from its secret store.
  */
 export interface ProviderCredential {
   readonly name: string;
@@ -26,10 +25,9 @@ export interface ProviderCredential {
  * Build a {@link GatewayConfig} from an already-loaded model catalog,
  * routing profiles, and provider credentials.
  *
- * The caller owns the credential source: the server reads from the database
- * (`provider_configs.api_key`), while the CLI and agent-runner read from
- * the process environment. Budget config is still read from env (it is
- * deployment tuning, not a secret).
+ * The caller owns the credential source: the server resolves each key from
+ * its secret store (`provider/<name>/api_key`). Budget config is still read
+ * from env (it is deployment tuning, not a secret).
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
@@ -97,7 +95,6 @@ const CatalogProviderSchema = z.object({
   name: z.string().min(1),
   providerType: z.string().min(1),
   baseUrl: z.string().nullable(),
-  apiKey: z.string().nullable().optional(),
 });
 
 export const GatewayCatalogSchema = z.object({
@@ -131,8 +128,10 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
     else modelsByProvider.set(m.providerName, [model]);
   }
 
-  // Provider credentials: prefer catalog-supplied keys (from DB via API),
-  // fall back to env vars for standalone CLI / agent-runner subprocess.
+  // Provider credentials come from this process's environment only: a catalog
+  // never carries a key (ADR-075 C2). The agent-runner subprocess's env is
+  // filled from the server's secret store; story s-isolated-worker-m1 removes
+  // that path.
   const envKeys = loadProviderKeys();
   const envKeysByProvider: Record<string, string | undefined> = {
     anthropic: envKeys.anthropicApiKey,
@@ -147,9 +146,7 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
   for (const p of catalog.providers) {
     const models = modelsByProvider.get(p.name);
     if (!models || models.length === 0) continue;
-    const catalogKey = (p.apiKey != null && p.apiKey !== "") ? p.apiKey : undefined;
-    const envKey = envKeysByProvider[p.name];
-    const resolvedKey = catalogKey ?? envKey;
+    const resolvedKey = envKeysByProvider[p.name];
     const hasCredentials =
       resolvedKey !== undefined ||
       (p.name === "local" && (envKeys.localLlmUrl ?? p.baseUrl) != null);

@@ -1,6 +1,6 @@
-import { asc, eq } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { modelConfigs, providerConfigs, systemSettings } from "../schema.js";
+import { modelConfigs, providerConfigs } from "../schema.js";
 
 export class ConfigRepository {
   constructor(private readonly db: Database) {}
@@ -24,13 +24,5 @@ export class ConfigRepository {
 
   async listProviderConfigs() {
     return this.db.select().from(providerConfigs);
-  }
-
-  async getSetting(key: string): Promise<string | null> {
-    const rows = await this.db
-      .select()
-      .from(systemSettings)
-      .where(eq(systemSettings.key, key));
-    return rows[0]?.value ?? null;
   }
 }

@@ -49,6 +49,22 @@ export class SecretKeyFileExists extends SecurityError {
   }
 }
 
+/** Key material of the wrong length reached the MasterKey constructor. Carries lengths only. */
+export class InvalidMasterKeyLength extends SecurityError {
+  readonly expectedBytes: number;
+  readonly actualBytes: number;
+
+  constructor(expectedBytes: number, actualBytes: number) {
+    super(
+      `A master key must be ${expectedBytes} bytes, got ${actualBytes}. Load the key with ` +
+        `loadMasterKey() from a file written by \`npx tsx scripts/secret-key-init.ts\`.`,
+    );
+    this.name = "InvalidMasterKeyLength";
+    this.expectedBytes = expectedBytes;
+    this.actualBytes = actualBytes;
+  }
+}
+
 export class InvalidSecretName extends SecurityError {
   readonly secretName: string;
   readonly issues: readonly string[];

@@ -1,8 +1,12 @@
 // Server integration tests — boot Hono app, hit every endpoint, verify format
 
 import { randomUUID } from "crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
+import { z } from "zod";
 import type pg from "pg";
 import {
   createDb,
@@ -12,10 +16,12 @@ import {
   DevSessionRepository,
   VisionRepository,
   ConfigRepository,
+  SecretRepository,
   withPlanningTransaction,
 } from "@ashara/db";
 import type { ContinuousRunner } from "@ashara/orchestrator";
 import { createBulkPlanWithContract } from "@ashara/planning";
+import { SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { bearerAuth } from "./middleware.js";
@@ -45,11 +51,15 @@ const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;
 let db: Database;
 let pool: pg.Pool;
 let app: Hono;
+let keyDir: string;
 
 const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
+const createdSecretNames: string[] = [];
+let keyedProviderName: string;
+let keylessProviderName: string;
 
 function authHeaders(): Record<string, string> {
   return {
@@ -93,12 +103,20 @@ beforeAll(async () => {
   const configRepo = new ConfigRepository(db);
   const runner = { wake: () => {} } as unknown as ContinuousRunner;
 
+  // A throwaway master key in a temp file: never the owner's key, never the
+  // owner's secrets. Only names derived from this suite's unique providers are written.
+  keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-server-intg-key-"));
+  const keyFile = path.join(keyDir, "secret.key");
+  fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
+  const secretStore = new SecretStore(new SecretRepository(db), loadMasterKey(keyFile));
+
   const deps: AppDeps = {
     workItemRepo,
     eventStore,
     devSessionRepo,
     visionRepo,
     configRepo,
+    secretStore,
     runner,
     createBulkPlan: makeCreateBulkPlan(db),
   };
@@ -109,11 +127,18 @@ beforeAll(async () => {
   app = honoApp;
 
   const testProviderName = `intg-provider-${randomUUID().slice(0, 8)}`;
-  createdProviderNames.push(testProviderName);
-  await pool.query(
-    "INSERT INTO provider_configs (name, provider_type, api_key, base_url) VALUES ($1, $2, $3, $4)",
-    [testProviderName, "openai-compatible", "sk-test-intg", "http://localhost:11434/v1"],
-  );
+  keyedProviderName = testProviderName;
+  keylessProviderName = `intg-provider-${randomUUID().slice(0, 8)}`;
+  for (const name of [keyedProviderName, keylessProviderName]) {
+    createdProviderNames.push(name);
+    await pool.query(
+      "INSERT INTO provider_configs (name, provider_type, base_url) VALUES ($1, $2, $3)",
+      [name, "openai-compatible", "http://localhost:11434/v1"],
+    );
+  }
+  const keyedSecret = providerApiKeySecretName(keyedProviderName);
+  createdSecretNames.push(keyedSecret);
+  await secretStore.put(keyedSecret, "throwaway-intg-value");
 
   const testModelId = `intg-model-${randomUUID().slice(0, 8)}`;
   createdModelIds.push(testModelId);
@@ -124,6 +149,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const name of createdSecretNames) {
+    await pool.query("DELETE FROM secrets WHERE name = $1", [name]);
+  }
+  fs.rmSync(keyDir, { recursive: true, force: true });
   for (const modelId of createdModelIds) {
     await pool.query("DELETE FROM model_configs WHERE model_id = $1", [modelId]);
   }
@@ -320,15 +349,23 @@ describe("Work Items Bulk", () => {
 // ===========================================================================
 
 describe("Config", () => {
-  test("GET /config/providers returns camelCase array with apiKey from DB", async () => {
+  test("GET /config/providers reports hasKey from the secret store and never a key", async () => {
     const res = await req("GET", "/config/providers");
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(Array.isArray(body)).toBe(true);
-    expect(body.length).toBeGreaterThanOrEqual(1);
-    expect(body[0]).toHaveProperty("providerType");
-    expect(body[0]).toHaveProperty("apiKey");
-    expect(body[0].provider_type).toBeUndefined();
+    const text = await res.text();
+    expect(text).not.toContain("throwaway-intg-value");
+    const rows = z.array(z.record(z.string(), z.unknown())).parse(JSON.parse(text));
+    for (const row of rows) {
+      expect(row).not.toHaveProperty("apiKey");
+      expect(row).not.toHaveProperty("api_key");
+      expect(typeof row["hasKey"]).toBe("boolean");
+    }
+    expect(rows.find((r) => r["name"] === keyedProviderName)).toMatchObject({
+      providerType: "openai-compatible",
+      hasKey: true,
+    });
+    expect(rows.find((r) => r["name"] === keylessProviderName)).toMatchObject({ hasKey: false });
+    expect(rows[0]?.["provider_type"]).toBeUndefined();
   });
 
   test("GET /config/models returns camelCase array", async () => {
