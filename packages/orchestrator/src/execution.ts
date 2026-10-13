@@ -34,7 +34,7 @@ async function executeTask(
   output: AgentOutputJson | null;
   attempt: number;
   errorEnvelope?: ErrorEnvelope;
-  /** Whether the agent subprocess was launched — see TaskCostInfo.costUsd. */
+  /** Whether the agent attempt was started — see TaskCostInfo.costUsd. */
   agentInvoked: boolean;
   /**
    * The item was parked at Blocked here (environment unavailable), so

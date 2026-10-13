@@ -18,9 +18,8 @@ export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
  *   2. the `ASHARA_MODELS_CONFIG` env var (operator override),
  *   3. the module-anchored repo default `<ashara-root>/config/models.toml`.
  * The default is anchored to the Ashara checkout via `resolveAsharaRoot()`, NOT
- * to process.cwd(): agent-runner subprocesses run with cwd = task worktree, so
- * a cwd-relative default silently fails to find the file there (rp-t2 -- see
- * paths.ts). Shared so routing-profile loading looks at the exact same file
+ * to process.cwd(): a process whose cwd is elsewhere silently fails to find a
+ * cwd-relative default (rp-t2 -- see paths.ts). Shared so routing-profile loading looks at the exact same file
  * pricing does -- one source of truth per config load.
  */
 export function resolveModelsConfigPath(configPath?: string): string {

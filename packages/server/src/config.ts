@@ -10,7 +10,7 @@ export interface ServerConfig {
   readonly apiToken: string;
   readonly port: number;
   readonly coreLoop: CoreLoopConfig;
-  /** The podman executable the provisioner runs and probes (ASHARA_PODMAN_BINARY). */
+  /** The podman executable every cell runs through (ASHARA_PODMAN_BINARY). */
   readonly podmanBinary: string;
 }
 
@@ -47,7 +47,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const baseBranch =
     process.env["BASE_BRANCH"] ?? detectDefaultBranch(repoPath) ?? "master";
 
-  const asharaSourceDir = process.env["ASHARA_SOURCE_DIR"] ?? ".";
   const maxBatchSize = parseIntOr(process.env["MAX_BATCH_SIZE"], 2);
   // Finding (a), E2E Run 11: the orchestrator's reactive budget is the only
   // ENFORCING spend cap, but it read ASHARA_BUDGET_LIMIT_USD only — a var the
@@ -65,7 +64,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     ...DEFAULT_CONFIG,
     workdirBase,
     baseBranch,
-    asharaSourceDir,
     maxBatchSize,
     budgetLimitUsd,
   };

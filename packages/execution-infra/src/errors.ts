@@ -3,8 +3,7 @@
  * secret: cells get no -e, --env-host or --secret), the exit code and stderr where one exists.
  */
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
-export class ExecutionInfraError extends Error {
+class ExecutionInfraError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "ExecutionInfraError";
@@ -58,13 +57,19 @@ export class CellStartFailed extends ExecutionInfraError {
   readonly argv: readonly string[];
   readonly exitCode: number | null;
   readonly stderr: string;
+  /** What became of a container the failed `podman run` may have created. */
+  readonly cleanup: string;
 
-  constructor(argv: readonly string[], exitCode: number | null, stderr: string) {
-    super(`Cell start failed (exit ${exitCode ?? "none"}): ${stderr.trim() || "(no stderr)"}; argv: ${JSON.stringify(argv)}`);
+  constructor(argv: readonly string[], exitCode: number | null, stderr: string, cleanup: string, options?: ErrorOptions) {
+    super(
+      `Cell start failed (exit ${exitCode ?? "none"}): ${stderr.trim() || "(no stderr)"}; ${cleanup}; argv: ${JSON.stringify(argv)}`,
+      options,
+    );
     this.name = "CellStartFailed";
     this.argv = argv;
     this.exitCode = exitCode;
     this.stderr = stderr;
+    this.cleanup = cleanup;
   }
 }
 
@@ -142,6 +147,31 @@ export class PodmanCommandFailed extends ExecutionInfraError {
     this.argv = argv;
     this.exitCode = exitCode;
     this.detail = detail;
+  }
+}
+
+/**
+ * A cell mount was refused before podman ran: after canonicalization (symlinks resolved) the host
+ * path is not under the substrate's mount root, or cannot be resolved at all (Discipline B).
+ */
+export class MountPathRejected extends ExecutionInfraError {
+  readonly hostPath: string;
+  readonly canonicalPath: string | null;
+  readonly mountRoot: string;
+  readonly reason: string;
+
+  constructor(hostPath: string, canonicalPath: string | null, mountRoot: string, reason: string, options?: ErrorOptions) {
+    super(
+      `Mount of ${JSON.stringify(hostPath)}` +
+        `${canonicalPath !== null && canonicalPath !== hostPath ? ` (resolves to ${JSON.stringify(canonicalPath)})` : ""} ` +
+        `refused: ${reason}; every mount must be under ${JSON.stringify(mountRoot)}`,
+      options,
+    );
+    this.name = "MountPathRejected";
+    this.hostPath = hostPath;
+    this.canonicalPath = canonicalPath;
+    this.mountRoot = mountRoot;
+    this.reason = reason;
   }
 }
 

@@ -9,9 +9,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ashara/execution-infra": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/shared": "*",
-    "smol-toml": "1.7.1",
-    "zod": "4.4.3"
+    "@ashara/workplace": "*",
+    "smol-toml": "1.7.1"
   }
 }

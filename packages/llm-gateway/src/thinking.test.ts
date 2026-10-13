@@ -18,7 +18,7 @@ describe("loadThinkingPolicyFromToml", () => {
     );
     expect(thinkingModeFor(policy, "escalation")).toBe("on");
     expect(thinkingModeFor(policy, "decomposition")).toBe("off");
-    expect(thinkingModeFor(policy, "environment-spec")).toBe("off");
+    expect(thinkingModeFor(policy, "not-a-site")).toBe("off");
     expect(thinkingModeFor(policy, undefined)).toBe("off");
   });
 

@@ -1,33 +1,3 @@
-import { z } from "zod";
-import type { CapabilityLevel } from "./enums.js";
-import { parseCapabilityLevel } from "./enums.js";
-
-// ---------------------------------------------------------------------------
-// Provider keys — LLM API credentials
-// ---------------------------------------------------------------------------
-
-export interface ProviderKeys {
-    readonly anthropicApiKey?: string;
-    readonly openaiApiKey?: string;
-    readonly deepseekApiKey?: string;
-    readonly mistralApiKey?: string;
-    readonly xaiApiKey?: string;
-    readonly googleApiKey?: string;
-    readonly localLlmUrl?: string;
-}
-
-export function loadProviderKeys(): ProviderKeys {
-    return {
-        anthropicApiKey: nonEmpty(process.env["ANTHROPIC_API_KEY"]),
-        openaiApiKey: nonEmpty(process.env["OPENAI_API_KEY"]),
-        deepseekApiKey: nonEmpty(process.env["DEEPSEEK_API_KEY"]),
-        mistralApiKey: nonEmpty(process.env["MISTRAL_API_KEY"]),
-        xaiApiKey: nonEmpty(process.env["XAI_API_KEY"]),
-        googleApiKey: nonEmpty(process.env["GOOGLE_API_KEY"]),
-        localLlmUrl: nonEmpty(process.env["LOCAL_LLM_URL"]),
-    };
-}
-
 // ---------------------------------------------------------------------------
 // Budget
 // ---------------------------------------------------------------------------
@@ -77,60 +47,7 @@ export function loadBudgetEnv(): BudgetEnv {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Execution context — env-var handoff from server spawn to agent-runner
-// subprocess (SEAM-2). Validated at both ends: fail-closed, no path defaults.
-// ---------------------------------------------------------------------------
-
-const ExecutionContextSchema = z.object({
-    ASHARA_BRIEF_PATH: z.string().min(1),
-    ASHARA_OUTPUT_PATH: z.string().min(1),
-    ASHARA_WORKING_DIR: z.string().min(1),
-    ASHARA_CATALOG_PATH: z.string().min(1),
-    AGENT_CAPABILITY: z.string().min(1).default("Strong"),
-});
-
-type ExecutionContext = z.infer<typeof ExecutionContextSchema>;
-
-/** @testseam env.test.ts checks the schema without mutating process.env */
-export function parseExecutionContext(env: Record<string, string | undefined>): ExecutionContext {
-    return ExecutionContextSchema.parse(env);
-}
-
-// ---------------------------------------------------------------------------
-// Agent runner — env vars consumed by the agent subprocess
-// ---------------------------------------------------------------------------
-
-export interface AgentRunnerEnv {
-    readonly workingDir: string;
-    readonly briefPath: string;
-    readonly outputPath: string;
-    readonly catalogPath: string;
-    readonly capability: CapabilityLevel;
-
-    readonly modelsConfigPath?: string;
-}
-
-export function loadAgentRunnerEnv(): AgentRunnerEnv {
-    const ctx = parseExecutionContext(process.env);
-    return {
-        workingDir: ctx.ASHARA_WORKING_DIR,
-        briefPath: ctx.ASHARA_BRIEF_PATH,
-        outputPath: ctx.ASHARA_OUTPUT_PATH,
-        catalogPath: ctx.ASHARA_CATALOG_PATH,
-        capability: parseCapabilityLevel(ctx.AGENT_CAPABILITY),
-
-        modelsConfigPath: loadModelsConfigPathEnvOverride(),
-    };
-}
-
-/**
- * Optional operator override for the models.toml config path
- * (`ASHARA_MODELS_CONFIG`). Read directly rather than through
- * `loadAgentRunnerEnv()`: pricing/routing-profile resolution runs in the
- * server process too, not just inside the agent-runner subprocess,
- * where the required `ExecutionContextSchema` fields are never set.
- */
+/** Optional operator override for the models.toml config path (`ASHARA_MODELS_CONFIG`). */
 export function loadModelsConfigPathEnvOverride(): string | undefined {
     return nonEmpty(process.env["ASHARA_MODELS_CONFIG"]);
 }

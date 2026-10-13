@@ -16,9 +16,7 @@ export interface CoreLoopConfig {
   readonly baseBranch: string;
   readonly maxBatchSize: number;
   readonly budgetLimitUsd: number;
-  readonly agentTimeoutMs: number;
   readonly maxRetries: number;
-  readonly asharaSourceDir: string;
   readonly decompositionTimeoutMs: number;
   readonly verifyTimeoutMs: number;
 }
@@ -34,9 +32,7 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   baseBranch: "master",
   maxBatchSize: 2,
   budgetLimitUsd: 5.0,
-  agentTimeoutMs: 300_000,
   maxRetries: 1,
-  asharaSourceDir: ".",
   decompositionTimeoutMs: 120_000,
   verifyTimeoutMs: 120_000,
 };

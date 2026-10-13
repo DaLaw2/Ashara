@@ -1,6 +1,4 @@
-import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { z } from "zod";
 import { serve } from "@hono/node-server";
 import {
@@ -44,18 +42,17 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import { ClientStops, PlanReports, TenderIntake } from "@ashara/engagement";
 import type {
+  AgentStaffing,
   StackDerivationScope,
   SessionStore,
   KnowledgeSink,
   KnowledgeSource,
-  AgentInvoker,
-  AgentSpawnOptions,
   ExecutionEventSink,
   ContractSource,
   ProjectIntentSource,
   StackDeriver,
 } from "@ashara/development";
-import { buildSanitizedEnv } from "@ashara/agent-runner";
+import { PodmanSubstrate, loadBaseCell } from "@ashara/execution-infra";
 import {
   BudgetLedger,
   buildGateway,
@@ -68,23 +65,18 @@ import {
   NoLLMProvidersConfigured,
   withStructuredLadder,
 } from "@ashara/llm-gateway";
-import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
+import type { LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
-import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR } from "@ashara/shared";
+import type { CapabilityLevel, ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 import type { AppDeps } from "./routes.js";
-import { resolveAgentOutput } from "./agent-output.js";
-import { ContainerSpawnError } from "./container-spawn.js";
-import { PodmanProvisioner } from "./podman-provisioner.js";
+import { cellInstanceFor, reconcileCellsAtStartup, teardownCellsAtShutdown } from "./cells.js";
 import {
   ServerStartupRefused,
-  buildProviderKeyEnv,
   loadApiToken,
   loadServerMasterKey,
   resolveProviderCredentials,
@@ -106,6 +98,16 @@ const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
 // every client, that they are not. The price is that distributed guessing is
 // bounded per source, not in total; against that the code itself carries the
 // entropy (MIN_CLIENT_ACCESS_CODE_LENGTH).
+// The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
+// (ADR-074 d56); 25 turns is the cap the agent loop has always had.
+const ATTEMPT_POLICY = {
+  maxTurns: 25,
+  perCommandTimeoutSeconds: 300,
+  toolTimeoutSeconds: 60,
+};
+// Interim: s-team-roster-m1 replaces this with the roster's role for the task.
+const AGENT_ROLE = "developer";
+
 const CLIENT_LOGIN_THROTTLE = {
   windowSeconds: 15 * 60,
   perNameAndSource: 5,
@@ -193,8 +195,8 @@ async function main(): Promise<void> {
       models[row.modelId] = toModelConfig("model_configs", row);
     }
     // Provider keys from the secret store, one per provider_configs row
-    // (ADR-075 C2). The agent-runner subprocess still reads keys from its own
-    // environment; buildProviderKeyEnv fills it from the store at spawn time.
+    // (ADR-075 C2): their only source. The agent's turns run in this process
+    // through this gateway, so no key leaves it.
     const dbProviderRows = await configRepo.listProviderConfigs();
     const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
     const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
@@ -225,6 +227,8 @@ async function main(): Promise<void> {
   }
 
   const failureRouter = new FailureRouter(3);
+  // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
+  const abortController = new AbortController();
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief) => devSessionRepo.insert(sid, tid, brief),
@@ -239,126 +243,28 @@ async function main(): Promise<void> {
       knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
   };
 
-  // Build the gateway catalog and provider key env vars at spawn time. Fresh
-  // per spawn so config changes between dispatches are picked up. The catalog
-  // carries no secrets; keys travel as agent-runner env vars.
-  interface SpawnData {
-    readonly catalog: GatewayCatalog;
-    readonly providerKeyEnv: Record<string, string>;
-  }
+  // Execution infrastructure: every tool call and every check runs in a cell on
+  // this podman (s-isolated-worker-m1). The cells are labelled with this
+  // deployment's instance, so startup reconciliation removes only its own.
+  const cellSubstrate = new PodmanSubstrate({
+    podmanPath: config.podmanBinary,
+    mountRoot: config.coreLoop.workdirBase,
+  });
+  const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
+  const baseCell = await loadBaseCell();
+  console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
 
-  async function buildSpawnData(): Promise<SpawnData> {
-    const [modelRows, providerRows] = await Promise.all([
-      configRepo.listModelConfigs(),
-      configRepo.listProviderConfigs(),
-    ]);
-
-    const catalog: GatewayCatalog = {
-      models: modelRows.map((row) => ({
-        modelId: row.modelId,
-        providerName: row.providerName,
-        apiModelId: row.apiModelId,
-        capability: row.capability,
-        inputCostPer1m: row.inputCostPer1m,
-        outputCostPer1m: row.outputCostPer1m,
-        cacheReadCostPer1m: row.cacheReadCostPer1m,
-        cacheWriteCostPer1m: row.cacheWriteCostPer1m,
-        maxContextTokens: row.maxContextTokens,
-        priceWindows: row.priceWindows,
-      })),
-      providers: providerRows.map((row) => ({
-        name: row.name,
-        providerType: row.providerType,
-        baseUrl: row.baseUrl,
-      })),
-    };
-
-    // Story s-isolated-worker-m1 removes this host env injection (loop moves to Z0).
-    const providerKeyEnv = await buildProviderKeyEnv(secretStore, providerRows);
-
-    return { catalog, providerKeyEnv };
-  }
-
-  const provisioner = new PodmanProvisioner(config.coreLoop.workdirBase, config.podmanBinary);
-
-  const agentInvoker: AgentInvoker = {
-    async spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson> {
-      const capability = determineCapability(opts.dispatchCount, opts.blockedReason);
+  // The agent half of each task's Assignment, resolved once per attempt.
+  const staffing: AgentStaffing = {
+    staff(task) {
+      const capability = determineCapability(task.dispatchCount, task.blockedReason);
       if (capability === "Frontier") {
-        console.log(`[${opts.taskId}] model escalated to Frontier (attempt ${opts.dispatchCount + 1})`);
+        console.log(`[${task.id}] model escalated to Frontier (attempt ${task.dispatchCount + 1})`);
       }
-
-      // Write the gateway catalog file into the task's control directory.
-      // The .ashara/ dir is created by execution-service before spawn is called.
-      const catalogPath = join(opts.workDir, ASHARA_CONTROL_DIR, "gateway-catalog.json");
-      const spawnData = await buildSpawnData();
-      writeFileSync(catalogPath, JSON.stringify(spawnData.catalog, null, 2));
-
-      // Agent-runner always runs on the host. When a provisioned container
-      // exists, run_command routes commands into it via ASHARA_EXEC_CONTAINER;
-      // otherwise commands execute locally.
-      const agentEnv: Record<string, string> = {
-        ...buildSanitizedEnv([]),
-        ...spawnData.providerKeyEnv,
-        ASHARA_BRIEF_PATH: opts.briefPath,
-        ASHARA_OUTPUT_PATH: opts.outputPath,
-        ASHARA_WORKING_DIR: opts.workDir,
-        ASHARA_CATALOG_PATH: catalogPath,
-        AGENT_CAPABILITY: capability,
+      return {
+        role: AGENT_ROLE,
+        model: llmGateway.resolveModel(capability, "agent-runner"),
       };
-
-      const execContainerName = provisioner.activeContainerName();
-      if (execContainerName) {
-        agentEnv["ASHARA_EXEC_CONTAINER"] = execContainerName;
-        agentEnv["ASHARA_HOST_WORKDIR"] = config.coreLoop.workdirBase;
-        agentEnv["ASHARA_CONTAINER_MOUNT"] = provisioner.activeContainerMount() ?? "/workspace";
-      }
-
-      console.log(
-        `[${opts.taskId}] launching agent-runner on host`
-        + (execContainerName ? ` (exec container: ${execContainerName})` : " (local execution)"),
-      );
-
-      const proc = spawn("node", [
-        resolve(config.coreLoop.asharaSourceDir, "node_modules/tsx/dist/cli.mjs"),
-        resolve(config.coreLoop.asharaSourceDir, "packages/agent-runner/src/runner.ts"),
-      ], {
-        cwd: opts.workDir,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: agentEnv,
-      });
-
-      const timer = setTimeout(() => {
-        console.warn(
-          `[${opts.taskId}] agent-runner exceeded ${config.coreLoop.agentTimeoutMs}ms — killing host process`,
-        );
-        proc.kill("SIGTERM");
-      }, config.coreLoop.agentTimeoutMs);
-      try {
-        let stdout = "";
-        let stderr = "";
-        proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-        proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-        const exitCode = await new Promise<number | null>((resolveCode, reject) => {
-          proc.on("close", resolveCode);
-          proc.on("error", (err) => {
-            reject(new ContainerSpawnError({
-              operation: "host-spawn",
-              containerName: execContainerName ?? "local",
-              taskId: opts.taskId,
-              exitCode: null,
-              cause: err.message,
-              stderr: "",
-            }));
-          });
-        });
-
-        if (stderr) console.log(`[${opts.taskId}] agent stderr:`, stderr.slice(0, 500));
-        return await resolveAgentOutput(opts.taskId, opts.outputPath, exitCode, stderr);
-      } finally {
-        clearTimeout(timer);
-      }
     },
   };
 
@@ -448,13 +354,15 @@ async function main(): Promise<void> {
     sessionStore,
     knowledgeSink,
     knowledgeSource,
-    agentInvoker,
-    llmGateway,
     eventSink: devEventSink,
     intentSource,
     stackDeriver,
     contractSource,
-    provisioner,
+    cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
+    llm: llmGateway,
+    staffing,
+    attemptPolicy: ATTEMPT_POLICY,
+    shutdownSignal: abortController.signal,
   });
 
   const coreLoopDeps: CoreLoopDeps = {
@@ -534,7 +442,9 @@ async function main(): Promise<void> {
     console.warn("Startup reconciliation failed; starting runner anyway:", e);
   }
 
-  const abortController = new AbortController();
+  // Cells a previous process of this instance leaked, removed before any dispatch.
+  await reconcileCellsAtStartup(cellSubstrate, cellInstance);
+
   const runnerPromise = runner.run(abortController.signal);
 
   const server = serve({
@@ -550,16 +460,16 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("Shutting down...");
+    // The abort cancels every attempt in flight; each dispatch then tears its
+    // own cells down, and the drain below removes whatever is left.
     abortController.abort();
-    // Agent-runner processes are host-spawned children — they inherit the
-    // server's process group, so SIGTERM propagates naturally on shutdown.
-    // Provisioned containers are cleaned up by DevelopmentService's teardown.
     server.close();
   };
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 
   await runnerPromise;
+  await teardownCellsAtShutdown(cellSubstrate);
   console.log("Server and continuous runner stopped");
 }
 
@@ -578,7 +488,7 @@ function extractPriorEnvelope(blockedReason: StoredBlockedReason | undefined): R
   return tryParseEnvelope(raw);
 }
 
-function determineCapability(dispatchCount: number, blockedReason: StoredBlockedReason | undefined): string {
+function determineCapability(dispatchCount: number, blockedReason: StoredBlockedReason | undefined): CapabilityLevel {
   if (dispatchCount === 0) return "Strong";
 
   const envelope = extractPriorEnvelope(blockedReason);

@@ -7,7 +7,6 @@ import type { ModelConfig } from "@ashara/llm-gateway";
 import { generateKeyFileContent } from "@ashara/security";
 import {
   ServerStartupRefused,
-  buildProviderKeyEnv,
   loadApiToken,
   loadServerMasterKey,
   resolveProviderCredentials,
@@ -99,6 +98,5 @@ describe("server startup secrets", () => {
       credentials,
     );
     expect(config.providers.map((p) => [p.name, p.apiKey])).toEqual([["deepseek", "store-value"]]);
-    expect(await buildProviderKeyEnv(reader, providers)).toEqual({ DEEPSEEK_API_KEY: "store-value" });
   });
 });

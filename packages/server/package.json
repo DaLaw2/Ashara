@@ -9,10 +9,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ashara/agent-runner": "*",
     "@ashara/db": "*",
     "@ashara/development": "*",
     "@ashara/engagement": "*",
+    "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/orchestrator": "*",

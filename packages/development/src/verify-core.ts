@@ -1,24 +1,18 @@
 import { isAbsolute } from "node:path";
-import { prepare, ToolchainError } from "./project-toolchain.js";
-import type { ToolchainDeps, ToolchainResult } from "./project-toolchain.js";
-import {
-  runDeterministicChecks,
-} from "./check-runner.js";
+import { runDeterministicChecks } from "./check-runner.js";
 import type { CoreTierResult } from "./check-runner.js";
 import { readVerifyConfig, isVacuousCommand } from "./verify-config.js";
 
 // ---------------------------------------------------------------------------
 // Shared verify check library (Phase 2, mig-phase-2).
 //
-// Single implementation behind the host-side verify callers (execution-service
+// Single implementation behind both verify callers (execution-service
 // and the post-merge gate): pure functions plus an injected command runner — no
 // shared runtime state.
 //
 // Containment is structural: each caller injects a CommandRunner (required,
-// no fallback), built from the Provisioner abstraction (provisionerAsRunner)
-// or, with no provisioner wired, defaultRunCommand.
-// The absence of a fallback is the mechanism: a caller that forgets to
-// inject a runner gets a compile error, not silent host execution.
+// no fallback); execution-service builds it from a cell (cellAsRunner), and
+// there is no host runner to fall back to.
 //
 // Verification is deterministic checks only: tsc/cargo check/npm test/custom
 // commands (check-runner.ts). Evidence across 11 E2E runs: every real quality
@@ -50,9 +44,9 @@ export interface CoreVerifyResult {
 }
 
 /**
- * Injected command runner. The default runs a local subprocess; both the
- * in-process and out-of-process callers spawn their own children (no shared
- * state), and tests may substitute a deterministic runner.
+ * Injected command runner: `command` is an argv array, `cwd` a host path the
+ * runner maps into its cell, `timeout` milliseconds. Tests substitute a
+ * deterministic runner.
  */
 export type CommandRunner = (
   command: string[],
@@ -82,33 +76,12 @@ export interface CoreVerifyInput {
 
 export interface CoreVerifyDeps {
   /**
-   * How to execute deterministic check commands (npm test, cargo check, etc.).
-   * Required — no fallback. Host-side callers inject a runner built from the
-   * Provisioner abstraction, or defaultRunCommand explicitly when no
-   * provisioner is wired. The absence of a default is the mechanism:
-   * a forgotten injection is a compile error, not silent host execution
+   * How to execute deterministic check commands. Required, no fallback: a
+   * forgotten injection is a compile error, not silent host execution
    * (Discipline A: the identity element is unavailable).
    */
   readonly runCommand: CommandRunner;
-  /**
-   * How to execute toolchain preparation commands (npm install, cargo build,
-   * go mod download). Required — no fallback. Separate from runCommand
-   * because preparation needs network access (to fetch dependencies) while
-   * checks do not. Host-side callers inject a Provisioner-backed runner
-   * with network enabled, or defaultRunCommand explicitly when no
-   * provisioner is wired.
-   *
-   * The split is here because the decision "preparation needs network"
-   * belongs to the caller, not to the runner.
-   */
-  readonly prepareRunCommand: CommandRunner;
   readonly log?: VerifyLogFn;
-  /**
-   * Toolchain preparer, run before the deterministic checks. Dispatches for
-   * any project type (Node, Cargo, Go). Default: the real prepare(). Tests
-   * inject a deterministic stub.
-   */
-  readonly prepareToolchain?: (targetPath: string, deps?: ToolchainDeps) => Promise<ToolchainResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,64 +112,18 @@ function assertValidVerifyPath(value: string, field: "workDir" | "gitRoot"): voi
   }
 }
 
-function toolchainFailureDetails(err: unknown): string {
-  if (err instanceof ToolchainError) {
-    const ctx = err.context;
-    const excerpt = ctx.outputExcerpt ? `; output: ${ctx.outputExcerpt.slice(0, 300)}` : "";
-    return (
-      `toolchain preparation failed at step "${err.step}": ${ctx.detail}` +
-      (ctx.command ? ` [${ctx.command.join(" ")}]` : "") +
-      (ctx.exitCode !== undefined ? ` (exit ${ctx.exitCode})` : "") +
-      excerpt
-    );
-  }
-  return `toolchain preparation error: ${err instanceof Error ? err.message : String(err)}`;
-}
-
-/**
- * Run the toolchain preparer for the workDir. Returns null on success; returns
- * a fully-formed failed CoreVerifyResult when preparation throws, so the caller
- * fails closed without running any check on an unprepared tree.
- *
- * `prepare()` dispatches internally: Node projects (package.json present) get
- * dependency installation and codegen; non-Node projects (Cargo.toml, go.mod)
- * get their own build/download step; projects with no recognized manifest get
- * a no-op return. This function does not gate on project type — `prepare()`
- * owns that routing.
- */
-async function prepareToolchainForVerify(
-  workDir: string,
-  prepareRun: CommandRunner,
-  deps: CoreVerifyDeps,
-  log: VerifyLogFn | undefined,
-): Promise<CoreVerifyResult | null> {
-  const prepareFn = deps.prepareToolchain ?? prepare;
-  try {
-    await prepareFn(workDir, { runCommand: prepareRun, log });
-    return null;
-  } catch (err) {
-    const details = toolchainFailureDetails(err);
-    log?.({ event: "verify_toolchain_failed", details });
-    return {
-      verdict: "failed",
-      tiers: {
-        deterministic: { status: "fail", details },
-      },
-    };
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Core verify
 // ---------------------------------------------------------------------------
 
 /**
- * Run the deterministic verify pipeline: toolchain preparation, then the
- * deterministic checks (tsc/cargo check/npm test/custom commands). `passed`
- * is exactly the deterministic tier's outcome — nothing else feeds it.
+ * Run the deterministic checks (verify.toml first, then contract and task-spec
+ * checks). `passed` is exactly the deterministic tier's outcome; nothing else
+ * feeds it. Ashara prepares no toolchain: whatever a check needs must already be
+ * in the cell (s-platform-role-m1 builds images from the committed environment).
  *
- * Never fails open: a toolchain-preparation failure or a failing check yields
- * `verdict="failed"`. A throwing log sink propagates (fail-closed at the caller).
+ * Never fails open: a failing check yields `verdict="failed"`, and zero checks
+ * `"unverified"`. A throwing log sink propagates (fail-closed at the caller).
  */
 export async function runVerifyCore(
   input: CoreVerifyInput,
@@ -206,24 +133,7 @@ export async function runVerifyCore(
   assertValidVerifyPath(input.gitRoot, "gitRoot");
 
   const checkRun = deps.runCommand;
-  const prepareRun = deps.prepareRunCommand;
   const log = deps.log;
-
-  // Reproduce the project's build semantics BEFORE any deterministic check, so
-  // the agent-worktree tsc runs against the same prepared tree the gate does
-  // (ADR-032 §1: one implementation, one environment). Preparation dispatches
-  // per project type: Node (npm/bun install + codegen), Cargo (cargo build),
-  // Go (go mod download), or no-op when no recognized manifest is present.
-  // Fail-closed (Run 9 / R8-F6a class): a toolchain failure yields a failed
-  // deterministic tier carrying the typed, self-diagnosing context; never fall
-  // through to running checks on an unprepared tree.
-  //
-  // prepareRun has network access; checkRun does not. Preparation fetches
-  // dependencies; checks observe the already-built tree.
-  const toolchainFailure = await prepareToolchainForVerify(input.workDir, prepareRun, deps, log);
-  if (toolchainFailure) {
-    return toolchainFailure;
-  }
 
   const verifyConfig = await readVerifyConfig(input.workDir);
   const configChecks = verifyConfig.checks

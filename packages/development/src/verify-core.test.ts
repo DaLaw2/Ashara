@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { describe, test, expect, vi } from "vitest";
 import { runVerifyCore, InvalidVerifyPathError } from "./verify-core.js";
 import type { CoreVerifyInput, CoreVerifyDeps, CommandRunner } from "./verify-core.js";
-import { ToolchainError } from "./project-toolchain.js";
-import type { ToolchainResult } from "./project-toolchain.js";
 
 // ---------------------------------------------------------------------------
 // GIT-SAFETY (a, mig-phase-2 t2): workDir/gitRoot are required and validated
@@ -19,18 +17,9 @@ const baseInput: Omit<CoreVerifyInput, "workDir" | "gitRoot"> = {
   contractChecks: [],
 };
 
-const stubToolchain: ToolchainResult = {
-  manager: "npm",
-  installRan: false,
-  installReason: "stub",
-  codegen: [],
-};
-
 function makeDeps(overrides: Partial<CoreVerifyDeps> = {}): CoreVerifyDeps {
   return {
     runCommand: vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" })),
-    prepareRunCommand: vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" })),
-    prepareToolchain: vi.fn(async () => stubToolchain),
     ...overrides,
   };
 }
@@ -97,66 +86,6 @@ describe("runVerifyCore — GIT-SAFETY (a) fail-closed workdir validation", () =
       // executable — the point here is only that validation did not block it.
       expect(result.verdict).toBe("unverified");
       expect(result.tiers.deterministic.status).toBe("skipped");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Non-Node project reachability (t-nonnode-prepare-is-unreachable)
-//
-// The whole finding: prepareToolchainForVerify previously guarded on
-// package.json, returning null before calling prepare(). Since prepare()
-// routes to prepareNonNode() only when package.json is ABSENT, the guard
-// made non-Node preparation unreachable. These tests verify the fix.
-// ---------------------------------------------------------------------------
-
-describe("runVerifyCore — non-Node project reaches preparation", () => {
-  test("workDir without package.json calls prepareToolchain (the finding is that it previously did not)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-nonnode-reach-"));
-    try {
-      const prepareToolchain = vi.fn(async () => stubToolchain);
-      const runCommand = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" }));
-      const prepareRunCommand = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" }));
-
-      await runVerifyCore(
-        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
-        { prepareToolchain, runCommand, prepareRunCommand },
-      );
-
-      // The critical assertion: prepareToolchain was called with the workDir
-      // and received the PREPARE runner, not the check runner.
-      expect(prepareToolchain).toHaveBeenCalledTimes(1);
-      expect(prepareToolchain).toHaveBeenCalledWith(dir, expect.objectContaining({ runCommand: prepareRunCommand }));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("non-Node preparation failure fails the verify closed (Discipline A)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-nonnode-fail-"));
-    try {
-      const prepareToolchain = vi.fn(async () => {
-        throw new ToolchainError("install", {
-          cwd: dir,
-          detail: "cargo build failed",
-          command: ["cargo", "build"],
-          exitCode: 101,
-        });
-      });
-
-      const result = await runVerifyCore(
-        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
-        {
-          prepareToolchain,
-          runCommand: vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" })),
-          prepareRunCommand: vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" })),
-        },
-      );
-
-      expect(result.verdict).toBe("failed");
-      expect(result.tiers.deterministic.details).toContain("cargo build failed");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -256,7 +185,7 @@ describe("runVerifyCore — contract checks replace baseline injection", () => {
 
 // ---------------------------------------------------------------------------
 // All checks now execute — no allowlist filtering. Any command the LLM
-// produces runs inside the container. A PHP check, a Zig check, any
+// produces runs inside the cell. A PHP check, a Zig check, any
 // previously-filtered command now executes and either passes or fails
 // honestly.
 // ---------------------------------------------------------------------------
@@ -347,79 +276,6 @@ describe("runVerifyCore — all checks execute (no allowlist)", () => {
       );
 
       expect(result.verdict).toBe("failed");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Runner split: preparation gets prepareRunCommand, checks get runCommand.
-// This is the mechanism that prevents npm install / cargo build / go mod
-// download from hitting --network=none. The test exercises the real
-// runVerifyCore code path, not a stub — the prepare function and the check
-// execution each receive a distinct, identifiable runner.
-// ---------------------------------------------------------------------------
-
-describe("runVerifyCore — preparation uses prepareRunCommand, checks use runCommand", () => {
-  test("prepareToolchain receives prepareRunCommand, checks receive runCommand", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-split-"));
-    try {
-      // Two distinct runners so we can tell which one was passed where
-      const checkRunner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "check" }));
-      const prepareRunner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "prepare" }));
-      const prepareToolchain = vi.fn(async () => stubToolchain);
-
-      const result = await runVerifyCore(
-        { checks: ["npm test"], contractChecks: [], workDir: dir, gitRoot: dir },
-        {
-          runCommand: checkRunner,
-          prepareRunCommand: prepareRunner,
-          prepareToolchain,
-        },
-      );
-
-      // Preparation was called with the PREPARE runner (network-enabled)
-      expect(prepareToolchain).toHaveBeenCalledTimes(1);
-      expect(prepareToolchain).toHaveBeenCalledWith(
-        dir,
-        expect.objectContaining({ runCommand: prepareRunner }),
-      );
-
-      // Checks were executed with the CHECK runner (network-isolated)
-      expect(checkRunner).toHaveBeenCalled();
-      // prepareRunner was NOT used to run checks
-      expect(prepareRunner).not.toHaveBeenCalled();
-
-      expect(result.verdict).toBe("passed");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("in-container path: both runners are the same defaultRunCommand and both work", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "ashara-verify-same-runner-"));
-    try {
-      // Simulates the agent-runner path: both fields point to the same runner
-      const sharedRunner = vi.fn<CommandRunner>(async () => ({ exitCode: 0, output: "" }));
-      const prepareToolchain = vi.fn(async () => stubToolchain);
-
-      const result = await runVerifyCore(
-        { checks: ["cargo check"], contractChecks: [], workDir: dir, gitRoot: dir },
-        {
-          runCommand: sharedRunner,
-          prepareRunCommand: sharedRunner,
-          prepareToolchain,
-        },
-      );
-
-      // Both preparation and checks used the same runner
-      expect(prepareToolchain).toHaveBeenCalledWith(
-        dir,
-        expect.objectContaining({ runCommand: sharedRunner }),
-      );
-      expect(sharedRunner).toHaveBeenCalled();
-      expect(result.verdict).toBe("passed");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

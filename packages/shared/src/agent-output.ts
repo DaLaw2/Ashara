@@ -1,38 +1,30 @@
-import { z } from "zod";
-
 /**
- * Subprocess trust boundary: the shape of output.json that agent-runner writes
- * and execution-service / orchestrator consume. Defined here (Published Language)
- * so the compiler catches field-name mismatches that previously compiled silently
- * against Record<string, unknown> — the bug that killed shouldSplit for 42 runs.
- *
- * Snake_case fields match the Rust-compatible serialization in agent-runner.
+ * What one attempt produced, in the shape the orchestrator's budget and failure routing read.
+ * Built in-process by Development's M1 adapter from the Workplace attempt's Outcome (story
+ * s-isolated-worker-m1); it no longer crosses a process boundary, so it carries no schema.
+ * Snake_case is kept because task_cost_history and stored error envelopes already hold it. A type
+ * alias, not an interface, so it stays assignable to the envelope's Record<string, unknown>.
  */
+type AgentErrorDetail = {
+  readonly model: string | null;
+  readonly turn_count: number;
+  readonly last_tool_call: string | null;
+  readonly message: string;
+};
 
-const agentErrorDetailSchema = z.object({
-  model: z.string().nullable(),
-  turn_count: z.number(),
-  last_tool_call: z.string().nullable(),
-  message: z.string(),
-});
-
-export const agentOutputJsonSchema = z.object({
-  status: z.enum(["done", "blocked", "failed"]),
-  summary: z.string(),
-  findings: z.array(z.string()),
-  error: z.string().nullable(),
-  error_detail: agentErrorDetailSchema.nullable(),
-  total_tokens: z.object({ input: z.number(), output: z.number() }),
-  total_cost: z.number(),
+export type AgentOutputJson = {
+  readonly status: "done" | "blocked" | "failed";
+  readonly summary: string;
+  readonly findings: string[];
+  readonly error: string | null;
+  readonly error_detail: AgentErrorDetail | null;
+  readonly total_tokens: { readonly input: number; readonly output: number };
+  readonly total_cost: number;
   /**
-   * `true` when every gateway call reported measured token counts; `false`
-   * when at least one call was unmeasured. Required at the subprocess
-   * boundary — an omitted flag must be a parse failure, not a silent
-   * `undefined` that reads as "measured".
+   * `false` when at least one model call of the attempt could not be priced: `total_cost` is
+   * then a lower bound and the orchestrator charges the run as unknown.
    */
-  cost_measured: z.boolean(),
-  turn_count: z.number(),
-  finish_reason: z.enum(["completed", "turn_limit", "error"]),
-});
-
-export type AgentOutputJson = z.infer<typeof agentOutputJsonSchema>;
+  readonly cost_measured: boolean;
+  readonly turn_count: number;
+  readonly finish_reason: "completed" | "turn_limit" | "error";
+};

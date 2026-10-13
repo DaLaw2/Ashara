@@ -225,9 +225,9 @@ export class NoLLMProvidersConfigured extends GatewayError {
 }
 
 /**
- * Thrown when the gateway catalog — from a file or an HTTP response — is
- * absent, unparseable, or structurally invalid. Carries the source (file
- * path or URL) and a list of issues for diagnosis (Discipline C).
+ * Thrown when a catalog row (model_configs, provider_configs) cannot be turned
+ * into gateway configuration. Carries the source table and a list of issues
+ * for diagnosis (Discipline C).
  */
 export class InvalidGatewayCatalog extends GatewayError {
   readonly source: string;

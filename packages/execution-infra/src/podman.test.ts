@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createCellBackend } from "./cell-backend.js";
 import {
   CellExecFailed,
   CellStartFailed,
   CellTeardownFailed,
   InvalidCellRequest,
+  MountPathRejected,
   PathOutsideWorkspace,
   PodmanCommandFailed,
   ProcessSpawnFailed,
@@ -30,17 +34,24 @@ function recorder(responses: Array<ProcessResult | Error>) {
     if (next instanceof Error) throw next;
     return next;
   };
-  return { requests, substrate: new PodmanSubstrate({ podmanPath: "/opt/podman", runner }) };
+  return { requests, substrate: new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner }) };
 }
 
-const spec: CellSpec = {
-  image: IMAGE,
-  project: "proj-1",
-  task: "task-1",
-  role: "worker",
-  instance: "inst-1",
-  mount: { hostPath: "/work/tree" },
-};
+// A real directory tree: mounts are canonicalized with realpath before podman runs.
+let root = "";
+let tree = "";
+let spec: CellSpec;
+
+beforeAll(async () => {
+  root = await realpath(await mkdtemp(join(tmpdir(), "ashara-mount-root-")));
+  tree = join(root, "tree");
+  await mkdir(tree);
+  spec = { image: IMAGE, project: "proj-1", task: "task-1", role: "worker", instance: "inst-1", mount: { hostPath: tree } };
+});
+
+afterAll(async () => {
+  await rm(root, { recursive: true, force: true });
+});
 
 describe("PodmanSubstrate argv", () => {
   afterEach(() => {
@@ -55,14 +66,14 @@ describe("PodmanSubstrate argv", () => {
     expect(cell.id).toBe(ID);
     expect(requests[0]?.file).toBe("/opt/podman");
     expect(requests[0]?.args).toEqual([
-      "run", "-d", "--init", "--pull=never", "--network=none", "--cap-drop=all",
+      "run", "-d", "--name", expect.stringMatching(/^ashara-cell-[0-9a-f-]{36}$/), "--init", "--pull=never", "--network=none", "--cap-drop=all",
       "--security-opt=no-new-privileges", "--userns=keep-id",
       "--label", "ashara.managed=1",
       "--label", "ashara.instance=inst-1",
       "--label", "ashara.project=proj-1",
       "--label", "ashara.task=task-1",
       "--label", "ashara.role=worker",
-      "-v", "/work/tree:/workspace:Z",
+      "-v", `${tree}:/workspace:Z`,
       IMAGE, "sleep", "infinity",
     ]);
     expect(Object.keys(requests[0]?.env ?? {}).every((k) => ["PATH", "HOME", "XDG_RUNTIME_DIR"].includes(k))).toBe(true);
@@ -70,8 +81,27 @@ describe("PodmanSubstrate argv", () => {
 
   it("uses a shared read-only label when asked", async () => {
     const { requests, substrate } = recorder([ok(ID)]);
-    await substrate.createCell({ ...spec, mount: { hostPath: "/w", readOnly: true, shared: true } });
-    expect(requests[0]?.args).toContain("/w:/workspace:ro,z");
+    await substrate.createCell({ ...spec, mount: { hostPath: tree, readOnly: true, shared: true } });
+    expect(requests[0]?.args).toContain(`${tree}:/workspace:ro,z`);
+  });
+
+  it("mounts each read-only entry over the writable tree, and refuses one that is missing or a symlink", async () => {
+    await mkdir(join(tree, ".git"), { recursive: true });
+    const { requests, substrate } = recorder([ok(ID)]);
+    await substrate.createCell({ ...spec, mount: { hostPath: tree, shared: true, readOnlyEntries: [".git"] } });
+    const args = requests[0]?.args ?? [];
+    expect(args.slice(args.indexOf(`${tree}:/workspace:z`) - 1, args.indexOf(IMAGE))).toEqual([
+      "-v", `${tree}:/workspace:z`,
+      "-v", `${tree}/.git:/workspace/.git:ro,z`,
+    ]);
+
+    await symlink(join(tree, ".git"), join(tree, "linked"));
+    for (const entry of ["linked", "absent", "..", "a/b"]) {
+      await expect(substrate.createCell({ ...spec, mount: { hostPath: tree, readOnlyEntries: [entry] } })).rejects.toBeInstanceOf(
+        entry === ".." || entry === "a/b" ? InvalidCellRequest : MountPathRejected,
+      );
+    }
+    expect(requests).toHaveLength(1);
   });
 
   it("rejects specs that could become options or break the volume syntax", async () => {
@@ -81,14 +111,40 @@ describe("PodmanSubstrate argv", () => {
     await expect(substrate.createCell({ ...spec, task: "a b" })).rejects.toBeInstanceOf(InvalidCellRequest);
   });
 
-  it("types a failed start with argv, exit code and stderr", async () => {
-    const { substrate } = recorder([{ ...ok("", 125), stderr: "image not known" }]);
+  it("refuses a mount outside the root, including one a symlink leads out of, before podman runs", async () => {
+    const { requests, substrate } = recorder([]);
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "ashara-outside-")));
+    try {
+      const link = join(root, "escape");
+      await symlink(outside, link);
+      for (const hostPath of [outside, link, root, join(root, "missing")]) {
+        await expect(substrate.createCell({ ...spec, mount: { hostPath } })).rejects.toBeInstanceOf(MountPathRejected);
+      }
+      expect(requests).toHaveLength(0);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("types a failed start and removes the container it may have created, by the name it gave it", async () => {
+    const { requests, substrate } = recorder([{ ...ok("", 125), stderr: "image not known" }, ok()]);
     const error = await substrate.createCell(spec).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(CellStartFailed);
     if (!(error instanceof CellStartFailed)) return;
     expect(error.exitCode).toBe(125);
     expect(error.stderr).toBe("image not known");
     expect(error.argv[0]).toBe("run");
+    const name = requests[0]?.args[3];
+    expect(requests[1]?.args).toEqual(["rm", "-f", "--ignore", name]);
+  });
+
+  it("keeps a failed start's container tracked when its removal fails, and teardownAll retries it", async () => {
+    const { requests, substrate } = recorder([ok("", 126), { ...ok("", 1), stderr: "busy" }, ok()]);
+    const error = await substrate.createCell(spec).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CellStartFailed);
+    const name = requests[0]?.args[3];
+    expect(await substrate.teardownAll()).toEqual([name]);
+    expect(requests[2]?.args).toEqual(["rm", "-f", "--ignore", name]);
   });
 
   it("execs under timeout in the workspace and reports timeouts", async () => {

@@ -2,14 +2,12 @@ import { CellToolFailed, InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 import { stripDotSlash, toWorkspaceRelative } from "./workspace-path.js";
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
-export interface TextOutput {
+interface TextOutput {
   readonly text: string;
   readonly truncated: boolean;
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
-export interface Listing {
+interface Listing {
   /** Workspace-relative paths; directories end in "/". Sorted. */
   readonly entries: readonly string[];
   readonly truncated: boolean;
@@ -18,7 +16,6 @@ export interface Listing {
 /**
  * What Workplace tools need from a cell. Every method is one `podman exec` of a POSIX utility; paths
  * are workspace-relative and resolved inside the cell. There is no host implementation.
- * @testseam adopted by t-isolated-switchover (s-isolated-worker-m1)
  */
 export interface CellBackend {
   readFile(path: string): Promise<TextOutput>;
@@ -30,7 +27,6 @@ export interface CellBackend {
   run(command: string, timeoutSeconds: number): Promise<ExecResult>;
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface CellBackendOptions {
   /** Timeout for the file tools (read, write, list, search). */
   readonly toolTimeoutSeconds: number;
@@ -39,7 +35,6 @@ export interface CellBackendOptions {
 // `"$1"` is the path argument, never interpolated into the script.
 const WRITE_SCRIPT = 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"';
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export function createCellBackend(cell: Pick<Cell, "exec">, options: CellBackendOptions): CellBackend {
   const timeoutSeconds = options.toolTimeoutSeconds;
 

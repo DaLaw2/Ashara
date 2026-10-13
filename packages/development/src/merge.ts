@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { TaskDescriptor } from "./execution-service.js";
-
-const execFileAsync = promisify(execFile);
+import { runHostGit, targetRepo } from "./host-git.js";
 
 export type MergeResult =
   | { readonly status: "clean" }
@@ -21,9 +18,7 @@ export function taskBranchName(taskId: string): string {
 
 export async function branchExists(targetPath: string, branch: string): Promise<boolean> {
   try {
-    await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
-      cwd: targetPath,
-    });
+    await runHostGit(targetRepo(targetPath), ["rev-parse", "--verify", `refs/heads/${branch}`]);
     return true;
   } catch {
     return false;
@@ -33,7 +28,7 @@ export async function branchExists(targetPath: string, branch: string): Promise<
 /** Captures main's HEAD before a tentative merge, for the gates' pre/post diff. */
 export async function captureMainHead(targetPath: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "main"], { cwd: targetPath });
+    const { stdout } = await runHostGit(targetRepo(targetPath), ["rev-parse", "main"]);
     return stdout.trim() || null;
   } catch {
     return null;
@@ -42,9 +37,7 @@ export async function captureMainHead(targetPath: string): Promise<string | null
 
 async function getConflictingFiles(targetPath: string): Promise<string[]> {
   try {
-    const { stdout } = await execFileAsync("git", ["diff", "--name-only", "--diff-filter=U"], {
-      cwd: targetPath,
-    });
+    const { stdout } = await runHostGit(targetRepo(targetPath), ["diff", "--name-only", "--diff-filter=U"]);
     return stdout
       .split("\n")
       .map((line) => line.trim())
@@ -74,7 +67,7 @@ async function getConflictingFiles(targetPath: string): Promise<string[]> {
 export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutReset> {
   for (const args of [["reset", "--hard", "HEAD"], ["clean", "-fd"]]) {
     try {
-      await execFileAsync("git", args, { cwd: targetPath });
+      await runHostGit(targetRepo(targetPath), args);
     } catch (e) {
       const stderr = e instanceof Error && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
       const message = e instanceof Error ? e.message : String(e);
@@ -90,7 +83,7 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
 /** `--no-commit` stages the merge without moving main; gates run before commitMerge/abortMerge decides its fate. */
 export async function tentativeMerge(targetPath: string, branch: string): Promise<MergeResult> {
   try {
-    await execFileAsync("git", ["merge", "--no-commit", "--no-ff", branch], { cwd: targetPath });
+    await runHostGit(targetRepo(targetPath), ["merge", "--no-commit", "--no-ff", branch]);
     return { status: "clean" };
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
@@ -103,23 +96,23 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
 }
 
 export async function commitMerge(targetPath: string, taskId: string): Promise<void> {
-  await execFileAsync("git", ["commit", "-m", `merge: task ${taskId}`], { cwd: targetPath });
+  await runHostGit(targetRepo(targetPath), ["commit", "-m", `merge: task ${taskId}`]);
   // Branch deletion deferred to cleanupWorkdir — worktree must be removed first
   // (git refuses to delete a branch that has an active worktree).
 }
 
 export async function abortMerge(targetPath: string): Promise<void> {
   try {
-    await execFileAsync("git", ["checkout", "--", "."], { cwd: targetPath });
+    await runHostGit(targetRepo(targetPath), ["checkout", "--", "."]);
   } catch (e) {
     console.warn(`[abortMerge] git checkout -- . failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   try {
-    await execFileAsync("git", ["clean", "-fd"], { cwd: targetPath });
+    await runHostGit(targetRepo(targetPath), ["clean", "-fd"]);
   } catch (e) {
     console.warn(`[abortMerge] git clean -fd failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-  await execFileAsync("git", ["merge", "--abort"], { cwd: targetPath });
+  await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
 }
 
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
@@ -129,14 +122,12 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
     () => false,
   );
   if (mergeHeadExists) {
-    await execFileAsync("git", ["merge", "--abort"], { cwd: targetPath }).catch(() => {});
+    await runHostGit(targetRepo(targetPath), ["merge", "--abort"]).catch(() => {});
   }
   try {
-    const { stdout } = await execFileAsync("git", ["symbolic-ref", "--short", "HEAD"], {
-      cwd: targetPath,
-    });
+    const { stdout } = await runHostGit(targetRepo(targetPath), ["symbolic-ref", "--short", "HEAD"]);
     if (stdout.trim() !== "main") {
-      await execFileAsync("git", ["checkout", "main"], { cwd: targetPath });
+      await runHostGit(targetRepo(targetPath), ["checkout", "main"]);
     }
   } catch (e: unknown) {
     console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${e instanceof Error ? e.message : String(e)}`);

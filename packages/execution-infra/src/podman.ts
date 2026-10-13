@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, sep } from "node:path";
 import { z } from "zod";
 import {
   CellExecFailed,
   CellStartFailed,
   CellTeardownFailed,
   InvalidCellRequest,
+  MountPathRejected,
   PodmanCommandFailed,
   ProcessSpawnFailed,
   SubstrateUnavailable,
@@ -52,12 +56,19 @@ const cellSpecSchema = z
           .regex(/^\/[^:,\0\n]*$/, "hostPath must be absolute and free of ':', ',', NUL and newline"),
         readOnly: z.boolean().optional(),
         shared: z.boolean().optional(),
+        readOnlyEntries: z
+          .array(
+            z
+              .string()
+              .regex(/^[^/:,\0\n]+$/, "an entry is one name directly under the mount, free of '/', ':', ',', NUL and newline")
+              .refine((name) => name !== "." && name !== "..", "an entry may not be '.' or '..'"),
+          )
+          .optional(),
       })
       .strict(),
   })
   .strict();
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface CellSpec {
   /** Opaque image reference, digest included; the substrate never pulls it (--pull=never). */
   readonly image: string;
@@ -72,11 +83,16 @@ export interface CellSpec {
     readonly readOnly?: boolean;
     /** Policy default false (private `:Z` label); true for a path two cells share (`:z`). */
     readonly shared?: boolean;
+    /**
+     * Names directly under hostPath that the cell sees read-only even in a writable mount: Z0's
+     * own metadata in a tree the cell writes (a repository's `.git`). Each must exist and must not
+     * be a symlink. Policy default: none.
+     */
+    readonly readOnlyEntries?: readonly string[];
   };
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
-export interface ExecOptions {
+interface ExecOptions {
   readonly stdin?: string | Buffer;
   readonly timeoutSeconds: number;
   /** Workspace-relative working directory; policy default is the workspace root. */
@@ -100,16 +116,19 @@ export interface Cell {
   teardown(): Promise<void>;
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface SubstrateInfo {
   readonly version: string;
   readonly rootless: boolean;
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface PodmanSubstrateOptions {
   /** Path or name of the podman binary; configuration, so a missing binary can be observed. */
   readonly podmanPath: string;
+  /**
+   * The host directory every mount must sit under once both are canonicalized (symlinks
+   * resolved): Ashara's workdirBase. A mount outside it is refused before podman runs.
+   */
+  readonly mountRoot: string;
   /** Policy default: spawn the binary directly. Tests inject a recorder. */
   readonly runner?: ProcessRunner;
   /** Policy default 1 MiB per stream. */
@@ -142,6 +161,10 @@ function issuesOf(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   try {
     return { ok: true, value: JSON.parse(text) };
@@ -150,14 +173,16 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false; er
   }
 }
 
-function buildRunArgs(spec: CellSpec): string[] {
-  const options = [
-    ...(spec.mount.readOnly === true ? ["ro"] : []),
-    spec.mount.shared === true ? "z" : "Z",
-  ].join(",");
+function buildRunArgs(spec: CellSpec, name: string, hostPath: string): string[] {
+  const label = spec.mount.shared === true ? "z" : "Z";
+  const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
+  const readOnlyEntries = (spec.mount.readOnlyEntries ?? []).flatMap((entry) => [
+    "-v", `${hostPath}/${entry}:${WORKSPACE_ROOT}/${entry}:ro,${label}`,
+  ]);
   return [
     "run",
     "-d",
+    "--name", name,
     "--init",
     "--pull=never",
     "--network=none",
@@ -169,7 +194,8 @@ function buildRunArgs(spec: CellSpec): string[] {
     "--label", `${LABEL_PROJECT}=${spec.project}`,
     "--label", `${LABEL_TASK}=${spec.task}`,
     "--label", `${LABEL_ROLE}=${spec.role}`,
-    "-v", `${spec.mount.hostPath}:${WORKSPACE_ROOT}:${options}`,
+    "-v", `${hostPath}:${WORKSPACE_ROOT}:${options}`,
+    ...readOnlyEntries,
     spec.image,
     "sleep", "infinity",
   ];
@@ -218,7 +244,16 @@ class PodmanCell implements Cell {
       throw new CellExecFailed(this.id, argv, null, result.stderr, `podman exec ended by signal ${result.signal ?? "unknown"}`);
     }
     if (result.exitCode === PODMAN_EXEC_ERROR) {
-      throw new CellExecFailed(this.id, argv, result.exitCode, result.stderr, "podman exec or timeout itself failed");
+      // 125 is ambiguous: podman exec's own failure, timeout(1)'s own failure, and a command that
+      // exits 125 all look the same here. Fail closed: treat it as a substrate failure.
+      throw new CellExecFailed(
+        this.id,
+        argv,
+        result.exitCode,
+        result.stderr,
+        "exit 125 is podman exec's or timeout's own failure code, and also a status the command itself may return; " +
+          "the three cannot be told apart, so it is treated as a substrate failure (fail-closed)",
+      );
     }
     if (options.stdin !== undefined && result.stdinError !== null) {
       throw new CellExecFailed(this.id, argv, result.exitCode, result.stderr, `stdin was not fully delivered: ${result.stdinError}`);
@@ -246,16 +281,22 @@ function streams(result: ProcessResult): Pick<ExecResult, "stdout" | "stderr" | 
   };
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export class PodmanSubstrate {
   private readonly podmanPath: string;
   private readonly runner: ProcessRunner;
   private readonly maxOutputBytes: number;
+  private readonly mountRoot: string;
   private readonly cells = new Map<string, PodmanCell>();
+  /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
+  private readonly unconfirmed = new Set<string>();
 
   constructor(options: PodmanSubstrateOptions) {
-    if (options.podmanPath === "") throw new InvalidCellRequest("substrate", ["podmanPath must not be empty"]);
+    const issues: string[] = [];
+    if (options.podmanPath === "") issues.push("podmanPath must not be empty");
+    if (!isAbsolute(options.mountRoot)) issues.push(`mountRoot must be an absolute path, got ${JSON.stringify(options.mountRoot)}`);
+    if (issues.length > 0) throw new InvalidCellRequest("substrate", issues);
     this.podmanPath = options.podmanPath;
+    this.mountRoot = options.mountRoot;
     this.runner = options.runner ?? spawnProcess;
     this.maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   }
@@ -304,16 +345,73 @@ export class PodmanSubstrate {
   async createCell(spec: CellSpec): Promise<Cell> {
     const parsed = cellSpecSchema.safeParse(spec);
     if (!parsed.success) throw new InvalidCellRequest("createCell", issuesOf(parsed.error));
-    const args = buildRunArgs(parsed.data);
+    const hostPath = await this.canonicalMountPath(parsed.data.mount.hostPath);
+    for (const entry of parsed.data.mount.readOnlyEntries ?? []) await this.assertPlainEntry(hostPath, entry);
+    const name = `ashara-cell-${randomUUID()}`;
+    const args = buildRunArgs(parsed.data, name, hostPath);
     const result = await this.run(args);
-    if (result.exitCode !== 0) throw new CellStartFailed(args, result.exitCode, result.stderr);
-    const id = containerIdSchema.safeParse(result.stdout.trim());
-    if (!id.success) {
-      throw new CellStartFailed(args, result.exitCode, `podman run printed no container id: ${JSON.stringify(result.stdout)}; ${result.stderr}`);
+    const id = result.exitCode === 0 ? containerIdSchema.safeParse(result.stdout.trim()) : null;
+    if (id === null || !id.success) {
+      // podman run can create the container and then fail to start it (or print no id): the
+      // container may exist, so it is removed by the name this call gave it, or kept for teardownAll.
+      const cleanup = await this.removeFailedStart(name);
+      const stderr =
+        result.exitCode === 0 ? `podman run printed no container id: ${JSON.stringify(result.stdout)}; ${result.stderr}` : result.stderr;
+      throw new CellStartFailed(args, result.exitCode, stderr, cleanup);
     }
     const cell = new PodmanCell(id.data, parsed.data, this);
     this.cells.set(id.data, cell);
     return cell;
+  }
+
+  /** realpath, then a prefix check against the realpath of mountRoot; the result must still be a valid volume source. */
+  private async canonicalMountPath(hostPath: string): Promise<string> {
+    let root: string;
+    let canonical: string;
+    try {
+      root = await realpath(this.mountRoot);
+    } catch (err) {
+      throw new MountPathRejected(hostPath, null, this.mountRoot, `the mount root cannot be resolved: ${messageOf(err)}`, { cause: err });
+    }
+    try {
+      canonical = await realpath(hostPath);
+    } catch (err) {
+      throw new MountPathRejected(hostPath, null, root, `the path cannot be resolved: ${messageOf(err)}`, { cause: err });
+    }
+    if (canonical === root || !canonical.startsWith(`${root}${sep}`)) {
+      throw new MountPathRejected(hostPath, canonical, root, "it is not strictly inside the mount root");
+    }
+    const source = cellSpecSchema.shape.mount.shape.hostPath.safeParse(canonical);
+    if (!source.success) {
+      throw new MountPathRejected(hostPath, canonical, root, `the resolved path is not a valid volume source: ${issuesOf(source.error).join("; ")}`);
+    }
+    return canonical;
+  }
+
+  /** A read-only entry is mounted by its own path, so a symlink there would mount whatever it points at. */
+  private async assertPlainEntry(canonicalHostPath: string, entry: string): Promise<void> {
+    const path = `${canonicalHostPath}${sep}${entry}`;
+    let canonical: string;
+    try {
+      canonical = await realpath(path);
+    } catch (err) {
+      throw new MountPathRejected(path, null, canonicalHostPath, `the read-only entry cannot be resolved: ${messageOf(err)}`, { cause: err });
+    }
+    if (canonical !== path) {
+      throw new MountPathRejected(path, canonical, canonicalHostPath, "the read-only entry is a symlink or resolves elsewhere");
+    }
+  }
+
+  private async removeFailedStart(name: string): Promise<string> {
+    try {
+      const removal = await this.run(["rm", "-f", "--ignore", name]);
+      if (removal.exitCode === 0) return `any container named ${name} was removed`;
+      this.unconfirmed.add(name);
+      return `removing a container named ${name} failed (exit ${removal.exitCode ?? "none"}: ${removal.stderr.trim() || "no stderr"}); it stays tracked for teardownAll`;
+    } catch (err) {
+      this.unconfirmed.add(name);
+      return `removing a container named ${name} failed (${messageOf(err)}); it stays tracked for teardownAll`;
+    }
   }
 
   /** @internal used by PodmanCell.teardown and reconcileOrphans. */
@@ -372,7 +470,7 @@ export class PodmanSubstrate {
     return this.removeAll("reconcileOrphans", orphans);
   }
 
-  /** Removes every cell this process created and still holds. */
+  /** Removes every cell this process created and still holds, and any container a failed start left. */
   async teardownAll(): Promise<string[]> {
     const removed: string[] = [];
     const failures: CellTeardownFailed[] = [];
@@ -383,6 +481,16 @@ export class PodmanSubstrate {
       } catch (err) {
         if (!(err instanceof CellTeardownFailed)) throw err;
         failures.push(err);
+      }
+    }
+    for (const name of [...this.unconfirmed]) {
+      try {
+        const result = await this.run(["rm", "-f", "--ignore", name]);
+        if (result.exitCode !== 0) throw new CellTeardownFailed(name, result.exitCode, result.stderr);
+        this.unconfirmed.delete(name);
+        removed.push(name);
+      } catch (err) {
+        failures.push(err instanceof CellTeardownFailed ? err : new CellTeardownFailed(name, null, "", { cause: err }));
       }
     }
     if (failures.length > 0) throw new TeardownIncomplete("teardownAll", removed, failures);

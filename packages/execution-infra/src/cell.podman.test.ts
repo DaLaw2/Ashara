@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -24,25 +24,27 @@ async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
 const instance = `test-${randomUUID()}`;
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];
+let mountRoot = "";
 let workspace = "";
 let substrate: PodmanSubstrate;
 
 beforeAll(async () => {
   process.env.ASHARA_PROBE_SECRET = "probe-secret-must-not-reach-the-cell";
-  workspace = await mkdtemp(join(tmpdir(), "ashara-cell-"));
-  substrate = new PodmanSubstrate({ podmanPath: "podman" });
+  mountRoot = await realpath(await mkdtemp(join(tmpdir(), "ashara-cell-root-")));
+  workspace = await mkdtemp(join(mountRoot, "ws-"));
+  substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot });
 }, 60_000);
 
 afterAll(async () => {
   delete process.env.ASHARA_PROBE_SECRET;
   await substrate.teardownAll();
   if (strayIds.length > 0) await run("podman", ["rm", "-f", "-t", "0", ...strayIds]);
-  await rm(workspace, { recursive: true, force: true });
+  await rm(mountRoot, { recursive: true, force: true });
 }, 60_000);
 
 describe("cell on real podman", () => {
   it("reports a missing podman binary as SubstrateUnavailable", async () => {
-    const missing = new PodmanSubstrate({ podmanPath: join(workspace, "no-such-podman") });
+    const missing = new PodmanSubstrate({ podmanPath: join(workspace, "no-such-podman"), mountRoot });
     await expect(missing.probeSubstrate()).rejects.toBeInstanceOf(SubstrateUnavailable);
   });
 
@@ -111,10 +113,40 @@ describe("cell on real podman", () => {
     expect(await ps(`label=ashara.task=${task}`)).toHaveLength(0);
   });
 
+  it("a read-only entry stays read-only to the cell while the rest of the mount is writable", async () => {
+    const tree = await mkdtemp(join(mountRoot, "ro-entry-"));
+    await mkdir(join(tree, ".git", "hooks"), { recursive: true });
+    await writeFile(join(tree, "gitlink"), "gitdir: /elsewhere\n");
+    const base = await loadBaseCell();
+    const cell = await substrate.createCell({
+      image: base.image,
+      project: "proj-cell-test",
+      task: `${task}-ro`,
+      role: "verifier",
+      instance,
+      mount: { hostPath: tree, shared: true, readOnlyEntries: [".git", "gitlink"] },
+    });
+    try {
+      const plant = await cell.exec(["sh", "-c", "echo x > .git/hooks/pre-commit"], { timeoutSeconds: 10 });
+      expect(plant.exitCode).not.toBe(0);
+      const rewrite = await cell.exec(["sh", "-c", "echo 'gitdir: planted' > gitlink"], { timeoutSeconds: 10 });
+      expect(rewrite.exitCode).not.toBe(0);
+      const replace = await cell.exec(["sh", "-c", "rm -rf .git gitlink"], { timeoutSeconds: 10 });
+      expect(replace.exitCode).not.toBe(0);
+      const work = await cell.exec(["sh", "-c", "echo ok > work.txt"], { timeoutSeconds: 10 });
+      expect(work.exitCode).toBe(0);
+    } finally {
+      await cell.teardown();
+    }
+    expect(await readFile(join(tree, "gitlink"), "utf8")).toBe("gitdir: /elsewhere\n");
+    expect(await readdir(join(tree, ".git", "hooks"))).toEqual([]);
+    expect(await readFile(join(tree, "work.txt"), "utf8")).toBe("ok\n");
+  });
+
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();
     // A previous process of this instance that died without tearing down.
-    const previous = new PodmanSubstrate({ podmanPath: "podman" });
+    const previous = new PodmanSubstrate({ podmanPath: "podman", mountRoot });
     const leaked = await previous.createCell({
       image: base.image,
       project: "proj-cell-test",

@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
+import { runHostGit, targetRepo, type HostRepo } from "../host-git.js";
 import {
   abortMerge,
   buildMergeAgentBrief,
@@ -13,7 +13,7 @@ import {
   tentativeMerge,
 } from "../merge.js";
 import { runVerifyCore } from "../verify-core.js";
-import type { CommandRunner } from "../verify-core.js";
+import type { CommandRunner, CoreVerifyResult } from "../verify-core.js";
 import { commitAllChanges, ensureTargetGitInit } from "../workspace.js";
 import { checkEntryPointRewrite } from "./entry-point.js";
 
@@ -28,16 +28,12 @@ export interface FinalizeContractInfo {
 export interface FinalizeDeps {
   readonly eventSink?: ExecutionEventSink;
   /**
-   * How the post-merge verify executes check commands. Required — no fallback.
-   * Network-isolated (--network=none) — checks observe the built tree.
+   * Runs `verify` with a runner into a short-lived role=verifier cell that mounts
+   * the target checkout, and tears the cell down after (execution-service). The
+   * cell has no network (execution-infra's podman run passes --network=none).
+   * Required, no fallback: there is no host runner.
    */
-  readonly runCommand: CommandRunner;
-  /**
-   * How the post-merge verify executes toolchain preparation (npm install,
-   * cargo build, go mod download). Required — no fallback. Network-enabled
-   * because preparation fetches dependencies.
-   */
-  readonly prepareRunCommand: CommandRunner;
+  readonly withVerifierCell: <T>(targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>) => Promise<T>;
 }
 
 async function abortAndFail(
@@ -68,32 +64,16 @@ async function abortAndFail(
 
 export async function finalizeSuccess(
   deps: FinalizeDeps,
-  workDir: string,
+  worktree: HostRepo,
   task: TaskDescriptor,
-  targetProjectPath: string | null,
+  targetProjectPath: string,
   attempt: number,
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
   try {
-    await commitAllChanges(workDir, `ashara: agent output for task ${task.id}`);
+    await commitAllChanges(worktree, `ashara: agent output for task ${task.id}`);
   } catch (e: unknown) {
     console.warn(`[finalize] commitAllChanges failed for task ${task.id}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  // A success is the claim that the work is merged: Completed is read as merged
-  // downstream (the client's stop report lists Completed tasks as merged). With
-  // no target workspace there is nothing to merge into, so fail closed rather
-  // than report a success that merged nothing.
-  if (targetProjectPath === null) {
-    console.warn(`[${task.id}] no target workspace — refusing to report success without a merge`);
-    return {
-      success: false,
-      gateFailureContext: "No target project workspace was resolved for this task, so its work could not be merged.",
-      errorLayer: wrapError("development", "finalizeSuccess", "target project path unresolved; nothing merged", {
-        taskId: task.id,
-        attempt,
-      }),
-    };
   }
 
   await recoverOrphanedMerge(targetProjectPath);
@@ -150,24 +130,43 @@ export async function finalizeSuccess(
   // Per-task verify uses only verify.toml; contract and taskSpec checks are
   // deferred to integration verify (they reference project-wide files that
   // may not exist in this task's worktree).
-  const postMergeVerify = await runVerifyCore(
-    {
-      workDir: targetProjectPath,
-      gitRoot: targetProjectPath,
-      checks: [],
-      contractChecks: [],
-    },
-    {
-      runCommand: deps.runCommand,
-      prepareRunCommand: deps.prepareRunCommand,
-      log: (event) => deps.eventSink?.emit({
-        ...event,
-        event: "post_merge_verify",
-        taskId: task.id,
-        attempt,
-      }),
-    },
-  );
+  let postMergeVerify: CoreVerifyResult;
+  try {
+    postMergeVerify = await deps.withVerifierCell(targetProjectPath, (runCommand) =>
+      runVerifyCore(
+        {
+          workDir: targetProjectPath,
+          gitRoot: targetProjectPath,
+          checks: [],
+          contractChecks: [],
+        },
+        {
+          runCommand,
+          log: (event) => deps.eventSink?.emit({
+            ...event,
+            event: "post_merge_verify",
+            taskId: task.id,
+            attempt,
+          }),
+        },
+      ),
+    );
+  } catch (e) {
+    // The verifier cell could not be created or the checks could not run: the
+    // merge is unverified, so it is aborted (Discipline A).
+    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    return abortAndFail(
+      task.id,
+      targetProjectPath,
+      "post-merge verification could not run — aborting tentative merge",
+      `Post-merge verify could not run: ${detail}`,
+      {
+        operation: "postMergeVerify",
+        gateOutput: detail,
+        gateContext: { taskId: task.id, attempt },
+      },
+    );
+  }
 
   if (postMergeVerify.verdict !== "passed") {
     return abortAndFail(
@@ -246,7 +245,7 @@ export async function finalizeSuccess(
   await commitMerge(targetProjectPath, task.id);
   console.log(`[${task.id}] merge committed to main, task branch deleted`);
 
-  console.log(`[${task.id}] task completed — work dir preserved at: ${workDir}`);
+  console.log(`[${task.id}] task completed — work dir preserved at: ${worktree.workTree}`);
 
   // The dev_sessions terminal write lives in DevelopmentService.withSessionLifecycle,
   // the one seam every outcome passes through. It used to happen here, on the success
@@ -266,30 +265,10 @@ export async function finalizeSuccess(
  * Rejects when git is unavailable or exits non-zero (fail-closed): a
  * dirty-tree check that cannot run is a failed check, not a passed one.
  */
-function detectDirtyTrackedFiles(cwd: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("git", ["diff", "--name-only"], {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-
-    proc.on("error", (err) => {
-      reject(err);
-    });
-
-    proc.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`git diff exited with code ${code}`));
-        return;
-      }
-      const files = stdout
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0);
-      resolve(files);
-    });
-  });
+async function detectDirtyTrackedFiles(targetProjectPath: string): Promise<string[]> {
+  const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["diff", "--name-only"]);
+  return stdout
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0);
 }

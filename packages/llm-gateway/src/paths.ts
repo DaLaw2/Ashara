@@ -3,28 +3,25 @@ import { dirname, join, parse as parsePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
-// CWD-independent Ashara root anchoring (rp-t2 — subprocess CWD blindness)
+// CWD-independent Ashara root anchoring (rp-t2 — CWD blindness)
 //
-// agent-runner runs with process.cwd() set to the task's own git worktree, NOT
-// the Ashara source checkout (server/container-spawn.ts passes `-w` as the
-// container's work directory; before ADR-058 this was the subprocess cwd). A
-// cwd-relative config default therefore silently mis-resolves: config/models.toml
-// is not found and routing profiles fall through to capability logic. Observed
-// live (Run 11 attempt 1, $1.48 burned).
+// A process whose cwd is not the Ashara source checkout (the agent subprocess
+// once ran in the task's worktree) mis-resolves a cwd-relative config default:
+// config/models.toml is not found and routing profiles fall through to
+// capability logic. Observed live (Run 11 attempt 1, $1.48 burned).
 //
 // Anchoring to THIS module's on-disk location (import.meta.url) instead of
-// process.cwd() makes those defaults correct by construction regardless of the
-// subprocess cwd. The @ashara/llm-gateway package always resolves into the
-// same repo checkout the server runs from (workspace/symlinked node_modules),
-// so import.meta.url points inside that checkout in every process.
+// process.cwd() makes those defaults correct by construction whatever the cwd.
+// The @ashara/llm-gateway package always resolves into the same repo checkout
+// the server runs from (workspace/symlinked node_modules), so import.meta.url
+// points inside that checkout.
 // ---------------------------------------------------------------------------
 
 /**
  * Resolves the Ashara monorepo root by walking up from this module's on-disk
  * directory until a directory carrying the monorepo signature is found (a
  * `config/models.toml` file and a `packages/` directory). CWD-independent by
- * design — see the module header for why process.cwd() cannot be trusted in
- * agent-runner subprocesses.
+ * design — see the module header for why process.cwd() cannot be trusted.
  *
  * If no ancestor matches (e.g. an exotic single-file bundle outside the repo),
  * it falls back to process.cwd() to preserve the prior resolution behavior

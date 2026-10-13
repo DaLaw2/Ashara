@@ -17,7 +17,6 @@ const baseCellSchema = z
   })
   .strict();
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface BaseCellReference {
   /** Opaque reference handed to CellSpec.image. */
   readonly image: string;
@@ -28,7 +27,6 @@ export interface BaseCellReference {
 /**
  * Loads the BaseCell reference (ADR-074 addendum 2 d61). A missing file, a reference without a
  * digest, or any extra key fails closed.
- * @testseam adopted by t-isolated-switchover (s-isolated-worker-m1)
  */
 export async function loadBaseCell(path: string = DEFAULT_BASE_CELL_PATH): Promise<BaseCellReference> {
   let text: string;

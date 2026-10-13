@@ -81,35 +81,3 @@ export async function resolveProviderCredentials(
   }
   return credentials;
 }
-
-// Story s-isolated-worker-m1 removes this env injection (the agent loop moves to Z0).
-const PROVIDER_KEY_ENV_MAP: Readonly<Record<string, string>> = {
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  deepseek: "DEEPSEEK_API_KEY",
-  mistral: "MISTRAL_API_KEY",
-  xai: "XAI_API_KEY",
-  google: "GOOGLE_API_KEY",
-};
-
-/**
- * The host agent-runner subprocess reads provider keys from its own env via
- * loadProviderKeys() (packages/agent-runner/src/runner.ts → loadGatewayCatalogFromFile
- * → buildConfigFromCatalog); this builds those variables from the secret store.
- */
-export async function buildProviderKeyEnv(
-  secrets: SecretReader,
-  providers: readonly ProviderRow[],
-): Promise<Record<string, string>> {
-  const env: Record<string, string> = {};
-  for (const credential of await resolveProviderCredentials(secrets, providers)) {
-    const envName = PROVIDER_KEY_ENV_MAP[credential.name];
-    if (envName !== undefined && credential.apiKey) {
-      env[envName] = credential.apiKey;
-    }
-    if (credential.providerType === "local" && credential.baseUrl) {
-      env["LOCAL_LLM_URL"] = credential.baseUrl;
-    }
-  }
-  return env;
-}

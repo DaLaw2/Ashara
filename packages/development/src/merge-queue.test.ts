@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -59,24 +59,6 @@ describe("target scaffold", () => {
   test("writes no .gitignore — the project's ignores are the project's", async () => {
     const exists = await access(join(target, ".gitignore")).then(() => true, () => false);
     expect(exists).toBe(false);
-  });
-
-  test("excludes the control dir through .git/info/exclude instead", async () => {
-    const exclude = await readFile(join(target, ".git", "info", "exclude"), "utf-8");
-    expect(exclude).toContain(".ashara/");
-
-    await writeFile(join(target, "note.txt"), "x", "utf-8");
-    const untracked = await git(target, "status", "--porcelain", "--untracked-files=all");
-    expect(untracked).toContain("note.txt");
-    expect(untracked).not.toContain(".ashara");
-  });
-
-  test("is idempotent — repeated init does not duplicate the exclude entry", async () => {
-    await ensureTargetGitInit(target);
-    await ensureTargetGitInit(target);
-    const exclude = await readFile(join(target, ".git", "info", "exclude"), "utf-8");
-    const occurrences = exclude.split("\n").filter((line) => line.trim() === ".ashara/").length;
-    expect(occurrences).toBe(1);
   });
 
   test("commits a root commit even though nothing is scaffolded", async () => {

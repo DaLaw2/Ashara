@@ -1,18 +1,11 @@
-import { spawn } from "node:child_process";
 import type { CommandRunner } from "./verify-core.js";
 
 // ---------------------------------------------------------------------------
-// Deterministic check execution (Phase 2, mig-phase-2).
-//
-// Single implementation behind the host-side verify callers — pure functions
-// plus an injected CommandRunner, no shared runtime state.
-//
-// Containment is structural, not enumerative: callers inject a CommandRunner
-// built from the Provisioner abstraction (provisionerAsRunner in
-// execution-service.ts).
+// Deterministic check execution (Phase 2, mig-phase-2): pure functions plus an
+// injected CommandRunner. Every runner execution-service builds runs the command
+// inside a cell (cellAsRunner); there is no host runner.
 // ---------------------------------------------------------------------------
 
-const MAX_OUTPUT_LENGTH = 2000;
 const CHECK_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
@@ -30,40 +23,6 @@ export interface CoreTierResult {
   readonly details: string;
   readonly checks?: CoreCheckResult[];
   readonly issues?: string[];
-}
-
-export const defaultRunCommand: CommandRunner = (command, cwd, timeout) => {
-  const proc = spawn(command[0], command.slice(1), {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  const timer = setTimeout(() => proc.kill(), timeout);
-
-  return (async () => {
-    try {
-      let stdout = "";
-      let stderr = "";
-      proc.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-      const exitCode = await new Promise<number | null>((resolve, reject) => {
-        proc.on("close", resolve);
-        proc.on("error", reject);
-      });
-
-      const combined = (stdout + stderr).trim();
-      // POLICY default: null exit code (process killed by signal) is failure, not unknown.
-      return { exitCode: exitCode ?? 1, output: truncateOutput(combined) };
-    } finally {
-      clearTimeout(timer);
-    }
-  })();
-};
-
-function truncateOutput(output: string): string {
-  if (output.length <= MAX_OUTPUT_LENGTH) return output;
-  return output.slice(-MAX_OUTPUT_LENGTH);
 }
 
 // ---------------------------------------------------------------------------

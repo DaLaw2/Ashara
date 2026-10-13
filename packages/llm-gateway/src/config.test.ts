@@ -1,11 +1,6 @@
-import { writeFile, mkdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { buildGatewayConfig, loadGatewayCatalogFromFile, toModelConfig } from "./config.js";
+import { describe, expect, test } from "vitest";
+import { buildGatewayConfig, toModelConfig } from "./config.js";
 import { InvalidGatewayCatalog } from "./errors.js";
-
-const TMP = join(tmpdir(), "ashara-catalog-test");
 
 function validCatalog() {
     return {
@@ -21,22 +16,8 @@ function validCatalog() {
             maxContextTokens: 200000,
             priceWindows: [],
         }],
-        providers: [{ name: "anthropic", providerType: "anthropic", baseUrl: null }],
     };
 }
-
-const SAVED_KEY = process.env["ANTHROPIC_API_KEY"];
-
-beforeEach(async () => {
-    await mkdir(TMP, { recursive: true });
-    process.env["ANTHROPIC_API_KEY"] = "test-key";
-});
-
-afterEach(async () => {
-    await rm(TMP, { recursive: true, force: true });
-    if (SAVED_KEY === undefined) delete process.env["ANTHROPIC_API_KEY"];
-    else process.env["ANTHROPIC_API_KEY"] = SAVED_KEY;
-});
 
 describe("toModelConfig", () => {
     const offPeak = (utcStartMinute: number, utcEndMinute: number) => ({
@@ -69,39 +50,5 @@ describe("buildGatewayConfig reads the provider type, not the name", () => {
         expect(() =>
             buildGatewayConfig({ m: model }, {}, [{ name: "ollama", providerType: "vllm", apiKey: "k", baseUrl: null }]),
         ).toThrow(/provider "ollama": provider_type "vllm"/);
-    });
-});
-
-describe("loadGatewayCatalogFromFile", () => {
-    test("valid catalog produces a GatewayConfig with the provider", async () => {
-        const path = join(TMP, "valid.json");
-        await writeFile(path, JSON.stringify(validCatalog()));
-        const config = await loadGatewayCatalogFromFile(path);
-        expect(config.providers).toHaveLength(1);
-        expect(config.providers[0].name).toBe("anthropic");
-        expect(config.providers[0].models).toHaveLength(1);
-    });
-
-    test("absent file throws InvalidGatewayCatalog", async () => {
-        const err = await loadGatewayCatalogFromFile("/nonexistent/catalog.json")
-            .catch((e: unknown) => e);
-        expect(err).toBeInstanceOf(InvalidGatewayCatalog);
-        expect((err as InvalidGatewayCatalog).source).toBe("/nonexistent/catalog.json");
-    });
-
-    test("malformed JSON throws InvalidGatewayCatalog", async () => {
-        const path = join(TMP, "bad.json");
-        await writeFile(path, "{ not json }}}");
-        const err = await loadGatewayCatalogFromFile(path).catch((e: unknown) => e);
-        expect(err).toBeInstanceOf(InvalidGatewayCatalog);
-        expect((err as InvalidGatewayCatalog).issues[0]).toContain("invalid JSON");
-    });
-
-    test("empty models array fails closed", async () => {
-        const catalog = { ...validCatalog(), models: [] };
-        const path = join(TMP, "empty-models.json");
-        await writeFile(path, JSON.stringify(catalog));
-        const err = await loadGatewayCatalogFromFile(path).catch((e: unknown) => e);
-        expect(err).toBeInstanceOf(InvalidGatewayCatalog);
     });
 });

@@ -12,12 +12,6 @@
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false
     },
-    "packages/agent-runner": {
-      "entry": ["src/runner.ts"],
-      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
-      "vitest": false,
-      "ignoreBinaries": ["podman"]
-    },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false

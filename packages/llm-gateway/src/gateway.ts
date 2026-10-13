@@ -705,6 +705,7 @@ function reportedCache(raw: unknown): ReportedCache {
  * Never throws: a throw here was caught by `withFallback`, which discarded a
  * successful completion and paid for a second call. An unreported count leaves
  * the cost unmeasured, which `measureCost` names and every caller logs.
+ * @testseam gateway.test.ts asserts the split directly
  */
 export function extractUsage(
   sdkUsage: { inputTokens?: number; outputTokens?: number; raw?: unknown } | undefined,

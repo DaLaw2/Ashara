@@ -1,9 +1,10 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
-import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { ASHARA_CONTROL_DIR, CONVERSATION_RECORDS_DIR, isAsharaControlPath, loadSkipDirs } from "@ashara/shared";
+import { loadSkipDirs } from "@ashara/shared";
+import { freshWorktreeRepo, initHostRepo, runHostGit, targetRepo, type HostRepo } from "./host-git.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +15,8 @@ const execFileAsync = promisify(execFile);
 export interface WorkdirInfo {
   readonly workDir: string;
   readonly taskBranch: string;
+  /** Resolved before any cell mounts workDir; every later git call on the worktree goes through it. */
+  readonly repo: HostRepo;
 }
 
 class WorkspaceError extends Error {
@@ -38,17 +41,24 @@ export async function createWorkdir(
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
   try {
-    await execFileAsync("git", ["worktree", "add", workDir, "-b", taskBranch, "main"], {
-      cwd: targetProjectPath,
-    });
+    await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, "-b", taskBranch, "main"]);
   } catch (e) {
     throw new WorkspaceError("createWorktree", { targetPath: targetProjectPath, workDir }, e);
   }
 
-  await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], { cwd: workDir });
-  await execFileAsync("git", ["config", "user.name", "Ashara Agent"], { cwd: workDir });
+  return { workDir, taskBranch, repo: await worktreeWithIdentity(targetProjectPath, workDir) };
+}
 
-  return { workDir, taskBranch };
+async function worktreeWithIdentity(targetProjectPath: string, workDir: string): Promise<HostRepo> {
+  try {
+    const repo = await freshWorktreeRepo(targetProjectPath, workDir);
+    await runHostGit(repo, ["config", "user.email", "ashara-agent@local"]);
+    await runHostGit(repo, ["config", "user.name", "Ashara Agent"]);
+    return repo;
+  } catch (e) {
+    await removeWorktree(targetProjectPath, workDir);
+    throw new WorkspaceError("resolveWorktreeRepo", { targetPath: targetProjectPath, workDir }, e);
+  }
 }
 
 export async function createWorkdirForRetry(
@@ -60,51 +70,42 @@ export async function createWorkdirForRetry(
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
   try {
-    await execFileAsync("git", ["worktree", "add", workDir, taskBranch], {
-      cwd: targetProjectPath,
-    });
+    await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, taskBranch]);
   } catch (e) {
     throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir }, e);
   }
 
-  await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], { cwd: workDir });
-  await execFileAsync("git", ["config", "user.name", "Ashara Agent"], { cwd: workDir });
-
-  return { workDir, taskBranch };
+  return { workDir, taskBranch, repo: await worktreeWithIdentity(targetProjectPath, workDir) };
 }
 
 async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
+  const repo = targetRepo(targetProjectPath);
   try {
-    await execFileAsync("git", ["worktree", "remove", workDir, "--force"], {
-      cwd: targetProjectPath,
-    });
+    await runHostGit(repo, ["worktree", "remove", workDir, "--force"]);
   } catch {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    await execFileAsync("git", ["worktree", "prune"], { cwd: targetProjectPath }).catch(() => {});
+    await runHostGit(repo, ["worktree", "prune"]).catch(() => {});
   }
   if (deleteBranch) {
-    await execFileAsync("git", ["branch", "-d", deleteBranch], { cwd: targetProjectPath }).catch(() => {});
+    await runHostGit(repo, ["branch", "-d", deleteBranch]).catch(() => {});
   }
 }
 
 /**
- * Files the agent changed. Ashara's own control directory is excluded: it is
- * written before the agent starts, so counting it would let an agent that
- * produced nothing pass the no-changes gate, and it would be reported as a
- * task deliverable.
+ * Files the agent changed. Ashara writes nothing into the worktree (records go to
+ * workdirBase/records/), so every change is the agent's.
  */
-export async function getChangedFiles(workDir: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd: workDir });
+export async function getChangedFiles(repo: HostRepo): Promise<string[]> {
+  const { stdout } = await runHostGit(repo, ["status", "--porcelain"]);
   return stdout
     .split("\n")
     .filter((line) => line.trim().length > 0)
-    .map((line) => line.slice(3).trim())
-    .filter((path) => !isAsharaControlPath(path));
+    .map((line) => line.slice(3).trim());
 }
 
 async function hasGitCommits(dir: string): Promise<boolean> {
   try {
-    await execFileAsync("git", ["-C", dir, "rev-parse", "HEAD"]);
+    await runHostGit(targetRepo(dir), ["rev-parse", "HEAD"]);
     return true;
   } catch {
     return false;
@@ -123,19 +124,16 @@ async function ensureGitInitialized(targetProjectPath: string): Promise<void> {
     () => false,
   );
   if (!isGitRepo) {
-    await execFileAsync("git", ["init", "-b", "main"], { cwd: targetProjectPath });
-    await execFileAsync("git", ["config", "user.email", "ashara-agent@local"], {
-      cwd: targetProjectPath,
-    });
-    await execFileAsync("git", ["config", "user.name", "Ashara Agent"], {
-      cwd: targetProjectPath,
-    });
+    await initHostRepo(targetProjectPath);
+    const repo = targetRepo(targetProjectPath);
+    await runHostGit(repo, ["config", "user.email", "ashara-agent@local"]);
+    await runHostGit(repo, ["config", "user.name", "Ashara Agent"]);
   }
 }
 
-export async function commitAllChanges(workDir: string, message: string): Promise<void> {
-  await execFileAsync("git", ["add", "-A"], { cwd: workDir });
-  await execFileAsync("git", ["commit", "-m", message, "--allow-empty-message"], { cwd: workDir });
+export async function commitAllChanges(repo: HostRepo, message: string): Promise<void> {
+  await runHostGit(repo, ["add", "-A"]);
+  await runHostGit(repo, ["commit", "-m", message, "--allow-empty-message"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,20 +160,20 @@ export type PartialCommitOutcome =
  * provides a message containing task ID, dispatch number, and failure path.
  */
 export async function commitPartialWork(
-  workDir: string,
+  repo: HostRepo,
   message: string,
 ): Promise<PartialCommitOutcome> {
   try {
-    const files = await getChangedFiles(workDir);
+    const files = await getChangedFiles(repo);
     if (files.length === 0) {
       return { committed: false, reason: "no-changes" };
     }
-    await execFileAsync("git", ["add", "-A"], { cwd: workDir });
-    await execFileAsync("git", ["commit", "-m", message], { cwd: workDir });
+    await runHostGit(repo, ["add", "-A"]);
+    await runHostGit(repo, ["commit", "-m", message]);
     return { committed: true, filesCount: files.length };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn(`[commitPartialWork] git failure in ${workDir}: ${msg}`);
+    console.warn(`[commitPartialWork] git failure in ${repo.workTree}: ${msg}`);
     return { committed: false, reason: "git-error", message: msg };
   }
 }
@@ -235,60 +233,20 @@ export async function buildFileTree(
   return paths.join("\n");
 }
 
-/**
- * Excludes Ashara's control directory from the target repository without
- * touching the project's `.gitignore`.
- *
- * `.git/info/exclude` is git's per-checkout ignore file: untracked, never
- * merged, never a conflict, and read from the common git dir so every linked
- * worktree inherits it. That is the correct home for an ignore that belongs to
- * this checkout rather than to the project.
- *
- * `.gitignore` is the project's own file, and Ashara cannot author it here: the
- * initial commit happens before any agent runs, so what this project needs
- * ignored is not yet knowable. Writing a guess does not merely add noise — it
- * SUPPRESSES the right answer, because the agent that later learns the stack
- * finds a `.gitignore` already present and leaves it alone. Run 39's Go target
- * inherited `node_modules/`, never got its compiled binary ignored, and
- * deadlocked the merge queue. The project's ignores arrive when the project's
- * stack does: from the agent, in the same commit as the manifest.
- */
-async function excludeControlDir(targetProjectPath: string): Promise<void> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--git-common-dir"], {
-    cwd: targetProjectPath,
-  });
-  const commonDir = stdout.trim();
-  const excludePath = join(
-    isAbsolute(commonDir) ? commonDir : join(targetProjectPath, commonDir),
-    "info",
-    "exclude",
-  );
-
-  const entry = `${ASHARA_CONTROL_DIR}/`;
-  const existing = await readFile(excludePath, "utf-8").catch(() => "");
-  if (existing.split("\n").some((line) => line.trim() === entry)) return;
-
-  await mkdir(dirname(excludePath), { recursive: true });
-  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
-  await writeFile(excludePath, `${existing}${separator}${entry}\n`, "utf-8");
-}
-
 export async function ensureTargetGitInit(targetProjectPath: string): Promise<void> {
   // GIT-SAFETY (path minting): refuse before creating/initialising anything
   // inside the repo or under a git working tree (defense in depth).
   await assertValidTargetProjectPath(targetProjectPath);
   await mkdir(targetProjectPath, { recursive: true });
   await ensureGitInitialized(targetProjectPath);
-  await excludeControlDir(targetProjectPath);
 
   if (!(await hasGitCommits(targetProjectPath))) {
-    await execFileAsync("git", ["add", "-A"], { cwd: targetProjectPath });
+    const repo = targetRepo(targetProjectPath);
+    await runHostGit(repo, ["add", "-A"]);
     // --allow-empty: the root commit exists so `main` and every task branch have
     // somewhere to point. It carries no scaffold of Ashara's own, so on a fresh
     // target there is nothing to commit and the plain form would fail.
-    await execFileAsync("git", ["commit", "--allow-empty", "-m", "init"], {
-      cwd: targetProjectPath,
-    });
+    await runHostGit(repo, ["commit", "--allow-empty", "-m", "init"]);
   }
 }
 
@@ -391,63 +349,6 @@ async function findGitWorkingTreeAncestor(startDir: string): Promise<string | nu
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;
-  }
-}
-
-/**
- * Whether the agent subprocess ran, determining ENOENT semantics.
- * - `"agent-ran"` — the agent was launched; a missing record means it crashed
- *   before writing its first turn. ENOENT is a diagnostic fact and is warned.
- * - `"pre-launch"` — the agent was never launched (stub execution, outer catch
- *   before dispatch). No conversation.jsonl was ever created. ENOENT is
- *   expected and silent.
- */
-export type ConversationRecordExpectation = "agent-ran" | "pre-launch";
-
-/**
- * Copies the agent's conversation record out of the worktree to a durable
- * location before cleanup destroys it. The record is the ONLY per-turn trace
- * of what the agent did — without this, diagnosing a run requires capturing
- * the filesystem while the process is still live.
- *
- * Organized as `<workdirBase>/records/<taskId>/conversation.jsonl`, locatable
- * by task id after the worktree is gone.
- *
- * Never throws. The task outcome is already determined by the time this runs,
- * and destroying a good outcome to save a diagnostic artifact would be
- * backwards. Discipline A: persisting the record is a policy decision (the
- * system chooses what to archive), and its output flows into zero verdicts —
- * a persist failure leaves the run no worse than the status quo where the
- * record was always lost.
- */
-export async function persistConversationRecord(
-  workDir: string,
-  taskId: string,
-  workdirBase: string,
-  expectation: ConversationRecordExpectation,
-): Promise<void> {
-  const source = join(workDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
-  const destDir = join(workdirBase, CONVERSATION_RECORDS_DIR, taskId);
-  const dest = join(destDir, "conversation.jsonl");
-
-  try {
-    const content = await readFile(source);
-    await mkdir(destDir, { recursive: true });
-    await writeFile(dest, content);
-  } catch (e: unknown) {
-    if (e instanceof Error && "code" in e && e.code === "ENOENT") {
-      if (expectation === "agent-ran") {
-        console.warn(
-          `[persistConversationRecord] expected conversation record for task ${taskId} ` +
-            `but none exists at ${source} — the agent may have crashed before writing its first turn`,
-        );
-      }
-      return;
-    }
-    console.warn(
-      `[persistConversationRecord] failed to persist conversation record for task ${taskId} ` +
-        `from ${source} to ${dest}: ${e instanceof Error ? e.message : String(e)}`,
-    );
   }
 }
 

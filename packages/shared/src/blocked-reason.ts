@@ -59,9 +59,11 @@ const failureRouterSchema = z.object({
 });
 
 /**
- * The execution substrate a task needs was not available, so no agent ran and
- * nothing executed. `unavailable` names what was missing (e.g. "podman");
- * `reason` carries the probe's own diagnostic text for the operator.
+ * The execution substrate a task needs was not available: before the attempt
+ * (no agent ran, nothing executed) or under it (a cell failed mid-attempt).
+ * `unavailable` names what was missing (e.g. "container substrate (podman)",
+ * "task cell"); `reason` carries the substrate's own diagnostic text for the
+ * operator.
  */
 const environmentUnavailableSchema = z.object({
   source: z.literal("environment_unavailable"),

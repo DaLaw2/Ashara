@@ -101,9 +101,9 @@
 # spent all 4,096 tokens reasoning and returned no text.
 #
 # `default` is required when this table is present; [thinking.sites] keys are
-# the routing sites ("escalation" covers every escalated ladder attempt). A call
-# with no routing site (environment-spec) uses `default`. With no [thinking]
-# table at all, thinking is off at every site.
+# the routing sites ("escalation" covers every escalated ladder attempt). A site
+# not named there uses `default`. With no [thinking] table at all, thinking is
+# off at every site.
 # =============================================================================
 
 [thinking]

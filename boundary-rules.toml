@@ -22,10 +22,8 @@ restrict.engagement = ["src/acl/*.ts"]
 allow = ["shared", "llm-gateway"]
 
 [development]
-allow = ["shared", "llm-gateway"]
-
-[agent-runner]
-allow = ["shared", "llm-gateway"]
+# ADR-075: Execution runs every task on a cell (execution-infra) through the Workplace attempt loop.
+allow = ["shared", "llm-gateway", "execution-infra", "workplace"]
 
 [db]
 allow = ["shared"]

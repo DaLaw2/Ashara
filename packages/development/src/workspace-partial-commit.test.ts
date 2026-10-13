@@ -48,13 +48,13 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     const workdirBase = join(base, "work");
 
     // First dispatch: create worktree, simulate agent producing files, then fail
-    const { workDir } = await createWorkdir(workdirBase, target, branch);
+    const { workDir, repo } = await createWorkdir(workdirBase, target, branch);
     await writeFile(join(workDir, "handler.ts"), 'export function handle() { return "hello"; }', "utf-8");
     await writeFile(join(workDir, "route.ts"), 'import { handle } from "./handler.js";', "utf-8");
 
     // Partial commit before cleanup (what execution-service now does on failure)
     const outcome = await commitPartialWork(
-      workDir,
+      repo,
       "ashara: partial work for retry (task test-partial, dispatch 1, agent-blocked)",
     );
     expect(outcome.committed).toBe(true);
@@ -89,11 +89,11 @@ describe("commitPartialWork — ADR-036 point 6", () => {
 
     const branch = "task/test-empty";
     const workdirBase = join(base, "work");
-    const { workDir } = await createWorkdir(workdirBase, target, branch);
+    const { workDir, repo } = await createWorkdir(workdirBase, target, branch);
 
     // Agent produced nothing — normal case
     const outcome = await commitPartialWork(
-      workDir,
+      repo,
       "ashara: partial work for retry (task test-empty, dispatch 1, agent-failed)",
     );
     expect(outcome).toEqual({ committed: false, reason: "no-changes" });
@@ -110,16 +110,16 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     const workdirBase = join(base, "work");
 
     // First dispatch: agent writes files, fails, partial commit preserved
-    const { workDir: w1 } = await createWorkdir(workdirBase, target, branch);
+    const { workDir: w1, repo: r1 } = await createWorkdir(workdirBase, target, branch);
     await writeFile(join(w1, "v1.ts"), "export const v = 1;", "utf-8");
-    await commitPartialWork(w1, "ashara: partial work for retry (task x, dispatch 1, agent-failed)");
+    await commitPartialWork(r1, "ashara: partial work for retry (task x, dispatch 1, agent-failed)");
     await cleanupWorkdir(w1, target);
 
     // Second dispatch (retry): agent adds more work, then finalizeSuccess commits
-    const { workDir: w2 } = await createWorkdirForRetry(workdirBase, target, branch);
+    const { workDir: w2, repo: r2 } = await createWorkdirForRetry(workdirBase, target, branch);
     await writeFile(join(w2, "v2.ts"), "export const v = 2;", "utf-8");
     // This is what finalizeSuccess calls
-    await commitAllChanges(w2, "ashara: agent output for task x");
+    await commitAllChanges(r2, "ashara: agent output for task x");
 
     // Both commits exist on the branch: partial and finalized
     const log = await git(w2, "log", "--oneline");
@@ -141,7 +141,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     await writeFile(join(nonGitDir, "file.txt"), "content", "utf-8");
 
     const outcome = await commitPartialWork(
-      nonGitDir,
+      { gitDir: join(nonGitDir, ".git"), workTree: nonGitDir },
       "ashara: partial work for retry (task x, dispatch 1, agent-failed)",
     );
     expect(outcome.committed).toBe(false);

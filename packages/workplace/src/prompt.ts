@@ -1,7 +1,7 @@
 import type { AssignmentBrief } from "./assignment.js";
 
 /**
- * The system prompt of an attempt, ported from agent-runner's runner.ts. Differences: no
+ * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
  * instruction uses git (the worktree's .git points at a host path the cell does not mount; Z0
  * commits), no stack literal, the cell's isolation is stated, and the attempt ends only through
  * the finish tool.

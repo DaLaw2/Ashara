@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { loadBudgetEnv, parseExecutionContext } from "./env.js";
+import { loadBudgetEnv } from "./env.js";
 
 const SAVED_ENV: Record<string, string | undefined> = {};
 const ENV_KEYS = [
@@ -51,46 +51,5 @@ describe("loadBudgetEnv", () => {
         process.env["ASHARA_BUDGET_PROVIDER_OPENAI"] = "not-a-number";
         const budget = loadBudgetEnv();
         expect(budget.perProvider).toEqual({});
-    });
-});
-
-describe("parseExecutionContext", () => {
-    const REQUIRED = {
-        ASHARA_BRIEF_PATH: "/tmp/brief.json",
-        ASHARA_OUTPUT_PATH: "/tmp/output.json",
-        ASHARA_WORKING_DIR: "/tmp/work",
-        ASHARA_CATALOG_PATH: "/tmp/catalog.json",
-    };
-
-    test("parses a fully-populated env", () => {
-        const ctx = parseExecutionContext({
-            ...REQUIRED,
-            AGENT_CAPABILITY: "Frontier",
-        });
-        expect(ctx).toEqual({
-            ...REQUIRED,
-            AGENT_CAPABILITY: "Frontier",
-        });
-    });
-
-    test("defaults AGENT_CAPABILITY to Strong", () => {
-        const ctx = parseExecutionContext({ ...REQUIRED });
-        expect(ctx.AGENT_CAPABILITY).toBe("Strong");
-    });
-
-    test("fails closed when a required field is missing", () => {
-        const { ASHARA_BRIEF_PATH: _omit, ...rest } = REQUIRED;
-        expect(() => parseExecutionContext(rest)).toThrow();
-    });
-
-    test("fails closed when ASHARA_CATALOG_PATH is missing", () => {
-        const { ASHARA_CATALOG_PATH: _omit, ...rest } = REQUIRED;
-        expect(() => parseExecutionContext(rest)).toThrow();
-    });
-
-    test("fails closed when a required field is an empty string", () => {
-        expect(() =>
-            parseExecutionContext({ ...REQUIRED, ASHARA_WORKING_DIR: "" }),
-        ).toThrow();
     });
 });

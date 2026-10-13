@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { runHostGit, targetRepo } from "../host-git.js";
 import type { GateResult } from "./types.js";
-
-const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Entry-point-rewrite check (gate) — E2E Run 7: an agent whole-file-rewrote
@@ -63,11 +60,7 @@ export async function checkEntryPointRewrite(
   }
 
   try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["ls-tree", preSyncHead, "--", contractEntryPoint],
-      { cwd: targetProjectPath },
-    );
+    const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["ls-tree", preSyncHead, "--", contractEntryPoint]);
     const entryPath = stdout.trim().length > 0 ? contractEntryPoint : null;
 
     if (entryPath === null) {
@@ -78,11 +71,7 @@ export async function checkEntryPointRewrite(
       };
     }
 
-    const { stdout: oldContent } = await execFileAsync(
-      "git",
-      ["show", `${preSyncHead}:${entryPath}`],
-      { cwd: targetProjectPath },
-    );
+    const { stdout: oldContent } = await runHostGit(targetRepo(targetProjectPath), ["show", `${preSyncHead}:${entryPath}`]);
 
     let newContent: string;
     try {

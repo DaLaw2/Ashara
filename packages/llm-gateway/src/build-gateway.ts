@@ -8,9 +8,7 @@ import type { CallRecording, GatewayConfig } from "./types.js";
 
 const HOW_TO_FIX =
   "Store an API key for at least one provider listed in provider_configs: " +
-  "`read -rs V && printf '%s' \"$V\" | npx tsx scripts/secret.ts put provider/<name>/api_key` " +
-  "(a process that loads its config over HTTP or from a catalog file reads the key from its " +
-  "environment instead, e.g. ANTHROPIC_API_KEY).";
+  "`read -rs V && printf '%s' \"$V\" | npx tsx scripts/secret.ts put provider/<name>/api_key`.";
 
 const ROUTING_PROFILE_HOW_TO_FIX =
   "Map the missing site(s) in this combo's [routing.profiles] table, or empty " +
@@ -83,9 +81,9 @@ function assertRoutingProfileModelsPresent(config: GatewayConfig): void {
 
 export interface BuildGatewayOptions {
   /**
-   * Already-resolved gateway config. Acquisition (TOML/env for the server,
-   * the catalog file for the agent-runner) stays caller-side — this
-   * factory only enforces the refuse-to-start invariant on the result.
+   * Already-resolved gateway config. Acquisition (the DB catalog and the
+   * secret store, in the server) stays caller-side — this factory only
+   * enforces the refuse-to-start invariant on the result.
    */
   readonly config: GatewayConfig;
   /**

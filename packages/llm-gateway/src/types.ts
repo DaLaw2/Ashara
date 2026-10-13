@@ -239,17 +239,12 @@ export interface StructuredResponse<T> {
   model: string;
 }
 
-/**
- * Who a recorded call serves. `environment-spec` is a caller with no routing
- * site of its own: it routes by capability alone, so it is not a `KnownLLMSite`.
- */
-type LlmCallSite = KnownLLMSite | "environment-spec";
-
 /** Required on every recorded call: the project the spend belongs to, and the work item when one is served. */
 export interface LlmCallContext {
   readonly projectId: ProjectId;
   readonly taskId: WorkItemId | null;
-  readonly callSite: LlmCallSite;
+  /** Who the recorded call serves: always a routing site. */
+  readonly callSite: KnownLLMSite;
 }
 
 export type LlmCallOperation = "generateObject" | "generateText:structured-fallback" | "generateText:turn";

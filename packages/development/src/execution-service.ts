@@ -1,24 +1,24 @@
-import path from "node:path";
 import { join } from "node:path";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/execution-infra";
+import { CellStartFailed, CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
+import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
-import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
+import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { ContextualLlm } from "@ashara/llm-gateway";
-import { LlmCallNotRecorded, PreCallRefusal } from "@ashara/llm-gateway";
-import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
-import { SubstrateUnavailable } from "./provisioner.js";
+import type { Outcome } from "@ashara/workplace";
+import { runAttempt } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
+import { DispatchRecords, cellAsRunner, toAgentOutput } from "./cell-execution.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 import { resolveProjectFrame } from "./project-frame.js";
 import type { TaskSpec } from "./types.js";
 import { finalizeSuccess } from "./gates/finalize.js";
+import type { FinalizeDeps } from "./gates/finalize.js";
 import { readVerifyConfig } from "./verify-config.js";
 import { runVerifyCore } from "./verify-core.js";
 import type { CommandRunner } from "./verify-core.js";
-import { defaultRunCommand } from "./check-runner.js";
 import { readManifestContext } from "./dispatch-utils.js";
-import { deriveEnvironmentSpec } from "./env-spec-derivation.js";
 import {
   buildFileTree,
   cleanupWorkdir,
@@ -26,49 +26,33 @@ import {
   createWorkdir,
   createWorkdirForRetry,
   getChangedFiles,
-  persistConversationRecord,
 } from "./workspace.js";
+import type { WorkdirInfo } from "./workspace.js";
 import { branchExists, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
-// ---------------------------------------------------------------------------
-// Provisioner → CommandRunner bridge
-// ---------------------------------------------------------------------------
-
-function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv, hostMountRoot: string): CommandRunner {
-  const containerMount = env.spec.projectMount;
-  return async (command: string[], cwd: string, timeout: number) => {
-    const rel = path.relative(hostMountRoot, cwd);
-    const containerCwd = rel && !rel.startsWith("..") ? path.posix.join(containerMount, rel) : containerMount;
-    const result = await provisioner.execute(env, command, { timeout, cwd: containerCwd });
-    return { exitCode: result.exitCode ?? 1, output: (result.stdout + result.stderr).trim() };
-  };
-}
-
-async function cleanupWorkdirBeforeRethrow(taskId: string, workDir: string, targetProjectPath: string): Promise<void> {
+async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targetProjectPath: string, why: string): Promise<void> {
   try {
     await cleanupWorkdir(workDir, targetProjectPath);
   } catch (cleanupError) {
-    console.warn(`[${taskId}] workdir cleanup failed before rethrowing a ledger failure (${workDir}):`, cleanupError);
+    console.warn(`[${taskId}] workdir cleanup failed (${workDir}) after ${why}:`, cleanupError);
   }
 }
 
-async function cleanupWorkdirBeforeBlock(taskId: string, workDir: string, targetProjectPath: string | null): Promise<void> {
-  try {
-    await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
-  } catch (cleanupError) {
-    console.warn(`[${taskId}] workdir cleanup failed before blocking on an unavailable substrate (${workDir}):`, cleanupError);
-  }
-}
-
+/**
+ * The substrate cannot host the task (podman missing or not answering, or a cell that cannot
+ * start): Blocked for the operator, never a host fallback (s-isolated-worker-m1 C2).
+ */
 function environmentBlocked(
   taskId: WorkItemId,
   sessionId: string,
-  e: SubstrateUnavailable,
+  operation: string,
+  e: SubstrateUnavailable | CellStartFailed,
   eventSink: ExecutionEventSink | undefined,
 ): ExecutionResult {
-  const chain = wrapError("development", e.context.operation, e, { taskId, ...e.context });
+  const unavailable = e instanceof SubstrateUnavailable ? `container substrate (${e.binary})` : "task cell";
+  const chain = wrapError("development", operation, e, { taskId, unavailable });
   const envelope: ErrorEnvelope = {
     outcome: "blocked",
     summary: `${e.message}; task ${taskId} blocked, no agent ran and nothing executed`,
@@ -78,7 +62,21 @@ function environmentBlocked(
   eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, reason: envelope.summary });
   return {
     status: "environment_blocked",
-    unavailable: e.context.substrate,
+    unavailable,
+    detail: envelope.summary,
+    output: null,
+    sessionId,
+    attempt: 1,
+    errorEnvelope: envelope,
+    agentInvoked: false,
+  };
+}
+
+function failedBeforeAgent(taskId: WorkItemId, sessionId: string, operation: string, e: unknown, summary: string): ExecutionResult {
+  const chain = wrapError("development", operation, e, { taskId });
+  const envelope: ErrorEnvelope = { outcome: "failed", summary: `${summary}: ${chain.message}`, chain };
+  return {
+    status: "failed",
     detail: envelope.summary,
     output: null,
     sessionId,
@@ -98,22 +96,47 @@ export interface SessionStore {
   fail(sessionId: string, verificationResult: unknown): Promise<void>;
 }
 
-export interface AgentInvoker {
-  spawn(opts: AgentSpawnOptions): Promise<AgentOutputJson>;
-}
-
-export interface AgentSpawnOptions {
-  readonly workDir: string;
-  readonly briefPath: string;
-  readonly outputPath: string;
-  readonly taskId: string;
-  readonly dispatchCount: number;
-  readonly blockedReason?: StoredBlockedReason;
-}
-
 export interface ExecutionEventSink {
   // open-by-design: log events carry caller-defined fields alongside the required `event` tag
   emit(event: Record<string, unknown> & { readonly event: string }): void;
+}
+
+/** What execution needs of the container substrate; execution-infra's PodmanSubstrate satisfies it. */
+interface CellSubstrate {
+  probeSubstrate(): Promise<SubstrateInfo>;
+  createCell(spec: CellSpec): Promise<Cell>;
+}
+
+/** The cells every dispatch runs on. */
+interface ExecutionCells {
+  readonly substrate: CellSubstrate;
+  /** The image every cell starts from (config/base-cell.toml). */
+  readonly baseCell: BaseCellReference;
+  /** The ashara.instance label of every cell this process creates; reconcileOrphans selects on it. */
+  readonly instance: string;
+}
+
+/** Who works a task and on which model. */
+interface AgentStaff {
+  readonly role: string;
+  readonly model: ResolvedModel;
+}
+
+/**
+ * Builds the agent half of a task's Assignment: its role and its model, resolved once per
+ * attempt and never inside it (ADR-074 d44). The composition root supplies it.
+ */
+export interface AgentStaffing {
+  staff(task: TaskDescriptor): AgentStaff;
+}
+
+/** The limits of one attempt; the wall clock is the attempt's own (ADR-074 d56, 20 minutes). */
+interface AttemptPolicy {
+  readonly maxTurns: number;
+  /** Upper bound of one run_command; the model may ask for less. */
+  readonly perCommandTimeoutSeconds: number;
+  /** Timeout of the file tools (read, write, list, search). */
+  readonly toolTimeoutSeconds: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,22 +191,25 @@ export interface TaskDescriptor {
 // ---------------------------------------------------------------------------
 
 /**
- * The outcome of a dispatch the execution substrate could not host: no agent
- * ran and nothing executed, on the host or anywhere else. It is not a task
- * failure (re-dispatching the same task cannot make the substrate appear), so
- * the orchestrator parks the item at Blocked with an `environment_unavailable`
- * reason instead of routing it through the FailureRouter.
+ * The outcome of a dispatch the execution substrate could not host: the
+ * substrate was unavailable before the attempt (no agent ran, nothing
+ * executed), or a cell failed under a running attempt (environment_failure).
+ * It is not a task failure (re-dispatching cannot make the substrate appear),
+ * so the orchestrator parks the item at Blocked with an
+ * `environment_unavailable` reason instead of routing it through the
+ * FailureRouter.
  */
 interface EnvironmentBlockedResult {
   readonly status: "environment_blocked";
-  /** What was unavailable, named for the operator (e.g. "podman"). */
+  /** What was unavailable, named for the operator (e.g. "container substrate (podman)"). */
   readonly unavailable: string;
   readonly detail: string;
-  readonly output: null;
+  /** null when no agent ran; the attempt's output when a cell failed under it. */
+  readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   readonly attempt: 1;
   readonly errorEnvelope: ErrorEnvelope;
-  readonly agentInvoked: false;
+  readonly agentInvoked: boolean;
 }
 
 export type ExecutionResult = AgentExecutionResult | EnvironmentBlockedResult;
@@ -203,19 +229,19 @@ interface AgentExecutionResult {
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
   /**
-   * Whether the agent subprocess was actually launched for this dispatch. The
-   * budget reads it to tell "no agent ran, therefore $0" apart from "an agent ran
-   * and we cannot tell what it cost" — the second must never be charged as $0
-   * (Discipline A: an evidence default in a number that gates dispatch).
+   * Whether the attempt loop was started for this dispatch. The budget reads it
+   * to tell "no agent ran, therefore $0" apart from "an agent ran and we cannot
+   * tell what it cost": the second must never be charged as $0 (Discipline A:
+   * an evidence default in a number that gates dispatch).
    */
   readonly agentInvoked: boolean;
 }
 
 /**
  * Mutable across the runExecution call so the outer catch can still report
- * whether the agent had been launched when the throw happened. A thrown
- * AgentSpawnError — the runner crashed after burning tokens — is exactly the
- * case where `agentInvoked` must survive the stack unwind.
+ * whether the attempt had been started when the throw happened: a throw after
+ * the model was called is exactly the case where `agentInvoked` must survive
+ * the stack unwind.
  */
 interface DispatchRecord {
   agentInvoked: boolean;
@@ -226,6 +252,25 @@ interface VerifyTaskOutcome {
   readonly details?: string;
   readonly checks?: ReadonlyArray<{ name: string; passed: boolean; output?: string }>;
 }
+
+/** Everything one dispatch holds once its cell is up. */
+interface Dispatch {
+  readonly task: TaskDescriptor;
+  readonly brief: AgentBrief;
+  readonly staff: AgentStaff;
+  readonly cell: Cell;
+  readonly records: DispatchRecords;
+  readonly targetProjectPath: string;
+  readonly workDir: string;
+  /** The worktree's git dir, resolved before the cell existed; never re-read from the work tree. */
+  readonly repo: WorkdirInfo["repo"];
+  readonly sessionId: string;
+  readonly contract: ProjectContract | null;
+  readonly record: DispatchRecord;
+}
+
+/** The ashara.role label of the post-merge check's cell. */
+const POST_MERGE_VERIFIER_ROLE = "verifier";
 
 // ---------------------------------------------------------------------------
 // DevelopmentService
@@ -246,8 +291,6 @@ export interface DevelopmentServiceDeps {
   readonly sessionStore: SessionStore;
   readonly knowledgeSink: KnowledgeSink;
   readonly knowledgeSource?: KnowledgeSource;
-  readonly agentInvoker: AgentInvoker;
-  readonly llmGateway: ContextualLlm | null;
   readonly eventSink?: ExecutionEventSink;
   /**
    * Supplies the owner's own vision text for a task's project (ADR-046). Absent ⇒
@@ -267,11 +310,17 @@ export interface DevelopmentServiceDeps {
    */
   readonly contractSource?: ContractSource;
   /**
-   * Required: execute() probes it before anything else, so there is no
-   * configuration in which an unavailable substrate means "run on the host".
+   * Required: execute() probes the substrate before anything else and runs every
+   * tool call and every check in a cell, so there is no configuration in which
+   * an unavailable substrate means "run on the host".
    */
-  readonly provisioner: Provisioner;
-  readonly provisionedEnv?: ProvisionedEnv;
+  readonly cells: ExecutionCells;
+  /** The recorded gateway: every agent turn is one llm_calls row charged to the task's project. */
+  readonly llm: ContextualTurnLlm;
+  readonly staffing: AgentStaffing;
+  readonly attemptPolicy: AttemptPolicy;
+  /** Aborted on shutdown: an attempt in flight ends as cancelled. */
+  readonly shutdownSignal: AbortSignal;
 }
 
 export class DevelopmentService {
@@ -281,22 +330,11 @@ export class DevelopmentService {
     this.deps = deps;
   }
 
-  private buildRunners(env?: ProvisionedEnv): { runCommand: CommandRunner; prepareRunCommand: CommandRunner } {
-    if (env) {
-      const runner = provisionerAsRunner(this.deps.provisioner, env, this.deps.config.workdirBase);
-      return { runCommand: runner, prepareRunCommand: runner };
-    }
-    return {
-      runCommand: defaultRunCommand,
-      prepareRunCommand: defaultRunCommand,
-    };
-  }
-
   async execute(
     task: TaskDescriptor,
     targetProjectPath: string | null,
   ): Promise<ExecutionResult> {
-    const { config, eventSink } = this.deps;
+    const { config, eventSink, cells } = this.deps;
     const sessionId = createSessionId();
     const base = config.workdirBase;
 
@@ -311,10 +349,26 @@ export class DevelopmentService {
     // worktree: a substrate that cannot host the task blocks it here, so no
     // later path can fall through to host execution.
     try {
-      await this.deps.provisioner.probe();
+      await cells.substrate.probeSubstrate();
     } catch (e) {
       if (!(e instanceof SubstrateUnavailable)) throw e;
-      return environmentBlocked(task.id, sessionId, e, eventSink);
+      return environmentBlocked(task.id, sessionId, "probeSubstrate", e, eventSink);
+    }
+
+    // Z0's git never discovers a repository from a tree a cell writes (host-git.ts),
+    // and only a target checkout gives the worktree a git dir Z0 owns. Without one
+    // nothing could be merged either, so the dispatch ends before any model call.
+    if (targetProjectPath === null) {
+      const result = failedBeforeAgent(
+        task.id,
+        sessionId,
+        "resolveTargetWorkspace",
+        "target project path unresolved; nothing could be merged",
+        `no target workspace for ${task.id}`,
+      );
+      eventSink?.emit({ event: "error", location: "DevelopmentService:resolveTargetWorkspace", taskId: task.id, attempt: 1, error: result.detail });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
     }
 
     let contract: ProjectContract | null = null;
@@ -360,82 +414,82 @@ export class DevelopmentService {
       return result;
     }
 
-    let workDir: string;
-    if (targetProjectPath) {
-      const branch = taskBranchName(task.id);
-      const isRetry = await branchExists(targetProjectPath, branch);
-      try {
-        if (isRetry) {
-          ({ workDir } = await createWorkdirForRetry(base, targetProjectPath, branch));
-        } else {
-          ({ workDir } = await createWorkdir(base, targetProjectPath, branch));
-        }
-      } catch (e) {
-        const chain = wrapError("development", "createWorkdir", e, { taskId: task.id });
-        eventSink?.emit({
-          event: "error",
-          location: "DevelopmentService:createWorkdir",
-          taskId: task.id,
-          attempt: 1,
-          error: chain.message,
-        });
-        const envelope: ErrorEnvelope = {
-          outcome: "failed",
-          summary: `workdir creation failed for ${task.id}: ${chain.message}`,
-          chain,
-        };
-        const result: ExecutionResult = {
-          status: "failed",
-          detail: envelope.summary,
-          output: null,
-          sessionId,
-          attempt: 1,
-          errorEnvelope: envelope,
-          agentInvoked: false,
-        };
-        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-        return result;
-      }
-    } else {
-      const { mkdtemp } = await import("node:fs/promises");
-      workDir = await mkdtemp(join(base, "task-"));
+    // The Assignment's agent half, once per attempt: a model that cannot be
+    // resolved (routing, budget) fails the dispatch before any worktree exists.
+    let staff: AgentStaff;
+    let records: DispatchRecords;
+    try {
+      staff = this.deps.staffing.staff(task);
+      records = new DispatchRecords(base, task.id, sessionId);
+      await records.writeBrief(brief);
+    } catch (e) {
+      const result = failedBeforeAgent(task.id, sessionId, "assignAgent", e, `agent assignment failed for ${task.id}`);
+      eventSink?.emit({ event: "error", location: "DevelopmentService:assignAgent", taskId: task.id, attempt: 1, error: result.detail });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
     }
 
-    let localEnv: ProvisionedEnv | undefined;
-    const preSuppliedEnv = this.deps.provisionedEnv;
-    if (!preSuppliedEnv && this.deps.llmGateway && targetProjectPath) {
-      try {
-        const manifestContent = await readManifestContext(targetProjectPath);
-        if (manifestContent) {
-          const spec = await deriveEnvironmentSpec(
-            manifestContent,
-            this.deps.llmGateway.forCall({ projectId: task.projectId, taskId: task.id, callSite: "environment-spec" }),
-          );
-          localEnv = await this.deps.provisioner.provision(spec);
-        }
-      } catch (e) {
-        // A ledger failure is not a provisioning failure: a call that reached the
-        // provider unrecorded, or was refused before it, must stop the task.
-        if (e instanceof LlmCallNotRecorded || e instanceof PreCallRefusal) {
-          await cleanupWorkdirBeforeRethrow(task.id, workDir, targetProjectPath);
-          throw e;
-        }
-        // The substrate vanished between the probe and provisioning: still a
-        // block, never a fall-through to host execution.
-        if (e instanceof SubstrateUnavailable) {
-          await cleanupWorkdirBeforeBlock(task.id, workDir, targetProjectPath);
-          return environmentBlocked(task.id, sessionId, e, eventSink);
-        }
-        console.warn(`[${task.id}] environment provisioning failed, falling back to HOST execution (no container):`, e);
-      }
+    let workdir: WorkdirInfo;
+    const branch = taskBranchName(task.id);
+    try {
+      workdir = (await branchExists(targetProjectPath, branch))
+        ? await createWorkdirForRetry(base, targetProjectPath, branch)
+        : await createWorkdir(base, targetProjectPath, branch);
+    } catch (e) {
+      const result = failedBeforeAgent(task.id, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
+      eventSink?.emit({
+        event: "error",
+        location: "DevelopmentService:createWorkdir",
+        taskId: task.id,
+        attempt: 1,
+        error: result.detail,
+      });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
     }
-    const envForRunners = preSuppliedEnv ?? localEnv;
+    const { workDir, repo } = workdir;
 
-    const dispatch: DispatchRecord = { agentInvoked: false };
+    // The task's cell mounts only its worktree, with the gitlink read-only. A substrate
+    // that vanished since the probe, or a cell that cannot start, still blocks: never a
+    // host fallback.
+    let cell: Cell;
+    try {
+      cell = await cells.substrate.createCell({
+        image: cells.baseCell.image,
+        project: task.projectId,
+        task: task.id,
+        role: staff.role,
+        instance: cells.instance,
+        mount: { hostPath: workDir, readOnlyEntries: [".git"] },
+      });
+    } catch (e) {
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
+      if (e instanceof SubstrateUnavailable || e instanceof CellStartFailed) {
+        return environmentBlocked(task.id, sessionId, "createCell", e, eventSink);
+      }
+      const result = failedBeforeAgent(task.id, sessionId, "createCell", e, `task cell refused for ${task.id}`);
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
+    }
+    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, role: staff.role, image: cells.baseCell.image, imageDigest: cells.baseCell.digest });
+
+    const dispatch: Dispatch = {
+      task,
+      brief,
+      staff,
+      cell,
+      records,
+      targetProjectPath,
+      workDir,
+      repo,
+      sessionId,
+      contract,
+      record: { agentInvoked: false },
+    };
 
     try {
       const result = await withSessionLifecycle(this.deps.sessionStore, sessionId, task.id, brief, () =>
-        this.runExecution(task, brief, targetProjectPath, workDir, sessionId, contract, dispatch, envForRunners),
+        this.runExecution(dispatch),
       );
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
@@ -454,8 +508,7 @@ export class DevelopmentService {
         attempt: 1,
         error: chain.message,
       });
-      await persistConversationRecord(workDir, task.id, base, dispatch.agentInvoked ? "agent-ran" : "pre-launch");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      await cleanupWorkdir(workDir, targetProjectPath);
       const envelope: ErrorEnvelope = {
         outcome: "failed",
         summary: `execution error for ${task.id}: ${chain.message}`,
@@ -468,18 +521,46 @@ export class DevelopmentService {
         sessionId,
         attempt: 1,
         errorEnvelope: envelope,
-        agentInvoked: dispatch.agentInvoked,
+        agentInvoked: dispatch.record.agentInvoked,
       };
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       return result;
     } finally {
-      if (localEnv) {
-        try {
-          await this.deps.provisioner.teardown(localEnv);
-        } catch (e) {
-          console.warn(`[${task.id}] environment teardown failed:`, e);
-        }
-      }
+      await this.teardownCell(task.id, cell);
+    }
+  }
+
+  /** A failed teardown is logged at warn with its typed context; the substrate keeps the cell for teardownAll and reconcileOrphans. */
+  private async teardownCell(taskId: string, cell: Cell): Promise<void> {
+    try {
+      await cell.teardown();
+    } catch (e) {
+      if (!(e instanceof CellTeardownFailed)) throw e;
+      console.warn(`[${taskId}] cell teardown failed; teardownAll at shutdown and reconcileOrphans at startup remove it:`, e);
+      this.deps.eventSink?.emit({ event: "cell_teardown_failed", taskId, cellId: e.cellId, exitCode: e.exitCode, stderr: e.stderr });
+    }
+  }
+
+  /**
+   * Runs `verify` with a runner into a short-lived role=verifier cell that mounts
+   * the target checkout with a shared label (`:z`): two cells may mount it. Its
+   * `.git` is read-only: Z0 commits the merge in that repository after the checks,
+   * so a check able to write its config or hooks would run code on the host.
+   */
+  private async withVerifierCell<T>(task: TaskDescriptor, targetProjectPath: string, verify: (runCommand: CommandRunner) => Promise<T>): Promise<T> {
+    const { cells } = this.deps;
+    const cell = await cells.substrate.createCell({
+      image: cells.baseCell.image,
+      project: task.projectId,
+      task: task.id,
+      role: POST_MERGE_VERIFIER_ROLE,
+      instance: cells.instance,
+      mount: { hostPath: targetProjectPath, shared: true, readOnlyEntries: [".git"] },
+    });
+    try {
+      return await verify(cellAsRunner(cell, targetProjectPath));
+    } finally {
+      await this.teardownCell(task.id, cell);
     }
   }
 
@@ -529,7 +610,6 @@ export class DevelopmentService {
         goal: spec.goal,
         projectFrame,
         context: taskContext,
-        tools: ["read_file", "write_file", "edit_file", "run_command", "search_codebase", "list_directory"],
         constraints: spec.checks,
         deliverables: spec.deliverables,
         knowledgeContext,
@@ -686,139 +766,71 @@ export class DevelopmentService {
     return sections.length > 1 ? sections.join("\n\n") : "";
   }
 
-  private async runExecution(
-    task: TaskDescriptor,
-    brief: AgentBrief,
-    targetProjectPath: string | null,
-    workDir: string,
-    sessionId: string,
-    contract: ProjectContract | null,
-    dispatch: DispatchRecord,
-    provisionedEnv?: ProvisionedEnv,
-  ): Promise<AgentExecutionResult> {
-    const { config, eventSink, agentInvoker } = this.deps;
-    const recordsBase = config.workdirBase;
-
-    const asharaDir = join(workDir, ASHARA_CONTROL_DIR);
-    await mkdir(asharaDir, { recursive: true });
-
-    const briefPath = join(asharaDir, "brief.json");
-    const outputPath = join(asharaDir, "output.json");
-    await writeFile(briefPath, JSON.stringify(brief, null, 2));
+  private async runExecution(d: Dispatch): Promise<ExecutionResult> {
+    const { eventSink, attemptPolicy } = this.deps;
+    const { task, brief, staff, workDir, targetProjectPath, sessionId } = d;
 
     eventSink?.emit({
       event: "agent_launched",
       taskId: task.id,
       attempt: 1,
       workDir,
-      briefPath,
+      cellId: d.cell.id,
+      role: staff.role,
+      provider: staff.model.provider,
+      model: staff.model.modelId,
+      records: d.records.dir,
     });
 
-    dispatch.agentInvoked = true;
-    const output: AgentOutputJson = await agentInvoker.spawn({ workDir, briefPath, outputPath, taskId: task.id, dispatchCount: task.dispatchCount, blockedReason: task.blockedReason });
-
-    const agentStatus = output.status;
-
-    if (agentStatus === "failed") {
-      const { summary, turn_count: turnCount, finish_reason: finishReason } = output;
-      // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
-      // worktree is gone and git status would fail.
-      const filesChanged = await getChangedFiles(workDir);
-      eventSink?.emit({
-        event: "agent_completed",
+    d.record.agentInvoked = true;
+    const outcome = await runAttempt(
+      {
+        projectId: task.projectId,
         taskId: task.id,
-        attempt: 1,
-        status: "failed",
-        turns: turnCount,
-        summary,
-        filesChanged,
-      });
-      if (targetProjectPath) {
-        await commitPartialWork(
-          workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, agent-failed)`,
-        );
-      }
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
-      const chain = wrapError("development", "agentExecution", summary, {
-        taskId: task.id,
-        turnCount,
-        finishReason,
-      });
-      const envelope: ErrorEnvelope = {
-        outcome: "failed",
-        summary: `agent reported failure after ${turnCount} turns: ${summary}`,
-        chain,
-        agentOutput: output,
-      };
-      return {
-        status: "failed",
-        detail: envelope.summary,
-        output,
-        sessionId,
-        attempt: 1,
-        errorEnvelope: envelope,
-        agentInvoked: true,
-      };
+        role: staff.role,
+        brief,
+        model: staff.model,
+        limits: { maxTurns: attemptPolicy.maxTurns, perCommandTimeoutSeconds: attemptPolicy.perCommandTimeoutSeconds },
+      },
+      {
+        llm: this.deps.llm,
+        cell: createCellBackend(d.cell, { toolTimeoutSeconds: attemptPolicy.toolTimeoutSeconds }),
+        clock: { now: () => Date.now() },
+        records: d.records,
+        signal: this.deps.shutdownSignal,
+      },
+    );
+    const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
+    // Observe the workdir BEFORE cleanup: after cleanupWorkdir the worktree is gone.
+    const filesChanged = await getChangedFiles(d.repo);
+    eventSink?.emit({
+      event: "agent_completed",
+      taskId: task.id,
+      attempt: 1,
+      status: output.status,
+      outcome: outcome.kind,
+      turns: outcome.turnsUsed,
+      cost: output.total_cost,
+      costMeasured: output.cost_measured,
+      summary: output.summary,
+      filesChanged,
+    });
+
+    if (!(outcome.kind === "finished" && outcome.status === "done")) {
+      return this.endWithoutDone(d, outcome, output);
     }
 
-    if (agentStatus === "blocked") {
-      const { summary, turn_count: turnCount } = output;
-      // Observe the workdir BEFORE cleanup — after cleanupWorkdir the
-      // worktree is gone and git status would fail.
-      const filesChanged = await getChangedFiles(workDir);
-      eventSink?.emit({
-        event: "agent_completed",
-        taskId: task.id,
-        attempt: 1,
-        status: "blocked",
-        turns: turnCount,
-        summary,
-        filesChanged,
-      });
-      if (targetProjectPath) {
-        await commitPartialWork(
-          workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, agent-blocked)`,
-        );
-      }
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
-      const chain = wrapError("development", "agentExecution", summary, {
-        taskId: task.id,
-        turnCount,
-      });
-      const envelope: ErrorEnvelope = {
-        outcome: "blocked",
-        summary: `agent reported blocked after ${turnCount} turns: ${summary}`,
-        chain,
-        agentOutput: output,
-      };
-      return {
-        status: "blocked",
-        detail: envelope.summary,
-        output,
-        sessionId,
-        attempt: 1,
-        errorEnvelope: envelope,
-        agentInvoked: true,
-      };
-    }
-
-    const changedCount = (await getChangedFiles(workDir)).length;
-    if (changedCount === 0) {
+    if (filesChanged.length === 0) {
       eventSink?.emit({
         event: "task_failed",
         taskId: task.id,
         attempt: 1,
         reason: "agent produced no file changes",
       });
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      await cleanupWorkdir(workDir, targetProjectPath);
       const chain = wrapError("development", "agentExecution", "agent produced no file changes", {
         taskId: task.id,
-        turnCount: output.turn_count,
+        turnCount: outcome.turnsUsed,
       });
       return {
         status: "failed",
@@ -831,19 +843,8 @@ export class DevelopmentService {
       };
     }
 
-    const filesChanged = await getChangedFiles(workDir);
-    eventSink?.emit({
-      event: "agent_completed",
-      taskId: task.id,
-      attempt: 1,
-      status: "done",
-      turns: output.turn_count,
-      cost: output.total_cost,
-      filesChanged,
-    });
-
     eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
-    const verifyOutcome = await this.verifyTask(task, workDir, output, 1, contract, provisionedEnv);
+    const verifyOutcome = await this.verifyTask(task, workDir, cellAsRunner(d.cell, workDir), 1);
 
     if (verifyOutcome.verdict === "unverified") {
       // Zero executable checks: a verdict computed from nothing must not read
@@ -856,14 +857,11 @@ export class DevelopmentService {
         attempt: 1,
         reason: "verification unverified — no executable checks",
       });
-      if (targetProjectPath) {
-        await commitPartialWork(
-          workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-unverified)`,
-        );
-      }
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      await commitPartialWork(
+        d.repo,
+        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-unverified)`,
+      );
+      await cleanupWorkdir(workDir, targetProjectPath);
       const chain = wrapError("development", "verify", "zero executable checks — task unverified", { taskId: task.id });
       const envelope: ErrorEnvelope = {
         outcome: "failed",
@@ -889,14 +887,11 @@ export class DevelopmentService {
         attempt: 1,
         reason: "verification failed",
       });
-      if (targetProjectPath) {
-        await commitPartialWork(
-          workDir,
-          `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-failed)`,
-        );
-      }
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      await commitPartialWork(
+        d.repo,
+        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-failed)`,
+      );
+      await cleanupWorkdir(workDir, targetProjectPath);
       const chain = wrapError("development", "verify", verifyOutcome.details ?? "verification failed", {
         taskId: task.id,
         checks: verifyOutcome.checks,
@@ -915,12 +910,12 @@ export class DevelopmentService {
     // Per-task verify uses only verify.toml; contract and taskSpec checks are
     // deferred to integration verify (they reference project-wide files that may
     // not exist in this task's worktree).
-    const finalizeDeps = {
-      ...this.deps,
-      ...this.buildRunners(provisionedEnv),
+    const finalizeDeps: FinalizeDeps = {
+      eventSink,
+      withVerifierCell: (path, verify) => this.withVerifierCell(task, path, verify),
     };
-    const finalizeResult = await finalizeSuccess(finalizeDeps, workDir, task, targetProjectPath, 1, {
-      entryPointPath: contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null,
+    const finalizeResult = await finalizeSuccess(finalizeDeps, d.repo, task, targetProjectPath, 1, {
+      entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
     });
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer;
@@ -936,8 +931,7 @@ export class DevelopmentService {
         attempt: 1,
         reason: envelope.summary,
       });
-      await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-      await cleanupWorkdir(workDir, targetProjectPath ?? undefined);
+      await cleanupWorkdir(workDir, targetProjectPath);
       return {
         status: "failed",
         detail: envelope.summary,
@@ -949,8 +943,7 @@ export class DevelopmentService {
       };
     }
 
-    await persistConversationRecord(workDir, task.id, recordsBase, "agent-ran");
-    await cleanupWorkdir(workDir, targetProjectPath ?? undefined, targetProjectPath ? taskBranchName(task.id) : undefined);
+    await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
     return {
@@ -963,24 +956,104 @@ export class DevelopmentService {
     };
   }
 
+  /**
+   * Every terminal except finished(done): finished(blocked) is `blocked`; a cell that failed under
+   * the attempt is environment-blocked (the operator's to fix); every other terminal is `failed`
+   * with the terminal named. None of them is ever read as completed.
+   */
+  private async endWithoutDone(d: Dispatch, outcome: Outcome, output: AgentOutputJson): Promise<ExecutionResult> {
+    const { task, staff, workDir, targetProjectPath, sessionId } = d;
+    await commitPartialWork(
+      d.repo,
+      `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, ${outcome.kind})`,
+    );
+    await cleanupWorkdir(workDir, targetProjectPath);
+
+    // Discipline C: task, model, turns, last tool call and the terminal's own detail.
+    const context = {
+      taskId: task.id,
+      role: staff.role,
+      provider: staff.model.provider,
+      model: staff.model.modelId,
+      outcome: outcome.kind,
+      turnCount: outcome.turnsUsed,
+      lastToolCall: outcome.lastToolCall,
+      records: d.records.dir,
+    };
+
+    if (outcome.kind === "environment_failure") {
+      const chain = wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source });
+      const envelope: ErrorEnvelope = {
+        outcome: "blocked",
+        summary: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
+        chain,
+        agentOutput: output,
+      };
+      this.deps.eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: 1, reason: envelope.summary });
+      return {
+        status: "environment_blocked",
+        unavailable: outcome.source === "cell" ? "task cell" : "attempt records",
+        detail: envelope.summary,
+        output,
+        sessionId,
+        attempt: 1,
+        errorEnvelope: envelope,
+        agentInvoked: true,
+      };
+    }
+
+    if (outcome.kind === "finished") {
+      const chain = wrapError("development", "agentAttempt", outcome.blockedReason ?? outcome.summary, context);
+      const envelope: ErrorEnvelope = {
+        outcome: "blocked",
+        summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${output.summary}`,
+        chain,
+        agentOutput: output,
+      };
+      return {
+        status: "blocked",
+        detail: envelope.summary,
+        output,
+        sessionId,
+        attempt: 1,
+        errorEnvelope: envelope,
+        agentInvoked: true,
+      };
+    }
+
+    const cause = outcome.kind === "transport_exhausted" ? outcome.error : outcome.kind === "cancelled" ? outcome.reason : outcome.detail;
+    const chain = wrapError("development", "agentAttempt", cause, context);
+    const envelope: ErrorEnvelope = {
+      outcome: "failed",
+      summary: `attempt ended as ${outcome.kind} after ${outcome.turnsUsed} turn(s) on ${staff.model.provider}/${staff.model.modelId}: ${outcome.detail}`,
+      chain,
+      agentOutput: output,
+    };
+    return {
+      status: "failed",
+      detail: envelope.summary,
+      output,
+      sessionId,
+      attempt: 1,
+      errorEnvelope: envelope,
+      agentInvoked: true,
+    };
+  }
+
   private async verifyTask(
     task: TaskDescriptor,
     workDir: string,
-    _output: AgentOutputJson,
+    runCommand: CommandRunner,
     attempt: number,
-    _contract: ProjectContract | null,
-    provisionedEnv?: ProvisionedEnv,
   ): Promise<VerifyTaskOutcome> {
     // Per-task verify uses only verify.toml; contract and taskSpec checks are
     // deferred to integration verify (they reference project-wide files that may
     // not exist in this task's worktree).
     try {
-      const { runCommand, prepareRunCommand } = this.buildRunners(provisionedEnv);
       const response = await runVerifyCore(
         { workDir, gitRoot: workDir, checks: [], contractChecks: [] },
         {
           runCommand,
-          prepareRunCommand,
           log: (event) => this.deps.eventSink?.emit({
             ...event,
             event: typeof event["event"] === "string" ? event["event"] : "verify_log",
@@ -1009,10 +1082,7 @@ export class DevelopmentService {
       };
     } catch (e) {
       // Discipline A: verification unreachable -> false, never true. The agent's
-      // own self-reported verify result is not part of the AgentOutputJson contract
-      // (the field never existed in the schema) and was always discarded — trusting
-      // it when real verification errored lets an optimistic/dishonest agent grade
-      // itself (Run 9 readiness review X1).
+      // own finish summary is never a verification result.
       console.warn(
         `[${task.id}] verify failed, failing closed:`,
         e,
@@ -1022,9 +1092,9 @@ export class DevelopmentService {
         location: "DevelopmentService:verifyTask",
         taskId: task.id,
         attempt,
-        error: String(e).slice(0, 500),
+        error: e instanceof Error ? `${e.name}: ${e.message}`.slice(0, 500) : String(e).slice(0, 500),
       });
-      return { verdict: "failed" };
+      return { verdict: "failed", details: `verification could not run: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
 }
@@ -1050,11 +1120,11 @@ export async function withSessionLifecycle(
   sessionId: string,
   taskId: string,
   brief: AgentBrief,
-  body: () => Promise<AgentExecutionResult>,
-): Promise<AgentExecutionResult> {
+  body: () => Promise<ExecutionResult>,
+): Promise<ExecutionResult> {
   await sessionStore.insert(sessionId, taskId, brief);
 
-  let outcome: AgentExecutionResult;
+  let outcome: ExecutionResult;
   try {
     outcome = await body();
   } catch (e) {

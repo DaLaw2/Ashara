@@ -17,13 +17,11 @@ import { TOOL_SCHEMAS, executeTool } from "./tools.js";
  */
 const AGENT_CALL_SITE = "agent-runner";
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
-export interface Clock {
+interface Clock {
   /** Milliseconds; only differences are used. */
   now(): number;
 }
 
-/** @testseam adopted by t-isolated-switchover (s-isolated-worker-m1) */
 export interface AttemptDeps {
   /** The recorded gateway: every turn is one generateTurn call, one llm_calls row. */
   readonly llm: ContextualTurnLlm;
@@ -46,7 +44,6 @@ class RecordWriteFailed extends Error {
  * Runs one attempt of an assignment: an explicit loop in Z0 (ADR-074 d7, no SDK stopWhen) where each
  * turn is one recorded model call and each returned tool call runs, in order, through the cell.
  * Resolves to exactly one Outcome terminal; throws only InvalidAssignment, before any call is made.
- * @testseam adopted by t-isolated-switchover (s-isolated-worker-m1)
  */
 export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Promise<Outcome> {
   const limits = resolveLimits(assignment);
