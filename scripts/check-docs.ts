@@ -1,8 +1,9 @@
 /**
  * Executable-claims gate.
  *
- * Finds every ```verify block in CLAUDE.md, docs/*.md and .claude/commands/*.md,
- * runs each command from the repo root, and compares trimmed stdout against
+ * Finds every ```verify block in the scan scope set by docs/README.md section 9 —
+ * CLAUDE.md, .claude/commands/*.md, docs/*.md, docs/design/*.md and
+ * docs/decisions/*.md — runs each command from the repo root, and compares trimmed stdout against
  * the recorded expected output. A mismatch, a non-zero exit, an unreadable
  * document, or an unparseable block is a failure. Exit non-zero on any failure.
  *
@@ -64,7 +65,6 @@ export interface VerifyBlock {
   /** 1-based line where ```verify starts */
   readonly blockLine: number;
   readonly commands: readonly ClaimCommand[];
-  readonly requiresDb: boolean;
 }
 
 export interface ClaimFailure {
@@ -77,15 +77,8 @@ export interface ClaimFailure {
   readonly kind: "mismatch" | "exit-nonzero" | "parse-error" | "unreadable";
 }
 
-export interface SkippedClaim {
-  readonly filePath: string;
-  readonly blockLine: number;
-  readonly reason: string;
-}
-
 export interface CheckResult {
   readonly failures: readonly ClaimFailure[];
-  readonly skipped: readonly SkippedClaim[];
   readonly commandsRun: number;
   readonly blocksChecked: number;
 }
@@ -126,11 +119,7 @@ export function parseVerifyBlocks(content: string, filePath: string): VerifyBloc
 
     const blockLine = i + 1;
     const rawAnnotation = (fenceMatch[1] ?? "").trim();
-    let requiresDb = false;
-
-    if (rawAnnotation === "requires=db") {
-      requiresDb = true;
-    } else if (rawAnnotation !== "") {
+    if (rawAnnotation !== "") {
       throw new BlockParseError(filePath, blockLine, `unknown annotation "${rawAnnotation}"`);
     }
 
@@ -196,7 +185,7 @@ export function parseVerifyBlocks(content: string, filePath: string): VerifyBloc
       throw new BlockParseError(filePath, blockLine, "verify block contains no $ commands");
     }
 
-    blocks.push({ filePath, blockLine, commands, requiresDb });
+    blocks.push({ filePath, blockLine, commands });
   }
 
   return blocks;
@@ -244,31 +233,15 @@ function executeCommand(command: string, cwd: string): ExecutionResult {
 
 /**
  * Run all commands in parsed verify blocks and compare against expected output.
- *
- * Blocks annotated `requires=db` are skipped (with a report) when
- * DATABASE_URL is absent. All other blocks run unconditionally —
- * a command that cannot execute is a failure, not a skip.
+ * Every block runs unconditionally — a command that cannot execute is a
+ * failure, never a skip.
  */
-export function checkBlocks(
-  blocks: readonly VerifyBlock[],
-  cwd: string,
-  hasDb: boolean,
-): CheckResult {
+export function checkBlocks(blocks: readonly VerifyBlock[], cwd: string): CheckResult {
   const failures: ClaimFailure[] = [];
-  const skipped: SkippedClaim[] = [];
   let commandsRun = 0;
   let blocksChecked = 0;
 
   for (const block of blocks) {
-    if (block.requiresDb && !hasDb) {
-      skipped.push({
-        filePath: block.filePath,
-        blockLine: block.blockLine,
-        reason: "requires=db but DATABASE_URL is not set",
-      });
-      continue;
-    }
-
     blocksChecked++;
 
     for (const cmd of block.commands) {
@@ -303,45 +276,40 @@ export function checkBlocks(
     }
   }
 
-  return { failures, skipped, commandsRun, blocksChecked };
+  return { failures, commandsRun, blocksChecked };
 }
 
 // ---------------------------------------------------------------------------
 // Document discovery
 // ---------------------------------------------------------------------------
 
+function markdownFilesIn(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => path.join(dir, entry.name));
+  } catch (err: unknown) {
+    throw new DocumentReadError(dir, err);
+  }
+}
+
+// Scan scope is docs/README.md section 9. investigations/ and archive/ are dated
+// observations that never hold verify blocks, so they are deliberately excluded.
 function discoverDocuments(root: string): string[] {
   const docs: string[] = [];
 
   const claudeMd = path.join(root, "CLAUDE.md");
   if (fs.existsSync(claudeMd)) docs.push(claudeMd);
 
-  // docs/*.md — top level only, not subdirectories
-  const docsDir = path.join(root, "docs");
-  if (fs.existsSync(docsDir)) {
-    try {
-      for (const entry of fs.readdirSync(docsDir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith(".md")) {
-          docs.push(path.join(docsDir, entry.name));
-        }
-      }
-    } catch (err: unknown) {
-      throw new DocumentReadError(docsDir, err);
-    }
-  }
-
-  // .claude/commands/*.md
-  const commandsDir = path.join(root, ".claude", "commands");
-  if (fs.existsSync(commandsDir)) {
-    try {
-      for (const entry of fs.readdirSync(commandsDir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith(".md")) {
-          docs.push(path.join(commandsDir, entry.name));
-        }
-      }
-    } catch (err: unknown) {
-      throw new DocumentReadError(commandsDir, err);
-    }
+  for (const dir of [
+    path.join(root, ".claude", "commands"),
+    path.join(root, "docs"),
+    path.join(root, "docs", "design"),
+    path.join(root, "docs", "decisions"),
+  ]) {
+    docs.push(...markdownFilesIn(dir));
   }
 
   return docs;
@@ -437,19 +405,9 @@ function main(): void {
     }
   }
 
-  const hasDb = Boolean(process.env.DATABASE_URL);
-  const { failures: execFailures, skipped, commandsRun, blocksChecked } =
-    checkBlocks(allBlocks, root, hasDb);
+  const { failures: execFailures, commandsRun, blocksChecked } = checkBlocks(allBlocks, root);
 
   const failures = [...parseFailures, ...execFailures];
-
-  // Report skips loudly — a silent skip is this project's most-cited defect
-  if (skipped.length > 0) {
-    console.warn("\nSkipped claims (NOT checked — requires=db without DATABASE_URL):");
-    for (const s of skipped) {
-      console.warn(`  ${s.filePath}:${s.blockLine}  ${s.reason}`);
-    }
-  }
 
   if (failures.length > 0) {
     console.error("\nExecutable-claims failures:\n");
@@ -462,18 +420,14 @@ function main(): void {
     }
     console.error(
       `${documents.length} documents scanned, ${blocksChecked} blocks checked, ` +
-        `${commandsRun} commands run, ${failures.length} failed` +
-        (skipped.length > 0 ? `, ${skipped.length} skipped` : "") +
-        "\n",
+        `${commandsRun} commands run, ${failures.length} failed\n`,
     );
     process.exit(1);
   }
 
   console.log(
     `\nAll claims verified. ${documents.length} documents scanned, ` +
-      `${blocksChecked} blocks checked, ${commandsRun} commands passed` +
-      (skipped.length > 0 ? `, ${skipped.length} skipped` : "") +
-      ".\n",
+      `${blocksChecked} blocks checked, ${commandsRun} commands passed.\n`,
   );
 }
 

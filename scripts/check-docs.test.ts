@@ -19,14 +19,8 @@ describe("parseVerifyBlocks", () => {
     expect(blocks[0].commands[1].command).toBe("echo b");
   });
 
-  test("parses requires=db annotation", () => {
+  test("throws on any annotation, including the removed requires=db", () => {
     const doc = "```verify requires=db\n$ echo ok\nok\n```";
-    const blocks = parseVerifyBlocks(doc, "test.md");
-    expect(blocks[0].requiresDb).toBe(true);
-  });
-
-  test("throws on unknown annotation", () => {
-    const doc = "```verify foo=bar\n$ echo ok\nok\n```";
     expect(() => parseVerifyBlocks(doc, "test.md")).toThrow("unknown annotation");
   });
 
@@ -63,14 +57,14 @@ describe("parseVerifyBlocks", () => {
 describe("checkBlocks", () => {
   test("matching claim passes", () => {
     const blocks = parseVerifyBlocks("```verify\n$ echo hello\nhello\n```", "test.md");
-    const result = checkBlocks(blocks, process.cwd(), false);
+    const result = checkBlocks(blocks, process.cwd());
     expect(result.failures).toHaveLength(0);
     expect(result.commandsRun).toBe(1);
   });
 
   test("drifted claim fails and names file and line", () => {
     const blocks = parseVerifyBlocks("```verify\n$ echo hello\ngoodbye\n```", "test.md");
-    const result = checkBlocks(blocks, process.cwd(), false);
+    const result = checkBlocks(blocks, process.cwd());
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].filePath).toBe("test.md");
     expect(result.failures[0].blockLine).toBe(1);
@@ -82,24 +76,15 @@ describe("checkBlocks", () => {
 
   test("non-zero exit command fails", () => {
     const blocks = parseVerifyBlocks("```verify\n$ false\n\n```", "test.md");
-    const result = checkBlocks(blocks, process.cwd(), false);
+    const result = checkBlocks(blocks, process.cwd());
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].kind).toBe("exit-nonzero");
-  });
-
-  test("requires=db block skipped without DATABASE_URL", () => {
-    const blocks = parseVerifyBlocks("```verify requires=db\n$ echo ok\nok\n```", "test.md");
-    const result = checkBlocks(blocks, process.cwd(), false);
-    expect(result.failures).toHaveLength(0);
-    expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0].reason).toContain("requires=db");
-    expect(result.commandsRun).toBe(0);
   });
 
   test("multi-line expected output compared correctly", () => {
     const doc = "```verify\n$ printf 'a\\nb\\nc'\na\nb\nc\n```";
     const blocks = parseVerifyBlocks(doc, "test.md");
-    const result = checkBlocks(blocks, process.cwd(), false);
+    const result = checkBlocks(blocks, process.cwd());
     expect(result.failures).toHaveLength(0);
   });
 });
