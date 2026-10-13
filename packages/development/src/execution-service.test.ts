@@ -1,8 +1,16 @@
-import { describe, expect, test } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, test } from "vitest";
+import type { ContextualLlm } from "@ashara/llm-gateway";
+import { LlmCallNotRecorded, PreCallRefusal } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
-import { createAgentBrief } from "@ashara/shared";
+import { createAgentBrief, createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
-import { withSessionLifecycle } from "./execution-service.js";
+import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
+import type { EnvironmentSpec, ProvisionedEnv, Provisioner } from "./provisioner.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -118,4 +126,114 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
     expect(outcome.status).toBe("completed");
     expect(store.phases.get("sess")).toBe("Preparing");
   });
+});
+
+class UnpricedModelLike extends PreCallRefusal {
+  constructor() {
+    super(`model "m" has no price; call refused before the request`);
+    this.name = "UnpricedModelLike";
+  }
+}
+
+function ledgerNotWritten(): LlmCallNotRecorded {
+  return new LlmCallNotRecorded(
+    {
+      projectId: "p",
+      callSite: "environment-spec",
+      provider: "prov",
+      model: "m",
+      operation: "generateStructured",
+      callOutcome: "ok",
+      providerError: undefined,
+    },
+    { cause: new Error("insert into llm_calls failed") },
+  );
+}
+
+function throwingGateway(error: Error): ContextualLlm {
+  return {
+    forCall: () => ({
+      generateStructured: async () => {
+        throw error;
+      },
+    }),
+  };
+}
+
+class RecordingProvisioner implements Provisioner {
+  readonly provisioned: EnvironmentSpec[] = [];
+  async provision(spec: EnvironmentSpec): Promise<ProvisionedEnv> {
+    this.provisioned.push(spec);
+    return { id: "env", version: 1, spec, status: "ready" };
+  }
+  async execute(): Promise<never> {
+    throw new Error("execute must not be reached");
+  }
+  async teardown(): Promise<void> {}
+  activeContainerName(): undefined {
+    return undefined;
+  }
+  activeContainerMount(): undefined {
+    return undefined;
+  }
+}
+
+const execFileAsync = promisify(execFile);
+
+// Since 7344ebfc the gateway throws two ledger failures. The environment-spec
+// fallback catch used to log them and continue to the agent; it must not.
+describe("environment-spec derivation does not swallow ledger failures", () => {
+  const scratch: string[] = [];
+  afterEach(async () => {
+    for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  const cases: ReadonlyArray<readonly [string, () => Error, abstract new (...args: never[]) => Error]> = [
+    ["LlmCallNotRecorded", ledgerNotWritten, LlmCallNotRecorded],
+    ["PreCallRefusal", () => new UnpricedModelLike(), PreCallRefusal],
+  ];
+
+  for (const [name, makeError, errorClass] of cases) {
+    test(`${name} propagates out of execute, no agent is spawned, the worktree is removed`, async () => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-ledger-")));
+      scratch.push(root);
+      const target = join(root, "target");
+      await mkdir(target);
+      await writeFile(join(target, "Makefile"), "build:\n\techo built\n");
+
+      const provisioner = new RecordingProvisioner();
+      let spawned = 0;
+      const service = new DevelopmentService({
+        config: { workdirBase: join(root, "work") },
+        sessionStore: new RecordingSessionStore(),
+        knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+        agentInvoker: {
+          spawn: async () => {
+            spawned++;
+            throw new Error("agent must not be spawned");
+          },
+        },
+        llmGateway: throwingGateway(makeError()),
+        intentSource: { loadIntent: async () => "build the thing" },
+        provisioner,
+      });
+
+      const run = service.execute(
+        {
+          id: createWorkItemId(),
+          projectId: parseProjectId("22222222-2222-4222-8222-222222222222"),
+          title: "t",
+          dispatchCount: 0,
+          successCriteria: [],
+        },
+        target,
+      );
+
+      await expect(run).rejects.toBeInstanceOf(errorClass);
+      expect(spawned).toBe(0);
+      expect(provisioner.provisioned).toHaveLength(0);
+      const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], { cwd: target });
+      expect(stdout.match(/^worktree /gm)).toHaveLength(1);
+    });
+  }
 });

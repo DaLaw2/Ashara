@@ -5,6 +5,7 @@ import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope,
 import { ASHARA_CONTROL_DIR, createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { ContextualLlm } from "@ashara/llm-gateway";
+import { LlmCallNotRecorded, PreCallRefusal } from "@ashara/llm-gateway";
 import type { Provisioner, ProvisionedEnv } from "./provisioner.js";
 import { formatAcceptanceCriteria, formatTaskSpec, EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
@@ -42,6 +43,14 @@ function provisionerAsRunner(provisioner: Provisioner, env: ProvisionedEnv, host
     const result = await provisioner.execute(env, command, { timeout, cwd: containerCwd });
     return { exitCode: result.exitCode ?? 1, output: (result.stdout + result.stderr).trim() };
   };
+}
+
+async function cleanupWorkdirBeforeRethrow(taskId: string, workDir: string, targetProjectPath: string): Promise<void> {
+  try {
+    await cleanupWorkdir(workDir, targetProjectPath);
+  } catch (cleanupError) {
+    console.warn(`[${taskId}] workdir cleanup failed before rethrowing a ledger failure (${workDir}):`, cleanupError);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +342,12 @@ export class DevelopmentService {
           localEnv = await this.deps.provisioner.provision(spec);
         }
       } catch (e) {
+        // A ledger failure is not a provisioning failure: a call that reached the
+        // provider unrecorded, or was refused before it, must stop the task.
+        if (e instanceof LlmCallNotRecorded || e instanceof PreCallRefusal) {
+          await cleanupWorkdirBeforeRethrow(task.id, workDir, targetProjectPath);
+          throw e;
+        }
         console.warn(`[${task.id}] environment provisioning failed, falling back to containerized execution:`, e);
       }
     }
