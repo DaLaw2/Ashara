@@ -1,5 +1,6 @@
+import { access } from "node:fs/promises";
 import type { BaseCellReference, Cell, CellSpec, SubstrateInfo } from "@ashara/execution-infra";
-import { CellStartFailed, CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
+import { CellTeardownFailed, SubstrateUnavailable, createCellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason } from "@ashara/shared";
 import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief, ProjectFrameUnresolvable } from "@ashara/shared";
@@ -9,6 +10,8 @@ import { runAttempt } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
 import { DispatchRecords, cellAsRunner, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
+import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
+import type { EnvironmentError } from "./environment-failure.js";
 import type { ProjectIntentSource, StackDeriver } from "./project-frame.js";
 import { resolveProjectFrame } from "./project-frame.js";
 import type { TaskSpec } from "./types.js";
@@ -28,6 +31,13 @@ import { branchExists, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
+async function pathExists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targetProjectPath: string, why: string): Promise<void> {
   try {
     await cleanupWorkdir(workDir, targetProjectPath);
@@ -37,35 +47,85 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
 }
 
 /**
- * The substrate cannot host the task (podman missing or not answering, or a cell that cannot
- * start): Blocked for the operator, never a host fallback (s-isolated-worker-m1 C2).
+ * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
+ * the attempt itself, the task cell's checks, and the post-merge verifier cell.
  */
-function environmentBlocked(
-  taskId: WorkItemId,
-  sessionId: string,
-  operation: string,
-  e: SubstrateUnavailable | CellStartFailed,
-  eventSink: ExecutionEventSink | undefined,
-): ExecutionResult {
-  const unavailable = e instanceof SubstrateUnavailable ? `container substrate (${e.binary})` : "task cell";
-  const chain = wrapError("development", operation, e, { taskId, unavailable });
+type EnvironmentStage = "probeSubstrate" | "createCell" | "agentAttempt" | "taskVerify" | "postMergeVerify";
+
+interface AgentPart {
+  readonly output: AgentOutputJson | null;
+  readonly agentInvoked: boolean;
+}
+
+const NO_AGENT: AgentPart = { output: null, agentInvoked: false };
+
+interface EnvironmentBlock extends AgentPart {
+  readonly taskId: WorkItemId;
+  readonly sessionId: string;
+  readonly stage: EnvironmentStage;
+  /** The failure's class name, e.g. MountPathRejected; the reason names it. */
+  readonly errorClass: string;
+  readonly message: string;
+  readonly chain: ErrorLayer;
+  readonly unavailable: string;
+}
+
+/**
+ * The substrate cannot host a stage of the task (podman missing or not answering, a cell that
+ * cannot start or be mounted, an exec the substrate could not run): Blocked for the operator with
+ * the stage and error class named, never a host fallback and never a failure for the classifier
+ * (s-isolated-worker-m1 C2, at every stage).
+ */
+function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
+  const { taskId, stage, errorClass } = block;
+  const kept = block.agentInvoked
+    ? "the agent's work is kept on the task branch"
+    : "no agent ran and nothing executed";
   const envelope: ErrorEnvelope = {
     outcome: "blocked",
-    summary: `${e.message}; task ${taskId} blocked, no agent ran and nothing executed`,
-    chain,
+    summary: `environment failed at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,
+    chain: block.chain,
+    ...(block.output !== null ? { agentOutput: block.output } : {}),
   };
   console.warn(`[${taskId}] ${envelope.summary}`);
-  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, reason: envelope.summary });
+  eventSink?.emit({ event: "task_blocked", taskId, attempt: 1, stage, errorClass, reason: envelope.summary });
   return {
     status: "environment_blocked",
-    unavailable,
+    unavailable: block.unavailable,
     detail: envelope.summary,
-    output: null,
-    sessionId,
+    output: block.output,
+    sessionId: block.sessionId,
     attempt: 1,
     errorEnvelope: envelope,
-    agentInvoked: false,
+    agentInvoked: block.agentInvoked,
   };
+}
+
+/** An environment block for a typed substrate error raised at `stage`. */
+function substrateBlocked(
+  taskId: WorkItemId,
+  sessionId: string,
+  stage: EnvironmentStage,
+  e: EnvironmentError,
+  cell: string,
+  agent: AgentPart,
+  eventSink: ExecutionEventSink | undefined,
+  chain?: ErrorLayer,
+): ExecutionResult {
+  const unavailable = unavailableOf(e, cell);
+  return environmentBlocked(
+    {
+      taskId,
+      sessionId,
+      stage,
+      errorClass: e.name,
+      message: e.message,
+      chain: chain ?? wrapError("development", stage, e, { taskId, unavailable, errorClass: e.name }),
+      unavailable,
+      ...agent,
+    },
+    eventSink,
+  );
 }
 
 function failedBeforeAgent(taskId: WorkItemId, sessionId: string, operation: string, e: unknown, summary: string): ExecutionResult {
@@ -189,7 +249,8 @@ export interface TaskDescriptor {
 /**
  * The outcome of a dispatch the execution substrate could not host: the
  * substrate was unavailable before the attempt (no agent ran, nothing
- * executed), or a cell failed under a running attempt (environment_failure).
+ * executed), a cell failed under a running attempt (environment_failure), or
+ * the task cell's checks or the post-merge verifier cell could not run.
  * It is not a task failure (re-dispatching cannot make the substrate appear),
  * so the orchestrator parks the item at Blocked with an
  * `environment_unavailable` reason instead of routing it through the
@@ -243,11 +304,14 @@ interface DispatchRecord {
   agentInvoked: boolean;
 }
 
-interface VerifyTaskOutcome {
-  readonly verdict: "passed" | "failed" | "unverified";
-  readonly details?: string;
-  readonly checks?: ReadonlyArray<{ name: string; passed: boolean; output?: string }>;
-}
+type VerifyTaskOutcome =
+  | {
+      readonly verdict: "passed" | "failed" | "unverified";
+      readonly details?: string;
+      readonly checks?: ReadonlyArray<{ name: string; passed: boolean; output?: string }>;
+    }
+  /** The cell could not run the checks: no verdict on the work at all. */
+  | { readonly verdict: "environment_failed"; readonly error: EnvironmentError };
 
 /** Everything one dispatch holds once its cell is up. */
 interface Dispatch {
@@ -348,7 +412,7 @@ export class DevelopmentService {
       await cells.substrate.probeSubstrate();
     } catch (e) {
       if (!(e instanceof SubstrateUnavailable)) throw e;
-      return environmentBlocked(task.id, sessionId, "probeSubstrate", e, eventSink);
+      return substrateBlocked(task.id, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
     }
 
     // Z0's git never discovers a repository from a tree a cell writes (host-git.ts),
@@ -460,8 +524,9 @@ export class DevelopmentService {
       });
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
-      if (e instanceof SubstrateUnavailable || e instanceof CellStartFailed) {
-        return environmentBlocked(task.id, sessionId, "createCell", e, eventSink);
+      const environmentFailure = environmentErrorOf(e);
+      if (environmentFailure !== null) {
+        return substrateBlocked(task.id, sessionId, "createCell", environmentFailure, "task cell", NO_AGENT, eventSink);
       }
       const result = failedBeforeAgent(task.id, sessionId, "createCell", e, `task cell refused for ${task.id}`);
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -756,6 +821,15 @@ export class DevelopmentService {
     eventSink?.emit({ event: "verify_started", taskId: task.id, attempt: 1, workDir });
     const verifyOutcome = await this.verifyTask(task, workDir, cellAsRunner(d.cell, workDir), 1);
 
+    if (verifyOutcome.verdict === "environment_failed") {
+      await commitPartialWork(
+        d.repo,
+        `ashara: partial work for retry (task ${task.id}, dispatch ${task.dispatchCount}, verify-environment-failed)`,
+      );
+      await cleanupWorkdir(workDir, targetProjectPath);
+      return substrateBlocked(task.id, sessionId, "taskVerify", verifyOutcome.error, "task cell", { output, agentInvoked: true }, eventSink);
+    }
+
     if (verifyOutcome.verdict === "unverified") {
       // Zero executable checks: a verdict computed from nothing must not read
       // as success (Discipline A). The orchestrator commits this as Failed and
@@ -827,6 +901,21 @@ export class DevelopmentService {
     const finalizeResult = await finalizeSuccess(finalizeDeps, d.repo, task, targetProjectPath, 1, {
       entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
     });
+    if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
+      // The merge was aborted and the branch kept: the verifier cell's substrate
+      // failed, which is the operator's to fix, not a regression of the tree.
+      await cleanupWorkdir(workDir, targetProjectPath);
+      return substrateBlocked(
+        task.id,
+        sessionId,
+        "postMergeVerify",
+        finalizeResult.environmentFailure,
+        "verifier cell",
+        { output, agentInvoked: true },
+        eventSink,
+        finalizeResult.errorLayer,
+      );
+    }
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer;
       const envelope: ErrorEnvelope = {
@@ -854,6 +943,12 @@ export class DevelopmentService {
     }
 
     await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
+    // Stated from the disk, not assumed: cleanupWorkdir's own fallbacks are best-effort.
+    if (await pathExists(workDir)) {
+      console.warn(`[${task.id}] task completed — but worktree ${workDir} is still on disk after cleanup`);
+    } else {
+      console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
+    }
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: 1, result: "completed" });
     await storeKnowledge(this.deps.knowledgeSink, task, output, filesChanged);
     return {
@@ -892,24 +987,25 @@ export class DevelopmentService {
     };
 
     if (outcome.kind === "environment_failure") {
-      const chain = wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source });
-      const envelope: ErrorEnvelope = {
-        outcome: "blocked",
-        summary: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
-        chain,
-        agentOutput: output,
-      };
-      this.deps.eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: 1, reason: envelope.summary });
-      return {
-        status: "environment_blocked",
-        unavailable: outcome.source === "cell" ? "task cell" : "attempt records",
-        detail: envelope.summary,
-        output,
-        sessionId,
-        attempt: 1,
-        errorEnvelope: envelope,
-        agentInvoked: true,
-      };
+      // Workplace already told the substrate's failure from the tool's own (classifyCellError);
+      // a records sink that cannot write is the same kind of failure, on the Z0 side.
+      const errorClass = outcome.error instanceof Error ? outcome.error.name : typeof outcome.error;
+      const typed = environmentErrorOf(outcome.error);
+      const unavailable = outcome.source === "records" ? "attempt records" : typed !== null ? unavailableOf(typed, "task cell") : "task cell";
+      return environmentBlocked(
+        {
+          taskId: task.id,
+          sessionId,
+          stage: "agentAttempt",
+          errorClass,
+          message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
+          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
+          unavailable,
+          output,
+          agentInvoked: true,
+        },
+        this.deps.eventSink,
+      );
     }
 
     if (outcome.kind === "finished") {
@@ -991,6 +1087,10 @@ export class DevelopmentService {
         checks: response.tiers.deterministic.checks?.map(c => ({ name: c.name, passed: c.passed, output: c.output })),
       };
     } catch (e) {
+      // A substrate that could not run the checks says nothing about the work:
+      // the caller blocks on the environment instead of failing the task.
+      const environmentFailure = environmentErrorOf(e);
+      if (environmentFailure !== null) return { verdict: "environment_failed", error: environmentFailure };
       // Discipline A: verification unreachable -> false, never true. The agent's
       // own finish summary is never a verification result.
       console.warn(

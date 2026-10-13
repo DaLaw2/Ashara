@@ -258,7 +258,20 @@ describe("processTask post-agent status ladder", () => {
 });
 
 describe("an environment-blocked dispatch parks the item at Blocked", () => {
-  function buildEnvironmentBlockedDeps(): {
+  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["developmentService"]["execute"]>>;
+
+  const probeBlocked: ExecutionResult = {
+    status: "environment_blocked",
+    unavailable: "podman",
+    detail: "execution substrate \"podman\" unavailable; no agent ran: podman binary not found on PATH",
+    output: null,
+    sessionId: "test-session",
+    attempt: 1,
+    errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
+    agentInvoked: false,
+  };
+
+  function buildEnvironmentBlockedDeps(execResult: ExecutionResult = probeBlocked): {
     deps: CoreLoopDeps;
     stored: () => WorkItem;
     statusesWritten: string[];
@@ -294,18 +307,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       withTransaction: notExercised("withTransaction"),
     };
 
-    const developmentService = {
-      execute: async () => ({
-        status: "environment_blocked" as const,
-        unavailable: "podman",
-        detail: "execution substrate \"podman\" unavailable; no agent ran: podman binary not found on PATH",
-        output: null,
-        sessionId: "test-session",
-        attempt: 1 as const,
-        errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
-        agentInvoked: false as const,
-      }),
-    };
+    const developmentService = { execute: async () => execResult };
 
     const deps = {
       config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
@@ -344,5 +346,53 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     expect(() =>
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
     ).not.toThrow();
+  });
+
+  // The isolated-worker run's finding 1: the verifier cell refused after the agent's work passed.
+  // Before, operation postMergeVerify reached the classifier as TREE_REGRESSION and was abandoned.
+  test("a verifier cell refused after the agent ran: Blocked naming the stage, never the failure router", async () => {
+    const output: AgentOutputJson = {
+      status: "done",
+      summary: "wrote greet.sh",
+      findings: [],
+      error: null,
+      error_detail: null,
+      total_tokens: { input: 100, output: 10 },
+      total_cost: 0.0006,
+      cost_measured: true,
+      turn_count: 4,
+      finish_reason: "completed",
+    };
+    const detail =
+      "environment failed at stage postMergeVerify (MountPathRejected): Mount of \"/x/target\" refused: it is not strictly inside the mount root; " +
+      "task t blocked, the agent's work is kept on the task branch";
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
+      status: "environment_blocked",
+      unavailable: "verifier cell mount (/x/target)",
+      detail,
+      output,
+      sessionId: "test-session",
+      attempt: 1,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary: detail,
+        chain: { boundary: "development", operation: "postMergeVerify", message: "Post-merge verify could not run", timestamp: new Date().toISOString() },
+        agentOutput: output,
+      },
+      agentInvoked: true,
+    });
+
+    const { result, costInfo } = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(costInfo.costUsd).toBe(0.0006);
+    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+    const reason = stored().blockedReason;
+    expect(reason?.source).toBe("environment_unavailable");
+    if (reason?.source !== "environment_unavailable") return;
+    expect(reason.unavailable).toBe("verifier cell mount (/x/target)");
+    expect(reason.reason).toContain("stage postMergeVerify (MountPathRejected)");
   });
 });

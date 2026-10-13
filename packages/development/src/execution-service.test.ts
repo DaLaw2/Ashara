@@ -1,16 +1,20 @@
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { promisify } from "node:util";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { PodmanSubstrate } from "@ashara/execution-infra";
-import type { ResolvedModel } from "@ashara/llm-gateway";
+import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError } from "@ashara/shared";
 import type { Outcome } from "@ashara/workplace";
 import { toAgentOutput } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
+import { taskBranchName } from "./merge.js";
+import { ensureTargetGitInit } from "./workspace.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -165,8 +169,13 @@ interface Probe {
   modelCalls: number;
 }
 
-function serviceOn(substrate: PodmanSubstrate, workdirBase: string): { service: DevelopmentService; probe: Probe } {
+function serviceOn(
+  substrate: PodmanSubstrate,
+  workdirBase: string,
+  turns?: (probe: Probe) => TurnResult,
+): { service: DevelopmentService; probe: Probe; events: Array<Record<string, unknown>> } {
   const probe: Probe = { sessions: new RecordingSessionStore(), staffed: 0, modelCalls: 0 };
+  const events: Array<Record<string, unknown>> = [];
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: probe.sessions,
@@ -178,11 +187,13 @@ function serviceOn(substrate: PodmanSubstrate, workdirBase: string): { service: 
       baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
       instance: "test-instance",
     },
+    eventSink: { emit: (event) => void events.push(event) },
     llm: {
       forCall: () => ({
         generateTurn: async () => {
           probe.modelCalls++;
-          throw new Error("no model may be called");
+          if (turns === undefined) throw new Error("no model may be called");
+          return turns(probe);
         },
       }),
     },
@@ -195,7 +206,7 @@ function serviceOn(substrate: PodmanSubstrate, workdirBase: string): { service: 
     attemptPolicy: { maxTurns: 5, perCommandTimeoutSeconds: 30, toolTimeoutSeconds: 30 },
     shutdownSignal: new AbortController().signal,
   });
-  return { service, probe };
+  return { service, probe, events };
 }
 
 const someTask = () => ({
@@ -265,6 +276,142 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
     expect(existsSync(workdirBase)).toBe(false);
+  });
+});
+
+// The isolated-worker run's finding 1: a verifier cell refused by the substrate was routed as a
+// tree regression and the task Abandoned. Every stage that runs on the substrate is failed here in
+// turn, with the real PodmanSubstrate over a fake process runner and a real git target.
+describe("a substrate failure at any stage blocks the task on the environment", () => {
+  const scratch: string[] = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  type Role = "developer" | "verifier";
+
+  interface Faults {
+    /** Where the substrate's mount root sits, relative to the scratch root. */
+    readonly mountRoot?: string;
+    readonly startFails?: Role;
+    readonly execFails?: Role;
+    readonly teardownFails?: boolean;
+    /** The model's single turn: run a command (an exec in the developer cell), or write and finish. */
+    readonly agentRunsCommand?: boolean;
+  }
+
+  const ok = (stdout = "", exitCode = 0, stderr = "") => ({
+    exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null,
+  });
+  const ids: Record<Role, string> = { developer: "a".repeat(64), verifier: "b".repeat(64) };
+  const roleOf = (id: string | undefined): Role | undefined => (id === ids.developer ? "developer" : id === ids.verifier ? "verifier" : undefined);
+
+  function turn(name: string, input: unknown): TurnResult {
+    return {
+      assistant: { role: "assistant", content: [{ type: "tool-call", toolCallId: `tc-${name}`, toolName: name, input }] },
+      text: "",
+      toolCalls: [{ kind: "valid", toolCallId: `tc-${name}`, toolName: name, input }],
+      finishReason: "tool_calls",
+      rawFinishReason: null,
+      usage: { inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      cost: { measured: true, inputCost: 0.001, outputCost: 0.001, cacheSavings: 0, totalCost: 0.002 },
+      provider: "fake",
+      model: "fake-model",
+    };
+  }
+
+  async function git(cwd: string, ...args: string[]): Promise<string> {
+    const { stdout } = await promisify(execFile)("git", args, { cwd });
+    return stdout.trim();
+  }
+
+  async function dispatch(faults: Faults) {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const warns: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => void warns.push(args.map(String).join(" ")));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-stage-")));
+    scratch.push(root);
+    const mountRoot = join(root, faults.mountRoot ?? ".");
+    await mkdir(mountRoot, { recursive: true });
+    const target = join(root, "target");
+    await mkdir(target);
+    await writeFile(join(target, "verify.toml"), '[checks]\ngreet = "test -f greet.txt"\n');
+    await ensureTargetGitInit(target);
+    const mainBefore = await git(target, "rev-parse", "main");
+    const workdirBase = join(root, "cells", "work");
+
+    const substrate = new PodmanSubstrate({
+      podmanPath: "podman",
+      mountRoot,
+      runner: async ({ args }) => {
+        switch (args[0]) {
+          case "info":
+            return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
+          case "run": {
+            const role: Role = args.includes("ashara.role=verifier") ? "verifier" : "developer";
+            return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
+          }
+          case "exec":
+            return faults.execFails !== undefined && faults.execFails === roleOf(args[4]) ? ok("", 125, "Error: OCI runtime error") : ok();
+          case "rm":
+            return faults.teardownFails === true ? ok("", 1, "Error: container is busy") : ok();
+          default:
+            throw new Error(`unexpected podman ${args.join(" ")}`);
+        }
+      },
+    });
+    const task = someTask();
+    const workDir = join(workdirBase, taskBranchName(task.id).replace(/\//g, "-"));
+    const { service, events } = serviceOn(substrate, workdirBase, (probe) => {
+      if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
+      if (probe.modelCalls === 1) writeFileSync(join(workDir, "greet.txt"), "hello\n");
+      return turn("finish", { status: "done", summary: "wrote greet.txt" });
+    });
+
+    const result = await service.execute(task, target);
+    const branches = await git(target, "branch", "--list", taskBranchName(task.id));
+    return { result, events, warns, target, mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "" };
+  }
+
+  test.each([
+    { stage: "createCell", errorClass: "CellStartFailed", faults: { startFails: "developer" }, unavailable: "task cell", agentInvoked: false },
+    { stage: "createCell", errorClass: "MountPathRejected", faults: { mountRoot: "elsewhere" }, unavailable: "task cell mount", agentInvoked: false },
+    { stage: "agentAttempt", errorClass: "CellExecFailed", faults: { execFails: "developer", agentRunsCommand: true }, unavailable: "task cell", agentInvoked: true },
+    { stage: "taskVerify", errorClass: "CellExecFailed", faults: { execFails: "developer" }, unavailable: "task cell", agentInvoked: true },
+    { stage: "postMergeVerify", errorClass: "CellStartFailed", faults: { startFails: "verifier" }, unavailable: "verifier cell", agentInvoked: true },
+    { stage: "postMergeVerify", errorClass: "CellExecFailed", faults: { execFails: "verifier" }, unavailable: "verifier cell", agentInvoked: true },
+    // The run's own case: the target checkout is outside the substrate's mount root.
+    { stage: "postMergeVerify", errorClass: "MountPathRejected", faults: { mountRoot: "cells" }, unavailable: "verifier cell mount", agentInvoked: true },
+  ] satisfies ReadonlyArray<{ stage: string; errorClass: string; faults: Faults; unavailable: string; agentInvoked: boolean }>)(
+    "$stage, $errorClass: environment_blocked naming the stage and the class; main untouched",
+    async ({ stage, errorClass, faults, unavailable, agentInvoked }) => {
+      const { result, events, target, mainBefore, mainAfter, branchKept } = await dispatch(faults);
+
+      expect(result.status).toBe("environment_blocked");
+      if (result.status !== "environment_blocked") return;
+      expect(result.detail).toContain(`stage ${stage} (${errorClass})`);
+      expect(result.unavailable).toContain(unavailable);
+      expect(result.agentInvoked).toBe(agentInvoked);
+      expect(result.errorEnvelope.outcome).toBe("blocked");
+      expect(result.errorEnvelope.chain.operation).toBe(stage);
+      expect(events.filter((e) => e.event === "task_blocked")).toEqual([expect.objectContaining({ stage, errorClass })]);
+      expect(events.some((e) => e.event === "task_failed" || e.event === "gate_failed" || e.event === "task_completed")).toBe(false);
+      // Nothing merged; the agent's work, where there was any, waits on its branch for the retry.
+      expect(mainAfter).toBe(mainBefore);
+      expect(await git(target, "status", "--porcelain")).toBe("");
+      if (stage === "taskVerify" || stage === "postMergeVerify") expect(branchKept).toBe(true);
+    },
+  );
+
+  // Teardown never ends a stage: the cell is left to teardownAll and reconcileOrphans.
+  test("a failed teardown of both cells: the task still completes, the failures logged and emitted", async () => {
+    const { result, events, warns, mainBefore, mainAfter } = await dispatch({ teardownFails: true });
+
+    expect(result.status).toBe("completed");
+    expect(mainAfter).not.toBe(mainBefore);
+    expect(events.filter((e) => e.event === "cell_teardown_failed")).toHaveLength(2);
+    expect(warns.some((w) => w.includes("still on disk"))).toBe(false);
   });
 });
 

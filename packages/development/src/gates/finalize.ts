@@ -1,6 +1,8 @@
 import { runHostGit, type HostRepo } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
+import { environmentErrorOf } from "../environment-failure.js";
+import type { EnvironmentError } from "../environment-failure.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
 import { targetRepo } from "../host-git.js";
 import {
@@ -20,7 +22,16 @@ import { checkEntryPointRewrite } from "./entry-point.js";
 
 export type FinalizeResult =
   | { readonly success: true }
-  | { readonly success: false; readonly gateFailureContext: string; readonly errorLayer: ErrorLayer };
+  | {
+      readonly success: false;
+      readonly gateFailureContext: string;
+      readonly errorLayer: ErrorLayer;
+      /**
+       * Set when the verifier cell's substrate failed, not a check: the caller blocks the task on
+       * the environment instead of routing a failure against a tree no check ever ran on.
+       */
+      readonly environmentFailure: EnvironmentError | null;
+    };
 
 export interface FinalizeContractInfo {
   readonly entryPointPath: string | null;
@@ -44,6 +55,7 @@ async function abortAndFail(
   gateFailureContext: string,
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
   errorLayerInfo: { operation: string; gateOutput: string; gateContext?: Record<string, unknown> },
+  environmentFailure: EnvironmentError | null = null,
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
 
@@ -60,7 +72,7 @@ async function abortAndFail(
     ...(abortError ? { abortError } : {}),
   });
 
-  return { success: false, gateFailureContext, errorLayer };
+  return { success: false, gateFailureContext, errorLayer, environmentFailure };
 }
 
 export async function finalizeSuccess(
@@ -94,6 +106,7 @@ export async function finalizeSuccess(
         taskId: task.id,
         attempt,
       }),
+      environmentFailure: null,
     };
   }
 
@@ -112,6 +125,7 @@ export async function finalizeSuccess(
         attempt,
         conflictFiles: mergeResult.files,
       }),
+      environmentFailure: null,
     };
   }
 
@@ -125,6 +139,7 @@ export async function finalizeSuccess(
         taskId: task.id,
         attempt,
       }),
+      environmentFailure: null,
     };
   }
 
@@ -154,18 +169,24 @@ export async function finalizeSuccess(
     );
   } catch (e) {
     // The verifier cell could not be created or the checks could not run: the
-    // merge is unverified, so it is aborted (Discipline A).
+    // merge is unverified, so it is aborted (Discipline A). A substrate failure
+    // says nothing about the merged tree, so it is carried out typed for the
+    // caller to block on, never reported as a failed post-merge verify.
     const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    const environmentFailure = environmentErrorOf(e);
     return abortAndFail(
       task.id,
       targetProjectPath,
-      "post-merge verification could not run — aborting tentative merge",
+      environmentFailure !== null
+        ? `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`
+        : "post-merge verification could not run — aborting tentative merge",
       `Post-merge verify could not run: ${detail}`,
       {
         operation: "postMergeVerify",
         gateOutput: detail,
-        gateContext: { taskId: task.id, attempt },
+        gateContext: { taskId: task.id, attempt, ...(environmentFailure !== null ? { errorClass: environmentFailure.name } : {}) },
       },
+      environmentFailure,
     );
   }
 
@@ -244,9 +265,7 @@ export async function finalizeSuccess(
   }
 
   await commitMerge(targetProjectPath, task.id);
-  console.log(`[${task.id}] merge committed to main, task branch deleted`);
-
-  console.log(`[${task.id}] task completed — work dir preserved at: ${worktree.workTree}`);
+  console.log(`[${task.id}] merge committed to main`);
 
   // The dev_sessions terminal write lives in DevelopmentService.withSessionLifecycle,
   // the one seam every outcome passes through. It used to happen here, on the success
