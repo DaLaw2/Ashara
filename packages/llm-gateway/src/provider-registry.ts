@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { CapabilityLevel } from "@ashara/shared";
-import { NoProviderAvailableError, ProviderMissingBaseUrl } from "./errors.js";
+import { NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import type { GatewayConfig, KnownLLMSite, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
@@ -60,19 +60,7 @@ function findBestModel(
       (a, b) =>
         CAPABILITY_RANK[a.capabilityLevel] - CAPABILITY_RANK[b.capabilityLevel],
     );
-  if (eligible.length > 0) return eligible[0];
-
-  const downgraded = [...models].sort(
-    (a, b) =>
-      CAPABILITY_RANK[b.capabilityLevel] - CAPABILITY_RANK[a.capabilityLevel],
-  );
-  if (downgraded.length > 0) {
-    console.warn(
-      `[ProviderRegistry] no model at capability=${capability}, downgrading to ${downgraded[0].id} (${downgraded[0].capabilityLevel})`,
-    );
-    return downgraded[0];
-  }
-  return undefined;
+  return eligible[0];
 }
 
 // TODO: capability → model routing should migrate to Compute domain (Phase 25)
@@ -83,8 +71,9 @@ export class ProviderRegistry {
    * The deployment's enabled-provider combo (routing-profiles story), fixed
    * at construction: it names WHICH providers are turned on for this
    * deployment, not which are excluded for a particular resolve() call
-   * (fallback/degrade only narrows the search for the profile-mapped model —
-   * see resolveFromProfile — it never changes which playbook applies).
+   * (fallback/degrade never changes which playbook applies; when it excludes
+   * the provider of the profile-mapped model, that one call uses capability
+   * logic over the remaining providers — see resolveFromProfile).
    */
   private readonly enabledCombo: string;
 
@@ -110,7 +99,7 @@ export class ProviderRegistry {
     // consulted when the caller tagged the request with a site — a site-less
     // request is the documented exception that always uses capability logic.
     if (site) {
-      const fromProfile = this.resolveFromProfile(enabledProviders, site, capability);
+      const fromProfile = this.resolveFromProfile(enabledProviders, excludeProviders, site, capability);
       if (fromProfile) return fromProfile;
     }
 
@@ -132,22 +121,18 @@ export class ProviderRegistry {
   }
 
   /**
-   * Static per-site routing lookup (routing-profiles story). Returns `null` —
-   * never throws — on any miss, so the caller falls through to capability
-   * logic: no profile registered for this deployment's enabled-provider
-   * combo, the matched profile doesn't map this site, the site's table has
-   * no entry for the REQUESTED capability and no `default` (a site whose
-   * requests vary in capability — see `RoutingProfileCapabilityTable` — must
-   * pick per-call, not once per site), or the mapped model isn't among
-   * `enabledProviders` (excluded by a caller's fallback/degrade retry, or
-   * simply removed from the deployment). Each miss is logged (Discipline C)
-   * — a routing gap should be visible, not silent.
-   *
-   * The unmapped-site miss stays fail-soft HERE because it is the intended
-   * behavior of an explicitly empty profile (`[routing.profiles."deepseek"]`),
-   * which is truthy but maps nothing. The case that used to hide a bug — a
-   * site missing from a NON-empty, curated profile — can no longer reach this
-   * point: `buildGateway` refuses to start on it (`RoutingProfileIncomplete`).
+   * Static per-site routing lookup (routing-profiles story). Returns `null`,
+   * so the caller uses capability logic, in exactly three cases: no profile
+   * registered for the enabled-provider combo; an explicitly empty profile
+   * (`[routing.profiles."deepseek"]`), which maps no site; or the mapped model
+   * is offered only by a provider the CALLER excluded (the provider-error
+   * fallback and the per-provider budget-degrade in gateway.ts), which is
+   * logged. Every other miss in a NON-EMPTY, curated profile throws
+   * `RoutingProfileUnresolved`: the site's table has no entry for the
+   * requested capability and no `default`, or no enabled provider offers the
+   * mapped model at all. A site missing from a non-empty profile cannot reach
+   * this point: `buildGateway` refuses to start on it
+   * (`RoutingProfileIncomplete`).
    *
    * Deliberately does NOT enforce "the mapped model must meet or exceed
    * `capability`" — a flat string entry (e.g. escalation -> claude-sonnet-4-6)
@@ -157,6 +142,7 @@ export class ProviderRegistry {
    */
   private resolveFromProfile(
     enabledProviders: ProviderConfig[],
+    excludeProviders: readonly string[],
     site: KnownLLMSite,
     capability: CapabilityLevel,
   ): ResolvedProvider | null {
@@ -171,20 +157,31 @@ export class ProviderRegistry {
 
     const entry = profile[site];
     if (!entry) {
+      if (Object.keys(profile).length > 0) {
+        throw new RoutingProfileUnresolved({
+          combo: this.enabledCombo,
+          site,
+          capability,
+          mappedModel: null,
+          searchedProviders: enabledProviders.map((p) => p.name),
+        });
+      }
       console.warn(
-        `[ProviderRegistry] routing profile "${this.enabledCombo}" has no mapping for site="${site}" ` +
-          `— falling through to capability logic`,
+        `[ProviderRegistry] routing profile "${this.enabledCombo}" is empty (site="${site}") ` +
+          `— using capability logic`,
       );
       return null;
     }
 
     const modelId = typeof entry === "string" ? entry : entry[capability] ?? entry.default;
     if (!modelId) {
-      console.warn(
-        `[ProviderRegistry] routing profile "${this.enabledCombo}" site="${site}" has no entry for ` +
-          `capability="${capability}" and no "default" — falling through to capability logic`,
-      );
-      return null;
+      throw new RoutingProfileUnresolved({
+        combo: this.enabledCombo,
+        site,
+        capability,
+        mappedModel: null,
+        searchedProviders: enabledProviders.map((p) => p.name),
+      });
     }
 
     for (const providerConfig of enabledProviders) {
@@ -198,11 +195,25 @@ export class ProviderRegistry {
       }
     }
 
-    console.warn(
-      `[ProviderRegistry] routing profile "${this.enabledCombo}" maps site="${site}" (capability="${capability}") ` +
-        `to model "${modelId}", but no enabled/available provider has it — falling through to capability logic`,
+    const excludedHolder = this.config.providers.find(
+      (p) => p.enabled && excludeProviders.includes(p.name) && p.models.some((m) => m.id === modelId),
     );
-    return null;
+    if (excludedHolder) {
+      console.warn(
+        `[ProviderRegistry] routing profile "${this.enabledCombo}" maps site="${site}" (capability="${capability}") ` +
+          `to model "${modelId}" on excluded provider "${excludedHolder.name}" — using capability logic ` +
+          `over [${enabledProviders.map((p) => p.name).join(", ")}] for this fallback/degrade`,
+      );
+      return null;
+    }
+
+    throw new RoutingProfileUnresolved({
+      combo: this.enabledCombo,
+      site,
+      capability,
+      mappedModel: modelId,
+      searchedProviders: enabledProviders.map((p) => p.name),
+    });
   }
 
   private resolveDefault(
@@ -226,6 +237,9 @@ export class ProviderRegistry {
       }
     }
 
-    throw new NoProviderAvailableError(capability);
+    throw new NoProviderAvailableError(
+      capability,
+      enabledProviders.flatMap((p) => p.models.map((m) => `${m.id} (${m.capabilityLevel})`)),
+    );
   }
 }

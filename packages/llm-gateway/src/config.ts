@@ -9,7 +9,7 @@ import {
 import { resolveModelsConfigPath } from "./pricing.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 import { InvalidGatewayCatalog } from "./errors.js";
-import type { FormatGroup, GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
+import type { GatewayConfig, ModelConfig, ProviderConfig, RoutingProfiles } from "./types.js";
 
 /**
  * A provider's credentials for gateway configuration. Decoupled from the
@@ -82,18 +82,11 @@ export function buildGatewayConfig(
 // Gateway catalog — one schema, one converter, two transports (file, HTTP)
 // ---------------------------------------------------------------------------
 
-const FORMAT_GROUP_VALUES = new Set<FormatGroup>(["native-fc", "code-fence", "text-patch"]);
-
-export function parseFormatGroup(raw: string): FormatGroup | undefined {
-  return FORMAT_GROUP_VALUES.has(raw as FormatGroup) ? (raw as FormatGroup) : undefined;
-}
-
 const CatalogModelSchema = z.object({
   modelId: z.string().min(1),
   providerName: z.string().min(1),
   apiModelId: z.string().nullable(),
   capability: z.string().min(1),
-  formatGroup: z.string().min(1),
   inputCostPer1m: z.number(),
   outputCostPer1m: z.number(),
   maxContextTokens: z.number().int().positive(),
@@ -128,7 +121,6 @@ function buildConfigFromCatalog(catalog: GatewayCatalog): GatewayConfig {
       apiModelId: m.apiModelId ?? m.modelId,
       provider: m.providerName,
       capabilityLevel: parseCapabilityLevel(m.capability),
-      formatGroup: parseFormatGroup(m.formatGroup),
       inputCostPer1M: m.inputCostPer1m,
       outputCostPer1M: m.outputCostPer1m,
       maxContextTokens: m.maxContextTokens,

@@ -195,7 +195,6 @@ export const modelConfigs = pgTable("model_configs", {
     .references(() => providerConfigs.name),
   apiModelId: text("api_model_id"),
   capability: text().notNull(),
-  formatGroup: text("format_group").notNull().default("native-fc"),
   inputCostPer1m: doublePrecision("input_cost_per_1m").notNull().default(0),
   outputCostPer1m: doublePrecision("output_cost_per_1m").notNull().default(0),
   maxContextTokens: integer("max_context_tokens").notNull().default(128000),

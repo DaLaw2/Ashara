@@ -37,8 +37,6 @@ function turn(
         toolCalls: opts.toolCalls ?? [],
         toolResults: opts.toolResults ?? [],
         tokenUsage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        contextTokens: 0,
-        maskedToolOutputs: 0,
     };
 }
 

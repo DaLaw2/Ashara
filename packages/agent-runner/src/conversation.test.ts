@@ -2,7 +2,6 @@ import { describe, expect, test, vi, beforeEach } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { AgentConversation } from "./conversation.js";
 import { ToolRegistry } from "./tools/index.js";
-import { NativeFCAdapter } from "./format-adapter.js";
 import type { ToolResult } from "./tools/types.js";
 
 // ---------------------------------------------------------------------------
@@ -79,8 +78,6 @@ describe("AgentConversation — native FC path", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 5,
             workingDir: "/workspace",
         });
@@ -108,8 +105,6 @@ describe("AgentConversation — native FC path", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 8,
             workingDir: "/workspace",
         });
@@ -148,8 +143,6 @@ describe("AgentConversation — costMeasured propagation", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 5,
         });
 
@@ -195,8 +188,6 @@ describe("AgentConversation — costMeasured propagation", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 5,
         });
 
@@ -229,8 +220,6 @@ describe("AgentConversation — error handling", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 5,
         });
 
@@ -251,8 +240,6 @@ describe("AgentConversation — error handling", () => {
         const registry = createMockRegistry();
         const conversation = new AgentConversation(model, registry, {
             staticSystemPrompt: "test",
-            capability: "Strong" as const,
-            adapter: new NativeFCAdapter(),
             maxTurns: 5,
         });
 

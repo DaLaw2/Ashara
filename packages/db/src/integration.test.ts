@@ -19,6 +19,7 @@ import {
   taskCostHistory,
   brainstormLog,
   failedApproaches,
+  modelConfigs,
   providerConfigs,
   systemSettings,
   visionDocuments,
@@ -271,7 +272,7 @@ describe("ConfigRepository", () => {
     repo = new ConfigRepository(db);
   });
 
-  test("providers and upsertModelConfig each round-trip through their table", async () => {
+  test("providers and model configs each round-trip through their table", async () => {
     createdProviderNames.push(testProviderName);
     await db.insert(providerConfigs).values({
       name: testProviderName,
@@ -285,7 +286,7 @@ describe("ConfigRepository", () => {
     expect(provider?.apiKey).toBe("sk-test-key-12345");
 
     createdModelIds.push(testModelId);
-    await repo.upsertModelConfig({
+    await db.insert(modelConfigs).values({
       modelId: testModelId,
       providerName: testProviderName,
       capability: "Strong",

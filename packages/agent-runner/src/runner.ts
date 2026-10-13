@@ -15,8 +15,6 @@ import { createDefaultRegistry } from "./tools/index.js";
 import type { ToolPromptContext } from "./tools/types.js";
 import { OutputCollector } from "./output.js";
 import type { AgentOutput } from "./output.js";
-import type { FormatAdapter } from "./format-adapter.js";
-import { NativeFCAdapter, CodeFenceAdapter } from "./format-adapter.js";
 import { createProfileAdapter } from "./acl/development-acl.js";
 import type { ProjectProfilePort } from "./acl/development-acl.js";
 import { enrichBrief } from "./brief-builder.js";
@@ -39,8 +37,6 @@ export type { AgentBrief } from "@ashara/shared";
 
 export interface RunnerGateway {
     resolveModel(capability: CapabilityLevel, site: string): ResolvedModel;
-    resolveEffectiveCapability?(capability: CapabilityLevel): CapabilityLevel;
-    resolveFormatGroup?(capability: CapabilityLevel): string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,34 +102,26 @@ export class AgentRunner {
             allowedBinaries: brief.allowedBinaries,
         });
 
-        // 5. Resolve model and format group, build system prompt
-        const resolvedCapability = resolveEffectiveCapability(this.gateway, this.config.capability);
-        const resolved = this.gateway.resolveModel(resolvedCapability, "agent-runner");
-        const formatGroup = resolveFormatGroup(this.gateway, this.config.capability);
+        // 5. Resolve model, build system prompt
+        const capability = this.config.capability;
+        const resolved = this.gateway.resolveModel(capability, "agent-runner");
         const toolPrompts = registry.collectPrompts(toolPromptCtx);
-        const staticSystemPrompt = buildStaticSystemPrompt(formatGroup, toolPrompts);
+        const staticSystemPrompt = buildStaticSystemPrompt(toolPrompts);
         const dynamicSystemPrompt = buildDynamicSystemPrompt(brief);
 
-        const allowed = capabilityToolSet(resolvedCapability);
+        const allowed = capabilityToolSet(capability);
 
         console.log(
             `[agent-runner] resolved model: ${resolved.modelId} (${resolved.provider}), ` +
-            `capability=${resolvedCapability}, tools=${[...allowed].join(", ")}`,
+            `capability=${capability}, tools=${[...allowed].join(", ")}`,
         );
 
         // 6. Create and run conversation — goal is the task instruction (always non-empty)
-        const isWeakModel =
-            resolvedCapability === "Light" || resolvedCapability === "Medium";
-
-        const adapter = selectAdapter(formatGroup, resolvedCapability);
-
         const conversationLogPath = join(this.config.workingDir, ASHARA_CONTROL_DIR, "conversation.jsonl");
 
         const conversation = new AgentConversation(resolved.model, registry, {
-            staticSystemPrompt: isWeakModel ? buildWeakModelSystemPrompt(brief) : staticSystemPrompt,
-            dynamicSystemPrompt: isWeakModel ? "" : dynamicSystemPrompt,
-            capability: this.config.capability,
-            adapter,
+            staticSystemPrompt,
+            dynamicSystemPrompt,
             maxTurns: this.config.maxTurns,
             workingDir: this.config.workingDir,
             conversationLogPath,
@@ -184,17 +172,6 @@ export class AgentRunner {
 // Tool filtering by capability
 // ---------------------------------------------------------------------------
 
-function resolveEffectiveCapability(gateway: RunnerGateway, requested: CapabilityLevel): CapabilityLevel {
-    if (gateway.resolveEffectiveCapability) {
-        const actual = gateway.resolveEffectiveCapability(requested);
-        if (actual !== requested) {
-            console.log(`[agent-runner] capability downgraded: ${requested} → ${actual}`);
-        }
-        return actual;
-    }
-    return requested;
-}
-
 const CORE_TOOLS = ["write_file", "read_file", "list_directory"];
 const STANDARD_TOOLS = [...CORE_TOOLS, "run_command"];
 const FULL_TOOLS = [...STANDARD_TOOLS, "edit_file", "search_codebase"];
@@ -212,31 +189,6 @@ function capabilityToolSet(capability: CapabilityLevel): Set<string> {
             const _exhaustive: never = capability;
             throw new Error(`Unknown capability level: ${String(_exhaustive)}`);
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Adapter selection
-// ---------------------------------------------------------------------------
-
-function resolveFormatGroup(gateway: RunnerGateway, capability: CapabilityLevel): string | undefined {
-    if (gateway.resolveFormatGroup) {
-        return gateway.resolveFormatGroup(capability);
-    }
-    return undefined;
-}
-
-function selectAdapter(formatGroup?: string, capability?: CapabilityLevel): FormatAdapter {
-    switch (formatGroup) {
-        case "native-fc":
-            return new NativeFCAdapter();
-        case "code-fence":
-            return new CodeFenceAdapter();
-        default:
-            if (capability === "Frontier" || capability === "Strong") {
-                return new NativeFCAdapter();
-            }
-            return new CodeFenceAdapter();
     }
 }
 
@@ -285,48 +237,7 @@ function formatProjectFrame(brief: AgentBrief): string {
     ].join("\n");
 }
 
-export function buildWeakModelSystemPrompt(brief: AgentBrief): string {
-    const lines = [
-        `You are a coding agent. Use write_file to create files. Use read_file to read files.`,
-        `Do not explain. Do not describe. Just call tools.`,
-        ``,
-        formatProjectFrame(brief),
-        ``,
-        `# Task`,
-        brief.goal,
-    ];
-
-    if (brief.priorAttemptFailure) {
-        lines.push(``, `# Prior Attempt Failure`, brief.priorAttemptFailure);
-    }
-
-    if (brief.knowledgeContext && brief.knowledgeContext.trim().length > 0) {
-        lines.push(``, `# Prior Knowledge & Lessons`, brief.knowledgeContext);
-    }
-
-    if (brief.artifactContext) {
-        lines.push(``, `# Current Project State`, brief.artifactContext);
-    }
-
-    if (brief.contractSlice) {
-        lines.push(``, brief.contractSlice);
-    }
-
-    if (brief.deliverables.length > 0) {
-        lines.push(``, `# Files to create`);
-        for (const d of brief.deliverables) {
-            lines.push(`- ${d}`);
-        }
-    }
-
-    for (const section of formatSupplementarySections(brief)) {
-        lines.push(``, section);
-    }
-
-    return lines.join("\n");
-}
-
-export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: string[]): string {
+export function buildStaticSystemPrompt(toolPrompts?: string[]): string {
     const sections: string[] = [];
 
     sections.push(
@@ -345,23 +256,6 @@ export function buildStaticSystemPrompt(formatGroup?: string, toolPrompts?: stri
                 ...toolPrompts.map((p) => `- ${p}`),
                 ``,
                 `If you need information about the project, use tools to get it — do not guess.`,
-            ].join("\n"),
-        );
-    }
-
-    if (formatGroup === "code-fence") {
-        sections.push(
-            [
-                `# Output Format`,
-                "You do NOT have tool-calling capability. Instead, output code in fenced blocks with the file path:",
-                "```language:path/to/file",
-                "code here",
-                "```",
-                "For example:",
-                "```python:app.py",
-                `print("hello")`,
-                "```",
-                "Every code block must include the file path after the language tag, separated by a colon.",
             ].join("\n"),
         );
     }

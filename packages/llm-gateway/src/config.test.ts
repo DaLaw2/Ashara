@@ -14,7 +14,6 @@ function validCatalog() {
             providerName: "anthropic",
             apiModelId: null,
             capability: "Strong",
-            formatGroup: "native-fc",
             inputCostPer1m: 3,
             outputCostPer1m: 15,
             maxContextTokens: 200000,

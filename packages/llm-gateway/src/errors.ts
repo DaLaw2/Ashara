@@ -52,15 +52,67 @@ export class ProviderError extends GatewayError {
   }
 }
 
+/**
+ * Thrown when no enabled provider has a model at or above the requested
+ * capability. There is no downgrade: a lower-tier model is never substituted.
+ */
 export class NoProviderAvailableError extends GatewayError {
   readonly capability: string;
+  /** `id (capability)` of every model the enabled providers offered. */
+  readonly availableModels: readonly string[];
 
-  constructor(capability: string) {
+  constructor(capability: string, availableModels: readonly string[]) {
     super(
-      `No provider available for capability level "${capability}"`,
+      `No provider available for capability level "${capability}" or above ` +
+        `(available models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`,
     );
     this.name = "NoProviderAvailableError";
     this.capability = capability;
+    this.availableModels = availableModels;
+  }
+}
+
+export interface RoutingProfileUnresolvedContext {
+  /** Enabled-provider combo whose profile was consulted, e.g. "anthropic+deepseek". */
+  readonly combo: string;
+  readonly site: string;
+  readonly capability: string;
+  /** Model the profile maps the site to; `null` when no entry covers the capability. */
+  readonly mappedModel: string | null;
+  /** Providers searched for `mappedModel` (enabled, minus any excluded by a fallback). */
+  readonly searchedProviders: readonly string[];
+}
+
+/**
+ * Thrown when a NON-EMPTY (curated) routing profile cannot resolve a request:
+ * the site's table covers neither the requested capability nor `default`, or
+ * the mapped model is on no searched provider. Falling through to capability
+ * logic would silently land the call on a model the profile was written to
+ * avoid, so the miss fails closed instead.
+ */
+export class RoutingProfileUnresolved extends GatewayError {
+  readonly combo: string;
+  readonly site: string;
+  readonly capability: string;
+  readonly mappedModel: string | null;
+  readonly searchedProviders: readonly string[];
+
+  constructor(context: RoutingProfileUnresolvedContext) {
+    const reason =
+      context.mappedModel === null
+        ? `has no entry covering this site at this capability (and no "default")`
+        : `maps it to model "${context.mappedModel}", which no searched provider ` +
+          `(${context.searchedProviders.length > 0 ? context.searchedProviders.join(", ") : "none"}) offers`;
+    super(
+      `Routing profile "${context.combo}" cannot resolve site="${context.site}" ` +
+        `(capability="${context.capability}"): the profile ${reason}`,
+    );
+    this.name = "RoutingProfileUnresolved";
+    this.combo = context.combo;
+    this.site = context.site;
+    this.capability = context.capability;
+    this.mappedModel = context.mappedModel;
+    this.searchedProviders = context.searchedProviders;
   }
 }
 

@@ -117,18 +117,6 @@ const CreateVisionSchema = z.object({
   changeReason: z.string().optional(),
 });
 
-const ModelConfigInputSchema = z.object({
-  modelId: z.string().min(1),
-  providerName: z.string().min(1),
-  apiModelId: z.string().optional(),
-  capability: z.enum(["Frontier", "Strong", "Medium", "Light"]),
-  formatGroup: z.enum(["native-fc", "code-fence", "text-patch"]).optional(),
-  inputCostPer1m: z.number().nonnegative(),
-  outputCostPer1m: z.number().nonnegative(),
-  maxContextTokens: z.number().int().positive(),
-  supportsCaching: z.boolean().default(false),
-});
-
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -400,34 +388,6 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     const { configRepo } = c.get("deps");
     const models = await configRepo.listModelConfigs();
     return c.json(models);
-  });
-
-  app.get("/config/models/:modelId", async (c) => {
-    const { configRepo } = c.get("deps");
-    const modelId = c.req.param("modelId");
-    const model = await configRepo.getModelConfig(modelId);
-    if (!model) return c.json({ error: "model not found" }, 404);
-    return c.json(model);
-  });
-
-  app.post("/config/models", async (c) => {
-    const { configRepo } = c.get("deps");
-
-    const parsed = ModelConfigInputSchema.safeParse(await c.req.json());
-    if (!parsed.success) {
-      return c.json({ error: "invalid model config", issues: parsed.error.issues }, 400);
-    }
-
-    const model = await configRepo.upsertModelConfig(parsed.data);
-    return c.json(model, 200);
-  });
-
-  app.delete("/config/models/:modelId", async (c) => {
-    const { configRepo } = c.get("deps");
-    const modelId = c.req.param("modelId");
-    const deleted = await configRepo.deleteModelConfig(modelId);
-    if (!deleted) return c.json({ error: "model not found" }, 404);
-    return c.body(null, 204);
   });
 
   app.get("/config/providers", async (c) => {

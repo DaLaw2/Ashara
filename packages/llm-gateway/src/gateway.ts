@@ -395,24 +395,6 @@ export class LLMGateway {
     };
   }
 
-  resolveEffectiveCapability(capability: CapabilityLevel): CapabilityLevel {
-    try {
-      const resolved = this.registry.resolve(capability);
-      return resolved.modelConfig.capabilityLevel;
-    } catch {
-      return capability;
-    }
-  }
-
-  resolveFormatGroup(capability: CapabilityLevel): string | undefined {
-    try {
-      const resolved = this.registry.resolve(capability);
-      return resolved.modelConfig.formatGroup;
-    } catch {
-      return undefined;
-    }
-  }
-
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
     const resolved = this.resolveWithBudgetDegrade(capability, site);
     return {

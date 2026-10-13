@@ -1,4 +1,4 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Database } from "../connection.js";
 import { modelConfigs, providerConfigs, systemSettings } from "../schema.js";
 
@@ -20,65 +20,6 @@ export class ConfigRepository {
         asc(modelConfigs.outputCostPer1m),
         asc(modelConfigs.modelId),
       );
-  }
-
-  async getModelConfig(modelId: string) {
-    const rows = await this.db
-      .select()
-      .from(modelConfigs)
-      .where(eq(modelConfigs.modelId, modelId));
-    return rows[0] ?? null;
-  }
-
-  async upsertModelConfig(model: {
-    modelId: string;
-    providerName: string;
-    apiModelId?: string | null;
-    capability: string;
-    formatGroup?: string;
-    inputCostPer1m: number;
-    outputCostPer1m: number;
-    maxContextTokens: number;
-    supportsCaching?: boolean;
-  }) {
-    const rows = await this.db
-      .insert(modelConfigs)
-      .values({
-        modelId: model.modelId,
-        providerName: model.providerName,
-        apiModelId: model.apiModelId ?? null,
-        capability: model.capability,
-        formatGroup: model.formatGroup ?? "native-fc",
-        inputCostPer1m: model.inputCostPer1m,
-        outputCostPer1m: model.outputCostPer1m,
-        maxContextTokens: model.maxContextTokens,
-        supportsCaching: model.supportsCaching ?? false,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: modelConfigs.modelId,
-        set: {
-          providerName: sql`EXCLUDED.provider_name`,
-          apiModelId: sql`EXCLUDED.api_model_id`,
-          capability: sql`EXCLUDED.capability`,
-          formatGroup: sql`EXCLUDED.format_group`,
-          inputCostPer1m: sql`EXCLUDED.input_cost_per_1m`,
-          outputCostPer1m: sql`EXCLUDED.output_cost_per_1m`,
-          maxContextTokens: sql`EXCLUDED.max_context_tokens`,
-          supportsCaching: sql`EXCLUDED.supports_caching`,
-          updatedAt: sql`EXCLUDED.updated_at`,
-        },
-      })
-      .returning();
-    return rows[0]!;
-  }
-
-  async deleteModelConfig(modelId: string): Promise<boolean> {
-    const rows = await this.db
-      .delete(modelConfigs)
-      .where(eq(modelConfigs.modelId, modelId))
-      .returning({ modelId: modelConfigs.modelId });
-    return rows.length > 0;
   }
 
   async listProviderConfigs() {

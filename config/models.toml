@@ -38,9 +38,9 @@
 # silently escape to capability routing, which is how stack-derivation once
 # reached Anthropic despite the reserve below.
 #
-# Within a table, a capability entry with no match for the requested
-# capability AND no "default" still falls through fail-soft (logged by
-# ProviderRegistry) -- only the SITE dimension is boot-enforced.
+# Within a table, a request whose capability has no entry AND no "default",
+# or whose mapped model no searched provider offers, fails the call
+# (RoutingProfileUnresolved) -- only the SITE dimension is boot-enforced.
 # =============================================================================
 
 [routing.profiles."deepseek"]

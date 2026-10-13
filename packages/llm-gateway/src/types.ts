@@ -8,11 +8,10 @@ import type { CapabilityLevel } from "@ashara/shared";
  * per-task capability ranges over Light/Strong/Frontier (taskSpec.capability)
  * — so a single fixed model
  * for the site would silently downgrade a Frontier-classified task. `default`
- * covers any requested capability without its own entry; a capability with
- * neither its own entry nor `default` falls through to capability logic
- * (fail-soft + warn — see `ProviderRegistry.resolveFromProfile`). Only the
- * SITE dimension is boot-enforced; picking which capabilities a table covers
- * stays the author's call.
+ * covers any requested capability without its own entry; a request for a
+ * capability with neither its own entry nor `default` throws
+ * `RoutingProfileUnresolved` (see `ProviderRegistry.resolveFromProfile`). Only
+ * the SITE dimension is boot-enforced; the capability dimension fails per call.
  */
 export type RoutingProfileCapabilityTable = Partial<Record<CapabilityLevel, string>> & {
   default?: string;
@@ -97,14 +96,11 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
-export type FormatGroup = "native-fc" | "code-fence" | "text-patch";
-
 export interface ModelConfig {
   id: string;
   apiModelId: string;
   provider: string;
   capabilityLevel: CapabilityLevel;
-  formatGroup?: FormatGroup;
   inputCostPer1M: number;
   outputCostPer1M: number;
   maxContextTokens: number;

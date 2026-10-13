@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ProviderMissingBaseUrl } from "./errors.js";
+import { NoProviderAvailableError, ProviderMissingBaseUrl, RoutingProfileUnresolved } from "./errors.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { GatewayConfig, ModelConfig } from "./types.js";
 
@@ -95,5 +95,46 @@ describe("ProviderRegistry base_url guard", () => {
     const resolved = registry.resolve("Strong");
     expect(resolved.providerName).toBe("mistral");
     expect(resolved.modelConfig.id).toBe("mistral-large");
+  });
+});
+
+describe("ProviderRegistry fails closed instead of substituting a model", () => {
+  const config = (routingProfiles?: GatewayConfig["routingProfiles"]): GatewayConfig => ({
+    providers: [
+      { name: "mistral", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
+    ],
+    defaultProvider: "mistral",
+    routingProfiles,
+  });
+
+  test("no model at or above the requested capability throws; no lower tier is substituted", () => {
+    expect(() => new ProviderRegistry(config()).resolve("Frontier")).toThrow(NoProviderAvailableError);
+  });
+
+  test("a curated profile with no entry for the capability throws rather than using capability logic", () => {
+    const registry = new ProviderRegistry(config({ mistral: { "agent-runner": { Frontier: "mistral-large" } } }));
+    expect(() => registry.resolve("Strong", [], "agent-runner")).toThrow(RoutingProfileUnresolved);
+  });
+
+  test("a curated profile mapping to a model no provider offers throws", () => {
+    const registry = new ProviderRegistry(config({ mistral: { "agent-runner": "absent-model" } }));
+    expect(() => registry.resolve("Strong", [], "agent-runner")).toThrow(/absent-model/);
+  });
+
+  test("an explicitly empty profile delegates to capability logic", () => {
+    const registry = new ProviderRegistry(config({ mistral: {} }));
+    expect(registry.resolve("Strong", [], "agent-runner").modelConfig.id).toBe("mistral-large");
+  });
+
+  test("a curated profile whose mapped model is on the excluded provider falls back to capability logic", () => {
+    const registry = new ProviderRegistry({
+      providers: [
+        { name: "mistral", apiKey: "k", baseUrl: "https://api.mistral.ai/v1", models: [MODEL], enabled: true },
+        { name: "other", apiKey: "k", baseUrl: "https://example.invalid/v1", models: [{ ...MODEL, id: "other-large" }], enabled: true },
+      ],
+      defaultProvider: "mistral",
+      routingProfiles: { "mistral+other": { "agent-runner": "mistral-large" } },
+    });
+    expect(registry.resolveFallback("Strong", "mistral", "agent-runner")?.modelConfig.id).toBe("other-large");
   });
 });
