@@ -31,6 +31,17 @@ export class ClientMessageNotConsumable extends Error {
   }
 }
 
+/** The operation needed an unconsumed inbound tender with this id, and found none. */
+class TenderNotOpen extends Error {
+  constructor(
+    readonly messageId: string,
+    readonly operation: string,
+  ) {
+    super(`cannot ${operation}: client message ${messageId} is not an unconsumed inbound tender`);
+    this.name = "TenderNotOpen";
+  }
+}
+
 /**
  * The client channel's rows (architecture K1, migration 016). The only writer of
  * outbound messages: no HTTP route creates one.
@@ -70,6 +81,55 @@ export class ClientMessageRepository {
       .from(clientMessages)
       .where(after ? and(byProject, after) : byProject)
       .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+  }
+
+  /** Inbound tenders not yet consumed, oldest first: the Liaison's intake queue. */
+  async listUnconsumedTenders(): Promise<ClientMessageRow[]> {
+    return this.db
+      .select()
+      .from(clientMessages)
+      .where(
+        and(
+          eq(clientMessages.direction, "inbound"),
+          eq(clientMessages.kind, "tender"),
+          isNull(clientMessages.consumedAt),
+        ),
+      )
+      .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
+  }
+
+  /**
+   * Counts one failed intake attempt on an unconsumed tender and records the
+   * error that ended it. Returns the attempt count after this one.
+   */
+  async recordIntakeFailure(id: string, error: string): Promise<number> {
+    const [row] = await this.db
+      .update(clientMessages)
+      .set({
+        intakeAttempts: sql`${clientMessages.intakeAttempts} + 1`,
+        intakeLastError: error,
+      })
+      .where(
+        and(
+          eq(clientMessages.id, id),
+          eq(clientMessages.direction, "inbound"),
+          eq(clientMessages.kind, "tender"),
+          isNull(clientMessages.consumedAt),
+        ),
+      )
+      .returning({ intakeAttempts: clientMessages.intakeAttempts });
+    if (!row) throw new TenderNotOpen(id, "record a failed intake attempt");
+    return row.intakeAttempts;
+  }
+
+  /** The answer already given to this question, or null when it has none. */
+  async findAnswerTo(questionId: string): Promise<ClientMessageRow | null> {
+    const [row] = await this.db
+      .select()
+      .from(clientMessages)
+      .where(and(eq(clientMessages.inReplyTo, questionId), eq(clientMessages.kind, "answer")))
+      .limit(1);
+    return row ?? null;
   }
 
   async markConsumed(id: string): Promise<ClientMessageRow> {
@@ -117,11 +177,12 @@ export interface CreatedTender {
  */
 export async function createProjectWithTender(
   db: Database,
+  clientId: string,
   name: string,
   body: string,
 ): Promise<CreatedTender> {
   return db.transaction(async (tx) => {
-    const project = await new ProjectRepository(tx).create(name);
+    const project = await new ProjectRepository(tx).create(name, clientId);
     const message = await new ClientMessageRepository(tx).insertInbound({
       projectId: project.id,
       kind: "tender",

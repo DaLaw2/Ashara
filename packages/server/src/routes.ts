@@ -33,11 +33,12 @@ import type { BulkPlanItem, BulkPlanEdge, BulkPlanResult } from "@ashara/plannin
 import { providerApiKeySecretName } from "@ashara/security";
 import {
   listClientMessages,
+  notJson,
   postClientMessage,
   readJsonBody,
   submitTender,
 } from "./client-channel.js";
-import type { ClientChannelDeps } from "./client-channel.js";
+import type { ChannelCaller, ClientChannelDeps } from "./client-channel.js";
 import { rowToWorkItem } from "./work-item-adapter.js";
 
 // ---------------------------------------------------------------------------
@@ -50,8 +51,8 @@ export interface AppDeps extends ClientChannelDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly projectRepo: ProjectRepository;
-  /** A tender: the project row and its vision v1 in one transaction (K3). */
-  readonly createProject: (name: string, vision: VisionInput) => Promise<CreatedProject>;
+  /** A tender: the project row, owned by `clientId`, and its vision v1 in one transaction (K3). */
+  readonly createProject: (clientId: string, name: string, vision: VisionInput) => Promise<CreatedProject>;
   readonly configRepo: ConfigRepository;
   /** Presence only: no route ever reads or returns a secret value. */
   readonly secretStore: { has(name: string): Promise<boolean> };
@@ -114,7 +115,10 @@ const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
 // every route that reads `body.*` validates the shape before touching it.
 // ---------------------------------------------------------------------------
 
+// `clientId` is required: every project belongs to a client (migration 018), and
+// the operator creating one on a client's behalf names which.
 const CreateVisionSchema = z.object({
+  clientId: z.uuid(),
   projectName: z.string().min(1),
   vision_text: z.string().min(1).optional(),
   visionText: z.string().min(1).optional(),
@@ -347,9 +351,11 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // -----------------------------------------------------------------------
 
   app.post("/vision", async (c) => {
-    const { createProject } = c.get("deps");
+    const { createProject, clientRepo } = c.get("deps");
 
-    const parsed = CreateVisionSchema.safeParse(await c.req.json());
+    const json = await readJsonBody(() => c.req.json());
+    if (!json.ok) return c.json(notJson("create vision", json).body, 400);
+    const parsed = CreateVisionSchema.safeParse(json.value);
     if (!parsed.success) {
       return c.json({ error: "invalid vision", issues: parsed.error.issues }, 400);
     }
@@ -358,10 +364,13 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
     if (!visionText) {
       return c.json({ error: "vision_text/visionText is required" }, 400);
     }
+    if ((await clientRepo.get(body.clientId)) === null) {
+      return c.json({ error: `client not found: ${body.clientId}` }, 404);
+    }
 
     // A tender creates its project and vision v1 together (K3); the caller keys
     // every later request for this project by the returned projectId.
-    const created = await createProject(body.projectName, {
+    const created = await createProject(body.clientId, body.projectName, {
       visionText,
       summary: body.summary,
       inferences: body.inferences ?? {},
@@ -395,19 +404,23 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // the Liaison writes those server-side. Every inbound insert NOTIFYs the loop.
   // -----------------------------------------------------------------------
 
+  // The bearer token is the operator's: it reaches every project, and a tender
+  // names the client it is for (404 for an unknown client).
+  const operator: ChannelCaller = { kind: "operator" };
+
   app.post("/tenders", async (c) => {
-    const result = await submitTender(c.get("deps"), await readJsonBody(() => c.req.json()));
+    const result = await submitTender(c.get("deps"), operator, await readJsonBody(() => c.req.json()));
     return c.json(result.body, result.status);
   });
 
   app.post("/projects/:projectId/messages", async (c) => {
     const json = await readJsonBody(() => c.req.json());
-    const result = await postClientMessage(c.get("deps"), c.req.param("projectId"), json);
+    const result = await postClientMessage(c.get("deps"), operator, c.req.param("projectId"), json);
     return c.json(result.body, result.status);
   });
 
   app.get("/projects/:projectId/messages", async (c) => {
-    const result = await listClientMessages(c.get("deps"), c.req.param("projectId"), c.req.query());
+    const result = await listClientMessages(c.get("deps"), operator, c.req.param("projectId"), c.req.query());
     return c.json(result.body, result.status);
   });
 

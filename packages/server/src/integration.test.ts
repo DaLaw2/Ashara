@@ -21,6 +21,7 @@ import {
   withPlanningTransaction,
   createProjectWithVision,
   ClientMessageRepository,
+  ClientRepository,
   createProjectWithTender,
 } from "@ashara/db";
 import { createBulkPlanWithContract } from "@ashara/planning";
@@ -64,12 +65,13 @@ const createdProjectIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
 const createdSecretNames: string[] = [];
+let suiteClientId: string;
 let keyedProviderName: string;
 let keylessProviderName: string;
 
 /** A project owned by this suite; its rows are removed in afterAll. */
 async function newProject(): Promise<ProjectId> {
-  const project = await new ProjectRepository(db).create(`server-intg-${randomUUID().slice(0, 8)}`);
+  const project = await new ProjectRepository(db).create(`server-intg-${randomUUID().slice(0, 8)}`, suiteClientId);
   createdProjectIds.push(project.id);
   return project.id;
 }
@@ -115,6 +117,7 @@ beforeAll(async () => {
   const visionRepo = new VisionRepository(db);
   const configRepo = new ConfigRepository(db);
   const runner: AppDeps["runner"] = { wake: () => {} };
+  suiteClientId = (await new ClientRepository(db).create(`server-intg-${randomUUID()}`)).id;
 
   // A throwaway master key in a temp file: never the owner's key, never the
   // owner's secrets. Only names derived from this suite's unique providers are written.
@@ -129,15 +132,16 @@ beforeAll(async () => {
     devSessionRepo,
     visionRepo,
     projectRepo: new ProjectRepository(db),
-    createProject: async (name, vision) => {
-      const created = await createProjectWithVision(db, name, vision);
+    createProject: async (clientId, name, vision) => {
+      const created = await createProjectWithVision(db, clientId, name, vision);
       createdProjectIds.push(created.project.id);
       createdVisionIds.push(created.vision.id);
       return created;
     },
     clientMessageRepo: new ClientMessageRepository(db),
-    createTender: async (projectName, body) => {
-      const created = await createProjectWithTender(db, projectName, body);
+    clientRepo: new ClientRepository(db),
+    createTender: async (clientId, projectName, body) => {
+      const created = await createProjectWithTender(db, clientId, projectName, body);
       createdProjectIds.push(created.project.id);
       return created;
     },
@@ -204,6 +208,7 @@ afterAll(async () => {
     await pool.query("DELETE FROM project_contracts WHERE project_id = $1", [id]);
     await pool.query("DELETE FROM projects WHERE id = $1", [id]);
   }
+  await pool.query("DELETE FROM clients WHERE id = $1", [suiteClientId]);
   await pool.end();
 });
 
@@ -457,6 +462,7 @@ describe("Config", () => {
 
 describe("Vision", () => {
   const tender = (visionText: string) => ({
+    clientId: suiteClientId,
     projectName: `intg-${randomUUID().slice(0, 8)}`,
     visionText,
     summary: "Test summary",
@@ -498,6 +504,12 @@ describe("Vision", () => {
     const { projectName: _omitted, ...withoutName } = tender("nameless");
     const res = await req("POST", "/vision", withoutName);
     expect(res.status).toBe(400);
+  });
+
+  test("POST /vision names its client: none is 400, an unknown one is 404", async () => {
+    const { clientId: _omitted, ...withoutClient } = tender("clientless");
+    expect((await req("POST", "/vision", withoutClient)).status).toBe(400);
+    expect((await req("POST", "/vision", { ...tender("unknown client"), clientId: randomUUID() })).status).toBe(404);
   });
 
   test("GET /projects/:id/vision is 404 for a project with no vision and 400 for a non-UUID", async () => {
@@ -581,6 +593,7 @@ describe("Client channel", () => {
 
   beforeAll(async () => {
     const res = await req("POST", "/tenders", {
+      clientId: suiteClientId,
       projectName: `server-intg-tender-${randomUUID().slice(0, 8)}`,
       body: "Build a ledger for a bakery.",
     });
@@ -590,11 +603,29 @@ describe("Client channel", () => {
     expect(tender.message).toMatchObject({ projectId, direction: "inbound", kind: "tender" });
   });
 
-  test("POST /tenders creates the project row and its tender message together", async () => {
-    const project = await pool.query("SELECT name FROM projects WHERE id = $1", [projectId]);
-    expect(project.rows).toHaveLength(1);
+  test("POST /tenders creates the project row, owned by the named client, and its tender message together", async () => {
+    const project = await pool.query("SELECT client_id FROM projects WHERE id = $1", [projectId]);
+    expect(project.rows).toEqual([{ client_id: suiteClientId }]);
     const rows = await pool.query("SELECT direction, kind, body FROM client_messages WHERE project_id = $1", [projectId]);
     expect(rows.rows).toEqual([{ direction: "inbound", kind: "tender", body: "Build a ledger for a bakery." }]);
+  });
+
+  test("POST /tenders requires a clientId and 404s an unknown one; no project is created", async () => {
+    const projectName = `server-intg-tender-refused-${randomUUID().slice(0, 8)}`;
+    expect((await req("POST", "/tenders", { projectName, body: "x" })).status).toBe(400);
+    expect((await req("POST", "/tenders", { clientId: randomUUID(), projectName, body: "x" })).status).toBe(404);
+    const rows = await pool.query("SELECT id FROM projects WHERE name = $1", [projectName]);
+    expect(rows.rowCount).toBe(0);
+  });
+
+  test("a body that is not JSON is 400 with a generic error; the parser detail stays in the log", async () => {
+    const res = await app.request(`/projects/${projectId}/messages`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "request body is not valid JSON" });
   });
 
   test("an inbound post persists a typed row and returns 201", async () => {
@@ -669,6 +700,13 @@ describe("Client channel", () => {
     }
     const missing = await req("POST", `/projects/${projectId}/messages`, { kind: "answer", body: "x" });
     expect(missing.status).toBe(400);
+
+    const again = await req("POST", `/projects/${projectId}/messages`, {
+      kind: "answer",
+      body: "USD.",
+      inReplyTo: question.id,
+    });
+    expect(again.status).toBe(409);
   });
 
   test("GET lists both directions oldest first, and ?since= keeps only later rows", async () => {

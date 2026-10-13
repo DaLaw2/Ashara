@@ -79,6 +79,7 @@ export const KNOWN_LLM_SITES = [
   "decomposition",
   "stack-derivation",
   "alignment",
+  "liaison-intake",
   "escalation",
 ] as const;
 

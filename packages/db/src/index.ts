@@ -12,7 +12,10 @@ export { ProjectRepository, createProjectWithVision } from "./repositories/proje
 export type { CreatedProject } from "./repositories/project.js";
 export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
 export type { CreatedTender } from "./repositories/client-message.js";
+export { recordTenderIntake, closeTenderAfterFailedIntake } from "./repositories/tender-intake.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
+export { ClientRepository } from "./repositories/client.js";
+export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
 export { EventStoreRepository } from "./repositories/event-store.js";
 export { CostRepository } from "./repositories/cost.js";
 export type { CapabilityCostEstimate } from "./repositories/cost.js";

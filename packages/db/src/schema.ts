@@ -24,13 +24,26 @@ function timestamptz(name?: string) {
 }
 
 // ---------------------------------------------------------------------------
-// projects (migration 014, K3 Project Record)
+// clients (migration 018): who a project belongs to and a session acts for
+// ---------------------------------------------------------------------------
+
+export const clients = pgTable("clients", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  name: text().notNull().unique(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// projects (migration 014, K3 Project Record; client_id since migration 018)
 // ---------------------------------------------------------------------------
 
 export const projects = pgTable("projects", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   name: text().notNull(),
   status: varchar({ length: 20 }).notNull().default("active"),
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
 
@@ -344,6 +357,9 @@ export const clientMessages = pgTable(
     inReplyTo: uuid("in_reply_to").references((): AnyPgColumn => clientMessages.id),
     consumedAt: timestamptz("consumed_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
+    // Migration 019: failed intake attempts of a tender, with the last one's error.
+    intakeAttempts: integer("intake_attempts").notNull().default(0),
+    intakeLastError: text("intake_last_error"),
   },
   (t) => ({
     projectCreatedIdx: index("idx_client_messages_project_created").on(t.projectId, t.createdAt),
@@ -358,7 +374,26 @@ export const clientSessions = pgTable("client_sessions", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   // SHA-256 of the cookie's token, hex; the token itself is never stored.
   tokenHash: text("token_hash").notNull().unique(),
+  // The one client this session acts for (migration 018).
+  clientId: uuid("client_id")
+    .notNull()
+    .references(() => clients.id),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   expiresAt: timestamptz("expires_at").notNull(),
   revokedAt: timestamptz("revoked_at"),
 });
+
+// ---------------------------------------------------------------------------
+// client_login_failures (migration 018): the login throttle's evidence
+// ---------------------------------------------------------------------------
+
+export const clientLoginFailures = pgTable(
+  "client_login_failures",
+  {
+    clientName: text("client_name").notNull(),
+    failedAt: timestamptz("failed_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    nameTimeIdx: index("idx_client_login_failures_name_time").on(t.clientName, t.failedAt),
+  }),
+);

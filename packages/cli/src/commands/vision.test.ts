@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, test, beforeEach, afterEach } from "vitest";
 import { tryCreateLLM, VisionError, runVision } from "./vision.js";
 
@@ -57,7 +58,7 @@ describe("tryCreateLLM fail-closed (no LLM configuration)", () => {
             "Build a bare-metal Rust firmware for STM32 microcontrollers " +
             "that drives an SPI flash chip and exposes a UART debug console";
 
-        const error = await runVision(firmwareVision).catch((e: unknown) => e);
+        const error = await runVision(firmwareVision, { clientId: randomUUID() }).catch((e: unknown) => e);
 
         expect(error).toBeInstanceOf(VisionError);
         expect(error).toHaveProperty("kind", "llm_unavailable");

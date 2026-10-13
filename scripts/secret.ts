@@ -15,6 +15,7 @@
 import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
 import { SecretNotFound, SecretStore, loadMasterKey, resolveKeyFilePath } from "@ashara/security";
 import { importLegacyCredentials } from "./import-legacy-credentials.js";
+import { readPipedStdin } from "./read-piped-stdin.js";
 
 class SecretCliUsageError extends Error {
   constructor(detail: string) {
@@ -26,16 +27,6 @@ class SecretCliUsageError extends Error {
   }
 }
 
-async function readPipedStdin(): Promise<string> {
-  if (process.stdin.isTTY) {
-    throw new SecretCliUsageError("put refuses to read the value from a terminal, where it would echo.");
-  }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-  return Buffer.concat(chunks).toString("utf-8").replace(/\r?\n$/, "");
-}
 
 function requireName(name: string | undefined, command: string): string {
   if (name === undefined) {
@@ -57,7 +48,7 @@ async function main(): Promise<void> {
     switch (command) {
       case "put": {
         const secretName = requireName(name, command);
-        await store.put(secretName, await readPipedStdin());
+        await store.put(secretName, await readPipedStdin("secret.ts put"));
         console.log(`Stored secret "${secretName}" under key ${key.id}.`);
         return;
       }

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import type { ClientMessageRepository, CreatedTender, ProjectRepository } from "@ashara/db";
+import type {
+  ClientMessageRepository,
+  ClientRepository,
+  CreatedTender,
+  ProjectRepository,
+} from "@ashara/db";
 import {
   ClientPostSchema,
   TenderSchema,
@@ -7,6 +12,7 @@ import {
   replyTargetProblem,
 } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 
 // The client channel's handlers (K1), shared by the operator's bearer API and the
 // web client's session API (ADR-076) so both speak through one validation path.
@@ -16,13 +22,23 @@ import { parseProjectId } from "@ashara/shared";
 export interface ClientChannelDeps {
   readonly projectRepo: ProjectRepository;
   readonly clientMessageRepo: ClientMessageRepository;
-  /** A tender: the project row and its inbound 'tender' message in one transaction (K1). */
-  readonly createTender: (projectName: string, body: string) => Promise<CreatedTender>;
+  readonly clientRepo: ClientRepository;
+  /** A tender: the project row, owned by `clientId`, and its inbound 'tender' message in one transaction (K1). */
+  readonly createTender: (clientId: string, projectName: string, body: string) => Promise<CreatedTender>;
 }
+
+/**
+ * Who is asking. The operator (bearer token) reaches every project and names the
+ * client a tender is for; a client (web session) reaches only its own projects,
+ * and another client's project is indistinguishable from one that does not exist.
+ */
+export type ChannelCaller =
+  | { readonly kind: "operator" }
+  | { readonly kind: "client"; readonly clientId: string };
 
 /** A handler's verdict, rendered as JSON by whichever route called it. */
 export interface ChannelResponse {
-  readonly status: 200 | 201 | 400 | 404;
+  readonly status: 200 | 201 | 400 | 404 | 409;
   readonly body: unknown;
 }
 
@@ -39,6 +55,15 @@ export async function readJsonBody(read: () => Promise<unknown>): Promise<JsonBo
   }
 }
 
+/**
+ * The parser's detail goes to the server log only: it can echo fragments of the
+ * request back, and the caller learns nothing from it it did not send.
+ */
+export function notJson(operation: string, json: { readonly reason: string }): ChannelResponse {
+  console.warn(`[client-channel] ${operation}: request body is not JSON: ${json.reason}`);
+  return { status: 400, body: { error: "request body is not valid JSON" } };
+}
+
 const ProjectIdParamSchema = z.uuid();
 
 // `since` is an instant; one without an offset would be read in the server's zone.
@@ -46,17 +71,54 @@ const MessagesQuerySchema = z.strictObject({
   since: z.iso.datetime({ offset: true }).optional(),
 });
 
-function notJson(json: { readonly reason: string }): ChannelResponse {
-  return { status: 400, body: { error: `request body is not JSON: ${json.reason}` } };
+/** The operator's tender names the client it is for; a client's tender is its own. */
+const OperatorTenderSchema = TenderSchema.extend({ clientId: z.uuid() });
+
+function projectNotFound(projectId: string): ChannelResponse {
+  return { status: 404, body: { error: `project not found: ${projectId}` } };
 }
 
-export async function submitTender(deps: ClientChannelDeps, json: JsonBody): Promise<ChannelResponse> {
-  if (!json.ok) return notJson(json);
-  const parsed = TenderSchema.safeParse(json.value);
-  if (!parsed.success) {
-    return { status: 400, body: { error: "invalid tender", issues: parsed.error.issues } };
+/** Whether `caller` may see this project. Absent and not-yours answer the same. */
+async function visibleProject(deps: ClientChannelDeps, caller: ChannelCaller, projectId: ProjectId): Promise<boolean> {
+  const project = await deps.projectRepo.get(projectId);
+  if (project === null) return false;
+  return caller.kind === "operator" || project.clientId === caller.clientId;
+}
+
+async function tenderOwner(
+  deps: ClientChannelDeps,
+  caller: ChannelCaller,
+  value: unknown,
+): Promise<
+  | { readonly ok: true; readonly clientId: string; readonly projectName: string; readonly body: string }
+  | { readonly ok: false; readonly response: ChannelResponse }
+> {
+  if (caller.kind === "client") {
+    const parsed = TenderSchema.safeParse(value);
+    if (!parsed.success) {
+      return { ok: false, response: { status: 400, body: { error: "invalid tender", issues: parsed.error.issues } } };
+    }
+    return { ok: true, clientId: caller.clientId, ...parsed.data };
   }
-  const created = await deps.createTender(parsed.data.projectName, parsed.data.body);
+  const parsed = OperatorTenderSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, response: { status: 400, body: { error: "invalid tender", issues: parsed.error.issues } } };
+  }
+  if ((await deps.clientRepo.get(parsed.data.clientId)) === null) {
+    return { ok: false, response: { status: 404, body: { error: `client not found: ${parsed.data.clientId}` } } };
+  }
+  return { ok: true, ...parsed.data };
+}
+
+export async function submitTender(
+  deps: ClientChannelDeps,
+  caller: ChannelCaller,
+  json: JsonBody,
+): Promise<ChannelResponse> {
+  if (!json.ok) return notJson("submit tender", json);
+  const owner = await tenderOwner(deps, caller, json.value);
+  if (!owner.ok) return owner.response;
+  const created = await deps.createTender(owner.clientId, owner.projectName, owner.body);
   return {
     status: 201,
     body: { projectId: created.project.id, message: parseClientMessage(created.message) },
@@ -65,6 +127,7 @@ export async function submitTender(deps: ClientChannelDeps, json: JsonBody): Pro
 
 export async function postClientMessage(
   deps: ClientChannelDeps,
+  caller: ChannelCaller,
   projectIdParam: string,
   json: JsonBody,
 ): Promise<ChannelResponse> {
@@ -74,22 +137,27 @@ export async function postClientMessage(
   }
   const projectId = parseProjectId(idParsed.data);
 
-  if (!json.ok) return notJson(json);
+  if (!json.ok) return notJson("post client message", json);
   const parsed = ClientPostSchema.safeParse(json.value);
   if (!parsed.success) {
     return { status: 400, body: { error: "invalid client message", issues: parsed.error.issues } };
   }
   const post = parsed.data;
 
-  if (!(await deps.projectRepo.get(projectId))) {
-    return { status: 404, body: { error: `project not found: ${projectId}` } };
-  }
+  if (!(await visibleProject(deps, caller, projectId))) return projectNotFound(projectId);
 
   let inReplyTo: string | null = null;
   if (post.kind === "answer") {
     const target = await deps.clientMessageRepo.findById(post.inReplyTo);
     const problem = replyTargetProblem(projectId, target ? parseClientMessage(target) : null);
     if (problem !== null) return { status: 400, body: { error: problem } };
+    const earlier = await deps.clientMessageRepo.findAnswerTo(post.inReplyTo);
+    if (earlier !== null) {
+      return {
+        status: 409,
+        body: { error: `question ${post.inReplyTo} is already answered by message ${earlier.id}` },
+      };
+    }
     inReplyTo = post.inReplyTo;
   }
 
@@ -104,6 +172,7 @@ export async function postClientMessage(
 
 export async function listClientMessages(
   deps: ClientChannelDeps,
+  caller: ChannelCaller,
   projectIdParam: string,
   rawQuery: Record<string, string>,
 ): Promise<ChannelResponse> {
@@ -117,9 +186,7 @@ export async function listClientMessages(
     return { status: 400, body: { error: "invalid query", issues: query.error.issues } };
   }
 
-  if (!(await deps.projectRepo.get(projectId))) {
-    return { status: 404, body: { error: `project not found: ${projectId}` } };
-  }
+  if (!(await visibleProject(deps, caller, projectId))) return projectNotFound(projectId);
 
   const since = query.data.since === undefined ? undefined : new Date(query.data.since);
   const rows = await deps.clientMessageRepo.listByProject(projectId, since);

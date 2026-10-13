@@ -1,5 +1,6 @@
-// The web client (ADR-076): login, session, CSRF and page headers against the
-// composed app, then a recorded headless-browser session against a live port.
+// The web client (ADR-076): login, throttling, session, client scoping, CSRF and
+// page headers against the composed app, then a recorded headless-browser session
+// against a live port.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -10,10 +11,12 @@ import { serve } from "@hono/node-server";
 import type { ServerType } from "@hono/node-server";
 import type { Hono } from "hono";
 import { chromium } from "playwright";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import {
+  ClientLoginFailureRepository,
   ClientMessageRepository,
+  ClientRepository,
   ClientSessionRepository,
   ConfigRepository,
   createDb,
@@ -27,7 +30,7 @@ import {
   VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { generateKeyFileContent, loadMasterKey, SecretStore } from "@ashara/security";
+import { clientAccessCodeSecretName, generateKeyFileContent, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import type { Database } from "../../db/src/connection.js";
 import { buildApp } from "./app.js";
@@ -37,19 +40,32 @@ import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "./web-client.js";
 import type { WebClientDeps } from "./web-client.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
+const NONCE = randomUUID().slice(0, 8);
 const API_TOKEN = `web-client-test-${randomUUID()}`;
-const ACCESS_CODE = randomBytes(24).toString("hex");
 const FAILURE_DELAY_MS = 150;
 const TTL_SECONDS = 3600;
+const THROTTLE = { maxFailures: 5, windowSeconds: 15 * 60 };
 const CLIENT_HEADER = { "X-Ashara-Client": "1" };
+const JSON_HEADERS = { "Content-Type": "application/json", ...CLIENT_HEADER };
+
+interface TestClient {
+  readonly id: string;
+  readonly name: string;
+  readonly code: string;
+}
 
 let db: Database;
 let keyDir: string;
 let secretStore: SecretStore;
-let accessCodeSecretName: string;
 let app: Hono;
-const createdProjectIds: string[] = [];
-const issuedTokens: string[] = [];
+/** Client A: the default for every test that does not name one. */
+let alice: TestClient;
+/** Client B: must never see A's projects. */
+let bob: TestClient;
+/** A client used only by the throttling test, so its failures disturb nothing else. */
+let throttled: TestClient;
+const ourClientIds: string[] = [];
+const ourClientNames: string[] = [];
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -69,13 +85,10 @@ function appDeps(): AppDeps {
     devSessionRepo: new DevSessionRepository(db),
     visionRepo: new VisionRepository(db),
     projectRepo: new ProjectRepository(db),
-    createProject: (name, vision) => createProjectWithVision(db, name, vision),
+    createProject: (clientId, name, vision) => createProjectWithVision(db, clientId, name, vision),
     clientMessageRepo: new ClientMessageRepository(db),
-    createTender: async (projectName, body) => {
-      const created = await createProjectWithTender(db, projectName, body);
-      createdProjectIds.push(created.project.id);
-      return created;
-    },
+    clientRepo: new ClientRepository(db),
+    createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
     configRepo: new ConfigRepository(db),
     secretStore,
     runner: { wake: () => {} },
@@ -88,10 +101,12 @@ function webClientDeps(overrides: Partial<WebClientDeps> = {}): WebClientDeps {
   return {
     projectRepo: base.projectRepo,
     clientMessageRepo: base.clientMessageRepo,
+    clientRepo: base.clientRepo,
     createTender: base.createTender,
     secrets: secretStore,
-    accessCodeSecretName,
     sessionRepo: new ClientSessionRepository(db),
+    loginFailureRepo: new ClientLoginFailureRepository(db),
+    loginThrottle: THROTTLE,
     sessionTtlSeconds: TTL_SECONDS,
     loginFailureDelayMs: FAILURE_DELAY_MS,
     assets: loadWebClientAssets(),
@@ -103,24 +118,38 @@ function build(overrides: Partial<WebClientDeps> = {}): Hono {
   return buildApp(API_TOKEN, appDeps(), webClientDeps(overrides));
 }
 
-async function login(target: Hono, url = "http://localhost/client/login"): Promise<Response> {
-  return target.request(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...CLIENT_HEADER },
-    body: JSON.stringify({ code: ACCESS_CODE }),
-  });
+async function newClient(label: string, storeCode = true): Promise<TestClient> {
+  const name = `web-client-test-${NONCE}-${label}`;
+  const row = await new ClientRepository(db).create(name);
+  ourClientIds.push(row.id);
+  ourClientNames.push(name);
+  const code = randomBytes(24).toString("hex");
+  if (storeCode) await secretStore.put(clientAccessCodeSecretName(row.id), code);
+  return { id: row.id, name, code };
+}
+
+async function attempt(
+  target: Hono,
+  client: string,
+  code: string,
+  url = "http://localhost/client/login",
+): Promise<Response> {
+  return target.request(url, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ client, code }) });
+}
+
+function login(target: Hono, who: TestClient = alice, url?: string): Promise<Response> {
+  return attempt(target, who.name, who.code, url);
 }
 
 function sessionToken(response: Response): string {
   const cookie = response.headers.get("set-cookie") ?? "";
   const match = new RegExp(`${CLIENT_SESSION_COOKIE}=([^;]+)`).exec(cookie);
   if (match === null) throw new Error(`no ${CLIENT_SESSION_COOKIE} cookie in: ${cookie}`);
-  issuedTokens.push(match[1]);
   return match[1];
 }
 
-async function loggedIn(target: Hono = app): Promise<string> {
-  const response = await login(target);
+async function loggedIn(who: TestClient = alice, target: Hono = app): Promise<string> {
+  const response = await login(target, who);
   expect(response.status).toBe(204);
   return sessionToken(response);
 }
@@ -132,7 +161,7 @@ function withSession(token: string, extra: Record<string, string> = {}): Record<
 async function postTender(token: string, projectName: string, body: string): Promise<string> {
   const response = await app.request("/client/api/tenders", {
     method: "POST",
-    headers: withSession(token, { "Content-Type": "application/json", ...CLIENT_HEADER }),
+    headers: withSession(token, JSON_HEADERS),
     body: JSON.stringify({ projectName, body }),
   });
   expect(response.status).toBe(201);
@@ -153,28 +182,31 @@ function memoryReader(entries: Record<string, string>): SecretReader {
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
-  // A throwaway master key and a secret name only this run owns: the owner's
-  // client/access_code, if one is stored, is never read or overwritten.
+  // A throwaway master key; every secret written is named by a client id this run created.
   keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-web-client-key-"));
   const keyFile = path.join(keyDir, "secret.key");
   fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
   secretStore = new SecretStore(new SecretRepository(db), loadMasterKey(keyFile));
-  accessCodeSecretName = `test-web-client/${randomUUID()}/access_code`;
-  await secretStore.put(accessCodeSecretName, ACCESS_CODE);
+  alice = await newClient("alice");
+  bob = await newClient("bob");
+  throttled = await newClient("throttled");
   app = build();
 });
 
 afterAll(async () => {
   const pool = db.$client;
-  await pool.query("DELETE FROM secrets WHERE name = $1", [accessCodeSecretName]);
+  const ours = "SELECT id FROM projects WHERE client_id = ANY($1)";
+  // Replies first: in_reply_to references another row of the same table.
+  await pool.query(`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${ours})`, [
+    ourClientIds,
+  ]);
+  await pool.query(`DELETE FROM client_messages WHERE project_id IN (${ours})`, [ourClientIds]);
+  await pool.query("DELETE FROM projects WHERE client_id = ANY($1)", [ourClientIds]);
+  await pool.query("DELETE FROM client_sessions WHERE client_id = ANY($1)", [ourClientIds]);
+  await pool.query("DELETE FROM secrets WHERE name = ANY($1)", [ourClientIds.map(clientAccessCodeSecretName)]);
+  await pool.query("DELETE FROM client_login_failures WHERE client_name LIKE $1", [`web-client-test-${NONCE}-%`]);
+  await pool.query("DELETE FROM clients WHERE id = ANY($1)", [ourClientIds]);
   fs.rmSync(keyDir, { recursive: true, force: true });
-  await pool.query("DELETE FROM client_sessions WHERE token_hash = ANY($1)", [issuedTokens.map(sha256Hex)]);
-  for (const id of createdProjectIds) {
-    // Replies first: in_reply_to references another row of the same table.
-    await pool.query("DELETE FROM client_messages WHERE project_id = $1 AND in_reply_to IS NOT NULL", [id]);
-    await pool.query("DELETE FROM client_messages WHERE project_id = $1", [id]);
-    await pool.query("DELETE FROM projects WHERE id = $1", [id]);
-  }
   await pool.end();
 });
 
@@ -201,13 +233,13 @@ describe("web client page", () => {
     expect(js).not.toContain("Authorization");
     for (const text of [html, js]) {
       expect(text).not.toContain(API_TOKEN);
-      expect(text).not.toContain(ACCESS_CODE);
+      expect(text).not.toContain(alice.code);
     }
   });
 });
 
 describe("client login", () => {
-  test("the right code sets an HttpOnly SameSite=Strict session cookie; Secure off loopback http", async () => {
+  test("the right name and code set an HttpOnly SameSite=Strict session bound to that client", async () => {
     const local = await login(app);
     expect(local.status).toBe(204);
     const cookie = local.headers.get("set-cookie") ?? "";
@@ -217,53 +249,109 @@ describe("client login", () => {
     expect(cookie).toContain(`Max-Age=${TTL_SECONDS}`);
     expect(cookie).not.toContain("Secure");
     const token = sessionToken(local);
-    const row = await db.$client.query("SELECT token_hash FROM client_sessions WHERE token_hash = $1", [
+    const row = await db.$client.query("SELECT client_id FROM client_sessions WHERE token_hash = $1", [
       sha256Hex(token),
     ]);
-    expect(row.rowCount).toBe(1);
+    expect(row.rows).toEqual([{ client_id: alice.id }]);
 
-    const remote = await login(app, "https://ashara.example/client/login");
+    const remote = await login(app, alice, "https://ashara.example/client/login");
     expect(remote.status).toBe(204);
     expect(remote.headers.get("set-cookie")).toContain("Secure");
-    sessionToken(remote);
   });
 
-  test("a wrong code is 401 after the fixed delay and sets no cookie", async () => {
-    const started = Date.now();
-    const response = await app.request("/client/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...CLIENT_HEADER },
-      body: JSON.stringify({ code: `${ACCESS_CODE}x` }),
-    });
-    expect(response.status).toBe(401);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(FAILURE_DELAY_MS - 5);
-    expect(response.headers.get("set-cookie")).toBeNull();
+  test("an unknown client and a wrong code are indistinguishable: same 401 body, both after the delay", async () => {
+    const answers: { status: number; body: unknown; elapsed: number; cookie: string | null }[] = [];
+    for (const [client, code] of [
+      [alice.name, `${alice.code}x`],
+      [`web-client-test-${NONCE}-nobody`, alice.code],
+      [alice.name, bob.code],
+    ]) {
+      const started = Date.now();
+      const response = await attempt(app, client, code);
+      answers.push({
+        status: response.status,
+        body: await response.json(),
+        elapsed: Date.now() - started,
+        cookie: response.headers.get("set-cookie"),
+      });
+    }
+    for (const answer of answers) {
+      expect(answer.status).toBe(401);
+      expect(answer.body).toEqual(answers[0].body);
+      expect(answer.elapsed).toBeGreaterThanOrEqual(FAILURE_DELAY_MS - 5);
+      expect(answer.cookie).toBeNull();
+    }
+    // A success purges the client's failures, so these leave no throttle behind.
+    await loggedIn(alice);
+    const left = await db.$client.query("SELECT count(*)::int AS n FROM client_login_failures WHERE client_name = $1", [
+      alice.name,
+    ]);
+    expect(left.rows).toEqual([{ n: 0 }]);
   });
 
-  test("no access code in the store is 503 naming the secret and the command; never a default", async () => {
-    const unconfigured = build({ secrets: memoryReader({}) });
-    const response = await login(unconfigured);
-    expect(response.status).toBe(503);
-    const body = await response.json();
-    expect(body).toMatchObject({ error: expect.stringContaining(`scripts/secret.ts put ${accessCodeSecretName}`) });
-    expect(response.headers.get("set-cookie")).toBeNull();
+  test("5 failures within the window close login with 429, across an app re-create, until the window passes", async () => {
+    for (let i = 0; i < THROTTLE.maxFailures; i++) {
+      expect((await attempt(app, throttled.name, `wrong-${i}`)).status).toBe(401);
+    }
+    const blocked = await login(app, throttled);
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("set-cookie")).toBeNull();
+
+    // A restart keeps the throttle: a new app over the same database still refuses.
+    const restarted = build();
+    expect((await login(restarted, throttled)).status).toBe(429);
+
+    // Once the failures fall out of the window, the right code works again.
+    await db.$client.query(
+      "UPDATE client_login_failures SET failed_at = now() - make_interval(secs => $2) WHERE client_name = $1",
+      [throttled.name, THROTTLE.windowSeconds + 60],
+    );
+    expect((await login(restarted, throttled)).status).toBe(204);
+  });
+
+  test("a client with no stored code is 503 with a generic body; the operator instruction goes to the log", async () => {
+    const codeless = await newClient("codeless", false);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const response = await login(app, codeless);
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(text).not.toContain("secret");
+      expect(text).not.toContain(codeless.id);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      const logged = errors.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logged).toContain(`scripts/secret.ts put ${clientAccessCodeSecretName(codeless.id)}`);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   test("a stored code too short to resist guessing is 503, even when presented exactly", async () => {
-    const weak = build({ secrets: memoryReader({ [accessCodeSecretName]: "short" }) });
-    const response = await weak.request("/client/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...CLIENT_HEADER },
-      body: JSON.stringify({ code: "short" }),
-    });
-    expect(response.status).toBe(503);
+    const weak = build({ secrets: memoryReader({ [clientAccessCodeSecretName(alice.id)]: "short" }) });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await attempt(weak, alice.name, "short")).status).toBe(503);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("a login body that is not JSON is 400 with a generic error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const response = await app.request("/client/login", { method: "POST", headers: JSON_HEADERS, body: "{code" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "request body is not valid JSON" });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("login without the client header is refused as a possible cross-site request", async () => {
     const response = await app.request("/client/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: ACCESS_CODE }),
+      body: JSON.stringify({ client: alice.name, code: alice.code }),
     });
     expect(response.status).toBe(403);
   });
@@ -310,13 +398,21 @@ describe("client session", () => {
     expect(row.rows[0]?.revoked_at).toBeInstanceOf(Date);
   });
 
-  test("an expired session is rejected", async () => {
+  test("an expired session is rejected, and a login deletes sessions ended over a day ago", async () => {
     const token = await loggedIn();
     await db.$client.query(
       "UPDATE client_sessions SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 second' WHERE token_hash = $1",
       [sha256Hex(token)],
     );
     expect((await app.request("/client/api/projects", { headers: withSession(token) })).status).toBe(401);
+
+    await db.$client.query(
+      "UPDATE client_sessions SET created_at = now() - interval '3 days', expires_at = now() - interval '2 days' WHERE token_hash = $1",
+      [sha256Hex(token)],
+    );
+    await loggedIn();
+    const gone = await db.$client.query("SELECT 1 FROM client_sessions WHERE token_hash = $1", [sha256Hex(token)]);
+    expect(gone.rowCount).toBe(0);
   });
 
   test("a state-changing request without the client header is 403 and writes nothing", async () => {
@@ -338,7 +434,7 @@ describe("client session", () => {
     for (const kind of ["question", "report"]) {
       const response = await app.request(`/client/api/projects/${projectId}/messages`, {
         method: "POST",
-        headers: withSession(token, { "Content-Type": "application/json", ...CLIENT_HEADER }),
+        headers: withSession(token, JSON_HEADERS),
         body: JSON.stringify({ kind, body: "spoofed" }),
       });
       expect(response.status).toBe(400);
@@ -348,10 +444,85 @@ describe("client session", () => {
       [projectId],
     );
     expect(outbound.rowCount).toBe(0);
+  });
+});
 
-    const listed = await app.request("/client/api/projects", { headers: withSession(token) });
-    const projects: unknown = await listed.json();
-    expect(projects).toEqual(expect.arrayContaining([expect.objectContaining({ id: projectId })]));
+describe("client scoping", () => {
+  test("client B cannot list, read, answer or stop client A's project: 404 each, nothing written", async () => {
+    const aliceToken = await loggedIn(alice);
+    const bobToken = await loggedIn(bob);
+    const aliceProject = await postTender(aliceToken, `web-client-scope-a-${randomUUID()}`, "A's project");
+    const bobProject = await postTender(bobToken, `web-client-scope-b-${randomUUID()}`, "B's project");
+    const owner = await db.$client.query("SELECT client_id FROM projects WHERE id = $1", [aliceProject]);
+    expect(owner.rows).toEqual([{ client_id: alice.id }]);
+
+    const question = await new ClientMessageRepository(db).insertOutbound({
+      projectId: parseProjectId(aliceProject),
+      kind: "question",
+      body: "Which colour?",
+      inReplyTo: null,
+    });
+
+    const listed = z
+      .array(z.object({ id: z.string() }))
+      .parse(await (await app.request("/client/api/projects", { headers: withSession(bobToken) })).json())
+      .map((p) => p.id);
+    expect(listed).toContain(bobProject);
+    expect(listed).not.toContain(aliceProject);
+
+    const unknown = await app.request(`/client/api/projects/${randomUUID()}/messages`, {
+      headers: withSession(bobToken),
+    });
+    const read = await app.request(`/client/api/projects/${aliceProject}/messages`, {
+      headers: withSession(bobToken),
+    });
+    expect(read.status).toBe(404);
+    expect(unknown.status).toBe(404);
+
+    for (const post of [
+      { kind: "answer", body: "Red.", inReplyTo: question.id },
+      { kind: "stop", body: "Stop it." },
+      { kind: "change", body: "Change it." },
+    ]) {
+      const response = await app.request(`/client/api/projects/${aliceProject}/messages`, {
+        method: "POST",
+        headers: withSession(bobToken, JSON_HEADERS),
+        body: JSON.stringify(post),
+      });
+      expect(response.status).toBe(404);
+    }
+    const inbound = await db.$client.query(
+      "SELECT kind FROM client_messages WHERE project_id = $1 AND direction = 'inbound'",
+      [aliceProject],
+    );
+    expect(inbound.rows).toEqual([{ kind: "tender" }]);
+
+    // The owner still reaches it.
+    const own = await app.request(`/client/api/projects/${aliceProject}/messages`, {
+      headers: withSession(aliceToken),
+    });
+    expect(own.status).toBe(200);
+  });
+
+  test("a question answered once rejects a second answer with 409", async () => {
+    const token = await loggedIn(alice);
+    const projectId = await postTender(token, `web-client-answer-twice-${randomUUID()}`, "build it");
+    const question = await new ClientMessageRepository(db).insertOutbound({
+      projectId: parseProjectId(projectId),
+      kind: "question",
+      body: "Which encoding?",
+      inReplyTo: null,
+    });
+    const answer = async (body: string): Promise<Response> =>
+      app.request(`/client/api/projects/${projectId}/messages`, {
+        method: "POST",
+        headers: withSession(token, JSON_HEADERS),
+        body: JSON.stringify({ kind: "answer", body, inReplyTo: question.id }),
+      });
+    expect((await answer("UTF-8.")).status).toBe(201);
+    expect((await answer("Latin-1.")).status).toBe(409);
+    const answers = await db.$client.query("SELECT body FROM client_messages WHERE in_reply_to = $1", [question.id]);
+    expect(answers.rows).toEqual([{ body: "UTF-8." }]);
   });
 });
 
@@ -398,15 +569,18 @@ describe("recorded web-client session", () => {
       expect(probeErrors.every((e) => e.includes("status of 401"))).toBe(true);
       step(`session probe before login: ${probeErrors.length} expected 401 console entry`);
 
-      await page.fill("#login-code", ACCESS_CODE);
+      await page.fill("#login-client", alice.name);
+      await page.fill("#login-code", alice.code);
       await page.click("#login-form button[type=submit]");
       await page.locator("#workspace").waitFor();
       const cookies = await context.cookies();
       const session = cookies.find((c) => c.name === CLIENT_SESSION_COOKIE);
       expect(session).toMatchObject({ httpOnly: true, sameSite: "Strict" });
-      if (session !== undefined) issuedTokens.push(session.value);
       expect(await page.evaluate(() => document.cookie)).toBe("");
-      step("logged in with the access code; session cookie is HttpOnly, SameSite=Strict, invisible to page script");
+      step(
+        `logged in as client "${alice.name}" with its access code; session cookie is HttpOnly, SameSite=Strict, ` +
+          "invisible to page script",
+      );
 
       const projectName = `web-client-session-${randomUUID().slice(0, 8)}`;
       const tenderBody = "Build a command-line tool that counts words in a file.";
@@ -416,7 +590,7 @@ describe("recorded web-client session", () => {
       await page.locator("#timeline li.kind-tender .msg-body", { hasText: tenderBody }).waitFor();
       step(`sent tender for project "${projectName}"; it appears in the timeline`);
 
-      const projects = await new ProjectRepository(db).list();
+      const projects = await new ProjectRepository(db).listByClient(alice.id);
       const project = projects.find((p) => p.name === projectName);
       if (project === undefined) throw new Error(`project ${projectName} not found after the tender`);
 

@@ -1,6 +1,7 @@
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import type { LiaisonIntake } from "./acl/engagement-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, TaskCostInfo, TaskResult } from "./types.js";
@@ -81,7 +82,7 @@ function notExercised(label: string): () => never {
   return () => { throw new Error(`${label}: not exercised`); };
 }
 
-function buildDeps(): CoreLoopDeps {
+function buildDeps(liaisonIntake: LiaisonIntake = { runPending: async () => [] }): CoreLoopDeps {
   const workItemRepo: WorkItemRepository = {
     findById: async () => null,
     save: async () => {},
@@ -114,6 +115,7 @@ function buildDeps(): CoreLoopDeps {
     developmentService: {},
     runStateStore,
     failureRouter: {},
+    liaisonIntake,
   } as unknown as CoreLoopDeps;
 }
 
@@ -217,5 +219,38 @@ describe("CoreLoop batch dispatch parallelism", () => {
     expect(cycleResult.results).toHaveLength(2);
     const statuses = cycleResult.results.map((r) => r.status).sort();
     expect(statuses).toEqual(["completed", "failed"]);
+  });
+});
+
+describe("CoreLoop tender intake", () => {
+  test("a cycle runs the Liaison's intake before dispatching work", async () => {
+    const order: string[] = [];
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+      order.push("dispatch");
+      return {
+        result: { taskId: task.id, status: "completed" as const, detail: "ok" },
+        costInfo: { costUsd: 0.01, inputTokens: 1, outputTokens: 1, modelId: "test", attempt: 1 },
+      };
+    });
+    const runPending = vi.fn(async () => {
+      order.push("intake");
+      return [];
+    });
+
+    await new CoreLoop(buildDeps({ runPending })).runCycle();
+
+    expect(runPending).toHaveBeenCalledTimes(1);
+    expect(order[0]).toBe("intake");
+    expect(order.filter((e) => e === "dispatch")).toHaveLength(2);
+  });
+
+  test("an intake store failure fails the cycle instead of being skipped", async () => {
+    const deps = buildDeps({
+      runPending: async () => {
+        throw new Error("client_messages unreachable");
+      },
+    });
+    await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/client_messages unreachable/);
+    expect(mockProcessTask).not.toHaveBeenCalled();
   });
 });

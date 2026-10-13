@@ -9,6 +9,8 @@ export {
   alignmentReask,
 } from "./alignment.js";
 export type { AlignmentLLM } from "./alignment.js";
+export { TenderIntake } from "./intake.js";
+export type { IntakeOutcome, IntakeStore, LiaisonIntake } from "./intake.js";
 export {
   ClientPostSchema,
   TenderSchema,

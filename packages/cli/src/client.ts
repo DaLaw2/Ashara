@@ -81,6 +81,8 @@ export interface SessionInfo {
 }
 
 export interface CreateVisionRequest {
+    /** The client the project belongs to (migration 018); the server answers 404 for an unknown one. */
+    readonly clientId: string;
     readonly projectName: string;
     readonly visionText: string;
     readonly summary: string;

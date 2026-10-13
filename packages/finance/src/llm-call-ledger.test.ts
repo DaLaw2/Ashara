@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { buildGateway, calculateCost } from "@ashara/llm-gateway";
 import type { GatewayConfig, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
@@ -119,12 +119,14 @@ beforeAll(async () => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   db = createDb(DATABASE_URL);
   calls = new LlmCallRepository(db);
-  projectId = (await new ProjectRepository(db).create(`llm-calls-test-${NONCE}`)).id;
+  const client = await new ClientRepository(db).create(`llm-calls-test-${NONCE}`);
+  projectId = (await new ProjectRepository(db).create(`llm-calls-test-${NONCE}`, client.id)).id;
 });
 
 afterAll(async () => {
   await clearRows();
   await db.execute(sql`DELETE FROM projects WHERE name = ${`llm-calls-test-${NONCE}`}`);
+  await db.execute(sql`DELETE FROM clients WHERE name = ${`llm-calls-test-${NONCE}`}`);
   await db.$client.end();
 });
 

@@ -11,6 +11,7 @@ import { ConfigRepository } from "./repositories/config.js";
 import { KnowledgeRepository } from "./repositories/knowledge.js";
 import { CostRepository } from "./repositories/cost.js";
 import { FailedApproachRepository } from "./repositories/failed-approach.js";
+import { ClientRepository } from "./repositories/client.js";
 import { ProjectRepository } from "./repositories/project.js";
 import {
   devSessions,
@@ -46,10 +47,13 @@ const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
 // Every work item and vision needs a project (migration 014); this suite owns one.
 let testProjectId: ProjectId;
+let testClientId: string;
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
-  testProjectId = (await new ProjectRepository(db).create(`db-intg-${randomUUID().slice(0, 8)}`)).id;
+  const nonce = randomUUID().slice(0, 8);
+  testClientId = (await new ClientRepository(db).create(`db-intg-${nonce}`)).id;
+  testProjectId = (await new ProjectRepository(db).create(`db-intg-${nonce}`, testClientId)).id;
 });
 
 afterAll(async () => {
@@ -90,6 +94,7 @@ async function cleanupAll() {
     await db.execute(sql`DELETE FROM work_items WHERE id = ${id}`);
   }
   await db.execute(sql`DELETE FROM projects WHERE id = ${testProjectId}`);
+  await db.execute(sql`DELETE FROM clients WHERE id = ${testClientId}`);
 }
 
 // ---------------------------------------------------------------------------

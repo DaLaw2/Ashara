@@ -11,11 +11,12 @@
 allow = []
 
 [orchestrator]
-# planning + development reachable ONLY through acl/ (enforced by restrict below)
+# planning + development + engagement reachable ONLY through acl/ (enforced by restrict below)
 # db is infrastructure, not a BC boundary
-allow = ["shared", "db", "planning", "development"]
+allow = ["shared", "db", "planning", "development", "engagement"]
 restrict.planning = ["src/acl/*.ts"]
 restrict.development = ["src/acl/*.ts"]
+restrict.engagement = ["src/acl/*.ts"]
 
 [planning]
 allow = ["shared", "llm-gateway"]

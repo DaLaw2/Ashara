@@ -2,24 +2,27 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
-import type { MiddlewareHandler } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
-import type { ClientSessionRepository } from "@ashara/db";
+import type { ClientLoginFailureRepository, ClientSessionRepository } from "@ashara/db";
+import { MIN_CLIENT_ACCESS_CODE_LENGTH, clientAccessCodeSecretName } from "@ashara/security";
 import {
   listClientMessages,
+  notJson,
   postClientMessage,
   readJsonBody,
   submitTender,
 } from "./client-channel.js";
-import type { ClientChannelDeps } from "./client-channel.js";
+import type { ChannelCaller, ClientChannelDeps } from "./client-channel.js";
 import type { SecretReader } from "./secrets.js";
 
 // The web client (ADR-076): one static page, one plain script and one stylesheet,
 // served by this process with no build step, plus a session-authenticated copy of
 // the client channel under /client/api. The browser never holds the server's API
-// token: a client logs in with the access code from the secret store and gets a
-// random session token in an HttpOnly cookie, stored server-side only as its hash.
+// token: a client logs in with its name and its own access code from the secret
+// store, and gets a random session token in an HttpOnly cookie, stored server-side
+// only as its hash and bound to that one client (migration 018).
 
 /** @testseam web-client.test.ts reads and sends the session cookie by name */
 export const CLIENT_SESSION_COOKIE = "ashara_client";
@@ -31,11 +34,8 @@ export const CLIENT_SESSION_COOKIE = "ashara_client";
  */
 const CLIENT_REQUEST_HEADER = "X-Ashara-Client";
 
-/**
- * Below this length the fixed failure delay is no defence: the code itself must
- * carry the entropy. Login refuses to run against a shorter stored code.
- */
-const MIN_ACCESS_CODE_LENGTH = 20;
+/** Ended sessions are kept this long after they end, then deleted at the next login. */
+const ENDED_SESSION_RETENTION_SECONDS = 24 * 60 * 60;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
@@ -49,7 +49,13 @@ const CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'none'",
 ].join("; ");
 
-const LoginSchema = z.strictObject({ code: z.string().min(1) });
+const LoginSchema = z.strictObject({
+  client: z.string().min(1).max(200),
+  code: z.string().min(1).max(1024),
+});
+
+/** Unknown client and wrong code answer with this one body, after the same delay. */
+const LOGIN_REJECTED = { error: "client name or access code rejected" };
 
 export interface WebClientAssets {
   readonly html: string;
@@ -65,6 +71,14 @@ class WebClientAssetMissing extends Error {
   ) {
     super(`web client asset could not be read: ${path}`, options);
     this.name = "WebClientAssetMissing";
+  }
+}
+
+/** A /client/api handler ran without the client id the session middleware sets. */
+class ClientSessionMissing extends Error {
+  constructor(readonly path: string) {
+    super(`web client route ${path} ran without a session client id; the session middleware did not run`);
+    this.name = "ClientSessionMissing";
   }
 }
 
@@ -87,16 +101,24 @@ export function loadWebClientAssets(): WebClientAssets {
   };
 }
 
+/** At `maxFailures` failed logins for one client name within `windowSeconds`, login answers 429. */
+interface LoginThrottle {
+  readonly maxFailures: number;
+  readonly windowSeconds: number;
+}
+
 export interface WebClientDeps extends ClientChannelDeps {
   readonly secrets: SecretReader;
-  /** Production passes CLIENT_ACCESS_CODE_SECRET_NAME; a test passes a name it owns. */
-  readonly accessCodeSecretName: string;
   readonly sessionRepo: ClientSessionRepository;
+  readonly loginFailureRepo: ClientLoginFailureRepository;
+  readonly loginThrottle: LoginThrottle;
   readonly sessionTtlSeconds: number;
-  /** Every failed login waits this long before answering (M1's only brute-force brake). */
+  /** Every failed login waits this long before answering. */
   readonly loginFailureDelayMs: number;
   readonly assets: WebClientAssets;
 }
+
+type WebClientEnv = { Variables: { clientId: string } };
 
 function sha256(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
@@ -128,6 +150,16 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function sessionClientId(c: Context<WebClientEnv>): string {
+  const clientId = c.get("clientId");
+  if (typeof clientId !== "string" || clientId === "") throw new ClientSessionMissing(c.req.path);
+  return clientId;
+}
+
+function sessionCaller(c: Context<WebClientEnv>): ChannelCaller {
+  return { kind: "client", clientId: sessionClientId(c) };
+}
+
 const requireClientHeader: MiddlewareHandler = async (c, next) => {
   if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header(CLIENT_REQUEST_HEADER) !== "1") {
     return c.json(
@@ -146,8 +178,39 @@ const securityHeaders: MiddlewareHandler = async (c, next) => {
   c.header("Cache-Control", "no-store");
 };
 
-export function createWebClientRoutes(deps: WebClientDeps): Hono {
-  const app = new Hono();
+/**
+ * The stored code for this client, or why login cannot run: absent, or too short
+ * to carry the entropy a login needs. The browser gets a generic 503; the
+ * operator's instruction goes to the server log.
+ */
+async function storedAccessCode(
+  deps: WebClientDeps,
+  client: { readonly id: string; readonly name: string },
+): Promise<{ readonly ok: true; readonly code: string } | { readonly ok: false }> {
+  const secretName = clientAccessCodeSecretName(client.id);
+  const fix =
+    `The operator stores one with \`read -rs C && printf '%s' "$C" | npx tsx scripts/secret.ts put ${secretName}\` ` +
+    `(at least ${MIN_CLIENT_ACCESS_CODE_LENGTH} characters).`;
+  if (!(await deps.secrets.has(secretName))) {
+    console.error(
+      `[web-client] login refused for client "${client.name}" (${client.id}): the secret store has no "${secretName}". ${fix}`,
+    );
+    return { ok: false };
+  }
+  const code = await deps.secrets.get(secretName);
+  if (code.length < MIN_CLIENT_ACCESS_CODE_LENGTH) {
+    console.error(
+      `[web-client] login refused for client "${client.name}" (${client.id}): the stored "${secretName}" is shorter ` +
+        `than ${MIN_CLIENT_ACCESS_CODE_LENGTH} characters, too weak to guard a login. ${fix}`,
+    );
+    return { ok: false };
+  }
+  return { ok: true, code };
+}
+
+export function createWebClientRoutes(deps: WebClientDeps): Hono<WebClientEnv> {
+  const app = new Hono<WebClientEnv>();
+  const { maxFailures, windowSeconds } = deps.loginThrottle;
 
   // "/client/*" also matches "/client" itself.
   app.use("/client/*", securityHeaders);
@@ -155,9 +218,11 @@ export function createWebClientRoutes(deps: WebClientDeps): Hono {
 
   app.use("/client/api/*", async (c, next) => {
     const token = getCookie(c, CLIENT_SESSION_COOKIE);
-    if (token === undefined || (await deps.sessionRepo.findActive(hashToken(token))) === null) {
+    const session = token === undefined ? null : await deps.sessionRepo.findActive(hashToken(token));
+    if (session === null) {
       return c.json({ error: "no valid client session; log in at /client" }, 401);
     }
+    c.set("clientId", session.clientId);
     return next();
   });
 
@@ -172,43 +237,50 @@ export function createWebClientRoutes(deps: WebClientDeps): Hono {
 
   app.post("/client/login", async (c) => {
     const json = await readJsonBody(() => c.req.json());
-    if (!json.ok) return c.json({ error: `request body is not JSON: ${json.reason}` }, 400);
+    if (!json.ok) return c.json(notJson("client login", json).body, 400);
     const parsed = LoginSchema.safeParse(json.value);
     if (!parsed.success) {
       return c.json({ error: "invalid login", issues: parsed.error.issues }, 400);
     }
+    const { client: clientName, code } = parsed.data;
 
-    const name = deps.accessCodeSecretName;
-    if (!(await deps.secrets.has(name))) {
-      return c.json(
-        {
-          error:
-            `client login is not configured: the secret store has no "${name}". The operator sets it with ` +
-            `\`read -rs C && printf '%s' "$C" | npx tsx scripts/secret.ts put ${name}\`.`,
-        },
-        503,
+    // Counted by the name as presented, so an unknown name is throttled exactly
+    // like a known one and the 429 reveals nothing about which names exist.
+    const recentFailures = await deps.loginFailureRepo.countWithin(clientName, windowSeconds);
+    if (recentFailures >= maxFailures) {
+      console.warn(
+        `[web-client] login throttled for client name "${clientName}": ${recentFailures} failures ` +
+          `within ${windowSeconds}s (limit ${maxFailures})`,
       );
-    }
-    const expected = await deps.secrets.get(name);
-    if (expected.length < MIN_ACCESS_CODE_LENGTH) {
-      return c.json(
-        {
-          error:
-            `client login is refused: the stored "${name}" is shorter than ${MIN_ACCESS_CODE_LENGTH} ` +
-            "characters, too weak for a login whose only brake is a fixed failure delay. " +
-            `The operator replaces it with \`npx tsx scripts/secret.ts put ${name}\`.`,
-        },
-        503,
-      );
+      c.header("Retry-After", String(windowSeconds));
+      return c.json({ error: "too many failed logins; try again later" }, 429);
     }
 
-    if (!codeMatches(parsed.data.code, expected)) {
+    const client = await deps.clientRepo.findByName(clientName);
+    let expected: string | null = null;
+    if (client !== null) {
+      const stored = await storedAccessCode(deps, client);
+      if (!stored.ok) return c.json({ error: "client login is temporarily unavailable" }, 503);
+      expected = stored.code;
+    }
+
+    // An unknown client still pays for a comparison, so both rejections do the same work.
+    const matched = codeMatches(code, expected ?? "") && expected !== null;
+    if (client === null || !matched) {
+      await deps.loginFailureRepo.record(clientName, windowSeconds);
+      console.warn(
+        `[web-client] login failed for client name "${clientName}": ` +
+          `${client === null ? "no such client" : "wrong access code"} ` +
+          `(${recentFailures + 1} within ${windowSeconds}s, limit ${maxFailures})`,
+      );
       await delay(deps.loginFailureDelayMs);
-      return c.json({ error: "access code rejected" }, 401);
+      return c.json(LOGIN_REJECTED, 401);
     }
 
+    await deps.loginFailureRepo.purge(clientName);
+    await deps.sessionRepo.deleteEndedBefore(ENDED_SESSION_RETENTION_SECONDS);
     const token = randomBytes(32).toString("base64url");
-    await deps.sessionRepo.create(hashToken(token), deps.sessionTtlSeconds);
+    await deps.sessionRepo.create(hashToken(token), client.id, deps.sessionTtlSeconds);
     setCookie(c, CLIENT_SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: "Strict",
@@ -233,23 +305,23 @@ export function createWebClientRoutes(deps: WebClientDeps): Hono {
   });
 
   app.post("/client/api/tenders", async (c) => {
-    const result = await submitTender(deps, await readJsonBody(() => c.req.json()));
+    const result = await submitTender(deps, sessionCaller(c), await readJsonBody(() => c.req.json()));
     return c.json(result.body, result.status);
   });
 
   app.get("/client/api/projects", async (c) => {
-    const projects = await deps.projectRepo.list();
+    const projects = await deps.projectRepo.listByClient(sessionClientId(c));
     return c.json(projects.map((p) => ({ id: p.id, name: p.name, status: p.status, createdAt: p.createdAt })));
   });
 
   app.get("/client/api/projects/:projectId/messages", async (c) => {
-    const result = await listClientMessages(deps, c.req.param("projectId"), c.req.query());
+    const result = await listClientMessages(deps, sessionCaller(c), c.req.param("projectId"), c.req.query());
     return c.json(result.body, result.status);
   });
 
   app.post("/client/api/projects/:projectId/messages", async (c) => {
     const json = await readJsonBody(() => c.req.json());
-    const result = await postClientMessage(deps, c.req.param("projectId"), json);
+    const result = await postClientMessage(deps, sessionCaller(c), c.req.param("projectId"), json);
     return c.json(result.body, result.status);
   });
 

@@ -3,6 +3,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
+import { ClientRepository } from "./client.js";
 import { ProjectRepository, createProjectWithVision } from "./project.js";
 import { VisionRepository } from "./vision.js";
 
@@ -15,6 +16,8 @@ const NONCE = randomUUID().slice(0, 8);
 let db: Database;
 let projects: ProjectRepository;
 let visions: VisionRepository;
+let clientId: string;
+let otherClientId: string;
 
 /** The message of `err` and of every error in its `cause` chain, joined. */
 function messageChain(err: unknown): string {
@@ -40,10 +43,12 @@ function vision(text: string) {
   return { visionText: text, summary: `summary of ${text}` };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   db = createDb(DATABASE_URL);
   projects = new ProjectRepository(db);
   visions = new VisionRepository(db);
+  clientId = (await new ClientRepository(db).create(`project-test-${NONCE}-client`)).id;
+  otherClientId = (await new ClientRepository(db).create(`project-test-${NONCE}-other`)).id;
 });
 
 afterAll(async () => {
@@ -52,6 +57,7 @@ afterAll(async () => {
     sql`DELETE FROM vision_documents WHERE project_id IN (SELECT id FROM projects WHERE name LIKE ${pattern})`,
   );
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
+  await db.execute(sql`DELETE FROM clients WHERE name LIKE ${pattern}`);
   await db.$client.end();
 });
 
@@ -60,8 +66,8 @@ describe("Project Record vision versions", () => {
   let b: ProjectId;
 
   beforeAll(async () => {
-    a = (await createProjectWithVision(db, `project-test-${NONCE}-a`, vision("vision A1"))).project.id;
-    b = (await createProjectWithVision(db, `project-test-${NONCE}-b`, vision("vision B1"))).project.id;
+    a = (await createProjectWithVision(db, clientId, `project-test-${NONCE}-a`, vision("vision A1"))).project.id;
+    b = (await createProjectWithVision(db, clientId, `project-test-${NONCE}-b`, vision("vision B1"))).project.id;
   });
 
   test("each project's first vision is version 1", async () => {
@@ -83,7 +89,7 @@ describe("Project Record vision versions", () => {
   });
 
   test("a project with no vision reads as null", async () => {
-    const empty = await projects.create(`project-test-${NONCE}-empty`);
+    const empty = await projects.create(`project-test-${NONCE}-empty`, clientId);
     expect(await visions.getCurrent(empty.id)).toBeNull();
     expect((await projects.get(empty.id))?.status).toBe("active");
   });
@@ -92,7 +98,7 @@ describe("Project Record vision versions", () => {
     const name = `project-test-${NONCE}-rollback`;
     await expect(
       // Postgres rejects a NUL byte in text, so the vision insert fails after the project insert.
-      createProjectWithVision(db, name, { visionText: "x\u0000y", summary: "s" }),
+      createProjectWithVision(db, clientId, name, { visionText: "x\u0000y", summary: "s" }),
     ).rejects.toThrow();
     const rows = await db.execute(sql`SELECT 1 FROM projects WHERE name = ${name}`);
     expect(rows.rows).toHaveLength(0);
@@ -116,5 +122,21 @@ describe("project_id is required", () => {
       ),
     );
     expect(message).toMatch(/null value in column "project_id"/);
+  });
+});
+
+describe("Project ownership", () => {
+  test("listByClient returns only that client's projects", async () => {
+    const mine = await projects.create(`project-test-${NONCE}-mine`, clientId);
+    const theirs = await projects.create(`project-test-${NONCE}-theirs`, otherClientId);
+    const listed = (await projects.listByClient(clientId)).map((p) => p.id);
+    expect(listed).toContain(mine.id);
+    expect(listed).not.toContain(theirs.id);
+    expect((await projects.get(theirs.id))?.clientId).toBe(otherClientId);
+  });
+
+  test("a project for no existing client is refused by the foreign key", async () => {
+    const message = await failureOf(() => projects.create(`project-test-${NONCE}-orphan`, randomUUID()));
+    expect(message).toMatch(/foreign key/);
   });
 });

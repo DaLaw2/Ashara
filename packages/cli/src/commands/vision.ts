@@ -256,12 +256,14 @@ async function postWorkItems(
  * on the CLI); when absent, `process.stdin.isTTY` remains the fallback mode
  * selector, exactly as before this flag existed. Passing `noInteract: true`
  * always forces the non-interactive, default-assumption path regardless of TTY.
+ * `clientId` is the client the project is created for; it has no default.
  */
 export interface RunVisionOptions {
     readonly noInteract?: boolean;
+    readonly clientId: string;
 }
 
-export async function runVision(visionText: string, options: RunVisionOptions = {}): Promise<number> {
+export async function runVision(visionText: string, options: RunVisionOptions): Promise<number> {
     if (!visionText.trim()) {
         throw new VisionError("empty_vision", "Vision text must not be empty");
     }
@@ -353,6 +355,7 @@ export async function runVision(visionText: string, options: RunVisionOptions = 
         }
 
         projectId = await client.createVision({
+            clientId: options.clientId,
             projectName: visionText.length > 80 ? visionText.slice(0, 80) : visionText,
             visionText,
             summary: alignment.visionSummary,

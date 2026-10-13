@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
 import { ClientMessageNotConsumable, ClientMessageRepository, createProjectWithTender } from "./client-message.js";
+import { ClientRepository } from "./client.js";
 import { ProjectRepository } from "./project.js";
 
 // Against the shared dev database: every row here belongs to a project this suite
@@ -17,6 +18,7 @@ const NONCE = randomUUID().slice(0, 8);
 let db: Database;
 let messages: ClientMessageRepository;
 let projectId: ProjectId;
+let clientId: string;
 
 const NotificationSchema = z.object({
   type: z.literal("client_message"),
@@ -46,7 +48,8 @@ async function failureOf(run: () => Promise<unknown>): Promise<string> {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   messages = new ClientMessageRepository(db);
-  projectId = (await new ProjectRepository(db).create(`client-message-test-${NONCE}`)).id;
+  clientId = (await new ClientRepository(db).create(`client-message-test-${NONCE}-client`)).id;
+  projectId = (await new ProjectRepository(db).create(`client-message-test-${NONCE}`, clientId)).id;
 });
 
 afterAll(async () => {
@@ -55,6 +58,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
+  await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
 });
 
@@ -147,10 +151,21 @@ describe("ClientMessageRepository", () => {
     await expect(messages.markConsumed(outbound.id)).rejects.toBeInstanceOf(ClientMessageNotConsumable);
   });
 
+  test("a question takes one answer: a second is refused by the unique index", async () => {
+    const question = await messages.insertOutbound({ projectId, kind: "question", body: "Which?", inReplyTo: null });
+    expect(await messages.findAnswerTo(question.id)).toBeNull();
+    const answer = await messages.insertInbound({ projectId, kind: "answer", body: "This.", inReplyTo: question.id });
+    expect((await messages.findAnswerTo(question.id))?.id).toBe(answer.id);
+    const message = await failureOf(() =>
+      messages.insertInbound({ projectId, kind: "answer", body: "That.", inReplyTo: question.id }),
+    );
+    expect(message).toContain("uq_client_messages_one_answer_per_question");
+  });
+
   test("a tender whose message insert fails leaves no project row", async () => {
     const name = `client-message-test-${NONCE}-rollback`;
     // Postgres rejects a NUL byte in text, so the message insert fails after the project insert.
-    await expect(createProjectWithTender(db, name, "x\u0000y")).rejects.toThrow();
+    await expect(createProjectWithTender(db, clientId, name, "x\u0000y")).rejects.toThrow();
     const rows = await db.execute(sql`SELECT 1 FROM projects WHERE name = ${name}`);
     expect(rows.rows).toHaveLength(0);
   });

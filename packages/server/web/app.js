@@ -18,6 +18,7 @@
     logout: el("logout"),
     login: el("login"),
     loginForm: el("login-form"),
+    loginClient: el("login-client"),
     loginCode: el("login-code"),
     workspace: el("workspace"),
     tenderForm: el("tender-form"),
@@ -65,7 +66,19 @@
     });
     if (response.status === 401 && path.startsWith("/client/api/")) throw new Unauthorized();
     const text = await response.text();
-    const data = text === "" ? null : JSON.parse(text);
+    let data = null;
+    if (text !== "") {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // A proxy or crash page answers in HTML: report the status, not a SyntaxError.
+        throw new Error(
+          response.ok
+            ? `unexpected non-JSON response (HTTP ${response.status})`
+            : `request failed with HTTP ${response.status}`,
+        );
+      }
+    }
     if (!response.ok) throw new Error(errorText(data, response.status));
     return data;
   }
@@ -90,7 +103,8 @@
     ui.logout.hidden = true;
     ui.login.hidden = false;
     showStatus(message);
-    ui.loginCode.focus();
+    if (ui.loginClient.value === "") ui.loginClient.focus();
+    else ui.loginCode.focus();
   }
 
   async function showWorkspace() {
@@ -229,7 +243,7 @@
 
   ui.loginForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    api("POST", "/client/login", { code: ui.loginCode.value })
+    api("POST", "/client/login", { client: ui.loginClient.value.trim(), code: ui.loginCode.value })
       .then(() => {
         ui.loginCode.value = "";
         return showWorkspace();

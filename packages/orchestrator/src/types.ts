@@ -7,6 +7,7 @@ import type {
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItemRepository, FailureRouter } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
+import type { LiaisonIntake } from "./acl/engagement-acl.js";
 import type { EventLogger } from "./event-logger.js";
 import type { RunStateStore } from "./run-state.js";
 
@@ -131,4 +132,6 @@ export interface CoreLoopDeps {
   readonly failureRouter: FailureRouter;
   /** Durable home of the budget's spend. */
   readonly runStateStore: RunStateStore;
+  /** The Liaison's tender intake, run each cycle before work-item gating. */
+  readonly liaisonIntake: LiaisonIntake;
 }

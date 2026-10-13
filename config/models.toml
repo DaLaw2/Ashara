@@ -61,6 +61,9 @@
 "agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
 "decomposition" = "deepseek-v4-flash"
 "alignment" = "deepseek-v4-flash"
+# The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
+# the CLI's alignment call, kept on the same model.
+"liaison-intake" = "deepseek-v4-flash"
 # Stack derivation (ADR-046) is a once-per-project, temperature-0 label
 # extraction -- cheap and deterministic, and keeping it on DeepSeek preserves
 # the Anthropic reserve stated above.

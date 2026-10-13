@@ -22,6 +22,8 @@ import {
   createProjectWithVision,
   ClientMessageRepository,
   ClientSessionRepository,
+  ClientRepository,
+  ClientLoginFailureRepository,
   createProjectWithTender,
 } from "@ashara/db";
 import {
@@ -39,6 +41,7 @@ import {
   tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService } from "@ashara/development";
+import { TenderIntake } from "@ashara/engagement";
 import type {
   StackDerivationScope,
   SessionStore,
@@ -64,7 +67,7 @@ import {
 } from "@ashara/llm-gateway";
 import type { GatewayCatalog, LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger } from "@ashara/finance";
-import { CLIENT_ACCESS_CODE_SECRET_NAME, SecretStore } from "@ashara/security";
+import { SecretStore } from "@ashara/security";
 import type { ProjectId, WorkItemId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
 import { ASHARA_CONTROL_DIR, parseCapabilityLevel, RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
@@ -84,11 +87,14 @@ import {
   resolveProviderCredentials,
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
+import { createIntakeStore } from "./intake-store.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
-// working day; a failed login answers after one second.
+// working day; a failed login answers after one second; five failures for one
+// client name within fifteen minutes close login for that name until the window passes.
 const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
+const CLIENT_LOGIN_THROTTLE = { maxFailures: 5, windowSeconds: 15 * 60 };
 
 async function main(): Promise<void> {
   // Phase 1: the master key, before anything else — without it no credential
@@ -444,6 +450,11 @@ async function main(): Promise<void> {
     eventLogger,
     failureRouter,
     runStateStore: runStateRepo,
+    liaisonIntake: new TenderIntake({
+      llm: llmGateway,
+      store: createIntakeStore(db),
+      onAttempt: ladderAttemptSink,
+    }),
   };
 
   const coreLoop = new CoreLoop(coreLoopDeps);
@@ -456,9 +467,10 @@ async function main(): Promise<void> {
     devSessionRepo,
     visionRepo,
     projectRepo,
-    createProject: (name, vision) => createProjectWithVision(db, name, vision),
+    createProject: (clientId, name, vision) => createProjectWithVision(db, clientId, name, vision),
     clientMessageRepo: new ClientMessageRepository(db),
-    createTender: (projectName, body) => createProjectWithTender(db, projectName, body),
+    clientRepo: new ClientRepository(db),
+    createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
     configRepo,
     secretStore,
     runner,
@@ -477,10 +489,12 @@ async function main(): Promise<void> {
   const app = buildApp(config.apiToken, appDeps, {
     projectRepo: appDeps.projectRepo,
     clientMessageRepo: appDeps.clientMessageRepo,
+    clientRepo: appDeps.clientRepo,
     createTender: appDeps.createTender,
     secrets: secretStore,
-    accessCodeSecretName: CLIENT_ACCESS_CODE_SECRET_NAME,
     sessionRepo: new ClientSessionRepository(db),
+    loginFailureRepo: new ClientLoginFailureRepository(db),
+    loginThrottle: CLIENT_LOGIN_THROTTLE,
     sessionTtlSeconds: CLIENT_SESSION_TTL_SECONDS,
     loginFailureDelayMs: CLIENT_LOGIN_FAILURE_DELAY_MS,
     assets: loadWebClientAssets(),

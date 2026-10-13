@@ -1,10 +1,21 @@
 import type { RunState } from "@ashara/shared";
+import type { IntakeOutcome } from "./acl/engagement-acl.js";
 import type { WorkItem } from "./acl/planning-acl.js";
 import { PlanningService, DependencyGraph } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, TaskResult } from "./types.js";
 import { BudgetTracker, extractCapability } from "./budget.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { openRun, persistRun } from "./run-state.js";
+
+/** Failures are logged at warn by the Liaison itself, with their attempt count. */
+function logIntake(outcome: IntakeOutcome): void {
+  if (outcome.kind === "recorded") {
+    console.log(
+      `[liaison-intake] tender ${outcome.tenderId}: vision v1 written for project ${outcome.projectId}, ` +
+        `${outcome.questions} question(s) posted`,
+    );
+  }
+}
 
 export class CoreLoop {
   private readonly deps: CoreLoopDeps;
@@ -32,6 +43,10 @@ export class CoreLoop {
     if (this.budget.isExhausted()) {
       this.reportBudgetExhaustion();
     } else {
+      // Tenders first: a project's intake comes before any work on it. Skipped
+      // with dispatch at the budget cap, since intake is an LLM call too.
+      for (const outcome of await deps.liaisonIntake.runPending()) logIntake(outcome);
+
       const eligible = await PlanningService.gate(deps.workItemRepo);
       if (eligible.length > 0) {
         const graph = await DependencyGraph.load(deps.workItemRepo);
