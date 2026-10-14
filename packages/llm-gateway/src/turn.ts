@@ -1,10 +1,10 @@
 import { jsonSchema } from "ai";
-import type { AssistantModelMessage, JSONSchema7, ModelMessage, Tool } from "ai";
+import type { AssistantModelMessage, JSONSchema7, ModelMessage, SystemModelMessage, Tool } from "ai";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { TurnToolExecutable } from "./errors.js";
 import type { ResolvedModel } from "./gateway.js";
-import type { CostMeasurement, TokenUsage } from "./types.js";
+import type { CostMeasurement, ProviderType, TokenUsage } from "./types.js";
 
 /**
  * One tool as the model sees it: its description and input schema, nothing
@@ -78,6 +78,49 @@ const SDK_TO_TURN: Readonly<Record<z.infer<typeof SdkFinishReasonSchema>, TurnFi
 export function mapFinishReason(sdkFinishReason: unknown): TurnFinishReason {
   const parsed = SdkFinishReasonSchema.safeParse(sdkFinishReason);
   return parsed.success ? SDK_TO_TURN[parsed.data] : "provider_error";
+}
+
+/** Anthropic's 5-minute ephemeral cache, the one whose write rate the catalog prices. */
+const ANTHROPIC_CACHE_BREAKPOINT = { anthropic: { cacheControl: { type: "ephemeral" } } } as const;
+
+function withCacheBreakpoint<M extends ModelMessage>(message: M): M {
+  return {
+    ...message,
+    providerOptions: {
+      ...message.providerOptions,
+      anthropic: { ...message.providerOptions?.["anthropic"], ...ANTHROPIC_CACHE_BREAKPOINT.anthropic },
+    },
+  };
+}
+
+/**
+ * The system prompt and conversation of one turn, with Anthropic prompt-cache
+ * breakpoints when the provider type is `anthropic`; every other type gets them
+ * unchanged. An attempt re-sends its whole conversation every turn, so without
+ * a breakpoint every turn pays full input price for the same prefix (W5 trial
+ * 2026-10-14: 0 cache reads over 569,810 Claude input tokens). Anthropic caches
+ * the prefix up to each breakpoint, in the order tools, system, messages:
+ * - the system prompt: tools and system, stable for the whole attempt;
+ * - the message before the latest assistant message: where the previous turn's
+ *   last breakpoint was, so this turn reads what that turn wrote;
+ * - the last message: written now for the next turn to read.
+ * Three of Anthropic's four breakpoints. A prefix shorter than the model's
+ * minimum cacheable length is simply not cached; the request is unchanged.
+ */
+export function cachedTurnPrompt(
+  providerType: ProviderType,
+  system: string,
+  messages: readonly ModelMessage[],
+): { readonly system: string | SystemModelMessage; readonly messages: ModelMessage[] } {
+  if (providerType !== "anthropic") return { system, messages: [...messages] };
+  const last = messages.length - 1;
+  let latestAssistant = -1;
+  for (const [i, message] of messages.entries()) if (message.role === "assistant") latestAssistant = i;
+  const previousEnd = latestAssistant > 0 ? latestAssistant - 1 : -1;
+  return {
+    system: { role: "system", content: system, providerOptions: ANTHROPIC_CACHE_BREAKPOINT },
+    messages: messages.map((message, i) => (i === last || i === previousEnd ? withCacheBreakpoint(message) : message)),
+  };
 }
 
 /** Builds the SDK tool set: schemas only, so the SDK has nothing to execute. */

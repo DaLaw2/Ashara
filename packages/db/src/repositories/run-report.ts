@@ -48,6 +48,7 @@ const SessionRowSchema = z.object({
   createdAt: z.coerce.date(),
   resolvedBy: z.string().nullable(),
   endOutcome: z.string().nullable(),
+  endDetail: z.string().nullable(),
   attemptPromptDigest: z.string().nullable(),
   attemptTerminal: z.string().nullable(),
   attemptTurns: z.number().int().nullable(),
@@ -77,6 +78,9 @@ const CallTotalsRowSchema = z.object({
  * - `open`: the phase is not terminal (in flight, or a crash orphan not yet reconciled).
  * - `reconciled`: a reconciler (`by`), not the session itself, wrote its terminal phase.
  * - `predates-attempt-columns`: created before migration 046 applied.
+ * - `completed-without-attempt`: it completed with no attempt (its work already delivered on main,
+ *   W5 trial D5); `endDetail` is its terminal write's own detail, null on a row written before a
+ *   completion recorded one.
  * - `unrecorded`: it ended without an attempt outcome reaching it (before the model, or the attempt
  *   threw); `endOutcome` is its terminal write's outcome, when one was written.
  */
@@ -85,6 +89,7 @@ type AttemptRecord =
   | { readonly kind: "open" }
   | { readonly kind: "reconciled"; readonly by: string }
   | { readonly kind: "predates-attempt-columns" }
+  | { readonly kind: "completed-without-attempt"; readonly endDetail: string | null }
   | { readonly kind: "unrecorded"; readonly endOutcome: string | null };
 
 /** One dev session of a task and what its row records about its attempt. */
@@ -135,6 +140,7 @@ function attemptRecord(row: z.infer<typeof SessionRowSchema>, attemptColumnsSinc
   if (!TERMINAL_SESSION_PHASES.some((phase) => phase === row.phase)) return { kind: "open" };
   if (row.resolvedBy !== null) return { kind: "reconciled", by: row.resolvedBy };
   if (row.createdAt < attemptColumnsSince) return { kind: "predates-attempt-columns" };
+  if (row.phase === "Completed") return { kind: "completed-without-attempt", endDetail: row.endDetail };
   return { kind: "unrecorded", endOutcome: row.endOutcome };
 }
 
@@ -167,7 +173,8 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
   const sessionRows = await db.execute(sql`
     SELECT s.id AS "sessionId", s.task_id AS "taskId", s.phase, s.environment_version AS "environmentVersion",
            s.created_at AS "createdAt", s.verification_result ->> 'resolvedBy' AS "resolvedBy",
-           s.verification_result ->> 'outcome' AS "endOutcome", s.attempt_prompt_digest AS "attemptPromptDigest",
+           s.verification_result ->> 'outcome' AS "endOutcome",
+           s.verification_result ->> 'detail' AS "endDetail",s.attempt_prompt_digest AS "attemptPromptDigest",
            s.attempt_terminal AS "attemptTerminal", s.attempt_turns AS "attemptTurns",
            s.attempt_provider AS "attemptProvider", s.attempt_model AS "attemptModel", s.attempt_cell AS "attemptCell"
     FROM dev_sessions s JOIN work_items w ON w.id = s.task_id

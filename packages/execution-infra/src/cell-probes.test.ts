@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { probeOutboundHost } from "./cell-probes.js";
+import { probeCredentialRead, probeOutboundHost } from "./cell-probes.js";
+import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
 function cellPrinting(stdout: string): Cell {
@@ -11,6 +12,32 @@ function cellPrinting(stdout: string): Cell {
     teardown: () => Promise.resolve(),
   };
 }
+
+describe("probeCredentialRead", () => {
+  it("sends the probed paths on stdin, never in argv, which reaches the cell's environment (W5 D4)", async () => {
+    const calls: Array<{ argv: readonly string[]; stdin: unknown }> = [];
+    const path = "/home/someone/project/.env";
+    const cell: Cell = {
+      ...cellPrinting(""),
+      exec: (argv, options) => {
+        calls.push({ argv, stdin: options.stdin });
+        const result: ExecResult = {
+          exitCode: 0, stdout: `path ${path} absent\n`, stderr: "", timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false,
+        };
+        return Promise.resolve(result);
+      },
+    };
+    const verdict = await probeCredentialRead(cell, { paths: [path], values: [{ name: "INIT_CWD", value: "/home/someone/project" }] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.argv.some((arg) => arg.includes(path))).toBe(false);
+    expect(calls[0]?.stdin).toBe(`${path}\n`);
+    expect(verdict).toMatchObject({ held: true });
+  });
+
+  it("refuses a path that cannot be sent as one line rather than probe something else", async () => {
+    await expect(probeCredentialRead(cellPrinting(""), { paths: ["/a\n/b"], values: [] })).rejects.toThrow(InvalidCellRequest);
+  });
+});
 
 describe("probeOutboundHost", () => {
   const isolated = "routes: 0\nconnect: wget exit 1\n";

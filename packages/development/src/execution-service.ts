@@ -527,7 +527,8 @@ export interface SessionStore {
   /** `environmentVersion` is the version the dispatch's cells were built from; null on the BaseCell. */
   insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null): Promise<void>;
   /** `attempt`: the session's Workplace attempt, or null when no attempt outcome reached it (ended before the model, or the attempt threw). */
-  complete(sessionId: string, attempt: SessionAttempt | null): Promise<void>;
+  /** `attemptEnd`: the completion's own detail, so a session that completed with no attempt says why. */
+  complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: { readonly outcome: "completed"; readonly detail: string }): Promise<void>;
   fail(sessionId: string, attemptEnd: unknown, attempt: SessionAttempt | null): Promise<void>;
 }
 
@@ -3211,7 +3212,9 @@ export async function withSessionLifecycle(
   }
 
   if (outcome.status === "completed") {
-    await closeSession(taskId, sessionId, () => sessionStore.complete(sessionId, slot.attempt));
+    await closeSession(taskId, sessionId, () =>
+      sessionStore.complete(sessionId, slot.attempt, { outcome: "completed", detail: outcome.detail }),
+    );
   } else {
     await closeSession(taskId, sessionId, () =>
       sessionStore.fail(

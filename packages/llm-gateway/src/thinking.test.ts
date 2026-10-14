@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { InvalidThinkingPolicy } from "./errors.js";
-import { loadThinkingPolicyFromToml, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
+import { loadThinkingPolicyFromToml, outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 
 function writeToml(body: string): string {
@@ -47,5 +47,19 @@ describe("loadThinkingPolicyFromToml", () => {
     expect(thinkingProviderOptions("deepseek", thinkingModeFor(policy, "agent-runner"))).toEqual({
       deepseek: { thinking: { type: "enabled" } },
     });
+  });
+});
+
+describe("outputBudget", () => {
+  test("thinking on adds the reasoning allowance on top of the answer's bound, within DeepSeek's ceiling", () => {
+    const on = outputBudget("deepseek", "on", 4096);
+    expect(on.reasoningAllowance).toBeGreaterThan(0);
+    expect(on.maxOutputTokens).toBe(4096 + on.reasoningAllowance);
+    expect(outputBudget("deepseek", "on", 393_216)).toEqual({ maxOutputTokens: 393_216, reasoningAllowance: 0 });
+  });
+
+  test("thinking off, or a provider type that takes no thinking switch, keeps the caller's bound", () => {
+    expect(outputBudget("deepseek", "off", 4096)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
+    expect(outputBudget("anthropic", "on", 4096)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
   });
 });

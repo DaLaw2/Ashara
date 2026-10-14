@@ -136,6 +136,9 @@ describe("DecompositionEngine", () => {
         for (const t of result.tasks.filter((t) => t.taskSpec.origin !== "sprint0" && t.id !== scaffold?.id)) {
             expect(waitsOn(result.dependencyEdges, t.id, scaffold?.id ?? ""), t.title).toBe(true);
         }
+        // W5 W1/W2: the scaffold writes down the public interface, and its placeholder starts and refuses each entry.
+        expect(scaffold?.description).toContain("Write down the product's public interface in PUBLIC_INTERFACE.md");
+        expect(scaffold?.successCriteria).toContainEqual(expect.stringMatching(/starts as the interface says .* never failing to start/));
         // Stack-free: the layout is the implementer's to choose in the environment's own terms.
         const text = `${scaffold?.title} ${scaffold?.description} ${JSON.stringify(scaffold?.taskSpec)}`;
         for (const literal of [/\bnpm\b/i, /cargo/i, /package\.json/i, /go\.mod/i, /python/i, /\bsrc\//i, /Makefile/]) {
@@ -172,6 +175,9 @@ describe("DecompositionEngine", () => {
             );
             for (const deliverable of implementation.taskSpec.deliverables) expect(check?.taskSpec.goal).toContain(deliverable);
             for (const criterion of implementation.successCriteria) expect(check?.taskSpec.goal).toContain(criterion);
+            // W5 W1: the check author tests the interface the scaffold wrote down, never a guessed one.
+            expect(check?.taskSpec.goal).toContain("Read the product's public interface in PUBLIC_INTERFACE.md");
+            expect(check?.taskSpec.goal).toMatch(/never try other ways to start, configure or call the product/);
         }
         // No check task decides another check task, and none depends on an implementation task.
         for (const check of checks) {

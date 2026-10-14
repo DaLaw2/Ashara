@@ -112,8 +112,11 @@
 # recorded with the W11 rehearsal. The risk this reopens: deepseek-flash's
 # reasoning tokens count against maxTokens, and in transcript 3 (2026-10-13),
 # with thinking on, 19 of 23 structured requests spent all 4,096 tokens
-# reasoning and returned no text (StructuredOutputTruncated). A site-less call
-# keeps the default, off.
+# reasoning and returned no text (StructuredOutputTruncated); the W5 trial
+# (2026-10-14) repeated it in 7 of 12 calls. Since then the gateway sends a
+# request with thinking on with a reasoning allowance added to its bound
+# (llm-gateway thinking.ts outputBudget), priced into its worst-case cost. A
+# site-less call keeps the default, off.
 #
 # `default` is required when this table is present; [thinking.sites] keys are
 # the routing sites ("escalation" covers every escalated ladder attempt). A site

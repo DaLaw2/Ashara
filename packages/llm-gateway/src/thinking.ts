@@ -75,3 +75,40 @@ export function thinkingProviderOptions(
   if (providerType !== "deepseek") return undefined;
   return { deepseek: { thinking: { type: mode === "on" ? "enabled" : "disabled" } } };
 }
+
+/**
+ * Output tokens added for reasoning to a request sent with thinking on. Why:
+ * DeepSeek counts reasoning against `max_tokens`, so a bound sized for the
+ * answer alone can be spent entirely on reasoning. In the W5 trial
+ * (2026-10-14) 7 of 12 deepseek-flash calls stopped at `length` with output
+ * tokens equal to reasoning tokens and 0 characters of text, at bounds of
+ * 2,048 and 4,096. DeepSeek's own default bound in thinking mode is 64K
+ * (api-docs.deepseek.com/api/create-chat-completion, read 2026-10-14); half of
+ * it for reasoning, on top of the answer, is a policy choice: the reasoning a
+ * structured call needs was never measured, because every observed overrun
+ * was cut off. A request still cut off reports this allowance in its
+ * `StructuredOutputTruncated`.
+ */
+const REASONING_ALLOWANCE_TOKENS = 32_768;
+
+/** DeepSeek's documented `max_tokens` ceiling: "between 1 and 384K (393216)" (same page, read 2026-10-14). */
+const DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216;
+
+/** The output bound a request is sent with, and how much of it is the reasoning allowance. */
+export interface OutputBudget {
+  /** Sent as the request's `maxOutputTokens`; Finance prices the worst case from it. */
+  readonly maxOutputTokens: number;
+  /** The part of `maxOutputTokens` added for reasoning; 0 when thinking is not sent on. */
+  readonly reasoningAllowance: number;
+}
+
+/**
+ * The bound for a request whose answer needs `answerTokens`. Only a request
+ * that actually carries thinking on gets the allowance: the provider types
+ * {@link thinkingProviderOptions} sends no switch to keep the caller's bound.
+ */
+export function outputBudget(providerType: ProviderType, mode: ThinkingMode, answerTokens: number): OutputBudget {
+  if (providerType !== "deepseek" || mode !== "on") return { maxOutputTokens: answerTokens, reasoningAllowance: 0 };
+  const maxOutputTokens = Math.min(answerTokens + REASONING_ALLOWANCE_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS);
+  return { maxOutputTokens, reasoningAllowance: maxOutputTokens - answerTokens };
+}

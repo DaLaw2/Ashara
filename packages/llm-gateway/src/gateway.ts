@@ -19,8 +19,9 @@ import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
-import { thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
-import { assistantMessageOf, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
+import { outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
+import type { OutputBudget } from "./thinking.js";
+import { assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
 import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
   CallRecording,
@@ -123,9 +124,17 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     this.thinking = config.thinking;
   }
 
-  /** The thinking switch for a request to `target` at `site`, or none for a provider type that takes no switch. */
-  private providerOptionsFor(target: CallTarget, site: string | undefined) {
-    return thinkingProviderOptions(target.providerType, thinkingModeFor(this.thinking, site));
+  /**
+   * The thinking switch for a request to `target` at `site` (none for a provider
+   * type that takes no switch), and the output bound it is sent with: the
+   * caller's `answerTokens`, plus a reasoning allowance when thinking is on.
+   */
+  private thinkingFor(target: CallTarget, site: string | undefined, answerTokens: number) {
+    const mode = thinkingModeFor(this.thinking, site);
+    return {
+      providerOptions: thinkingProviderOptions(target.providerType, mode),
+      budget: outputBudget(target.providerType, mode, answerTokens),
+    };
   }
 
   /**
@@ -237,21 +246,23 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     };
     const site = scope.context.callSite;
     const tools = toSdkTools(request.tools);
+    const { providerOptions, budget } = this.thinkingFor(target, site, TURN_MAX_OUTPUT_TOKENS);
+    const prompt = cachedTurnPrompt(target.providerType, request.system, request.messages);
 
     const params: Parameters<typeof generateText>[0] = {
       model: request.model.model,
-      system: request.system,
-      messages: [...request.messages],
+      system: prompt.system,
+      messages: prompt.messages,
       tools,
       stopWhen: isStepCount(1),
-      maxOutputTokens: TURN_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: budget.maxOutputTokens,
       maxRetries: 0,
-      providerOptions: this.providerOptionsFor(target, site),
+      providerOptions,
       abortSignal: request.abortSignal,
     };
     const size: RequestSize = {
       requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
-      maxOutputTokens: TURN_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: budget.maxOutputTokens,
     };
     const { result, requestedAt, admitted } = await this.send(scope, target, site, operation, size, () =>
       generateText(params),
@@ -409,18 +420,19 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateObject";
     const site = request.site ?? scope?.context.callSite;
+    const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens);
     const params: Parameters<typeof generateObject>[0] = {
       model: resolved.provider,
       schema: request.schema,
       prompt: request.prompt,
       system: request.systemPrompt,
-      maxOutputTokens: request.maxTokens,
+      maxOutputTokens: budget.maxOutputTokens,
       maxRetries: 0,
-      providerOptions: this.providerOptionsFor(resolved, site),
+      providerOptions,
     };
     const size: RequestSize = {
       requestBytes: utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema)),
-      maxOutputTokens: request.maxTokens,
+      maxOutputTokens: budget.maxOutputTokens,
     };
     let sent: {
       readonly result: Awaited<ReturnType<typeof generateObject>>;
@@ -431,7 +443,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       sent = await this.send(scope, resolved, site ?? "unknown", operation, size, () => generateObject(params));
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
-      throw structuredFailureOf(error, resolved, request.maxTokens);
+      throw structuredFailureOf(error, resolved, budget);
     }
     const { result, requestedAt, admitted } = sent;
 
@@ -446,7 +458,8 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        maxTokens: request.maxTokens,
+        maxTokens: budget.maxOutputTokens,
+        reasoningAllowance: budget.reasoningAllowance,
         outputTokens: extraction.reported.outputTokens,
         reasoningTokens: extraction.reasoningTokens,
         // generateObject keeps no raw text on success; this is the parsed object re-serialized.
@@ -478,15 +491,19 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const operation: LlmCallOperation = "generateText:structured-fallback";
     const site = request.site ?? scope?.context.callSite;
     const prompt = request.prompt + "\n\nRespond with valid JSON only. No markdown, no explanation.";
+    const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens);
     const params: Parameters<typeof generateText>[0] = {
       model: resolved.provider,
       prompt,
       system: request.systemPrompt,
-      maxOutputTokens: request.maxTokens,
+      maxOutputTokens: budget.maxOutputTokens,
       maxRetries: 0,
-      providerOptions: this.providerOptionsFor(resolved, site),
+      providerOptions,
     };
-    const size: RequestSize = { requestBytes: utf8Bytes(prompt, request.systemPrompt), maxOutputTokens: request.maxTokens };
+    const size: RequestSize = {
+      requestBytes: utf8Bytes(prompt, request.systemPrompt),
+      maxOutputTokens: budget.maxOutputTokens,
+    };
     const { result, requestedAt, admitted } = await this.send(scope, resolved, site ?? "unknown", operation, size, () =>
       generateText(params),
     );
@@ -505,7 +522,8 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        maxTokens: request.maxTokens,
+        maxTokens: budget.maxOutputTokens,
+        reasoningAllowance: budget.reasoningAllowance,
         outputTokens: extraction.reported.outputTokens,
         reasoningTokens: extraction.reasoningTokens,
         text: result.text,
@@ -586,7 +604,7 @@ function failureOfRequest(error: unknown): { readonly finishReason: LlmFinishRea
 function structuredFailureOf(
   error: NoObjectGeneratedError,
   resolved: CallTarget,
-  maxTokens: number,
+  budget: OutputBudget,
 ): SchemaValidationError {
   const text = error.text ?? "";
   if (error.finishReason === "length") {
@@ -594,7 +612,8 @@ function structuredFailureOf(
       {
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
-        maxTokens,
+        maxTokens: budget.maxOutputTokens,
+        reasoningAllowance: budget.reasoningAllowance,
         outputTokens: error.usage?.outputTokens ?? null,
         reasoningTokens: error.usage ? extractUsage(error.usage).reasoningTokens : null,
         text,

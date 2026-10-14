@@ -142,7 +142,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     const repo = new DevSessionRepository(db);
     const store: SessionStore = {
       insert: (sid, tid, brief, version) => repo.insert(sid, tid, brief, version),
-      complete: (sid, attempt) => repo.complete(sid, attempt),
+      complete: (sid, attempt, end) => repo.complete(sid, attempt, end),
       fail: (sid, end, attempt) => repo.fail(sid, end, attempt),
     };
     const brief = createAgentBrief(
@@ -201,6 +201,17 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       sessionId: idleSession,
       attempt: 1,
     }));
+    // A close as already delivered completes with no attempt; the report quotes its own end record (W5 D5).
+    const deliveredSession = createSessionId();
+    const deliveredDetail = `task already delivered on main at ${"a".repeat(40)}: its checks revision 1 and every suite pass there; nothing merged`;
+    await withSessionLifecycle(store, { sessionId: deliveredSession, taskId: idleTaskId, brief: { ...brief, taskId: idleTaskId }, environmentVersion: null }, async () => ({
+      status: "completed",
+      delivered: { kind: "already-delivered", mainCommit: "a".repeat(40) },
+      detail: deliveredDetail,
+      output: null,
+      sessionId: deliveredSession,
+      attempt: 1,
+    }));
 
     // NULL attempt columns are not "no model call": a session still open, a crash orphan the
     // reconciler closed (on the task with calls, as a crashed dispatch would leave it) and a row
@@ -218,10 +229,11 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     const evidence = await readRunEvidence(db, projectId);
 
     const sessions = evidence.tasks.flatMap((t) => t.sessions);
-    expect(sessions.map((s) => s.sessionId).sort()).toEqual([attemptSession, idleSession, openSession, orphanSession, oldSession].sort());
+    expect(sessions.map((s) => s.sessionId).sort()).toEqual([attemptSession, idleSession, deliveredSession, openSession, orphanSession, oldSession].sort());
     expect(Object.fromEntries(sessions.map((s) => [s.sessionId, s.attempt.kind]))).toEqual({
       [attemptSession]: "recorded",
       [idleSession]: "unrecorded",
+      [deliveredSession]: "completed-without-attempt",
       [openSession]: "open",
       [orphanSession]: "reconciled",
       [oldSession]: "predates-attempt-columns",
@@ -262,12 +274,15 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     expect(line(openSession)).toMatch(/\(Preparing, .*\): no attempt recorded; the session is not terminal/);
     expect(line(orphanSession)).toContain("no attempt recorded; closed by startup-reconciler as a crash orphan");
     expect(line(oldSession)).toContain("no attempt recorded; the session predates migration 046");
+    expect(line(deliveredSession)).toContain(`(Completed, `);
+    expect(line(deliveredSession)).toContain(`no attempt; it completed without one, and its end record reads: ${deliveredDetail}`);
+    expect(line(deliveredSession)).not.toMatch(/threw|before the model/);
     const recorded = sessions.find((s) => s.sessionId === attemptSession)?.attempt;
     expect(line(attemptSession)).toContain(
       `terminal finished:done, 3 turn(s), model deepseek/deepseek-scripted, base cell, prompt digest ${recorded?.kind === "recorded" ? recorded.attempt.promptDigest : "MISSING"}`,
     );
     // The orphan sits on the task that has llm_calls rows: those calls cannot be tied to an attempt.
     expect(report.text).toContain("UNTIED: 3 llm_calls row(s) on this task and 1 session(s) without a recorded attempt");
-    expect(report.text).toContain("5 dev session(s), 1 with a recorded attempt, 4 without; 1 task(s) UNTIED");
+    expect(report.text).toContain("6 dev session(s), 1 with a recorded attempt, 5 without; 1 task(s) UNTIED");
   });
 });

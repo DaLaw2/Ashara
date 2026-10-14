@@ -1,4 +1,5 @@
 import { expectedCpuMax, type CellResourceLimits } from "./cell-limits.js";
+import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
 /*
@@ -18,8 +19,8 @@ export interface ProbeVerdict {
 const PROBE_TIMEOUT_SECONDS = 30;
 
 /** Shell builtins only, so any image with a POSIX sh can be probed. */
-async function inCell(cell: Cell, script: string, args: readonly string[] = []): Promise<ExecResult> {
-  return cell.exec(["sh", "-c", script, "ashara-probe", ...args], { timeoutSeconds: PROBE_TIMEOUT_SECONDS });
+async function inCell(cell: Cell, script: string, args: readonly string[] = [], stdin?: string): Promise<ExecResult> {
+  return cell.exec(["sh", "-c", script, "ashara-probe", ...args], { timeoutSeconds: PROBE_TIMEOUT_SECONDS, stdin });
 }
 
 function unobserved(probe: string, result: ExecResult): ProbeVerdict {
@@ -74,8 +75,12 @@ export interface CredentialCanaries {
   readonly values: ReadonlyArray<{ readonly name: string; readonly value: string }>;
 }
 
+// The paths arrive on stdin, one per line, never as arguments: an exec's argv reaches the cell as
+// environment variables (podman.ts ASHARA_ARG_<n>), which the /proc/*/environ read below prints
+// back, so a probed path containing a canary value (npx's INIT_CWD inside `<cwd>/.env`, W5 trial
+// 2026-10-14 D4) reported the probe's own input as a leak.
 const CREDENTIAL_SCRIPT = [
-  'for p in "$@"; do',
+  'while IFS= read -r p || [ -n "$p" ]; do',
   '  if [ -f "$p" ] && [ -r "$p" ]; then',
   '    printf \'path %s readable\\n\' "$p"',
   '    while IFS= read -r l || [ -n "$l" ]; do printf \'%s\\n\' "$l"; done < "$p"',
@@ -90,7 +95,11 @@ const CREDENTIAL_SCRIPT = [
 /** No credential path is readable in the cell, and no credential value appears in its files or environments. */
 export async function probeCredentialRead(cell: Cell, canaries: CredentialCanaries): Promise<ProbeVerdict> {
   const probe = "credential read";
-  const result = await inCell(cell, CREDENTIAL_SCRIPT, canaries.paths);
+  const unsendable = canaries.paths.filter((path) => path === "" || /[\r\n]/.test(path));
+  if (unsendable.length > 0) {
+    throw new InvalidCellRequest(probe, unsendable.map((path) => `a probed path must be one non-empty line: ${JSON.stringify(path)}`));
+  }
+  const result = await inCell(cell, CREDENTIAL_SCRIPT, [], canaries.paths.map((path) => `${path}\n`).join(""));
   if (result.exitCode !== 0) return unobserved(probe, result);
   // The script's own report lines name the probed paths, which a value may contain: they are not searched.
   const headers = new Set(canaries.paths.flatMap((path) => ["readable", "present", "absent"].map((state) => `path ${path} ${state}`)));

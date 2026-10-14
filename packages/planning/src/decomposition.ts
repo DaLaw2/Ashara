@@ -560,14 +560,31 @@ const SPRINT0_DESCRIPTION =
 
 const SCAFFOLD_TITLE = "Set up the product's layout";
 
+/**
+ * Where the scaffold writes down the product's public interface, which every check author reads
+ * (W5 trial 2026-10-14, W1: with no interface fixed, check authors guessed it and their checks
+ * accepted 8 ways to start the product and 6 ways to complete an item). Ashara's own convention, the
+ * same for every product; what the interface is, is the product's.
+ */
+const PUBLIC_INTERFACE_FILE = "PUBLIC_INTERFACE.md";
+
 const SCAFFOLD_DESCRIPTION =
     "Set up the product's skeleton in the environment the platform role defined: its module root, its manifests " +
     "and its entry point, laid out so that the environment's build and test commands pass from the repository root " +
-    "on a fresh checkout and leave it clean. Implement none of the behaviour the vision asks for: each later task " +
-    "delivers its own, and its checks are written against this layout. The entry point is a placeholder that " +
-    "refuses every input: however it is run, with any arguments or input, it prints a message saying the product " +
-    "does not do that yet and exits with a non-zero status, so that a check of any behaviour fails on it. Say in " +
-    "your finish summary where the entry point is and how the product is run.";
+    "on a fresh checkout and leave it clean. " +
+    `Write down the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root: the one interface ` +
+    "the product commits to, which every later task implements and every check tests. Name each way the vision says " +
+    "the product is used, in the terms its kind has (each command with its arguments and exit statuses, each network " +
+    "route with its request and response shapes and statuses, each function or type of a library's API, or whatever " +
+    "else the product exposes), how it is started and configured (arguments, environment variables, the files it " +
+    "reads and writes, a port), and the error each entry gives for input it refuses. Choose one form for each: never " +
+    "alternatives. Implement none of the behaviour the vision asks for: each later task delivers its own, and its " +
+    "checks are written against this layout and this interface. The product is a placeholder of the interface: it " +
+    "starts and runs exactly as the interface says, and answers every entry of the interface with a refusal (an error " +
+    "response, a non-zero exit status, a raised error, as the entry's kind has) saying the product does not do that " +
+    "yet, so that a check of any behaviour fails on it because the behaviour is missing, never because the product " +
+    "could not start. A product that runs as a long-lived process starts, stays up and answers each request with that " +
+    "refusal until it is stopped. Say in your finish summary where the entry point is and how the product is run.";
 
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
 
@@ -593,7 +610,10 @@ function addProductScaffold(
         "build and test leave the checkout clean",
         "the work changes no recipe file",
         "no behaviour a vision item asks for is implemented yet",
-        "the entry point refuses every input: it prints a message and exits with a non-zero status",
+        `${PUBLIC_INTERFACE_FILE} at the repository root names one form for each entry of the product's public interface, ` +
+            "how the product is started and configured, and the error each entry gives",
+        "the product starts as the interface says and answers every entry of it with a refusal (an error response or " +
+            "a non-zero exit status), never failing to start",
     ];
     const scaffold: PlannedTask = {
         id: generateId("task"),
@@ -606,10 +626,11 @@ function addProductScaffold(
         taskSpec: {
             goal: SCAFFOLD_DESCRIPTION,
             endState: successCriteria.join("; "),
-            scope: "the product's module root, manifests and entry point; no behaviour of the vision",
+            scope: `the product's module root, manifests, entry point and ${PUBLIC_INTERFACE_FILE}; no behaviour of the vision`,
             deliverables: [
                 "the product's skeleton, on which the environment's build and test commands pass",
-                "a placeholder entry point that refuses every input with a message and a non-zero exit",
+                `${PUBLIC_INTERFACE_FILE}: the product's public interface, one form for each entry`,
+                "a placeholder that starts as the interface says and refuses every entry of it",
                 "a finish summary naming the entry point and how the product is run",
             ],
             capability: PLANNER_SET_LEVEL,
@@ -648,6 +669,12 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
             bulleted(task.taskSpec.visionItems),
         `Deliverables of "${task.title}":\n${bulleted(task.taskSpec.deliverables)}`,
         `Acceptance of "${task.title}":\n${bulleted(task.successCriteria)}`,
+        `Read the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root before writing any ` +
+            "check, and test the product only through that interface, in the one form it names: never try other ways " +
+            "to start, configure or call the product. On the foundation the product starts and refuses every entry, " +
+            `so each check must fail there because "${task.title}" is not done, never because the product did not ` +
+            `start. If ${PUBLIC_INTERFACE_FILE} is missing, or does not name what a check needs, say so in your ` +
+            "finish summary.",
     ].join("\n\n");
     const successCriteria = [
         "every check is defined with define_check",

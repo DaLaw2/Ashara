@@ -125,24 +125,32 @@ export class StructuredOutputTruncated extends SchemaValidationError {
   readonly maxTokens: number | null;
   readonly outputTokens: number | null;
   readonly reasoningTokens: number | null;
+  /** The part of `maxTokens` the gateway added for reasoning; 0 when the request was not sent with thinking on. */
+  readonly reasoningAllowance: number;
   readonly textLength: number;
 
   constructor(
     context: {
       readonly provider: string;
       readonly model: string;
+      /** The bound the request was sent with, reasoning allowance included. */
       readonly maxTokens: number | null;
+      readonly reasoningAllowance: number;
       readonly outputTokens: number | null;
       readonly reasoningTokens: number | null;
       readonly text: string;
     },
     options?: ErrorOptions,
   ) {
+    const allReasoning =
+      context.text.length === 0 && context.reasoningTokens !== null && context.reasoningTokens === context.outputTokens;
     super(
       [
         `output truncated: ${context.provider}/${context.model} stopped at maxTokens=${context.maxTokens ?? "provider default"} ` +
-          `(finish reason length; output tokens ${context.outputTokens ?? "unreported"}, of which reasoning ` +
-          `${context.reasoningTokens ?? "unreported"}; text length ${context.text.length})`,
+          `(of which reasoning allowance ${context.reasoningAllowance}; finish reason length; output tokens ` +
+          `${context.outputTokens ?? "unreported"}, of which reasoning ${context.reasoningTokens ?? "unreported"}; ` +
+          `text length ${context.text.length})` +
+          (allReasoning ? ": the whole bound went to reasoning and no answer text was produced" : ""),
         `Raw LLM response: ${context.text.slice(0, 500)}`,
       ],
       context.model,
@@ -152,6 +160,7 @@ export class StructuredOutputTruncated extends SchemaValidationError {
     this.provider = context.provider;
     this.model = context.model;
     this.maxTokens = context.maxTokens;
+    this.reasoningAllowance = context.reasoningAllowance;
     this.outputTokens = context.outputTokens;
     this.reasoningTokens = context.reasoningTokens;
     this.textLength = context.text.length;

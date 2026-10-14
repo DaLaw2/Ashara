@@ -76,6 +76,11 @@ function sessionLine(index: number, s: Session): string {
       return `${head}: no attempt recorded; closed by ${record.by} as a crash orphan, so any model calls it made are untracked`;
     case "predates-attempt-columns":
       return `${head}: no attempt recorded; the session predates migration 046, which added the attempt columns`;
+    case "completed-without-attempt":
+      return (
+        `${head}: no attempt; it completed without one, and its end record reads: ` +
+        `${record.endDetail ?? "(no detail written: the row predates completions recording one)"}`
+      );
     case "unrecorded":
       return (
         `${head}: no attempt recorded; it ended (${record.endOutcome ?? "no end outcome written"}) without an attempt outcome ` +

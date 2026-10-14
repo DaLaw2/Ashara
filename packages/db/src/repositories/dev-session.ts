@@ -37,8 +37,8 @@ function attemptColumns(attempt: SessionAttempt | null) {
 }
 
 /**
- * dev_sessions is an attempt log: when each attempt opened and how it ended (`phase`, and on a
- * failure the end's outcome and detail in verification_result). It holds no verdict on the task
+ * dev_sessions is an attempt log: when each attempt opened and how it ended (`phase`, and the end's
+ * outcome and detail in verification_result). It holds no verdict on the task
  * and no record of what was merged, which is work_items.merge_commit (migration 041): its terminal
  * write is fail-soft (withSessionLifecycle), so no report or decision reads it as delivery.
  */
@@ -60,12 +60,15 @@ export class DevSessionRepository {
    * `attempt`: null when no attempt outcome reached the session (it ended before the model, or its
    * attempt threw). Required, never defaulted: the six columns of migration 046 then stay NULL, and
    * NULL means only "no attempt recorded", never "no model call" (run-report reads it that way).
+   * `attemptEnd`: how the session ended, in its own words, as `fail` writes a failure's, so a session
+   * that completed without an attempt (work already delivered on main) says why (W5 trial D5).
    */
-  async complete(sessionId: string, attempt: SessionAttempt | null) {
+  async complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: { readonly outcome: "completed"; readonly detail: string }) {
     await this.db
       .update(devSessions)
       .set({
         ...attemptColumns(attempt),
+        verificationResult: attemptEnd,
         phase: "Completed",
         updatedAt: new Date(),
       })

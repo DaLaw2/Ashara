@@ -269,7 +269,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
-    complete: (sid, attempt) => devSessionRepo.complete(sid, attempt),
+    complete: (sid, attempt, end) => devSessionRepo.complete(sid, attempt, end),
     fail: (sid, vr, attempt) => devSessionRepo.fail(sid, vr, attempt),
   };
 

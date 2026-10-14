@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
-import { UnpricedModel } from "./errors.js";
+import { BudgetExceeded, UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
 import { SpendCap } from "./spend-cap.js";
 
@@ -467,6 +467,10 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
     expect(rows[0]?.callSite).toBe("agent-runner");
     expect(rows[0]?.model).toBe("turn-model");
     expect(rows[0]?.costUsd).toBeCloseTo(expectedCost, 9);
+    expect(rows[0]).toMatchObject({ cacheReadTokens: 900, cacheWriteTokens: 0 });
+    // The system prompt and the conversation's last message carry Anthropic cache breakpoints.
+    const breakpoint = { anthropic: { cacheControl: { type: "ephemeral" } } };
+    expect(mock.doGenerateCalls[0]?.prompt.map((message) => message.providerOptions)).toEqual([breakpoint, breakpoint]);
   });
 
   test("a call to an undeclared tool comes back as an invalid call for the loop to answer, in one ok row", async () => {
@@ -572,15 +576,54 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     let mock = stubModel({ doGenerate: ok });
     await ask(gateway("deepseek", deepseek), "decomposition");
     expect(mock.doGenerateCalls[0]?.providerOptions).toEqual({ deepseek: { thinking: { type: "disabled" } } });
+    expect(mock.doGenerateCalls[0]?.maxOutputTokens).toBe(512);
 
     mock = stubModel({ doGenerate: ok });
     const policy = { default: "off" as const, sites: { "liaison-intake": "on" as const } };
     await ask(gateway("deepseek", deepseek, () => PEAK, policy), "liaison-intake");
     expect(mock.doGenerateCalls[0]?.providerOptions).toEqual({ deepseek: { thinking: { type: "enabled" } } });
+    // Thinking on: the bound sent covers reasoning on top of the caller's 512 answer tokens.
+    expect(mock.doGenerateCalls[0]?.maxOutputTokens).toBeGreaterThan(512);
 
     mock = stubModel({ doGenerate: ok });
     await ask(gateway("anthropic", model({}), () => PEAK, policy), "liaison-intake");
     expect(mock.doGenerateCalls[0]?.providerOptions).toBeUndefined();
+    expect(mock.doGenerateCalls[0]?.maxOutputTokens).toBe(512);
+  });
+
+  test("with thinking on, the spend cap prices the worst case from the larger bound that is sent", async () => {
+    await clearRows();
+    // $1,000 per 1M output tokens: 512 answer tokens fit a $1 project cap; 512 plus a reasoning allowance do not.
+    const deepseek = model({ id: "ds-bound", provider: "deepseek", outputCostPer1M: 1_000, cacheWriteCostPer1M: null });
+    const underCap = (thinking: "on" | "off") =>
+      buildGateway({
+        models: sdkLanguageModels,
+        config: {
+          providers: [
+            { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [deepseek], enabled: true },
+          ],
+          defaultProvider: "deepseek",
+          thinking: { default: thinking, sites: {} },
+        },
+        checkedSources: ["test"],
+        recording: {
+          kind: "recorded",
+          recorder: new LlmCallLedger(
+            calls,
+            new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
+          ),
+        },
+        clock: () => PEAK,
+      })
+        .forCall({ projectId, taskId: null, callSite: "decomposition" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
+
+    const mock = stubModel({ doGenerate: result('{"greeting":"hi"}', "stop", 10, DEEPSEEK_RAW) });
+    await expect(underCap("on")).rejects.toThrow(BudgetExceeded);
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    await expect(underCap("off")).resolves.toMatchObject({ data: { greeting: "hi" } });
+    expect(mock.doGenerateCalls).toHaveLength(1);
+    await clearRows();
   });
 
   test("empty text at finish reason length is a 'truncated' error row with its reasoning tokens, never ok", async () => {
@@ -592,7 +635,14 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
       gateway("deepseek", model({ id: "ds-truncated", cacheWriteCostPer1M: null }))
         .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
         .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 }),
-    ).rejects.toMatchObject({ name: "StructuredOutputTruncated", reasoningTokens: 4096, textLength: 0 });
+    ).rejects.toMatchObject({
+      name: "StructuredOutputTruncated",
+      maxTokens: 4096,
+      reasoningAllowance: 0,
+      reasoningTokens: 4096,
+      textLength: 0,
+      message: expect.stringMatching(/the whole bound went to reasoning/),
+    });
 
     const rows = await rowsOfThisProject();
     expect(rows).toHaveLength(1);
@@ -603,6 +653,26 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
       outputTokens: 4096,
       reasoningTokens: 4096,
     });
+  });
+
+  test("a truncation sent with thinking on reports the bound it was sent with and the reasoning allowance in it", async () => {
+    await clearRows();
+    const raw = { ...DEEPSEEK_RAW, completion_tokens: 9000, completion_tokens_details: { reasoning_tokens: 9000 } };
+    const mock = stubModel({ doGenerate: result("", "length", 9000, raw) });
+    const thinkingOn = { default: "on" as const, sites: {} };
+
+    const failure = await gateway("deepseek", model({ id: "ds-truncated-on", cacheWriteCostPer1M: null }), () => PEAK, thinkingOn)
+      .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+      .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 4096 })
+      .then(
+        () => expect.unreachable("a truncated call must not succeed"),
+        (error: unknown) => error,
+      );
+
+    const sent = mock.doGenerateCalls[0]?.maxOutputTokens;
+    expect(failure).toMatchObject({ name: "StructuredOutputTruncated", maxTokens: sent, reasoningAllowance: (sent ?? 0) - 4096 });
+    expect(sent).toBeGreaterThan(4096);
+    await clearRows();
   });
 
   test("a failed generateObject is recorded at what the provider billed", async () => {
