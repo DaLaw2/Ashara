@@ -78,13 +78,13 @@ function intakeResponse(questionCount: number) {
     summary: "A booking page for the client's two pottery studios.",
     scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
     assumptions: [
-      { statement: "Each class has a fixed capacity set by the studio.", rationale: "The tender mentions full classes." },
-      { statement: "Bookings need no account.", rationale: "The tender says walk-in customers book." },
+      { statement: "Each class has a fixed capacity set by the studio.", rationale: "The tender mentions full classes.", kind: "client-visible" },
+      { statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "internal-design" },
     ],
     questions: Array.from({ length: questionCount }, (_, i) => ({
       text: `Question ${i + 1} about the pottery studios?`,
       whyItMatters: `It changes booking rule ${i + 1}.`,
-      assumption: { statement: `Booking rule ${i + 1} is the studio's usual one.`, rationale: `The tender implies rule ${i + 1}.` },
+      assumption: { statement: `Booking rule ${i + 1} is the studio's usual one.`, rationale: `The tender implies rule ${i + 1}.`, kind: "client-visible" },
     })),
   };
 }
@@ -110,7 +110,9 @@ async function tender(body: string): Promise<{ projectId: ProjectId; tenderId: s
 const VisionRowSchema = z.object({
   version: z.number(),
   visionText: z.string(),
-  inferences: z.array(z.object({ key: z.string(), statement: z.string(), rationale: z.string(), status: z.string() })),
+  inferences: z.array(
+    z.object({ key: z.string(), statement: z.string(), rationale: z.string(), status: z.string(), kind: z.string(), disclosed: z.string() }),
+  ),
   openQuestions: z.array(
     z.object({ messageId: z.string(), text: z.string(), whyItMatters: z.string(), assumptionKey: z.string() }),
   ),
@@ -209,6 +211,23 @@ describe("Liaison tender intake", () => {
       expect(questions[i]?.body).toContain(`we proceed on this assumption: ${adopted?.statement}`);
     }
 
+    // The two unasked assumptions reach the client in one report, posted with the questions (d89 C).
+    const reports = messages.filter((m) => m.direction === "outbound" && m.kind === "report");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.inReplyTo).toBe(tenderId);
+    expect(reports[0]?.body).toContain("we proceed on them unless you object");
+    expect(reports[0]?.body).toContain("Each class has a fixed capacity set by the studio.");
+    expect(reports[0]?.body).toContain("Bookings need no account.");
+    expect(reports[0]?.body).not.toContain("Booking rule 1");
+    expect(vision?.inferences.map((a) => a.disclosed)).toEqual(["asked", "asked", "asked", "reported", "reported"]);
+    expect(vision?.inferences.map((a) => a.kind)).toEqual([
+      "client-visible",
+      "client-visible",
+      "client-visible",
+      "client-visible",
+      "internal-design",
+    ]);
+
     expect(await callSitesOf(projectId)).toEqual(["liaison-intake"]);
   });
 
@@ -297,6 +316,8 @@ describe("Liaison tender intake", () => {
     expect(await visions(projectId)).toHaveLength(1);
     const messages = await messagesOf(projectId);
     expect(messages.filter((m) => m.kind === "question")).toHaveLength(1);
+    // The assumptions report is posted once, with the first intake, and never again.
+    expect(messages.filter((m) => m.kind === "report")).toHaveLength(1);
     expect(await callSitesOf(projectId)).toEqual(["liaison-intake"]);
   });
 });

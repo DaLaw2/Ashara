@@ -302,14 +302,27 @@ describe("a suite review halt recorded before migration 048 is told once", () =>
 
     expect(
       await findings.record({ projectId, reviewTaskId: review, problems: [{ checkTaskIds: [checkA], kind: "outside-vision", problem: "first", evidence: "e" }] }),
-    ).toEqual(new Map([[checkA, 1]]));
+    ).toEqual({ timesNamed: new Map([[checkA, 1]]), earlierFindings: new Map([[checkA, []]]) });
     await findings.record({ projectId, reviewTaskId: review, problems: [{ checkTaskIds: [checkA], kind: "outside-vision", problem: "second", evidence: "e" }] });
     const third = await findings.record({
       projectId,
       reviewTaskId: review,
       problems: [{ checkTaskIds: [checkA, checkB], kind: "contradiction", problem, evidence: "wc -l; test -z" }],
     });
-    expect(third).toEqual(new Map([[checkA, 3], [checkB, 1]]));
+    expect(third.timesNamed).toEqual(new Map([[checkA, 3], [checkB, 1]]));
+    // ADR-074 addendum 2 d89 F: every earlier review's findings on each named check task, oldest first.
+    expect(third.earlierFindings).toEqual(
+      new Map([
+        [
+          checkA,
+          [
+            { kind: "outside-vision", problem: "first", evidence: "e" },
+            { kind: "outside-vision", problem: "second", evidence: "e" },
+          ],
+        ],
+        [checkB, []],
+      ]),
+    );
 
     await new ProjectRepository(db).block(projectId, { category: "suite_review", errorClass: "SuiteReviewBoundReached", reason: "named 3 times" });
     await reports().runPending();

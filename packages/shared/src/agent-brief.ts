@@ -20,12 +20,15 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
 /**
  * An assumption of the project's current vision: what work proceeds on until the client says
  * otherwise. `key` is its id within the vision (A1, A2, ...); `status` is passed through as the
- * vision records it (Inferred, or Stated).
+ * vision records it (Inferred, or Stated); `standing` is what the client has seen of it, and `kind`
+ * whether it is behaviour the client sees or the team's own design (ADR-074 addendum 2 d89 C, E).
  */
 const VisionAssumptionSchema = z.strictObject({
   key: z.string().min(1),
   status: z.string().min(1),
   statement: z.string().min(1),
+  standing: z.enum(["stated", "asked", "reported", "not-shown"]),
+  kind: z.enum(["client-visible", "internal-design", "unclassified"]),
 });
 
 /**

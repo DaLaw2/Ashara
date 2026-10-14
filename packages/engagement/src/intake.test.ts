@@ -146,7 +146,7 @@ describe("TenderIntake response schema", () => {
       assumptions: [],
     });
     const question = { text: "Which studio?", whyItMatters: "It sets the rules." };
-    const assumption = { statement: "The larger studio.", rationale: "The tender names it first." };
+    const assumption = { statement: "The larger studio.", rationale: "The tender names it first.", kind: "client-visible" };
     const verdicts: boolean[] = [];
     const llm: ContextualLlm = {
       forCall: () => ({
@@ -198,15 +198,15 @@ describe("TenderIntake assumption label", () => {
         {
           text: "Which Windows version?",
           whyItMatters: "The build must start there.",
-          assumption: { statement: "Until you answer, we build one standalone executable.", rationale: "No installer." },
+          assumption: { statement: "Until you answer, we build one standalone executable.", rationale: "No installer.", kind: "client-visible" },
         },
         {
           text: "Which encoding?",
           whyItMatters: "Names must read correctly.",
-          assumption: { statement: `${LABEL} the files are UTF-8.`, rationale: "The common default." },
+          assumption: { statement: `${LABEL} the files are UTF-8.`, rationale: "The common default.", kind: "client-visible" },
         },
       ],
-      assumptions: [{ statement: "Until you answered nothing changes.", rationale: "Kept as written." }],
+      assumptions: [{ statement: "Until you answered nothing changes.", rationale: "Kept as written.", kind: "internal-design" }],
     };
     const llm: ContextualLlm = {
       forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw) }) }),
@@ -255,7 +255,7 @@ describe("TenderIntake assumption label", () => {
       summary: "A tool.",
       scopeBoundaries: ["In: a tool"],
       questions: [],
-      assumptions: [{ statement, rationale: "None given." }],
+      assumptions: [{ statement, rationale: "None given.", kind: "client-visible" }],
     });
     const verdicts: boolean[] = [];
     const llm: ContextualLlm = {
@@ -290,6 +290,94 @@ describe("TenderIntake assumption label", () => {
 
     await new TenderIntake({ llm, store }).runPending();
 
+    expect(verdicts[0]).toBe(false);
+  });
+});
+
+describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
+  const raw = (assumptions: readonly Record<string, unknown>[]) => ({
+    summary: "A key-value store.",
+    scopeBoundaries: ["In: put, get, list"],
+    questions: [
+      {
+        text: "May values hold spaces?",
+        whyItMatters: "It decides how a value is read.",
+        assumption: { statement: "Values are one word.", rationale: "The tender's examples.", kind: "client-visible" },
+      },
+    ],
+    assumptions,
+  });
+
+  function storeOf(id: string, recordIntake: IntakeStore["recordIntake"]): IntakeStore {
+    return {
+      openTenders: async () => [
+        { id, projectId: parseProjectId("00000000-0000-4000-8000-000000000005", "test"), body: "A store.", intakeAttempts: 0, intakeLastError: null },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake,
+      consumeTender: async () => {},
+      recordFailedAttempt: async () => 1,
+      closeFailedTender: async () => {},
+      blockProject: async () => {
+        throw new Error("blockProject must not be reached");
+      },
+    };
+  }
+
+  async function intakeOf(response: unknown) {
+    const llm: ContextualLlm = {
+      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response) }) }),
+    };
+    const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
+    const store = storeOf("tender-r", async (write) => {
+      writes.push(write);
+      return { kind: "recorded", questionIds: write.questions.map((_, i) => `q${i}`) };
+    });
+    await new TenderIntake({ llm, store }).runPending();
+    const [write, ...more] = writes;
+    if (write === undefined || more.length > 0) throw new Error(`expected one intake write, got ${writes.length}`);
+    return write;
+  }
+
+  test("one report lists the unasked assumptions, behaviour apart from design, and none a question carries", async () => {
+    const write = await intakeOf(
+      raw([
+        { statement: "list prints keys sorted.", rationale: "Predictable output.", kind: "client-visible" },
+        { statement: "The log file is wal.log.", rationale: "A plain name.", kind: "internal-design" },
+      ]),
+    );
+    const report = write.assumptionsReport ?? "";
+    expect(report).toContain("we proceed on them unless you object");
+    expect(report).toContain("What the product will do:\n- A2: list prints keys sorted.");
+    expect(report).toContain("How we will build it");
+    expect(report).toContain("- A3: The log file is wal.log.");
+    expect(report).not.toContain("Values are one word.");
+    expect(write.vision(["q0"]).inferences.map((a) => [a.key, a.kind, a.disclosed])).toEqual([
+      ["A1", "client-visible", "asked"],
+      ["A2", "client-visible", "reported"],
+      ["A3", "internal-design", "reported"],
+    ]);
+  });
+
+  test("no report when every assumption is a question's", async () => {
+    expect((await intakeOf(raw([]))).assumptionsReport).toBeNull();
+  });
+
+  test("an assumption with no kind is rejected, never stored unclassified", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const verdicts: boolean[] = [];
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          verdicts.push(request.schema.safeParse(raw([{ statement: "Sorted.", rationale: "Predictable." }])).success);
+          throw new Error("stop after the schema check");
+        },
+      }),
+    };
+    const store = storeOf("tender-k", async () => {
+      throw new Error("recordIntake must not be reached");
+    });
+    await new TenderIntake({ llm, store }).runPending();
     expect(verdicts[0]).toBe(false);
   });
 });

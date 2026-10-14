@@ -570,6 +570,7 @@ describe("define_check", () => {
     const defined: CheckDefinition[] = [];
     const timeouts: number[] = [];
     const written: string[] = [];
+    const probed: string[] = [];
     const checks: CheckDefinitionPort = {
       fileWritten(path) {
         written.push(path);
@@ -581,9 +582,29 @@ describe("define_check", () => {
         else defined.push(check);
         return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check), discarded };
       },
+      async probe(command, timeoutSeconds) {
+        probed.push(command);
+        return { kind: "ran", run: { name: "probe", command, exitCode: 0, timedOut: false, output: "Cargo.toml\nsrc" }, timeoutSeconds };
+      },
     };
-    return { checks, defined, timeouts, written };
+    return { checks, defined, timeouts, written, probed };
   }
+
+  it("probe_foundation runs a command on the foundation and defines no check (W11 D4)", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "probe_foundation", input: { command: "ls" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Looked." } }]),
+    ]);
+    const { checks, defined, probed } = recorder();
+    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    expect(Object.keys(requests[0]?.tools ?? {})).toContain("probe_foundation");
+    expect(requests[0]?.system).toContain("never\n  define a check only to look around");
+    expect(probed).toEqual(["ls"]);
+    expect(defined).toEqual([]);
+    const [result] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(result).toMatchObject({ value: expect.stringContaining("no check was defined") });
+    expect(result).toMatchObject({ value: expect.stringContaining("Cargo.toml") });
+  });
 
   it("tells Z0 every file the author writes with its file tools, and never one a command left (N22)", async () => {
     const { llm } = scriptedLlm([
@@ -718,21 +739,45 @@ describe("define_check", () => {
   });
 
   // Fourth run N15: date and amount checks covered only accepted inputs, so a looser parser passed them.
-  it("asks the check author for a check of every assumption among the task's items, rejected inputs included", () => {
+  it("asks the check author for a check of what each cited item accepts and rejects", () => {
     const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("Check every assumption among those items");
-    expect(prompt).toContain("write a check that gives that input and requires it to be refused");
+    expect(prompt).toContain("For each cited item, check what it says the product accepts and what it says the product must");
+    expect(prompt).toContain("gives that input and requires it to be refused");
     expect(prompt).toContain("## Assumptions work proceeds on");
     expect(prompt).toContain("the project as it stood before any task of the plan did its work");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Check every assumption among those items");
+    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("For each cited item");
   });
 
-  // Fifth run N21: a check fixed a column count on stdout the tender never asked for (ADR-074 addendum 2 d71 d).
-  it("tells the check author its checks may test only the vision items its task delivers", () => {
+  // Fifth run N21 and W11 (ADR-074 addendum 2 d89 A): one rule, the acceptance lines against their cited items;
+  // W11's author was told both "test the deliverables" and "test only the items", and the two disagreed.
+  it("gives the check author one rule: test the acceptance lines, each against its cited items", () => {
     const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("Your checks may test only the vision items the task delivers");
-    expect(prompt).toContain("and the inputs those items say the product must reject");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("may test only the vision items");
+    expect(prompt).toContain("Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites");
+    expect(prompt).not.toContain("deliverables and acceptance");
+    expect(prompt).not.toContain("may test only the vision items");
+    expect(prompt).toContain("An assumption marked internal design is how the team builds the product");
+    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Test the task's acceptance lines");
+  });
+
+  // W11 (d89 C): the header said the client agreed to every assumption, and to most of them it had agreed to nothing.
+  it("says of each assumption only what the client has seen of it, and whether it is client-visible or internal design", () => {
+    const brief = {
+      ...assignment().brief,
+      assumptions: [
+        { key: "A1", status: "Stated", statement: "Values may hold spaces.", standing: "stated" as const, kind: "client-visible" as const },
+        { key: "A2", status: "Inferred", statement: "Exit code 2 means a missing key.", standing: "asked" as const, kind: "client-visible" as const },
+        { key: "A3", status: "Inferred", statement: "list prints keys sorted.", standing: "reported" as const, kind: "client-visible" as const },
+        { key: "A4", status: "Inferred", statement: "The log is wal.log.", standing: "reported" as const, kind: "internal-design" as const },
+        { key: "A5", status: "Inferred", statement: "Written before kinds.", standing: "not-shown" as const, kind: "unclassified" as const },
+      ],
+    };
+    const prompt = buildSystemPrompt(brief, "implementation");
+    expect(prompt).not.toContain("The client agreed");
+    expect(prompt).toContain("- A1 (Stated by the client; client-visible behaviour): Values may hold spaces.");
+    expect(prompt).toContain("- A2 (Inferred; the client was asked about it and has not answered; client-visible behaviour)");
+    expect(prompt).toContain("- A3 (Inferred; reported to the client, who has not objected; client-visible behaviour)");
+    expect(prompt).toContain("- A4 (Inferred; reported to the client, who has not objected; internal design): The log is wal.log.");
+    expect(prompt).toContain("- A5 (Inferred; never shown to the client; not classified)");
   });
 
   it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {
@@ -798,7 +843,11 @@ describe("run_checks", () => {
     expect(passing.timeouts).toEqual([]);
     expect(toolResultsOf(second.requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("Invalid arguments for run_checks") });
 
-    const checks: CheckDefinitionPort = { fileWritten: () => undefined, define: async () => ({ kind: "refused", reason: "unused" }) };
+    const checks: CheckDefinitionPort = {
+      fileWritten: () => undefined,
+      define: async () => ({ kind: "refused", reason: "unused" }),
+      probe: async () => ({ kind: "files_refused", detail: "unused" }),
+    };
     await expect(
       runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);

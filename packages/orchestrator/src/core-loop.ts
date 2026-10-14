@@ -117,15 +117,19 @@ export class CoreLoop {
     // built on sets the project's replanning flag, and the gate below does not dispatch
     // a flagged project's tasks (ProjectRepository.listActiveIds) until the replanning
     // step revises its plan.
-    const answers = await this.step("liaison-answers", () => deps.liaisonAnswers.runPending());
-    if (answers.kind === "stop") return this.haltAtCap(answers.stop);
-    for (const outcome of answers.outcomes) logAnswer(outcome);
+    const answers = await this.readAnswers();
+    if (answers !== null) return this.haltAtCap(answers);
 
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.
     const rosters = await this.step("roster", () => deps.rosterDerivation.runPending());
     if (rosters.kind === "stop") return this.haltAtCap(rosters.stop);
     for (const outcome of rosters.outcomes) logRoster(outcome);
+
+    // Answers posted while the roster was derived are read before the first plan, so it is made
+    // from the vision they state (W11 D5).
+    const beforePlan = await this.readAnswers();
+    if (beforePlan !== null) return this.haltAtCap(beforePlan);
 
     // Then a first plan for each project that has a vision, a roster and no work items,
     // and the Liaison's report on each recorded planning outcome. Both before
@@ -135,6 +139,11 @@ export class CoreLoop {
     const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
+    // Answers posted while the first plan was being written are read before any of its tasks is
+    // dispatched (W11 D5): one that changes an assumption the plan relied on flags the project, the
+    // revision below replans it in this cycle, and the gate never dispatches the plan it replaces.
+    const afterPlan = await this.readAnswers();
+    if (afterPlan !== null) return this.haltAtCap(afterPlan);
     // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (ADR-074
     // addendum 2 d74 D, d76; the gate dispatches neither project's tasks meanwhile, so no dependent of a
     // given-up task waits on anyone), whose project has no task in progress: the previous
@@ -194,6 +203,14 @@ export class CoreLoop {
     const stop = refusedAtDeployment ?? (await deps.spendCap.deploymentStop());
     if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };
     return { tasksProcessed: batch.length, results, stop: null };
+  }
+
+  /** The client's answers not yet read, each read once; the spend cap's stop when a call was refused, else null. */
+  private async readAnswers(): Promise<LoopStop | null> {
+    const answers = await this.step("liaison-answers", () => this.deps.liaisonAnswers.runPending());
+    if (answers.kind === "stop") return answers.stop;
+    for (const outcome of answers.outcomes) logAnswer(outcome);
+    return null;
   }
 
   private async postDeliveredReports(): Promise<void> {

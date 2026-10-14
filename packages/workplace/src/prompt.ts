@@ -151,19 +151,21 @@ const CHECK_PROMPT = [
   `it is now, which may already hold some of that task's behaviour, delivered by other work.`,
   `- Define each check with define_check: a name and a shell command. ${CHECK_RUNNER}`,
   `  A check passes when its command exits 0 and prints output, and fails otherwise.`,
-  `- Each check states observable behaviour from the task's deliverables and acceptance, never how it is built.`,
-  `- Your checks may test only the vision items the task delivers, listed in the Goal below ("Vision items ... delivers"),`,
-  `  and the inputs those items say the product must reject. Check nothing that none of them asks for: no intermediate`,
-  `  output, no format and no message the client did not ask for. Before any work starts, a reviewer reads every check`,
-  `  of the plan together with the vision and sends back any check outside those items or contradicting another.`,
-  `- Check every assumption among those items: what each says the product accepts and what it says the product must`,
-  `  reject. For every input the task must reject (malformed, out of range, in another form than the assumption`,
-  `  states), write a check that gives that input and requires it to be refused.`,
+  `- Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites: a check states`,
+  `  observable behaviour an acceptance line asks for, as its cited items say it, never how it is built. Check nothing`,
+  `  that no cited item asks for: no intermediate output, no format, no file and no message they do not ask for. Before`,
+  `  any work starts, a reviewer reads every check of the plan together with each task's cited items and the public`,
+  `  interface, and sends back any check outside its task's cited items or contradicting another.`,
+  `- For each cited item, check what it says the product accepts and what it says the product must reject. For every`,
+  `  input the task must reject (malformed, out of range, in another form than the item states), write a check that`,
+  `  gives that input and requires it to be refused.`,
+  `- An assumption marked internal design is how the team builds the product, not something the client asked for:`,
+  `  never test it, except as the public interface names it (a command, a file the client reads), in its one form.`,
   `- Name the files and entry points the project already has (its file tree is in the Project Context Map below),`,
   `  or the ones the task names; do not invent other names for them.`,
   `- At least one check must FAIL on the foundation, for the reason the task's work is missing there; a check that`,
   `  passes on the foundation is kept as a guard of behaviour that already holds. Write each check for the task's`,
-  `  behaviour as its deliverables and acceptance state it, never stronger to make it fail: a check that demands more`,
+  `  behaviour as its acceptance lines and their cited items state it, never stronger to make it fail: a check that demands more`,
   `  than the task asks for makes the task's developer build more than the task. A check that times out, or whose`,
   `  command cannot be found or run, is rejected. One that fails only on a syntax error or a missing file of its own`,
   `  can never pass: it is worse than none.`,
@@ -172,6 +174,9 @@ const CHECK_PROMPT = [
   `- define_check red-runs the check at once on the foundation, with your files so far written over it, and shows`,
   `  you its exit code and output. Read them. To fix a check, define it again under the same name: the last`,
   `  definition of a name is the one kept.`,
+  `- Every check you define is kept as an acceptance check of the task. To look at the foundation (what exists`,
+  `  there, how the product starts or refuses), run the command with probe_foundation, which records nothing; never`,
+  `  define a check only to look around.`,
   `- Write every file your checks need (test files, fixtures, scripts) in your checks directory, which the Context`,
   `  below names, with write_file or edit_file: only those are kept with the checks and written over the project`,
   `  whenever they run. A file you write anywhere else, the product's source included, is discarded: it is never`,
@@ -211,15 +216,37 @@ function environmentSection(environment: AssignmentBrief["projectEnvironment"]):
   ].join("\n");
 }
 
-/** The assumptions the client agreed work proceeds on, by id, so the agent never contradicts one. */
+type BriefAssumption = AssignmentBrief["assumptions"][number];
+
+/** What the client has seen of an assumption, as the record says: nothing is claimed beyond it (ADR-074 addendum 2 d89 C). */
+const STANDING: Readonly<Record<BriefAssumption["standing"], string>> = {
+  stated: "Stated by the client",
+  asked: "Inferred; the client was asked about it and has not answered",
+  reported: "Inferred; reported to the client, who has not objected",
+  "not-shown": "Inferred; never shown to the client",
+};
+
+const KIND: Readonly<Record<BriefAssumption["kind"], string>> = {
+  "client-visible": "client-visible behaviour",
+  "internal-design": "internal design",
+  unclassified: "not classified",
+};
+
+/** The assumptions work proceeds on, by id, each with where it stands with the client, so the agent never contradicts one. */
 function assumptionsSection(brief: AssignmentBrief): string {
   const header = [
     `## Assumptions work proceeds on (vision version ${brief.visionVersion})`,
-    `The client agreed the work proceeds on these until they say otherwise. Do not contradict any of them. If the`,
+    `Work proceeds on these until the client says otherwise. Each says where it stands with the client: only a Stated`,
+    `one is the client's own word; an Inferred one is the team's decision, which the client was asked about or told of`,
+    `only as marked. Client-visible behaviour is what the product does for the client; internal design is how the team`,
+    `builds it, guidance for the work and never a requirement of the client. Do not contradict any of them. If the`,
     `task cannot be done without contradicting one, finish as blocked and name the assumption by its id.`,
   ];
   if (brief.assumptions.length === 0) return [...header, `None are recorded.`].join("\n");
-  return [...header, ...brief.assumptions.map((a) => `- ${a.key} (${a.status}): ${a.statement}`)].join("\n");
+  return [
+    ...header,
+    ...brief.assumptions.map((a) => `- ${a.key} (${STANDING[a.standing]}; ${KIND[a.kind]}): ${a.statement}`),
+  ].join("\n");
 }
 
 /**

@@ -707,7 +707,11 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
  * problems nobody answered.
  */
 async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
-  const timesNamed = await deps.suiteReviewFindings.record({ projectId: task.projectId, reviewTaskId: task.id, problems: review.problems });
+  const { timesNamed, earlierFindings } = await deps.suiteReviewFindings.record({
+    projectId: task.projectId,
+    reviewTaskId: task.id,
+    problems: review.problems,
+  });
   const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
   if (!item) {
     console.warn(`[${task.id}] review task vanished before its findings could be routed (${review.detail})`);
@@ -719,7 +723,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
   const previousStatus = item.status;
   let exit: ReturnType<typeof exitSuiteReview>;
   try {
-    exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed });
+    exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed, earlierFindings });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     console.warn(`[${task.id}] suite-review exit rejected (${e.from} -> ${e.to}); review left at ${e.from} (${review.detail})`);

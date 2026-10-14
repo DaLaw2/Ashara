@@ -331,8 +331,8 @@ const VISION = {
   version: 2,
   visionText: "build the thing",
   inferences: [
-    { key: "A1", statement: "Greetings are written in lower case.", rationale: "the tender's sample", status: "Inferred" },
-    { key: "A2", statement: "The greeting file is plain text, one line.", rationale: "client answer", status: "Stated" },
+    { key: "A1", statement: "Greetings are written in lower case.", rationale: "the tender's sample", status: "Inferred", kind: "client-visible", disclosed: "reported" },
+    { key: "A2", statement: "The greeting file is plain text, one line.", rationale: "client answer", status: "Stated", kind: "client-visible", disclosed: "asked" },
   ],
 };
 
@@ -726,12 +726,16 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly baselineExit?: number;
     /** Like checkoutsBlocked, but only from the model's first call: the checkouts before the model are made. */
     readonly checkoutsBlockedAfterSweep?: boolean;
+    /** The exit code of the environment's build on a red run's foundation (W11 D2); 0 when absent. */
+    readonly foundationBuildExit?: number;
   }
 
   /** The delivered sweep's CI cell: told apart by its checkout, and kept out of `started` and `runs`. */
   const SWEEP_ID = "e".repeat(64);
   /** A CI cell red-running on the stored baseline: in `started` as "ci", told apart only for baselineExit. */
   const BASELINE_ID = "f".repeat(64);
+  /** The CI cell of the environment's build on a red run's foundation: kept out of `started` and `runs`. */
+  const FOUNDATION_BUILD_ID = "9".repeat(64);
 
   const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
     exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null, statusReport,
@@ -774,6 +778,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     /** Every `podman run`'s argv, as the substrate built it, but the delivered sweep's. */
     const runs: string[][] = [];
     const sweepRuns: string[][] = [];
+    const foundationBuilds: string[][] = [];
 
     const substrate = new PodmanSubstrate({
       podmanPath: "podman",
@@ -787,6 +792,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
               sweepRuns.push([...args]);
               return ok(`${SWEEP_ID}\n`);
             }
+            if (args.some((arg) => arg.includes("/checkouts/foundation-build-"))) {
+              foundationBuilds.push([...args]);
+              return ok(`${FOUNDATION_BUILD_ID}\n`);
+            }
             runs.push([...args]);
             const role: Role = args.includes("ashara.role=verifier") ? "verifier" : args.includes("ashara.role=ci") ? "ci" : "developer";
             started.push({ role, image: args.find((arg) => arg.startsWith("sha256:") || arg.includes("@sha256:")) });
@@ -799,6 +808,10 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             const probe = args.includes("ashara-sweep");
             // argv travels in the wrapper's environment; the command is its last element.
             const command = [...args].reverse().find((arg) => arg.startsWith("ASHARA_ARG_"))?.replace(/^ASHARA_ARG_\d+=/, "");
+            if (cellId === FOUNDATION_BUILD_ID) {
+              const exit = faults.foundationBuildExit ?? 0;
+              return ran(exit === 0 ? "built\n" : "error: no build manifest in the tree\n", exit);
+            }
             if (cellId === SWEEP_ID) return ran(faults.sweepExit === 0 ? "hello\n" : "", faults.sweepExit ?? 1);
             if (cellId === BASELINE_ID && faults.execFails !== "ci") return ran(faults.ciStdout ?? "hello\n", faults.baselineExit ?? faults.ciExit ?? 0);
             const role = cellId === BASELINE_ID ? "ci" : roleOf(cellId);
@@ -884,7 +897,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
     return {
-      result, events, warns, target, started, runs, sweepRuns, probe, workdirBase, taskId: task.id,
+      result, events, warns, target, started, runs, sweepRuns, foundationBuilds, probe, workdirBase, taskId: task.id,
       mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "",
     };
   }
@@ -932,8 +945,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     }
     // sprint0-run-2026-10-14 D9: the brief carries the vision's assumptions, not only its text.
     expect(system).toContain("vision version 2");
-    expect(system).toContain("- A1 (Inferred): Greetings are written in lower case.");
-    expect(system).toContain("- A2 (Stated): The greeting file is plain text, one line.");
+    expect(system).toContain("- A1 (Inferred; reported to the client, who has not objected; client-visible behaviour): Greetings are written in lower case.");
+    expect(system).toContain("- A2 (Stated by the client; client-visible behaviour): The greeting file is plain text, one line.");
   });
 
   test.each([
@@ -1123,6 +1136,43 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(mainAfter).toBe(mainBefore);
   });
 
+  // W11 D2: every revision-3 check failed on a foundation with no build manifest, and the red run kept them all.
+  test("checks from another environment version on a baseline the environment no longer builds: checks_stale, never trusted on failures the build caused", async () => {
+    const { result, probe, events, foundationBuilds } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 1, foundationBuildExit: 1 });
+
+    expect(foundationBuilds).toHaveLength(1);
+    expect(result.status, result.detail).toBe("checks_stale");
+    expect(result.detail).toContain("the environment's build fails on the baseline");
+    expect(result.detail).toContain("no build manifest in the tree");
+    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: false });
+    expect(probe.modelCalls).toBe(0);
+  });
+
+  test("a check task on a foundation the environment does not build: environment_undefined before the model; the red run is never reached", async () => {
+    const { result, probe, events, target, taskId, foundationBuilds, started } = await dispatch({ checkWork: true, foundationBuildExit: 1 });
+
+    expect(foundationBuilds).toHaveLength(1);
+    expect(result.status, result.detail).toBe("environment_undefined");
+    if (result.status !== "environment_undefined") return;
+    expect(result.reason).toContain("the environment's build");
+    expect(result.reason).toContain("fails on the plan's foundation");
+    expect(result.reason).toContain("no build manifest in the tree");
+    expect(result.errorEnvelope.chain.operation).toBe("foundationBuild");
+    expect(events.find((e) => e.event === "foundation_build")).toMatchObject({ passed: false, exitCode: 1 });
+    expect(events.some((e) => e.event === "agent_launched" || e.event === "check_red_run" || e.event === "task_checks_recorded")).toBe(false);
+    expect(probe.modelCalls).toBe(0);
+    expect(started.map((s) => s.role)).toEqual(["developer"]);
+    expect(await git(target, "branch", "--list", checkBranchName(taskId))).toBe("");
+  });
+
+  test("a check task on a foundation the environment builds: the build runs once before the model, then the attempt goes on", async () => {
+    const { probe, events, foundationBuilds } = await dispatch({ checkWork: true });
+
+    expect(foundationBuilds).toHaveLength(1);
+    expect(events.find((e) => e.event === "foundation_build")).toMatchObject({ passed: true, exitCode: 0 });
+    expect(probe.modelCalls).toBeGreaterThan(0);
+  });
+
   // The (c) review: a git or checkout step of the revalidating red run was rethrown into processTask.
   test("Z0 cannot make the revalidating red run's checkout: blocked under checkRedRun before the model, never a failure", async () => {
     const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), checkoutsBlocked: true });
@@ -1131,7 +1181,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     if (result.status !== "environment_blocked") return;
     expect(result.errorEnvelope.chain.operation).toBe("checkRedRun");
     expect(result.detail).toContain("stage checkRedRun (VerificationInfrastructureFault)");
-    expect(result.unavailable).toBe("verification infrastructure (red run on the baseline)");
+    expect(result.unavailable).toBe("verification infrastructure (build on the baseline)");
     expect(probe.modelCalls).toBe(0);
     expect(events.some((e) => e.event === "task_failed" || e.event === "agent_launched")).toBe(false);
     expect(mainAfter).toBe(mainBefore);

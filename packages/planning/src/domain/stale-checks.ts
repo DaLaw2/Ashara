@@ -256,6 +256,11 @@ interface SuiteReviewFindings {
    * durable record, suite_review_findings). Every named check task has an entry.
    */
   readonly timesNamed: ReadonlyMap<string, number>;
+  /**
+   * Per check task the problems name: every problem earlier reviews found in its checks, oldest
+   * first (ADR-074 addendum 2 d89 F). Every named check task has an entry, empty on its first review.
+   */
+  readonly earlierFindings: ReadonlyMap<string, readonly Omit<SuiteReviewProblem, "checkTaskIds">[]>;
 }
 
 type SuiteReviewExit =
@@ -277,6 +282,17 @@ class SuiteReviewCountMissing extends Error {
   }
 }
 
+/** The review's record names a check task without its earlier findings: a rewrite would be briefed on less than was found. */
+class SuiteReviewHistoryMissing extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly checkTaskId: string,
+  ) {
+    super(`review task ${reviewTaskId}: the findings name check task ${checkTaskId}, but no record of earlier reviews of it was read`);
+    this.name = "SuiteReviewHistoryMissing";
+  }
+}
+
 /** The review's problems name no check task: there is nothing to send them back to, and no problem to wait on. */
 class SuiteReviewNamesNoCheckTask extends Error {
   constructor(
@@ -293,24 +309,44 @@ function namedCheckTasks(problems: readonly SuiteReviewProblem[]): string[] {
   return [...new Set(problems.flatMap((problem) => problem.checkTaskIds))];
 }
 
-/** The review's problems as the check author reads them in its reopened task's brief. */
-function reviewBrief(checkTaskId: string, problems: readonly SuiteReviewProblem[]): string {
+function kindText(kind: SuiteReviewProblem["kind"]): string {
+  return kind === "contradiction" ? "checks that contradict each other" : "a check outside the task's cited vision items";
+}
+
+/**
+ * The review's problems as the check author reads them in its reopened task's brief, and every
+ * problem earlier reviews found in this task's checks (ADR-074 addendum 2 d89 F; W11: each rewrite was
+ * shown only the latest review, so a check one review had it drop came back and the next review
+ * named it again).
+ */
+function reviewBrief(
+  checkTaskId: string,
+  problems: readonly SuiteReviewProblem[],
+  earlier: readonly Omit<SuiteReviewProblem, "checkTaskIds">[],
+): string {
   const own = problems.filter((problem) => problem.checkTaskIds.includes(checkTaskId));
   return [
     `A review of every check this plan's check tasks wrote, read together with the vision before any of the work ` +
       `started, found problems with the checks this task recorded. Define the task's checks again so that none of ` +
       `these remains: checks that no product could pass together with the other checks named, or that test behaviour ` +
-      `no vision item of the task asks for. Keep every check that is not part of a problem.`,
+      `no vision item the task cites asks for. Keep every check that is not part of a problem.`,
     ...own.map((problem, i) => {
       const others = problem.checkTaskIds.filter((id) => id !== checkTaskId);
       return [
-        `Problem ${i + 1} (${problem.kind === "contradiction" ? "checks that contradict each other" : "a check outside the vision"}): ${problem.problem}`,
+        `Problem ${i + 1} (${kindText(problem.kind)}): ${problem.problem}`,
         others.length > 0 ? `It also involves the checks of check task(s) ${others.join(", ")}.` : "",
         `Evidence: ${problem.evidence}`,
       ]
         .filter((line) => line !== "")
         .join("\n");
     }),
+    ...(earlier.length === 0
+      ? []
+      : [
+          `Earlier reviews found these problems in this task's checks too. Your new checks must not bring any of them ` +
+            `back:\n` +
+            earlier.map((problem, i) => `Earlier problem ${i + 1} (${kindText(problem.kind)}): ${problem.problem}\nEvidence: ${problem.evidence}`).join("\n"),
+        ]),
   ].join("\n\n");
 }
 
@@ -337,6 +373,7 @@ export function exitSuiteReview(
   for (const checkTaskId of named) {
     const times = findings.timesNamed.get(checkTaskId);
     if (times === undefined) throw new SuiteReviewCountMissing(review.id, checkTaskId);
+    if (!findings.earlierFindings.has(checkTaskId)) throw new SuiteReviewHistoryMissing(review.id, checkTaskId);
     if (times > SUITE_REVIEW_BOUND) {
       giveUpWorkItem(review, {
         source: "suite_review_unresolved",
@@ -367,10 +404,12 @@ export function exitSuiteReview(
   }
   for (const { item, checkedTaskId } of reopenable) {
     const times = findings.timesNamed.get(item.id);
+    const earlier = findings.earlierFindings.get(item.id);
+    if (earlier === undefined) throw new SuiteReviewHistoryMissing(review.id, item.id);
     reopenCheckTask(
       item,
       checkedTaskId,
-      reviewBrief(item.id, findings.problems),
+      reviewBrief(item.id, findings.problems, earlier),
       { reviewTaskId: review.id, reviewed: times },
       { review_task_id: review.id, review: times },
     );

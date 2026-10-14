@@ -175,14 +175,19 @@ describe("lifecycle simulator, fast tier", () => {
 
   // B9 (baseline §7.7), fixed in Finance: an admission sums the in-flight estimates before it reads
   // the recorded spend. Planted back (ledger-read-first), the other task's call is recorded and
-  // released between the spend read and the in-flight sum and counts in neither. Seed 23 because
-  // the window needs the tape to hand the turn on at the read's return and back only after the
-  // other task's release: observed in seeds 1-80 at cap $10 on seed 23 alone (at cap $6, seed 7).
+  // released between the spend read and the in-flight sum and counts in neither. The window needs
+  // the tape to hand the turn on at the read's return and back only after the other task's release:
+  // observed in seeds 1-80 at cap $10 on seed 23 alone, at cap $6 on seed 7 alone. Seed 7 at $6 since
+  // the stand-in plan's lines name their sources (ADR-074 addendum 2 d89 A): ledger-read-first over
+  // seeds 1-80 at $10 then caught it on none, and at $6 on seed 7 alone, which fails I5:over-committed
+  // alone and passes clean (observed, scan of 2026-10-14). Why the change moved the window: unverified.
   it("catches an admission that counts a just-recorded call in neither the spend nor the in-flight sum", async () => {
-    const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(23, undefined, shared);
+    // The race needs two admissions to meet near the cap, so it hangs on the calls' estimated prices:
+    // the check author's brief and tools grew (W11 D4) and seed 23 at $10 no longer met it.
+    const shared = { projects: 2, capUsd: 6 } as const;
+    const clean = await seeded(7, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
-    const planted = await seeded(23, "ledger-read-first", shared);
+    const planted = await seeded(7, "ledger-read-first", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

@@ -56,6 +56,12 @@ export type CheckDefinitionResult =
   /** The model can fix it: the reason is told to it as the tool's error. */
   | { readonly kind: "refused"; readonly reason: string };
 
+/** probe_foundation's run of one command on the foundation: nothing of it is recorded. */
+export type FoundationProbe =
+  | { readonly kind: "ran"; readonly run: CheckRun; readonly timeoutSeconds: number }
+  | { readonly kind: "files_refused"; readonly detail: string }
+  | { readonly kind: "product_changed"; readonly detail: string };
+
 /**
  * Z0's side of define_check, supplied by the execution service for a check task only: it keeps
  * each definition (the last of a name wins) for Z0 to harvest when the attempt finishes, and
@@ -68,4 +74,10 @@ export interface CheckDefinitionPort {
    */
   fileWritten(path: string): void;
   define(check: CheckDefinition, timeoutSeconds: number): Promise<CheckDefinitionResult>;
+  /**
+   * Runs one command on the foundation the way define_check red-runs a check, and records nothing:
+   * the author's way to look at the foundation, so no command it runs only to look around is ever
+   * stored as an acceptance check (W11 D4). A substrate that cannot run it throws.
+   */
+  probe(command: string, timeoutSeconds: number): Promise<FoundationProbe>;
 }

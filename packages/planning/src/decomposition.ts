@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
 import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
-import { ProjectKnowledgeSchema } from "@ashara/shared";
+import { PUBLIC_INTERFACE_FILE, ProjectKnowledgeSchema, visionSourceLine } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
     DecomposedTaskSpec,
@@ -11,10 +11,13 @@ import type {
     DroppedDependency,
     PriorEpicResult,
     TaskSpec,
+    TracedLine,
+    UntracedLine,
     VisionItem,
     WorkItemSpec,
 } from "./decomposition-types.js";
 import {
+    citable,
     DEFAULT_DECOMPOSITION_CONFIG,
     TaskCapExceededError,
     TaskOutputSchema,
@@ -157,8 +160,15 @@ export class DecompositionEngine {
             input.environment.kind === "new"
                 ? this.ensureSprint0Task(epic.id, allTasks, dependencyEdges)
                 : dependOnEnvironment(input.environment.taskId, allTasks, dependencyEdges);
+        // A revision on a layout already merged red-runs its checks on that layout's latest merged
+        // state (layout.taskId), never on an environment task merged before it (W11 D2); a new
+        // environment task of the revision lands on that state, so it is the foundation then.
         const foundationId =
-            input.layout.kind === "new" ? addProductScaffold(epic.id, environmentId, allTasks, dependencyEdges) : environmentId;
+            input.layout.kind === "new"
+                ? addProductScaffold(epic.id, environmentId, allTasks, dependencyEdges)
+                : input.environment.kind === "new"
+                  ? environmentId
+                  : input.layout.taskId;
         const plannedTasks = addReviewTask(
             epic.id,
             foundationId,
@@ -291,26 +301,28 @@ export class DecompositionEngine {
             // First-writer-wins on duplicate titles so an edge resolves to the
             // earliest task with that title rather than being clobbered.
             if (!titleToId.has(raw.title)) titleToId.set(raw.title, id);
-            return { raw, id, tracedTexts: traced.texts };
+            return { raw, id, traced };
         });
 
-        return assigned.map(({ raw, id, tracedTexts }) => ({
+        return assigned.map(({ raw, id, traced }) => ({
             id,
             level: "task" as const,
             title: raw.title,
             description: raw.description,
-            successCriteria: raw.successCriteria,
+            successCriteria: traced.acceptance.map((line) => line.line),
             parentId,
             dependsOn: this.resolveDependsOn(raw, id, refToId, titleToId, parentId),
             taskSpec: {
                 goal: raw.goal || raw.description || raw.title,
                 endState: raw.endState,
                 scope: raw.scope,
-                deliverables: raw.deliverables,
+                deliverables: raw.deliverables.map((deliverable) => deliverable.text),
                 capability: raw.capability,
                 capabilityReason: raw.capabilityReason,
                 origin: "decomposition" as const,
-                visionItems: tracedTexts,
+                visionItems: traced.sources.map((item) => item.text),
+                sources: traced.sources,
+                acceptance: traced.acceptance,
             },
         }));
     }
@@ -421,7 +433,7 @@ export class DecompositionEngine {
         visionItems: readonly VisionItem[],
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "visionItems": ["S1"], "capability": "Medium", "capabilityReason": "..."}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["S1"]}], "acceptance": [{"text": "...", "sources": ["S1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [
             `${instruction}.`,
@@ -455,20 +467,20 @@ export class DecompositionEngine {
 
         lines.push(
             ``,
-            `Vision items (what the client asked for, each with its id):`,
-            ...visionItems.map((item) => `- ${item.id}: ${item.text}`),
+            `Vision items (what the client asked for, each with its id). A scope line or a client-visible assumption may be cited; an internal-design assumption is how the team builds the product, guidance for its implementer that no deliverable or acceptance line cites:`,
+            ...visionItems.map((item) => `- ${visionSourceLine(item)}`),
         );
 
         const examples = DECOMPOSITION_EXAMPLES;
         lines.push(
             ``,
             `Task Quality Requirements:`,
-            `- In "visionItems", list the ids of the vision items above that the task delivers, at least one. Plan no behavior that no vision item asks for: a task that names no vision item, or names an id not listed above, is rejected.`,
+            `- Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves, at least one each. A line that names no item, names an id not listed above, or names an internal-design assumption is rejected. Plan no behavior that no citable item asks for, and write no line that uses an assumption it does not name: the items a task delivers are exactly those its lines name.`,
+            `- "acceptance" lines decide the task done: each is an observable outcome a user of the product could confirm (e.g., ${examples.successExample}), and the task's checks test each line against the items it names.`,
             `- Emit at most ${taskCap} tasks. A response with more is rejected, not truncated: merge related work instead.`,
             `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
             `- Describe each task by what the product does when it is finished, in the client's terms.`,
-            `- successCriteria are observable outcomes a user of the product could confirm (e.g., ${examples.successExample}).`,
-            `- endState, scope and deliverables are required for every task; a task missing any of them is rejected.`,
+            `- endState, scope, deliverables and acceptance are required for every task; a task missing any of them is rejected.`,
             `- deliverables are observable outcomes (e.g., ${examples.deliverablesExample}), not generic descriptions.`,
             `- endState must be an observable condition (e.g., ${examples.endStateExample}) not vague ("complete", "done", "works").`,
             `- scope names the part of the product the task covers (e.g., ${examples.scopeExample}) not "the project".`,
@@ -560,14 +572,6 @@ const SPRINT0_DESCRIPTION =
 
 const SCAFFOLD_TITLE = "Set up the product's layout";
 
-/**
- * Where the scaffold writes down the product's public interface, which every check author reads
- * (W5 trial 2026-10-14, W1: with no interface fixed, check authors guessed it and their checks
- * accepted 8 ways to start the product and 6 ways to complete an item). Ashara's own convention, the
- * same for every product; what the interface is, is the product's.
- */
-const PUBLIC_INTERFACE_FILE = "PUBLIC_INTERFACE.md";
-
 const SCAFFOLD_DESCRIPTION =
     "Set up the product's skeleton in the environment the platform role defined: its module root, its manifests " +
     "and its entry point, laid out so that the environment's build and test commands pass from the repository root " +
@@ -578,8 +582,11 @@ const SCAFFOLD_DESCRIPTION =
     "route with its request and response shapes and statuses, each function or type of a library's API, or whatever " +
     "else the product exposes), how it is started and configured (arguments, environment variables, the files it " +
     "reads and writes, a port), and the error each entry gives for input it refuses. Choose one form for each: never " +
-    "alternatives. Implement none of the behaviour the vision asks for: each later task delivers its own, and its " +
-    "checks are written against this layout and this interface. The product is a placeholder of the interface: it " +
+    "alternatives. Where an assumption marked internal design fixes part of what the product exposes (a command's " +
+    "name, a file the client reads), write it into the interface as that assumption states it; the other " +
+    "internal-design assumptions are how later tasks build the product, not part of its interface. Implement none " +
+    "of the behaviour the vision asks for: each later task delivers its own, and its checks are written against " +
+    "this layout and this interface. The product is a placeholder of the interface: it " +
     "starts and runs exactly as the interface says, and answers every entry of the interface with a refusal (an error " +
     "response, a non-zero exit status, a raised error, as the entry's kind has) saying the product does not do that " +
     "yet, so that a check of any behaviour fails on it because the behaviour is missing, never because the product " +
@@ -654,21 +661,22 @@ function bulleted(lines: readonly string[]): string {
 /**
  * The check task of one decomposed task (ADR-074 addendum 2 d63): the check author
  * writes the checks that decide whether it is done, after the plan's foundation (the
- * product scaffold, or the environment of a revision, d72 B2) and before any
+ * product scaffold, or a revision's latest merged layout or new environment, d72 B2) and before any
  * implementation task of the plan starts (d67 a). Its text names no stack: the checks
  * are commands of the project environment. `checksFor` names the task its checks decide,
  * since every implementation task depends on every check task and the edges cannot say.
  */
 function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask): PlannedTask {
     const goal =
-        `Write the checks that decide whether "${task.title}" is done: observable behaviour from its deliverables ` +
-        `and acceptance; each check is a command the project environment can run`;
+        `Write the checks that decide whether "${task.title}" is done: the observable behaviour its acceptance lines ` +
+        `ask for, each tested against the vision items it cites; each check is a command the project environment can run`;
     const description = [
         `${goal}.`,
-        `Vision items "${task.title}" delivers (its checks may test only these, and the inputs they say to reject):\n` +
-            bulleted(task.taskSpec.visionItems),
-        `Deliverables of "${task.title}":\n${bulleted(task.taskSpec.deliverables)}`,
-        `Acceptance of "${task.title}":\n${bulleted(task.successCriteria)}`,
+        `Vision items "${task.title}" cites (its checks may test only what these ask for, and the inputs they say to ` +
+            `reject):\n${bulleted(task.taskSpec.sources.map(visionSourceLine))}`,
+        `Acceptance of "${task.title}", each line with the items it serves:\n` +
+            bulleted(task.taskSpec.acceptance.map((line) => `[${line.sources.join(", ")}] ${line.line}`)),
+        `Deliverables of "${task.title}", for context:\n${bulleted(task.taskSpec.deliverables)}`,
         `Read the product's public interface in ${PUBLIC_INTERFACE_FILE} at the repository root before writing any ` +
             "check, and test the product only through that interface, in the one form it names: never try other ways " +
             "to start, configure or call the product. On the foundation the product starts and refuses every entry, " +
@@ -700,6 +708,8 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
             origin: "check",
             checksFor: task.id,
             visionItems: task.taskSpec.visionItems,
+            sources: task.taskSpec.sources,
+            acceptance: task.taskSpec.acceptance,
         },
     };
 }
@@ -720,8 +730,8 @@ function reviewTaskFor(
     const description = [
         `Read every check this plan's check tasks wrote, all together and with the vision, before any of the plan's ` +
             `work starts. Name every set of checks that no product could pass together, and every check that tests ` +
-            `behaviour no vision item asks for.`,
-        `Vision items:\n${bulleted(visionItems.map((item) => item.text))}`,
+            `behaviour none of the vision items its own task cites asks for.`,
+        `Vision items:\n${bulleted(visionItems.map(visionSourceLine))}`,
     ].join("\n\n");
     const successCriteria = [
         "every stored check of the plan was read with the vision",
@@ -743,13 +753,14 @@ function reviewTaskFor(
             capability: PLANNER_SET_LEVEL,
             origin: "review",
             visionItems: visionItems.map((item) => item.text),
+            sources: [...visionItems],
         },
     };
 }
 
 /**
  * Adds the review task after every task of the plan: it depends on the plan's foundation (the product
- * scaffold, or a revision's environment task) and on every check task, and every decomposed task
+ * scaffold, or a revision's latest merged layout or new environment task) and on every check task, and every decomposed task
  * depends on it (beside its edges to every check task, d67 a).
  */
 function addReviewTask(
@@ -774,29 +785,51 @@ function isDecomposed(task: PlannedTask): task is DecomposedTask {
 }
 
 type VisionTrace =
-    | { readonly kind: "traced"; readonly texts: string[] }
+    | {
+          readonly kind: "traced";
+          /** The union of every line's sources, in the vision's order. */
+          readonly sources: VisionItem[];
+          readonly acceptance: TracedLine[];
+      }
     | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
 
 /**
- * The vision items a raw task names, each by its prompt id or its exact text, as their texts in the
- * vision's order. Untraceable when it names none, or names anything that is no item of the vision.
+ * The vision items a raw task's deliverables and acceptance lines cite (ADR-074 addendum 2 d89 A), each
+ * by its id or its exact text. Untraceable when a line cites none, cites anything that is no item of
+ * the vision, or cites an item no line may cite (d89 E): an internal-design or unclassified
+ * assumption. The task's traced items are then exactly the union of what its lines cite.
  */
 function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentId: string): VisionTrace {
-    const named = raw.visionItems.map((entry) => entry.trim());
-    const unknown = named.filter((entry) => !visionItems.some((item) => item.id === entry || item.text === entry));
-    if (named.length === 0 || unknown.length > 0) {
+    const lookup = (entry: string) => visionItems.find((item) => item.id === entry || item.text === entry);
+    const problems: UntracedLine[] = [];
+    const cited = new Set<string>();
+    const lineIds = (field: "deliverable" | "acceptance", line: { readonly text: string; readonly sources: readonly string[] }) => {
+        const ids: string[] = [];
+        if (line.sources.length === 0) problems.push({ field, text: line.text, problem: "no-source" });
+        for (const source of line.sources.map((entry) => entry.trim())) {
+            const item = lookup(source);
+            if (item === undefined) problems.push({ field, text: line.text, problem: "unknown", source });
+            else if (item.type === "assumption" && item.kind !== "client-visible") {
+                problems.push({ field, text: line.text, problem: "not-citable", source: item.id, kind: item.kind });
+            } else if (!ids.includes(item.id)) ids.push(item.id);
+        }
+        for (const id of ids) cited.add(id);
+        return ids;
+    };
+    for (const deliverable of raw.deliverables) lineIds("deliverable", deliverable);
+    const acceptance = raw.acceptance.map((line) => ({ line: line.text, sources: lineIds("acceptance", line) }));
+    if (problems.length > 0) {
         return {
             kind: "untraceable",
             error: new UntraceableTaskError({
                 taskTitle: raw.title,
-                unknown,
-                availableIds: visionItems.map((item) => item.id),
+                lines: problems,
+                citableIds: visionItems.filter(citable).map((item) => item.id),
                 parentId,
             }),
         };
     }
-    const texts = visionItems.filter((item) => named.includes(item.id) || named.includes(item.text)).map((item) => item.text);
-    return { kind: "traced", texts };
+    return { kind: "traced", sources: visionItems.filter((item) => cited.has(item.id)), acceptance };
 }
 
 /** Every planned task depends on the environment task already done; returns its id. */
@@ -811,7 +844,7 @@ function dependOnEnvironment(
 
 /**
  * Gives every decomposed task its check task, each depending on the plan's foundation (the product
- * scaffold of a new project, d72 B2, or the environment task of a revision), and makes every
+ * scaffold of a new project, d72 B2, or a revision's latest merged layout or new environment task), and makes every
  * decomposed task depend on every check task of the plan (ADR-074 addendum 2 d67 a): all checks
  * are authored before any implementation starts, as a QA team writes a sprint's acceptance tests up
  * front, and every authoring is red-run against the foundation's recorded merge (d74 A). Each check task is placed

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
+import { StoredAssumptionKindSchema, assumptionStanding, describeErrorChain } from "@ashara/shared";
 import type { AgentBrief, WorkItemId } from "@ashara/shared";
 
 /** The project's current vision as stored: its version, its text verbatim, and its inferences jsonb unparsed. */
@@ -36,8 +36,16 @@ export class ProjectIntentUnavailable extends Error {
 // The keyed assumption records intake and the stack choice write (vision_documents.inferences).
 // The map shape the deleted CLI path wrote carries no ids, so a worker could not be told which
 // assumption it may not contradict: it is refused, never rendered without them.
+// Each carries its kind and how the client learned of it when the record says (ADR-074 addendum 2
+// d89); a record that says neither is rendered as unclassified and not shown to the client.
 const StoredAssumptionsSchema = z.array(
-  z.looseObject({ key: z.string().min(1), status: z.string().min(1), statement: z.string().min(1) }),
+  z.looseObject({
+    key: z.string().min(1),
+    status: z.string().min(1),
+    statement: z.string().min(1),
+    kind: StoredAssumptionKindSchema,
+    disclosed: z.unknown().optional(),
+  }),
 );
 
 /** The task's project intent; throws {@link ProjectIntentUnavailable} when there is none or it cannot be read. */
@@ -59,6 +67,12 @@ export async function loadProjectIntent(source: ProjectIntentSource, taskId: Wor
   return {
     intent: vision.visionText.trim(),
     visionVersion: vision.version,
-    assumptions: assumptions.data.map(({ key, status, statement }) => ({ key, status, statement })),
+    assumptions: assumptions.data.map((a) => ({
+      key: a.key,
+      status: a.status,
+      statement: a.statement,
+      standing: assumptionStanding(a),
+      kind: a.kind,
+    })),
   };
 }

@@ -4,7 +4,15 @@ import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
 import { runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
-import type { CheckDefinition, CheckRedRunPreview, CheckRun, CheckRunReport, ProductChangedReport } from "@ashara/workplace";
+import type {
+  CheckDefinition,
+  CheckRedRunPreview,
+  CheckRun,
+  CheckRunReport,
+  EnvironmentTestRun,
+  FoundationProbe,
+  ProductChangedReport,
+} from "@ashara/workplace";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { TreePathRefused, readTreeFile, writeTreeFile } from "./tree-read.js";
 import { cleanupWorkdir } from "./workspace.js";
@@ -91,7 +99,8 @@ export interface TaskCheckStore {
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /**
    * The check task's foundation (ADR-074 addendum 2 d74 A): the recorded merge of the product
-   * scaffold it depends on, or of its environment task for a plan revision with no scaffold.
+   * scaffold it depends on, or of its one dependency merged after the scaffold for a plan revision
+   * with no scaffold of its own; none for a dependency merged before it (W11 D2).
    */
   foundationOf(checkTaskId: WorkItemId): Promise<CheckFoundation>;
   /**
@@ -186,6 +195,35 @@ export class StoredChecksStale extends Error {
     this.revision = stored.revision;
     this.storedVersion = stored.environmentVersion;
     this.baselineCommit = stored.baselineCommit;
+  }
+}
+
+/** The environment's build on a red run's foundation, as a record and a brief read it: its command, exit and output's end. */
+export function describeFoundationBuild(build: EnvironmentTestRun): string {
+  const exit = build.timedOut ? "timed out" : build.exitCode === null ? "killed without an exit code" : `exit code ${build.exitCode}`;
+  const output = `${build.stdout.text}${build.stderr.text}`.trim();
+  return `\`${build.command}\`: ${exit}\n${output === "" ? "(no output)" : tailOf(output)}`;
+}
+
+/**
+ * The environment's build fails on a red run's foundation (W11 D2): every check would fail there
+ * because nothing builds, which says nothing about whether it tells the task's work from its
+ * absence. The red run is unrunnable, never accepted. Names no commit: its message reaches the plan
+ * repair's evidence; the commit goes to the event.
+ */
+export class FoundationUnbuildable extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly foundationTaskId: string,
+    readonly environmentVersion: string,
+    readonly build: EnvironmentTestRun,
+  ) {
+    super(
+      `the environment's build (version ${environmentVersion}) fails on the plan's foundation, the merge of task ` +
+        `${foundationTaskId}, so no check of task ${taskId} can be red-run there: a check failing on a product that ` +
+        `does not build proves nothing about the work it decides. The build: ${describeFoundationBuild(build)}`,
+    );
+    this.name = "FoundationUnbuildable";
   }
 }
 
@@ -605,6 +643,17 @@ export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, ch
   if (run === undefined) throw new SuiteRunMissing(checkoutDir);
   const rejection = redRunProblem(run);
   return { kind: "ran", run, timeoutSeconds, rejection, holdsAlready: rejection === null && !failsDecisively(run) };
+}
+
+/** probe_foundation's run of one command on the foundation, as the author is shown it; nothing of it is recorded. */
+export function foundationProbeOf(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string): FoundationProbe {
+  if (report.kind === "files_refused") {
+    return { kind: "files_refused", detail: `the check files cannot be placed on the foundation: ${report.detail}` };
+  }
+  if (report.kind === "product_changed") return { kind: "product_changed", detail: `on the foundation, ${describeProductChange(report)}` };
+  const [run] = report.runs;
+  if (run === undefined) throw new SuiteRunMissing(checkoutDir);
+  return { kind: "ran", run, timeoutSeconds };
 }
 
 /**

@@ -473,13 +473,23 @@ function isEnvironmentTask(item: WorkItem): boolean {
 }
 
 /**
- * The product layout a revision builds on (ADR-074 addendum 2 d72 B2): the latest completed product
- * scaffold, or a new one when none completed (an open one is superseded with the rest).
+ * The product layout a revision builds on (ADR-074 addendum 2 d72 B2), or a new one when no scaffold
+ * completed (an open one is superseded with the rest). Built on, its taskId is the layout's latest
+ * merged state: of the latest completed product scaffold and every task with a merge on record that
+ * completed after it, the last to complete. Never a task merged before the scaffold, whose commit
+ * holds no product to build (W11 D2). A Completed task with a merge takes no later transition (only
+ * a check task is reopened, and nothing of it is merged), so its updatedAt is when it completed.
  */
 function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
   const scaffolds = completed.filter(({ item }) => item.taskSpec?.origin === "product-scaffold");
-  const current = scaffolds[scaffolds.length - 1];
-  return current === undefined ? { kind: "new" } : { kind: "existing", taskId: current.item.id };
+  const scaffold = scaffolds[scaffolds.length - 1];
+  if (scaffold === undefined) return { kind: "new" };
+  let latest = scaffold;
+  for (const planned of completed) {
+    if (planned.mergeCommit === null) continue;
+    if (planned.item.updatedAt.getTime() > latest.item.updatedAt.getTime()) latest = planned;
+  }
+  return { kind: "existing", taskId: latest.item.id };
 }
 
 /** The work already done, kept as the revision's context: titles and what merged them. */

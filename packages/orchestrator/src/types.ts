@@ -227,7 +227,17 @@ interface SuiteReviewFindingsEntry {
   }>;
 }
 
-/** Appends the findings; resolves, per named check task, to how many reviews have named it, this one included. */
+/**
+ * Appends the findings; resolves, per named check task, to how many reviews have named it, this one
+ * included, and to every problem the earlier reviews found in its checks, oldest first (ADR-074
+ * addendum 2 d89 F).
+ */
 interface SuiteReviewFindingRecord {
-  record(findings: SuiteReviewFindingsEntry): Promise<ReadonlyMap<string, number>>;
+  record(findings: SuiteReviewFindingsEntry): Promise<{
+    readonly timesNamed: ReadonlyMap<string, number>;
+    readonly earlierFindings: ReadonlyMap<
+      string,
+      ReadonlyArray<{ readonly kind: "contradiction" | "outside-vision"; readonly problem: string; readonly evidence: string }>
+    >;
+  }>;
 }

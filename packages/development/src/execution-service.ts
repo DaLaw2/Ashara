@@ -20,11 +20,23 @@ import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, Clock, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRunPreview, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
+import type {
+  AssignmentRole,
+  AttemptCellImage,
+  CheckDefinition,
+  CheckDefinitionPort,
+  CheckRedRunPreview,
+  CheckRunReport,
+  EnvironmentTestRun,
+  FoundationProbe,
+  Outcome,
+  TaskCheckRunPort,
+} from "@ashara/workplace";
 import {
   checkPassed,
   checkVerdict,
   describeProductChange,
+  environmentBuildPassed,
   environmentCheckPassed,
   environmentCommandsPassed,
   environmentProbePassed,
@@ -40,7 +52,7 @@ import type { SessionAttempt } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
 import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
-import { environmentCheckPort, runPostMergeEnvironmentCommands, runPostMergeProbe, runSubstrateGate } from "./environment-check.js";
+import { environmentCheckPort, runFoundationBuild, runPostMergeEnvironmentCommands, runPostMergeProbe, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
 import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
@@ -54,11 +66,14 @@ import type { CheckoutLease } from "./checkout-lock.js";
 import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
+  FoundationUnbuildable,
   StoredChecksStale,
   checkAreaOf,
   checkBranchName,
+  describeFoundationBuild,
   discardCheckWorkdir,
   dropCheckBranch,
+  foundationProbeOf,
   formatChecksForBrief,
   formatFoundationForCheckAuthor,
   formatProjectChecksForCheckAuthor,
@@ -1116,7 +1131,7 @@ export class DevelopmentService {
 
     // A review of the plan's suites reads stored checks and the vision in one structured call: no
     // substrate, environment, worktree or cell is involved, so none is probed.
-    if (task.taskSpec?.origin === "review") return this.reviewSuites(task, sessionId);
+    if (task.taskSpec?.origin === "review") return this.reviewSuites(task, sessionId, targetProjectPath);
 
     // First, before the contract, the brief (which may call an LLM) or the
     // worktree: a substrate that cannot host the task blocks it here, so no
@@ -1397,11 +1412,11 @@ export class DevelopmentService {
    * model call is a refusal like an agent's; any other error, an unreadable suite or a verdict that
    * never validated included, fails the review, so nothing is released on it.
    */
-  private async reviewSuites(task: TaskDescriptor, sessionId: string): Promise<ExecutionResult> {
+  private async reviewSuites(task: TaskDescriptor, sessionId: string, targetProjectPath: string): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
     let outcome: Awaited<ReturnType<SuiteReviewing["review"]>>;
     try {
-      outcome = await this.deps.suiteReview.review(task);
+      outcome = await this.deps.suiteReview.review(task, targetProjectPath);
     } catch (e) {
       const refusal = preCallRefusalOf(e);
       if (refusal !== null) {
@@ -1558,8 +1573,10 @@ export class DevelopmentService {
       | "delivered-sweep"
       | `run-checks-${number}`
       | `define-check-${number}`
+      | `probe-foundation-${number}`
       | "environment-check"
-      | "substrate-gate",
+      | "substrate-gate"
+      | "foundation-build",
   ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
@@ -1703,6 +1720,12 @@ export class DevelopmentService {
       if (stale !== null) return stale;
       const delivered = await this.sweepDelivered(d, d.work.stored);
       if (delivered !== null) return delivered;
+    }
+    // A check author is dispatched only on a foundation the environment builds (W11 D2): on one it
+    // does not, every check fails for that reason alone and the red run could decide nothing.
+    if (d.work.kind === "check-authoring") {
+      const unbuilt = await this.foundationBuildGate(d, d.work);
+      if (unbuilt !== null) return unbuilt;
     }
 
     eventSink?.emit({
@@ -2738,6 +2761,73 @@ export class DevelopmentService {
   }
 
   /**
+   * Before a check author's model is called (W11 D2): the environment's `build` from this dispatch's
+   * image on a fresh checkout of the plan's foundation, as the merge gate builds before it runs
+   * anything. Passing: null, and every red run of the attempt (define_check's and the one at
+   * finish) is on a foundation that builds, so a check failing there fails for its own reason. Failing:
+   * the red run is unrunnable, never accepted. A re-dispatch would meet the same foundation in the
+   * same environment, so the task is not failed: it ends `environment_undefined`, which gives it up
+   * for a plan repair with the build as evidence. A build that could not run at all is environment-blocked.
+   */
+  private async foundationBuildGate(d: Dispatch, work: CheckAuthoring): Promise<ExecutionResult | null> {
+    const { eventSink } = this.deps;
+    const { task, sessionId, targetProjectPath } = d;
+    let build: EnvironmentTestRun;
+    try {
+      build = await runFoundationBuild(
+        this.environmentScope(d),
+        RED_RUN_ROLE,
+        work.environment.imageId,
+        work.foundation.commit,
+        work.environment.definition,
+        this.deps.attemptPolicy.perCommandTimeoutSeconds,
+      );
+    } catch (e) {
+      await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
+      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "build on the foundation");
+    }
+    const passed = environmentBuildPassed(build);
+    eventSink?.emit({
+      event: "foundation_build",
+      taskId: task.id,
+      attempt: task.attempt,
+      foundationTaskId: work.foundation.taskId,
+      baselineCommit: work.foundation.commit,
+      environmentVersion: work.environment.version,
+      exitCode: build.exitCode,
+      timedOut: build.timedOut,
+      passed,
+      ...(passed ? {} : { build: describeFoundationBuild(build) }),
+    });
+    if (passed) return null;
+
+    await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch);
+    const unbuildable = new FoundationUnbuildable(task.id, work.foundation.taskId, work.environment.version, build);
+    const summary = `no check of task ${task.id} can be red-run: ${unbuildable.message}; no agent ran`;
+    console.warn(`[${task.id}] ${summary}`);
+    eventSink?.emit({ event: "task_blocked", taskId: task.id, attempt: task.attempt, stage: "foundationBuild", errorClass: unbuildable.name, reason: summary });
+    return {
+      status: "environment_undefined",
+      reason: unbuildable.message,
+      detail: summary,
+      output: null,
+      sessionId,
+      attempt: task.attempt,
+      errorEnvelope: {
+        outcome: "blocked",
+        summary,
+        chain: wrapError("development", "foundationBuild", unbuildable, {
+          taskId: task.id,
+          foundationTaskId: work.foundation.taskId,
+          environmentVersion: work.environment.version,
+          exitCode: build.exitCode,
+          timedOut: build.timedOut,
+        }),
+      },
+    };
+  }
+
+  /**
    * define_check's port (ADR-074 addendum 2 d65 a): records the definition, the last of a name
    * winning, then red-runs that one check at once by the harvest's own machinery: the files the
    * attempt has changed so far (a snapshot of its throwaway worktree, by the harvest's rules) are
@@ -2749,43 +2839,60 @@ export class DevelopmentService {
    */
   private checkDefinitionPort(d: Dispatch, work: CheckAuthoring): CheckDefinitionPort {
     let runs = 0;
+    // One command on a fresh checkout of the foundation with the attempt's check files so far over
+    // it, by the harvest's own rules: define_check's red run and probe_foundation's look alike.
+    const onFoundation = async (
+      check: CheckDefinition,
+      timeoutSeconds: number,
+      purpose: "define-check" | "probe-foundation",
+    ): Promise<{ readonly report: CheckRunReport; readonly dir: string; readonly discarded: readonly string[] }> => {
+      runs += 1;
+      const dir = this.checkoutDir(d, `${purpose}-${runs}`);
+      try {
+        const harvest = await previewCheckFiles(
+          d.repo,
+          d.task.id,
+          work.startCommit,
+          buildContextPaths(work.environment.definition),
+          work.recorder.writtenFiles(),
+          checkAreaOf(work.checkedTaskId),
+        );
+        if (harvest.kind === "rejected") return { report: { kind: "files_refused", detail: harvest.reason }, dir, discarded: [] };
+        const report = await runChecksOnCheckout(
+          { ...this.checkCells(d), timeoutSeconds },
+          RED_RUN_ROLE,
+          work.environment.imageId,
+          work.foundation.commit,
+          dir,
+          [check],
+          harvest.files,
+        );
+        return { report, dir, discarded: harvest.discarded };
+      } catch (e) {
+        if (environmentErrorOf(e) !== null) throw e;
+        throw new VerificationInfrastructureFault(d.task.id, purpose === "define-check" ? "define_check red run" : "probe_foundation run", { cause: e });
+      }
+    };
     return {
       fileWritten: (path) => work.recorder.fileWritten(path),
+      probe: async (command, timeoutSeconds): Promise<FoundationProbe> => {
+        const { report, dir } = await onFoundation({ name: "probe", command }, timeoutSeconds, "probe-foundation");
+        this.deps.eventSink?.emit({
+          event: "foundation_probed",
+          taskId: d.task.id,
+          attempt: d.task.attempt,
+          command,
+          ...(report.kind === "ran"
+            ? { exitCode: report.runs[0]?.exitCode ?? null, timedOut: report.runs[0]?.timedOut ?? false }
+            : { notRun: report.kind }),
+        });
+        return foundationProbeOf(report, timeoutSeconds, dir);
+      },
       define: async (check, timeoutSeconds) => {
         const recording = work.recorder.record(check);
         if (recording.kind === "refused") return recording;
-        runs += 1;
-        let redRun: CheckRedRunPreview;
-        let discarded: readonly string[] = [];
-        try {
-          const harvest = await previewCheckFiles(
-            d.repo,
-            d.task.id,
-            work.startCommit,
-            buildContextPaths(work.environment.definition),
-            work.recorder.writtenFiles(),
-            checkAreaOf(work.checkedTaskId),
-          );
-          if (harvest.kind === "rejected") {
-            redRun = { kind: "files_refused", detail: harvest.reason };
-          } else {
-            discarded = harvest.discarded;
-            const dir = this.checkoutDir(d, `define-check-${runs}`);
-            const report = await runChecksOnCheckout(
-              { ...this.checkCells(d), timeoutSeconds },
-              RED_RUN_ROLE,
-              work.environment.imageId,
-              work.foundation.commit,
-              dir,
-              [check],
-              harvest.files,
-            );
-            redRun = redRunPreview(report, timeoutSeconds, dir);
-          }
-        } catch (e) {
-          if (environmentErrorOf(e) !== null) throw e;
-          throw new VerificationInfrastructureFault(d.task.id, "define_check red run", { cause: e });
-        }
+        const { report, dir, discarded } = await onFoundation(check, timeoutSeconds, "define-check");
+        const redRun: CheckRedRunPreview = redRunPreview(report, timeoutSeconds, dir);
         this.deps.eventSink?.emit({
           event: "check_defined",
           taskId: d.task.id,
@@ -2872,22 +2979,47 @@ export class DevelopmentService {
     if (stored.baselineCommit === null) {
       problem = `revision ${stored.revision} records no baseline commit (it was stored before baselines were recorded), so it cannot be red-run again`;
     } else {
-      let redRun: CheckRunReport;
-      try {
-        redRun = await runChecksOnCheckout(
-          this.checkCells(d),
-          RED_RUN_ROLE,
-          cellImageOf(d.environment),
-          stored.baselineCommit,
-          this.checkoutDir(d, "red-run"),
-          stored.checks,
-          stored.files,
-        );
-      } catch (e) {
-        await cleanupWorkdir(workDir, targetProjectPath);
-        return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on the baseline");
+      // As at authoring (W11 D2): on a baseline the environment no longer builds, every check fails
+      // for that reason alone, which is no evidence the set still tells the task's work from its absence.
+      // The BaseCell (Sprint 0's cells only) defines no build: its run is the red run alone, as before.
+      let build: EnvironmentTestRun | null = null;
+      if (d.environment.kind === "environment") {
+        try {
+          build = await runFoundationBuild(
+            this.environmentScope(d),
+            RED_RUN_ROLE,
+            d.environment.imageId,
+            stored.baselineCommit,
+            d.environment.definition,
+            this.deps.attemptPolicy.perCommandTimeoutSeconds,
+          );
+        } catch (e) {
+          await cleanupWorkdir(workDir, targetProjectPath);
+          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "build on the baseline");
+        }
       }
-      if (redRun.kind === "files_refused") {
+      let redRun: CheckRunReport | { readonly kind: "unbuilt"; readonly build: EnvironmentTestRun };
+      if (build !== null && !environmentBuildPassed(build)) {
+        redRun = { kind: "unbuilt", build };
+      } else {
+        try {
+          redRun = await runChecksOnCheckout(
+            this.checkCells(d),
+            RED_RUN_ROLE,
+            cellImageOf(d.environment),
+            stored.baselineCommit,
+            this.checkoutDir(d, "red-run"),
+            stored.checks,
+            stored.files,
+          );
+        } catch (e) {
+          await cleanupWorkdir(workDir, targetProjectPath);
+          return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on the baseline");
+        }
+      }
+      if (redRun.kind === "unbuilt") {
+        problem = `the environment's build fails on the baseline, so no check there can be red-run: ${describeFoundationBuild(redRun.build)}`;
+      } else if (redRun.kind === "files_refused") {
         problem = `the check files cannot be placed on the baseline: ${redRun.detail}`;
       } else if (redRun.kind === "product_changed") {
         problem = `on the baseline, ${describeProductChange(redRun)}`;

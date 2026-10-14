@@ -2,6 +2,50 @@ import { z } from "zod";
 import { CapabilityLevelSchema } from "./enums.js";
 
 /**
+ * One item of the vision a plan derives from, as a task cites it (ADR-074 addendum 2 d71 d, d89): a
+ * scope line (S1..) or an assumption, by its key, with its status, what the client has seen of it and
+ * its kind. `id` is the item's id in the vision version the plan was decomposed from.
+ */
+const VisionSourceSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("scope"), id: z.string().min(1), text: z.string().min(1) }),
+  z.strictObject({
+    type: z.literal("assumption"),
+    id: z.string().min(1),
+    text: z.string().min(1),
+    status: z.string().min(1),
+    standing: z.enum(["stated", "asked", "reported", "not-shown"]),
+    kind: z.enum(["client-visible", "internal-design", "unclassified"]),
+  }),
+]);
+
+export type VisionSource = z.infer<typeof VisionSourceSchema>;
+
+type AssumptionSource = Extract<VisionSource, { type: "assumption" }>;
+
+const STANDING: Readonly<Record<AssumptionSource["standing"], string>> = {
+  stated: "Stated by the client",
+  asked: "Inferred; asked of the client, not yet answered",
+  reported: "Inferred; reported to the client",
+  "not-shown": "Inferred; never shown to the client",
+};
+
+const KIND: Readonly<Record<AssumptionSource["kind"], string>> = {
+  "client-visible": "client-visible",
+  "internal-design": "internal design, not citable",
+  unclassified: "no recorded kind, not citable",
+};
+
+/** A vision item as the plan's prompts and descriptions name it: its id, what it is, and its text. */
+export function visionSourceLine(item: VisionSource): string {
+  return item.type === "scope"
+    ? `${item.id} (scope): ${item.text}`
+    : `${item.id} (assumption; ${STANDING[item.standing]}; ${KIND[item.kind]}): ${item.text}`;
+}
+
+/** An acceptance line of a decomposed task with the ids of the vision items it serves (d89 A). */
+const TracedLineSchema = z.strictObject({ line: z.string().min(1), sources: z.array(z.string().min(1)).min(1) });
+
+/**
  * Published Language: the persisted task specification stored in the jsonb
  * `task_spec` column. All fields optional — not every level carries a spec,
  * and different producers populate different subsets. The key set is closed — every lifecycle
@@ -51,6 +95,14 @@ const storedTaskSpecSchema = z.object({
   // decomposed task's are those it delivers, its check task's are the same, and a review task's are
   // every item of the vision its plan revision was decomposed from. Absent on rows written before it.
   visionItems: z.array(z.string().min(1)).optional(),
+  // The same items as `visionItems`, each with its id, status, standing with the client and kind
+  // (ADR-074 addendum 2 d89): what a check task's checks are judged against, item by item, and for a
+  // review task every item of the vision. Absent on rows written before it.
+  sources: z.array(VisionSourceSchema).optional(),
+  // A decomposed task's acceptance lines and its check task's, each with the ids of the items in
+  // `sources` it serves (d89 A): the task's traced items are exactly the union of those. Absent on
+  // rows written before it.
+  acceptance: z.array(TracedLineSchema).optional(),
   // An environment-change task's: whether the project's product scaffold had completed when Z0
   // opened it (d72 S, B2). "absent" means its merge lands on a main with no product, so its
   // post-merge check runs the probe only; the product's build and test run on the scaffold's own

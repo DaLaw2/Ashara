@@ -92,12 +92,12 @@ const TASKS = {
   tasks: [
     {
       ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [],
-      endState: "Both studios' classes are listed", scope: "class listing", deliverables: ["class list"], visionItems: ["S1"],
+      endState: "Both studios' classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
     {
       ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"],
-      endState: "A member books a seat", scope: "booking", deliverables: ["booking form"], visionItems: ["S1"],
+      endState: "A member books a seat", scope: "booking", deliverables: [{ text: "booking form", sources: ["S1"] }], acceptance: [{ text: "a client uses the booking form", sources: ["S1"] }],
       capability: "Frontier", capabilityReason: "graded for the test",
     },
   ],
@@ -132,7 +132,7 @@ function intake(): TenderIntake {
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
   scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book." }],
+  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {
       text: "Which studio opens first?",
@@ -141,12 +141,13 @@ const INTAKE = {
       assumption: {
         statement: "Until you answer, the harbour studio opens first.",
         rationale: "The tender names it first.",
+        kind: "client-visible",
       },
     },
     {
       text: "How many seats does a class have?",
       whyItMatters: "It sets the booking limit.",
-      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels." },
+      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible" },
     },
   ],
 };
@@ -704,11 +705,16 @@ describe("tender to first plan", () => {
       expect(question.body.match(/until you answer/gi)).toHaveLength(1);
     }
     expect(questions[0]?.body).toContain("Until you answer, we proceed on this assumption: The harbour studio opens first.");
-    const report = outbound.filter((m) => m.kind === "report");
+    // Intake told the client of the assumption no question carries, in reply to the tender (ADR-074 addendum 2 d89 C).
+    const assumptionsReport = outbound.filter((m) => m.kind === "report" && m.inReplyTo === created.message.id);
+    expect(assumptionsReport).toHaveLength(1);
+    expect(assumptionsReport[0]?.body).toContain("Bookings need no account.");
+    expect(assumptionsReport[0]?.body).not.toContain("The harbour studio opens first.");
+    const report = outbound.filter((m) => m.kind === "report" && m.inReplyTo !== created.message.id);
     expect(report).toHaveLength(1);
     expect(report[0]?.body).toMatch(/split into 2 tasks for what you asked for\./);
     expect(report[0]?.body).toContain("First, the team sets up the project environment");
     expect(report[0]?.body).toContain("(2 check tasks)");
-    expect(outbound).toHaveLength(3);
+    expect(outbound).toHaveLength(4);
   });
 });

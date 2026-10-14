@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database, DbHandle } from "../connection.js";
 import { suiteReviewFindings } from "../schema.js";
@@ -45,27 +45,60 @@ class SuiteReviewFindingCorrupt extends Error {
   }
 }
 
+/**
+ * What the record holds of the check tasks one review named: per check task, how many reviews have
+ * named it, this one included, and every problem the earlier ones found in its checks, oldest first.
+ */
+interface RecordedSuiteReview {
+  readonly timesNamed: ReadonlyMap<string, number>;
+  readonly earlierFindings: ReadonlyMap<string, readonly ReviewProblem[]>;
+}
+
 export class SuiteReviewFindingRepository {
   constructor(private readonly db: Database) {}
 
   /**
    * Appends one row per check task the problems name and returns, per named check task, how many
-   * reviews have named it, this one included, read in the same transaction as the insert.
+   * reviews have named it, this one included, and what the earlier reviews found in its checks
+   * (ADR-074 addendum 2 d89 F: a rewrite shown only the latest review put back what an earlier one
+   * had it drop), read in the same transaction as the insert.
    */
-  async record(findings: NewSuiteReviewFindings): Promise<ReadonlyMap<string, number>> {
+  async record(findings: NewSuiteReviewFindings): Promise<RecordedSuiteReview> {
     const named = [...new Set(findings.problems.flatMap((problem) => problem.checkTaskIds))];
     if (named.length === 0) throw new SuiteReviewFindingsUnrecordable(findings.reviewTaskId, "its problems name no check task");
     return this.db.transaction(async (tx) => {
-      await tx.insert(suiteReviewFindings).values(
-        named.map((checkTaskId) => ({
-          projectId: findings.projectId,
-          reviewTaskId: findings.reviewTaskId,
-          checkTaskId,
-          problems: findings.problems
-            .filter((problem) => problem.checkTaskIds.includes(checkTaskId))
-            .map(({ kind, problem, evidence }) => ({ kind, problem, evidence })),
-        })),
-      );
+      const inserted = await tx
+        .insert(suiteReviewFindings)
+        .values(
+          named.map((checkTaskId) => ({
+            projectId: findings.projectId,
+            reviewTaskId: findings.reviewTaskId,
+            checkTaskId,
+            problems: findings.problems
+              .filter((problem) => problem.checkTaskIds.includes(checkTaskId))
+              .map(({ kind, problem, evidence }) => ({ kind, problem, evidence })),
+          })),
+        )
+        .returning({ id: suiteReviewFindings.id });
+      const earlierRows = await tx
+        .select({ id: suiteReviewFindings.id, checkTaskId: suiteReviewFindings.checkTaskId, problems: suiteReviewFindings.problems })
+        .from(suiteReviewFindings)
+        .where(
+          and(
+            inArray(suiteReviewFindings.checkTaskId, named),
+            notInArray(
+              suiteReviewFindings.id,
+              inserted.map((row) => row.id),
+            ),
+          ),
+        )
+        .orderBy(asc(suiteReviewFindings.createdAt), asc(suiteReviewFindings.id));
+      const earlierFindings = new Map<string, ReviewProblem[]>(named.map((checkTaskId) => [checkTaskId, []]));
+      for (const row of earlierRows) {
+        const parsed = ReviewProblemsSchema.safeParse(row.problems);
+        if (!parsed.success) throw new SuiteReviewFindingCorrupt(row.id, `problems do not parse: ${z.prettifyError(parsed.error)}`);
+        earlierFindings.get(row.checkTaskId)?.push(...parsed.data);
+      }
       const rows = await tx
         .select({ checkTaskId: suiteReviewFindings.checkTaskId, times: count() })
         .from(suiteReviewFindings)
@@ -77,7 +110,7 @@ export class SuiteReviewFindingRepository {
       if (uncounted.length > 0) {
         throw new SuiteReviewFindingsUnrecordable(findings.reviewTaskId, `check task(s) ${uncounted.join(", ")} counted no review right after one was recorded`);
       }
-      return times;
+      return { timesNamed: times, earlierFindings };
     });
   }
 }

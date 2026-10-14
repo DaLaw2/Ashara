@@ -41,7 +41,13 @@ import {
   FirstPlanner,
   Replanner,
 } from "@ashara/planning";
-import { DevelopmentService, SuiteReviewer, canonicalizeAllowingMissing, pruneStaleEnvironmentImages } from "@ashara/development";
+import {
+  DevelopmentService,
+  SuiteReviewer,
+  canonicalizeAllowingMissing,
+  gitPublicInterface,
+  pruneStaleEnvironmentImages,
+} from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, DeliveredReports, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
@@ -390,7 +396,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       },
     },
     checks: createTaskCheckStore(db),
-    suiteReview: new SuiteReviewer({ llm: llmGateway, source: createSuiteReviewSource(db), onAttempt: ladderAttemptSink }),
+    suiteReview: new SuiteReviewer({
+      llm: llmGateway,
+      source: createSuiteReviewSource(db),
+      publicInterface: gitPublicInterface,
+      onAttempt: ladderAttemptSink,
+    }),
     shutdownSignal: abortController.signal,
     clock: ports.clock,
   });

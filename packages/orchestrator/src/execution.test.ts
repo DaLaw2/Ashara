@@ -1410,7 +1410,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
           recorded.push(findings);
           const ids = [...new Set(findings.problems.flatMap((p) => p.checkTaskIds))];
           for (const id of ids) named.set(id, (named.get(id) ?? priorReviews) + 1);
-          return new Map(ids.map((id) => [id, named.get(id) ?? 0]));
+          return { timesNamed: new Map(ids.map((id) => [id, named.get(id) ?? 0])), earlierFindings: new Map(ids.map((id) => [id, []])) };
         },
       },
       failedApproachRepo: { record: async () => { approaches++; } },

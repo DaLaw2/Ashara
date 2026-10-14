@@ -1,13 +1,16 @@
 import { z } from "zod";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
-import { describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
+import type { AssumptionDisclosure, AssumptionKind, ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
 // Proceed on silence at once (orchestrator 2026-10-13, on the board): the questions
 // go out, the assumptions work proceeds on are recorded as Inferred, and vision v1
 // is written in the same intake. A later answer is a change request, not a rewrite.
+// The assumptions no question carries are reported to the client in one message of the
+// same intake, without waiting (ADR-073 Q8, ADR-074 addendum 2 d89 C), so every Inferred
+// assumption intake writes is one the client was asked about or told of.
 
 /** At most this many questions per tender (orchestrator 2026-10-13, on the board). */
 const MAX_QUESTIONS_PER_TENDER = 5;
@@ -34,7 +37,14 @@ function withoutLabelLeadIn(statement: string): string {
 // A statement that is nothing but the lead-in is rejected (and re-asked), never stored empty.
 const AssumptionStatementSchema = z.string().min(1).transform(withoutLabelLeadIn).pipe(z.string().min(1));
 
-const AssumptionSchema = z.strictObject({ statement: AssumptionStatementSchema, rationale: z.string().min(1) });
+// "kind" (d89 E): behaviour the client sees, or the team's own design choice. The Liaison
+// classifies each assumption when it writes it; only a client-visible one may become the
+// source of an acceptance line.
+const AssumptionSchema = z.strictObject({
+  statement: AssumptionStatementSchema,
+  rationale: z.string().min(1),
+  kind: AssumptionKindSchema,
+});
 
 const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
@@ -68,6 +78,9 @@ interface InferredAssumption {
   readonly statement: string;
   readonly rationale: string;
   readonly status: "Inferred";
+  readonly kind: AssumptionKind;
+  /** How the client learned of it: the question that asked about it, or the assumptions report. */
+  readonly disclosed: AssumptionDisclosure;
 }
 
 interface OpenQuestion {
@@ -91,6 +104,8 @@ interface IntakeWrite {
   readonly tender: OpenTender;
   /** Question bodies as posted to the client, most impactful first; the store keeps this order. */
   readonly questions: readonly string[];
+  /** The report of the assumptions no question carries; null when every assumption is a question's. */
+  readonly assumptionsReport: string | null;
   readonly vision: (questionMessageIds: readonly string[]) => IntakeVision;
 }
 
@@ -102,7 +117,7 @@ type IntakeCommit =
 export interface IntakeStore {
   openTenders(): Promise<readonly OpenTender[]>;
   currentVisionVersion(projectId: ProjectId): Promise<number | null>;
-  /** Consumes the tender, posts the questions and writes vision v1 together. */
+  /** Consumes the tender, posts the questions and the assumptions report, and writes vision v1, together. */
   recordIntake(write: IntakeWrite): Promise<IntakeCommit>;
   /** Consumes the tender and writes nothing else. */
   consumeTender(tenderId: string): Promise<void>;
@@ -180,6 +195,16 @@ function buildIntakePrompt(tender: string): string {
     `  wording like it ("Until you answer", "We assume", "For now").`,
     `- "assumptions": every other decision the tender leaves open that work must proceed on,`,
     `  each with the same "statement" and "rationale". Do not repeat a question's assumption.`,
+    `  The client is told of each of them, and work proceeds on them unless the client objects.`,
+    `- Every assumption, a question's included, has a "kind":`,
+    `  - "client-visible": behaviour the client sees or relies on when using the deliverable, such`,
+    `    as what it outputs and in what form, which inputs it accepts or refuses and how it says so,`,
+    `    or what still holds after a failure. The client's acceptance tests may check it.`,
+    `  - "internal-design": how the team builds it, which the client neither sees nor relies on,`,
+    `    such as the name of an internal file, the mechanism behind a guarantee, or how data is laid`,
+    `    out. It guides the work and is never checked as the client's requirement.`,
+    `  When one decision fixes both a behaviour and the mechanism behind it, record two`,
+    `  assumptions, one of each kind.`,
     ``,
     `How to choose the questions:`,
     `- First consider every unknown the tender leaves open. For each, ask: if my assumption is`,
@@ -202,8 +227,8 @@ function buildIntakePrompt(tender: string): string {
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
     `Use exactly this format: {"summary": "...", "scopeBoundaries": ["..."], ` +
       `"questions": [{"text": "...", "whyItMatters": "...", ` +
-      `"assumption": {"statement": "...", "rationale": "..."}}], ` +
-      `"assumptions": [{"statement": "...", "rationale": "..."}]}`,
+      `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible"}}], ` +
+      `"assumptions": [{"statement": "...", "rationale": "...", "kind": "internal-design"}]}`,
   ].join("\n");
 }
 
@@ -233,14 +258,41 @@ function assumptionKey(index: number): string {
   return `A${index + 1}`;
 }
 
-/** Every assumption of the intake, keyed: the questions' first, in question order, then the unasked ones. */
+/**
+ * Every assumption of the intake, keyed: the questions' first, in question order, then the unasked
+ * ones, which the assumptions report tells the client of.
+ */
 function inferencesOf(response: IntakeResponse): InferredAssumption[] {
-  return [...response.questions.map((q) => q.assumption), ...response.assumptions].map((a, i) => ({
+  const asked = response.questions.map((q) => ({ ...q.assumption, disclosed: "asked" as const }));
+  const reported = response.assumptions.map((a) => ({ ...a, disclosed: "reported" as const }));
+  return [...asked, ...reported].map((a, i) => ({
     key: assumptionKey(i),
     statement: a.statement,
     rationale: a.rationale,
     status: "Inferred",
+    kind: a.kind,
+    disclosed: a.disclosed,
   }));
+}
+
+/**
+ * What the client reads of the assumptions no question asked about (ADR-074 addendum 2 d89 C): the
+ * decisions work proceeds on unless they object, behaviour first, then the team's design choices.
+ * Nothing waits on a reply (ADR-073 Q8). Null when there are none.
+ */
+function assumptionsReport(inferences: readonly InferredAssumption[]): string | null {
+  const reported = inferences.filter((a) => a.disclosed === "reported");
+  if (reported.length === 0) return null;
+  const listed = (kind: AssumptionKind) =>
+    reported.filter((a) => a.kind === kind).map((a) => `- ${a.key}: ${a.statement} (why: ${a.rationale})`);
+  const behaviour = listed("client-visible");
+  const design = listed("internal-design");
+  return [
+    `Besides the questions we asked, the tender leaves these decisions open, and we proceed on them unless you object. Work does not wait for a reply.`,
+    ...(behaviour.length === 0 ? [] : [`What the product will do:\n${behaviour.join("\n")}`]),
+    ...(design.length === 0 ? [] : [`How we will build it (our own design choices, which your acceptance does not depend on):\n${design.join("\n")}`]),
+    `If any of these does not fit what you need, send a change naming it and saying what should be different.`,
+  ].join("\n\n");
 }
 
 /**
@@ -357,14 +409,16 @@ export class TenderIntake implements LiaisonIntake {
   }
 
   private toWrite(tender: OpenTender, response: IntakeResponse): IntakeWrite {
+    const inferences = inferencesOf(response);
     return {
       tender,
       questions: response.questions.map(questionBody),
+      assumptionsReport: assumptionsReport(inferences),
       vision: (questionMessageIds) => ({
         visionText: tender.body,
         summary: response.summary,
         scopeBoundaries: response.scopeBoundaries,
-        inferences: inferencesOf(response),
+        inferences,
         openQuestions: response.questions.map((q, i) => {
           const messageId = questionMessageIds[i];
           if (questionMessageIds.length !== response.questions.length || messageId === undefined) {

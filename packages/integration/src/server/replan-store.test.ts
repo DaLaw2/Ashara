@@ -84,12 +84,12 @@ function jsonResult(value: unknown) {
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
   scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book." }],
+  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first." },
+      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible" },
     },
   ],
 };
@@ -108,7 +108,7 @@ const FIRST_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [],
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: ["harbour booking"], visionItems: ["S1"],
+      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -117,7 +117,7 @@ const REVISED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [],
-      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: ["hill booking"], visionItems: ["S1"],
+      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: [{ text: "hill booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the hill booking", sources: ["S1"] }],
       capability: "Light", capabilityReason: "graded for the test",
     },
   ],
@@ -127,7 +127,7 @@ const REPAIRED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Book a harbour class by its date", description: "Harbour bookings, smaller.", dependsOn: [],
-      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: ["harbour booking"], visionItems: ["S1"],
+      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: [{ text: "harbour booking", sources: ["S1"] }], acceptance: [{ text: "a client uses the harbour booking", sources: ["S1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -414,6 +414,47 @@ describe("a late client change is planned", () => {
 
     // Nothing is flagged any more: no second revision.
     expect(await replanner().runPending()).toEqual([]);
+  });
+
+  // W11 D2: revision 3's checks were red-run on Sprint 0's commit, which holds no product to build.
+  test("a revision after the scaffold red-runs its checks on the layout's latest merge, never on the environment task merged before it", async () => {
+    const { projectId, questionId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const sprint0 = first.find((i) => i.origin === "sprint0");
+    const scaffold = first.find((i) => i.origin === "product-scaffold");
+    const harbour = first.find((i) => i.origin === "decomposition");
+    if (sprint0 === undefined || scaffold === undefined || harbour === undefined) throw new Error("the first plan has no Sprint 0, scaffold or task");
+    const merged = [
+      { id: sprint0.id, commit: "1".repeat(40), minutesAgo: 30 },
+      { id: scaffold.id, commit: "2".repeat(40), minutesAgo: 20 },
+      { id: harbour.id, commit: "3".repeat(40), minutesAgo: 10 },
+    ];
+    for (const { id, commit, minutesAgo } of merged) {
+      await startTask(id);
+      await completeTask(id);
+      // Completion times fixed apart: the order the merges landed on main.
+      await db.execute(sql`
+        UPDATE work_items SET merge_commit = ${commit}, updated_at = now() - make_interval(mins => ${minutesAgo}) WHERE id = ${id}`);
+    }
+    await contradict(projectId, questionId);
+    pipelineModel({ environmentChange: false });
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", revision: 2, newEnvironment: false }]);
+
+    const added = (await itemsOf(projectId)).filter((i) => !first.some((f) => f.id === i.id));
+    expect(added.filter((i) => i.origin === "product-scaffold" || i.origin === "sprint0")).toEqual([]);
+    const newCheck = added.find((i) => i.origin === "check");
+    const review = added.find((i) => i.origin === "review");
+    if (newCheck === undefined || review === undefined) throw new Error("the revision planned no check or review task");
+    expect(await dependenciesOf(newCheck.id)).toEqual([harbour.id]);
+    expect(await dependenciesOf(review.id)).toContain(harbour.id);
+    const checks = new TaskCheckRepository(db);
+    expect(await checks.foundationOf(newCheck.id)).toEqual({ kind: "found", taskId: harbour.id, commit: "3".repeat(40) });
+
+    // A check task whose only foundation merged before the product scaffold has no foundation: fail closed.
+    await db.execute(sql`UPDATE dependencies SET to_id = ${sprint0.id} WHERE from_id = ${newCheck.id}`);
+    const before = await checks.foundationOf(newCheck.id);
+    expect(before.kind).toBe("none");
+    if (before.kind === "none") expect(before.reason).toContain("not after the project's product scaffold");
   });
 
   test("an environment change plans a new environment task, and the old one stays Completed", async () => {

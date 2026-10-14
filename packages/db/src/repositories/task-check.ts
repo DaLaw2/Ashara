@@ -1,6 +1,7 @@
 import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseWorkItemJsonb } from "@ashara/shared";
+import type { VisionSource } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { dependencies, taskChecks, workItems } from "../schema.js";
 
@@ -53,6 +54,8 @@ const FoundationRowSchema = z.object({
   mergeCommit: z.string().nullable(),
   origin: z.string().nullable(),
   workKind: z.string().nullable(),
+  completedAt: z.coerce.date(),
+  scaffoldCompletedAt: z.coerce.date().nullable(),
 });
 
 /** A revision with no check: an empty revision would read as "nothing to check". */
@@ -89,6 +92,7 @@ interface CheckTaskUnderReview {
   readonly status: string;
   readonly checksFor: string | null;
   readonly visionItems: readonly string[] | null;
+  readonly sources: readonly VisionSource[] | null;
   readonly checkedTitle: string | null;
 }
 
@@ -121,25 +125,40 @@ export class TaskCheckRepository {
   }
 
   /**
-   * The check task's foundation (ADR-074 addendum 2 d74 A): among the tasks it depends on, the
-   * product scaffold's recorded merge commit (migration 041), or, for a plan revision with no
-   * scaffold of its own, its environment task's (Sprint 0 or an environment task). A foundation
-   * that is not Completed with a merge commit on record is no foundation: the reason says which.
+   * The check task's foundation (ADR-074 addendum 2 d74 A): the task it depends on whose recorded
+   * merge commit (migration 041) its checks are red-run on. That is the product scaffold when it
+   * depends on one; otherwise its one dependency: a revision's latest merged state of the layout,
+   * or the revision's new environment task. A foundation other than a scaffold must have completed
+   * after a Completed product scaffold of the project: a commit merged before the product's layout
+   * holds nothing that builds, so every check would fail there for that reason alone (W11 D2). A
+   * foundation that is ambiguous, not Completed, without a merge commit on record, or merged before
+   * the scaffold is no foundation: the reason says which.
    */
   async foundationOf(checkTaskId: string): Promise<CheckFoundation> {
     const result = await this.db.execute(sql`
-      SELECT w.id, w.status, w.merge_commit AS "mergeCommit", w.task_spec->>'origin' AS origin, w.work_kind AS "workKind"
+      SELECT w.id, w.status, w.merge_commit AS "mergeCommit", w.task_spec->>'origin' AS origin, w.work_kind AS "workKind",
+             w.updated_at AS "completedAt",
+             (SELECT max(s.updated_at) FROM work_items s
+               WHERE s.project_id = w.project_id AND s.status = 'Completed'
+                 AND s.task_spec->>'origin' = 'product-scaffold') AS "scaffoldCompletedAt"
       FROM dependencies d JOIN work_items w ON w.id = d.to_id
       WHERE d.from_id = ${checkTaskId}
-        AND (w.task_spec->>'origin' IN ('product-scaffold', 'sprint0') OR w.work_kind = 'environment')
       ORDER BY w.updated_at DESC, w.id`);
     const rows = z.array(FoundationRowSchema).parse(result.rows);
     const scaffold = rows.find((row) => row.origin === "product-scaffold");
-    const foundation = scaffold ?? rows[0];
+    const [only] = rows;
+    const foundation = scaffold ?? (rows.length === 1 ? only : undefined);
     if (foundation === undefined) {
-      return { kind: "none", reason: `check task ${checkTaskId} depends on no product scaffold and no environment task` };
+      return {
+        kind: "none",
+        reason:
+          rows.length === 0
+            ? `check task ${checkTaskId} depends on no task to red-run its checks on`
+            : `check task ${checkTaskId} depends on no product scaffold and on ${rows.length} tasks ` +
+              `[${rows.map((row) => row.id).join(", ")}], so which one's merge is its foundation is not known`,
+      };
     }
-    const what = scaffold !== undefined ? "product scaffold" : "environment task";
+    const what = scaffold !== undefined ? "product scaffold" : `task (${foundation.origin ?? foundation.workKind ?? "no origin"})`;
     if (foundation.status !== "Completed" || foundation.mergeCommit === null) {
       return {
         kind: "none",
@@ -147,6 +166,21 @@ export class TaskCheckRepository {
           `check task ${checkTaskId}'s foundation, ${what} ${foundation.id}, is ${foundation.status} with ` +
           `${foundation.mergeCommit === null ? "no merge commit on record" : `merge commit ${foundation.mergeCommit}`}`,
       };
+    }
+    if (scaffold === undefined) {
+      const scaffoldAt = foundation.scaffoldCompletedAt;
+      if (scaffoldAt === null || foundation.completedAt.getTime() <= scaffoldAt.getTime()) {
+        return {
+          kind: "none",
+          reason:
+            `check task ${checkTaskId}'s foundation, ${what} ${foundation.id}, ` +
+            (scaffoldAt === null
+              ? "is no product scaffold, and no product scaffold of the project has completed"
+              : `completed at ${foundation.completedAt.toISOString()}, not after the project's product scaffold ` +
+                `(completed at ${scaffoldAt.toISOString()})`) +
+            `: its merge holds no product layout to red-run the checks on`,
+        };
+      }
     }
     return { kind: "found", taskId: foundation.id, commit: foundation.mergeCommit };
   }
@@ -178,6 +212,7 @@ export class TaskCheckRepository {
         status: row.status,
         checksFor: taskSpec?.checksFor ?? null,
         visionItems: taskSpec?.visionItems ?? null,
+        sources: taskSpec?.sources ?? null,
         checkedTitle: row.checkedTitle,
       };
     });

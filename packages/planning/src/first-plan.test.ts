@@ -130,12 +130,39 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
       ],
     });
 
+    // Records written before kinds: placed by order, unclassified, never shown to the client.
     expect(items).toEqual([
-      { id: "S1", text: "In: booking" },
-      { id: "S2", text: "Out: payments" },
-      { id: "A1", text: "Classes hold twenty" },
-      { id: "A2", text: "Bookings close an hour before" },
+      { type: "scope", id: "S1", text: "In: booking" },
+      { type: "scope", id: "S2", text: "Out: payments" },
+      { type: "assumption", id: "A1", text: "Classes hold twenty", status: "Inferred", standing: "not-shown", kind: "unclassified" },
+      { type: "assumption", id: "A2", text: "Bookings close an hour before", status: "Stated", standing: "stated", kind: "unclassified" },
     ]);
+  });
+
+  // ADR-074 addendum 2 d89: an assumption is cited by its key in the vision, with its kind and standing.
+  test("an assumption is the item of its key, with the kind and standing its record holds; a repeated key is refused", () => {
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
+    const reading = (inferences: unknown) => ({ projectId, visionVersion: 3, summary: "A store.", scopeBoundaries: ["In: put"], inferences });
+    expect(
+      visionItemsOf(
+        reading([
+          { key: "A1", statement: "Values are one word", status: "Inferred", kind: "client-visible", disclosed: "asked" },
+          { key: "A7", statement: "The log is wal.log", status: "Inferred", kind: "internal-design", disclosed: "reported" },
+        ]),
+      ),
+    ).toEqual([
+      { type: "scope", id: "S1", text: "In: put" },
+      { type: "assumption", id: "A1", text: "Values are one word", status: "Inferred", standing: "asked", kind: "client-visible" },
+      { type: "assumption", id: "A7", text: "The log is wal.log", status: "Inferred", standing: "reported", kind: "internal-design" },
+    ]);
+    expect(() =>
+      visionItemsOf(
+        reading([
+          { key: "A1", statement: "x", status: "Inferred", kind: "client-visible" },
+          { key: "A1", statement: "y", status: "Inferred", kind: "client-visible" },
+        ]),
+      ),
+    ).toThrow(/two assumptions share the key A1/);
   });
 
   test("a vision with no item fails the plan attempt before any model call", async () => {

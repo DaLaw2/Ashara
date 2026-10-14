@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import { describeErrorChain, projectBlockCause } from "@ashara/shared";
+import { StoredAssumptionKindSchema, assumptionStanding, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel, WorkKind } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
@@ -140,11 +140,18 @@ const ClientAnswerSchema = z.object({ question: z.string().min(1), answer: z.str
 // the deleted CLI path (POST /vision) wrote hold a map of direction category to
 // inference and are still in the database. Both are read; a Stated record without
 // its answer, or anything else, stops the attempt rather than planning without them.
+// Each record's key, kind and disclosure are read as stored (ADR-074 addendum 2 d89): a record
+// written before them has no kind, so no line may cite it, and its id is its place in the list.
+const RecordFieldsSchema = z.object({
+  key: z.string().min(1).optional(),
+  kind: StoredAssumptionKindSchema,
+  disclosed: z.unknown().optional(),
+});
 const InferencesSchema = z.union([
   z.array(
     z.union([
-      z.object({ statement: z.string().min(1), status: z.literal("Stated"), clientAnswer: ClientAnswerSchema }),
-      z.object({ statement: z.string().min(1), status: z.string().min(1).refine((s) => s !== "Stated") }),
+      RecordFieldsSchema.extend({ statement: z.string().min(1), status: z.literal("Stated"), clientAnswer: ClientAnswerSchema }),
+      RecordFieldsSchema.extend({ statement: z.string().min(1), status: z.string().min(1).refine((s) => s !== "Stated") }),
     ]),
   ),
   z.record(z.string(), z.string()),
@@ -187,21 +194,41 @@ export function northStarOf(project: StoredVisionReading): string {
 }
 
 /**
- * Every item of the stored vision a planned task can trace to (ADR-074 addendum 2 d71 d): each scope
- * boundary (S1..), then each assumption work proceeds on, a Stated one by the decision the client's
- * answer made (A1.., in stored order, as intake numbers them). The summary is not an item: it restates
- * the whole tender, so a task tracing to it would trace to nothing in particular.
+ * Every item of the stored vision a planned task can trace to (ADR-074 addendum 2 d71 d, d89): each
+ * scope boundary (S1..), then each assumption work proceeds on, by its key in the vision (A1.., as
+ * intake and the stack choice key them; a record without one by its place), a Stated one by the
+ * decision the client's answer made, each with its status, standing with the client and kind. The
+ * summary is not an item: it restates the whole tender, so a task tracing to it would trace to
+ * nothing in particular.
  */
 export function visionItemsOf(project: StoredVisionReading): VisionItem[] {
   const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
   const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
-  const assumptions = Array.isArray(inferences)
-    ? inferences.map((a) => a.statement)
-    : Object.entries(inferences).map(([category, inference]) => `${category}: ${inference}`);
-  return [
-    ...scope.map((text, i) => ({ id: `S${i + 1}`, text })),
-    ...assumptions.map((text, i) => ({ id: `A${i + 1}`, text })),
-  ];
+  const assumptions: VisionItem[] = Array.isArray(inferences)
+    ? inferences.map((a, i) => ({
+        type: "assumption",
+        id: a.key ?? `A${i + 1}`,
+        text: a.statement,
+        status: a.status,
+        standing: assumptionStanding(a),
+        kind: a.kind,
+      }))
+    : Object.entries(inferences).map(([category, inference], i) => ({
+        type: "assumption",
+        id: `A${i + 1}`,
+        text: `${category}: ${inference}`,
+        status: "Inferred",
+        standing: "not-shown",
+        kind: "unclassified",
+      }));
+  const ids = new Set<string>();
+  for (const item of assumptions) {
+    if (ids.has(item.id)) {
+      throw new VisionUnreadable(project.projectId, project.visionVersion, "inferences", `two assumptions share the key ${item.id}`);
+    }
+    ids.add(item.id);
+  }
+  return [...scope.map((text, i): VisionItem => ({ type: "scope", id: `S${i + 1}`, text })), ...assumptions];
 }
 
 function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {

@@ -16,20 +16,36 @@ const INPUT: DecompositionInput = {
     environment: { kind: "new" },
     layout: { kind: "new" },
     visionItems: [
-        { id: "S1", text: "In: booking a seat in a class of either studio" },
-        { id: "A1", text: "A class holds at most twenty members" },
+        { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio" },
+        {
+            type: "assumption",
+            id: "A1",
+            text: "A class holds at most twenty members",
+            status: "Inferred",
+            standing: "reported",
+            kind: "client-visible",
+        },
+        {
+            type: "assumption",
+            id: "A2",
+            text: "Bookings are recorded in one ledger",
+            status: "Inferred",
+            standing: "reported",
+            kind: "internal-design",
+        },
     ],
 };
 
-function task(ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+/** A task whose one deliverable and one acceptance line cite `sources`. */
+function task(ref: string, extra: Record<string, unknown> = {}, sources: readonly string[] = ["S1"]): Record<string, unknown> {
     return {
         ref,
         title: `Task ${ref}`,
         description: `Do ${ref}.`,
         endState: `${ref} is observable`,
         scope: `the ${ref} module`,
-        deliverables: [`${ref} source`],
-        visionItems: ["S1"],
+        deliverables: [{ text: `${ref} works`, sources }],
+        acceptance: [{ text: `a member sees ${ref}`, sources }],
         capability: "Medium",
         capabilityReason: `${ref} is one well-specified behavior`,
         ...extra,
@@ -118,7 +134,7 @@ describe("DecompositionEngine", () => {
     test("a first plan sets up the product's layout after Sprint 0 and before every check, traced to the items it enables", async () => {
         const llm = scriptedLlm(
             { nodes: [], edges: [] },
-            { tasks: [task("t1", { visionItems: ["S1"] }), task("t2", { dependsOn: ["t1"], visionItems: ["A1"] })] },
+            { tasks: [task("t1", {}, ["S1"]), task("t2", { dependsOn: ["t1"] }, ["A1"])] },
             seen,
         );
         const result = await new DecompositionEngine(llm).decompose(INPUT);
@@ -152,6 +168,29 @@ describe("DecompositionEngine", () => {
         expect(revision.tasks.filter((t) => t.taskSpec.origin === "product-scaffold")).toEqual([]);
     });
 
+    test("a revision on a merged layout red-runs on that layout's latest merge, never on the environment task merged before it (W11 D2)", async () => {
+        const decompose = (environment: DecompositionInput["environment"]) =>
+            new DecompositionEngine(
+                scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+            ).decompose({ ...INPUT, environment, layout: { kind: "existing", taskId: "layout-latest" } });
+
+        const onExisting = await decompose({ kind: "existing", taskId: "env-done" });
+        const checkTasks = onExisting.tasks.filter((t) => t.taskSpec.origin === "check" || t.taskSpec.origin === "review");
+        expect(checkTasks).toHaveLength(2);
+        for (const t of checkTasks) {
+            expect(t.dependsOn).toContain("layout-latest");
+            expect(t.dependsOn).not.toContain("env-done");
+        }
+        const check = checkTasks.find((t) => t.taskSpec.origin === "check");
+        expect(onExisting.dependencyEdges.filter((e) => e.from === check?.id).map((e) => e.to)).toEqual(["layout-latest"]);
+
+        // A new environment task of the revision lands on that layout: its merge is the foundation then.
+        const onNew = await decompose({ kind: "new" });
+        const sprint0 = onNew.tasks.find((t) => t.taskSpec.origin === "sprint0");
+        const newCheck = onNew.tasks.find((t) => t.taskSpec.origin === "check");
+        expect(newCheck?.dependsOn).toEqual([sprint0?.id]);
+    });
+
     test("every decomposed task gets one check task, after the product scaffold, naming it by checksFor; its text names no stack", async () => {
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
@@ -170,11 +209,11 @@ describe("DecompositionEngine", () => {
             expect(result.dependencyEdges).toContainEqual({ from: check?.id, to: sprint0Id });
             expect(check?.title).toBe(`Write the checks for "${implementation.title}"`);
             expect(check?.taskSpec.goal).toContain(
-                `Write the checks that decide whether "${implementation.title}" is done: observable behaviour from its deliverables ` +
-                    `and acceptance; each check is a command the project environment can run`,
+                `Write the checks that decide whether "${implementation.title}" is done: the observable behaviour its ` +
+                    `acceptance lines ask for, each tested against the vision items it cites`,
             );
             for (const deliverable of implementation.taskSpec.deliverables) expect(check?.taskSpec.goal).toContain(deliverable);
-            for (const criterion of implementation.successCriteria) expect(check?.taskSpec.goal).toContain(criterion);
+            for (const criterion of implementation.successCriteria) expect(check?.taskSpec.goal).toContain(`[S1] ${criterion}`);
             // W5 W1: the check author tests the interface the scaffold wrote down, never a guessed one.
             expect(check?.taskSpec.goal).toContain("Read the product's public interface in PUBLIC_INTERFACE.md");
             expect(check?.taskSpec.goal).toMatch(/never try other ways to start, configure or call the product/);
@@ -200,6 +239,8 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
         const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id : environment.taskId;
+        // A revision's checks are red-run on the layout already merged, never on the environment task (W11 D2).
+        const foundationId = layout.kind === "existing" ? layout.taskId : environmentId;
         const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
         const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
         expect(checkIds).toHaveLength(3);
@@ -212,7 +253,7 @@ describe("DecompositionEngine", () => {
         const [t1, t2] = decomposed;
         expect(result.dependencyEdges).toContainEqual({ from: t2?.id, to: t1?.id });
         for (const checkId of checkIds) {
-            expect(result.dependencyEdges.filter((e) => e.from === checkId).map((e) => e.to)).toEqual([environmentId]);
+            expect(result.dependencyEdges.filter((e) => e.from === checkId).map((e) => e.to)).toEqual([foundationId]);
         }
     });
 
@@ -274,31 +315,51 @@ describe("DecompositionEngine", () => {
         expect(seen.verdicts[0]).toMatchObject({ ok: false });
     });
 
-    test.each(["endState", "scope", "deliverables"])("a task missing %s is rejected, not inferred", async (field) => {
+    test.each(["endState", "scope", "deliverables", "acceptance"])("a task missing %s is rejected, not inferred", async (field) => {
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
     });
     // Fifth run N21: the first task printed a column count the tender never asked for (ADR-074 addendum 2 d71 d).
+    // W11 (d89 A): deliverables used assumptions the task did not name; now every line names its own sources.
     test.each([
-        ["names no vision item", []],
-        ["names an item the vision does not hold", ["S9"]],
-    ])("a plan whose task %s is rejected through the ladder, never written", async (_label, named) => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { visionItems: named })] }, seen);
+        ["an acceptance line that names no source", { acceptance: [{ text: "keys come back sorted", sources: [] }] }, "names no vision item it serves"],
+        ["a deliverable that names no source", { deliverables: [{ text: "sorted listing", sources: [] }] }, "names no vision item it serves"],
+        ["a line naming an item the vision does not hold", { acceptance: [{ text: "keys come back sorted", sources: ["S9"] }] }, '"S9", which is no vision item'],
+    ])("a plan with %s is rejected through the ladder, never written", async (_label, broken, message) => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", broken)] }, seen);
 
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
         expect(seen.verdicts).toHaveLength(1);
         expect(seen.verdicts[0]).toMatchObject({ ok: false });
-        expect(seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "").toContain('Task "Task t2"');
+        const errors = seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "";
+        expect(errors).toContain('Task "Task t2"');
+        expect(errors).toContain(message);
     });
 
-    test("the task prompt lists every vision item by id and asks each task to name those it delivers", async () => {
+    // d89 E: an internal-design assumption guides the implementer; it is never what a check decides.
+    test("an internal-design assumption cannot be the source of an acceptance line or a deliverable", async () => {
+        for (const broken of [
+            { acceptance: [{ text: "every booking lands in the ledger", sources: ["S1", "A2"] }] },
+            { deliverables: [{ text: "one ledger", sources: ["A2"] }] },
+        ]) {
+            resetIdCounter();
+            const verdicts: StructuredValidation[] = [];
+            const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1", broken)] }, { prompts: [], verdicts });
+            await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
+            expect(verdicts[0]?.ok === false ? verdicts[0].errors.join("\n") : "").toContain("names A2, an internal-design assumption");
+        }
+    });
+
+    test("the task prompt lists every vision item by id with its kind and asks each line to name its sources", async () => {
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
         await new DecompositionEngine(llm).decompose(INPUT);
 
         const prompt = seen.prompts[1] ?? "";
-        expect(prompt).toContain("- S1: In: booking a seat in a class of either studio");
-        expect(prompt).toContain("- A1: A class holds at most twenty members");
-        expect(prompt).toContain('In "visionItems", list the ids of the vision items above that the task delivers');
+        expect(prompt).toContain("- S1 (scope): In: booking a seat in a class of either studio");
+        expect(prompt).toContain("- A1 (assumption; Inferred; reported to the client; client-visible): A class holds at most twenty members");
+        expect(prompt).toContain("- A2 (assumption; Inferred; reported to the client; internal design, not citable): Bookings are recorded in one ledger");
+        expect(prompt).toContain('Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves');
+        expect(prompt).not.toContain('"visionItems"');
     });
 
     test("a vision with no item is refused before any model call", async () => {
@@ -307,21 +368,43 @@ describe("DecompositionEngine", () => {
         expect(seen.prompts).toEqual([]);
     });
 
-    test("a task records the texts of the items it traces to, by id or exact text; its check task carries them in its brief", async () => {
+    // W11 (d89 A): the traced items are exactly the union of the lines' sources, never chosen beside them.
+    test("a task's traced items are exactly the union of its lines' sources, by id or exact text; its check task carries them", async () => {
         const llm = scriptedLlm(
             { nodes: [], edges: [] },
-            { tasks: [task("t1", { visionItems: ["A1", "In: booking a seat in a class of either studio"] })] },
+            {
+                tasks: [
+                    task("t1", {
+                        deliverables: [{ text: "a member can book", sources: ["In: booking a seat in a class of either studio"] }],
+                        acceptance: [
+                            { text: "a member books a seat", sources: ["S1"] },
+                            { text: "the twenty-first booking is refused", sources: ["A1", "S1"] },
+                        ],
+                    }),
+                ],
+            },
             seen,
         );
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const implementation = result.tasks.find((t) => t.taskSpec.origin === "decomposition");
         const traced = ["In: booking a seat in a class of either studio", "A class holds at most twenty members"];
-        expect(implementation?.taskSpec).toMatchObject({ visionItems: traced });
+        expect(implementation?.taskSpec).toMatchObject({
+            visionItems: traced,
+            acceptance: [
+                { line: "a member books a seat", sources: ["S1"] },
+                { line: "the twenty-first booking is refused", sources: ["A1", "S1"] },
+            ],
+        });
+        expect(implementation?.taskSpec.origin === "decomposition" ? implementation.taskSpec.sources.map((s) => s.id) : []).toEqual(["S1", "A1"]);
+        expect(implementation?.successCriteria).toEqual(["a member books a seat", "the twenty-first booking is refused"]);
         const check = result.tasks.find((t) => t.taskSpec.origin === "check");
-        expect(check?.taskSpec).toMatchObject({ visionItems: traced });
-        expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" delivers (its checks may test only these, and the inputs they say to reject):`);
-        for (const text of traced) expect(check?.taskSpec.goal).toContain(`- ${text}`);
+        expect(check?.taskSpec).toMatchObject({ visionItems: traced, acceptance: implementation?.taskSpec.origin === "decomposition" ? implementation.taskSpec.acceptance : [] });
+        expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" cites (its checks may test only what these ask for, and the inputs they say to reject):`);
+        expect(check?.taskSpec.goal).toContain("- S1 (scope): In: booking a seat in a class of either studio");
+        expect(check?.taskSpec.goal).toContain("- A1 (assumption; Inferred; reported to the client; client-visible): A class holds at most twenty members");
+        expect(check?.taskSpec.goal).toContain("- [A1, S1] the twenty-first booking is refused");
+        expect(check?.taskSpec.goal).not.toContain("Bookings are recorded in one ledger");
     });
 
     // Fifth run N20: 36 stored checks no product could all pass (ADR-074 addendum 2 d71 c).
@@ -337,16 +420,16 @@ describe("DecompositionEngine", () => {
         expect(reviews).toHaveLength(1);
         const review = reviews[0];
         const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
-        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id : environment.taskId;
-        expect(review?.dependsOn).toEqual([environmentId, ...checkIds]);
-        expect(result.dependencyEdges.filter((e) => e.from === review?.id).map((e) => e.to)).toEqual([environmentId, ...checkIds]);
+        const foundationId = layout.kind === "existing" ? layout.taskId : result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id;
+        expect(review?.dependsOn).toEqual([foundationId, ...checkIds]);
+        expect(result.dependencyEdges.filter((e) => e.from === review?.id).map((e) => e.to)).toEqual([foundationId, ...checkIds]);
         for (const implementation of result.tasks.filter((t) => t.taskSpec.origin === "decomposition")) {
             expect(result.dependencyEdges).toContainEqual({ from: implementation.id, to: review?.id });
         }
         // Nothing but implementations waits on the review: the check tasks run before it.
         const waiting = result.dependencyEdges.filter((e) => e.to === review?.id).map((e) => e.from);
         expect(waiting.sort()).toEqual(result.tasks.filter((t) => t.taskSpec.origin === "decomposition").map((t) => t.id).sort());
-        expect(review?.taskSpec).toMatchObject({ visionItems: INPUT.visionItems.map((item) => item.text) });
+        expect(review?.taskSpec).toMatchObject({ visionItems: INPUT.visionItems.map((item) => item.text), sources: INPUT.visionItems });
     });
 
     // ADR-074 addendum 2 d70: the planner grades each task; the plan's own tasks keep a fixed level.

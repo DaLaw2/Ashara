@@ -275,6 +275,24 @@ describe("CoreLoop first plan", () => {
     expect(order).toEqual(["stop", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
+  test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched (W11 D5)", async () => {
+    const order: string[] = [];
+    mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+      order.push("dispatch");
+      return { taskId: task.id, status: "completed" as const, detail: "ok" };
+    });
+    const step = (name: string) =>
+      vi.fn(async () => {
+        order.push(name);
+        return [];
+      });
+    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, undefined, undefined, { runPending: step("roster") });
+
+    await new CoreLoop({ ...deps, liaisonAnswers: { runPending: step("answers") }, replanning: { runPending: step("replan") } }).runCycle();
+
+    expect(order).toEqual(["intake", "answers", "roster", "answers", "plan", "answers", "replan", "dispatch", "dispatch"]);
+  });
+
   test("a planning store failure fails the cycle instead of being skipped", async () => {
     const deps = buildDeps(undefined, {
       runPending: async () => {

@@ -83,7 +83,7 @@ class EnvironmentCheckCommitFailed extends Error {
 }
 
 /** Which check a fresh checkout is for: each has its own directory. */
-type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify" | "verify-probe";
+type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify" | "verify-probe" | "foundation-build";
 
 /** Everything one environment check needs of its dispatch. */
 export interface EnvironmentCheckScope {
@@ -343,6 +343,24 @@ export function runPostMergeProbe(
   timeoutSeconds: number,
 ): Promise<EnvironmentTestRun> {
   return runProbeOnCheckout(scope, "verify-probe", role, tested.imageRef, commit, tested.definition, timeoutSeconds);
+}
+
+/**
+ * The definition's `build` from `imageRef` on a fresh checkout of `commit`, a red run's foundation
+ * (W11 D2): the merge gate's first step, run before any check there, so a check that fails only
+ * because the product does not build is never read as a check that tells the task's work from its
+ * absence. The command is the environment's own, never one Ashara names. The cell has no network; a
+ * substrate failure throws.
+ */
+export function runFoundationBuild(
+  scope: EnvironmentCheckScope,
+  role: string,
+  imageRef: string,
+  commit: string,
+  definition: EnvironmentDefinition,
+  timeoutSeconds: number,
+): Promise<EnvironmentTestRun> {
+  return withCheckoutCell(scope, "foundation-build", role, imageRef, commit, (cell) => runCommand(cell, definition.build, timeoutSeconds));
 }
 
 /**

@@ -73,17 +73,17 @@ function jsonResult(value: unknown) {
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
   scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
-  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book." }],
+  assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {
       text: "Which studio opens first?",
       whyItMatters: "It orders the work.",
-      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first." },
+      assumption: { statement: "The harbour studio opens first.", rationale: "The tender names it first.", kind: "client-visible" },
     },
     {
       text: "How many seats does a class have?",
       whyItMatters: "It sets the booking limit.",
-      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels." },
+      assumption: { statement: "A class has twelve seats.", rationale: "The tender mentions a dozen wheels.", kind: "client-visible" },
     },
   ],
 };
@@ -102,7 +102,7 @@ const TASKS = {
   tasks: [
     {
       ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [],
-      endState: "Classes are listed", scope: "class listing", deliverables: ["class list"], visionItems: ["S1"],
+      endState: "Classes are listed", scope: "class listing", deliverables: [{ text: "class list", sources: ["S1"] }], acceptance: [{ text: "a client uses the class list", sources: ["S1"] }],
       capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
@@ -156,13 +156,13 @@ function planner(): FirstPlanner {
 }
 
 /** A tender taken in: vision v1 with A1 and A2 adopted by the two questions, A3 unasked. */
-async function intakenProject(): Promise<{ projectId: ProjectId; questionIds: string[] }> {
+async function intakenProject(): Promise<{ projectId: ProjectId; tenderId: string; questionIds: string[] }> {
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
   ourProjects.add(created.project.id);
   pipelineModel({ verdict: "confirms" });
   expect((await intake().runPending()).map((o) => o.kind)).toEqual(["recorded"]);
   const questions = (await new ClientMessageRepository(db).listByProject(created.project.id)).filter((m) => m.kind === "question");
-  return { projectId: created.project.id, questionIds: questions.map((q) => q.id) };
+  return { projectId: created.project.id, tenderId: created.message.id, questionIds: questions.map((q) => q.id) };
 }
 
 async function answer(projectId: ProjectId, questionId: string, body: string): Promise<string> {
@@ -304,7 +304,7 @@ describe("the client's answers", () => {
   });
 
   test("an answer after the first plan that changes an assumption it was built on is reported once and stops dispatch", async () => {
-    const { projectId, questionIds } = await intakenProject();
+    const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
     pipelineModel({ verdict: "confirms" });
@@ -327,7 +327,10 @@ describe("the client's answers", () => {
     });
     expect(await replanFlagOf(projectId)).toBe(answerId);
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);
-    const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report");
+    // Beside intake's report of the unasked assumptions, in reply to the tender (ADR-074 addendum 2 d89 C).
+    const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter(
+      (m) => m.kind === "report" && m.inReplyTo !== tenderId,
+    );
     expect(reports).toHaveLength(1);
     expect(reports[0]?.inReplyTo).toBe(answerId);
     expect(reports[0]?.body).toContain("The plan assumed: The harbour studio opens first.");
@@ -337,7 +340,7 @@ describe("the client's answers", () => {
   });
 
   test("an answer after the first plan that confirms its assumption is Stated without replanning", async () => {
-    const { projectId, questionIds } = await intakenProject();
+    const { projectId, tenderId, questionIds } = await intakenProject();
     const [first] = questionIds;
     if (first === undefined) throw new Error("intake posted no question");
     pipelineModel({ verdict: "confirms" });
@@ -348,7 +351,9 @@ describe("the client's answers", () => {
     pipelineModel({ verdict: "confirms" });
     expect((await answers().runPending()).map((o) => o.kind === "stated" && o.replanRequested)).toEqual([false]);
     expect(await replanFlagOf(projectId)).toBeNull();
-    expect((await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report")).toHaveLength(0);
+    expect(
+      (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report" && m.inReplyTo !== tenderId),
+    ).toHaveLength(0);
   });
 
   test("two answers of one project in one cycle: each is read against the vision as the other left it (third run N9)", async () => {

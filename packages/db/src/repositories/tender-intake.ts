@@ -23,6 +23,8 @@ interface TenderIntakeWrite {
   readonly projectId: ProjectId;
   /** Outbound question bodies, posted with their positions in this order. */
   readonly questions: readonly string[];
+  /** The report of the assumptions no question carries, posted after the questions; null when there is none. */
+  readonly assumptionsReport: string | null;
   /** The vision v1 document, given the ids of the posted questions in the same order. */
   readonly vision: (questionIds: readonly string[]) => VisionInput;
 }
@@ -33,7 +35,7 @@ type TenderIntakeCommit =
 
 /**
  * One tender's intake, in one transaction: the tender consumed, its questions
- * posted, vision v1 written. The tender is consumed first so its row lock
+ * and its assumptions report posted, vision v1 written. The tender is consumed first so its row lock
  * serialises two intakes of it; a project that already has a vision gets only
  * the consumption and nothing new.
  */
@@ -48,6 +50,11 @@ export async function recordTenderIntake(db: Database, write: TenderIntakeWrite)
 
     const questions = await messages.insertQuestions(write.projectId, write.tenderId, write.questions);
     const questionIds = questions.map((q) => q.id);
+    // Once per project with no reports_on subject of its own: it commits only with vision v1, which
+    // UNIQUE (project_id, version) lets exactly one intake write.
+    if (write.assumptionsReport !== null) {
+      await messages.insertOutbound({ projectId: write.projectId, kind: "report", body: write.assumptionsReport, inReplyTo: write.tenderId });
+    }
     const vision = await visions.create(write.projectId, write.vision(questionIds));
     if (vision.version !== 1) throw new IntakeVisionNotFirst(write.projectId, write.tenderId, vision.version);
     return { kind: "recorded", visionId: vision.id, questionIds };

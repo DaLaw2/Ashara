@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
+import type { CapabilityLevel, ProjectKnowledge, VisionSource } from "@ashara/shared";
 import { CapabilityLevelSchema } from "@ashara/shared";
 
 export interface WorkItemSpec {
@@ -34,9 +34,31 @@ interface Traced {
     readonly visionItems: string[];
 }
 
-/** A decomposed task's specification: what the client asked for that it delivers, and how it is seen done. */
+/**
+ * The traced items of a task whose checks are judged item by item (d89): each with its id, status,
+ * standing with the client and kind, in the vision's order; their texts are `visionItems`.
+ */
+interface Sourced extends Traced {
+    readonly sources: VisionItem[];
+}
+
+/** An acceptance line with the ids of the vision items it serves (d89 A). */
+export interface TracedLine {
+    readonly line: string;
+    readonly sources: string[];
+}
+
+/**
+ * A decomposed task's specification: what the client asked for that it delivers, and how it is seen
+ * done. Its traced items are exactly the union of the items its deliverables and acceptance lines
+ * cite (d89 A), never chosen apart from them.
+ */
 export type DecomposedTaskSpec = TaskSpecCore &
-    Traced & { readonly origin: "decomposition"; readonly capabilityReason: string };
+    Sourced & {
+        readonly origin: "decomposition";
+        readonly capabilityReason: string;
+        readonly acceptance: TracedLine[];
+    };
 
 /**
  * A planned task's specification. It carries no checks: the decomposer does not
@@ -52,18 +74,24 @@ export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
     | (TaskSpecCore & Traced & { readonly origin: "product-scaffold"; readonly checkedBy: "substrate" })
     | DecomposedTaskSpec
-    /** `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a). */
-    | (TaskSpecCore & Traced & { readonly origin: "check"; readonly checksFor: string })
-    | (TaskSpecCore & Traced & { readonly origin: "review" });
+    /**
+     * `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a);
+     * its sources and acceptance lines are that task's (d89).
+     */
+    | (TaskSpecCore & Sourced & { readonly origin: "check"; readonly checksFor: string; readonly acceptance: TracedLine[] })
+    | (TaskSpecCore & Sourced & { readonly origin: "review" });
 
 /**
- * One item of the vision a plan is decomposed from: a scope boundary or an assumption work
- * proceeds on. `id` is local to one decomposition prompt (S1.., A1..); the item's text is what
- * the plan records.
+ * One item of the vision a plan is decomposed from: a scope boundary (S1..) or an assumption work
+ * proceeds on, by its key in the vision. Only a scope line and a client-visible assumption may be
+ * cited by a deliverable or an acceptance line (ADR-074 addendum 2 d89 E); an internal-design or
+ * unclassified one is guidance for the implementer.
  */
-export interface VisionItem {
-    readonly id: string;
-    readonly text: string;
+export type VisionItem = VisionSource;
+
+/** Whether a deliverable or an acceptance line may cite the item (d89 E). */
+export function citable(item: VisionItem): boolean {
+    return item.type === "scope" || item.kind === "client-visible";
 }
 
 /**
@@ -89,7 +117,9 @@ export type EnvironmentPlanning =
 
 /**
  * The product's layout a plan builds on (ADR-074 addendum 2 d72 B2): set up by a new product
- * scaffold task in the plan, or already set up by a completed one (`taskId`).
+ * scaffold task in the plan, or already set up by a completed one. `taskId` is then the completed
+ * task whose recorded merge is the layout's latest merged state: the scaffold, or a task merged
+ * after it. A revision on the existing environment red-runs its checks there (W11 D2).
  */
 export type LayoutPlanning =
     | { readonly kind: "new" }
@@ -165,6 +195,16 @@ export class TaskCapExceededError extends Error {
     }
 }
 
+/**
+ * A deliverable or an acceptance line with the ids of the vision items it serves (ADR-074 addendum 2
+ * d89 A). `sources` may be empty here: a line that cites nothing is the decomposer's semantic
+ * rejection, whose message names the line, not a bare schema failure.
+ */
+const TracedLineOutputSchema = z.object({
+    text: z.string().trim().min(1),
+    sources: z.array(z.string().trim().min(1)),
+});
+
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({
         /**
@@ -176,7 +216,6 @@ export const TaskOutputSchema = z.object({
         ref: z.string().optional(),
         title: z.string(),
         description: z.string(),
-        successCriteria: z.array(z.string()).default([]),
         dependsOn: z.array(z.string()).default([]),
         goal: z.string().default(""),
         // Required and non-empty: these were once filled by keyword inference over
@@ -184,10 +223,10 @@ export const TaskOutputSchema = z.object({
         // register of the model's own. Omission is now a schema failure the ladder re-asks.
         endState: z.string().trim().min(1),
         scope: z.string().trim().min(1),
-        deliverables: z.array(z.string().trim().min(1)).min(1),
-        // The ids (or exact texts) of the vision items the task delivers (ADR-074 addendum 2 d71 d).
-        // Required: an empty list, or an entry naming no item, is the decomposer's semantic rejection.
-        visionItems: z.array(z.string().trim().min(1)),
+        // Each deliverable and each acceptance line names the vision items it serves (ADR-074 addendum
+        // 2 d71 d, d89 A); the task's traced items are the union of those, never chosen separately.
+        deliverables: z.array(TracedLineOutputSchema).min(1),
+        acceptance: z.array(TracedLineOutputSchema).min(1),
         // The planner's grade of the work's difficulty (ADR-074 addendum 2 d70) and why. Required: a
         // task without a grade is a schema failure the ladder re-asks, never a default level.
         capability: CapabilityLevelSchema,
@@ -195,31 +234,56 @@ export const TaskOutputSchema = z.object({
     })).min(1),
 });
 
-/** Context of {@link UntraceableTaskError}: the task, what it named, and every item it could have named. */
+/** What is wrong with one deliverable or acceptance line's sources. */
+export type UntracedLine =
+    | { readonly field: "deliverable" | "acceptance"; readonly text: string; readonly problem: "no-source" }
+    | { readonly field: "deliverable" | "acceptance"; readonly text: string; readonly problem: "unknown"; readonly source: string }
+    | {
+          readonly field: "deliverable" | "acceptance";
+          readonly text: string;
+          readonly problem: "not-citable";
+          readonly source: string;
+          readonly kind: "internal-design" | "unclassified";
+      };
+
+/** Context of {@link UntraceableTaskError}: the task, each line whose sources are wrong, and every item it could cite. */
 interface UntraceableTaskContext {
     readonly taskTitle: string;
-    /** The entries of its `visionItems` that name no vision item; empty when it named none at all. */
-    readonly unknown: readonly string[];
-    readonly availableIds: readonly string[];
+    readonly lines: readonly UntracedLine[];
+    readonly citableIds: readonly string[];
     readonly parentId: string;
 }
 
+function untracedText(line: UntracedLine): string {
+    const which = `${line.field} ${JSON.stringify(line.text)}`;
+    switch (line.problem) {
+        case "no-source":
+            return `${which} names no vision item it serves`;
+        case "unknown":
+            return `${which} names ${JSON.stringify(line.source)}, which is no vision item`;
+        case "not-citable":
+            return line.kind === "internal-design"
+                ? `${which} names ${line.source}, an internal-design assumption: it guides the implementer and is never ` +
+                      `a deliverable or acceptance line's source; drop the line or cite the client-visible item it serves`
+                : `${which} names ${line.source}, an assumption of no recorded kind, which cannot be a source`;
+    }
+}
+
 /**
- * A planned task names no vision item it delivers, or names one the vision does not hold (ADR-074
- * addendum 2 d71 d; fifth run N21: a scaffold task whose behaviour the tender never asked for).
- * Inside the ladder its message is a re-ask; past it the plan is rejected, never written.
+ * A planned task's deliverable or acceptance line cites no vision item, one the vision does not hold,
+ * or an assumption that may not be a source (ADR-074 addendum 2 d71 d, d89 A and E; fifth run N21: a
+ * scaffold task whose behaviour the tender never asked for; W11: lines drawn from assumptions the task
+ * did not name). Checked mechanically, with no model call. Inside the ladder its message is a re-ask;
+ * past it the plan is rejected, never written.
  */
 export class UntraceableTaskError extends Error {
     readonly context: UntraceableTaskContext;
 
     constructor(context: UntraceableTaskContext) {
         super(
-            context.unknown.length === 0
-                ? `Task "${context.taskTitle}" names no vision item it delivers; every task must name at least one of ` +
-                      `[${context.availableIds.join(", ")}] (decomposition of ${context.parentId})`
-                : `Task "${context.taskTitle}" names ${context.unknown.map((u) => JSON.stringify(u)).join(", ")}, which ` +
-                      `${context.unknown.length === 1 ? "is" : "are"} no vision item; the vision's items are ` +
-                      `[${context.availableIds.join(", ")}] (decomposition of ${context.parentId})`,
+            `Task "${context.taskTitle}": ${context.lines.map(untracedText).join("; ")}. Every deliverable and every ` +
+                `acceptance line must name in "sources" at least one of [${context.citableIds.join(", ")}] ` +
+                `(decomposition of ${context.parentId})`,
         );
         this.name = "UntraceableTaskError";
         this.context = context;

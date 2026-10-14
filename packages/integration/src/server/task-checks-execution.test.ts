@@ -33,8 +33,8 @@ import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
-// no skip. A check task's checks are red-run on the plan's foundation (the Sprint 0 merge here,
-// ADR-074 addendum 2 d74 A) and stored; an implementation task is swept for delivery on main, then
+// no skip. A check task's checks are red-run on the plan's foundation (the product scaffold's merge
+// here, which the environment builds, ADR-074 addendum 2 d74 A, W11 D2) and stored; an implementation task is swept for delivery on main, then
 // decided by them on its tentative merge.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
@@ -83,7 +83,7 @@ let substrate: PodmanSubstrate;
 
 const HELLO_CHECK = "grep hello hello.txt\n";
 
-/** The Sprint 0 task on record whose merge is the plan's foundation, and that merge commit. */
+/** The product scaffold on record whose merge is the plan's foundation, and that merge commit. */
 let foundationTaskId: WorkItemId;
 let foundation = "";
 
@@ -242,11 +242,17 @@ beforeAll(async () => {
   await git("add", "environment");
   await git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
   foundation = await git("rev-parse", "main");
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
+    VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${RUN_SCOPE_AD_HOC}, ${projectId},
+            'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
+            ${foundation})`);
+  // The product's layout here is the environment's own tree, whose build ("true") passes.
   foundationTaskId = createWorkItemId();
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
-    VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the project environment', ${RUN_SCOPE_AD_HOC}, ${projectId},
-            'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
+    VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the product''s layout', ${RUN_SCOPE_AD_HOC}, ${projectId},
+            'implementation', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
 }, 60_000);
@@ -350,6 +356,26 @@ describe("independent verification", () => {
     expect(await checkRowsOf(greeting.implementation.id)).toEqual([
       expect.objectContaining({ name: "says hi", command: `sh ${hiSh}`, files: [{ path: hiSh, content: "grep hi hi.txt\n" }] }),
     ]);
+    expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
+  }, 300_000);
+
+  // W11 D4: debug_tmp, debug_env and debug_ls were defined to look around the foundation and stored as acceptance checks.
+  it("probe_foundation shows the foundation and stores nothing; only the checks defined reach the set", async () => {
+    const greeting = await plannedPair("Write hey.txt");
+
+    const { result, mock, events } = await runTask(greeting.check, [
+      toolCallTurn("probe_foundation", { command: "ls environment" }),
+      toolCallTurn("define_check", { name: "says hey", command: "grep hey hey.txt" }),
+      toolCallTurn("finish", { status: "done", summary: "One check: hey.txt says hey." }),
+    ]);
+
+    expect(result.status, result.detail).toBe("completed");
+    const afterProbe = JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null);
+    expect(afterProbe).toContain("no check was defined");
+    expect(afterProbe).toContain("environment.toml");
+    expect(events.filter((e) => e.event === "foundation_probed")).toMatchObject([{ command: "ls environment", exitCode: 0 }]);
+    expect(events.filter((e) => e.event === "check_defined").map((e) => e["name"])).toEqual(["says hey"]);
+    expect((await checkRowsOf(greeting.implementation.id)).map((row) => row.name)).toEqual(["says hey"]);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
 
@@ -618,9 +644,13 @@ describe("post-merge regression suite", () => {
 
     expect(result.status, result.detail).toBe("completed");
     const verify = events.find((e) => e.event === "post_merge_verify");
-    expect(verify).toMatchObject({ verdict: "passed", uncheckedTasks: [legacy.implementation.id] });
+    // The product scaffold is a Completed implementation task with no stored check too (its gate is
+    // the environment's build and test), so it is named beside the legacy task.
+    expect(verify).toMatchObject({ verdict: "passed", uncheckedTasks: [foundationTaskId, legacy.implementation.id] });
     expect(verify?.["regressionTasks"]).not.toContain(legacy.implementation.id);
-    expect(verify?.["details"]).toContain(`Not re-run, no check is stored for them (completed before checks existed): ${legacy.implementation.id}`);
+    expect(verify?.["details"]).toContain(
+      `Not re-run, no check is stored for them (completed before checks existed): ${foundationTaskId}, ${legacy.implementation.id}`,
+    );
   }, 300_000);
 
   // docs/investigations/second-run-2026-10-14.md N2 (no exit from a wrong check) and N3 (a retry judged

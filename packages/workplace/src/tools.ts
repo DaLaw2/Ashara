@@ -4,7 +4,7 @@ import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
 import type { WorkKind } from "@ashara/shared";
 import { CHECK_RUNNER } from "./check-definition.js";
-import type { CheckDefinitionPort, CheckDefinitionResult } from "./check-definition.js";
+import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
 import { checkPassed, formatCheckRunReport } from "./check-run.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
@@ -28,6 +28,7 @@ const searchArgs = z.object({ pattern: nonEmpty, path: nonEmpty.optional() }).st
 const runCommandArgs = z.object({ command: nonEmpty, timeout_seconds: z.number().int().positive().optional() }).strict();
 const buildEnvironmentArgs = z.object({}).strict();
 const runChecksArgs = z.object({}).strict();
+const probeFoundationArgs = z.object({ command: nonBlank }).strict();
 const defineCheckArgs = z
   .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
   .strict();
@@ -191,7 +192,8 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
     "the checks and written over the project whenever they run; a file you write anywhere else is discarded. A check " +
     "that changes a file the project tracks is rejected. The check is red-run at once on the foundation, with your " +
     "check files so far written over it; the result shows its exit code and output and whether it would be " +
-    "rejected. Defining a check with the name of one already defined replaces it.",
+    "rejected. Defining a check with the name of one already defined replaces it. Every check defined is kept as " +
+    "an acceptance check of the task: never define one to look around; use probe_foundation for that.",
   inputSchema: {
     type: "object",
     properties: {
@@ -199,6 +201,22 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
       command: { type: "string", description: "The shell command." },
     },
     required: ["name", "command"],
+    additionalProperties: false,
+  },
+};
+
+/** Beside define_check: a look at the foundation that is never kept as a check (W11 D4). */
+const PROBE_FOUNDATION_SCHEMA: TurnToolSchema = {
+  description:
+    "Run one shell command on the plan's foundation, exactly where define_check red-runs a check (your check " +
+    "files so far written over it), and see its exit code and output. Nothing is recorded: it defines no check. " +
+    "Use it to look at the foundation (which files exist there, how the product starts or refuses) before you " +
+    "define the checks. " +
+    CHECK_RUNNER,
+  inputSchema: {
+    type: "object",
+    properties: { command: { type: "string", description: "The shell command." } },
+    required: ["command"],
     additionalProperties: false,
   },
 };
@@ -253,7 +271,7 @@ export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): T
     case "environment":
       return { ...offered, build_environment: BUILD_ENVIRONMENT_SCHEMA, finish: ENVIRONMENT_FINISH_SCHEMA };
     case "check":
-      return { ...offered, define_check: DEFINE_CHECK_SCHEMA };
+      return { ...offered, define_check: DEFINE_CHECK_SCHEMA, probe_foundation: PROBE_FOUNDATION_SCHEMA };
     case "implementation":
       return runChecks ? { ...offered, dispute_check: DISPUTE_CHECK_SCHEMA } : offered;
     case null:
@@ -358,6 +376,21 @@ function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult,
   return { kind: "result", output: lines.join("\n"), isError: redRun.rejection !== null };
 }
 
+/** probe_foundation's answer: the command's run on the foundation; nothing was recorded. */
+function formatFoundationProbe(probe: FoundationProbe): ToolExecution {
+  if (probe.kind !== "ran") return toolError(`It could not run on the foundation: ${probe.detail}\nNothing was recorded.`);
+  const { run } = probe;
+  return {
+    kind: "result",
+    output: [
+      `Run on the plan's foundation (limit ${probe.timeoutSeconds}s); no check was defined:`,
+      `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
+      `  output: ${run.output === "" ? "(empty)" : run.output}`,
+    ].join("\n"),
+    isError: run.timedOut || run.exitCode !== 0,
+  };
+}
+
 function countOccurrences(text: string, needle: string): { readonly count: number; readonly first: number } {
   let count = 0;
   let first = -1;
@@ -449,6 +482,12 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const result = await context.checks.define({ name, command: args.data.command }, context.commandTimeoutSeconds);
       if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
       return formatDefinedCheck(name, result);
+    }
+    case "probe_foundation": {
+      const args = probeFoundationArgs.safeParse(input);
+      if (!args.success) return argsError(toolName, args.error);
+      if (context.checks === null) return toolError(`probe_foundation is not available in this attempt.`);
+      return formatFoundationProbe(await context.checks.probe(args.data.command, context.commandTimeoutSeconds));
     }
     case "run_checks": {
       const args = runChecksArgs.safeParse(input);

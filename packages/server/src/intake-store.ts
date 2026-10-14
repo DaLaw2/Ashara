@@ -34,6 +34,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
         tenderId: write.tender.id,
         projectId: write.tender.projectId,
         questions: write.questions,
+        assumptionsReport: write.assumptionsReport,
         vision: (questionIds) => {
           const vision = write.vision(questionIds);
           return {

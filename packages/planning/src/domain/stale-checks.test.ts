@@ -83,6 +83,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     const exit = exitSuiteReview(review, new Map([[a.id, a], [b.id, b], [c.id, c]]), {
       problems,
       timesNamed: new Map([[a.id, 1], [b.id, 2]]),
+      earlierFindings: new Map([[a.id, []], [b.id, []]]),
     });
 
     expect(exit).toEqual({ kind: "reopened", checkTasks: [a, b] });
@@ -97,6 +98,40 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     expect(a.blockedReason).toMatchObject({ source: "replan", replanContext: { raw: { checkedTaskId: "impl-a", reviewTaskId: review.id } } });
   });
 
+  // W11 (ADR-074 addendum 2 d89 F): rewrite 2's brief carried only review 2's finding, so the stale-lock and
+  // interrupted-compact checks review 1 had it drop came back.
+  test("a reopened check task's brief carries every earlier review's findings on it, not only the latest", () => {
+    const review = reviewTask();
+    const a = checkTaskFor("impl-a");
+    const exit = exitSuiteReview(review, new Map([[a.id, a]]), {
+      problems: [{ checkTaskIds: [a.id], kind: "outside-vision", problem: "lib.sh runs a binary named kvstore", evidence: "lib.sh: ./kvstore" }],
+      timesNamed: new Map([[a.id, 2]]),
+      earlierFindings: new Map([
+        [a.id, [{ kind: "outside-vision" as const, problem: "compact_interrupted requires an atomic rewrite", evidence: "compact.sh: kill -9" }]],
+      ]),
+    });
+
+    expect(exit.kind).toBe("reopened");
+    const brief = a.blockedReason?.source === "replan" ? a.blockedReason.replanContext.detail : "";
+    expect(brief).toContain("Problem 1 (a check outside the task's cited vision items): lib.sh runs a binary named kvstore");
+    expect(brief).toContain("Earlier reviews found these problems in this task's checks too");
+    expect(brief).toContain("Earlier problem 1 (a check outside the task's cited vision items): compact_interrupted requires an atomic rewrite");
+    expect(brief).toContain("Evidence: compact.sh: kill -9");
+  });
+
+  test("findings naming a check task with no record of its earlier reviews are refused before anything is reopened", () => {
+    const review = reviewTask();
+    const a = checkTaskFor("impl-a");
+    expect(() =>
+      exitSuiteReview(review, new Map([[a.id, a]]), {
+        problems: [{ checkTaskIds: [a.id], kind: "contradiction", problem: "p", evidence: "e" }],
+        timesNamed: new Map([[a.id, 1]]),
+        earlierFindings: new Map(),
+      }),
+    ).toThrow(/no record of earlier reviews/);
+    expect([review.status, a.status]).toEqual(["InProgress", "Completed"]);
+  });
+
   test("a check task named a third time is past the bound: the review is given up and no check task is reopened", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
@@ -105,6 +140,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     const exit = exitSuiteReview(review, new Map([[a.id, a], [b.id, b]]), {
       problems: [{ checkTaskIds: [a.id, b.id], kind: "contradiction", problem: "p", evidence: "e" }],
       timesNamed: new Map([[a.id, 1], [b.id, 3]]),
+      earlierFindings: new Map([[a.id, []], [b.id, []]]),
     });
 
     expect(exit).toEqual({ kind: "bound", bound: 2, checkTaskId: b.id, times: 3 });
@@ -120,6 +156,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     const exit = exitSuiteReview(review, new Map([[a.id, a], [gone.id, gone]]), {
       problems: [{ checkTaskIds: [a.id, gone.id], kind: "contradiction", problem: "p", evidence: "e" }],
       timesNamed: new Map([[a.id, 1], [gone.id, 1]]),
+      earlierFindings: new Map([[a.id, []], [gone.id, []]]),
     });
 
     expect(exit.kind).toBe("unreopenable");

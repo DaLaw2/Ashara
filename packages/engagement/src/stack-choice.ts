@@ -130,6 +130,10 @@ export class StackChoiceReports implements LiaisonStackChoices {
       statement: due.statement,
       rationale: `The team chose this when it set up the project environment (Sprint 0 task ${due.taskId}); the client has not confirmed it.`,
       status: "Inferred",
+      // How the product is built, not what it does for the client (ADR-074 addendum 2 d89 E); this
+      // choice's own report tells the client of it.
+      kind: "internal-design",
+      disclosed: "reported",
     };
     return {
       projectId: due.projectId,
