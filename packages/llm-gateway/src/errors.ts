@@ -28,7 +28,8 @@ export class NoProviderAvailableError extends GatewayError {
 
   constructor(capability: string, availableModels: readonly string[]) {
     super(
-      `No provider available for capability level "${capability}" or above ` +
+      `No provider available for capability level "${capability}" or above: no enabled provider offers a model ` +
+        `graded at that level or higher, and no lower model is substituted ` +
         `(available models: ${availableModels.length > 0 ? availableModels.join(", ") : "none"})`,
     );
     this.name = "NoProviderAvailableError";

@@ -2,7 +2,9 @@
 #
 # The model catalog is DB-authoritative (seeded by migration 002_seed_models.sql;
 # prices, cache rates and time-of-day windows refreshed by 021; the verified
-# models of the 2026-10-13 price investigation added by 026).
+# models of the 2026-10-13 price investigation added by 026; the current-models
+# catalog, its levels as Ashara calls each model, and prompt-length tiers set by
+# 047 from docs/investigations/model-catalog-2026-10-14.md, ADR-074 item 83).
 # This file contains only deployment-specific routing profiles.
 #
 # To add/update models, create a new migration or use the model_configs DB table.
@@ -52,41 +54,38 @@
 
 [routing.profiles."deepseek"]
 # Intentionally empty: a deepseek-only deployment gets pure capability-level
-# routing, byte-identical to pre-routing-profiles behavior.
+# routing. Since 047 its one model is deepseek-flash, graded Strong with thinking
+# on (below): Light, Medium and Strong requests resolve to it. Nothing lower is
+# substituted for Frontier: a task the planner grades Frontier fails with
+# NoProviderAvailableError, and a Strong structured call whose attempts all
+# fail has no tier to escalate to, so it ends in StructuredOutputExhausted with
+# `unavailableEscalation` set (reliability-ladder.ts), the same terminal
+# failure its caller blocks on.
 
 [routing.profiles."anthropic"]
 # Pins what capability routing resolved to before migration 026 added
-# claude-haiku-5-5 (Light), claude-opus-5-5 and claude-fable-5-1: a Light
-# agent-runner task would otherwise move from Sonnet 5.5 to Haiku 5.5, which
-# the installed @ai-sdk/anthropic does not know (price investigation section
-# 2.2). Changing an Anthropic-only allocation is an owner decision, not a
-# side effect of a catalog refresh.
-"agent-runner" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"decomposition" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"liaison-intake" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"roster" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"suite-review" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
-"escalation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+# claude-haiku-5-5, claude-opus-5-5 and claude-fable-5-1. Changing an
+# Anthropic-only allocation is an owner decision, not a side effect of a catalog
+# refresh. Frontier moved from claude-opus-4-8, removed by 047 as legacy, to its
+# successor claude-opus-5-5 (Frontier as called).
+"agent-runner" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
+"decomposition" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
+"liaison-intake" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
+"roster" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
+"suite-review" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
+"escalation" = { Frontier = "claude-opus-5-5", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
-# Plan C (owner, provider-budget-cap story): DeepSeek is the agent/planning
-# workhorse; Anthropic is reserved for ladder-escalated retries only, to
-# protect the $20 Anthropic credit (E2E budget <= $1 total). The
-# judge tier that used to hold the third Anthropic slot was removed in
-# ADR-034, taking claude-opus-4-8 out of routing with it.
-# Frontier agent tasks (graded so by the planner, or escalated after a failed
-# attempt) stay on DeepSeek's own Frontier model (v4-pro) rather than
-# downgrading to Flash or escaping to Anthropic. Every other grade takes the
-# default, so in this combo a planner's grade below Frontier picks the same
-# model as Strong: grading changes no agent-runner model here until an owner
-# maps Light or Medium (whether a Flash-class model can serve them is
-# unverified; see Runs 30-32 below). The "anthropic" table above is the same.
-# Agent default upgraded to V4 Pro: deepseek-v4-flash, since retired and aliased
-# to V4.1-Flash, could not produce compiling TypeScript+Hono code (Runs 30-32:
-# every attempt failed tsc baseline). Prices are model_configs' (migration 021):
-# Pro is 3.3-4.4x Flash and below Sonnet 5.5 ($1.32/$3.96 at DeepSeek's peak vs
-# $2/$10). Frontier stays on Pro (no-op).
-"agent-runner" = { Frontier = "deepseek-v4-pro", default = "deepseek-v4-pro" }
+# DeepSeek serves planning and intake; since 047 Claude serves every agent-runner task
+# (below) and every ladder escalation.
+# agent-runner named deepseek-v4-pro at every level until 047 removed it
+# (ADR-074 item 83 b: it grades below deepseek-flash at 3.3x the price). Each
+# level now goes to the Claude model graded at that level as called (047):
+# Frontier claude-opus-5-5, Strong claude-sonnet-5-5, Medium claude-haiku-5-5.
+# No Claude model is graded Light; a Light task takes claude-haiku-5-5, the
+# cheapest Claude model above it. So every agent-runner task in this combo now
+# spends Anthropic credit.
+"agent-runner" = { Frontier = "claude-opus-5-5", Strong = "claude-sonnet-5-5", Medium = "claude-haiku-5-5", Light = "claude-haiku-5-5" }
 "decomposition" = "deepseek-flash"
 # The Liaison's tender intake (s-liaison-intake-m1): the server-side successor of
 # the deleted CLI alignment call.
@@ -97,8 +96,9 @@
 # The review of a plan revision's check suites (ADR-074 addendum 2 d71 c): one structured
 # call per review, reading every stored suite with the vision.
 "suite-review" = "deepseek-flash"
-# Sonnet 5.5 replaces Sonnet 4.6 (Decided: owner 2026-10-13, ADR-077).
-"escalation" = "claude-sonnet-5-5"
+# An escalation goes up a level: the base sites run deepseek-flash (Strong as called), so the
+# escalation is the Frontier Claude model, never a lateral Strong one (ADR-074 item 83 b).
+"escalation" = "claude-opus-5-5"
 
 # =============================================================================
 # Thinking mode per call site (ADR-074 D13: per role tier, default off, turned
@@ -106,9 +106,14 @@
 # provider_type that takes one: today only "deepseek" (thinking.type). Every
 # other provider type gets no option, whatever this table says.
 #
-# Why off: deepseek-flash thinks by default, and its reasoning tokens count
-# against maxTokens. In transcript 3 (2026-10-13) 19 of 23 structured requests
-# spent all 4,096 tokens reasoning and returned no text.
+# On at every routing site (Decided: owner 2026-10-14, ADR-074 item 83 a): a
+# model's level is graded as Ashara calls it, and deepseek-flash is Strong only
+# with thinking on (model-catalog record 2026-10-14 §4.4). The D13 A/B is
+# recorded with the W11 rehearsal. The risk this reopens: deepseek-flash's
+# reasoning tokens count against maxTokens, and in transcript 3 (2026-10-13),
+# with thinking on, 19 of 23 structured requests spent all 4,096 tokens
+# reasoning and returned no text (StructuredOutputTruncated). A site-less call
+# keeps the default, off.
 #
 # `default` is required when this table is present; [thinking.sites] keys are
 # the routing sites ("escalation" covers every escalated ladder attempt). A site
@@ -120,3 +125,9 @@
 default = "off"
 
 [thinking.sites]
+"agent-runner" = "on"
+"decomposition" = "on"
+"liaison-intake" = "on"
+"roster" = "on"
+"suite-review" = "on"
+"escalation" = "on"

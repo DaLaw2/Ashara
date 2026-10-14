@@ -50,11 +50,15 @@ function isPositiveAmount(value: number): boolean {
 /**
  * The worst-case USD cost of one call: input estimated from the request's
  * bytes at one token per byte plus framing, output at its full bound, both
- * priced at the model's highest rate in any price window (input at the higher
- * of the plain and cache-write rates).
+ * priced at the model's highest rate in any price window or prompt-length tier
+ * (input at the higher of the plain and cache-write rates). A cap, not a price.
  */
 export function worstCaseCostUsd(model: ModelConfig, requestBytes: number, maxOutputTokens: number): number {
-  const rates = [model, ...model.priceWindows.map((window) => window.rates)];
+  const rates = [
+    model,
+    ...model.priceWindows.map((window) => window.rates),
+    ...model.priceTiers.map((tier) => tier.rates),
+  ];
   const inputRate = Math.max(...rates.map((r) => Math.max(r.inputCostPer1M, r.cacheWriteCostPer1M ?? 0)));
   const outputRate = Math.max(...rates.map((r) => r.outputCostPer1M));
   const inputTokens = Math.ceil(requestBytes / BYTES_PER_TOKEN_FLOOR) + REQUEST_FRAMING_TOKENS;

@@ -38,7 +38,7 @@ const deepseek: ModelConfig = {
   maxContextTokens: 100_000,
   cacheReadCostPer1M: 0.07,
   cacheWriteCostPer1M: null,
-  priceWindows: [],
+  priceWindows: [], priceTiers: [],
 };
 
 function toolCallTurn(toolName: string, input: unknown, usage: { input: number | undefined; cacheHit: number | undefined }) {

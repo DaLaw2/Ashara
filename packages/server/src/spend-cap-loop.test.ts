@@ -47,7 +47,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 100_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [],
+  priceWindows: [], priceTiers: [],
 };
 
 type Db = ReturnType<typeof createDb>;

@@ -8,7 +8,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { BudgetExceeded } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
-import { SpendCap } from "./spend-cap.js";
+import { SpendCap, worstCaseCostUsd } from "./spend-cap.js";
 
 // Against Postgres: every row belongs to a project this suite creates under a
 // unique name, and afterAll deletes exactly those rows. No real LLM call is made.
@@ -39,7 +39,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 100_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [],
+  priceWindows: [], priceTiers: [],
 };
 
 function stubModel(usage: { input: number | undefined; output: number | undefined }): MockLanguageModelV4 {
@@ -126,6 +126,18 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM projects WHERE name = ${NAME}`);
   await db.execute(sql`DELETE FROM clients WHERE name = ${NAME}`);
   await db.$client.end();
+});
+
+describe("worstCaseCostUsd", () => {
+  test("prices at the highest prompt-length tier: an estimate is a cap, never the base price", () => {
+    const tiered: ModelConfig = {
+      ...MODEL,
+      priceTiers: [{ minInputTokens: 272_001, rates: { inputCostPer1M: 2, outputCostPer1M: 15, cacheReadCostPer1M: null, cacheWriteCostPer1M: null } }],
+    };
+    // 1,000 bytes plus 1,024 framing tokens of input, 100 output tokens.
+    expect(worstCaseCostUsd(tiered, 1_000, 100)).toBeCloseTo((2_024 * 2 + 100 * 15) / 1_000_000, 12);
+    expect(worstCaseCostUsd(MODEL, 1_000, 100)).toBeCloseTo((2_024 * 1 + 100 * 10) / 1_000_000, 12);
+  });
 });
 
 describe("Finance's spend cap, read from llm_calls", () => {

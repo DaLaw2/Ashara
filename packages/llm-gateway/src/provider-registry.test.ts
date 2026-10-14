@@ -18,7 +18,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 128_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [],
+  priceWindows: [], priceTiers: [],
 };
 
 describe("ProviderRegistry base_url guard", () => {
@@ -176,6 +176,22 @@ describe("ProviderRegistry fails closed instead of substituting a model", () => 
 
   test("no model at or above the requested capability throws; no lower tier is substituted", () => {
     expect(() => registryOf(config()).resolve("Frontier")).toThrow(NoProviderAvailableError);
+  });
+
+  test("capability logic picks the cheapest model at or above the request, not the lowest level", () => {
+    const registry = registryOf({
+      providers: [{
+        name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", enabled: true,
+        models: [
+          { ...MODEL, id: "dear-medium", provider: "deepseek", capabilityLevel: "Medium", inputCostPer1M: 1.32, outputCostPer1M: 3.96 },
+          { ...MODEL, id: "cheap-strong", provider: "deepseek", capabilityLevel: "Strong", inputCostPer1M: 0.3, outputCostPer1M: 1.2 },
+        ],
+      }],
+      defaultProvider: "deepseek",
+    });
+    expect(registry.resolve("Light").modelConfig.id).toBe("cheap-strong");
+    expect(registry.resolve("Medium").modelConfig.id).toBe("cheap-strong");
+    expect(() => registry.resolve("Frontier")).toThrow(/no lower model is substituted/);
   });
 
   test("a curated profile with no entry for the capability throws rather than using capability logic", () => {

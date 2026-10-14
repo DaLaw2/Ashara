@@ -83,6 +83,13 @@ export const sdkLanguageModels: LanguageModelFactory = (providerConfig, modelCon
   }
 };
 
+/**
+ * The cheapest model graded at or above `capability`: base input rate, then
+ * base output rate, then id, so the choice never depends on catalog order.
+ * Picking the lowest qualifying level instead sent a Light request to a
+ * dearer, weaker model whenever a cheaper one was graded higher (model-catalog
+ * record 2026-10-14 §7 flag 2).
+ */
 function findBestModel(
   models: ModelConfig[],
   capability: CapabilityLevel,
@@ -92,7 +99,9 @@ function findBestModel(
     .filter((m) => CAPABILITY_RANK[m.capabilityLevel] >= targetRank)
     .sort(
       (a, b) =>
-        CAPABILITY_RANK[a.capabilityLevel] - CAPABILITY_RANK[b.capabilityLevel],
+        a.inputCostPer1M - b.inputCostPer1M ||
+        a.outputCostPer1M - b.outputCostPer1M ||
+        a.id.localeCompare(b.id),
     );
   return eligible[0];
 }

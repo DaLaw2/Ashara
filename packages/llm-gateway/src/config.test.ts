@@ -14,7 +14,7 @@ function validCatalog() {
             cacheReadCostPer1m: 0.3,
             cacheWriteCostPer1m: 3.75,
             maxContextTokens: 200000,
-            priceWindows: [],
+            priceWindows: [], priceTiers: [],
         }],
     };
 }
@@ -35,6 +35,29 @@ describe("toModelConfig", () => {
         const base = validCatalog().models[0]!;
         const model = { ...base, cacheWriteCostPer1m: null, priceWindows: [offPeak(0, 60)] };
         expect(() => toModelConfig("catalog.json", model)).toThrow(/cache write rate/);
+    });
+
+    const longPrompt = { minInputTokens: 200_000, inputCostPer1m: 6, outputCostPer1m: 30, cacheReadCostPer1m: 0.6, cacheWriteCostPer1m: 7.5 };
+
+    test("loads a prompt-length tier with its rates", () => {
+        const model = toModelConfig("catalog.json", { ...validCatalog().models[0]!, priceTiers: [longPrompt] });
+        expect(model.priceTiers).toEqual([{
+            minInputTokens: 200_000,
+            rates: { inputCostPer1M: 6, outputCostPer1M: 30, cacheReadCostPer1M: 0.6, cacheWriteCostPer1M: 7.5 },
+        }]);
+    });
+
+    test("refuses a model with both tiers and windows: no rule combines them", () => {
+        const model = { ...validCatalog().models[0]!, priceWindows: [offPeak(0, 60)], priceTiers: [longPrompt] };
+        expect(() => toModelConfig("catalog.json", model)).toThrow(/both priceTiers and priceWindows/);
+    });
+
+    test("refuses a tier that bills a cache class the base rates do not, or two tiers at one threshold", () => {
+        const base = validCatalog().models[0]!;
+        expect(() => toModelConfig("catalog.json", { ...base, cacheReadCostPer1m: null, priceTiers: [longPrompt] }))
+            .toThrow(/cache read rate/);
+        expect(() => toModelConfig("catalog.json", { ...base, priceTiers: [longPrompt, longPrompt] }))
+            .toThrow(/share the threshold 200000/);
     });
 });
 

@@ -14,7 +14,7 @@ function model(overrides: Partial<ModelConfig>): ModelConfig {
     maxContextTokens: 100_000,
     cacheReadCostPer1M: 0.5,
     cacheWriteCostPer1M: null,
-    priceWindows: [],
+    priceWindows: [], priceTiers: [],
     ...overrides,
   };
 }
@@ -125,5 +125,44 @@ describe("measureCost", () => {
   test("unreported input or output counts are missing counts, never a $0 cost", () => {
     const cost = measureCost(extractUsage(undefined).reported, model({ cacheReadCostPer1M: null }), AT);
     expect(cost).toEqual({ measured: false, missingCounts: ["inputTokens", "outputTokens"], missingRates: [] });
+  });
+  describe("a prompt-length tier prices the whole call from its reported input count", () => {
+    // claude-haiku-5-5 as migration 047 stores it: a prompt over 100,000 tokens, cache classes included.
+    const haiku = model({
+      inputCostPer1M: 0.1, outputCostPer1M: 0.5, cacheReadCostPer1M: 0.01, cacheWriteCostPer1M: 0.125,
+      priceTiers: [{
+        minInputTokens: 100_001,
+        rates: { inputCostPer1M: 0.5, outputCostPer1M: 2.5, cacheReadCostPer1M: 0.05, cacheWriteCostPer1M: 0.625 },
+      }],
+    });
+    const costOf = (inputTokens: number, cacheReadTokens: number): number => {
+      const cost = measureCost({ inputTokens, outputTokens: 1_000, cacheReadTokens, cacheWriteTokens: 0 }, haiku, AT);
+      if (!cost.measured) return expect.unreachable("every count is reported");
+      return cost.totalCost;
+    };
+
+    test("at the boundary the base rates apply; one token past it, the tier's rates apply to every token", () => {
+      expect(costOf(100_000, 0)).toBeCloseTo((100_000 * 0.1 + 1_000 * 0.5) / 1_000_000, 12);
+      expect(costOf(100_001, 0)).toBeCloseTo((100_001 * 0.5 + 1_000 * 2.5) / 1_000_000, 12);
+    });
+
+    test("cache reads count toward the threshold and are billed at the tier's cache rate", () => {
+      expect(costOf(150_000, 90_000)).toBeCloseTo((60_000 * 0.5 + 90_000 * 0.05 + 1_000 * 2.5) / 1_000_000, 12);
+    });
+
+    test("of several tiers a count reaches, the highest threshold wins", () => {
+      const twoTiers = model({
+        cacheReadCostPer1M: null,
+        priceTiers: [
+          { minInputTokens: 500, rates: { inputCostPer1M: 4, outputCostPer1M: 16, cacheReadCostPer1M: null, cacheWriteCostPer1M: null } },
+          { minInputTokens: 200, rates: { inputCostPer1M: 3, outputCostPer1M: 12, cacheReadCostPer1M: null, cacheWriteCostPer1M: null } },
+        ],
+      });
+      const priced = (inputTokens: number) =>
+        measureCost({ inputTokens, outputTokens: 0, cacheReadTokens: null, cacheWriteTokens: null }, twoTiers, AT);
+      expect(priced(199)).toMatchObject({ measured: true, totalCost: (199 * 2) / 1_000_000 });
+      expect(priced(200)).toMatchObject({ measured: true, totalCost: (200 * 3) / 1_000_000 });
+      expect(priced(500)).toMatchObject({ measured: true, totalCost: (500 * 4) / 1_000_000 });
+    });
   });
 });

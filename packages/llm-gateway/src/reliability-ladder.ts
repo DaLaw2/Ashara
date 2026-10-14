@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
-import { GatewayError, SchemaValidationError } from "./errors.js";
+import { GatewayError, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import type { KnownLLMSite } from "./types.js";
 
@@ -17,7 +17,10 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 //
 // One shared control-flow combinator behind EVERY structured/verdict LLM call:
 //   N validated attempts against the current model → escalate ONE capability
-//   tier → N more validated attempts → typed terminal failure.
+//   tier → N more validated attempts → typed terminal failure. A deployment
+//   with no model at the escalation tier ends at the same terminal failure once
+//   the base tier is spent: the escalation is recorded as unavailable, never
+//   substituted, and never thrown past the caller's exhaustion handling.
 //
 // History it must respect (ADR-025): free-text judge parsing and text-fallback
 // structured parsing were chosen deliberately because generateObject failed
@@ -95,27 +98,40 @@ interface LadderModelAttempts {
   readonly errors: readonly string[];
 }
 
+/** The escalation tier the deployment has no model for, and the routing refusal that said so. */
+interface UnavailableEscalation {
+  readonly capability: CapabilityLevel;
+  readonly reason: string;
+}
+
 /**
- * Terminal typed failure: every validated attempt failed on every tier. Carries
- * enough context to diagnose the failure from the message alone (Discipline C).
+ * Terminal typed failure: every validated attempt failed on every tier the
+ * deployment can serve. Carries enough context to diagnose the failure from the
+ * message alone (Discipline C), including an escalation tier that had no model.
  */
 export class StructuredOutputExhausted extends GatewayError {
   readonly site: string;
   readonly perModel: readonly LadderModelAttempts[];
   readonly lastRawExcerpt: string;
   readonly validationErrors: readonly string[];
+  /** Set when the escalation tier was never attempted because no model is graded at or above it. */
+  readonly unavailableEscalation: UnavailableEscalation | null;
 
   constructor(
     site: string,
     perModel: readonly LadderModelAttempts[],
     lastRawExcerpt: string,
     validationErrors: readonly string[],
+    unavailableEscalation: UnavailableEscalation | null,
   ) {
     const models = perModel
       .map((m) => `${m.capability}/${m.model} x${m.attempts}`)
       .join(", ");
+    const escalation = unavailableEscalation
+      ? `; escalation to ${unavailableEscalation.capability} unavailable: ${unavailableEscalation.reason}`
+      : "";
     super(
-      `Structured output exhausted at "${site}" after [${models}]: ` +
+      `Structured output exhausted at "${site}" after [${models}]${escalation}: ` +
         `${validationErrors.join("; ") || "no valid result"} ` +
         `(last raw: ${JSON.stringify(lastRawExcerpt)})`,
     );
@@ -124,6 +140,7 @@ export class StructuredOutputExhausted extends GatewayError {
     this.perModel = perModel;
     this.lastRawExcerpt = lastRawExcerpt;
     this.validationErrors = validationErrors;
+    this.unavailableEscalation = unavailableEscalation;
   }
 
   /** Total attempts across every tier. */
@@ -148,6 +165,11 @@ type LadderAttemptOutcome<T> =
       readonly errors: readonly string[];
       readonly rawExcerpt?: string;
       readonly model?: string;
+    }
+  | {
+      /** No model serves this tier; only an escalation tier may report it. */
+      readonly ok: false;
+      readonly tierUnavailable: string;
     };
 
 interface LadderCoreDeps<T> {
@@ -190,13 +212,26 @@ async function runLadderCore<T>(
   let lastRawExcerpt = "";
   let lastErrors: readonly string[] = [];
 
-  for (const capability of tiers) {
+  for (const [tierIndex, capability] of tiers.entries()) {
     let tierModel = "unknown";
     let tierErrors: readonly string[] = [];
 
     for (let i = 0; i < deps.attempts; i++) {
       attemptNo++;
       const outcome = await deps.attempt(capability, attemptNo);
+
+      if ("tierUnavailable" in outcome) {
+        if (tierIndex === 0) {
+          throw new GatewayError(
+            `reliability-ladder: the requested tier ${capability} at site "${request.site}" was reported ` +
+              `unavailable; only an escalation tier may be (${outcome.tierUnavailable})`,
+          );
+        }
+        throw new StructuredOutputExhausted(request.site, perModel, lastRawExcerpt, lastErrors, {
+          capability,
+          reason: outcome.tierUnavailable,
+        });
+      }
 
       if (outcome.ok) {
         deps.onAttempt?.({
@@ -235,7 +270,7 @@ async function runLadderCore<T>(
     perModel.push({ capability, model: tierModel, attempts: deps.attempts, errors: tierErrors });
   }
 
-  throw new StructuredOutputExhausted(request.site, perModel, lastRawExcerpt, lastErrors);
+  throw new StructuredOutputExhausted(request.site, perModel, lastRawExcerpt, lastErrors, null);
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +351,8 @@ export interface StructuredLadderOptions {
  * Wrap a structured provider so every `generateStructured` call runs through
  * the ladder: attempts on the requested model, escalate one
  * capability tier on persistent schema failure, then throw
- * `StructuredOutputExhausted`. Replaces per-site ad-hoc enum-drift tolerance
+ * `StructuredOutputExhausted` (also when no model is graded at the escalation
+ * tier, which `unavailableEscalation` records). Replaces per-site ad-hoc enum-drift tolerance
  * (G5) with the shared retry+escalate contract. The wrapped provider's own
  * validation surfaces as `SchemaValidationError`, which the ladder treats as a
  * failed attempt; any other (transport) error propagates unchanged.
@@ -382,6 +418,13 @@ export function withStructuredLadder(
                   rawExcerpt: excerpt(err.errors.join("; ")),
                   model: err.model ?? undefined,
                 };
+              }
+              // The base tier is spent by now: a deployment with no model at the
+              // escalation tier exhausts here, rather than throwing a routing
+              // error past every caller's exhaustion handling. Routing refuses
+              // before any request is sent, so nothing was spent on it.
+              if (err instanceof NoProviderAvailableError && capability !== request.capability) {
+                return { ok: false, tierUnavailable: err.message };
               }
               throw err;
             }

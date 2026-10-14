@@ -299,7 +299,7 @@ const unusedModel: ResolvedModel = {
     cacheReadCostPer1M: null,
     cacheWriteCostPer1M: null,
     maxContextTokens: 1,
-    priceWindows: [],
+    priceWindows: [], priceTiers: [],
   },
   effectiveCapability: "Strong",
 };

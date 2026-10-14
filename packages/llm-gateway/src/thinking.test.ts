@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { InvalidThinkingPolicy } from "./errors.js";
-import { loadThinkingPolicyFromToml, thinkingModeFor } from "./thinking.js";
+import { loadThinkingPolicyFromToml, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
+import { KNOWN_LLM_SITES } from "./types.js";
 
 function writeToml(body: string): string {
   const path = join(mkdtempSync(join(tmpdir(), "ashara-thinking-")), "models.toml");
@@ -39,7 +40,12 @@ describe("loadThinkingPolicyFromToml", () => {
     warn.mockRestore();
   });
 
-  test("the repo's config/models.toml parses", () => {
-    expect(loadThinkingPolicyFromToml(join(import.meta.dirname, "..", "..", "..", "config", "models.toml")).default).toBe("off");
+  test("the repo's config/models.toml turns thinking on at every routing site (ADR-074 item 83 a)", () => {
+    const policy = loadThinkingPolicyFromToml(join(import.meta.dirname, "..", "..", "..", "config", "models.toml"));
+    for (const site of KNOWN_LLM_SITES) expect([site, thinkingModeFor(policy, site)]).toEqual([site, "on"]);
+    expect(thinkingModeFor(policy, undefined)).toBe("off");
+    expect(thinkingProviderOptions("deepseek", thinkingModeFor(policy, "agent-runner"))).toEqual({
+      deepseek: { thinking: { type: "enabled" } },
+    });
   });
 });

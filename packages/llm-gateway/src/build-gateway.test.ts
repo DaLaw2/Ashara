@@ -16,7 +16,7 @@ const MODEL: ModelConfig = {
   maxContextTokens: 100_000,
   cacheReadCostPer1M: null,
   cacheWriteCostPer1M: null,
-  priceWindows: [],
+  priceWindows: [], priceTiers: [],
 };
 
 function makeConfig(routingProfiles: RoutingProfiles): GatewayConfig {

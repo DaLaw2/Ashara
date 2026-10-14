@@ -16,7 +16,7 @@ const task = (taskSpec: StoredTaskSpec | undefined): TaskDescriptor => ({
 function model(id: string, capabilityLevel: CapabilityLevel, outputCostPer1M: number): ModelConfig {
   return {
     id, apiModelId: id, provider: "deepseek", capabilityLevel, inputCostPer1M: 1, outputCostPer1M,
-    maxContextTokens: 100_000, cacheReadCostPer1M: null, cacheWriteCostPer1M: null, priceWindows: [],
+    maxContextTokens: 100_000, cacheReadCostPer1M: null, cacheWriteCostPer1M: null, priceWindows: [], priceTiers: [],
   };
 }
 

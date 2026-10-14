@@ -88,13 +88,21 @@ export function buildGatewayConfig(
 }
 
 // ---------------------------------------------------------------------------
-// Catalog model rows (model_configs with their model_price_windows)
+// Catalog model rows (model_configs with their model_price_windows and model_price_tiers)
 // ---------------------------------------------------------------------------
 
 interface CatalogPriceWindow {
   readonly isoWeekday: number;
   readonly utcStartMinute: number;
   readonly utcEndMinute: number;
+  readonly inputCostPer1m: number;
+  readonly outputCostPer1m: number;
+  readonly cacheReadCostPer1m: number | null;
+  readonly cacheWriteCostPer1m: number | null;
+}
+
+interface CatalogPriceTier {
+  readonly minInputTokens: number;
   readonly inputCostPer1m: number;
   readonly outputCostPer1m: number;
   readonly cacheReadCostPer1m: number | null;
@@ -112,6 +120,7 @@ interface CatalogModel {
   readonly cacheWriteCostPer1m: number | null;
   readonly maxContextTokens: number;
   readonly priceWindows: readonly CatalogPriceWindow[];
+  readonly priceTiers: readonly CatalogPriceTier[];
 }
 
 /**
@@ -141,7 +150,39 @@ function priceWindowIssues(model: CatalogModel): string[] {
   return issues;
 }
 
-function toTokenRates(rates: CatalogPriceWindow | CatalogModel): TokenRates {
+/**
+ * Why a model's prompt-length tiers cannot be applied: a threshold that is not
+ * a positive integer, two tiers at one threshold, a tier that bills a cache
+ * class the base rates do not (or the reverse), or tiers together with price
+ * windows, which no catalog model has and no rule combines.
+ */
+function priceTierIssues(model: CatalogModel): string[] {
+  const issues: string[] = [];
+  const tiers = model.priceTiers;
+  if (tiers.length > 0 && model.priceWindows.length > 0) {
+    issues.push(`${model.modelId}: has both priceTiers and priceWindows; no rule combines a prompt-length tier with a time window`);
+  }
+  for (const [i, t] of tiers.entries()) {
+    const where = `${model.modelId}.priceTiers[${i}]`;
+    if (!Number.isInteger(t.minInputTokens) || t.minInputTokens <= 0) {
+      issues.push(`${where}: minInputTokens ${t.minInputTokens} is not a positive integer`);
+    }
+    if ((t.cacheReadCostPer1m === null) !== (model.cacheReadCostPer1m === null)) {
+      issues.push(`${where}: cache read rate ${t.cacheReadCostPer1m} vs base ${model.cacheReadCostPer1m}`);
+    }
+    if ((t.cacheWriteCostPer1m === null) !== (model.cacheWriteCostPer1m === null)) {
+      issues.push(`${where}: cache write rate ${t.cacheWriteCostPer1m} vs base ${model.cacheWriteCostPer1m}`);
+    }
+    for (const [j, other] of tiers.entries()) {
+      if (j > i && other.minInputTokens === t.minInputTokens) {
+        issues.push(`${where} and priceTiers[${j}] share the threshold ${t.minInputTokens}`);
+      }
+    }
+  }
+  return issues;
+}
+
+function toTokenRates(rates: CatalogPriceWindow | CatalogPriceTier | CatalogModel): TokenRates {
   return {
     inputCostPer1M: rates.inputCostPer1m,
     outputCostPer1M: rates.outputCostPer1m,
@@ -151,12 +192,13 @@ function toTokenRates(rates: CatalogPriceWindow | CatalogModel): TokenRates {
 }
 
 /**
- * One catalog model (a model_configs row with its model_price_windows) as the
- * gateway's {@link ModelConfig}. Throws {@link InvalidGatewayCatalog} naming
- * `source` when its price windows cannot be applied unambiguously.
+ * One catalog model (a model_configs row with its model_price_windows and
+ * model_price_tiers) as the gateway's {@link ModelConfig}. Throws
+ * {@link InvalidGatewayCatalog} naming `source` when its price windows or tiers
+ * cannot be applied unambiguously.
  */
 export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
-  const issues = priceWindowIssues(m);
+  const issues = [...priceWindowIssues(m), ...priceTierIssues(m)];
   if (issues.length > 0) throw new InvalidGatewayCatalog(source, issues);
   return {
     id: m.modelId,
@@ -171,5 +213,6 @@ export function toModelConfig(source: string, m: CatalogModel): ModelConfig {
       utcEndMinute: w.utcEndMinute,
       rates: toTokenRates(w),
     })),
+    priceTiers: m.priceTiers.map((t) => ({ minInputTokens: t.minInputTokens, rates: toTokenRates(t) })),
   };
 }

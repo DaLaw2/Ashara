@@ -28,8 +28,21 @@ export function resolveModelsConfigPath(configPath?: string): string {
     ?? join(resolveAsharaRoot(), "config", "models.toml");
 }
 
-/** The rates in force at `at`: the price window covering it, else the model's base rates. */
-function ratesAt(model: ModelConfig, at: Date): TokenRates {
+/**
+ * The rates a call is billed at: the highest prompt-length tier its input
+ * count reaches, else the price window covering `at`, else the model's base
+ * rates. The catalog refuses a model with both tiers and windows
+ * (`toModelConfig`), so the two never combine.
+ */
+function ratesFor(model: ModelConfig, at: Date, inputTokens: number | null): TokenRates {
+  // An unreported input count leaves the call unmeasured (measureCost), so no tier is ever chosen for it.
+  const tier = model.priceTiers
+    .filter((t) => inputTokens !== null && inputTokens >= t.minInputTokens)
+    .reduce<ModelConfig["priceTiers"][number] | undefined>(
+      (best, t) => (best === undefined || t.minInputTokens > best.minInputTokens ? t : best),
+      undefined,
+    );
+  if (tier) return tier.rates;
   const isoWeekday = at.getUTCDay() === 0 ? 7 : at.getUTCDay();
   const minute = at.getUTCHours() * 60 + at.getUTCMinutes();
   const window = model.priceWindows.find(
@@ -54,11 +67,12 @@ function cachePrice(reported: number | null, rate: number | null): CachePrice {
 /**
  * The USD cost of one call made at `at` from the counts its provider reported,
  * or the classes that leave it unmeasured. `inputTokens` includes both cache
- * classes. The caller supplies `at`: the rate depends on it, and this function
- * reads no clock.
+ * classes, and it alone selects a prompt-length tier, whose rates then apply to
+ * every token of the call. The caller supplies `at`: the rate depends on it,
+ * and this function reads no clock.
  */
 export function measureCost(reported: ReportedTokens, model: ModelConfig, at: Date): CostMeasurement {
-  const rates = ratesAt(model, at);
+  const rates = ratesFor(model, at, reported.inputTokens);
   const missingCounts: PricedTokenClass[] = [];
   const missingRates: PricedTokenClass[] = [];
   if (reported.inputTokens === null) missingCounts.push("inputTokens");

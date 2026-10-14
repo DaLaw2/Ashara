@@ -84,7 +84,7 @@ describe("server startup secrets", () => {
       maxContextTokens: 1000,
       cacheReadCostPer1M: null,
       cacheWriteCostPer1M: null,
-      priceWindows: [],
+      priceWindows: [], priceTiers: [],
     };
     const reader = memoryReader({ "provider/deepseek/api_key": "store-value" });
     const providers = [

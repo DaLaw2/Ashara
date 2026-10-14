@@ -140,6 +140,17 @@ interface PriceWindow {
   readonly rates: TokenRates;
 }
 
+/**
+ * Rates that replace the model's base rates for a whole call whose reported
+ * input tokens (both cache classes included) are at least `minInputTokens`.
+ * The threshold is stored at the lowest reading of the provider's wording, so a
+ * count inside an ambiguous boundary is billed the higher tier.
+ */
+interface PriceTier {
+  readonly minInputTokens: number;
+  readonly rates: TokenRates;
+}
+
 export interface ModelConfig extends TokenRates {
   id: string;
   apiModelId: string;
@@ -147,6 +158,8 @@ export interface ModelConfig extends TokenRates {
   capabilityLevel: CapabilityLevel;
   maxContextTokens: number;
   readonly priceWindows: readonly PriceWindow[];
+  /** Prompt-length tiers; empty when the model bills one rate at every prompt length. */
+  readonly priceTiers: readonly PriceTier[];
 }
 
 export interface TokenUsage {

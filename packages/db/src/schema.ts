@@ -333,6 +333,24 @@ export const modelPriceWindows = pgTable("model_price_windows", {
 }));
 
 // ---------------------------------------------------------------------------
+// model_price_tiers (migration 047): prompt-length rates replacing a model's base rates
+// ---------------------------------------------------------------------------
+
+export const modelPriceTiers = pgTable("model_price_tiers", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  modelId: text("model_id")
+    .notNull()
+    .references(() => modelConfigs.modelId, { onDelete: "cascade", onUpdate: "cascade" }),
+  minInputTokens: integer("min_input_tokens").notNull(),
+  inputCostPer1m: doublePrecision("input_cost_per_1m").notNull(),
+  outputCostPer1m: doublePrecision("output_cost_per_1m").notNull(),
+  cacheReadCostPer1m: doublePrecision("cache_read_cost_per_1m"),
+  cacheWriteCostPer1m: doublePrecision("cache_write_cost_per_1m"),
+}, (t) => ({
+  modelThresholdUnique: unique("model_price_tiers_model_id_min_input_tokens_key").on(t.modelId, t.minInputTokens),
+}));
+
+// ---------------------------------------------------------------------------
 // system_settings
 // ---------------------------------------------------------------------------
 
