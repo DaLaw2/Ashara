@@ -89,5 +89,8 @@ export class Tape {
 export const ReplayFileSchema = z.strictObject({
   seed: z.number().int(),
   profile: z.enum(PROFILES),
+  /** The run mode the decisions were taken in (RunOptions); absent on a file from a one-project run. */
+  projects: z.union([z.literal(1), z.literal(2)]).optional(),
+  capUsd: z.number().positive().optional(),
   decisions: z.array(DecisionSchema),
 });

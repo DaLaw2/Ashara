@@ -1,7 +1,10 @@
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
@@ -19,16 +22,17 @@ import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
 import type { PodmanEvent } from "./fake-podman.js";
-import { Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
+import { GitDates, Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
 import type { FaultKind, FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
 import type { Outcome, Snapshot, Violation } from "./invariants.js";
-import { emptyCoverage, sample } from "./coverage.js";
+import { emptyCoverage, observeAcceptanceSweeps, sample } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
 import { ADVERSARY, FAULTS } from "./profile.js";
+import { deliveredReportMisstatesUnchecked, deliveredReportOmitsGoal, deliveredReportOmitsUncovered, deliveredReportUnrecorded, haltReportFixedCause, stopReportOmitsMerge } from "./report-plants.js";
 import type { Profile } from "./profile.js";
 import { StandIns } from "./scripted-models.js";
 import { Tape } from "./tape.js";
@@ -44,9 +48,29 @@ import type { Decision, TapeMode } from "./tape.js";
  *   planted on a run of two projects, where only the deployment's check stands between them;
  * - ledger-read-first: a spend-cap admission reads the recorded spend before the in-flight
  *   estimates, the order B9 crossed the cap with (I5, admission clause; baseline §7.7);
- * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8).
+ * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8);
+ * - halt-report-fixed-cause: a halt's report states a fixed cause, not the recorded one (I4);
+ * - stop-report-omits-merge: the stop report leaves out a merge on record (I4);
+ * - delivered-report-omits-goal, delivered-report-misstates-unchecked: the delivered report leaves
+ *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
+ * - delivered-report-omits-uncovered: the delivered report leaves out an asked-for item no
+ *   acceptance line of a swept check task cites (I4, W11c D3);
+ * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
+ *   it is posted again (I4, exactly once).
  */
-const MUTATIONS = ["skip-merge-record", "no-checkout-lock", "no-admission-queue", "ledger-read-first", "infrastructure-fault-pinned"] as const;
+const MUTATIONS = [
+  "skip-merge-record",
+  "no-checkout-lock",
+  "no-admission-queue",
+  "ledger-read-first",
+  "infrastructure-fault-pinned",
+  "halt-report-fixed-cause",
+  "stop-report-omits-merge",
+  "delivered-report-omits-goal",
+  "delivered-report-misstates-unchecked",
+  "delivered-report-omits-uncovered",
+  "delivered-report-unrecorded",
+] as const;
 /** @testseam simulator.test.ts plants each to prove I5, I7 and I8 are not blind */
 export type Mutation = (typeof MUTATIONS)[number];
 
@@ -64,6 +88,12 @@ const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "no-admission-queue": { bypassed: ["spend-admission"], queries: null, code: null },
   "ledger-read-first": { bypassed: [], queries: null, code: plantLedgerReadFirst },
   "infrastructure-fault-pinned": { bypassed: [], queries: pinInfrastructureFaults, code: null },
+  "halt-report-fixed-cause": { bypassed: [], queries: haltReportFixedCause, code: null },
+  "stop-report-omits-merge": { bypassed: [], queries: stopReportOmitsMerge, code: null },
+  "delivered-report-omits-goal": { bypassed: [], queries: deliveredReportOmitsGoal, code: null },
+  "delivered-report-misstates-unchecked": { bypassed: [], queries: deliveredReportMisstatesUnchecked, code: null },
+  "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncovered, code: null },
+  "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
 };
 
 export interface RunOptions {
@@ -91,12 +121,15 @@ export interface RunOptions {
   readonly cellOutage?: boolean;
 }
 
+/** The run's shape apart from its seed: how many projects share the deployment, and its cap. */
+export type RunMode = Pick<RunOptions, "projects" | "capUsd">;
+
 export interface RunResult {
   readonly seed: number;
   readonly profile: Profile;
   readonly outcome: Outcome;
   readonly violations: readonly Violation[];
-  /** Canonical: ids and commits replaced by their order of first appearance, no time in it. */
+  /** Canonical: ids and commits replaced by their order of first appearance, no time in it; the violations last. */
   readonly trace: readonly string[];
   readonly decisions: readonly Decision[];
   readonly coverage: Coverage;
@@ -259,8 +292,38 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   };
 }
 
-/** Replaces each id, commit and hex digest by its kind and order of first appearance (design §4.3). */
-function canonical(lines: readonly string[]): string[] {
+/**
+ * The simulator runs outside an Ashara git checkout. Production then refuses every target workspace
+ * (development workspace.ts resolves its own repository root with git and fails closed without one),
+ * so a seed would end in a different outcome than in a checkout: not a result, a wrong place to run.
+ */
+class SimulatorOutsideCheckout extends Error {
+  constructor(
+    readonly moduleDir: string,
+    readonly detail: string,
+  ) {
+    super(
+      `the simulator must run inside an Ashara git checkout (production resolves its repository root with git from its own ` +
+        `source and refuses every target workspace without one); git rev-parse --show-toplevel failed from ${moduleDir}: ${detail}`,
+    );
+    this.name = "SimulatorOutsideCheckout";
+  }
+}
+
+async function assertGitCheckout(): Promise<void> {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  try {
+    await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: moduleDir });
+  } catch (err) {
+    throw new SimulatorOutsideCheckout(moduleDir, describeErrorChain(err));
+  }
+}
+
+/**
+ * Replaces each id, commit and hex digest by its kind and order of first appearance (design §4.3),
+ * and the run's own working directory, drawn by mkdtemp, by a fixed name.
+ */
+function canonical(lines: readonly string[], workdir: string): string[] {
   const seen = new Map<string, string>();
   const name = (kind: string, raw: string): string => {
     const known = seen.get(raw);
@@ -271,6 +334,7 @@ function canonical(lines: readonly string[]): string[] {
   };
   return lines.map((line) =>
     line
+      .replaceAll(workdir, "<workdir>")
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, (m) => name("id", m))
       .replace(/\b[0-9a-f]{64}\b/g, (m) => name("hash", m))
       .replace(/\b[0-9a-f]{40}\b/g, (m) => name("commit", m)),
@@ -345,6 +409,7 @@ function standing(snapshot: Snapshot): string {
  * after every cycle; crashes and SIGTERMs answered by composing a new instance on the same workdir.
  */
 export async function runSeed(options: RunOptions): Promise<RunResult> {
+  await assertGitCheckout();
   const started = Date.now();
   const tape = new Tape(options.tape);
   const rates = ADVERSARY[options.profile];
@@ -395,6 +460,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
   const admissions = new AdmissionLedger(clock);
+  const gitDates = new GitDates();
   let longestQuiet = 0;
 
   const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
@@ -403,11 +469,15 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const restoreEnv = simulatedEnvironment(workdir, capUsd);
   const restoreWaits = observeContendedWaits(interleaver.contended);
   const restoreCode = planted?.code?.() ?? null;
+  const restoreSweeps = observeAcceptanceSweeps((sweep) => {
+    coverage.sweeps.add(sweep);
+    trace.push(`acceptance sweep ${sweep}`);
+  });
   let database: RunDatabase | null = null;
   let observer: Database | null = null;
   let instance: Live | null = null;
   try {
-    database = await createRunDatabase(options.databaseUrl, options.template);
+    database = await createRunDatabase(options.databaseUrl, options.template, options.seed);
     const db = database;
     const observing = createDb(db.url, (config) => new pg.Pool({ ...config, application_name: "ashara-sim-observer", max: 2 }));
     observer = observing;
@@ -500,7 +570,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map() };
         // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
         checkouts = new CheckoutWatch(report);
-        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles, admissions, cellOutage: options.cellOutage === true };
+        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles, admissions, cellOutage: options.cellOutage === true, gitDates };
         try {
           const ashara = await composeAshara({
             masterKey,
@@ -741,6 +811,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     if (observer !== null) await observer.$client.end();
     if (database !== null) await database.drop();
     restoreCode?.();
+    restoreSweeps();
     restoreWaits();
     restoreEnv();
     restoreConsole();
@@ -752,7 +823,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     profile: options.profile,
     outcome,
     violations: [...violations.values()],
-    trace: canonical(trace),
+    // The violations close the trace, so one equality covers what a run did and what it was judged to have done.
+    trace: canonical([...trace, ...[...violations.values()].map((violation) => `violation ${violation.key}: ${violation.statement}`)], workdir),
     decisions: tape.decisions(),
     coverage,
     cycles,

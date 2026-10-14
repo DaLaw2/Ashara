@@ -63,12 +63,10 @@ function textResult(text: string): LanguageModelV4GenerateResult {
   return { content: [{ type: "text", text }], finishReason: { unified: "stop", raw: "stop" }, usage: USAGE, warnings: [] };
 }
 
-let toolCallCounter = 0;
-
-function toolCall(toolName: string, input: unknown): LanguageModelV4GenerateResult {
-  toolCallCounter += 1;
+/** `callNumber` counts within one run's stand-ins: a count kept across runs made a seed's prompts depend on the seeds before it. */
+function toolCall(callNumber: number, toolName: string, input: unknown): LanguageModelV4GenerateResult {
   const content: LanguageModelV4Content[] = [
-    { type: "tool-call", toolCallId: `sim-call-${toolCallCounter}`, toolName, input: JSON.stringify(input) },
+    { type: "tool-call", toolCallId: `sim-call-${callNumber}`, toolName, input: JSON.stringify(input) },
   ];
   return { content, finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage: USAGE, warnings: [] };
 }
@@ -147,6 +145,7 @@ function assistantTurns(options: LanguageModelV4CallOptions): number {
  */
 export class StandIns {
   private readonly attempts = new Map<string, AttemptScript>();
+  private toolCalls = 0;
 
   constructor(private readonly context: StandInContext) {}
 
@@ -315,11 +314,11 @@ export class StandIns {
     const step = script.steps[turn];
     if (step !== undefined) {
       this.context.onModelCall({ site: "agent-runner", action: step[0] });
-      return toolCall(step[0], step[1]);
+      return toolCall(++this.toolCalls, step[0], step[1]);
     }
     if (script.stalls) {
       this.context.onModelCall({ site: "agent-runner", action: "stall" });
-      return toolCall("list_directory", { path: "." });
+      return toolCall(++this.toolCalls, "list_directory", { path: "." });
     }
     this.context.onModelCall({ site: "agent-runner", action: script.refuses ? "refusal" : "no-more-steps" });
     return REFUSAL;

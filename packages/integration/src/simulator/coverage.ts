@@ -1,16 +1,17 @@
 import { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { EXECUTION_STATUSES } from "@ashara/development";
+import { DevelopmentService, EXECUTION_STATUSES } from "@ashara/development";
 import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 import type { WorkItemStatus } from "@ashara/shared";
 import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
 import type { FaultRecord } from "./faults.js";
-import { sourceOf } from "./invariants.js";
+import { haltCauseOf, sourceOf } from "./invariants.js";
 import type { Snapshot } from "./invariants.js";
 
 /**
  * What a run reached, against the code's own iterable lifecycle lists (design §4.12, S7): every
  * work-item transition, blocked-reason source, project status, project block kind and execution
- * status, and every fault kind at every seam.
+ * status, and every fault kind at every seam; every acceptance sweep outcome (W7) and every halt
+ * by its cause and block kind (W6/W7).
  */
 export interface Coverage {
   readonly transitions: Set<string>;
@@ -21,6 +22,45 @@ export interface Coverage {
   readonly faults: Set<string>;
   /** What the batch of two reached (CONCURRENCY), recorded by the run as its interleaver reports it. */
   readonly concurrency: Set<string>;
+  /** The acceptance sweeps' outcomes, recorded by the run as production returns them (observeAcceptanceSweeps). */
+  readonly sweeps: Set<string>;
+  /** Each halt reached, as `<cause>:<block kind>` (invariants.ts haltCauseOf). */
+  readonly halts: Set<string>;
+}
+
+type AcceptanceSweep = Awaited<ReturnType<DevelopmentService["sweepForAcceptance"]>>;
+
+/**
+ * Every outcome of an acceptance sweep, by the kind Development returns (execution-service.ts
+ * AcceptanceSweep): `satisfies` makes the type checker refuse this list when a kind is added or
+ * removed there, so it cannot drift from the code's own union.
+ */
+const SWEEP_OUTCOMES = {
+  ran: ["ran:passed", "ran:failed"],
+  unrunnable: ["unrunnable"],
+  faulted: ["faulted"],
+} as const satisfies Record<AcceptanceSweep["kind"], readonly string[]>;
+
+function sweepOutcome(sweep: AcceptanceSweep): string {
+  return sweep.kind === "ran" ? (sweep.passed ? "ran:passed" : "ran:failed") : sweep.kind;
+}
+
+/**
+ * Records the outcome of every acceptance sweep the run's instances return, observing
+ * Development's own method (the sweep writes no record of an unrunnable sweep); returns what
+ * undoes it.
+ */
+export function observeAcceptanceSweeps(onSweep: (outcome: string) => void): () => void {
+  const prototype = DevelopmentService.prototype;
+  const real = prototype.sweepForAcceptance;
+  prototype.sweepForAcceptance = async function (this: DevelopmentService, ...args: Parameters<DevelopmentService["sweepForAcceptance"]>): Promise<AcceptanceSweep> {
+    const sweep = await real.apply(this, args);
+    onSweep(sweepOutcome(sweep));
+    return sweep;
+  };
+  return () => {
+    prototype.sweepForAcceptance = real;
+  };
 }
 
 /**
@@ -39,6 +79,8 @@ export function emptyCoverage(): Coverage {
     executionStatuses: new Set(),
     faults: new Set(),
     concurrency: new Set(),
+    sweeps: new Set(),
+    halts: new Set(),
   };
 }
 
@@ -50,6 +92,8 @@ const COVERAGE_KEYS = [
   "executionStatuses",
   "faults",
   "concurrency",
+  "sweeps",
+  "halts",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -115,7 +159,10 @@ export function sample(coverage: Coverage, snapshot: Snapshot, faults: readonly 
     if (source !== null) coverage.blockedSources.add(source);
   }
   coverage.projectStatuses.add(snapshot.project.status);
-  for (const episode of snapshot.episodes) coverage.blockKinds.add(episode.kind);
+  for (const episode of snapshot.episodes) {
+    coverage.blockKinds.add(episode.kind);
+    coverage.halts.add(`${haltCauseOf(episode.kind)}:${episode.kind}`);
+  }
   for (const fault of faults) coverage.faults.add(`${fault.seam}:${fault.fault}`);
   for (const status of executions) coverage.executionStatuses.add(status);
 }
@@ -144,5 +191,7 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("execution statuses (inferred from their routing)", EXECUTION_STATUSES, coverage.executionStatuses),
     split("faults by seam", faultPairs, coverage.faults),
     split("batch of two", CONCURRENCY, coverage.concurrency),
+    split("acceptance sweeps (AcceptanceSweep kinds)", Object.values(SWEEP_OUTCOMES).flat(), coverage.sweeps),
+    split("halts by cause (project block kinds)", PROJECT_BLOCK_KINDS.map((kind) => `${haltCauseOf(kind)}:${kind}`), coverage.halts),
   ];
 }

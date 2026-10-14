@@ -2,8 +2,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/shared";
+import { checkReports, readReportRecords } from "./client-reports.js";
+import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
 
@@ -37,6 +40,8 @@ const itemRow = z.object({
   checksFor: z.string().nullable(),
   blockedReason: z.unknown(),
   mergeCommit: z.string().nullable(),
+  /** How the recorded commit closed the item (migration 049): merged or already_delivered. */
+  mergeKind: z.string().nullable(),
   ownerRoleId: z.string().nullable(),
   dispatchCount: z.number(),
   infrastructureFaults: z.number(),
@@ -78,6 +83,8 @@ export interface Snapshot {
   readonly unrecordedCalls: number;
   readonly events: ReadonlyArray<z.infer<typeof eventRow>>;
   readonly main: readonly MainCommit[];
+  /** What the client was sent and the records each report is rendered from (I4). */
+  readonly reports: ReportRecords;
 }
 
 /** A snapshot query returned no row where it always returns one: the invariants cannot be judged. */
@@ -108,7 +115,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     (
       await db.execute(sql`
         SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
-               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
+               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit", merge_kind AS "mergeKind",
                owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
                infrastructure_faults AS "infrastructureFaults"
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
@@ -157,6 +164,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     unrecordedCalls: spend.unrecorded,
     events,
     main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
+    reports: await readReportRecords(db, projectId),
   };
 }
 
@@ -197,23 +205,47 @@ export function sourceOf(raw: unknown): (typeof BLOCKED_REASON_SOURCES)[number] 
   return parsed.success ? parsed.data.source : null;
 }
 
+/** `unrecognized`: a block kind outside the code's list, whose cause the simulator cannot name. */
+type HaltCause = "spend_cap" | "infrastructure" | "undeliverable" | "unrecognized";
+
 /** What a run ended in, in design §2.2's terms mapped onto today's project states. */
 export type Outcome =
   | { readonly kind: "accepted" }
-  | { readonly kind: "halted"; readonly cause: "spend_cap" | "infrastructure" | "undeliverable"; readonly detail: string }
+  | { readonly kind: "halted"; readonly cause: HaltCause; readonly detail: string }
   | { readonly kind: "stopped" }
   | { readonly kind: "open" };
 
-const SPEND = new Set(["budget_cap"]);
-const INFRASTRUCTURE = new Set(["configuration", "fault", "infrastructure"]);
+/**
+ * Each project block kind's halt cause, over the code's own list (`satisfies`: a kind added there
+ * fails the type check here until it is given one). `infrastructure` is W6's halt on the machines,
+ * which the substrate probe ends; `fault` is Ashara's own record or step failing, which W7 calls
+ * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
+ * spend cap) is Ashara's setup, kept with infrastructure as before.
+ */
+const HALT_CAUSES = {
+  budget_cap: "spend_cap",
+  configuration: "infrastructure",
+  fault: "undeliverable",
+  planning_stopped: "undeliverable",
+  check_dispute: "undeliverable",
+  replan_bound: "undeliverable",
+  suite_review: "undeliverable",
+  plan_repair: "undeliverable",
+  infrastructure: "infrastructure",
+} as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], HaltCause>;
+const HALT_CAUSE_OF: ReadonlyMap<string, HaltCause> = new Map(Object.entries(HALT_CAUSES));
+
+/** A block kind's (or category's) halt cause; one outside the code's list is `unrecognized`, never a guessed cause. */
+export function haltCauseOf(kind: string): HaltCause {
+  return HALT_CAUSE_OF.get(kind) ?? "unrecognized";
+}
 
 export function outcomeOf(snapshot: Snapshot): Outcome {
   const { project } = snapshot;
   if (project.status === "stopped") return { kind: "stopped" };
   if (project.status === "blocked") {
     const category = project.blockedCategory ?? (project.planStopped ? "planning_stopped" : "unknown");
-    const cause = SPEND.has(category) ? "spend_cap" : INFRASTRUCTURE.has(category) ? "infrastructure" : "undeliverable";
-    return { kind: "halted", cause, detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
+    return { kind: "halted", cause: haltCauseOf(category), detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
   }
   // Accepted is production's own state since migration 049: every goal task done is not acceptance
   // until the sweep on main passes.
@@ -270,11 +302,16 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
     }
   }
 
-  // I4: an accepted project has its delivered report (E3), once the run ends; halt episodes'
-  // reports are I2's. A report's claims against the snapshot are not judged here (L8's snapshot
-  // rendering is deferred, mvp-rescope §1.3).
+  // I4: an accepted project has its delivered report (E3), once the run ends; that a halt episode
+  // has its report is I2's. What each report states is judged against the records it is rendered
+  // from (client-reports.ts): the halt's recorded cause, the merges recorded at a stop, the goals'
+  // closes and the unchecked tasks at acceptance, and no report posted twice.
   if (context.final && snapshot.project.status === "accepted" && !snapshot.project.deliveredReported) {
     add("I4", "accepted-unreported", "the project is accepted but its delivered report was never posted");
+  }
+  if (context.final) {
+    const checked = new Set(snapshot.checks.map((check) => check.taskId));
+    for (const found of checkReports(snapshot.reports, snapshot.project, snapshot.items, checked)) add("I4", found.key, found.statement);
   }
 
   // I5: spend within the cap; every call has a recorded cost.

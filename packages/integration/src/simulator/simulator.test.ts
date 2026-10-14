@@ -55,7 +55,7 @@ describe("lifecycle simulator, fast tier", () => {
   for (const seed of FAST_SEEDS) {
     it(`seed ${seed} fails exactly its listed violations`, async () => {
       const result = await seeded(seed);
-      expect(diffExpected(seed, result.violations), result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
+      expect(diffExpected(result, {}), result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
     }, 90_000);
   }
 
@@ -75,7 +75,25 @@ describe("lifecycle simulator, fast tier", () => {
     expect(second.trace).toEqual(first.trace);
   }, 90_000);
 
-  // B8 (baseline §3) has no seed on the keyed tape, so it is pinned by its two decisions: the
+  // A seed is a function of itself alone (owner 2026-10-15, fixed seeds and replay): run twice in
+  // one process, the second after the first moved every counter a run can leave behind, its trace
+  // (what it did, ids and commits canonical, its violations last) is byte-identical. Seed 6 once
+  // flaked one project (I7:unrecorded); seeds 18 and 59 are two-project runs at the soak's cap.
+  const twice: ReadonlyArray<readonly [number, Pick<RunOptions, "projects" | "capUsd">]> = [
+    [6, {}],
+    [21, {}],
+    [18, { projects: 2, capUsd: 10 }],
+    [59, { projects: 2, capUsd: 10 }],
+  ];
+  for (const [seed, scenario] of twice) {
+    it(`runs seed ${seed}${scenario.projects === 2 ? " with two projects" : ""} twice to the same trace`, async () => {
+      const first = await seeded(seed, undefined, scenario);
+      const second = await seeded(seed, undefined, scenario);
+      expect(second.trace.join("\n")).toBe(first.trace.join("\n"));
+    }, 120_000);
+  }
+
+  // B8 (baseline §3; task t-begin-failure-leaks-connection) has no seed on the keyed tape, so it is pinned by its two decisions: the
   // first BEGIN fails with a 40001. Before the leak was named, its teardown waited on the pool's end forever.
   it("names a connection production leaves checked out instead of hanging on it", async () => {
     const result = await runSeed({
@@ -92,7 +110,7 @@ describe("lifecycle simulator, fast tier", () => {
     expect(result.violations.map((v) => v.key)).toEqual(["I1:leaked-connection:begin"]);
   }, 90_000);
 
-  // B3 (baseline §3), minimized from chaos seed 6: a crash, a crash right after the task is set
+  // B3 (baseline §3; task t-orphan-requeue-failure), minimized from chaos seed 6: a crash, a crash right after the task is set
   // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read.
   it("leaves an orphan the reconciler failed to requeue InProgress while the process lives", async () => {
     const result = await runSeed({
@@ -117,6 +135,29 @@ describe("lifecycle simulator, fast tier", () => {
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after", "db:db-query-failed"]);
     expect(result.log.some((line) => line.includes("failed to requeue crash-orphaned InProgress item"))).toBe(true);
     expect(result.violations.map((v) => v.key).sort()).toEqual(["I1:open", "I7:orphan:Define and commit the project environment:2", "I8:InProgress", "I8:Pending"]);
+  }, 90_000);
+
+  // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window), a known production failure pinned until it is fixed: the
+  // process dies on the merge-record write right after the merge commit landed on main
+  // (development merge.ts commitMerge, then orchestrator execution.ts writes the record); at boot the
+  // startup reconciler requeues the orphan without looking on main (startup-reconciler.ts
+  // requeueOrphan), so the merged work is dispatched again and main holds a merge no record names.
+  // The two-project triage of §7.7 (seeds 31 46 56 57 78) is this defect. A fix fails this test:
+  // then it asserts the clean outcome instead.
+  it("names a merge on main whose record a crash lost (B5, known failure)", async () => {
+    const label = 'fault.db:update "work_items" set "merge_commit" = $1, "merge_kind" = ';
+    const result = await runSeed({
+      seed: 10,
+      profile: "typical",
+      tape: { kind: "replay", decisions: [{ key: `${label}#1`, value: 1 }, { key: `${label}.kind#1`, value: 0 }] },
+      databaseUrl,
+      template,
+      maxCycles: MAX_CYCLES,
+      timeoutMs: SEED_TIMEOUT_MS,
+    });
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["db:crash-before"]);
+    expect(result.log.some((line) => line.includes("[startup-reconciler] requeued"))).toBe(true);
+    expect(keys(result)).toEqual(["I7:unrecorded:Define and commit the project environment"]);
   }, 90_000);
 
   // B4 (baseline §3), seed 14's tape minimized on a9f781ce: two simulated git index.lock failures
@@ -152,7 +193,7 @@ describe("lifecycle simulator, fast tier", () => {
   // staged merge, which I7's merge-queue clause names.
   it("catches two finalizes overlapping on one checkout when the checkout lock is skipped", async () => {
     const clean = await seeded(30);
-    expect(diffExpected(30, clean.violations), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
+    expect(diffExpected(clean, {}), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
     expect([...clean.coverage.concurrency]).toContain("contended:target-checkout");
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
     const planted = await seeded(30, "no-checkout-lock");
@@ -205,6 +246,55 @@ describe("lifecycle simulator, fast tier", () => {
     expect(planted.trace.filter((line) => line.endsWith("1 task(s) [interrupted]")).length).toBeGreaterThan(4);
     expect(keys(planted)).toEqual(["I1:open", "I8:Pending"]);
     expect(planted.outcome.kind).toBe("open");
+  }, 90_000);
+
+  // ADR-074 d84 b, W7: the stand-ins drive seed 10 to Accepted on one passed sweep of main; the
+  // delivered report is judged against the goal tasks' merge records and the task and check
+  // records, so a report that drops a goal's close, misstates what no stored check covers, leaves
+  // out an asked-for item no acceptance line cites, or is posted with no record of it (and so
+  // posted again) is named.
+  it("accepts a project on a passed sweep and catches a delivered report that misstates its records", async () => {
+    const clean = await seeded(10);
+    expect(clean.outcome.kind).toBe("accepted");
+    expect(keys(clean)).toEqual([]);
+    expect([...clean.coverage.projectStatuses]).toContain("accepted");
+    expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
+    expect(keys(await seeded(10, "delivered-report-omits-goal"))).toEqual(["I4:delivered-close"]);
+    expect(keys(await seeded(10, "delivered-report-misstates-unchecked"))).toEqual(["I4:delivered-unchecked"]);
+    // W11c D3: the stand-ins' assumption is cited by no acceptance line, so the report lists it; dropped, it is named.
+    expect(keys(await seeded(10, "delivered-report-omits-uncovered"))).toEqual(["I4:delivered-coverage"]);
+    expect(keys(await seeded(10, "delivered-report-unrecorded"))).toContain("I4:unrecorded-report");
+  }, 120_000);
+
+  // W6/W7: a halt's report quotes the cause recorded on its episode. Seed 10 under a cell outage
+  // halts on infrastructure and then undeliverable (plan_repair); seed 1 halts at the spend cap.
+  it("catches a halt report that states a fixed cause instead of the recorded one", async () => {
+    const outage = await seeded(10, "halt-report-fixed-cause", { cellOutage: true });
+    expect(keys(outage)).toEqual(["I4:halt-cause:infrastructure", "I4:halt-cause:plan_repair"]);
+    const spend = await seeded(1, "halt-report-fixed-cause");
+    expect(spend.outcome).toMatchObject({ kind: "halted", cause: "spend_cap" });
+    expect(keys(spend)).toEqual(["I4:halt-cause:budget_cap"]);
+  }, 120_000);
+
+  // The stop report names exactly the merges recorded. A tape of two decisions: the client stops
+  // the project at cycle 5, after three tasks merged (seed 10's ids, no fault).
+  it("catches a stop report that leaves out a merge on record", async () => {
+    const stop = (mutation?: Mutation): Promise<RunResult> =>
+      runSeed({
+        seed: 10,
+        profile: "typical",
+        tape: { kind: "replay", decisions: [{ key: "client.stop#1", value: 1 }, { key: "client.stop-cycle#1", value: 3 }] },
+        databaseUrl,
+        template,
+        maxCycles: MAX_CYCLES,
+        timeoutMs: SEED_TIMEOUT_MS,
+        ...(mutation === undefined ? {} : { mutation }),
+      });
+    const clean = await stop();
+    expect(clean.outcome.kind).toBe("stopped");
+    expect(clean.trace).toContain("client stop at cycle 5");
+    expect(keys(clean)).toEqual([]);
+    expect(keys(await stop("stop-report-omits-merge"))).toEqual(["I4:stop-merges"]);
   }, 90_000);
 
   it("catches a merge recorded under a commit main does not hold", async () => {

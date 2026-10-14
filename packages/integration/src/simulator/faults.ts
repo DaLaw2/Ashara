@@ -221,6 +221,21 @@ export class SimClock implements Clock {
   }
 }
 
+/**
+ * The date stamped on every host git call of one run: a commit's id hashes its author and committer
+ * dates, so with the wall clock's a seed's commits differed from run to run. One second later per
+ * call, from a fixed instant, and never read from the SimClock, whose readings production's own
+ * clock reads would then shift. Kept across a run's restarts, as a host's clock is.
+ */
+export class GitDates {
+  private calls = 0;
+
+  next(): string {
+    this.calls += 1;
+    return `${Date.UTC(2026, 9, 14, 9, 0, 0) / 1000 + this.calls} +0000`;
+  }
+}
+
 const queryText = z.union([z.string(), z.object({ text: z.string() })]);
 
 function labelOfQuery(args: readonly unknown[]): string {
@@ -254,6 +269,7 @@ interface SeamContext {
    * cell. Not a fault of the tape's budget: the host stays broken for the whole run.
    */
   readonly cellOutage: boolean;
+  readonly gitDates: GitDates;
 }
 
 /** A deliberate defect planted in the queries one instance sends (the L3 mutation check). */
@@ -287,6 +303,19 @@ export const pinInfrastructureFaults: QueryPlant = (args) => {
 };
 
 const clientPid = z.object({ processID: z.number().int() });
+/** How long a killed connection's client may take to see its end: past it, the harness is wrong. */
+const TERMINATION_SEEN_MS = 10_000;
+
+/** A backend the fault terminated never ended its client's connection: the fault did not take effect. */
+class TerminationUnseen extends Error {
+  constructor(
+    readonly instance: string,
+    readonly pid: number,
+  ) {
+    super(`${instance}: backend ${pid} was terminated, yet its client saw no end of the connection within ${TERMINATION_SEEN_MS} ms`);
+    this.name = "TerminationUnseen";
+  }
+}
 /** The most query labels kept per checked-out connection: enough to name what left it checked out. */
 const CHECKOUT_LABELS = 8;
 
@@ -297,15 +326,15 @@ const CHECKOUT_LABELS = 8;
 export function faultingPools(context: SeamContext, applicationName: string, plant: QueryPlant | null = null): PoolFactory {
   return (config) => {
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
-    const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, pid: number | null): Promise<unknown> => {
+    const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, kill: (() => Promise<void>) | null): Promise<unknown> => {
       const args = plant === null ? [...given] : plant(given);
       const run = (): Promise<unknown> => send(args);
       const label = labelOfQuery(args);
       // Killing the transaction needs a checked-out connection's backend: a pool query has none.
-      const effective: FaultKind[] = pid === null ? ["db-query-failed"] : ["db-query-failed", "db-transaction-killed"];
+      const effective: FaultKind[] = kill === null ? ["db-query-failed"] : ["db-query-failed", "db-transaction-killed"];
       const fate = await context.scheduler.enter(context.instance, "db", label, effective);
       if (fate.fault === "db-query-failed") throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
-      if (fate.fault === "db-transaction-killed" && pid !== null) await context.terminateBackend(pid);
+      if (fate.fault === "db-transaction-killed" && kill !== null) await kill();
       const value = await run();
       context.admissions.written(label, args);
       context.scheduler.leave(context.instance, fate, "db", label);
@@ -344,6 +373,28 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
             const sent: string[] = [];
             context.instance.checkouts.set(client, sent);
             const pid = clientPid.safeParse(client);
+            /**
+             * Kills the connection's backend between two queries of its transaction, and returns only
+             * once the client has seen the connection end: its error then reached `onError` with no
+             * query in flight (the uncaught error that is production's fatal exit). The query after
+             * it would otherwise race the termination's arrival, and whether the process exited this
+             * cycle or a later one would depend on the machine's load, not the seed.
+             */
+            const kill = pid.success
+              ? async (): Promise<void> => {
+                  const ended = new Promise<void>((resolve) => client.once("end", () => resolve()));
+                  await context.terminateBackend(pid.data.processID);
+                  let timer: NodeJS.Timeout | undefined;
+                  const unseen = new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => reject(new TerminationUnseen(context.instance.name, pid.data.processID)), TERMINATION_SEEN_MS);
+                  });
+                  try {
+                    await Promise.race([ended, unseen]);
+                  } finally {
+                    clearTimeout(timer);
+                  }
+                }
+              : null;
             return new Proxy(client, {
               get(inner, innerProperty, innerReceiver) {
                 if (innerProperty === "release") {
@@ -357,7 +408,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
                 if (innerProperty === "query") {
                   return (...args: unknown[]) => {
                     if (sent.length < CHECKOUT_LABELS) sent.push(labelOfQuery(args));
-                    return query(args, (given) => Reflect.apply(inner.query, inner, given), pid.success ? pid.data.processID : null);
+                    return query(args, (given) => Reflect.apply(inner.query, inner, given), kill);
                   };
                 }
                 const value: unknown = Reflect.get(inner, innerProperty, innerReceiver);
@@ -392,9 +443,13 @@ export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
     await context.scheduler.returned("git", label);
     return value;
   };
+  const dated = (invocation: Parameters<GitRunner["text"]>[0]): Parameters<GitRunner["text"]>[0] => {
+    const date = context.gitDates.next();
+    return { ...invocation, env: { ...(invocation.env ?? process.env), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } };
+  };
   return {
-    text: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.text(invocation)),
-    bytes: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.bytes(invocation)),
+    text: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.text(dated(invocation))),
+    bytes: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.bytes(dated(invocation))),
   };
 }
 

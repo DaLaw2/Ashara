@@ -128,7 +128,44 @@ export interface RunDatabase {
   drop(): Promise<void>;
 }
 
-export async function createRunDatabase(baseUrl: string, template: string): Promise<RunDatabase> {
+const randomDefaultRows = z.array(z.object({ table: z.string(), column: z.string() }));
+
+/**
+ * Replaces every `gen_random_uuid()` column default of a run database with ids drawn from the seed
+ * and the order of insertion. A database-drawn id is random per run, and production orders by such
+ * ids (the startup reconciler walks projects by id), so two runs of one seed could walk two projects
+ * in either order and a fault keyed by occurrence would land on a different item.
+ */
+async function seedDatabaseIds(baseUrl: string, name: string, seed: number): Promise<void> {
+  const client = new pg.Client({ connectionString: urlFor(baseUrl, name), application_name: "ashara-sim-admin" });
+  await client.connect();
+  try {
+    await client.query("CREATE SEQUENCE sim_uuid_seq");
+    // Version 4 and variant 8 are written into the digest, so the id parses as a v4 uuid wherever production validates one.
+    await client.query(
+      `CREATE FUNCTION sim_uuid() RETURNS uuid LANGUAGE sql AS $$
+         SELECT (substr(h, 1, 12) || '4' || substr(h, 14, 3) || '8' || substr(h, 18))::uuid
+         FROM md5('${String(seed >>> 0)}:' || nextval('sim_uuid_seq')) AS h
+       $$`,
+    );
+    const columns = randomDefaultRows.parse(
+      (
+        await client.query(
+          `SELECT table_name AS "table", column_name AS "column" FROM information_schema.columns
+           WHERE table_schema = 'public' AND column_default = 'gen_random_uuid()'`,
+        )
+      ).rows,
+    );
+    if (columns.length === 0) throw new ScratchDatabaseFailed("seed ids", name, "no column defaults to gen_random_uuid(), so the schema changed under the simulator");
+    for (const { table, column } of columns) {
+      await client.query(`ALTER TABLE ${quoted(table)} ALTER COLUMN ${quoted(column)} SET DEFAULT sim_uuid()`);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+export async function createRunDatabase(baseUrl: string, template: string, seed: number): Promise<RunDatabase> {
   runCounter += 1;
   const name = `${RUN_PREFIX}${Math.floor(Date.now() / 1000)}_${process.pid}_${runCounter}`;
   await withAdmin(baseUrl, async (admin) => {
@@ -139,6 +176,7 @@ export async function createRunDatabase(baseUrl: string, template: string): Prom
       await admin.query("SELECT pg_advisory_unlock($1)", [TEMPLATE_LOCK]);
     }
   });
+  await seedDatabaseIds(baseUrl, name, seed);
   return {
     name,
     url: urlFor(baseUrl, name),

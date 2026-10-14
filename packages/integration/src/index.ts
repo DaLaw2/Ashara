@@ -6,6 +6,6 @@ export { PROFILES, profileOfSeed } from "./simulator/profile.js";
 export type { Profile } from "./simulator/profile.js";
 export { describeCoverage, describeRun } from "./simulator/report.js";
 export { runSeed } from "./simulator/run.js";
-export type { RunOptions, RunResult } from "./simulator/run.js";
+export type { RunMode, RunOptions, RunResult } from "./simulator/run.js";
 export { ReplayFileSchema } from "./simulator/tape.js";
 export type { Decision } from "./simulator/tape.js";

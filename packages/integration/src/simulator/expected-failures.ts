@@ -1,4 +1,5 @@
-import type { Violation } from "./invariants.js";
+import { profileOfSeed } from "./profile.js";
+import type { RunMode, RunResult } from "./run.js";
 
 /**
  * The fast tier's seeds that fail on today's code, each with the violation keys it fails (the
@@ -6,9 +7,15 @@ import type { Violation } from "./invariants.js";
  * defect (docs/investigations/simulator-baseline-2026-10-14.md). A seed here must fail exactly
  * these keys: a new violation in a known-failing seed, even of an invariant it already fails, is
  * unexpected, and a fix makes the seed fail its test until its entry is removed, so a known
- * failure can neither hide a new one nor outlive its fix.
+ * failure can neither hide a new one nor outlive its fix. Every entry was observed under its seed's
+ * own profile (profile.ts profileOfSeed), so it applies only to a run under that profile: the
+ * profile chooses the faults, and under another one the seed is a different run with no entry.
  */
 interface ExpectedFailure {
+  readonly seed: number;
+  /** The run mode the seed fails in (RunOptions.projects, RunOptions.capUsd); one project and the tape's cap when absent. */
+  readonly projects?: 1 | 2;
+  readonly capUsd?: number;
   readonly keys: readonly string[];
   readonly baseline: string;
 }
@@ -33,8 +40,50 @@ interface ExpectedFailure {
  * decisions) fail I1:open, I2 environment_unavailable, I8:Blocked(environment_unavailable) and
  * I8:Pending there, and replayed on W6 end accepted with no violation, cycle 1 "interrupted". That
  * tape pins it in simulator.test.ts.
+ *
+ * The soak's known production failures (baseline §7.8, the triage of §7.7's two-project scans):
+ * none is in the fast tier, which pins B5 and B8 by their tapes in simulator.test.ts instead; these
+ * keep `just simulate` from counting them as unexpected until they are fixed, and a fix shows each
+ * as listed-but-not-failed.
  */
-const EXPECTED_FAILURES: ReadonlyMap<number, ExpectedFailure> = new Map<number, ExpectedFailure>([]);
+const B5 = "B5 (baseline §3, §7.8; task t-merge-record-crash-window): a crash between the merge commit on main and its record; the startup reconciler requeues the task without looking on main";
+const B3 = "B3 (baseline §3, §7.8, §7.9; task t-orphan-requeue-failure): a fault on the startup reconciler's dev_sessions read leaves a crash orphan InProgress until the next boot";
+const B8 = "B8 (baseline §3, §7.8; task t-begin-failure-leaks-connection): a failed BEGIN leaves its pool connection checked out (drizzle-orm node-postgres session.transaction)";
+/**
+ * Two projects fail the same keys at a cap of $10 (§7.8's soak) and at the tape's own cap
+ * (`--projects 2` alone, baseline §7.10), so each is listed in both modes.
+ */
+const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
+  { seed: 31, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
+  { seed: 46, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: `${B5}; the crash is at commitMerge's rev-parse HEAD, right after the commit` },
+  { seed: 56, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 57, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
+  { seed: 75, keys: ["I1:leaked-connection:begin"], baseline: B8 },
+  // Named at the sixth restart since baseline §7.10 (the fifth in §7.9).
+  { seed: 59, keys: ["I7:orphan:Define and commit the project environment:6"], baseline: B3 },
+];
+const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
+  { seed: 7, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 57, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  {
+    seed: 45,
+    keys: ["I7:unrecorded:Define and commit the project environment"],
+    baseline: `${B5}; the crash is on a host git call inside the merge, after its commit and before "merge committed" is logged (baseline §7.10)`,
+  },
+  ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
+  ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2 }) as const),
+  // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it
+  // ends halted spend_cap with no violation there, the same on two runs; B5 is not fixed, the
+  // seed no longer reaches its window (which of master's three commits re-rolled it: unverified).
+];
+
+/** The entry of one run, if it has one: its seed under the seed's own profile, in its run mode. */
+function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): ExpectedFailure | undefined {
+  if (run.profile !== profileOfSeed(run.seed)) return undefined;
+  return EXPECTED_FAILURES.find((entry) => entry.seed === run.seed && (entry.projects ?? 1) === (mode.projects ?? 1) && entry.capUsd === mode.capUsd);
+}
 
 /** How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer fails. */
 export interface ExpectedFailureDiff {
@@ -42,9 +91,9 @@ export interface ExpectedFailureDiff {
   readonly missing: readonly string[];
 }
 
-export function diffExpected(seed: number, violations: readonly Violation[]): ExpectedFailureDiff {
-  const listed = new Set(EXPECTED_FAILURES.get(seed)?.keys ?? []);
-  const failed = new Set(violations.map((violation) => violation.key));
+export function diffExpected(run: Pick<RunResult, "seed" | "profile" | "violations">, mode: RunMode): ExpectedFailureDiff {
+  const listed = new Set(entryOf(run, mode)?.keys ?? []);
+  const failed = new Set(run.violations.map((violation) => violation.key));
   return {
     unexpected: [...failed].filter((key) => !listed.has(key)).sort(),
     missing: [...listed].filter((key) => !failed.has(key)).sort(),
