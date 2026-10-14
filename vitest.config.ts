@@ -10,5 +10,8 @@ export default defineConfig({
     include: ["packages/*/src/**/*.test.ts", "scripts/**/*.test.ts"],
     testTimeout: 120_000,
     maxWorkers: Math.min(MAX_TEST_WORKERS, availableParallelism()),
+    // Every PodmanSubstrate runs its cells and builds under required caps (ASHARA_CELL_*, W9); a
+    // test's cells run under these unless it passes its own.
+    env: { ASHARA_CELL_MEMORY: "2g", ASHARA_CELL_CPUS: "2", ASHARA_CELL_PIDS_LIMIT: "512" },
   },
 });

@@ -12,6 +12,31 @@ class DispatchEvidenceUnread extends Error {
 }
 
 /**
+ * What the session's Workplace attempt was (migration 046), written with its terminal phase. The
+ * terminal is the attempt's typed end ("finished:done", "turn_cap", ...); `cell` says whether it
+ * ran on the BaseCell or on the session's environment version.
+ */
+interface SessionAttempt {
+  readonly promptDigest: string;
+  readonly terminal: string;
+  readonly turns: number;
+  readonly provider: string;
+  readonly model: string;
+  readonly cell: "base-cell" | "environment";
+}
+
+function attemptColumns(attempt: SessionAttempt | null) {
+  return {
+    attemptPromptDigest: attempt?.promptDigest ?? null,
+    attemptTerminal: attempt?.terminal ?? null,
+    attemptTurns: attempt?.turns ?? null,
+    attemptProvider: attempt?.provider ?? null,
+    attemptModel: attempt?.model ?? null,
+    attemptCell: attempt?.cell ?? null,
+  };
+}
+
+/**
  * dev_sessions is an attempt log: when each attempt opened and how it ended (`phase`, and on a
  * failure the end's outcome and detail in verification_result). It holds no verdict on the task
  * and no record of what was merged, which is work_items.merge_commit (migration 041): its terminal
@@ -31,20 +56,27 @@ export class DevSessionRepository {
     });
   }
 
-  async complete(sessionId: string) {
+  /**
+   * `attempt`: null when no attempt outcome reached the session (it ended before the model, or its
+   * attempt threw). Required, never defaulted: the six columns of migration 046 then stay NULL, and
+   * NULL means only "no attempt recorded", never "no model call" (run-report reads it that way).
+   */
+  async complete(sessionId: string, attempt: SessionAttempt | null) {
     await this.db
       .update(devSessions)
       .set({
+        ...attemptColumns(attempt),
         phase: "Completed",
         updatedAt: new Date(),
       })
       .where(eq(devSessions.id, sessionId));
   }
 
-  async fail(sessionId: string, attemptEnd: unknown) {
+  async fail(sessionId: string, attemptEnd: unknown, attempt: SessionAttempt | null) {
     await this.db
       .update(devSessions)
       .set({
+        ...attemptColumns(attempt),
         verificationResult: attemptEnd,
         phase: "Failed",
         updatedAt: new Date(),

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { buildLimitArgs } from "./cell-limits.js";
 import { materializeSnapshot, snapshotEnvironment, type EnvironmentDefinition } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentBuildUnrecorded, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
 import type { PodmanSubstrate } from "./podman.js";
@@ -221,6 +222,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
   if (!tag.success) issues.push(`projectId: ${tag.error.issues.map((issue) => issue.message).join(", ")}`);
   if (!Number.isInteger(deps.timeoutMs) || deps.timeoutMs <= 0) issues.push(`timeoutMs must be a positive integer, got ${deps.timeoutMs}`);
   if (issues.length > 0) throw new InvalidCellRequest("buildEnvironmentImage", issues);
+  const limits = deps.substrate.resourceLimits();
 
   const snapshot = await snapshotEnvironment(request.repoGitDir, request.commit, request.definition);
   const identity: EnvironmentBuildIdentity = {
@@ -269,6 +271,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     const args = [
       "build",
       `--network=${BUILD_NETWORK}`,
+      ...buildLimitArgs(limits),
       "--pull=missing",
       "--label", `${LABEL_MANAGED}=1`,
       "--label", `${LABEL_PROJECT}=${request.projectId}`,

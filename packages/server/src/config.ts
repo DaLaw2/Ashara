@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import type { CoreLoopConfig } from "@ashara/orchestrator";
 import { DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { readCellLimits, type CellResourceLimits } from "@ashara/execution-infra";
 
 export interface ServerConfig {
   readonly databaseUrl: string;
@@ -17,6 +18,11 @@ export interface ServerConfig {
   };
   /** The podman executable every cell runs through (ASHARA_PODMAN_BINARY). */
   readonly podmanBinary: string;
+  /**
+   * The CPU, memory and pids caps of every cell and every image build (ASHARA_CELL_MEMORY,
+   * ASHARA_CELL_CPUS, ASHARA_CELL_PIDS_LIMIT). Required: an unset or malformed one refuses the boot.
+   */
+  readonly cellLimits: CellResourceLimits;
 }
 
 class InvalidBudgetLimit extends Error {
@@ -81,6 +87,8 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // Policy default: unset means "podman on PATH". Pointing it at a missing
   // binary is how an unavailable substrate is observed without uninstalling.
   const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
+  // No default: the host also runs Postgres and Z0, so the caps are the owner's choice (W9).
+  const cellLimits = readCellLimits(process.env);
 
   return {
     databaseUrl,
@@ -89,6 +97,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     coreLoop,
     spendCaps: { deploymentUsd, perProjectUsd },
     podmanBinary,
+    cellLimits,
   };
 }
 

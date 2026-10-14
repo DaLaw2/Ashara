@@ -35,15 +35,19 @@ class RecordingSessionStore implements SessionStore {
     this.environmentVersions.set(sessionId, environmentVersion);
   }
 
-  async complete(sessionId: string): Promise<void> {
+  readonly attempts = new Map<string, Parameters<SessionStore["complete"]>[1]>();
+
+  async complete(sessionId: string, attempt: Parameters<SessionStore["complete"]>[1]): Promise<void> {
     if (this.failOnWrite) throw new Error("db unreachable");
     this.phases.set(sessionId, "Completed");
+    this.attempts.set(sessionId, attempt);
   }
 
-  async fail(sessionId: string, verificationResult: unknown): Promise<void> {
+  async fail(sessionId: string, verificationResult: unknown, attempt: Parameters<SessionStore["fail"]>[2]): Promise<void> {
     if (this.failOnWrite) throw new Error("db unreachable");
     this.phases.set(sessionId, "Failed");
     this.failures.set(sessionId, verificationResult);
+    this.attempts.set(sessionId, attempt);
   }
 }
 
@@ -229,6 +233,29 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
       outcome: "errored",
       detail: "Error: the attempt threw before an outcome",
     });
+  });
+
+  test("the attempt body ran is written with the terminal phase, a throw included; none when it ran none", async () => {
+    const attempt = { promptDigest: "a".repeat(64), terminal: "turn_cap", turns: 4, provider: "p", model: "m", cell: "base-cell" as const };
+    const thrown = new RecordingSessionStore();
+    await expect(
+      withSessionLifecycle(thrown, session, async (slot) => {
+        slot.attempt = attempt;
+        throw new Error("after the attempt");
+      }),
+    ).rejects.toThrow("after the attempt");
+    expect(thrown.attempts.get("sess")).toEqual(attempt);
+
+    const completed = new RecordingSessionStore();
+    await withSessionLifecycle(completed, session, async (slot) => {
+      slot.attempt = { ...attempt, terminal: "finished:done" };
+      return result("completed");
+    });
+    expect(completed.attempts.get("sess")).toMatchObject({ terminal: "finished:done" });
+
+    const none = new RecordingSessionStore();
+    await withSessionLifecycle(none, session, async () => result("checks_stale"));
+    expect(none.attempts.get("sess")).toBeNull();
   });
 
   test("the failure payload carries the outcome and detail, not just a phase", async () => {
@@ -767,13 +794,20 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             return ok(`${role === "ci" && args.some((arg) => arg.includes("/checkouts/red-run-")) ? BASELINE_ID : ids[role]}\n`);
           }
           case "exec": {
-            if (args[5] === SWEEP_ID) return ran(faults.sweepExit === 0 ? "hello\n" : "", faults.sweepExit ?? 1);
-            if (args[5] === BASELINE_ID && faults.execFails !== "ci") return ran(faults.ciStdout ?? "hello\n", faults.baselineExit ?? faults.ciExit ?? 0);
-            const role = args[5] === BASELINE_ID ? "ci" : roleOf(args[5]);
-            // No status report: podman exec itself failed, the command never ran.
-            if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
-            if (role === "ci" && faults.ciFailsCommand !== undefined && args.at(-1) === faults.ciFailsCommand) return ran("broken\n", 1);
-            if (role === "verifier" && faults.verifierFailsCommand !== undefined && args.at(-1) === faults.verifierFailsCommand) return ran("broken\n", 1);
+            const cellId = args.find((arg) => /^[0-9a-f]{64}$/.test(arg));
+            // The cell probe after an exec with no status report: a fresh exec of the sweep.
+            const probe = args.includes("ashara-sweep");
+            // argv travels in the wrapper's environment; the command is its last element.
+            const command = [...args].reverse().find((arg) => arg.startsWith("ASHARA_ARG_"))?.replace(/^ASHARA_ARG_\d+=/, "");
+            if (cellId === SWEEP_ID) return ran(faults.sweepExit === 0 ? "hello\n" : "", faults.sweepExit ?? 1);
+            if (cellId === BASELINE_ID && faults.execFails !== "ci") return ran(faults.ciStdout ?? "hello\n", faults.baselineExit ?? faults.ciExit ?? 0);
+            const role = cellId === BASELINE_ID ? "ci" : roleOf(cellId);
+            // No status report, and the cell fails its probe too: podman exec itself failed, the command never ran.
+            if (faults.execFails !== undefined && faults.execFails === role) {
+              return probe ? ok("", 125, "Error: OCI runtime error") : ok("", 125, "Error: OCI runtime error", "");
+            }
+            if (role === "ci" && faults.ciFailsCommand !== undefined && command === faults.ciFailsCommand) return ran("broken\n", 1);
+            if (role === "verifier" && faults.verifierFailsCommand !== undefined && command === faults.verifierFailsCommand) return ran("broken\n", 1);
             return role === "ci" ? ran(faults.ciStdout ?? "hello\n", faults.ciExit ?? 0) : ran("hello\n");
           }
           case "rm":
@@ -868,6 +902,9 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(resolved).toMatchObject({ imageId: ENV_IMAGE_ID, version: expect.stringMatching(/^[0-9a-f]{64}$/) });
     const version = resolved?.["version"];
     expect([...probe.sessions.environmentVersions.values()]).toEqual([version]);
+    expect([...probe.sessions.attempts.values()]).toEqual([
+      { promptDigest: expect.stringMatching(/^[0-9a-f]{64}$/), terminal: "finished:done", turns: 1, provider: expect.any(String), model: expect.any(String), cell: "environment" },
+    ]);
 
     const [sessionDir] = await readdir(join(workdirBase, "records", taskId));
     const conversation = await readFile(join(workdirBase, "records", taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
@@ -1369,6 +1406,7 @@ const base = {
   turnsUsed: 3,
   cost: { measured: true as const, totalUsd: 0.25, turns: 3 },
   lastToolCall: { turn: 3, toolName: "run_command", input: "{}" },
+  promptDigest: "0".repeat(64),
   detail: "why it ended",
 };
 

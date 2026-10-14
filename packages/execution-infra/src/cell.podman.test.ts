@@ -297,6 +297,42 @@ describe("cell on real podman", () => {
     }
   }, 60_000);
 
+  // m2-trial-rust-kv-2026-10-14 M1: `kill -9 $(pgrep -f '<pattern from the command>')` matched the
+  // wrapper, whose command line carried the command, and the lost status read as a lost cell.
+  it("a command that kills by a pattern from its own text ends itself, never the wrapper; one that kills the wrapper is a lost status in a healthy cell", async () => {
+    const cell = await substrate.createCell({
+      image: (await loadBaseCell()).image,
+      project: "proj-cell-test",
+      task: `${task}-self-kill`,
+      role: "worker",
+      instance,
+      mount: { hostPath: workspace },
+    });
+    // `kill -9 $(pgrep -f <pattern>)` in POSIX sh over the cell's /proc, so no procps is needed in the
+    // image: like pgrep, the listing subshell leaves out only itself.
+    const pkill = (pattern: string): string =>
+      `kill -9 $(read -r me _ < /proc/self/stat; for p in /proc/[0-9]*; do [ "\${p#/proc/}" = "$me" ] && continue; ` +
+      `tr '\\0' ' ' < "$p/cmdline" 2>/dev/null | grep -qF -- ${pattern} && echo "\${p#/proc/}"; done)`;
+    try {
+      // The model's trial command: the marker is in its own text, so it matches its own processes.
+      const own = await cell.exec(
+        ["sh", "-c", `sleep 41 & echo started; ${pkill("'flock-x-ltest3'")}; sleep 2; echo survived`],
+        { timeoutSeconds: 20 },
+      );
+      expect(own, own.stderr).toMatchObject({ exitCode: 137, statusLost: false, timedOut: false, stdout: "started\n" });
+
+      // A pattern only the wrapper's script holds (split, so this command's text does not): the
+      // wrapper dies, the cell answers its probe, and its sweep ends what the command left.
+      const wrapper = await cell.exec(["sh", "-c", `sleep 42 & echo started; ${pkill('"ashara""_sweep"')}; sleep 5`], { timeoutSeconds: 20 });
+      expect(wrapper).toMatchObject({ exitCode: null, statusLost: true, timedOut: false, stdout: "started\n" });
+      const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
+      expect(left).not.toMatch(/sleep 4[12]/);
+      expect(await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 })).toMatchObject({ exitCode: 0, stdout: "usable\n" });
+    } finally {
+      await cell.teardown();
+    }
+  }, 60_000);
+
   it("reconciles a leaked cell of this instance and leaves every other container alone", async () => {
     const base = await loadBaseCell();
     // A previous process of this instance that died without tearing down.

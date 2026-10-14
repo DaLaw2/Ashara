@@ -2,7 +2,7 @@
 export interface CheckRun {
   readonly name: string;
   readonly command: string;
-  /** null when the host had to kill the podman client; timedOut is then true. */
+  /** null when the host had to kill the podman client (timedOut is then true) or the command's exit status was lost in the cell. */
   readonly exitCode: number | null;
   readonly timedOut: boolean;
   /** The end of stdout and stderr together. */
@@ -41,6 +41,7 @@ export function checkPassed(run: CheckRun): boolean {
 export function checkVerdict(run: CheckRun): string {
   if (checkPassed(run)) return "PASSED";
   if (run.timedOut) return "FAILED: timed out";
+  if (run.exitCode === null) return "FAILED: ended with its exit status unknown";
   return run.exitCode !== 0 ? `FAILED: exited ${run.exitCode}` : "FAILED: printed nothing";
 }
 

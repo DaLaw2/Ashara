@@ -7,7 +7,7 @@ export interface LogTail {
 /** One of the definition's commands (`probe`, `build` or `test`), run in a cell from the built image. */
 export interface EnvironmentTestRun {
   readonly command: string;
-  /** null when the host had to kill the podman client; timedOut is then true. */
+  /** null when the host had to kill the podman client (timedOut is then true) or the command's exit status was lost in the cell. */
   readonly exitCode: number | null;
   readonly timedOut: boolean;
   readonly stdout: LogTail;
@@ -100,12 +100,14 @@ function commandSection(label: "Build" | "Test" | "Probe", run: EnvironmentTestR
 
 function buildVerdict(build: EnvironmentTestRun): string {
   if (environmentBuildPassed(build)) return "PASSED";
-  return build.timedOut ? "FAILED: the build command timed out" : `FAILED: the build command exited ${build.exitCode}`;
+  if (build.timedOut) return "FAILED: the build command timed out";
+  return build.exitCode === null ? "FAILED: the build command ended with its exit status unknown" : `FAILED: the build command exited ${build.exitCode}`;
 }
 
 function printingVerdict(label: "test" | "probe", run: EnvironmentTestRun): string {
   if (environmentProbePassed(run)) return "PASSED";
   if (run.timedOut) return `FAILED: the ${label} command timed out`;
+  if (run.exitCode === null) return `FAILED: the ${label} command ended with its exit status unknown`;
   return run.exitCode !== 0 ? `FAILED: the ${label} command exited ${run.exitCode}` : `FAILED: the ${label} command printed nothing`;
 }
 

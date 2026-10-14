@@ -1,5 +1,9 @@
 export { PodmanSubstrate } from "./podman.js";
 export type { Cell, CellSpec, ExecResult, SubstrateInfo } from "./podman.js";
+export { CELL_LIMIT_VARIABLES, readCellLimits } from "./cell-limits.js";
+export type { CellResourceLimits } from "./cell-limits.js";
+export { probeCredentialRead, probeOutboundHost, probeResourceCaps } from "./cell-probes.js";
+export type { CredentialCanaries, ProbeVerdict } from "./cell-probes.js";
 export { createCellBackend } from "./cell-backend.js";
 export type { CellBackend } from "./cell-backend.js";
 export { loadBaseCell } from "./base-cell.js";

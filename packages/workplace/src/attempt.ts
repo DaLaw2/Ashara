@@ -13,6 +13,7 @@ import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } fro
 import { CostTally } from "./outcome.js";
 import type { LastToolCall, Outcome, Terminal } from "./outcome.js";
 import { FIRST_MESSAGE, buildSystemPrompt } from "./prompt.js";
+import { promptDigest } from "./prompt-digest.js";
 import { describeInput, toRecordedOutcome, truncateText } from "./records.js";
 import type { AttemptRecord, AttemptRecordSink } from "./records.js";
 import { executeTool, toolSchemasFor } from "./tools.js";
@@ -98,6 +99,8 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
   const llm = deps.llm.forCall({ projectId: assignment.projectId, taskId: assignment.taskId, callSite: AGENT_CALL_SITE });
   const system = buildSystemPrompt(assignment.brief, assignment.workKind);
   const messages: ModelMessage[] = [{ role: "user", content: FIRST_MESSAGE }];
+  // Taken before the loop appends to `messages`: exactly what the first call is sent.
+  const digest = promptDigest({ system, messages, tools });
   const costs = new CostTally();
   let turnsUsed = 0;
   let lastToolCall: LastToolCall | null = null;
@@ -114,7 +117,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
   }
 
   async function conclude(terminal: Terminal): Promise<Outcome> {
-    const outcome: Outcome = { ...terminal, turnsUsed, cost: costs.snapshot(), lastToolCall };
+    const outcome: Outcome = { ...terminal, turnsUsed, cost: costs.snapshot(), lastToolCall, promptDigest: digest };
     const failed = await record({ kind: "outcome", at: clock.now(), outcome: toRecordedOutcome(outcome) });
     if (failed === null) return outcome;
     // The outcome itself could not be recorded: an unrecorded "done" is not reported as done.
@@ -126,6 +129,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
       turnsUsed,
       cost: outcome.cost,
       lastToolCall,
+      promptDigest: digest,
     };
   }
 
@@ -162,6 +166,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     limits,
     system,
     firstMessage: FIRST_MESSAGE,
+    promptDigest: digest,
   });
   if (started !== null) return recordsFailed(started);
 

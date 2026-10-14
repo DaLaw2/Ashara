@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentBrief } from "@ashara/shared";
 import { CONVERSATION_RECORDS_DIR } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
+import type { AttemptCellImage, AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
 
 /** Record directory names come from ids; anything else could walk out of workdirBase/records. */
 const RECORD_SEGMENT = /^[A-Za-z0-9._-]{1,128}$/;
@@ -95,5 +95,31 @@ export function toAgentOutput(outcome: Outcome, modelId: string, tokens: TokenTa
     cost_measured: cost.measured,
     turn_count: outcome.turnsUsed,
     finish_reason: outcome.kind === "finished" ? "completed" : outcome.kind === "turn_cap" ? "turn_limit" : "error",
+  };
+}
+
+/** An attempt as the session's terminal write records it (migration 046). */
+export interface SessionAttempt {
+  readonly promptDigest: string;
+  /** The Outcome kind, with a finished attempt's status: "finished:done", "finished:blocked", "turn_cap", ... */
+  readonly terminal: string;
+  readonly turns: number;
+  readonly provider: string;
+  readonly model: string;
+  readonly cell: AttemptCellImage["kind"];
+}
+
+export function toSessionAttempt(
+  outcome: Outcome,
+  model: { readonly provider: string; readonly modelId: string },
+  cellImage: AttemptCellImage,
+): SessionAttempt {
+  return {
+    promptDigest: outcome.promptDigest,
+    terminal: outcome.kind === "finished" ? `finished:${outcome.status}` : outcome.kind,
+    turns: outcome.turnsUsed,
+    provider: model.provider,
+    model: model.modelId,
+    cell: cellImage.kind,
   };
 }

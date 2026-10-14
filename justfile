@@ -68,6 +68,17 @@ secrets:
 server:
     npx tsx packages/server/src/index.ts
 
+# The roadmap's M2 exit 6 probes from inside real cells (W9): resource caps, a credential read, an
+# outbound host and an environment-file write without the grant, one verdict each; exits non-zero
+# unless every probe held. Needs ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS and ASHARA_CELL_PIDS_LIMIT
+# (config/env.example). `just probes --image <ref>` probes that environment image instead of the BaseCell.
+probes *ARGS:
+    npx tsx scripts/probes.ts {{ARGS}}
+
+# One project's run evidence (roadmap M2 exit 7): attempts, cost coverage, cache-hit share. Read-only.
+run-report project:
+    npx tsx scripts/run-report.ts {{project}}
+
 install:
     npm install
 

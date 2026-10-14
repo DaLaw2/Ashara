@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createCellBackend } from "./cell-backend.js";
+import { readCellLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
+  CellLimitsInvalid,
   CellStartFailed,
   CellTeardownFailed,
   InvalidCellRequest,
@@ -23,6 +25,7 @@ const run = promisify(execFile);
 const ID = "a".repeat(64);
 const OTHER_ID = "b".repeat(64);
 const IMAGE = "docker.io/library/debian:12-slim@sha256:" + "c".repeat(64);
+const LIMITS = { memoryBytes: 512 * 1024 * 1024, cpus: 1.5, pids: 256 };
 
 function ok(stdout = "", exitCode: number | null = 0): ProcessResult {
   return { exitCode, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
@@ -47,7 +50,7 @@ function recorder(responses: Array<ProcessResult | Error>) {
     if (next instanceof Error) throw next;
     return next;
   };
-  return { requests, substrate: new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner }) };
+  return { requests, substrate: new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root, runner, limits: LIMITS }) };
 }
 
 // A real directory tree: mounts are canonicalized with realpath before podman runs.
@@ -81,7 +84,9 @@ describe("PodmanSubstrate argv", () => {
     const name = requests[0]?.args[3] ?? "";
     expect(requests[0]?.args).toEqual([
       "run", "-d", "--name", expect.stringMatching(/^ashara-cell-[0-9a-f-]{36}$/), "--init", "--pull=never", "--network=none", "--cap-drop=all",
-      "--security-opt=no-new-privileges", "--userns=keep-id",
+      "--security-opt=no-new-privileges",
+      "--memory=536870912", "--memory-swap=536870912", "--cpus=1.5", "--pids-limit=256",
+      "--userns=keep-id",
       "--label", "ashara.managed=1",
       "--label", "ashara.instance=inst-1",
       "--label", "ashara.project=proj-1",
@@ -97,6 +102,24 @@ describe("PodmanSubstrate argv", () => {
     await cell.teardown();
     expect(requests[1]?.args).toEqual(["rm", "-f", ID]);
     expect(await readdir(join(root, ".ashara-cell-state", "inst-1"))).toEqual([]);
+  });
+
+  it("refuses to build a substrate without cell limits: none given and ASHARA_CELL_MEMORY unset", () => {
+    const saved = process.env.ASHARA_CELL_MEMORY;
+    delete process.env.ASHARA_CELL_MEMORY;
+    try {
+      expect(() => new PodmanSubstrate({ podmanPath: "/opt/podman", mountRoot: root })).toThrow(CellLimitsInvalid);
+      expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_MEMORY="4"/);
+      expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "0", ASHARA_CELL_PIDS_LIMIT: "10" })).toThrow(/ASHARA_CELL_CPUS/);
+      expect(() => readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "1", ASHARA_CELL_PIDS_LIMIT: " " })).toThrow(/ASHARA_CELL_PIDS_LIMIT is not set/);
+      expect(readCellLimits({ ASHARA_CELL_MEMORY: "4g", ASHARA_CELL_CPUS: "0.5", ASHARA_CELL_PIDS_LIMIT: "10" })).toEqual({
+        memoryBytes: 4 * 1024 ** 3,
+        cpus: 0.5,
+        pids: 10,
+      });
+    } finally {
+      if (saved !== undefined) process.env.ASHARA_CELL_MEMORY = saved;
+    }
   });
 
   it("uses a shared read-only label when asked", async () => {
@@ -219,10 +242,16 @@ describe("PodmanSubstrate argv", () => {
     const cell = await substrate.createCell(spec);
     const result = await cell.exec(["cat", "--", "./a"], { timeoutSeconds: 30, stdin: "in", cwd: "src" });
     const args = requests[1]?.args ?? [];
-    expect(args.slice(0, 8)).toEqual(["exec", "-i", "--preserve-fds=1", "-w", "/workspace/src", ID, "sh", "-c"]);
-    expect(args.slice(9)).toEqual(["ashara-exec", "5", "30", "cat", "--", "./a"]);
+    // argv travels in the wrapper's environment, never on its command line (M2 trial M1).
+    expect(args.slice(0, 14)).toEqual([
+      "exec", "-i", "--preserve-fds=1", "-w", "/workspace/src",
+      "-e", "ASHARA_ARGC=3", "-e", "ASHARA_ARG_0=cat", "-e", "ASHARA_ARG_1=--", "-e", "ASHARA_ARG_2=./a",
+      ID,
+    ]);
+    expect(args.slice(14, 16)).toEqual(["sh", "-c"]);
+    expect(args.slice(17)).toEqual(["ashara-exec", "5", "30"]);
     // The wrapper runs argv under timeout(1), then sweeps the cell before it reports.
-    expect(args[8]).toContain('timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?\nashara_sweep ||');
+    expect(args[16]).toContain('timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?\nashara_sweep ||');
     expect(requests[1]?.statusChannel).toBe(true);
     expect(requests[1]?.stdin).toBe("in");
     expect(result).toMatchObject({ exitCode: 0, stdout: "out", timedOut: false });
@@ -232,11 +261,12 @@ describe("PodmanSubstrate argv", () => {
     expect(early).toMatchObject({ exitCode: 124, timedOut: false });
   });
 
-  it("a command that exits 125 is the command's result; an exit with no status report is the substrate's failure", async () => {
-    const { substrate } = recorder([
+  it("a command that exits 125 is the command's result; an exit with no status report in a cell that fails its probe is the substrate's failure", async () => {
+    const { requests, substrate } = recorder([
       ok(ID),
       ran("", 125),
       unreported(125, "Error: no container with name or ID found"),
+      { ...ok("", 125), stderr: "Error: no container with name or ID found" },
       { ...ran("", 3), exitCode: 125 },
       { ...ok("", 0), statusReport: "zero\n" },
     ]);
@@ -247,21 +277,45 @@ describe("PodmanSubstrate argv", () => {
     expect(podmanFailed).toBeInstanceOf(CellExecFailed);
     if (!(podmanFailed instanceof CellExecFailed)) return;
     expect(podmanFailed).toMatchObject({ exitCode: 125, stderr: "Error: no container with name or ID found", argv: ["true"] });
+    expect(podmanFailed.message).toMatch(/failed its probe/);
+    expect(requests[3]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
+    expect(requests[3]?.args[4]).toContain("ashara_sweep");
 
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
   });
 
-  it("a sweep that left a process alive, or an exec without a session of its own, is CellExecFailed", async () => {
+  // M2 trial M1: `kill -9 $(pgrep -f ...)` in the command killed the wrapper itself.
+  it("an exit with no status report in a cell that passes its probe is the command's result, its status unknown", async () => {
+    const { requests, substrate } = recorder([ok(ID), { ...unreported(137, "partial err"), stdout: "partial" }, ok("", 0)]);
+    const cell = await substrate.createCell(spec);
+    const result = await cell.exec(["sh", "-c", "pkill -f marker"], { timeoutSeconds: 10 });
+    expect(result).toEqual({
+      exitCode: null,
+      stdout: "partial",
+      stderr: "partial err",
+      timedOut: false,
+      statusLost: true,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    });
+    // The probe is the sweep: it also ends what the command left that the dead wrapper never swept.
+    expect(requests[2]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
+    expect(requests[2]?.args[4]).toContain("ashara_sweep");
+  });
+
+  it("a sweep that left a process alive, an exec without a session of its own, or one that cannot run argv is CellExecFailed", async () => {
     const { substrate } = recorder([
       ok(ID),
       { ...ran("", 0), statusReport: "unswept 0\n" },
       { ...ran("", 125), statusReport: "unisolated\n" },
+      { ...ran("", 127), statusReport: "unrunnable\n" },
       { ...ran("", 0), statusReport: "unswept zero\n" },
     ]);
     const cell = await substrate.createCell(spec);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/still alive after the wrapper's sweep/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/not a session of its own.*not run/);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/could not run the command; the command was not run/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
   });
 
@@ -347,7 +401,7 @@ describe("CellBackend", () => {
       cell: {
         exec: async (argv: readonly string[], options: { stdin?: string | Buffer; timeoutSeconds: number }) => {
           calls.push({ argv, stdin: options.stdin });
-          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, ...result };
+          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false, ...result };
         },
       },
     };

@@ -15,6 +15,7 @@ import type { CheckRunReport, TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentTestRun } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { promptDigest } from "./prompt-digest.js";
 import type { AttemptRecord } from "./records.js";
 
 type TurnRequest = Parameters<ReturnType<ContextualTurnLlm["forCall"]>["generateTurn"]>[0];
@@ -92,7 +93,7 @@ function fakeCell(overrides: Partial<CellBackend> = {}) {
     },
     async run(command, timeoutSeconds): Promise<ExecResult> {
       commands.push({ command, timeoutSeconds });
-      return { exitCode: 0, stdout: "ok\n", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false };
+      return { exitCode: 0, stdout: "ok\n", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: false };
     },
     ...overrides,
   };
@@ -185,6 +186,31 @@ describe("runAttempt", () => {
     expect(records.map((r) => r.kind)).toEqual(["attempt_started", "turn", "tool_result", "turn", "tool_result", "turn", "outcome"]);
   });
 
+  it("digests exactly what the first call was sent, records it, and changes it with the brief", async () => {
+    const writing = () => turn([{ name: "write_file", input: { path: "a.txt", content: "a" } }]);
+    const finished = () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]);
+    const first = scriptedLlm([writing, finished]);
+    const { deps: d, records } = deps(first.llm, fakeCell().cell);
+    const a = assignment();
+
+    const outcome = await runAttempt(a, d);
+
+    const sent = first.requests[0];
+    if (sent === undefined) throw new Error("no first request");
+    expect(outcome.promptDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(outcome.promptDigest).toBe(promptDigest({ system: sent.system, messages: sent.messages, tools: sent.tools }));
+    expect(records[0]).toMatchObject({ kind: "attempt_started", promptDigest: outcome.promptDigest });
+    expect(records.at(-1)).toMatchObject({ kind: "outcome", outcome: { promptDigest: outcome.promptDigest } });
+
+    const again = await runAttempt(a, deps(scriptedLlm([finished]).llm, fakeCell().cell).deps);
+    expect(again.promptDigest).toBe(outcome.promptDigest);
+    const changed = await runAttempt(
+      { ...a, brief: { ...a.brief, goal: "Write goodbye.txt" } },
+      deps(scriptedLlm([finished]).llm, fakeCell().cell).deps,
+    );
+    expect(changed.promptDigest).not.toBe(outcome.promptDigest);
+  });
+
   it("returns invalid tool arguments to the model as a tool error and keeps going", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "write_file", input: { path: "a.txt" } }, { name: "nope", input: "{", invalid: "AI_NoSuchToolError" }]),
@@ -209,7 +235,7 @@ describe("runAttempt", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
     ]);
     const { cell } = fakeCell({
-      run: async () => ({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false, stdoutTruncated: false, stderrTruncated: false }),
+      run: async () => ({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: false }),
     });
 
     const outcome = await runAttempt(assignment(), deps(llm, cell).deps);
@@ -218,6 +244,23 @@ describe("runAttempt", () => {
     const [read, run] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(read).toMatchObject({ type: "error-text", value: expect.stringContaining("No such file") });
     expect(run).toEqual({ type: "error-text", value: "Exit code: 1\nSTDERR:\nboom" });
+  });
+
+  // M2 trial M1: a command that killed the process running it, in a cell that stayed healthy.
+  it("reports a command whose exit status was lost to the model, not as an environment failure", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "run_command", input: { command: "pkill -f flock" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
+    ]);
+    const { cell } = fakeCell({
+      run: async () => ({ exitCode: null, stdout: "partial", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: true }),
+    });
+
+    const outcome = await runAttempt(assignment(), deps(llm, cell).deps);
+
+    expect(outcome.kind).toBe("finished");
+    const [run] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(run).toMatchObject({ type: "error-text", value: expect.stringMatching(/^Exit status unknown: [^]*\nSTDOUT:\npartial$/) });
   });
 
   it("ends at the turn cap", async () => {

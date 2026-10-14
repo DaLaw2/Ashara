@@ -32,7 +32,8 @@ import {
   runAttempt,
 } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
-import { DispatchRecords, toAgentOutput } from "./cell-execution.js";
+import { DispatchRecords, toAgentOutput, toSessionAttempt } from "./cell-execution.js";
+import type { SessionAttempt } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
 import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
@@ -512,8 +513,14 @@ function ownerUnresolved(
 export interface SessionStore {
   /** `environmentVersion` is the version the dispatch's cells were built from; null on the BaseCell. */
   insert(sessionId: string, taskId: string, brief: unknown, environmentVersion: string | null): Promise<void>;
-  complete(sessionId: string): Promise<void>;
-  fail(sessionId: string, attemptEnd: unknown): Promise<void>;
+  /** `attempt`: the session's Workplace attempt, or null when no attempt outcome reached it (ended before the model, or the attempt threw). */
+  complete(sessionId: string, attempt: SessionAttempt | null): Promise<void>;
+  fail(sessionId: string, attemptEnd: unknown, attempt: SessionAttempt | null): Promise<void>;
+}
+
+/** Where runExecution leaves its attempt for the session's terminal write; null until runAttempt returns. */
+interface AttemptSlot {
+  attempt: SessionAttempt | null;
 }
 
 export interface ExecutionEventSink {
@@ -1285,7 +1292,7 @@ export class DevelopmentService {
       const result = await withSessionLifecycle(
         this.deps.sessionStore,
         { sessionId, taskId: task.id, brief, environmentVersion: sessionEnvironmentVersion(environment) },
-        () => this.runExecution(dispatch),
+        (slot) => this.runExecution(dispatch, slot),
       );
       // Every non-completed terminal outcome carries a blocking/failure reason
       // worth keeping (kl-t4): capturing it here, ONE seam covering every return
@@ -1635,7 +1642,7 @@ export class DevelopmentService {
     return sections.length > 1 ? sections.join("\n\n") : "";
   }
 
-  private async runExecution(d: Dispatch): Promise<ExecutionResult> {
+  private async runExecution(d: Dispatch, slot: AttemptSlot): Promise<ExecutionResult> {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, brief, staff, workDir, targetProjectPath, sessionId } = d;
 
@@ -1686,6 +1693,7 @@ export class DevelopmentService {
         taskChecks: d.work.kind === "stored-checks" ? this.taskCheckRunPort(d, d.work.stored, d.work.merged) : null,
       },
     );
+    slot.attempt = toSessionAttempt(outcome, staff.model, attemptCellImage(d.environment));
     const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
     // Observe the workdir BEFORE cleanup: after cleanupWorkdir the worktree is gone.
     const filesChanged = await getChangedFiles(d.repo);
@@ -3091,33 +3099,43 @@ export class DevelopmentService {
 export async function withSessionLifecycle(
   sessionStore: SessionStore,
   session: { readonly sessionId: string; readonly taskId: string; readonly brief: AgentBrief; readonly environmentVersion: string | null },
-  body: () => Promise<ExecutionResult>,
+  body: (slot: AttemptSlot) => Promise<ExecutionResult>,
 ): Promise<ExecutionResult> {
   const { sessionId, taskId } = session;
   await sessionStore.insert(sessionId, taskId, session.brief, session.environmentVersion);
 
+  // The attempt, when body ran one, is written with the terminal phase on every exit, a throw included.
+  const slot: AttemptSlot = { attempt: null };
   let outcome: ExecutionResult;
   try {
-    outcome = await body();
+    outcome = await body(slot);
   } catch (e) {
     await closeSession(taskId, sessionId, () =>
-      sessionStore.fail(sessionId, {
-        outcome: "errored",
-        detail: describeErrorChain(e),
-      }),
+      sessionStore.fail(
+        sessionId,
+        {
+          outcome: "errored",
+          detail: describeErrorChain(e),
+        },
+        slot.attempt,
+      ),
     );
     throw e;
   }
 
   if (outcome.status === "completed") {
-    await closeSession(taskId, sessionId, () => sessionStore.complete(sessionId));
+    await closeSession(taskId, sessionId, () => sessionStore.complete(sessionId, slot.attempt));
   } else {
     await closeSession(taskId, sessionId, () =>
-      sessionStore.fail(sessionId, {
-        outcome: outcome.status,
-        detail: outcome.detail,
-        ...(outcome.errorEnvelope !== undefined ? { errorEnvelope: outcome.errorEnvelope } : {}),
-      }),
+      sessionStore.fail(
+        sessionId,
+        {
+          outcome: outcome.status,
+          detail: outcome.detail,
+          ...(outcome.errorEnvelope !== undefined ? { errorEnvelope: outcome.errorEnvelope } : {}),
+        },
+        slot.attempt,
+      ),
     );
   }
   return outcome;

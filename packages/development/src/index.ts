@@ -1,10 +1,15 @@
 export type { ProjectIntentSource } from "./project-intent.js";
 
 export { DevelopmentService } from "./execution-service.js";
+/** @testseam scripts/run-report.test.ts drives a scripted attempt through the session's terminal write */
+export { withSessionLifecycle } from "./execution-service.js";
+/** @testseam scripts/run-report.test.ts maps its scripted attempt as runExecution does */
+export { toSessionAttempt } from "./cell-execution.js";
 /** @testseam execution-service.test.ts checks it names every status; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { EXECUTION_STATUSES } from "./execution-service.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
 export { discardTaskBranch } from "./merge.js";
+export { probeEnvironmentWrite } from "./gates/environment-write-probe.js";
 export { currentEnvironmentBuilt, pruneStaleEnvironmentImages } from "./current-environment.js";
 export type { EnvironmentImages } from "./environment-check.js";
 export type { KnowledgeSink, KnowledgeSource } from "./knowledge-writer.js";

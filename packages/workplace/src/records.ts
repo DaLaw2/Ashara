@@ -49,6 +49,8 @@ export type AttemptRecord =
       readonly limits: { readonly maxTurns: number; readonly wallClockMs: number; readonly perCommandTimeoutSeconds: number };
       readonly system: string;
       readonly firstMessage: string;
+      /** sha256 (hex) of the first call's system prompt, messages and tools; the outcome carries the same. */
+      readonly promptDigest: string;
     }
   | {
       readonly kind: "turn";

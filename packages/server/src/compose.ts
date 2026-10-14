@@ -255,8 +255,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
-    complete: (sid) => devSessionRepo.complete(sid),
-    fail: (sid, vr) => devSessionRepo.fail(sid, vr),
+    complete: (sid, attempt) => devSessionRepo.complete(sid, attempt),
+    fail: (sid, vr, attempt) => devSessionRepo.fail(sid, vr, attempt),
   };
 
   const knowledgeSink: KnowledgeSink = {
@@ -273,11 +273,16 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     podmanPath: config.podmanBinary,
     mountRoot: config.coreLoop.workdirBase,
     runner: ports.processRunner,
+    limits: config.cellLimits,
   });
   const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
   const environmentBuildRepo = new EnvironmentBuildRepository(db);
   const baseCell = await loadBaseCell();
   console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
+  console.log(
+    `Cell limits (every cell and image build): memory ${config.cellLimits.memoryBytes} bytes, ` +
+      `${config.cellLimits.cpus} CPUs, ${config.cellLimits.pids} pids`,
+  );
 
   // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
   // role from the project's latest stored roster (s-team-roster-m1), and the model.

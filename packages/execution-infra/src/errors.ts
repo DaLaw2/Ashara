@@ -54,6 +54,25 @@ export class InvalidCellRequest extends ExecutionInfraError {
   }
 }
 
+/** A cell resource limit is unset or malformed: no cell may start, and the server refuses to boot. */
+export class CellLimitsInvalid extends ExecutionInfraError {
+  readonly variable: string;
+  readonly raw: string | null;
+  readonly expected: string;
+
+  constructor(variable: string, raw: string | null, expected: string) {
+    super(
+      raw === null || raw.trim() === ""
+        ? `${variable} is not set; every cell runs under required CPU, memory and pids limits, so set it to ${expected}`
+        : `${variable}=${JSON.stringify(raw)} is not ${expected}`,
+    );
+    this.name = "CellLimitsInvalid";
+    this.variable = variable;
+    this.raw = raw;
+    this.expected = expected;
+  }
+}
+
 export class CellStartFailed extends ExecutionInfraError {
   readonly argv: readonly string[];
   readonly exitCode: number | null;

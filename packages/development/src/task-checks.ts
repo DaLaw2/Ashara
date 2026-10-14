@@ -425,7 +425,7 @@ export async function runSuitesOnCheckout(
           name: check.name,
           command: check.command,
           exitCode: result.exitCode,
-          timedOut: result.timedOut || result.exitCode === null,
+          timedOut: result.timedOut,
           output: tailOf(`${result.stdout}${result.stderr}`.trim()),
         });
       }

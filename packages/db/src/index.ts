@@ -6,6 +6,7 @@ export { listenForEvents } from "./listener.js";
 
 export { WorkItemRepository } from "./repositories/work-item.js";
 export { DevSessionRepository } from "./repositories/dev-session.js";
+export { readRunEvidence } from "./repositories/run-report.js";
 export { VisionRepository } from "./repositories/vision.js";
 export { ProjectRepository } from "./repositories/project.js";
 export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";

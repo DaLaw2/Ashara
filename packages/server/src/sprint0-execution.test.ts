@@ -410,8 +410,8 @@ describe("Sprint 0", () => {
       ],
       {
         insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version),
-        complete: (sid) => sessions.complete(sid),
-        fail: (sid, verification) => sessions.fail(sid, verification),
+        complete: (sid, attempt) => sessions.complete(sid, attempt),
+        fail: (sid, verification, attempt) => sessions.fail(sid, verification, attempt),
       },
     );
 

@@ -1,8 +1,9 @@
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
 import { initHostRepo, runHostGit, runOwnRepoGit, type HostRepo } from "@ashara/execution-infra";
+import { canonicalizeAllowingMissing, withTargetCheckout } from "./checkout-lock.js";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
 
@@ -33,7 +34,9 @@ export async function createWorkdir(
   targetProjectPath: string,
   taskBranch: string,
 ): Promise<WorkdirInfo> {
-  await ensureTargetGitInit(targetProjectPath);
+  // A fresh target's first commit is staged in its main checkout: two first dispatches, or one
+  // racing a finalize, must not share that index.
+  await withTargetCheckout(targetProjectPath, () => ensureTargetGitInit(targetProjectPath));
   await mkdir(base, { recursive: true });
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
@@ -369,29 +372,6 @@ export class InvalidTargetProjectPath extends Error {
   ) {
     super(`Refusing to use target project path "${path}": ${reason}`);
     this.name = "InvalidTargetProjectPath";
-  }
-}
-
-// realpath() fails on paths that do not exist yet. A minted target is usually
-// not created at validation time, so resolve the nearest existing ancestor and
-// re-append the missing tail. Fail closed if NO ancestor resolves.
-async function canonicalizeAllowingMissing(inputPath: string): Promise<string> {
-  let current = resolve(inputPath);
-  const missing: string[] = [];
-  for (;;) {
-    try {
-      const real = await realpath(current);
-      return missing.length === 0 ? real : join(real, ...missing.reverse());
-    } catch (err) {
-      const parent = dirname(current);
-      if (parent === current) {
-        throw new Error(
-          `no existing ancestor could be resolved for "${inputPath}": ${describeErrorChain(err)}`,
-        );
-      }
-      missing.push(basename(current));
-      current = parent;
-    }
   }
 }
 

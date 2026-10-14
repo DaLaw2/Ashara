@@ -26,6 +26,8 @@ interface OutcomeBase {
   readonly turnsUsed: number;
   readonly cost: AttemptCost;
   readonly lastToolCall: LastToolCall | null;
+  /** sha256 (hex) of the system prompt, messages and tools of the attempt's first model call (prompt-digest.ts). */
+  readonly promptDigest: string;
   /** Why the attempt ended, readable on its own (Discipline C). */
   readonly detail: string;
 }
@@ -87,7 +89,7 @@ export type Outcome =
 
 /** The fields every terminal shares; the loop supplies them when it concludes. */
 export type Terminal = WithoutBase<Outcome>;
-type WithoutBase<O> = O extends Outcome ? Omit<O, "turnsUsed" | "cost" | "lastToolCall"> : never;
+type WithoutBase<O> = O extends Outcome ? Omit<O, "turnsUsed" | "cost" | "lastToolCall" | "promptDigest"> : never;
 
 export class CostTally {
   private measuredUsd = 0;

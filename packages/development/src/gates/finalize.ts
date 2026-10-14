@@ -1,6 +1,7 @@
 import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
+import { withTargetCheckout } from "../checkout-lock.js";
 import { environmentErrorOf } from "../environment-failure.js";
 import type { EnvironmentError } from "../environment-failure.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
@@ -126,14 +127,27 @@ async function abortAndFail(
 
 /**
  * Merges the task branch, which the caller has already committed the agent's work to (a commit
- * that failed ended the dispatch before this point), and checks the merge.
+ * that failed ended the dispatch before this point), and checks the merge. One finalize at a time
+ * per target (ADR-074 d82 W3): from the orphan recovery through the commit or the abort, the
+ * checkout's lock is held, so a batch's other task neither aborts this one's tentative merge nor
+ * merges against a main this one is about to move; it waits and merges against the main it lands on.
  */
-export async function finalizeSuccess(
+export function finalizeSuccess(
   deps: FinalizeDeps,
   task: TaskDescriptor,
   targetProjectPath: string,
   attempt: number,
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
+): Promise<FinalizeResult> {
+  return withTargetCheckout(targetProjectPath, () => finalizeHeld(deps, task, targetProjectPath, attempt, contractInfo));
+}
+
+async function finalizeHeld(
+  deps: FinalizeDeps,
+  task: TaskDescriptor,
+  targetProjectPath: string,
+  attempt: number,
+  contractInfo: FinalizeContractInfo,
 ): Promise<FinalizeResult> {
   await recoverOrphanedMerge(targetProjectPath);
   await ensureTargetGitInit(targetProjectPath);

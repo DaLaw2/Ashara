@@ -309,11 +309,22 @@ function classifyCellError(toolName: string, error: unknown): ToolExecution {
   return { kind: "environment_failure", error, toolName };
 }
 
+const STATUS_LOST =
+  "Exit status unknown: the process running this command was killed before it reported how the command ended. " +
+  "A command that kills processes by pattern (pkill -f, kill $(pgrep -f ...)) can match the shell running it. " +
+  "Everything the command left running was stopped; the workspace is intact.";
+
 function formatRun(result: ExecResult, timeoutSeconds: number): ToolExecution {
-  const parts = [result.timedOut ? `Timed out after ${timeoutSeconds}s and was killed (exit ${result.exitCode})` : `Exit code: ${result.exitCode}`];
+  const parts = [
+    result.statusLost
+      ? STATUS_LOST
+      : result.timedOut
+        ? `Timed out after ${timeoutSeconds}s and was killed (exit ${result.exitCode})`
+        : `Exit code: ${result.exitCode}`,
+  ];
   if (result.stdout !== "") parts.push(`STDOUT:\n${withCellMarker(result.stdout, result.stdoutTruncated)}`);
   if (result.stderr !== "") parts.push(`STDERR:\n${withCellMarker(result.stderr, result.stderrTruncated)}`);
-  return { kind: "result", output: parts.join("\n"), isError: result.timedOut || result.exitCode !== 0 };
+  return { kind: "result", output: parts.join("\n"), isError: result.statusLost || result.timedOut || result.exitCode !== 0 };
 }
 
 /** define_check's answer: what was recorded and how its immediate red run on main went. */
@@ -405,8 +416,9 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (!args.success) return argsError(toolName, args.error);
       const timeoutSeconds = Math.min(args.data.timeout_seconds ?? context.commandTimeoutSeconds, context.commandTimeoutSeconds);
       const result = await cell.run(args.data.command, timeoutSeconds);
-      // A null exit code means the host backstop killed the podman client: the substrate hung, not the command.
-      if (result.exitCode === null) {
+      // A null exit code without a lost status means the host backstop killed the podman client:
+      // the substrate hung, not the command.
+      if (result.exitCode === null && !result.statusLost) {
         return {
           kind: "environment_failure",
           toolName,

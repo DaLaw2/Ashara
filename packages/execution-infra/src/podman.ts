@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 
 import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
+import { cellLimitsSchema, readCellLimits, runLimitArgs, type CellResourceLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
   CellStartFailed,
@@ -86,8 +87,12 @@ const SWEEP_FUNCTIONS = [
 const ISOLATION_CHECK = 'ashara_stat "/proc/$$" && [ "$ashara_sid" = "$$" ] && [ "$$" != 1 ]';
 
 /**
- * Every exec runs `sh -c EXEC_WRAPPER ashara-exec <grace> <seconds> <argv...>` with podman's
- * --preserve-fds=1, so the host's fourth pipe is fd 3 in the cell. The wrapper runs
+ * Every exec runs `sh -c EXEC_WRAPPER ashara-exec <grace> <seconds>` with podman's
+ * --preserve-fds=1, so the host's fourth pipe is fd 3 in the cell. argv reaches the wrapper
+ * through its environment (ASHARA_ARGC, ASHARA_ARG_<i>), never its own command line: a command
+ * that kills by pattern (`pkill -f`, `kill $(pgrep -f ...)`) matches the command lines of the
+ * processes it finds, and the wrapper's must not carry the command's text (M2 trial M1). The
+ * wrapper rebuilds argv and unsets those variables before argv runs. The wrapper runs
  * `timeout -k <grace> <seconds> argv` with fd 3 closed, sweeps the cell, then writes the
  * command's exit status to fd 3. A command's own status therefore arrives on a channel closed to
  * the command and beyond the output caps, and an exit with no report is podman's or the wrapper's
@@ -102,13 +107,21 @@ const ISOLATION_CHECK = 'ashara_stat "/proc/$$" && [ "$ashara_sid" = "$$" ] && [
  * or group it moved to. A cell's execs are serialized (PodmanCell.exec), so nothing a sweep
  * kills belongs to another live exec: the cell holds only what runs now. A sweep that leaves a
  * process alive reports `unswept <status>`; an exec that is not its own session reports
- * `unisolated` and runs nothing. A missing timeout(1) exits without a report.
+ * `unisolated` and runs nothing; one that cannot run argv (no timeout(1) on the PATH, no argv in
+ * its environment) reports `unrunnable` and runs nothing. A wrapper that dies before it reports,
+ * killed by the command it runs or by the loss of the cell, leaves no report: PodmanCell tells the
+ * two apart by sweeping the cell from a fresh exec.
  */
+const ARGC_VARIABLE = "ASHARA_ARGC";
+const ARG_VARIABLE_PREFIX = "ASHARA_ARG_";
 const EXEC_WRAPPER = [
   ...SWEEP_FUNCTIONS,
   `${ISOLATION_CHECK} || { echo "ashara-exec: the exec is not a session of its own in the cell" >&2; printf 'unisolated\\n' >&3; exit 125; }`,
-  "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; exit 127; }",
-  'k=$1; t=$2; shift 2; timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?',
+  "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; printf 'unrunnable\\n' >&3; exit 127; }",
+  String.raw`case $ASHARA_ARGC in ''|*[!0-9]*|0) echo "ashara-exec: no argv in ASHARA_ARGC" >&2; printf 'unrunnable\n' >&3; exit 125;; esac`,
+  'k=$1; t=$2; set --; ashara_i=0',
+  String.raw`while [ "$ashara_i" -lt "$ASHARA_ARGC" ]; do eval "set -- \"\$@\" \"\$ASHARA_ARG_$ashara_i\"; unset ASHARA_ARG_$ashara_i"; ashara_i=$((ashara_i + 1)); done`,
+  'unset ASHARA_ARGC ashara_i; timeout -k "$k" "$t" "$@" 3>&-; ashara_s=$?',
   "ashara_sweep || { printf 'unswept %s\\n' \"$ashara_s\" >&3; exit \"$ashara_s\"; }",
   "printf '%s\\n' \"$ashara_s\" >&3; exit \"$ashara_s\"",
 ].join("\n");
@@ -125,12 +138,14 @@ const exitStatusSchema = z
 type StatusReport =
   | { readonly kind: "exited"; readonly status: number }
   | { readonly kind: "unswept"; readonly status: number }
-  | { readonly kind: "unisolated" };
+  | { readonly kind: "unisolated" }
+  | { readonly kind: "unrunnable" };
 
-/** The wrapper's one line on fd 3; null when it is none of the three the wrapper writes. */
+/** The wrapper's one line on fd 3; null when it is none of the four the wrapper writes. */
 function parseStatusReport(report: string | null): StatusReport | null {
   if (report === null) return null;
   if (report === "unisolated\n") return { kind: "unisolated" };
+  if (report === "unrunnable\n") return { kind: "unrunnable" };
   const match = /^(unswept )?([^\n]*)\n$/.exec(report);
   if (match === null) return null;
   const status = exitStatusSchema.safeParse(match[2]);
@@ -210,11 +225,20 @@ interface ExecOptions {
 }
 
 export interface ExecResult {
-  /** null only when the host backstop killed the podman client (then timedOut is true). */
+  /**
+   * null when the host backstop killed the podman client (then timedOut is true), or when the
+   * command's status was lost in a cell that stayed healthy (then statusLost is true).
+   */
   readonly exitCode: number | null;
   readonly stdout: string;
   readonly stderr: string;
   readonly timedOut: boolean;
+  /**
+   * The wrapper died before it reported the command's status, and a sweep from a fresh exec then
+   * found the cell answering and left it clean: what killed the wrapper ran in the cell, where only
+   * the command ran. The command's own result, its exit status unknown: exitCode is null.
+   */
+  readonly statusLost: boolean;
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
 }
@@ -243,6 +267,12 @@ export interface PodmanSubstrateOptions {
   readonly runner?: ProcessRunner;
   /** Policy default 1 MiB per stream. */
   readonly maxOutputBytes?: number;
+  /**
+   * The caps every cell and every image build runs under. Absent, they are read from the process
+   * environment (readCellLimits: ASHARA_CELL_MEMORY, ASHARA_CELL_CPUS, ASHARA_CELL_PIDS_LIMIT), and
+   * the constructor throws CellLimitsInvalid when one is unset: there is no limit in code.
+   */
+  readonly limits?: CellResourceLimits;
 }
 
 const podmanInfoSchema = z.object({
@@ -291,7 +321,7 @@ interface CellState {
     | null;
 }
 
-function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState): string[] {
+function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState, limits: CellResourceLimits): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
   // The state is the cell's alone (private label); the gitlink stand-in is every cell's (shared label).
@@ -311,6 +341,7 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: Cel
     "--network=none",
     "--cap-drop=all",
     "--security-opt=no-new-privileges",
+    ...runLimitArgs(limits),
     "--userns=keep-id",
     "--label", `${LABEL_MANAGED}=1`,
     "--label", `${LABEL_INSTANCE}=${spec.instance}`,
@@ -363,10 +394,12 @@ class PodmanCell implements Cell {
     if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
+    const argvEnvironment = [`${ARGC_VARIABLE}=${argv.length}`, ...argv.map((arg, i) => `${ARG_VARIABLE_PREFIX}${i}=${arg}`)];
     const args = [
-      "exec", "-i", "--preserve-fds=1", "-w", workdir, this.id,
+      "exec", "-i", "--preserve-fds=1", "-w", workdir,
+      ...argvEnvironment.flatMap((variable) => ["-e", variable]),
+      this.id,
       "sh", "-c", EXEC_WRAPPER, EXEC_WRAPPER_NAME, String(KILL_GRACE_SECONDS), String(options.timeoutSeconds),
-      ...argv,
     ];
     const startedAt = Date.now();
     let result: ProcessResult;
@@ -384,8 +417,8 @@ class PodmanCell implements Cell {
     if (result.killedByHost) {
       // The podman client hung past every in-cell bound, so the wrapper may never have swept:
       // the cell is swept from a fresh exec before the timeout is reported.
-      await this.sweep(argv);
-      return { ...streams(result), exitCode: null, timedOut: true };
+      await this.sweep(argv, "the host backstop ended the exec");
+      return { ...streams(result), exitCode: null, timedOut: true, statusLost: false };
     }
     if (result.exitCode === null) {
       throw new CellExecFailed(this.id, argv, null, result.stderr, `podman exec ended by signal ${result.signal ?? "unknown"}`);
@@ -395,16 +428,25 @@ class PodmanCell implements Cell {
       throw new CellExecFailed(this.id, argv, exitCode, result.stderr, `stdin was not fully delivered: ${result.stdinError}`);
     }
     if (result.statusReport === "") {
-      // The wrapper never reported: podman exec, a missing sh or timeout(1), or a cell removed
-      // mid-run failed before or while running the command. timeout(1) never ends the wrapper.
-      throw new CellExecFailed(
-        this.id,
-        argv,
-        exitCode,
-        result.stderr,
-        `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command: ` +
-          "podman exec, the wrapper's sh or its timeout(1) failed before or while running it",
-      );
+      // The wrapper never reported: podman exec or the wrapper's sh failed, the cell was lost
+      // mid-run, or the command killed the wrapper (M2 trial M1). Only the last leaves a cell that
+      // answers a fresh exec, whose sweep also ends what the command left that the dead wrapper
+      // never swept. timeout(1) never ends the wrapper.
+      const unreported = `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command`;
+      try {
+        await this.sweep(argv, unreported);
+      } catch (probe) {
+        throw new CellExecFailed(
+          this.id,
+          argv,
+          exitCode,
+          result.stderr,
+          `${unreported}, and the cell then failed its probe: podman exec, the wrapper's sh or the cell itself failed ` +
+            `(${describeErrorChain(probe)})`,
+          { cause: probe },
+        );
+      }
+      return { ...streams(result), exitCode: null, timedOut: false, statusLost: true };
     }
     const report = parseStatusReport(result.statusReport);
     if (report === null) {
@@ -426,6 +468,9 @@ class PodmanCell implements Cell {
           "from the cell's own processes; the command was not run",
       );
     }
+    if (report.kind === "unrunnable") {
+      throw new CellExecFailed(this.id, argv, exitCode, result.stderr, "the in-cell wrapper could not run the command; the command was not run");
+    }
     if (report.kind === "unswept") {
       throw new CellExecFailed(
         this.id,
@@ -445,18 +490,22 @@ class PodmanCell implements Cell {
       );
     }
     if (TIMEOUT_EXITS.has(exitCode) && elapsedMs >= options.timeoutSeconds * 1000) {
-      return { ...streams(result), exitCode, timedOut: true };
+      return { ...streams(result), exitCode, timedOut: true, statusLost: false };
     }
-    return { ...streams(result), exitCode, timedOut: false };
+    return { ...streams(result), exitCode, timedOut: false, statusLost: false };
   }
 
-  /** Kills every process outside the init's session from an exec of its own; throws unless none is left. */
-  private async sweep(argv: readonly string[]): Promise<void> {
+  /**
+   * Kills every process outside the init's session from an exec of its own; throws unless none is
+   * left. It is the cell's health probe too: it passes only in a cell that answers an exec. `why`
+   * names what led to the sweep, for the error.
+   */
+  private async sweep(argv: readonly string[], why: string): Promise<void> {
     let result: ProcessResult;
     try {
       result = await this.substrate.run(["exec", this.id, "sh", "-c", SWEEP_SCRIPT, "ashara-sweep"]);
     } catch (err) {
-      throw new CellExecFailed(this.id, argv, null, "", "the host backstop ended the exec and the cell could not be swept", { cause: err });
+      throw new CellExecFailed(this.id, argv, null, "", `${why}, and the cell could not be swept`, { cause: err });
     }
     if (result.exitCode !== 0) {
       throw new CellExecFailed(
@@ -464,7 +513,7 @@ class PodmanCell implements Cell {
         argv,
         result.exitCode,
         result.stderr,
-        "the host backstop ended the exec and sweeping the cell afterwards failed: what the command started may still run",
+        `${why}, and sweeping the cell afterwards failed: the cell is lost, or what the command started may still run`,
       );
     }
   }
@@ -536,6 +585,7 @@ export class PodmanSubstrate {
   private readonly runner: ProcessRunner;
   private readonly maxOutputBytes: number;
   private readonly mountRoot: string;
+  private readonly limits: CellResourceLimits;
   private readonly cells = new Map<string, PodmanCell>();
   /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
   private readonly unconfirmed = new Set<string>();
@@ -548,7 +598,10 @@ export class PodmanSubstrate {
     const issues: string[] = [];
     if (options.podmanPath === "") issues.push("podmanPath must not be empty");
     if (!isAbsolute(options.mountRoot)) issues.push(`mountRoot must be an absolute path, got ${JSON.stringify(options.mountRoot)}`);
-    if (issues.length > 0) throw new InvalidCellRequest("substrate", issues);
+    const limits = cellLimitsSchema.safeParse(options.limits ?? readCellLimits(process.env));
+    if (!limits.success) issues.push(...issuesOf(limits.error).map((issue) => `limits.${issue}`));
+    if (issues.length > 0 || !limits.success) throw new InvalidCellRequest("substrate", issues);
+    this.limits = limits.data;
     this.podmanPath = options.podmanPath;
     this.mountRoot = options.mountRoot;
     this.runner = options.runner ?? spawnProcess;
@@ -579,6 +632,11 @@ export class PodmanSubstrate {
     }
   }
 
+  /** The caps every container this substrate starts runs under, cells and image builds alike. */
+  resourceLimits(): CellResourceLimits {
+    return this.limits;
+  }
+
   async probeSubstrate(): Promise<SubstrateInfo> {
     const result = await this.run(["info", "--format", "json"]);
     if (result.exitCode !== 0) {
@@ -605,7 +663,7 @@ export class PodmanSubstrate {
     this.starting.add(name);
     try {
       const state = await this.prepareState(parsed.data.instance, name, hostPath, gitEntry);
-      const args = buildRunArgs(parsed.data, name, hostPath, state);
+      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits);
       let result: ProcessResult;
       try {
         result = await this.run(args);
