@@ -302,8 +302,10 @@ interface MergedImage {
  * that changed nothing: passed only when every suite ran every one of its checks and each passed.
  * The details open with each failure, naming its suite and check. Only on a merge is an earlier
  * task's failing check this task's regression; on main the task changed nothing to cause it.
+ *
+ * @testseam execution-service.test.ts shows a check that never ran fails the verdict (c-independent-verify C2)
  */
-function suitesVerdict(
+export function suitesVerdict(
   suites: readonly CheckSuite[],
   runs: readonly SuiteRun[],
   regressionCount: number,
@@ -972,7 +974,6 @@ interface Dispatch {
   /** The worktree's git dir, resolved before the cell existed; never re-read from the work tree. */
   readonly repo: WorkdirInfo["repo"];
   readonly sessionId: string;
-  readonly contract: ProjectContract | null;
   /** What the task cell, the red-run and gate cells and the post-merge verifier cell are started from. */
   readonly environment: DispatchEnvironment;
   readonly work: DispatchWork;
@@ -1332,7 +1333,6 @@ export class DevelopmentService {
       workDir,
       repo,
       sessionId,
-      contract,
       environment,
       work,
     };
@@ -1825,9 +1825,7 @@ export class DevelopmentService {
       };
     }
 
-    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, task.attempt, {
-      entryPointPath: d.contract ? nodeByKind(d.contract.knowledge, "entry_point")?.label ?? null : null,
-    });
+    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, task.attempt);
     if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
       // The merge was aborted and the branch kept: the verifier cell's substrate
       // failed, which is the operator's to fix, not a regression of the tree.

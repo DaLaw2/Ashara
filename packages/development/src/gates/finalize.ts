@@ -9,7 +9,6 @@ import { targetRepo } from "../host-git.js";
 import {
   abortMerge,
   buildMergeAgentBrief,
-  captureMainHead,
   commitMerge,
   mergeInProgress,
   recoverOrphanedMerge,
@@ -18,7 +17,6 @@ import {
   tentativeMerge,
 } from "../merge.js";
 import { ensureTargetGitInit } from "../workspace.js";
-import { checkEntryPointRewrite } from "./entry-point.js";
 
 /**
  * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
@@ -59,10 +57,6 @@ export type FinalizeResult =
        */
       readonly infrastructureFault: VerificationInfrastructureFault | null;
     };
-
-export interface FinalizeContractInfo {
-  readonly entryPointPath: string | null;
-}
 
 /** The post-merge check's verdict on the target checkout holding the tentative merge. */
 export interface PostMergeVerdict {
@@ -210,11 +204,10 @@ export async function finalizeSuccess(
   task: TaskDescriptor,
   targetProjectPath: string,
   attempt: number,
-  contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
   const holder = `finalize of task ${task.id} attempt ${attempt}`;
   try {
-    return await withTargetCheckout(targetProjectPath, holder, (lease) => finalizeHeld(deps, task, targetProjectPath, attempt, contractInfo, lease));
+    return await withTargetCheckout(targetProjectPath, holder, (lease) => finalizeHeld(deps, task, targetProjectPath, attempt, lease));
   } catch (e) {
     if (!(e instanceof CheckoutHolderOverran) || e.waiter !== holder) throw e;
     // Nothing was merged and no check ran: the stuck holder is the operator's, never the task's failure.
@@ -235,14 +228,12 @@ async function finalizeHeld(
   task: TaskDescriptor,
   targetProjectPath: string,
   attempt: number,
-  contractInfo: FinalizeContractInfo,
   lease: CheckoutLease,
 ): Promise<FinalizeResult> {
   await recoverOrphanedMerge(targetProjectPath);
   await ensureTargetGitInit(targetProjectPath);
 
-  // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and
-  // before captureMainHead so the entry-point gate diffs against a clean tree.
+  // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and before the tentative merge.
   // This is also where a checkout an earlier finalize could not restore (TargetCheckoutUnrestored)
   // stays blocked: every finalize restores it first, and none merges until that succeeds.
   const unrestored = await unrestoredReason(targetProjectPath);
@@ -265,7 +256,6 @@ async function finalizeHeld(
     };
   }
 
-  const preMergeHead = await captureMainHead(targetProjectPath);
   const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));
 
   if (mergeResult.status === "conflict") {
@@ -395,29 +385,6 @@ async function finalizeHeld(
         operation: "postMergeDirtyTree",
         gateOutput: `${dirtyFiles.length} tracked file(s) modified by check commands: ${fileList}`,
         gateContext: { taskId: task.id, attempt, dirtyFiles },
-      },
-    );
-  }
-
-  const entryPointCheck = await checkEntryPointRewrite(targetProjectPath, preMergeHead, contractInfo.entryPointPath);
-  deps.eventSink?.emit({
-    event: "entry_point_rewrite_check",
-    taskId: task.id,
-    attempt,
-    passed: entryPointCheck.passed,
-    output: entryPointCheck.output.slice(0, 1000),
-  });
-
-  if (!entryPointCheck.passed) {
-    return abortAndFail(
-      task.id,
-      targetProjectPath,
-      "entry-point-rewrite check FAILED — aborting tentative merge",
-      `Entry-point rewrite check failed:\n${entryPointCheck.output}`,
-      {
-        operation: "entryPointRewriteCheck",
-        gateOutput: entryPointCheck.output,
-        gateContext: { taskId: task.id, attempt },
       },
     );
   }

@@ -564,6 +564,28 @@ describe("post-merge regression suite", () => {
     expect(existsSync(join(target, "BROKEN"))).toBe(false);
   }, 300_000);
 
+  // s-independent-verify-m1 C2: the task's own stored check failing on its merge fails it; Z0 merges nothing.
+  it("a merge on which the task's own stored check fails fails the task, not as a regression; nothing merged", async () => {
+    const sun = await checkedPair("Write sun.txt", { name: "shines", command: "grep sun sun.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result, events } = await runTask(sun.implementation, [
+      toolCallTurn("write_file", { path: "sun.txt", content: "moon\n" }),
+      toolCallTurn("finish", { status: "done", summary: "Wrote sun.txt." }),
+    ]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain('check "shines" FAILED: exited 1');
+    expect(result.detail).not.toContain("REGRESSION");
+    expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed" });
+    expect(events.some((e) => e.event === "task_completed")).toBe(false);
+    if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
+    expect(result.errorEnvelope.chain.operation).toBe("postMergeTaskChecks");
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+    expect(await git("status", "--porcelain")).toBe("");
+    expect(existsSync(join(target, "sun.txt"))).toBe(false);
+  }, 300_000);
+
   it("a merge that passes the environment's test, every earlier task's checks and its own is merged", async () => {
     const wave = await checkedPair("Write wave.txt", { name: "waves", command: "grep wave wave.txt" });
 

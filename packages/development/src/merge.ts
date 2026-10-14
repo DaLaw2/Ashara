@@ -51,16 +51,6 @@ export async function branchExists(targetPath: string, branch: string): Promise<
   }
 }
 
-/** Captures main's HEAD before a tentative merge, for the gates' pre/post diff. */
-export async function captureMainHead(targetPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await runHostGit(targetRepo(targetPath), ["rev-parse", "main"]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 async function getConflictingFiles(targetPath: string): Promise<string[]> {
   try {
     const { stdout } = await runHostGit(targetRepo(targetPath), ["diff", "--name-only", "--diff-filter=U"]);

@@ -44,7 +44,6 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
     // is the product scaffold's build and test on its merge (ADR-074 addendum 2 d74 D).
     case "postMergeTaskChecks":
     case "postMergeScaffold":
-    case "entryPointRewriteCheck":
     // The branch wrote another role's files (a stored check file): the task's own work, retried with the reason.
     case "ownershipGate":
       return "VERIFICATION_GAP";

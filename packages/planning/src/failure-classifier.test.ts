@@ -28,10 +28,6 @@ describe("classifyFailure", () => {
     expect(decision).toMatchObject({ action: "replan", attempt: 2 });
   });
 
-  test("VERIFICATION_GAP — entryPointRewriteCheck operation", () => {
-    expect(classifyFailure(envelope(layer("entryPointRewriteCheck", "check failed")))).toBe("VERIFICATION_GAP");
-  });
-
   test("COMPILATION_ERROR — compilation errors in agent execution", () => {
     const e = envelope(layer("agentExecution", "compilation fails: error 2345"));
     expect(classifyFailure(e)).toBe("COMPILATION_ERROR");
