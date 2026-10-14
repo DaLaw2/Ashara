@@ -22,15 +22,39 @@ interface TaskSpecCore {
 }
 
 /**
+ * The vision items a task traces to (ADR-074 addendum 2 d71 d), as the vision states them: never
+ * empty, since a task that delivers no item of the vision is not planned.
+ */
+interface Traced {
+    readonly visionItems: string[];
+}
+
+/** A decomposed task's specification: what the client asked for that it delivers, and how it is seen done. */
+export type DecomposedTaskSpec = TaskSpecCore & Traced & { readonly origin: "decomposition" };
+
+/**
  * A planned task's specification. It carries no checks: the decomposer does not
  * author them (ADR-074 addendum 2 d63). Each decomposed task has a check task in
  * which the check author writes them; Sprint 0 is checked by the environment substrate.
+ * The plan's review task reads every check task's suite together before any decomposed
+ * task starts (d71 c); its vision items are every item of the vision.
  */
 export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
-    | (TaskSpecCore & { readonly origin: "decomposition" })
+    | DecomposedTaskSpec
     /** `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a). */
-    | (TaskSpecCore & { readonly origin: "check"; readonly checksFor: string });
+    | (TaskSpecCore & Traced & { readonly origin: "check"; readonly checksFor: string })
+    | (TaskSpecCore & Traced & { readonly origin: "review" });
+
+/**
+ * One item of the vision a plan is decomposed from: a scope boundary or an assumption work
+ * proceeds on. `id` is local to one decomposition prompt (S1.., A1..); the item's text is what
+ * the plan records.
+ */
+export interface VisionItem {
+    readonly id: string;
+    readonly text: string;
+}
 
 /**
  * A `dependsOn` entry the model emitted that named no sibling task, was re-asked
@@ -62,6 +86,8 @@ export interface DecompositionInput {
     readonly conventions: string[];
     readonly manifestContext?: string;
     readonly environment: EnvironmentPlanning;
+    /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
+    readonly visionItems: readonly VisionItem[];
 }
 
 export interface PriorEpicResult {
@@ -140,8 +166,56 @@ export const TaskOutputSchema = z.object({
         endState: z.string().trim().min(1),
         scope: z.string().trim().min(1),
         deliverables: z.array(z.string().trim().min(1)).min(1),
+        // The ids (or exact texts) of the vision items the task delivers (ADR-074 addendum 2 d71 d).
+        // Required: an empty list, or an entry naming no item, is the decomposer's semantic rejection.
+        visionItems: z.array(z.string().trim().min(1)),
     })).min(1),
 });
+
+/** Context of {@link UntraceableTaskError}: the task, what it named, and every item it could have named. */
+interface UntraceableTaskContext {
+    readonly taskTitle: string;
+    /** The entries of its `visionItems` that name no vision item; empty when it named none at all. */
+    readonly unknown: readonly string[];
+    readonly availableIds: readonly string[];
+    readonly parentId: string;
+}
+
+/**
+ * A planned task names no vision item it delivers, or names one the vision does not hold (ADR-074
+ * addendum 2 d71 d; fifth run N21: a scaffold task whose behaviour the tender never asked for).
+ * Inside the ladder its message is a re-ask; past it the plan is rejected, never written.
+ */
+export class UntraceableTaskError extends Error {
+    readonly context: UntraceableTaskContext;
+
+    constructor(context: UntraceableTaskContext) {
+        super(
+            context.unknown.length === 0
+                ? `Task "${context.taskTitle}" names no vision item it delivers; every task must name at least one of ` +
+                      `[${context.availableIds.join(", ")}] (decomposition of ${context.parentId})`
+                : `Task "${context.taskTitle}" names ${context.unknown.map((u) => JSON.stringify(u)).join(", ")}, which ` +
+                      `${context.unknown.length === 1 ? "is" : "are"} no vision item; the vision's items are ` +
+                      `[${context.availableIds.join(", ")}] (decomposition of ${context.parentId})`,
+        );
+        this.name = "UntraceableTaskError";
+        this.context = context;
+    }
+}
+
+/**
+ * The vision holds no item a task could trace to (no scope boundary, no assumption): nothing could
+ * be planned without inventing what the client asked for, so no decomposition is attempted.
+ */
+export class VisionItemsMissing extends Error {
+    constructor(readonly epicTitle: string) {
+        super(
+            `the vision of "${epicTitle}" states no scope boundary and no assumption: no task could trace to it, ` +
+                `so nothing is planned`,
+        );
+        this.name = "VisionItemsMissing";
+    }
+}
 
 /**
  * Context carried by {@link UnresolvableDependencyError} (Discipline C): reading

@@ -220,3 +220,150 @@ function reopenableCheckTask(
   if (checkTask.status !== "Completed") return { kind: "refused", why: `check task ${checkTask.id} is ${checkTask.status}, not Completed` };
   return { kind: "reopenable", item: checkTask };
 }
+
+/**
+ * How many times the review of a plan revision's suites may name one check task and have it
+ * reopened (ADR-074 addendum 2 d71 c), as disputes are bounded (d65 c). A review that names it once
+ * more blocks the project for its owner: the check author has not settled the problem that often.
+ */
+const SUITE_REVIEW_BOUND = 2;
+
+/** One problem the review found: the check tasks whose checks it involves, what is wrong, and the evidence. */
+interface SuiteReviewProblem {
+  readonly checkTaskIds: readonly string[];
+  /** Checks no product can pass together, or a check of behaviour no vision item asks for. */
+  readonly kind: "contradiction" | "outside-vision";
+  readonly problem: string;
+  readonly evidence: string;
+}
+
+interface SuiteReviewFindings {
+  readonly problems: readonly SuiteReviewProblem[];
+  /**
+   * Per check task the problems name: how many reviews have named it, this one included (Quality's
+   * durable record, suite_review_findings). Every named check task has an entry.
+   */
+  readonly timesNamed: ReadonlyMap<string, number>;
+}
+
+type SuiteReviewExit =
+  /** Each named check task is reopened (Completed -> Pending) with its problems; the review waits on them at Pending. */
+  | { readonly kind: "reopened"; readonly checkTasks: readonly WorkItem[] }
+  /** A named check task is past the bound: nothing is mutated; the caller blocks the project and returns the review to Pending. */
+  | { readonly kind: "bound"; readonly bound: number; readonly checkTaskId: string; readonly times: number }
+  /** A named check task cannot be reopened: the review is parked at Blocked with a suite_review_unresolved reason. */
+  | { readonly kind: "unreopenable"; readonly why: string };
+
+/** The review's record names a check task without its count: the record the bound is read from lies. */
+class SuiteReviewCountMissing extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly checkTaskId: string,
+  ) {
+    super(`review task ${reviewTaskId}: the findings name check task ${checkTaskId}, but no count of reviews naming it was recorded`);
+    this.name = "SuiteReviewCountMissing";
+  }
+}
+
+/** The review's problems name no check task: there is nothing to send them back to, and no problem to wait on. */
+class SuiteReviewNamesNoCheckTask extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly problems: number,
+  ) {
+    super(`review task ${reviewTaskId}: ${problems} problem(s) were found, but they name no check task`);
+    this.name = "SuiteReviewNamesNoCheckTask";
+  }
+}
+
+/** The check task named by every problem, once each, in the order the problems name them. */
+function namedCheckTasks(problems: readonly SuiteReviewProblem[]): string[] {
+  return [...new Set(problems.flatMap((problem) => problem.checkTaskIds))];
+}
+
+/** The review's problems as the check author reads them in its reopened task's brief. */
+function reviewBrief(checkTaskId: string, problems: readonly SuiteReviewProblem[]): string {
+  const own = problems.filter((problem) => problem.checkTaskIds.includes(checkTaskId));
+  return [
+    `A review of every check this plan's check tasks wrote, read together with the vision before any of the work ` +
+      `started, found problems with the checks this task recorded. Define the task's checks again so that none of ` +
+      `these remains: checks that no product could pass together with the other checks named, or that test behaviour ` +
+      `no vision item of the task asks for. Keep every check that is not part of a problem.`,
+    ...own.map((problem, i) => {
+      const others = problem.checkTaskIds.filter((id) => id !== checkTaskId);
+      return [
+        `Problem ${i + 1} (${problem.kind === "contradiction" ? "checks that contradict each other" : "a check outside the vision"}): ${problem.problem}`,
+        others.length > 0 ? `It also involves the checks of check task(s) ${others.join(", ")}.` : "",
+        `Evidence: ${problem.evidence}`,
+      ]
+        .filter((line) => line !== "")
+        .join("\n");
+    }),
+  ].join("\n\n");
+}
+
+/**
+ * The exit of an InProgress review task whose review found problems. Past the bound for any named
+ * check task, nothing is mutated and the caller blocks the project; when a named check task cannot
+ * be reopened (missing, not a Completed check task, deciding no task) the review is parked at
+ * Blocked; otherwise every named check task is reopened with its problems in its brief and the
+ * review returns to Pending, where its dependencies on them hold it until they complete again and
+ * it reviews the new suites. Mutates `review` and, on "reopened", each check task; the caller saves
+ * the check tasks first, so the review is never left waiting on a check task that stayed Completed.
+ */
+export function exitSuiteReview(
+  review: WorkItem,
+  checkTasks: ReadonlyMap<string, WorkItem | null>,
+  findings: SuiteReviewFindings,
+): SuiteReviewExit {
+  if (review.status !== "InProgress" || !canTransitionTo(review.status, "Pending")) {
+    throw new InvalidStatusTransition(review.id, review.status, "Pending");
+  }
+  const named = namedCheckTasks(findings.problems);
+  if (named.length === 0) throw new SuiteReviewNamesNoCheckTask(review.id, findings.problems.length);
+  for (const checkTaskId of named) {
+    const times = findings.timesNamed.get(checkTaskId);
+    if (times === undefined) throw new SuiteReviewCountMissing(review.id, checkTaskId);
+    if (times > SUITE_REVIEW_BOUND) return { kind: "bound", bound: SUITE_REVIEW_BOUND, checkTaskId, times };
+  }
+  const reopenable: Array<{ readonly item: WorkItem; readonly checkedTaskId: string }> = [];
+  const refused: string[] = [];
+  for (const checkTaskId of named) {
+    const found = reopenableCheckTask(checkTasks.get(checkTaskId) ?? null, checkTaskId);
+    if (found.kind === "refused") refused.push(found.why);
+    else if (found.item.taskSpec?.checksFor === undefined) refused.push(`check task ${checkTaskId} decides no implementation task (task_spec.checksFor)`);
+    else reopenable.push({ item: found.item, checkedTaskId: found.item.taskSpec.checksFor });
+  }
+  const problemsText = findings.problems.map((p) => `- [${p.checkTaskIds.join(", ")}] ${p.problem} (evidence: ${p.evidence})`).join("\n");
+  if (refused.length > 0) {
+    const why = refused.join("; ");
+    blockWorkItem(review, {
+      source: "suite_review_unresolved",
+      checkTaskIds: named,
+      reason: `the review of the plan's checks found problems:\n${problemsText}\nThey cannot be sent back to their check tasks: ${why}`,
+    });
+    return { kind: "unreopenable", why };
+  }
+  for (const { item, checkedTaskId } of reopenable) {
+    const times = findings.timesNamed.get(item.id);
+    reopenCheckTask(
+      item,
+      checkedTaskId,
+      reviewBrief(item.id, findings.problems),
+      { reviewTaskId: review.id, reviewed: times },
+      { review_task_id: review.id, review: times },
+    );
+  }
+  review.status = "Pending";
+  review.blockedReason = undefined;
+  review.updatedAt = new Date();
+  review.events.push(
+    createDomainEvent("work_item.awaiting_checks", "planning", {
+      work_item_id: review.id,
+      level: review.level,
+      check_task_ids: named,
+      review_problems: findings.problems.length,
+    }),
+  );
+  return { kind: "reopened", checkTasks: reopenable.map(({ item }) => item) };
+}

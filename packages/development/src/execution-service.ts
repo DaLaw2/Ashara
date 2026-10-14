@@ -12,7 +12,8 @@ import {
   environmentVersion,
   readEnvironmentDefinition,
 } from "@ashara/execution-infra";
-import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/llm-gateway";
+import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -79,6 +80,7 @@ import {
 import type { WorkdirInfo } from "./workspace.js";
 import { branchExists, discardTaskBranch, taskBranchName } from "./merge.js";
 import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
+import type { SuiteReviewing } from "./suite-review.js";
 import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
 async function pathExists(path: string): Promise<boolean> {
@@ -324,6 +326,14 @@ function suitesVerdict(
     head.push("This task's merge breaks checks of a task already merged: the regression is this task's, and nothing was merged.");
   }
   return { passed: false, details: [...head, "", ...sections].join("\n") };
+}
+
+/** The PreCallRefusal anywhere in the error's cause chain, or null when no model call was refused. */
+function preCallRefusalOf(e: unknown): PreCallRefusal | null {
+  for (let current: unknown = e; current instanceof Error; current = current.cause) {
+    if (current instanceof PreCallRefusal) return current;
+  }
+  return null;
 }
 
 function failedBeforeAgent(task: DispatchRef, sessionId: string, operation: string, e: unknown, summary: string): ExecutionResult {
@@ -647,7 +657,8 @@ interface RefusedResult {
   readonly status: "refused";
   readonly refusal: PreCallRefusal;
   readonly detail: string;
-  readonly output: AgentOutputJson;
+  /** null for a review of a plan's suites, whose one structured call ran without an agent. */
+  readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -755,9 +766,33 @@ interface OwnerUnresolvedResult {
   readonly errorEnvelope: ErrorEnvelope;
 }
 
+/**
+ * The review of a plan revision's suites (ADR-074 addendum 2 d71 c) found problems: checks no
+ * product can pass together, or checks of behaviour no vision item asks for. Its schema validated
+ * and every check task it names is one whose suite it read. Not the review's failure and no lesson:
+ * the orchestrator records the findings, reopens each named check task with them (bounded per check
+ * task) and returns the review to Pending to read the new suites, never routing it through the
+ * FailureRouter.
+ */
+interface SuiteReviewProblemsResult {
+  readonly status: "suite_review_problems";
+  readonly problems: ReadonlyArray<{
+    readonly checkTaskIds: readonly string[];
+    readonly kind: "contradiction" | "outside-vision";
+    readonly problem: string;
+    readonly evidence: string;
+  }>;
+  readonly detail: string;
+  readonly output: null;
+  readonly sessionId: string;
+  readonly attempt: number;
+  readonly errorEnvelope: ErrorEnvelope;
+}
+
 export type ExecutionResult =
   | AgentExecutionResult
   | CompletedResult
+  | SuiteReviewProblemsResult
   | EnvironmentBlockedResult
   | EnvironmentUndefinedResult
   | RefusedResult
@@ -792,13 +827,15 @@ type Delivery =
    * main (ADR-074 addendum 2 d67 b): `mainCommit` is main when they ran, the delivering commit.
    */
   | { readonly kind: "already-delivered"; readonly mainCommit: string }
-  | { readonly kind: "checks-recorded"; readonly revision: number };
+  | { readonly kind: "checks-recorded"; readonly revision: number }
+  /** A review of the plan's suites that found no problem in the suites of `reviewed` check tasks. */
+  | { readonly kind: "suites-reviewed"; readonly reviewed: readonly string[] };
 
 interface CompletedResult {
   readonly status: "completed";
   readonly delivered: Delivery;
   readonly detail: string;
-  /** null only for work found already delivered before any model was called. */
+  /** null for work found already delivered before any model was called, and for a review of the plan's suites (no agent). */
   readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   readonly attempt: number;
@@ -890,6 +927,12 @@ export interface DevelopmentServiceDeps {
    * an implementation task is decided by them. Required: no task is verified without them.
    */
   readonly checks: TaskCheckStore;
+  /**
+   * Quality's review of a plan revision's suites (ADR-074 addendum 2 d71 c): a review task is
+   * dispatched to it, never to an agent, so it runs no cell. Required: no implementation is released
+   * without it.
+   */
+  readonly suiteReview: SuiteReviewing;
   /** Aborted on shutdown: an attempt in flight ends as cancelled. */
   readonly shutdownSignal: AbortSignal;
 }
@@ -929,6 +972,10 @@ export class DevelopmentService {
       goal: task.taskSpec?.goal ?? task.title,
       model: task.taskSpec?.capability ?? "Strong",
     });
+
+    // A review of the plan's suites reads stored checks and the vision in one structured call: no
+    // substrate, environment, worktree or cell is involved, so none is probed.
+    if (task.taskSpec?.origin === "review") return this.reviewSuites(task, sessionId);
 
     // First, before the contract, the brief (which may call an LLM) or the
     // worktree: a substrate that cannot host the task blocks it here, so no
@@ -1201,6 +1248,68 @@ export class DevelopmentService {
     } finally {
       await this.teardownCell(task.id, cell);
     }
+  }
+
+  /**
+   * The review of the plan revision's suites (ADR-074 addendum 2 d71 c). Clean only once the model's
+   * verdict validated against its schema and names only suites it read: the plan's implementations
+   * are released by completing it. Problems are returned for the orchestrator to route. A refused
+   * model call is a refusal like an agent's; any other error, an unreadable suite or a verdict that
+   * never validated included, fails the review, so nothing is released on it.
+   */
+  private async reviewSuites(task: TaskDescriptor, sessionId: string): Promise<ExecutionResult> {
+    const { eventSink } = this.deps;
+    let outcome: Awaited<ReturnType<SuiteReviewing["review"]>>;
+    try {
+      outcome = await this.deps.suiteReview.review(task);
+    } catch (e) {
+      const refusal = preCallRefusalOf(e);
+      if (refusal !== null) {
+        const summary = `the review of the plan's checks for ${task.id} stopped at a refused model call: ${refusal.message}; nothing was reviewed`;
+        return {
+          status: "refused",
+          refusal,
+          detail: summary,
+          output: null,
+          sessionId,
+          attempt: task.attempt,
+          errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
+        };
+      }
+      const result = failedBeforeAgent(task, sessionId, "reviewSuites", e, `the review of the plan's checks for ${task.id} gave no verdict`);
+      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
+    }
+    const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
+    if (outcome.kind === "clean") {
+      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem${setAside}`;
+      eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside });
+      return {
+        status: "completed",
+        delivered: { kind: "suites-reviewed", reviewed: outcome.reviewed },
+        detail,
+        output: null,
+        sessionId,
+        attempt: task.attempt,
+      };
+    }
+    const named = [...new Set(outcome.problems.flatMap((problem) => problem.checkTaskIds))];
+    const summary =
+      `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found ` +
+      `${outcome.problems.length} problem(s) in the checks of ${named.join(", ")}${setAside}:\n` +
+      outcome.problems.map((p) => `- [${p.kind}; ${p.checkTaskIds.join(", ")}] ${p.problem}`).join("\n");
+    console.warn(`[${task.id}] ${summary}`);
+    eventSink?.emit({ event: "suite_review_problems", taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length });
+    return {
+      status: "suite_review_problems",
+      problems: outcome.problems,
+      detail: summary,
+      output: null,
+      sessionId,
+      attempt: task.attempt,
+      errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", summary, { taskId: task.id, checkTasks: named }) },
+    };
   }
 
   /** A failed teardown is logged at warn with its typed context; the substrate keeps the cell for teardownAll and reconcileOrphans. */

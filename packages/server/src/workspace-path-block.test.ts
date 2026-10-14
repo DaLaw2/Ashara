@@ -143,6 +143,7 @@ describe("a project whose workspace path is refused", () => {
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
       checks: { checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), storedOfProject: notExercised("storedOfProject"), append: notExercised("append"), latest: notExercised("latest") },
+      suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
     });
 
@@ -171,6 +172,8 @@ describe("a project whose workspace path is refused", () => {
       planReports: { runPending: async () => [] },
       checkDisputes: { record: notExercised("checkDisputes") },
       disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+      suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+      suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
       blockReports: { runPending: async () => [] },
       parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
       environmentOwner: notExercised("environmentOwner"),

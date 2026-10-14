@@ -568,6 +568,28 @@ export const checkDisputes = pgTable("check_disputes", {
 });
 
 // ---------------------------------------------------------------------------
+// suite_review_findings (migration 044, Quality): one row per check task a review of a plan
+// revision's suites named, with the problems naming it, append-only. Their count per check task
+// bounds how often that check task is reopened for a review. problems is jsonb, parsed by the
+// repository.
+// ---------------------------------------------------------------------------
+
+export const suiteReviewFindings = pgTable("suite_review_findings", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id),
+  reviewTaskId: uuid("review_task_id")
+    .notNull()
+    .references(() => workItems.id),
+  checkTaskId: uuid("check_task_id")
+    .notNull()
+    .references(() => workItems.id),
+  problems: jsonb().notNull(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // project_blocks (migration 040): one row per time a project entered 'blocked',
 // opened and ended by the projects_block_episode trigger and the operator's unblock.
 // ---------------------------------------------------------------------------

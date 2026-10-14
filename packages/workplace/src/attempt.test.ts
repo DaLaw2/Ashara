@@ -648,13 +648,21 @@ describe("define_check", () => {
   });
 
   // Fourth run N15: date and amount checks covered only accepted inputs, so a looser parser passed them.
-  it("asks the check author for a check of every assumption the task touches, rejected inputs included", () => {
+  it("asks the check author for a check of every assumption among the task's items, rejected inputs included", () => {
     const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("Check every assumption the task touches");
+    expect(prompt).toContain("Check every assumption among those items");
     expect(prompt).toContain("write a check that gives that input and requires it to be refused");
     expect(prompt).toContain("## Assumptions work proceeds on");
     expect(prompt).toContain("That task has not started: what it");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Check every assumption the task touches");
+    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Check every assumption among those items");
+  });
+
+  // Fifth run N21: a check fixed a column count on stdout the tender never asked for (ADR-074 addendum 2 d71 d).
+  it("tells the check author its checks may test only the vision items its task delivers", () => {
+    const prompt = buildSystemPrompt(assignment().brief, "check");
+    expect(prompt).toContain("Your checks may test only the vision items the task delivers");
+    expect(prompt).toContain("and the inputs those items say the product must reject");
+    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("may test only the vision items");
   });
 
   it("an operator's unblock note reaches the next attempt's prompt, and only when there is one (third run N11)", () => {

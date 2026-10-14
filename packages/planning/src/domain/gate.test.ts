@@ -106,6 +106,56 @@ describe("GateKeeper.filterAvailable", () => {
     expect(store.get(own.id)?.blockedReason).toMatchObject({ source: "dependency_unsatisfiable", blockedBy: [check.id] });
   });
 
+  // ADR-074 addendum 2 d71 c: the plan's review runs after its last check task, before any implementation.
+  test("implementations wait on the plan's review, which waits on every check task; a clean review releases them", async () => {
+    const own = task("Pending", "implement the checked task");
+    const other = task("Pending", "implement another task");
+    const checkA = { ...task("Completed", "write checks a"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: own.id } };
+    const checkB = { ...task("Pending", "write checks b"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: other.id } };
+    const review = { ...task("Pending", "review the checks"), workKind: "check" as const, taskSpec: { origin: "review" as const } };
+    const edges = [
+      { fromId: review.id, toId: checkA.id },
+      { fromId: review.id, toId: checkB.id },
+      ...[own, other].flatMap((impl) => [
+        { fromId: impl.id, toId: checkA.id },
+        { fromId: impl.id, toId: checkB.id },
+        { fromId: impl.id, toId: review.id },
+      ]),
+    ];
+    const { repo, store } = repoOf([checkA, checkB, review, own, other], edges);
+    const { events } = publisher();
+
+    // A check task still to run: only it is dispatched.
+    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([checkB.id]);
+
+    // Every check task done: only the review is dispatched, not one implementation.
+    store.set(checkB.id, { ...checkB, status: "Completed" });
+    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
+
+    // The review completed: the implementations are released.
+    store.set(review.id, { ...review, status: "Completed" });
+    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id).sort()).toEqual([own.id, other.id].sort());
+  });
+
+  test("an Abandoned check task does not hold the review, which reads the other suites; its own task is parked", async () => {
+    const own = task("Pending", "implement the checked task");
+    const checkA = { ...task("Abandoned", "write checks a"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: own.id } };
+    const checkB = { ...task("Completed", "write checks b"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: "other" } };
+    const review = { ...task("Pending", "review the checks"), workKind: "check" as const, taskSpec: { origin: "review" as const } };
+    const { repo } = repoOf(
+      [checkA, checkB, review, own],
+      [
+        { fromId: review.id, toId: checkA.id },
+        { fromId: review.id, toId: checkB.id },
+        { fromId: own.id, toId: checkA.id },
+        { fromId: own.id, toId: review.id },
+      ],
+    );
+    const { events } = publisher();
+
+    expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id)).toEqual([review.id]);
+  });
+
   test("a Pending task waiting on a check task still in flight waits, unsaved", async () => {
     const check = { ...task("Pending", "write checks"), workKind: "check" as const };
     const impl = task("Pending", "implement");

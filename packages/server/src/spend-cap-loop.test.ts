@@ -118,6 +118,8 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     planReports: { runPending: async () => [] },
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+    suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
     blockReports: { runPending: async () => [] },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     environmentOwner: notExercised("environmentOwner"),
@@ -292,6 +294,7 @@ describe("a turn refused at the project's spend cap", () => {
         append: notExercised("append"),
         latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), checks: [{ name: "noop", command: "true" }], files: [] }),
       },
+      suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
     });
 

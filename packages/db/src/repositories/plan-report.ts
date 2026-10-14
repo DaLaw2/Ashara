@@ -26,6 +26,8 @@ interface TaskCounts {
   readonly sprint0: number;
   /** The check task decomposition adds for each task it produced. */
   readonly checks: number;
+  /** The review of every check of the plan, read together before any of its work starts (ADR-074 addendum 2 d71 c). */
+  readonly reviews: number;
   /** Tasks whose task_spec records no origin (written before origin was recorded). */
   readonly unrecorded: number;
 }
@@ -128,6 +130,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
         decomposition: origins.filter((o) => o === "decomposition").length,
         sprint0: origins.filter((o) => o === "sprint0").length,
         checks: origins.filter((o) => o === "check").length,
+        reviews: origins.filter((o) => o === "review").length,
         unrecorded: origins.filter((o) => o === undefined).length,
       },
       droppedOrderingHints: dropped,

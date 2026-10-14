@@ -3,7 +3,7 @@ import { SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
-import { FirstPlanner } from "./first-plan.js";
+import { FirstPlanner, visionItemsOf } from "./first-plan.js";
 import type { FirstPlanStore } from "./first-plan.js";
 
 function roleRow(roleId: string, name: string, capabilities: string[]) {
@@ -17,14 +17,20 @@ const ROSTER_ROWS = [
   roleRow("00000000-0000-4000-8000-0000000000a4", "Check author", ["author-checks"]),
 ];
 
-function awaiting(projectId: ProjectId, planLastError: string | null, planAttempts = 3, rosterRows: unknown = ROSTER_ROWS) {
+function awaiting(
+  projectId: ProjectId,
+  planLastError: string | null,
+  planAttempts = 3,
+  rosterRows: unknown = ROSTER_ROWS,
+  scopeBoundaries: unknown = ["In: booking a class"],
+) {
   return {
     projectId,
     projectName: "Studio booking",
     visionVersion: 1,
     visionText: "A booking page.",
     summary: "A booking page.",
-    scopeBoundaries: [],
+    scopeBoundaries,
     inferences: [],
     planAttempts,
     planLastError,
@@ -107,5 +113,46 @@ describe("FirstPlanner decomposition ladder", () => {
 
     expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
     expect(capabilities).toEqual(["Strong", "Strong", "Frontier", "Frontier"]);
+  });
+});
+
+describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
+  test("each scope boundary and each assumption is an item; a Stated one by the decision the answer made", () => {
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000024", "test");
+    const items = visionItemsOf({
+      projectId,
+      visionVersion: 2,
+      summary: "A booking page.",
+      scopeBoundaries: ["In: booking", "Out: payments"],
+      inferences: [
+        { statement: "Classes hold twenty", status: "Inferred" },
+        { statement: "Bookings close an hour before", status: "Stated", clientAnswer: { question: "When?", answer: "An hour before" } },
+      ],
+    });
+
+    expect(items).toEqual([
+      { id: "S1", text: "In: booking" },
+      { id: "S2", text: "Out: payments" },
+      { id: "A1", text: "Classes hold twenty" },
+      { id: "A2", text: "Bookings close an hour before" },
+    ]);
+  });
+
+  test("a vision with no item fails the plan attempt before any model call", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
+    const errors: string[] = [];
+    const store: FirstPlanStore = {
+      ...storeWith([awaiting(projectId, null, 0, ROSTER_ROWS, [])], []),
+      recordFailedAttempt: async (_projectId, error) => {
+        errors.push(error);
+        return 1;
+      },
+    };
+
+    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["failed"]);
+    expect(errors[0]).toMatch(/^VisionItemsMissing: /);
   });
 });

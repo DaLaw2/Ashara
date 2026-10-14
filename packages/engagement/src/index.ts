@@ -7,7 +7,7 @@ export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
 export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
 export { BlockReports } from "./block-report.js";
-export type { BlockReportStore, LiaisonBlockReports, LiaisonCheckDisputes } from "./block-report.js";
+export type { BlockReportStore, LiaisonBlockReports, LiaisonCheckDisputes, LiaisonSuiteReviews } from "./block-report.js";
 export { StackChoiceReports } from "./stack-choice.js";
 export type { LiaisonStackChoices, StackChoiceStore } from "./stack-choice.js";
 export {

@@ -10,7 +10,7 @@ import type { DecompositionInput, DecompositionResult, EnvironmentPlanning } fro
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
 import type { FirstPlanWrite } from "./first-plan.js";
-import { northStarOf, planOwners, toWrite } from "./first-plan.js";
+import { northStarOf, planOwners, toWrite, visionItemsOf } from "./first-plan.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
@@ -347,7 +347,7 @@ export class Replanner implements Replanning {
       kind: "revised",
       projectId,
       revision: write.revision,
-      tasks: write.summary.newTasks.length + write.summary.newCheckTasks + (write.summary.newEnvironmentTask ? 1 : 0),
+      tasks: write.plan.items.filter((item) => item.level === "Task").length,
       superseded: write.summary.supersededTasks.length + write.summary.supersededOther,
       newEnvironment: write.summary.newEnvironmentTask,
     };
@@ -415,6 +415,8 @@ export class Replanner implements Replanning {
               },
             ],
       environment,
+      // The same rule as a first plan (ADR-074 addendum 2 d71 d): every new task traces to the current vision.
+      visionItems: visionItemsOf(project),
     };
     return new DecompositionEngine(llm).decompose(input);
   }

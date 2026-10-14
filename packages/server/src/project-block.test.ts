@@ -49,6 +49,8 @@ interface TaskRow {
 const SPRINT0: TaskRow = { taskSpec: { origin: "sprint0", checkedBy: "substrate" } };
 /** The check task a reportable first plan holds for each decomposed task. */
 const CHECKS: TaskRow = { taskSpec: { origin: "check" } };
+/** The review of every check task a reportable first plan holds (ADR-074 addendum 2 d71 c). */
+const REVIEW: TaskRow = { taskSpec: { origin: "review" } };
 
 const jsonb = (value: unknown) => (value === undefined ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`);
 
@@ -153,7 +155,7 @@ afterAll(async () => {
 
 describe("one project's bad record in a cycle", () => {
   test("an unfounded first plan blocks only its project; the healthy project is reported and gated in the same cycle", async () => {
-    const healthy = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }, CHECKS, SPRINT0], true);
+    const healthy = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }, CHECKS, SPRINT0, REVIEW], true);
     // A task with no recorded origin: the Liaison cannot report the plan truthfully.
     const bad = await projectWith(db, [{ taskSpec: { goal: "Set up the studio list." } }, SPRINT0], true);
 
@@ -207,7 +209,7 @@ describe("one project's bad record in a cycle", () => {
 
   test("a corrupt row in a planned project blocks it at reporting instead of failing every project's reports", async () => {
     await inRolledBackTransaction(async (tx) => {
-      const founded = await projectWith(tx, [{ taskSpec: { origin: "decomposition" } }, CHECKS, SPRINT0], true);
+      const founded = await projectWith(tx, [{ taskSpec: { origin: "decomposition" } }, CHECKS, SPRINT0, REVIEW], true);
       const corrupt = await projectWith(tx, [{ taskSpec: { origin: "decomposition" }, successCriteria: "not a list" }], true);
 
       const outcomes = await reports(tx).runPending();

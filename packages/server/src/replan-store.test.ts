@@ -104,7 +104,7 @@ const FIRST_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [],
-      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: ["harbour booking"],
+      endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: ["harbour booking"], visionItems: ["S1"],
     },
   ],
 };
@@ -112,7 +112,7 @@ const REVISED_TASKS = {
   tasks: [
     {
       ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [],
-      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: ["hill booking"],
+      endState: "Hill classes can be booked", scope: "hill bookings", deliverables: ["hill booking"], visionItems: ["S1"],
     },
   ],
 };
@@ -334,7 +334,7 @@ describe("a late client change is planned", () => {
     const mock = pipelineModel({ environmentChange: false });
     const outcomes = await replanner().runPending();
 
-    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, tasks: 2, superseded: 1, newEnvironment: false }]);
+    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, tasks: 3, superseded: 2, newEnvironment: false }]);
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("Already done, and kept") && p.includes(`merged as ${MERGE_COMMIT}`))).toBe(true);
 
@@ -357,6 +357,7 @@ describe("a late client change is planned", () => {
       ["Epic", null, expect.any(String)],
       ["Task", "check", `Write the checks for "Open hill studio bookings"`],
       ["Task", "decomposition", "Open hill studio bookings"],
+      ["Task", "review", "Review the plan's checks together against the vision"],
     ]);
     // No new environment task: the new work builds on the Sprint 0 already done.
     for (const task of added.filter((i) => i.level === "Task")) expect(await dependenciesOf(task.id)).toContain(sprint0.id);

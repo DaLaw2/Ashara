@@ -143,6 +143,20 @@ const checkDisputedSchema = z.object({
 });
 
 /**
+ * The review of a plan revision's check suites (ADR-074 addendum 2 d71 c) found problems, and a
+ * check task it named cannot be reopened to answer them (it is not a Completed check task deciding
+ * one implementation task). Written only on the review task, then; reopenable check tasks are
+ * reopened instead and the review waits on them at Pending. `checkTaskIds` names every check task
+ * the review named; `reason` carries the problems and why no reopen was possible.
+ */
+const suiteReviewUnresolvedSchema = z.object({
+  source: z.literal("suite_review_unresolved"),
+  checkTaskIds: z.array(z.string().min(1)).min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task cannot be staffed: it has no owner role, or its owner is not a role of the project's
  * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
  * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
@@ -237,6 +251,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   ownerUnresolvedSchema,
   checksRewriteBoundSchema,
   checkDisputedSchema,
+  suiteReviewUnresolvedSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   supersededSchema,
@@ -301,6 +316,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "owner_unresolved":
     case "checks_rewrite_bound":
     case "check_disputed":
+    case "suite_review_unresolved":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "superseded":
@@ -345,6 +361,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "environment_change_needed":
     case "checks_rewrite_bound":
     case "check_disputed":
+    case "suite_review_unresolved":
     case "dependency_unsatisfiable":
     case "api":
     case "task_failed":

@@ -151,6 +151,17 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       errorEnvelope: { outcome: "blocked", summary: "no owner", chain: wrapError("development", "assignAgent", "no owner") },
     };
   }
+  if (status === "suite_review_problems") {
+    return {
+      status,
+      problems: [{ checkTaskIds: ["check-task"], kind: "contradiction", problem: "p", evidence: "e" }],
+      detail: `${status} detail`,
+      output: null,
+      sessionId: "s",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: "review", chain: wrapError("development", "reviewSuites", "review") },
+    };
+  }
   if (status === "completed") {
     return {
       status,
@@ -391,6 +402,11 @@ function serviceOn(
       },
     },
     checks: typeof checks === "function" ? checks(probe) : checks,
+    suiteReview: {
+      review: async () => {
+        throw new Error("no suite review may run in these dispatches");
+      },
+    },
     shutdownSignal,
   });
   return { service, probe, events };
@@ -884,7 +900,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     if (result.status !== "refused") return;
     expect(result.refusal).toBe(refusal);
     expect(result.detail).toContain("turn 2");
-    expect(result.output.status).toBe("blocked");
+    expect(result.output?.status).toBe("blocked");
     expect(probe.modelCalls).toBe(2);
     expect(probe.findings).toBe(0);
     expect(events.filter((e) => e.event === "task_refused")).toEqual([expect.objectContaining({ errorClass: "PreCallRefusal" })]);

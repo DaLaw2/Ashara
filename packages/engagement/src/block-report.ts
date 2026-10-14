@@ -7,9 +7,10 @@ import type { BlockedExit, ProjectBlockCause, ProjectId, StoredBlockedReason } f
 // error class, no component name, no stored reason text. Reports are read from recorded block
 // episodes, so a block written before a crash is still reported after the restart; the store
 // posts each at most once. A project blocked because its check disputes passed their bound
-// (ADR-074 addendum 2 d65 c) is one of these blocks: its report names the disputed check.
+// (ADR-074 addendum 2 d65 c) is one of these blocks: its report names the disputed check. So is a
+// project blocked because the review of a plan's checks kept finding problems in them (d71 c).
 
-/** What paused a project, as recorded on its block episode; a check dispute's block carries its own. */
+/** What paused a project, as recorded on its block episode; a check dispute's and a suite review's block carry their own. */
 type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound";
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it. */
@@ -21,9 +22,24 @@ interface BlockingDispute {
   readonly disputes: number;
 }
 
+/** The review that passed its bound, as recorded when the project was blocked on it. */
+interface BlockingReview {
+  /** How many reviews had named the check task past the bound when the project was blocked. */
+  readonly times: number;
+  /** What the last review found, as it stated each problem. */
+  readonly problems: readonly string[];
+}
+
 /** A recorded block, resumption or task block the client has not been told about. */
 type DueBlockReport =
   | { readonly subject: "project-blocked"; readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: "suite_review";
+      readonly review: BlockingReview;
+    }
   | {
       readonly subject: "project-blocked";
       readonly episodeId: string;
@@ -90,6 +106,39 @@ export interface LiaisonCheckDisputes {
   blockOnDisputes(bound: DisputeBound): Promise<"blocked" | "already-blocked">;
 }
 
+/** A review of a plan's suites that named one check task past its bound, as Delivery hands it to the Liaison. */
+interface SuiteReviewBound {
+  readonly projectId: ProjectId;
+  readonly reviewTaskId: string;
+  readonly checkTaskId: string;
+  /** Reviews that have named the check task, this one included. */
+  readonly times: number;
+  readonly bound: number;
+  /** The problems this review found, as it stated them. */
+  readonly problems: readonly string[];
+}
+
+/**
+ * What the core loop asks of the Liaison when the review of a plan's suites names one check task
+ * past its bound (ADR-074 addendum 2 d71 c): nothing in the team settles the checks, so the project
+ * is blocked for its owner. Its one report is posted by runPending, from the record.
+ */
+export interface LiaisonSuiteReviews {
+  blockOnSuiteReview(bound: SuiteReviewBound): Promise<"blocked" | "already-blocked">;
+}
+
+/** The project's cause on record: the review task, the check task past its bound, and what was found. */
+class SuiteReviewBoundReached extends Error {
+  constructor(readonly bound: SuiteReviewBound) {
+    super(
+      `review task ${bound.reviewTaskId} named check task ${bound.checkTaskId} in ${bound.times} review(s), past the ` +
+        `bound of ${bound.bound}; it is not reopened again. The review found:\n` +
+        bound.problems.map((problem) => `- ${problem}`).join("\n"),
+    );
+    this.name = "SuiteReviewBoundReached";
+  }
+}
+
 /** The project's cause on record: which check task, how often, and the last dispute. */
 class CheckDisputeBoundReached extends Error {
   constructor(readonly bound: DisputeBound) {
@@ -147,6 +196,18 @@ function disputeBoundReport(dispute: BlockingDispute): string {
   ].join("\n\n");
 }
 
+/** Plain words: what stopped, what the review found, and what the client can do. */
+function suiteReviewBoundReport(review: BlockingReview): string {
+  return [
+    `Work on this project is paused. Before building starts, the team reviews all the checks written to confirm the ` +
+      `work, together with what you asked for. The review keeps finding checks that cannot all be passed at once, or ` +
+      `that test something you did not ask for, and the team has not been able to settle this after ${review.times} reviews.`,
+    `What the last review found:\n${review.problems.map((problem) => `- ${problem}`).join("\n")}`,
+    `Nothing will be built until this is resolved. If you can say what the product should do in these cases, send a ` +
+      `change describing it: the team takes it in when work resumes, and you will be told when it does.`,
+  ].join("\n\n");
+}
+
 function projectResumedReport(): string {
   return "Work on this project has resumed: the team cleared what paused it, and the work goes on from where it stopped.";
 }
@@ -164,6 +225,8 @@ function taskCause(reason: StoredBlockedReason | undefined): string {
       return "the checks that decide whether it is done no longer hold on the project's current build and test environment";
     case "check_disputed":
       return "its developer found that one of the checks written to confirm it cannot be passed by correct work, and that check cannot be looked at again by the team on its own";
+    case "suite_review_unresolved":
+      return "the review of the checks written for the plan found problems in them, and those checks cannot be sent back to be written again by the team on its own";
     case "environment_change_needed":
       return "its work needs a change to the project's build and test environment, which this task may not make";
     case "owner_unresolved":
@@ -213,8 +276,16 @@ function taskBlockedReport(title: string, reason: StoredBlockedReason | undefine
   ].join("\n\n");
 }
 
-export class BlockReports implements LiaisonBlockReports, LiaisonCheckDisputes {
+export class BlockReports implements LiaisonBlockReports, LiaisonCheckDisputes, LiaisonSuiteReviews {
   constructor(private readonly store: BlockReportStore) {}
+
+  /** Blocks the project on the review; its one report is posted by runPending, from the record. */
+  async blockOnSuiteReview(bound: SuiteReviewBound): Promise<"blocked" | "already-blocked"> {
+    const cause: ProjectBlockCause = { ...projectBlockCause(new SuiteReviewBoundReached(bound)), category: "suite_review" };
+    const result = await this.store.blockProject(bound.projectId, cause);
+    console.warn(`[liaison-suite-review] project ${bound.projectId} ${result}: ${cause.reason}`);
+    return result;
+  }
 
   /** Blocks the project on the dispute; its one report is posted by runPending, from the record. */
   async blockOnDisputes(bound: DisputeBound): Promise<"blocked" | "already-blocked"> {
@@ -242,7 +313,12 @@ export class BlockReports implements LiaisonBlockReports, LiaisonCheckDisputes {
           break;
         }
         case "project-blocked": {
-          const body = due.kind === "check_dispute" ? disputeBoundReport(due.dispute) : projectBlockedReport(due.kind);
+          const body =
+            due.kind === "check_dispute"
+              ? disputeBoundReport(due.dispute)
+              : due.kind === "suite_review"
+                ? suiteReviewBoundReport(due.review)
+                : projectBlockedReport(due.kind);
           const kind = await this.store.postProjectReport(due.episodeId, "blocked", body);
           outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
           break;

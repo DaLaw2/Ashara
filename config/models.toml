@@ -63,6 +63,7 @@
 "decomposition" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "liaison-intake" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "roster" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
+"suite-review" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 "escalation" = { Frontier = "claude-opus-4-8", default = "claude-sonnet-5-5" }
 
 [routing.profiles."anthropic+deepseek"]
@@ -86,6 +87,9 @@
 # Roster derivation (s-team-roster-m1): one structured call per tender, the
 # same shape and size as decomposition's.
 "roster" = "deepseek-flash"
+# The review of a plan revision's check suites (ADR-074 addendum 2 d71 c): one structured
+# call per review, reading every stored suite with the vision.
+"suite-review" = "deepseek-flash"
 # Sonnet 5.5 replaces Sonnet 4.6 (Decided: owner 2026-10-13, ADR-077).
 "escalation" = "claude-sonnet-5-5"
 

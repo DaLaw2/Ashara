@@ -9,7 +9,7 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000010", "test")
 type Dropped = { kind: "recorded"; count: number } | { kind: "unrecorded" };
 
 function reportsFor(
-  tasks: { decomposition: number; sprint0: number; checks: number; unrecorded: number },
+  tasks: { decomposition: number; sprint0: number; checks: number; reviews: number; unrecorded: number },
   droppedOrderingHints: Dropped = { kind: "recorded", count: 0 },
 ) {
   const posted: string[] = [];
@@ -36,7 +36,7 @@ function reportsFor(
 
 describe("first-plan report", () => {
   test("counts only the tasks toward the client's goal and states the environment setup and the checks apart", async () => {
-    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, checks: 6, unrecorded: 0 });
+    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, checks: 6, reviews: 1, unrecorded: 0 });
 
     await reports.runPending();
 
@@ -44,11 +44,12 @@ describe("first-plan report", () => {
     expect(posted[0]).toContain(`1 epic ("Studio sign-up merge"), split into 6 tasks for what you asked for.`);
     expect(posted[0]).toContain("First, the team sets up the project environment");
     expect(posted[0]).toContain("Before any of those tasks starts, team members who do not do them write the checks that decide whether each is done (6 check tasks)");
+    expect(posted[0]).toContain("Then a team member who wrote none of those checks reads them all together with what you asked for");
     expect(posted[0]).not.toMatch(/7 tasks|12 tasks|13 tasks|ordering hint/);
   });
 
   test("states the ordering hints the plan dropped", async () => {
-    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, checks: 6, unrecorded: 0 }, { kind: "recorded", count: 2 });
+    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 2 });
 
     await reports.runPending();
 
@@ -56,10 +57,11 @@ describe("first-plan report", () => {
   });
 
   test.each([
-    ["a task of unrecorded origin", { decomposition: 6, sprint0: 1, checks: 6, unrecorded: 1 }, { kind: "recorded", count: 0 }],
-    ["no Sprint 0 task", { decomposition: 6, sprint0: 0, checks: 6, unrecorded: 0 }, { kind: "recorded", count: 0 }],
-    ["a decomposed task without its check task", { decomposition: 6, sprint0: 1, checks: 5, unrecorded: 0 }, { kind: "recorded", count: 0 }],
-    ["no record of dropped ordering hints", { decomposition: 6, sprint0: 1, checks: 6, unrecorded: 0 }, { kind: "unrecorded" }],
+    ["a task of unrecorded origin", { decomposition: 6, sprint0: 1, checks: 6, reviews: 1, unrecorded: 1 }, { kind: "recorded", count: 0 }],
+    ["no Sprint 0 task", { decomposition: 6, sprint0: 0, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 0 }],
+    ["a decomposed task without its check task", { decomposition: 6, sprint0: 1, checks: 5, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 0 }],
+    ["no record of dropped ordering hints", { decomposition: 6, sprint0: 1, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "unrecorded" }],
+    ["no review of its checks", { decomposition: 6, sprint0: 1, checks: 6, reviews: 0, unrecorded: 0 }, { kind: "recorded", count: 0 }],
   ] as const)("a plan with %s is not reported and its project is blocked", async (_case, tasks, dropped) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { reports, posted, blocked } = reportsFor({ ...tasks }, { ...dropped });

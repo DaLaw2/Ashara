@@ -11,6 +11,7 @@ import type {
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
+  LiaisonSuiteReviews,
 } from "./acl/engagement-acl.js";
 import type { ParkedExitChecks } from "./parked-exits.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
@@ -153,6 +154,13 @@ export interface CoreLoopDeps {
   /** The Liaison's block of a project whose check disputes passed their bound; blockReports posts its one report. */
   readonly disputeReports: LiaisonCheckDisputes;
   /**
+   * Quality's durable record of the reviews of plan revisions' suites (ADR-074 addendum 2 d71 c):
+   * how many reviews named each check task bounds its reopens.
+   */
+  readonly suiteReviewFindings: SuiteReviewFindingRecord;
+  /** The Liaison's block of a project whose suite review named a check task past its bound; blockReports posts its one report. */
+  readonly suiteReviewReports: LiaisonSuiteReviews;
+  /**
    * The Liaison's one report per project block, per resumption after an operator's unblock and
    * per task block; run every cycle, at the budget cap too (no LLM call).
    */
@@ -184,4 +192,21 @@ interface CheckDisputeEntry {
 /** Appends a dispute; resolves to the disputes its check task has drawn, this one included. */
 interface CheckDisputeRecord {
   record(dispute: CheckDisputeEntry): Promise<number>;
+}
+
+/** One review of a plan revision's suites that found problems, as its dispatch ended with it. */
+interface SuiteReviewFindingsEntry {
+  readonly projectId: string;
+  readonly reviewTaskId: string;
+  readonly problems: ReadonlyArray<{
+    readonly checkTaskIds: readonly string[];
+    readonly kind: "contradiction" | "outside-vision";
+    readonly problem: string;
+    readonly evidence: string;
+  }>;
+}
+
+/** Appends the findings; resolves, per named check task, to how many reviews have named it, this one included. */
+interface SuiteReviewFindingRecord {
+  record(findings: SuiteReviewFindingsEntry): Promise<ReadonlyMap<string, number>>;
 }

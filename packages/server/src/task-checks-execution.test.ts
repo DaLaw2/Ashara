@@ -182,6 +182,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
       },
     },
     checks: createTaskCheckStore(db),
+    suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
     shutdownSignal: new AbortController().signal,
   });
   const result = await service.execute(task, target);

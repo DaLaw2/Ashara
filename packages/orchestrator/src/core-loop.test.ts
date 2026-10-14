@@ -129,6 +129,8 @@ function buildDeps(
     stackChoices,
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+    suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
     blockReports: { runPending: async () => [] },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     environmentOwner: notExercised("environmentOwner"),

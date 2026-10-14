@@ -70,8 +70,10 @@ export function parseWorkItemJsonb(row: WorkItemJsonbRow): ParsedWorkItemJsonb {
  * `check_dispute`: a task's implementer kept disputing one of its checks past the bound of disputes
  * (migration 039), which nothing in the team settles. `replan_bound`: the client's changes revised the
  * plan as many times as Delivery revises it before the operator reviews the project (migration 042).
+ * `suite_review`: the review of a plan revision's check suites kept naming one check task past the
+ * bound of reopens (migration 044), which nothing in the team settles.
  */
-type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute" | "replan_bound";
+type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute" | "replan_bound" | "suite_review";
 
 /** Why a project was blocked (migration 025): the cause's category, the error's class and its full chain. */
 export interface ProjectBlockCause {

@@ -12,6 +12,7 @@ import {
 import type { Database, DbHandle } from "../connection.js";
 import { checkDisputes, clientMessages, projectBlocks, projects, workItems } from "../schema.js";
 import { noOpenStop } from "./project.js";
+import { blockingReview } from "./suite-review.js";
 
 // The Liaison's reports on blocks (migration 040): one when a project is blocked, one when an
 // operator returns it to work, and one each time a task is blocked. Each is due while its episode
@@ -19,8 +20,33 @@ import { noOpenStop } from "./project.js";
 // against that episode in the same transaction, so a retried or concurrent post tells the client
 // once.
 
-const ProjectBlockKindSchema = z.enum(["budget_cap", "configuration", "fault", "planning_stopped", "check_dispute", "replan_bound"]);
-type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute">;
+const ProjectBlockKindSchema = z.enum([
+  "budget_cap",
+  "configuration",
+  "fault",
+  "planning_stopped",
+  "check_dispute",
+  "replan_bound",
+  "suite_review",
+]);
+type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review">;
+
+/** The review a suite_review block was written on: the last one recorded before the block. */
+interface BlockingReviewRow {
+  readonly times: number;
+  readonly problems: readonly string[];
+}
+
+/** A suite_review block has no review of its project recorded at or before it: nothing to report it by. */
+class BlockingReviewMissing extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly projectId: string,
+  ) {
+    super(`project_blocks row ${episodeId} (project ${projectId}) is a suite_review block, but no suite_review_findings row of the project precedes it`);
+    this.name = "BlockingReviewMissing";
+  }
+}
 
 /** The dispute a check_dispute block was written on: the last one recorded before the block. */
 interface BlockingDisputeRow {
@@ -38,6 +64,13 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "check_dispute";
       readonly dispute: BlockingDisputeRow;
+    }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: "suite_review";
+      readonly review: BlockingReviewRow;
     }
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId }
   | {
@@ -154,6 +187,10 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
     if (kind.data === "check_dispute") {
       const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute });
+    } else if (kind.data === "suite_review") {
+      const review = await blockingReview(db, row.projectId, row.blockedAt);
+      if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
+      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review });
     } else {
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data });
     }

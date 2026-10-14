@@ -23,6 +23,7 @@ import {
   recoverFailedItem,
   exitStaleChecks,
   exitDisputedCheck,
+  exitSuiteReview,
   requestEnvironmentChange,
 } from "./acl/planning-acl.js";
 import type { TaskDescriptor } from "./acl/development-acl.js";
@@ -38,6 +39,7 @@ type ParkedReason = Extract<
       | "environment_undefined"
       | "checks_stale"
       | "check_disputed"
+      | "suite_review_unresolved"
       | "owner_unresolved"
       | "merge_unrecorded";
   }
@@ -87,6 +89,17 @@ interface DisputedCheckResult {
   readonly detail: string;
 }
 
+/** A review of a plan revision's suites that found problems, as development returned it. */
+interface SuiteReviewProblemsResult {
+  readonly problems: ReadonlyArray<{
+    readonly checkTaskIds: readonly string[];
+    readonly kind: "contradiction" | "outside-vision";
+    readonly problem: string;
+    readonly evidence: string;
+  }>;
+  readonly detail: string;
+}
+
 /** An implementer's finished work that changed paths under environment/, as development returned it. */
 interface EnvironmentChangeResult {
   readonly paths: readonly string[];
@@ -103,6 +116,8 @@ interface ExecutionRoutingDeps {
   readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
   readonly checkDisputes: CoreLoopDeps["checkDisputes"];
   readonly disputeReports: CoreLoopDeps["disputeReports"];
+  readonly suiteReviewFindings: CoreLoopDeps["suiteReviewFindings"];
+  readonly suiteReviewReports: CoreLoopDeps["suiteReviewReports"];
   readonly environmentOwner: CoreLoopDeps["environmentOwner"];
 }
 
@@ -181,6 +196,19 @@ async function executeTask(
     // answer, so the check task is reopened with the dispute and the item waits on it, within a
     // bound of disputes per check task; past it the project is blocked for its owner.
     await routeAsDisputed(deps, task, execResult);
+    return {
+      result: blockedResult(task.id, execResult.detail),
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "suite_review_problems") {
+    // Not the review's failure and no lesson (ADR-074 addendum 2 d71 c): the checks are their
+    // authors' to fix, so each named check task is reopened with the findings and the review waits
+    // on them to read the new suites, within a bound per check task; past it the project is blocked.
+    await routeAsSuiteReview(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -389,6 +417,8 @@ async function routeAsParked(
         ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
         : reason.source === "check_disputed"
         ? `check ${JSON.stringify(reason.checkName)} disputed and check task ${reason.checkTaskId} cannot be reopened`
+        : reason.source === "suite_review_unresolved"
+        ? `the suite review found problems and check task(s) ${reason.checkTaskIds.join(", ")} cannot be reopened`
         : reason.source === "owner_unresolved"
           ? `no roster role can work it (owner ${reason.ownerRoleId ?? "none"})`
           : reason.source === "merge_unrecorded"
@@ -569,6 +599,98 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     return;
   }
   console.warn(`[${task.id}] blocked, check ${JSON.stringify(dispute.check.name)} disputed and check task ${dispute.checkTaskId} cannot be reopened: ${exit.why}`);
+}
+
+/**
+ * The exit of a review task whose review of its plan revision's suites found problems (planning's
+ * exitSuiteReview). The findings are recorded first, durably: how many reviews named each check
+ * task is the bound. Within it every named check task is reopened with the problems in its brief and
+ * the review returns to Pending, all in one transaction, its dispatch given back; the review's
+ * dependencies on those check tasks hold it until they complete again, and the plan's
+ * implementations stay held by their dependency on the review. Past the bound the Liaison blocks the
+ * project with one report and the review returns to Pending, its dispatch given back, where the gate
+ * skips it until the owner returns the project to work. A named check task that cannot be reopened,
+ * or one that moves while it is reopened, parks the review at Blocked with a suite_review_unresolved
+ * reason, so no implementation is released on problems nobody answered.
+ */
+async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
+  const timesNamed = await deps.suiteReviewFindings.record({ projectId: task.projectId, reviewTaskId: task.id, problems: review.problems });
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
+  if (!item) {
+    console.warn(`[${task.id}] review task vanished before its findings could be routed (${review.detail})`);
+    return;
+  }
+  const named = [...new Set(review.problems.flatMap((problem) => problem.checkTaskIds))];
+  const checkTasks = new Map<string, WorkItem | null>();
+  for (const checkTaskId of named) checkTasks.set(checkTaskId, await findCheckTask(deps.workItemRepo, checkTaskId, "suite review checkTaskIds"));
+  const previousStatus = item.status;
+  let exit: ReturnType<typeof exitSuiteReview>;
+  try {
+    exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed });
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${task.id}] suite-review exit rejected (${e.from} -> ${e.to}); review left at ${e.from} (${review.detail})`);
+    return;
+  }
+
+  switch (exit.kind) {
+    case "bound": {
+      const blocked = await deps.suiteReviewReports.blockOnSuiteReview({
+        projectId: task.projectId,
+        reviewTaskId: task.id,
+        checkTaskId: exit.checkTaskId,
+        times: exit.times,
+        bound: exit.bound,
+        problems: review.problems.map((problem) => problem.problem),
+      });
+      await requeueAndRefund(
+        deps,
+        task.id,
+        `review ${exit.times} naming check task ${exit.checkTaskId}, past the bound of ${exit.bound} (project ${task.projectId} ${blocked})`,
+        "execution.routeAsSuiteReview",
+      );
+      return;
+    }
+    case "unreopenable": {
+      try {
+        await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+      } catch (e) {
+        if (!(e instanceof InvalidStatusTransition)) throw e;
+        console.warn(`[${task.id}] suite-review park rejected (${e.from} -> Blocked); review left at ${e.from}`);
+        return;
+      }
+      console.warn(`[${task.id}] blocked, the suite review found problems no check task can be reopened for: ${exit.why}`);
+      await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
+      return;
+    }
+    case "reopened": {
+      try {
+        await deps.workItemRepo.withTransaction(async (tx) => {
+          for (const checkTask of exit.checkTasks) await PlanningService.saveWorkItem(tx, checkTask, "Completed");
+          await PlanningService.saveWorkItem(tx, item, previousStatus);
+        });
+      } catch (e) {
+        if (!(e instanceof InvalidStatusTransition)) throw e;
+        // Nothing was written: a check task or the review moved while they were being reopened.
+        await routeAsParked(deps, task.id, {
+          source: "suite_review_unresolved",
+          checkTaskIds: named,
+          reason: `${review.detail}\nThe check tasks cannot be reopened: ${e.message}`,
+        });
+        return;
+      }
+      for (const checkTask of exit.checkTasks) {
+        await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsSuiteReview");
+      }
+      await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
+      const dispatchCount = await refundBestEffort(deps, task.id, "a suite review with problems");
+      console.warn(
+        `[${task.id}] suite review found ${review.problems.length} problem(s); check task(s) ${named.join(", ")} reopened ` +
+          `with them, review back at Pending waiting on them (dispatch count ${dispatchCount})`,
+      );
+      return;
+    }
+  }
 }
 
 /**
@@ -794,6 +916,8 @@ export async function processTask(
     projects: deps.projectRepo,
     checkDisputes: deps.checkDisputes,
     disputeReports: deps.disputeReports,
+    suiteReviewFindings: deps.suiteReviewFindings,
+    suiteReviewReports: deps.suiteReviewReports,
     environmentOwner: deps.environmentOwner,
   };
   const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);

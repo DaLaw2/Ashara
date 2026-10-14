@@ -13,7 +13,7 @@ export {
   takeEvents,
 } from "./work-item.js";
 
-export { exitDisputedCheck, exitStaleChecks } from "./stale-checks.js";
+export { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
 
 export { requestEnvironmentChange } from "./environment-change.js";
 

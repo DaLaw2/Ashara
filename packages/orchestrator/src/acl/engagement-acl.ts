@@ -21,4 +21,5 @@ export type {
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
+  LiaisonSuiteReviews,
 } from "@ashara/engagement";

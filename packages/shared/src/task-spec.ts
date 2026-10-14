@@ -23,9 +23,11 @@ const storedTaskSpecSchema = z.object({
   // decomposed task, in which the check author writes the checks that decide it
   // (story s-independent-verify-m1), or the environment task Z0 opens when an
   // implementation's work needs a change under environment/, in which the
-  // environment role makes it (ADR-074 addendum 2 d66 b). Absent on rows written
-  // before it was recorded.
-  origin: z.enum(["decomposition", "sprint0", "check", "environment-change"]).optional(),
+  // environment role makes it (ADR-074 addendum 2 d66 b), or the review decomposition
+  // adds to every plan revision, in which every suite its check tasks stored is read
+  // together before any implementation starts (ADR-074 addendum 2 d71 c). Absent on
+  // rows written before it was recorded.
+  origin: z.enum(["decomposition", "sprint0", "check", "environment-change", "review"]).optional(),
   // What checks the task's work: "substrate" means the checks are the
   // environment substrate's own (the definition parses, the image builds, its
   // test command passes), so the task carries none of its own. Absent means no
@@ -35,6 +37,10 @@ const storedTaskSpecSchema = z.object({
   // implementation task of a plan revision depends on every check task of it (ADR-074 addendum 2
   // d67 a), so the dependency edges no longer say which one. Absent on rows written before it.
   checksFor: z.string().min(1).optional(),
+  // The vision items, as the vision states them, the task traces to (ADR-074 addendum 2 d71 d): a
+  // decomposed task's are those it delivers, its check task's are the same, and a review task's are
+  // every item of the vision its plan revision was decomposed from. Absent on rows written before it.
+  visionItems: z.array(z.string().min(1)).optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

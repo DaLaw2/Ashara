@@ -90,6 +90,8 @@ function coreLoopDeps(
     stackChoices: { runPending: notExercised("stackChoices") },
     checkDisputes: { record: notExercised("checkDisputes") },
     disputeReports: { blockOnDisputes: notExercised("disputeReports") },
+    suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+    suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
     blockReports: { runPending: notExercised("blockReports") },
     parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
     environmentOwner: notExercised("environmentOwner"),
@@ -1195,5 +1197,157 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(result.status).toBe("completed");
     expect(writes).toEqual(["InProgress", `merge ${mainCommit}`, "Completed"]);
     expect(stored().status).toBe("Completed");
+  });
+
+  // ADR-074 addendum 2 d71 c: a clean review completes, which releases the plan's implementations.
+  test("a clean review of the plan's suites merges nothing and completes the review task", async () => {
+    const { deps, stored, writes } = buildMergeDeps(
+      { ...merged, output: null, delivered: { kind: "suites-reviewed", reviewed: ["check-a", "check-b"] } },
+      notExercised("recordMergeCommit"),
+    );
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(writes).toEqual(["InProgress", "Completed"]);
+    expect(stored().status).toBe("Completed");
+  });
+});
+
+// docs/investigations/fifth-run-2026-10-14.md N20: 36 stored checks no product could all pass reached
+// the implementers. ADR-074 addendum 2 d71 c: a review reads them together before any implementation.
+describe("a review of the plan's suites with problems: the named check tasks are reopened and the review waits", () => {
+  const CHECK_A: WorkItemId = createWorkItemId();
+  const CHECK_B: WorkItemId = createWorkItemId();
+  const CHECK_C: WorkItemId = createWorkItemId();
+  const problem = "a prints a column count on stdout, b requires stdout to hold only the report";
+  const problems = [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction" as const, problem, evidence: "a: wc; b: diff" }];
+
+  function buildReviewDeps(priorReviews: number) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const check = (id: WorkItemId, checksFor: string): WorkItem => ({
+      ...freshPendingItem(),
+      id,
+      title: `write the checks ${checksFor}`,
+      workKind: "check",
+      status: "Completed",
+      dispatchCount: 1,
+      taskSpec: { origin: "check", checksFor },
+    });
+    const rows = new Map<string, WorkItem>([
+      [ITEM_ID, { ...freshPendingItem(), workKind: "check", taskSpec: { origin: "review", visionItems: ["In: monthly totals"] } }],
+      [CHECK_A, check(CHECK_A, "impl-a")],
+      [CHECK_B, check(CHECK_B, "impl-b")],
+      [CHECK_C, check(CHECK_C, "impl-c")],
+    ]);
+    const recorded: Array<{ readonly reviewTaskId: string; readonly problems: readonly unknown[] }> = [];
+    const named = new Map<string, number>();
+    const reports: Array<{ readonly checkTaskId: string; readonly times: number; readonly bound: number; readonly problems: readonly string[] }> = [];
+    let routed = 0;
+    let approaches = 0;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const rowOf = (id: string): WorkItem => {
+      const row = rows.get(id);
+      if (row === undefined) throw new Error(`no row ${id}`);
+      return row;
+    };
+    const workItemRepo: WorkItemRepository = {
+      findById: async (id) => {
+        const row = rows.get(id);
+        return row === undefined ? null : copy(row);
+      },
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        const row = rowOf(item.id);
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        rows.set(item.id, { ...copy(item), dispatchCount: row.dispatchCount });
+      },
+      incrementDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
+        return row.dispatchCount + 1;
+      },
+      refundDispatchCount: async (id) => {
+        const row = rowOf(id);
+        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+        return row.dispatchCount - 1;
+      },
+      recordMergeCommit: notExercised("recordMergeCommit"),
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
+      withTransaction: async (fn) => fn(workItemRepo),
+    };
+    const deps = coreLoopDeps({
+      workItemRepo,
+      developmentService: {
+        execute: async () => ({
+          status: "suite_review_problems",
+          problems,
+          detail: "the review found 1 problem(s)",
+          output: null,
+          sessionId: "test-session",
+          attempt: 1,
+          errorEnvelope: {
+            outcome: "blocked",
+            summary: "the review found 1 problem(s)",
+            chain: { boundary: "development", operation: "reviewSuites", message: "problems", timestamp: new Date().toISOString() },
+          },
+        }),
+      },
+      suiteReviewFindings: {
+        record: async (findings) => {
+          recorded.push(findings);
+          const ids = [...new Set(findings.problems.flatMap((p) => p.checkTaskIds))];
+          for (const id of ids) named.set(id, (named.get(id) ?? priorReviews) + 1);
+          return new Map(ids.map((id) => [id, named.get(id) ?? 0]));
+        },
+      },
+      suiteReviewReports: {
+        blockOnSuiteReview: async (bound) => {
+          reports.push(bound);
+          return "blocked";
+        },
+      },
+      failedApproachRepo: { record: async () => { approaches++; } },
+      failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+    });
+    return { deps, rowOf, recorded, reports, routed: () => routed, approaches: () => approaches };
+  }
+
+  test("each named check task is reopened with the problem; the review is back at Pending to run again after them", async () => {
+    const { deps, rowOf, recorded, reports, routed, approaches } = buildReviewDeps(0);
+
+    const result = await processTask(deps, rowOf(ITEM_ID));
+
+    expect(result.status).toBe("blocked");
+    expect(recorded).toEqual([expect.objectContaining({ reviewTaskId: ITEM_ID, problems })]);
+    expect(rowOf(ITEM_ID)).toMatchObject({ status: "Pending", dispatchCount: 0, blockedReason: undefined });
+    expect([rowOf(CHECK_A).status, rowOf(CHECK_B).status, rowOf(CHECK_C).status]).toEqual(["Pending", "Pending", "Completed"]);
+    const context = rowOf(CHECK_A).blockedReason;
+    expect(context?.source).toBe("replan");
+    if (context?.source !== "replan") return;
+    expect(context.replanContext.detail).toContain(problem);
+    expect(context.replanContext.detail).toContain(`It also involves the checks of check task(s) ${CHECK_B}.`);
+    expect(reports).toEqual([]);
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
+
+  test("a check task named past the bound: the project is blocked with a report, the review back at Pending, nothing reopened", async () => {
+    const { deps, rowOf, reports, routed, approaches } = buildReviewDeps(2);
+
+    await processTask(deps, rowOf(ITEM_ID));
+
+    expect(reports).toEqual([expect.objectContaining({ checkTaskId: CHECK_A, times: 3, bound: 2, problems: [problem] })]);
+    expect(rowOf(ITEM_ID)).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect([rowOf(CHECK_A).status, rowOf(CHECK_B).status]).toEqual(["Completed", "Completed"]);
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
   });
 });

@@ -18,6 +18,8 @@ interface PlanTaskCounts {
   readonly sprint0: number;
   /** The tasks in which the checks of a decomposed task are written, one per decomposed task. */
   readonly checks: number;
+  /** The review that reads every check of the plan together before any of its work starts. */
+  readonly reviews: number;
   readonly unrecorded: number;
 }
 
@@ -93,7 +95,8 @@ class PlanReportUnfounded extends Error {
     const droppedText = dropped.kind === "recorded" ? `${dropped.count} dropped ordering hint(s)` : "no record of dropped ordering hints";
     super(
       `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
-        `${tasks.sprint0} Sprint 0 task(s), ${tasks.checks} check task(s), ${tasks.unrecorded} task(s) of unrecorded origin ` +
+        `${tasks.sprint0} Sprint 0 task(s), ${tasks.checks} check task(s), ${tasks.reviews} check review task(s), ` +
+        `${tasks.unrecorded} task(s) of unrecorded origin ` +
         `and ${droppedText}; ` +
         `no report is posted`,
     );
@@ -127,6 +130,11 @@ class PlanRevisionSummaryUnreadable extends Error {
   }
 }
 
+// Every plan and every revision carries one review task (planning decomposition.ts), so both reports state it.
+const REVIEW_SENTENCE =
+  `Then a team member who wrote none of those checks reads them all together with what you asked for, and sends ` +
+  `back any that cannot all be passed at once or that test something you did not ask for, before building starts.`;
+
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
@@ -145,6 +153,7 @@ function firstPlanReport(epicTitles: readonly string[], goalTasks: number, check
       `before any of those tasks starts.`,
     `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
       `is done (${plural(checkTasks, "check task")}). A task counts as done only when its checks pass.`,
+    REVIEW_SENTENCE,
   ];
   if (droppedHints > 0) {
     paragraphs.push(
@@ -172,6 +181,7 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
     `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
     `Before any of them starts, team members who do not do them write the checks that decide whether each is done ` +
       `(${plural(summary.newCheckTasks, "check task")}).`,
+    REVIEW_SENTENCE,
   );
   const setAside = summary.supersededTasks.length + summary.supersededOther;
   paragraphs.push(
@@ -254,6 +264,7 @@ export class PlanReports implements LiaisonPlanReports {
       tasks.decomposition === 0 ||
       tasks.sprint0 !== 1 ||
       tasks.checks !== tasks.decomposition ||
+      tasks.reviews !== 1 ||
       tasks.unrecorded > 0 ||
       dropped.kind === "unrecorded"
     ) {

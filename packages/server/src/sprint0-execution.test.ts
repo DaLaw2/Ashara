@@ -212,6 +212,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
       },
     },
     checks: createTaskCheckStore(db),
+    suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
     shutdownSignal: new AbortController().signal,
   });
   try {

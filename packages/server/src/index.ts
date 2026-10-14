@@ -19,6 +19,7 @@ import {
   ClientLoginFailureRepository,
   EnvironmentBuildRepository,
   CheckDisputeRepository,
+  SuiteReviewFindingRepository,
   createProjectWithTender,
   latestRosterRevision,
   latestRosterRoles,
@@ -41,7 +42,7 @@ import {
   shouldEscalate,
   tryParseEnvelope,
 } from "@ashara/planning";
-import { DevelopmentService, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
+import { DevelopmentService, SuiteReviewer, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
@@ -90,7 +91,7 @@ import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.
 import { createReplanStore } from "./replan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
-import { createTaskCheckStore } from "./task-check-store.js";
+import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { createFatalExit, reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
 import { createAgentStaffing } from "./staffing.js";
@@ -348,6 +349,7 @@ async function main(): Promise<void> {
       },
     },
     checks: createTaskCheckStore(db),
+    suiteReview: new SuiteReviewer({ llm: llmGateway, source: createSuiteReviewSource(db), onAttempt: ladderAttemptSink }),
     shutdownSignal: abortController.signal,
   });
 
@@ -394,6 +396,8 @@ async function main(): Promise<void> {
     checkDisputes: new CheckDisputeRepository(db),
     blockReports,
     disputeReports: blockReports,
+    suiteReviewFindings: new SuiteReviewFindingRepository(db),
+    suiteReviewReports: blockReports,
     parkedExits: createParkedExitChecks(db),
     // The environment task an implementation needs is owned by the role doing environment work.
     async environmentOwner(projectId) {

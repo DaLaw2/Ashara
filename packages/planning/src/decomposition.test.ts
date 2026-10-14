@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
 import type { StructuredValidation } from "@ashara/llm-gateway";
-import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError } from "./decomposition-types.js";
+import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 import type { DecompositionLLM } from "./decomposition.js";
@@ -12,6 +12,10 @@ const INPUT: DecompositionInput = {
     epicDescription: "Two studios merge their class schedules; members book seats in either.",
     conventions: [],
     environment: { kind: "new" },
+    visionItems: [
+        { id: "S1", text: "In: booking a seat in a class of either studio" },
+        { id: "A1", text: "A class holds at most twenty members" },
+    ],
 };
 
 function task(ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -22,6 +26,7 @@ function task(ref: string, extra: Record<string, unknown> = {}): Record<string, 
         endState: `${ref} is observable`,
         scope: `the ${ref} module`,
         deliverables: [`${ref} source`],
+        visionItems: ["S1"],
         ...extra,
     };
 }
@@ -63,7 +68,7 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.knowledge.nodes).toEqual([]);
-        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "check", "decomposition", "check"]);
+        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "check", "decomposition", "check", "review"]);
         expect(result.tasks[3]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
@@ -206,5 +211,74 @@ describe("DecompositionEngine", () => {
     test.each(["endState", "scope", "deliverables"])("a task missing %s is rejected, not inferred", async (field) => {
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
+    });
+    // Fifth run N21: the first task printed a column count the tender never asked for (ADR-074 addendum 2 d71 d).
+    test.each([
+        ["names no vision item", []],
+        ["names an item the vision does not hold", ["S9"]],
+    ])("a plan whose task %s is rejected through the ladder, never written", async (_label, named) => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { visionItems: named })] }, seen);
+
+        await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
+        expect(seen.verdicts).toHaveLength(1);
+        expect(seen.verdicts[0]).toMatchObject({ ok: false });
+        expect(seen.verdicts[0]?.ok === false ? seen.verdicts[0].errors.join("\n") : "").toContain('Task "Task t2"');
+    });
+
+    test("the task prompt lists every vision item by id and asks each task to name those it delivers", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        await new DecompositionEngine(llm).decompose(INPUT);
+
+        const prompt = seen.prompts[1] ?? "";
+        expect(prompt).toContain("- S1: In: booking a seat in a class of either studio");
+        expect(prompt).toContain("- A1: A class holds at most twenty members");
+        expect(prompt).toContain('In "visionItems", list the ids of the vision items above that the task delivers');
+    });
+
+    test("a vision with no item is refused before any model call", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: [] })).rejects.toBeInstanceOf(VisionItemsMissing);
+        expect(seen.prompts).toEqual([]);
+    });
+
+    test("a task records the texts of the items it traces to, by id or exact text; its check task carries them in its brief", async () => {
+        const llm = scriptedLlm(
+            { nodes: [], edges: [] },
+            { tasks: [task("t1", { visionItems: ["A1", "In: booking a seat in a class of either studio"] })] },
+            seen,
+        );
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const implementation = result.tasks.find((t) => t.taskSpec.origin === "decomposition");
+        const traced = ["In: booking a seat in a class of either studio", "A class holds at most twenty members"];
+        expect(implementation?.taskSpec).toMatchObject({ visionItems: traced });
+        const check = result.tasks.find((t) => t.taskSpec.origin === "check");
+        expect(check?.taskSpec).toMatchObject({ visionItems: traced });
+        expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" delivers (its checks may test only these, and the inputs they say to reject):`);
+        for (const text of traced) expect(check?.taskSpec.goal).toContain(`- ${text}`);
+    });
+
+    // Fifth run N20: 36 stored checks no product could all pass (ADR-074 addendum 2 d71 c).
+    test.each([
+        ["a first plan", { kind: "new" } as const],
+        ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
+    ])("in %s one review task waits on every check task and every implementation waits on it", async (_label, environment) => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment });
+
+        const reviews = result.tasks.filter((t) => t.taskSpec.origin === "review");
+        expect(reviews).toHaveLength(1);
+        const review = reviews[0];
+        const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
+        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id : environment.taskId;
+        expect(review?.dependsOn).toEqual([environmentId, ...checkIds]);
+        expect(result.dependencyEdges.filter((e) => e.from === review?.id).map((e) => e.to)).toEqual([environmentId, ...checkIds]);
+        for (const implementation of result.tasks.filter((t) => t.taskSpec.origin === "decomposition")) {
+            expect(result.dependencyEdges).toContainEqual({ from: implementation.id, to: review?.id });
+        }
+        // Nothing but implementations waits on the review: the check tasks run before it.
+        const waiting = result.dependencyEdges.filter((e) => e.to === review?.id).map((e) => e.from);
+        expect(waiting.sort()).toEqual(result.tasks.filter((t) => t.taskSpec.origin === "decomposition").map((t) => t.id).sort());
+        expect(review?.taskSpec).toMatchObject({ visionItems: INPUT.visionItems.map((item) => item.text) });
     });
 });

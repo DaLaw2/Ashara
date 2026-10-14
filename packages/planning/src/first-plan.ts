@@ -10,6 +10,7 @@ import type {
   DecompositionResult,
   DroppedDependency,
   TaskSpec,
+  VisionItem,
   WorkItemSpec,
 } from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
@@ -185,6 +186,24 @@ export function northStarOf(project: StoredVisionReading): string {
   return sections.join("\n\n");
 }
 
+/**
+ * Every item of the stored vision a planned task can trace to (ADR-074 addendum 2 d71 d): each scope
+ * boundary (S1..), then each assumption work proceeds on, a Stated one by the decision the client's
+ * answer made (A1.., in stored order, as intake numbers them). The summary is not an item: it restates
+ * the whole tender, so a task tracing to it would trace to nothing in particular.
+ */
+export function visionItemsOf(project: StoredVisionReading): VisionItem[] {
+  const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
+  const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
+  const assumptions = Array.isArray(inferences)
+    ? inferences.map((a) => a.statement)
+    : Object.entries(inferences).map(([category, inference]) => `${category}: ${inference}`);
+  return [
+    ...scope.map((text, i) => ({ id: `S${i + 1}`, text })),
+    ...assumptions.map((text, i) => ({ id: `A${i + 1}`, text })),
+  ];
+}
+
 function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
   switch (level) {
     case "epic":
@@ -213,7 +232,10 @@ export function planOwners(projectId: ProjectId, rosterRows: unknown): PlanOwner
 /**
  * The kind of work a planned task is. Sprint 0 defines the project environment,
  * the environment role's work; every decomposed task is implementation, and its
- * check task is the check author's.
+ * check task is the check author's. The review of the plan's suites is the check
+ * author's role too, as a hat (ADR-074 addendum 2 d71 c): a roster holds exactly one
+ * role with author-checks, so no other role could take it, and the review is a separate
+ * dispatch that reads the stored suites and authored none of them.
  */
 function workKindOf(origin: TaskSpec["origin"]): WorkKind {
   switch (origin) {
@@ -222,6 +244,7 @@ function workKindOf(origin: TaskSpec["origin"]): WorkKind {
     case "decomposition":
       return "implementation";
     case "check":
+    case "review":
       return "check";
   }
 }
@@ -345,6 +368,7 @@ export class FirstPlanner implements FirstPlanning {
       epicDescription: project.visionText,
       conventions: [],
       environment: { kind: "new" },
+      visionItems: visionItemsOf(project),
     };
     return new DecompositionEngine(llm).decompose(input);
   }

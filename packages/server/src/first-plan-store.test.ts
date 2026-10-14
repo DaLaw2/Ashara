@@ -92,11 +92,11 @@ const TASKS = {
   tasks: [
     {
       ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [],
-      endState: "Both studios' classes are listed", scope: "class listing", deliverables: ["class list"],
+      endState: "Both studios' classes are listed", scope: "class listing", deliverables: ["class list"], visionItems: ["S1"],
     },
     {
       ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"],
-      endState: "A member books a seat", scope: "booking", deliverables: ["booking form"],
+      endState: "A member books a seat", scope: "booking", deliverables: ["booking form"], visionItems: ["S1"],
     },
   ],
 };
@@ -272,8 +272,16 @@ const checksOf = (title: string) => `Write the checks for "${title}"`;
  * t2 depends on t1, every decomposed task depends on the Sprint 0 task decomposition adds and on
  * every check task of the plan (ADR-074 addendum 2 d67 a), and each check task depends on Sprint 0.
  */
+/** The review of every check of the plan, which every implementation waits on (ADR-074 addendum 2 d71 c). */
+const REVIEW_TITLE = "Review the plan's checks together against the vision";
+
 const EXPECTED_EDGES = [
   `${BOOKING_FORM} -> ${CLASS_LIST}`,
+  `${BOOKING_FORM} -> ${REVIEW_TITLE}`,
+  `${CLASS_LIST} -> ${REVIEW_TITLE}`,
+  `${REVIEW_TITLE} -> ${SPRINT0_TITLE}`,
+  `${REVIEW_TITLE} -> ${checksOf(BOOKING_FORM)}`,
+  `${REVIEW_TITLE} -> ${checksOf(CLASS_LIST)}`,
   `${BOOKING_FORM} -> ${SPRINT0_TITLE}`,
   `${BOOKING_FORM} -> ${checksOf(BOOKING_FORM)}`,
   `${BOOKING_FORM} -> ${checksOf(CLASS_LIST)}`,
@@ -291,6 +299,7 @@ const EXPECTED_OWNERS = [
   `Task ${checksOf(CLASS_LIST)}: check / Check author`,
   `Task ${checksOf(BOOKING_FORM)}: check / Check author`,
   `Task ${SPRINT0_TITLE}: environment / Platform`,
+  `Task ${REVIEW_TITLE}: check / Check author`,
 ].sort();
 
 /** The ordering hints recorded as dropped with the project's first plan. */
@@ -367,13 +376,13 @@ describe("first plan", () => {
 
     const outcomes = await planner().runPending();
 
-    // Two decomposed tasks, their two check tasks, and the Sprint 0 task decomposition always adds.
-    expect(outcomes).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 5 }]);
+    // Two decomposed tasks, their two check tasks, and the Sprint 0 and review tasks decomposition always adds.
+    expect(outcomes).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 6 }]);
     const items = await workItemsOf(projectId);
     const epics = items.filter((i) => i.level === "Epic");
     expect(epics).toHaveLength(1);
     const tasks = items.filter((i) => i.level === "Task");
-    expect(tasks).toHaveLength(5);
+    expect(tasks).toHaveLength(6);
     expect(tasks.every((t) => t.parentId === epics[0]?.id)).toBe(true);
     expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
     const sites = await callSitesOf(projectId);
@@ -407,7 +416,7 @@ describe("first plan", () => {
     });
     const projectId = await projectWithVision();
 
-    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 5 }]);
+    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 6 }]);
 
     expect(await droppedOf(projectId)).toEqual([{ dependentTaskTitle: BOOKING_FORM, unresolvedRef: "payments" }]);
     expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
@@ -431,6 +440,7 @@ describe("first plan", () => {
         `${checksOf(CLASS_LIST)}: check`,
         `${checksOf(BOOKING_FORM)}: check`,
         `${SPRINT0_TITLE}: sprint0`,
+        `${REVIEW_TITLE}: review`,
       ].sort(),
     );
     expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
@@ -484,7 +494,7 @@ describe("first plan", () => {
 
     expect(await planner().runPending()).toEqual([]);
     expect(mock.doGenerateCalls).toHaveLength(0);
-    expect(await workItemsOf(projectId)).toHaveLength(6);
+    expect(await workItemsOf(projectId)).toHaveLength(7);
   });
 
   test("the client's answers in the vision's Stated assumptions reach decomposition, and the knowledge graph the contract", async () => {
@@ -500,7 +510,7 @@ describe("first plan", () => {
       },
     ]);
 
-    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 5 }]);
+    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 6 }]);
 
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("Client clarifications") && p.includes("Which studio opens first? -> The harbour studio"))).toBe(true);
@@ -655,7 +665,7 @@ describe("tender to first plan", () => {
     expect(rosterPrompt).toContain("A class has twelve seats.");
 
     const decomposition = decompositionModel();
-    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 5 }]);
+    expect(await planner().runPending()).toEqual([{ kind: "planned", projectId, epics: 1, tasks: 6 }]);
     expect((await ownersOf(projectId)).filter((row) => row.startsWith("Task "))).toEqual(EXPECTED_OWNERS);
     // Delivery plans on the assumptions the open questions adopted, not only the unasked one.
     const prompts = decomposition.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
@@ -664,7 +674,7 @@ describe("tender to first plan", () => {
     }
     const items = await workItemsOf(projectId);
     expect(items.filter((i) => i.level === "Epic")).toHaveLength(1);
-    expect(items.filter((i) => i.level === "Task")).toHaveLength(5);
+    expect(items.filter((i) => i.level === "Task")).toHaveLength(6);
     expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
     expect(new Set(await callSitesOf(projectId))).toEqual(new Set(["liaison-intake", "roster", "decomposition"]));
 

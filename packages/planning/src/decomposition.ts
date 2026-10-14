@@ -3,6 +3,7 @@ import type { ProjectKnowledge } from "@ashara/shared";
 import { ProjectKnowledgeSchema } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
+    DecomposedTaskSpec,
     DecompositionConfig,
     DecompositionInput,
     EnvironmentPlanning,
@@ -10,6 +11,7 @@ import type {
     DroppedDependency,
     PriorEpicResult,
     TaskSpec,
+    VisionItem,
     WorkItemSpec,
 } from "./decomposition-types.js";
 import {
@@ -17,6 +19,8 @@ import {
     TaskCapExceededError,
     TaskOutputSchema,
     UnresolvableDependencyError,
+    UntraceableTaskError,
+    VisionItemsMissing,
 } from "./decomposition-types.js";
 
 export interface DecompositionLLM {
@@ -58,7 +62,9 @@ export class DecompositionEngine {
         this.config = DEFAULT_DECOMPOSITION_CONFIG;
     }
 
+    /** Throws VisionItemsMissing, before any model call, for a vision no task could trace to. */
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
+        if (input.visionItems.length === 0) throw new VisionItemsMissing(input.epicTitle);
         return this.decomposeInternal(input);
     }
 
@@ -149,7 +155,13 @@ export class DecompositionEngine {
             input.environment.kind === "new"
                 ? this.ensureSprint0Task(epic.id, allTasks, dependencyEdges)
                 : dependOnEnvironment(input.environment.taskId, allTasks, dependencyEdges);
-        const plannedTasks = addCheckTasks(epic.id, sprint0Id, allTasks, dependencyEdges);
+        const plannedTasks = addReviewTask(
+            epic.id,
+            sprint0Id,
+            addCheckTasks(epic.id, sprint0Id, allTasks, dependencyEdges),
+            dependencyEdges,
+            input.visionItems,
+        );
 
         return {
             epic,
@@ -220,16 +232,27 @@ export class DecompositionEngine {
      * feedback rather than accepted. It mirrors {@link resolveTasks}'s failure
      * checks without assigning ids (generateId runs once, after this passes).
      */
-    private validateTasks(rawTasks: readonly RawTask[], cap: number, parentId: string): StructuredValidation {
+    private validateTasks(
+        rawTasks: readonly RawTask[],
+        cap: number,
+        parentId: string,
+        visionItems: readonly VisionItem[],
+    ): StructuredValidation {
         if (rawTasks.length > cap) {
             return { ok: false, errors: [new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId }).message] };
         }
         const availableRefs = rawTasks.flatMap((t) => (t.ref ? [t.ref] : []));
         const availableTitles = rawTasks.map((t) => t.title);
-        const errors = unresolvedDependencies(rawTasks).map(
-            (unresolved) =>
-                new UnresolvableDependencyError({ ...unresolved, availableRefs, availableTitles, parentId }).message,
-        );
+        const errors = [
+            ...unresolvedDependencies(rawTasks).map(
+                (unresolved) =>
+                    new UnresolvableDependencyError({ ...unresolved, availableRefs, availableTitles, parentId }).message,
+            ),
+            ...rawTasks.flatMap((raw) => {
+                const traced = traceToVision(raw, visionItems, parentId);
+                return traced.kind === "untraceable" ? [traced.error.message] : [];
+            }),
+        ];
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
     }
 
@@ -239,13 +262,16 @@ export class DecompositionEngine {
      * `dependsOn` entry is resolved to that id by `ref` first (primary), then
      * exact `title` (legacy fallback). Over-cap output and a dependency on
      * something never emitted both fail closed, so nothing the model produced is
-     * dropped. This holds even for an LLM that ignores `validate`.
+     * dropped. This holds even for an LLM that ignores `validate`, and so does the
+     * trace to the vision: a task naming no vision item, or one the vision does not
+     * hold, throws UntraceableTaskError.
      */
     private resolveTasks(
         rawTasks: readonly RawTask[],
         cap: number,
         parentId: string,
-    ): Array<WorkItemSpec & { taskSpec: TaskSpec }> {
+        visionItems: readonly VisionItem[],
+    ): Array<WorkItemSpec & { taskSpec: DecomposedTaskSpec }> {
         if (rawTasks.length > cap) {
             throw new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId });
         }
@@ -253,15 +279,17 @@ export class DecompositionEngine {
         const refToId = new Map<string, string>();
         const titleToId = new Map<string, string>();
         const assigned = rawTasks.map((raw) => {
+            const traced = traceToVision(raw, visionItems, parentId);
+            if (traced.kind === "untraceable") throw traced.error;
             const id = generateId("task");
             if (raw.ref) refToId.set(raw.ref, id);
             // First-writer-wins on duplicate titles so an edge resolves to the
             // earliest task with that title rather than being clobbered.
             if (!titleToId.has(raw.title)) titleToId.set(raw.title, id);
-            return { raw, id };
+            return { raw, id, tracedTexts: traced.texts };
         });
 
-        return assigned.map(({ raw, id }) => ({
+        return assigned.map(({ raw, id, tracedTexts }) => ({
             id,
             level: "task" as const,
             title: raw.title,
@@ -276,6 +304,7 @@ export class DecompositionEngine {
                 deliverables: raw.deliverables,
                 capability: "Strong",
                 origin: "decomposition" as const,
+                visionItems: tracedTexts,
             },
         }));
     }
@@ -325,6 +354,7 @@ export class DecompositionEngine {
             input.manifestContext,
             taskCap,
             input.environment,
+            input.visionItems,
         );
 
         // Every unresolvable edge a rejected attempt carried. The re-ask tells the
@@ -338,7 +368,7 @@ export class DecompositionEngine {
                 for (const unresolved of unresolvedDependencies(value.tasks)) {
                     unresolvedSeen.set(JSON.stringify([unresolved.dependentTaskTitle, unresolved.unresolvedRef]), unresolved);
                 }
-                return this.validateTasks(value.tasks, taskCap, epic.id);
+                return this.validateTasks(value.tasks, taskCap, epic.id, input.visionItems);
             },
         );
         // A ref that now resolves on the same task is kept, not dropped. An edge
@@ -348,7 +378,7 @@ export class DecompositionEngine {
             (seen) =>
                 !parsed.tasks.some((t) => t.title === seen.dependentTaskTitle && t.dependsOn.includes(seen.unresolvedRef)),
         );
-        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id), droppedDependencies };
+        return { tasks: this.resolveTasks(parsed.tasks, taskCap, epic.id, input.visionItems), droppedDependencies };
     }
 
     private buildPriorContext(priorResults?: PriorEpicResult[]): string {
@@ -382,9 +412,10 @@ export class DecompositionEngine {
         manifestContext: string | undefined,
         taskCap: number,
         environment: EnvironmentPlanning,
+        visionItems: readonly VisionItem[],
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."]}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "visionItems": ["S1"]}]}';
 
         const lines = [
             `${instruction}.`,
@@ -416,10 +447,17 @@ export class DecompositionEngine {
             lines.push(``, `Project manifest files found:`, manifestContext);
         }
 
+        lines.push(
+            ``,
+            `Vision items (what the client asked for, each with its id):`,
+            ...visionItems.map((item) => `- ${item.id}: ${item.text}`),
+        );
+
         const examples = DECOMPOSITION_EXAMPLES;
         lines.push(
             ``,
             `Task Quality Requirements:`,
+            `- In "visionItems", list the ids of the vision items above that the task delivers, at least one. Plan no behavior that no vision item asks for: a task that names no vision item, or names an id not listed above, is rejected.`,
             `- Emit at most ${taskCap} tasks. A response with more is rejected, not truncated: merge related work instead.`,
             `- Each task title must be a specific, actionable verb phrase (e.g., ${examples.titleExample}) not generic (e.g., "Implement functionality").`,
             `- Describe each task by what the product does when it is finished, in the client's terms.`,
@@ -488,12 +526,14 @@ function bulleted(lines: readonly string[]): string {
  * are commands of the project environment. `checksFor` names the task its checks decide,
  * since every implementation task depends on every check task and the edges cannot say.
  */
-function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): PlannedTask {
+function checkTaskFor(epicId: string, sprint0Id: string, task: DecomposedTask): PlannedTask {
     const goal =
         `Write the checks that decide whether "${task.title}" is done: observable behaviour from its deliverables ` +
         `and acceptance; each check is a command the project environment can run`;
     const description = [
         `${goal}.`,
+        `Vision items "${task.title}" delivers (its checks may test only these, and the inputs they say to reject):\n` +
+            bulleted(task.taskSpec.visionItems),
         `Deliverables of "${task.title}":\n${bulleted(task.taskSpec.deliverables)}`,
         `Acceptance of "${task.title}":\n${bulleted(task.successCriteria)}`,
     ].join("\n\n");
@@ -520,8 +560,103 @@ function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): Pla
             capability: "Strong",
             origin: "check",
             checksFor: task.id,
+            visionItems: task.taskSpec.visionItems,
         },
     };
+}
+
+/**
+ * The plan revision's review task (ADR-074 addendum 2 d71 c): after the last of its check tasks
+ * completes and before any of its decomposed tasks is dispatched, a reviewer who wrote none of the
+ * checks reads every stored suite together with the vision and names the checks no product can pass
+ * together and the checks that test what no vision item asks for. It depends on every check task and
+ * every decomposed task depends on it, so the gate does the ordering. Its vision items are every item.
+ */
+function reviewTaskFor(
+    epicId: string,
+    environmentId: string,
+    checks: readonly PlannedTask[],
+    visionItems: readonly VisionItem[],
+): PlannedTask {
+    const description = [
+        `Read every check this plan's check tasks wrote, all together and with the vision, before any of the plan's ` +
+            `work starts. Name every set of checks that no product could pass together, and every check that tests ` +
+            `behaviour no vision item asks for.`,
+        `Vision items:\n${bulleted(visionItems.map((item) => item.text))}`,
+    ].join("\n\n");
+    const successCriteria = [
+        "every stored check of the plan was read with the vision",
+        "every contradiction and every check outside the vision is named with the check task that wrote it",
+    ];
+    return {
+        id: generateId("task"),
+        level: "task",
+        title: "Review the plan's checks together against the vision",
+        description,
+        successCriteria,
+        parentId: epicId,
+        dependsOn: [environmentId, ...checks.map((check) => check.id)],
+        taskSpec: {
+            goal: description,
+            endState: successCriteria.join("; "),
+            scope: "every check of this plan revision",
+            deliverables: ["a structured review naming each problem, the check tasks involved and the evidence, or none"],
+            capability: "Strong",
+            origin: "review",
+            visionItems: visionItems.map((item) => item.text),
+        },
+    };
+}
+
+/**
+ * Adds the review task after every task of the plan: it depends on the environment task and on every
+ * check task, and every decomposed task depends on it (beside its edges to every check task, d67 a).
+ */
+function addReviewTask(
+    epicId: string,
+    environmentId: string,
+    tasks: readonly PlannedTask[],
+    dependencyEdges: Array<{ from: string; to: string }>,
+    visionItems: readonly VisionItem[],
+): PlannedTask[] {
+    const checks = tasks.filter((task) => task.taskSpec.origin === "check");
+    const review = reviewTaskFor(epicId, environmentId, checks, visionItems);
+    dependencyEdges.push({ from: review.id, to: environmentId });
+    for (const check of checks) dependencyEdges.push({ from: review.id, to: check.id });
+    for (const task of tasks.filter(isDecomposed)) dependencyEdges.push({ from: task.id, to: review.id });
+    return [...tasks, review];
+}
+
+type DecomposedTask = WorkItemSpec & { taskSpec: DecomposedTaskSpec };
+
+function isDecomposed(task: PlannedTask): task is DecomposedTask {
+    return task.taskSpec.origin === "decomposition";
+}
+
+type VisionTrace =
+    | { readonly kind: "traced"; readonly texts: string[] }
+    | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
+
+/**
+ * The vision items a raw task names, each by its prompt id or its exact text, as their texts in the
+ * vision's order. Untraceable when it names none, or names anything that is no item of the vision.
+ */
+function traceToVision(raw: RawTask, visionItems: readonly VisionItem[], parentId: string): VisionTrace {
+    const named = raw.visionItems.map((entry) => entry.trim());
+    const unknown = named.filter((entry) => !visionItems.some((item) => item.id === entry || item.text === entry));
+    if (named.length === 0 || unknown.length > 0) {
+        return {
+            kind: "untraceable",
+            error: new UntraceableTaskError({
+                taskTitle: raw.title,
+                unknown,
+                availableIds: visionItems.map((item) => item.id),
+                parentId,
+            }),
+        };
+    }
+    const texts = visionItems.filter((item) => named.includes(item.id) || named.includes(item.text)).map((item) => item.text);
+    return { kind: "traced", texts };
 }
 
 /** Every planned task depends on the environment task already done; returns its id. */
@@ -547,7 +682,7 @@ function addCheckTasks(
     tasks: readonly PlannedTask[],
     dependencyEdges: Array<{ from: string; to: string }>,
 ): PlannedTask[] {
-    const decomposed = tasks.filter((task) => task.taskSpec.origin === "decomposition");
+    const decomposed = tasks.filter(isDecomposed);
     const checkOf = new Map(decomposed.map((task) => [task.id, checkTaskFor(epicId, sprint0Id, task)]));
     for (const check of checkOf.values()) dependencyEdges.push({ from: check.id, to: sprint0Id });
     for (const task of decomposed) {

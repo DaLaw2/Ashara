@@ -1,7 +1,8 @@
 import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
+import { parseWorkItemJsonb } from "@ashara/shared";
 import type { Database } from "../connection.js";
-import { taskChecks, workItems } from "../schema.js";
+import { dependencies, taskChecks, workItems } from "../schema.js";
 
 // Quality's task checks (migration 036): the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.
@@ -62,6 +63,15 @@ class CheckedTaskMissing extends Error {
   }
 }
 
+/** A check task a review reads, as stored; nulls are what the row does not record. */
+interface CheckTaskUnderReview {
+  readonly id: string;
+  readonly status: string;
+  readonly checksFor: string | null;
+  readonly visionItems: readonly string[] | null;
+  readonly checkedTitle: string | null;
+}
+
 interface CompletedChecks {
   readonly checked: TaskChecksRecord[];
   /** Completed implementation tasks with no stored check: nothing of theirs can be re-run. */
@@ -88,6 +98,38 @@ export class TaskCheckRepository {
       )
       .orderBy(asc(workItems.id));
     return rows.map((row) => row.id);
+  }
+
+  /**
+   * The check tasks a review task depends on (ADR-074 addendum 2 d71 c): its plan revision's, each
+   * with its status, its task_spec as stored (parsed with the row) and the title of the task its
+   * checks decide (null when task_spec.checksFor names no work item). Oldest first.
+   */
+  async checkTasksUnderReview(reviewTaskId: string): Promise<CheckTaskUnderReview[]> {
+    const rows = await this.db
+      .select({
+        id: workItems.id,
+        projectId: workItems.projectId,
+        status: workItems.status,
+        taskSpec: workItems.taskSpec,
+        successCriteria: workItems.successCriteria,
+        blockedReason: workItems.blockedReason,
+        checkedTitle: sql<string | null>`(SELECT checked.title FROM work_items checked WHERE checked.id::text = ${workItems.taskSpec}->>'checksFor')`,
+      })
+      .from(dependencies)
+      .innerJoin(workItems, eq(workItems.id, dependencies.toId))
+      .where(and(eq(dependencies.fromId, reviewTaskId), eq(workItems.workKind, "check")))
+      .orderBy(asc(workItems.createdAt), asc(workItems.id));
+    return rows.map((row) => {
+      const { taskSpec } = parseWorkItemJsonb(row);
+      return {
+        id: row.id,
+        status: row.status,
+        checksFor: taskSpec?.checksFor ?? null,
+        visionItems: taskSpec?.visionItems ?? null,
+        checkedTitle: row.checkedTitle,
+      };
+    });
   }
 
   /**

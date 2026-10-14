@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, postPlanReport, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, postPlanReport, ProjectRepository, SuiteReviewFindingRepository } from "@ashara/db";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
@@ -83,6 +83,7 @@ afterAll(async () => {
     await db.execute(sql`DELETE FROM project_blocks WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM blocked_task_reports WHERE work_item_id IN (SELECT id FROM work_items WHERE project_id = ${id})`);
     await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${id}`);
+    await db.execute(sql`DELETE FROM suite_review_findings WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM work_items WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM projects WHERE id = ${id}`);
   }
@@ -241,5 +242,65 @@ describe("a blocked task is told once per time it is blocked", () => {
     expect(await statusOf(corrupt)).toBe("blocked");
     await reports().runPending();
     expect(await messagesOf(corrupt)).toEqual([expect.stringContaining("Ashara found a problem on its own side")]);
+  });
+});
+
+// ADR-074 addendum 2 d71 c (fifth run N20): a review that keeps naming one check task blocks the
+// project for its owner, with one plain report of what it found.
+describe("a review of a plan's suites past its bound blocks the project with one report", () => {
+  async function workItem(projectId: ProjectId, title: string, taskSpec: unknown): Promise<string> {
+    const id = randomUUID();
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id)
+      VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify(taskSpec)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+    return id;
+  }
+
+  test("the counts per check task survive in the record, and the block's report states the last review's problems", async () => {
+    const projectId = await newProject();
+    const review = await workItem(projectId, "Review the plan's checks", { origin: "review" });
+    const checkA = await workItem(projectId, "Write the checks for a", { origin: "check" });
+    const checkB = await workItem(projectId, "Write the checks for b", { origin: "check" });
+    const findings = new SuiteReviewFindingRepository(db);
+    const problem = "the checks of a print a column count that the checks of b forbid on stdout";
+
+    expect(
+      await findings.record({ projectId, reviewTaskId: review, problems: [{ checkTaskIds: [checkA], kind: "outside-vision", problem: "first", evidence: "e" }] }),
+    ).toEqual(new Map([[checkA, 1]]));
+    await findings.record({ projectId, reviewTaskId: review, problems: [{ checkTaskIds: [checkA], kind: "outside-vision", problem: "second", evidence: "e" }] });
+    const third = await findings.record({
+      projectId,
+      reviewTaskId: review,
+      problems: [{ checkTaskIds: [checkA, checkB], kind: "contradiction", problem, evidence: "wc -l; test -z" }],
+    });
+    expect(third).toEqual(new Map([[checkA, 3], [checkB, 1]]));
+
+    expect(
+      await reports().blockOnSuiteReview({ projectId, reviewTaskId: review, checkTaskId: checkA, times: 3, bound: 2, problems: [problem] }),
+    ).toBe("blocked");
+    await reports().runPending();
+    await reports().runPending();
+
+    expect(await statusOf(projectId)).toBe("blocked");
+    expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "suite_review", reported: true })]);
+    const bodies = await messagesOf(projectId);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("after 3 reviews");
+    expect(bodies[0]).toContain(`- ${problem}`);
+    expect(bodies[0]).not.toContain("first");
+    expect(bodies[0]).not.toContain(checkA);
+  });
+
+  test("a review task parked because its check tasks cannot be reopened is told in plain words", async () => {
+    const projectId = await newProject();
+    const id = randomUUID();
+    const reason = { source: "suite_review_unresolved", checkTaskIds: [randomUUID()], reason: "abandoned" };
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, blocked_reason, run_scope, project_id)
+      VALUES (${id}, 'Task', 'Blocked', 'Review the checks', ${JSON.stringify(reason)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+
+    await reports().runPending();
+
+    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("the review of the checks written for the plan found problems in them")]);
   });
 });
