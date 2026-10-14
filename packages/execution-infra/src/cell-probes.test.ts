@@ -4,7 +4,7 @@ import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
 function cellPrinting(stdout: string): Cell {
-  const result: ExecResult = { exitCode: 0, stdout, stderr: "", timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false };
+  const result: ExecResult = { exitCode: 0, stdout, stderr: "", timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null };
   return {
     id: "c".repeat(64),
     spec: { image: "img", project: "p", task: "t", role: "verifier", instance: "i", mount: { hostPath: "/nowhere" } },
@@ -22,7 +22,7 @@ describe("probeCredentialRead", () => {
       exec: (argv, options) => {
         calls.push({ argv, stdin: options.stdin });
         const result: ExecResult = {
-          exitCode: 0, stdout: `path ${path} absent\n`, stderr: "", timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false,
+          exitCode: 0, stdout: `path ${path} absent\n`, stderr: "", timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null,
         };
         return Promise.resolve(result);
       },

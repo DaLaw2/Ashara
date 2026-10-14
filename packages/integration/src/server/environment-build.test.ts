@@ -120,7 +120,7 @@ describe("environment image build", () => {
       { substrate, recorder: builds, timeoutMs: 120_000 },
     );
     // A reuse runs no build, so it carries no log; everything else is the first build's.
-    expect(built.reused ? null : built.log.truncated).toBe(false);
+    expect(built.reused ? null : built.log.every((piece) => piece.kind === "kept")).toBe(true);
     const { reused: _reused, ...identity } = again;
     expect(again.reused).toBe(true);
     expect(built).toMatchObject(identity);
@@ -157,7 +157,7 @@ describe("environment image build", () => {
       { substrate, recorder: builds, timeoutMs: 120_000 },
     ).catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(EnvironmentBuildFailed);
-    expect(failure).toMatchObject({ exitCode: expect.any(Number), logTail: expect.stringContaining("secret.txt") });
+    expect(failure).toMatchObject({ exitCode: expect.any(Number), message: expect.stringContaining("secret.txt") });
     const recorded = await rows();
     expect(recorded).toHaveLength(2);
     expect(recorded[1]).toMatchObject({ status: "failed", network: "private", image_id: null, error: expect.stringContaining("failed") });

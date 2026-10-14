@@ -69,17 +69,17 @@ function sha256(text: string): string {
 function result(request: ProcessRequest, outcome: SimOutcome): ProcessResult {
   if (outcome.hung) {
     return {
-      exitCode: null, signal: "SIGKILL", stdout: outcome.stdout, stdoutTruncated: false, stderr: outcome.stderr,
-      stderrTruncated: false, killedByHost: true, stdinError: null, statusReport: request.statusChannel === true ? "" : null,
+      exitCode: null, signal: "SIGKILL", stdout: outcome.stdout, stdoutCut: null, stderr: outcome.stderr,
+      stderrCut: null, killedByHost: true, stdinError: null, statusReport: request.statusChannel === true ? "" : null,
     };
   }
   return {
     exitCode: outcome.exitCode,
     signal: null,
     stdout: outcome.stdout,
-    stdoutTruncated: false,
+    stdoutCut: null,
     stderr: outcome.stderr,
-    stderrTruncated: false,
+    stderrCut: null,
     killedByHost: false,
     stdinError: null,
     statusReport: request.statusChannel === true ? `${outcome.exitCode}\n` : null,

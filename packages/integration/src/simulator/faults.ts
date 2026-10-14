@@ -415,7 +415,7 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
     const specific = PODMAN_FAULT_OF[subcommand];
     const fate = await context.scheduler.enter(context.instance, "podman", label, specific === undefined ? [] : [specific]);
     const failed = (exitCode: number, stderr: string): Awaited<ReturnType<ProcessRunner>> => ({
-      exitCode, signal: null, stdout: "", stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null,
+      exitCode, signal: null, stdout: "", stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null,
       statusReport: request.statusChannel === true ? "" : null,
     });
     if (fate.fault === "substrate-down") return failed(125, "Error: unable to connect to Podman socket (simulated)");

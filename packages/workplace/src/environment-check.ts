@@ -1,8 +1,5 @@
-/** The end of a log, and whether anything before it was cut. */
-export interface LogTail {
-  readonly text: string;
-  readonly truncated: boolean;
-}
+import { renderElided, shownText } from "@ashara/shared";
+import type { ElidedText } from "@ashara/shared";
 
 /** One of the definition's commands (`probe`, `build` or `test`), run in a cell from the built image. */
 export interface EnvironmentTestRun {
@@ -10,8 +7,9 @@ export interface EnvironmentTestRun {
   /** null when the host had to kill the podman client (timedOut is then true) or the command's exit status was lost in the cell. */
   readonly exitCode: number | null;
   readonly timedOut: boolean;
-  readonly stdout: LogTail;
-  readonly stderr: LogTail;
+  /** Each stream with its middle cut to a bound; every cut is counted. */
+  readonly stdout: ElidedText;
+  readonly stderr: ElidedText;
 }
 
 /**
@@ -40,12 +38,12 @@ export type EnvironmentCheckReport =
   | { readonly kind: "definition_refused"; readonly detail: string }
   /** The work adds, changes or deletes paths outside the recipe. */
   | { readonly kind: "out_of_scope"; readonly recipe: readonly string[]; readonly paths: readonly string[] }
-  | { readonly kind: "build_failed"; readonly version: string; readonly detail: string; readonly log: LogTail }
+  | { readonly kind: "build_failed"; readonly version: string; readonly detail: string; readonly log: ElidedText }
   | {
       readonly kind: "tested";
       readonly version: string;
       readonly imageRef: string;
-      readonly build: { readonly kind: "reused" } | { readonly kind: "built"; readonly log: LogTail };
+      readonly build: { readonly kind: "reused" } | { readonly kind: "built"; readonly log: ElidedText };
       readonly probe: EnvironmentTestRun;
     };
 
@@ -65,7 +63,7 @@ export function environmentBuildPassed(build: EnvironmentTestRun): boolean {
 
 /** `test` or `probe` passed: it exited 0 within its time and printed something (an empty pass proves nothing). */
 export function environmentProbePassed(run: EnvironmentTestRun): boolean {
-  return run.exitCode === 0 && !run.timedOut && `${run.stdout.text}${run.stderr.text}`.trim() !== "";
+  return run.exitCode === 0 && !run.timedOut && `${shownText(run.stdout)}${shownText(run.stderr)}`.trim() !== "";
 }
 
 /** `build` and `test` passed and left the checkout clean: the scaffold's verdict, and a rebuilt environment's. */
@@ -83,9 +81,9 @@ export function environmentCheckPassed(report: EnvironmentCheckReport): boolean 
   return report.kind === "tested" && environmentProbePassed(report.probe);
 }
 
-function logSection(title: string, log: LogTail): string {
-  const body = log.text === "" ? "(empty)" : log.text;
-  return log.truncated ? `${title} (truncated: only its end is shown):\n${body}` : `${title}:\n${body}`;
+function logSection(title: string, log: ElidedText): string {
+  const body = renderElided(log);
+  return `${title}:\n${body === "" ? "(empty)" : body}`;
 }
 
 function commandSection(label: "Build" | "Test" | "Probe", run: EnvironmentTestRun, verdict: string): string {

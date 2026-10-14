@@ -14,15 +14,16 @@ import {
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
+  elidedOutput,
   parseEnvironmentDefinition,
   readEnvironmentDefinition,
   recipePaths,
   runHostGit,
 } from "@ashara/execution-infra";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, keepEnds } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { environmentBuildPassed } from "@ashara/workplace";
-import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun, LogTail } from "@ashara/workplace";
+import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun } from "@ashara/workplace";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { TreePathRefused, readTreeFile } from "./tree-read.js";
 import type { TreeFileRead } from "./tree-read.js";
@@ -37,8 +38,8 @@ import { cleanupWorkdir } from "./workspace.js";
 // and the toolchain probe, never the product's build or test on a tree that holds no product.
 
 const MAX_DEFINITION_BYTES = 64 * 1024;
-/** Longest end of a command's stdout or stderr kept for the model and the gate record. */
-const TEST_LOG_TAIL_CHARS = 4000;
+/** Most characters of a command's stdout or stderr kept, head and tail, for the model and the gate record. */
+const TEST_LOG_CHARS = 4000;
 const CHECK_REF_PREFIX = "refs/ashara/environment-check/";
 const REF_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -113,19 +114,14 @@ export interface TestedEnvironment {
   readonly definition: EnvironmentDefinition;
 }
 
-function tailOf(text: string, alreadyTruncated: boolean): LogTail {
-  if (text.length <= TEST_LOG_TAIL_CHARS) return { text, truncated: alreadyTruncated };
-  return { text: text.slice(-TEST_LOG_TAIL_CHARS), truncated: true };
-}
-
 async function runCommand(cell: Cell, command: string, timeoutSeconds: number): Promise<EnvironmentTestRun> {
   const result = await cell.exec(["sh", "-c", command], { timeoutSeconds });
   return {
     command,
     exitCode: result.exitCode,
     timedOut: result.timedOut,
-    stdout: tailOf(result.stdout, result.stdoutTruncated),
-    stderr: tailOf(result.stderr, result.stderrTruncated),
+    stdout: keepEnds(elidedOutput(result.stdout, result.stdoutCut), TEST_LOG_CHARS),
+    stderr: keepEnds(elidedOutput(result.stderr, result.stderrCut), TEST_LOG_CHARS),
   };
 }
 
@@ -197,7 +193,7 @@ async function buildAndProbe(
     built = await scope.images.build({ projectId: scope.projectId, repoGitDir: scope.repo.gitDir, commit, definition });
   } catch (err) {
     if (err instanceof EnvironmentBuildFailed) {
-      return { kind: "build_failed", version: err.version, detail: err.detail, log: { text: err.logTail, truncated: err.logTruncated } };
+      return { kind: "build_failed", version: err.version, detail: err.detail, log: err.log };
     }
     if (err instanceof EnvironmentVersionUnresolved) return { kind: "definition_refused", detail: err.reason };
     throw err;

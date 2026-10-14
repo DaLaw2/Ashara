@@ -83,9 +83,9 @@ describe("cell on real podman", () => {
 
     await backend.writeFile("src/notes.txt", "alpha\nneedle here\n");
     expect(await readFile(join(workspace, "src", "notes.txt"), "utf8")).toBe("alpha\nneedle here\n");
-    expect(await backend.readFile("src/notes.txt")).toEqual({ text: "alpha\nneedle here\n", truncated: false });
-    expect((await backend.listDirectory(".", 2)).entries).toEqual(["src/", "src/notes.txt"]);
-    expect((await backend.search("need+le", ".")).text.trim()).toBe("src/notes.txt:2:needle here");
+    expect(await backend.readFile("src/notes.txt")).toEqual([{ kind: "kept", text: "alpha\nneedle here\n" }]);
+    expect(await backend.listDirectory(".", 2)).toEqual([{ kind: "kept", text: "src/\nsrc/notes.txt\n" }]);
+    expect(await backend.search("need+le", ".")).toEqual([{ kind: "kept", text: "src/notes.txt:2:needle here\n" }]);
 
     const ran = await backend.run("echo hi; echo err >&2; exit 3", 30);
     expect(ran).toMatchObject({ exitCode: 3, stdout: "hi\n", stderr: "err\n", timedOut: false });

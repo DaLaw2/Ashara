@@ -10,7 +10,7 @@ import type { CellBackend } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { RUN_SCOPE_AD_HOC, createAgentBrief, createSessionId, parseWorkItemId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
 import type { AttemptCellImage } from "@ashara/workplace";
@@ -58,19 +58,19 @@ function memoryCell(): CellBackend {
   const files = new Map<string, string>();
   return {
     async readFile(path) {
-      return { text: files.get(path) ?? "", truncated: false };
+      return wholeText(files.get(path) ?? "");
     },
     async writeFile(path, content) {
       files.set(path, content);
     },
     async listDirectory() {
-      return { entries: [...files.keys()].sort(), truncated: false };
+      return wholeText([...files.keys()].sort().join("\n"));
     },
     async search() {
-      return { text: "", truncated: false };
+      return wholeText("");
     },
     async run() {
-      return { exitCode: 0, stdout: "", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: false };
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false, stdoutCut: null, stderrCut: null, statusLost: false };
     },
   };
 }

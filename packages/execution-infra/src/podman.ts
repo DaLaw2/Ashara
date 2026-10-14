@@ -16,7 +16,7 @@ import {
   TeardownIncomplete,
 } from "./errors.js";
 import { snapshotRepository } from "./host-git.js";
-import { spawnProcess, type ProcessRequest, type ProcessResult, type ProcessRunner } from "./process-runner.js";
+import { spawnProcess, type ProcessRequest, type ProcessResult, type ProcessRunner, type StreamCut } from "./process-runner.js";
 import { WORKSPACE_ROOT, toWorkspaceAbsolute } from "./workspace-path.js";
 
 const LABEL_MANAGED = "ashara.managed";
@@ -257,8 +257,9 @@ export interface ExecResult {
    * the command ran. The command's own result, its exit status unknown: exitCode is null.
    */
   readonly statusLost: boolean;
-  readonly stdoutTruncated: boolean;
-  readonly stderrTruncated: boolean;
+  /** Where the middle of stdout was cut past the output cap, and how many characters; null when it is whole. */
+  readonly stdoutCut: StreamCut | null;
+  readonly stderrCut: StreamCut | null;
 }
 
 export interface Cell {
@@ -567,12 +568,12 @@ class PodmanCell implements Cell {
   }
 }
 
-function streams(result: ProcessResult): Pick<ExecResult, "stdout" | "stderr" | "stdoutTruncated" | "stderrTruncated"> {
+function streams(result: ProcessResult): Pick<ExecResult, "stdout" | "stderr" | "stdoutCut" | "stderrCut"> {
   return {
     stdout: result.stdout,
     stderr: result.stderr,
-    stdoutTruncated: result.stdoutTruncated,
-    stderrTruncated: result.stderrTruncated,
+    stdoutCut: result.stdoutCut,
+    stderrCut: result.stderrCut,
   };
 }
 

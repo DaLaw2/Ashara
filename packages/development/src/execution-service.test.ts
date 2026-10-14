@@ -408,7 +408,7 @@ function serviceOn(
           probe.builds++;
           const { version, commit } = await environmentVersion(request.repoGitDir, request.commit, request.definition);
           if (probe.rebuildFails && probe.builds > 1) {
-            throw new EnvironmentBuildFailed(request.projectId, version, 1, false, "step 2/2: missing package\n", false, "the image build exited 1");
+            throw new EnvironmentBuildFailed(request.projectId, version, 1, false, [{ kind: "kept", text: "step 2/2: missing package\n" }], "the image build exited 1");
           }
           probe.version = version;
           return {
@@ -531,7 +531,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const { service, probe, events } = serviceOn(substrate, workdirBase);
@@ -568,7 +568,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const unresolved = { kind: "owner-unresolved", ownerRoleId: null, rosterRevision: 1, reason: "the work item has no owner role" } as const;
@@ -615,7 +615,7 @@ describe("a task nothing could decide ends before the agent", () => {
       mountRoot: root,
       runner: async (request) => {
         if (request.args[0] !== "info") throw new Error(`no cell may be created: podman ${request.args.join(" ")}`);
-        return { exitCode: 0, signal: null, stdout: info, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
+        return { exitCode: 0, signal: null, stdout: info, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
     const workdirBase = join(root, "work");
@@ -738,7 +738,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   const FOUNDATION_BUILD_ID = "9".repeat(64);
 
   const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
-    exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null, statusReport,
+    exitCode, signal: null, stdout, stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null, statusReport,
   });
   /** An exec the in-cell wrapper reported the command's own status for. */
   const ran = (stdout: string, exitCode = 0) => ok(stdout, exitCode, "", `${exitCode}\n`);

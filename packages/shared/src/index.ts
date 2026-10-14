@@ -98,3 +98,6 @@ export type { ContractRepository } from "./repository-ports.js";
 
 export { CONVERSATION_RECORDS_DIR } from "./workspace-layout.js";
 
+
+export type { ElidedText } from "./elided-text.js";
+export { cutText, headBudget, joinElided, keepEnds, renderElided, shownText, uncutText, wholeText } from "./elided-text.js";

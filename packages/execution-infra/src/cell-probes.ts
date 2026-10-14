@@ -108,7 +108,7 @@ export async function probeCredentialRead(cell: Cell, canaries: CredentialCanari
   const readable = pathLines.filter((line) => line.endsWith(" readable"));
   const searched = lines.filter((line) => !headers.has(line)).join("\n");
   const leaked = canaries.values.filter(({ value }) => value !== "" && searched.includes(value)).map(({ name }) => name);
-  const held = !result.stdoutTruncated && leaked.length === 0 && pathLines.length === canaries.paths.length;
+  const held = result.stdoutCut === null && leaked.length === 0 && pathLines.length === canaries.paths.length;
   return {
     probe,
     held,
@@ -116,7 +116,7 @@ export async function probeCredentialRead(cell: Cell, canaries: CredentialCanari
       `${pathLines.join("; ") || "no path probed"}; ${canaries.values.length} value(s) searched in the cell's output, ` +
       (leaked.length === 0 ? "none found" : `found: ${leaked.join(", ")}`) +
       (readable.length > 0 ? `; ${readable.length} path(s) readable at their host path (their content is not a credential unless a value matched)` : "") +
-      (result.stdoutTruncated ? "; the output was truncated, so the search is incomplete" : ""),
+      (result.stdoutCut !== null ? "; the output was truncated, so the search is incomplete" : ""),
   };
 }
 

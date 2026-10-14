@@ -208,7 +208,7 @@ const run = promisify(execFile);
 /** A substrate whose podman answers from a script: every cell starts, every exec succeeds. */
 function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
   const ok = (stdout = "") => ({
-    exitCode: 0, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null,
+    exitCode: 0, signal: null, stdout, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null,
     statusReport: null,
   });
   return new PodmanSubstrate({

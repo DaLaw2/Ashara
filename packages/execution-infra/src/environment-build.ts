@@ -3,19 +3,20 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
-import type { ProjectId } from "@ashara/shared";
+import { describeErrorChain, joinElided, keepEnds, renderElided } from "@ashara/shared";
+import type { ElidedText, ProjectId } from "@ashara/shared";
 import { buildLimitArgs } from "./cell-limits.js";
 import { materializeSnapshot, snapshotEnvironment, type EnvironmentDefinition } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentBuildUnrecorded, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
 import type { PodmanSubstrate } from "./podman.js";
+import { elidedOutput } from "./process-runner.js";
 
 /**
  * podman build's own default network namespace. ADR-074 addendum 2 d62: only this Z0-run build of
  * the environment reaches the network; every cell keeps --network=none.
  */
 const BUILD_NETWORK = "private";
-const LOG_TAIL_CHARS = 4000;
+const LOG_CHARS = 4000;
 const VERSION_TAG_CHARS = 16;
 
 const LABEL_MANAGED = "ashara.managed";
@@ -84,22 +85,14 @@ interface EnvironmentBuildDeps {
   readonly timeoutMs: number;
 }
 
-/** The last LOG_TAIL_CHARS characters of a build's log, and whether anything before them was cut. */
-interface BuildLogTail {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
 export type BuiltEnvironment = EnvironmentBuildIdentity & { readonly imageId: string } & (
     /** An image already built for this project and version was used as is: no build ran, so there is no log. */
     | { readonly reused: true }
-    | { readonly reused: false; readonly log: BuildLogTail }
+    /** The build's log, its middle cut past LOG_CHARS characters. */
+    | { readonly reused: false; readonly log: ElidedText }
   );
 
 
-function tailOf(log: string): BuildLogTail {
-  return log.length <= LOG_TAIL_CHARS ? { text: log, truncated: false } : { text: log.slice(-LOG_TAIL_CHARS), truncated: true };
-}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -246,17 +239,16 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     if (recorded !== null && recorded.imageId === existing) return { ...identity, imageId: existing, reused: true };
   }
 
-  const fail = async (exitCode: number | null, timedOut: boolean, log: string, detail: string, cause?: unknown): Promise<never> => {
-    const tail = tailOf(log);
+  const fail = async (exitCode: number | null, timedOut: boolean, log: ElidedText, detail: string, cause?: unknown): Promise<never> => {
     const error = new EnvironmentBuildFailed(
-      request.projectId, snapshot.version, exitCode, timedOut, tail.text, tail.truncated, detail,
+      request.projectId, snapshot.version, exitCode, timedOut, keepEnds(log, LOG_CHARS), detail,
       cause === undefined ? undefined : { cause },
     );
     try {
-      await deps.recorder.recordFailed({ ...identity, logDigest: sha256(log), error: error.message });
+      await deps.recorder.recordFailed({ ...identity, logDigest: sha256(renderElided(log)), error: error.message });
     } catch (recordErr) {
       throw new EnvironmentBuildFailed(
-        request.projectId, snapshot.version, exitCode, timedOut, tail.text, tail.truncated,
+        request.projectId, snapshot.version, exitCode, timedOut, error.log,
         `${detail}; recording the failed build also failed: ${describeErrorChain(recordErr)}`,
         { cause: error },
       );
@@ -272,7 +264,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       await mkdir(context);
       await materializeSnapshot(request.repoGitDir, snapshot, context);
     } catch (err) {
-      return await fail(null, false, "", `the build context could not be exported: ${describeErrorChain(err)}`, err);
+      return await fail(null, false, [], `the build context could not be exported: ${describeErrorChain(err)}`, err);
     }
 
     const args = [
@@ -289,8 +281,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       context,
     ];
     const result = await deps.substrate.run(args, { killAfterMs: deps.timeoutMs });
-    const truncated = result.stdoutTruncated || result.stderrTruncated ? "\n[output truncated]" : "";
-    const log = `${result.stdout}${result.stderr}${truncated}`;
+    const log = joinElided([elidedOutput(result.stdout, result.stdoutCut), elidedOutput(result.stderr, result.stderrCut)]);
     if (result.killedByHost) return await fail(null, true, log, `podman build ran past ${deps.timeoutMs} ms and was killed`);
     if (result.exitCode !== 0) {
       return await fail(result.exitCode, false, log, `podman build exited ${result.exitCode ?? `by signal ${result.signal ?? "unknown"}`}`);
@@ -303,11 +294,11 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       return await fail(result.exitCode, false, log, `podman build succeeded but wrote no valid image id: ${describeErrorChain(err)}`, err);
     }
     try {
-      await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(log) });
+      await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(renderElided(log)) });
     } catch (err) {
       throw new EnvironmentBuildUnrecorded({ ...identity, imageId }, describeErrorChain(err), { cause: err });
     }
-    return { ...identity, imageId, reused: false, log: tailOf(log) };
+    return { ...identity, imageId, reused: false, log: keepEnds(log, LOG_CHARS) };
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

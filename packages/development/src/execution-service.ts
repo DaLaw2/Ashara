@@ -18,7 +18,7 @@ import {
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, Clock, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
-import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief, renderElided } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   AssignmentRole,
@@ -103,9 +103,9 @@ import {
 } from "./workspace.js";
 import type { WorkdirInfo } from "./workspace.js";
 import { branchExists, discardTaskBranch, taskBranchName } from "./merge.js";
-import type { KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
+import type { KnowledgeSection, KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import type { SuiteReviewing } from "./suite-review.js";
-import { buildKnowledgeQueryText, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
+import { buildKnowledgeQueryText, renderKnowledgeContext, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
 
 async function pathExists(path: string): Promise<boolean> {
   return access(path).then(
@@ -1667,43 +1667,29 @@ export class DevelopmentService {
       queryText: buildKnowledgeQueryText(task.title, spec),
     };
 
-    const MAX_CHARS = 8000; // ~2K tokens
-    const sections: string[] = ["# Prior Knowledge"];
-    let charCount = sections[0].length;
+    const sections: KnowledgeSection[] = [];
 
     try {
       const findings = await source.recentFindings(scope, 10);
-      if (findings.length > 0) {
-        const lines = ["## Recent Findings"];
-        for (const f of findings) {
-          const line = `- "${f.title}" (source: ${f.source})\n  ${f.contentSnippet}`;
-          if (charCount + line.length > MAX_CHARS) break;
-          lines.push(line);
-          charCount += line.length;
-        }
-        if (lines.length > 1) sections.push(lines.join("\n"));
-      }
+      sections.push({
+        heading: "## Recent Findings",
+        entries: findings.map((f) => `- "${f.title}" (source: ${f.source})\n  ${f.contentSnippet}`),
+      });
     } catch (e: unknown) {
       console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${describeErrorChain(e)}`);
     }
 
     try {
       const approaches = await source.failedApproaches(scope, 10);
-      if (approaches.length > 0) {
-        const lines = ["## Failed Approaches — do not repeat"];
-        for (const a of approaches) {
-          const line = `- "${a.title}" — Failed: ${a.failureReason} (affected: ${a.affectedArea})\n  Learned: ${a.learned}`;
-          if (charCount + line.length > MAX_CHARS) break;
-          lines.push(line);
-          charCount += line.length;
-        }
-        if (lines.length > 1) sections.push(lines.join("\n"));
-      }
+      sections.push({
+        heading: "## Failed Approaches — do not repeat",
+        entries: approaches.map((a) => `- "${a.title}" — Failed: ${a.failureReason} (affected: ${a.affectedArea})\n  Learned: ${a.learned}`),
+      });
     } catch (e: unknown) {
       console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${describeErrorChain(e)}`);
     }
 
-    return sections.length > 1 ? sections.join("\n\n") : "";
+    return renderKnowledgeContext(sections);
   }
 
   private async runExecution(d: Dispatch, slot: AttemptSlot): Promise<ExecutionResult> {
@@ -2671,7 +2657,7 @@ export class DevelopmentService {
     } catch (e) {
       if (e instanceof EnvironmentBuildFailed) {
         return refused(
-          `${change}, and its image could not be built: ${e.detail}\nBuild log${e.logTruncated ? " (its end)" : ""}:\n${e.logTail.trim() || "(empty)"}`,
+          `${change}, and its image could not be built: ${e.detail}\nBuild log:\n${renderElided(e.log).trim() || "(empty)"}`,
         );
       }
       if (e instanceof EnvironmentVersionUnresolved) return refused(`${change}, and it cannot be built: ${e.message}`);

@@ -1,16 +1,41 @@
+import { joinElided, wholeText } from "@ashara/shared";
+import type { ElidedText } from "@ashara/shared";
 import { CellToolFailed, InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
+import { elidedOutput } from "./process-runner.js";
 import { stripDotSlash, toWorkspaceRelative } from "./workspace-path.js";
 
-interface TextOutput {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-interface Listing {
-  /** Workspace-relative paths; directories end in "/". Sorted. */
-  readonly entries: readonly string[];
-  readonly truncated: boolean;
+/**
+ * A utility's line output with each line's leading "./" stripped and, when `sort`, the lines sorted. Past the output
+ * cap the middle was cut: a line split by the cut is dropped whole and counted with it, and the lines on each side
+ * are sorted on their own. Counts are of the characters the utility printed.
+ */
+function lineOutput(result: ExecResult, sort: boolean): ElidedText {
+  const pieces = elidedOutput(result.stdout, result.stdoutCut);
+  const out: ElidedText[] = [];
+  pieces.forEach((piece, i) => {
+    if (piece.kind === "cut") {
+      out.push([piece]);
+      return;
+    }
+    let text = piece.text;
+    let before = 0;
+    let after = 0;
+    if (i > 0) {
+      const firstBreak = text.indexOf("\n");
+      before = firstBreak === -1 ? text.length : firstBreak + 1;
+      text = text.slice(before);
+    }
+    if (i < pieces.length - 1) {
+      after = text.length - (text.lastIndexOf("\n") + 1);
+      text = text.slice(0, text.length - after);
+    }
+    const lines = text.split("\n").filter((line) => line !== "").map(stripDotSlash);
+    if (sort) lines.sort();
+    const body = lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+    out.push([{ kind: "cut", chars: before }], wholeText(body), [{ kind: "cut", chars: after }]);
+  });
+  return joinElided(out);
 }
 
 /**
@@ -18,11 +43,12 @@ interface Listing {
  * are workspace-relative and resolved inside the cell. There is no host implementation.
  */
 export interface CellBackend {
-  readFile(path: string): Promise<TextOutput>;
+  readFile(path: string): Promise<ElidedText>;
   writeFile(path: string, content: string): Promise<void>;
-  listDirectory(path: string, depth: number): Promise<Listing>;
+  /** Workspace-relative paths, one per line; directories end in "/". Sorted. */
+  listDirectory(path: string, depth: number): Promise<ElidedText>;
   /** Extended regular expression, recursive under `path`; lines are "<path>:<line>:<text>". */
-  search(pattern: string, path: string): Promise<TextOutput>;
+  search(pattern: string, path: string): Promise<ElidedText>;
   /** `sh -c <command>` under `timeout`; the result is the command's, whatever its exit code. */
   run(command: string, timeoutSeconds: number): Promise<ExecResult>;
 }
@@ -49,7 +75,7 @@ export function createCellBackend(cell: Pick<Cell, "exec">, options: CellBackend
   return {
     async readFile(path) {
       const result = await tool("readFile", ["cat", "--", toWorkspaceRelative(path)], [0]);
-      return { text: result.stdout, truncated: result.stdoutTruncated };
+      return elidedOutput(result.stdout, result.stdoutCut);
     },
 
     async writeFile(path, content) {
@@ -67,16 +93,14 @@ export function createCellBackend(cell: Pick<Cell, "exec">, options: CellBackend
         "-type", "d", "-exec", "printf", "%s/\\n", "{}", "+", "-o", "-print",
       ];
       const result = await tool("listDirectory", argv, [0]);
-      const entries = result.stdout.split("\n").filter((line) => line !== "").map(stripDotSlash).sort();
-      return { entries, truncated: result.stdoutTruncated };
+      return lineOutput(result, true);
     },
 
     async search(pattern, path) {
       if (pattern === "") throw new InvalidCellRequest("search", ["pattern must not be empty"]);
       // grep exits 1 for "no match", which is an answer, not a failure.
       const result = await tool("search", ["grep", "-rn", "-E", "-e", pattern, "--", toWorkspaceRelative(path)], [0, 1]);
-      const text = result.stdout.split("\n").map(stripDotSlash).join("\n");
-      return { text, truncated: result.stdoutTruncated };
+      return lineOutput(result, false);
     },
 
     async run(command, runTimeoutSeconds) {

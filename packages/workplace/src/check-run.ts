@@ -5,7 +5,7 @@ export interface CheckRun {
   /** null when the host had to kill the podman client (timedOut is then true) or the command's exit status was lost in the cell. */
   readonly exitCode: number | null;
   readonly timedOut: boolean;
-  /** The end of stdout and stderr together. */
+  /** stdout and stderr together, their middle cut to a bound with a marker counting the characters cut. */
   readonly output: string;
 }
 

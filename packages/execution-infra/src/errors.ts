@@ -4,6 +4,9 @@
  * code and stderr where one exists.
  */
 
+import { renderElided } from "@ashara/shared";
+import type { ElidedText } from "@ashara/shared";
+
 class ExecutionInfraError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -309,9 +312,8 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
   readonly version: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
-  readonly logTail: string;
-  /** Whether the log was longer than logTail, which is then only its end. */
-  readonly logTruncated: boolean;
+  /** The build's log, its middle cut to a bound. */
+  readonly log: ElidedText;
   readonly detail: string;
 
   constructor(
@@ -319,14 +321,13 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
     version: string,
     exitCode: number | null,
     timedOut: boolean,
-    logTail: string,
-    logTruncated: boolean,
+    log: ElidedText,
     detail: string,
     options?: ErrorOptions,
   ) {
     super(
       `Environment build of project ${projectId} version ${version} failed (exit ${exitCode ?? "none"}` +
-        `${timedOut ? ", timed out" : ""}): ${detail}; log tail: ${logTail.trim() || "(empty)"}`,
+        `${timedOut ? ", timed out" : ""}): ${detail}; log: ${renderElided(log).trim() || "(empty)"}`,
       options,
     );
     this.name = "EnvironmentBuildFailed";
@@ -334,8 +335,7 @@ export class EnvironmentBuildFailed extends ExecutionInfraError {
     this.version = version;
     this.exitCode = exitCode;
     this.timedOut = timedOut;
-    this.logTail = logTail;
-    this.logTruncated = logTruncated;
+    this.log = log;
     this.detail = detail;
   }
 }

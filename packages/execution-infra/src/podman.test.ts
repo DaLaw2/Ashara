@@ -28,7 +28,7 @@ const IMAGE = "docker.io/library/debian:12-slim@sha256:" + "c".repeat(64);
 const LIMITS = { memoryBytes: 512 * 1024 * 1024, cpus: 1.5, pids: 256 };
 
 function ok(stdout = "", exitCode: number | null = 0): ProcessResult {
-  return { exitCode, signal: null, stdout, stdoutTruncated: false, stderr: "", stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null };
+  return { exitCode, signal: null, stdout, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
 }
 
 /** An exec whose in-cell wrapper reported the command's own status on fd 3. */
@@ -310,8 +310,8 @@ describe("PodmanSubstrate argv", () => {
       stderr: "partial err",
       timedOut: false,
       statusLost: true,
-      stdoutTruncated: false,
-      stderrTruncated: false,
+      stdoutCut: null,
+      stderrCut: null,
     });
     // The probe is the sweep: it also ends what the command left that the dead wrapper never swept.
     expect(requests[2]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
@@ -415,7 +415,7 @@ describe("CellBackend", () => {
       cell: {
         exec: async (argv: readonly string[], options: { stdin?: string | Buffer; timeoutSeconds: number }) => {
           calls.push({ argv, stdin: options.stdin });
-          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false, ...result };
+          return { exitCode: 0, stdout: "", stderr: "", timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null, ...result };
         },
       },
     };
@@ -438,7 +438,19 @@ describe("CellBackend", () => {
       ["sh", "-c", "make test"],
     ]);
     expect(calls[1]?.stdin).toBe("body");
-    expect(listing.entries).toEqual(["src/", "src/a.ts"]);
+    expect(listing).toEqual([{ kind: "kept", text: "src/\nsrc/a.ts\n" }]);
+  });
+
+  it("drops a listing line the output cap split and counts it with the cut, sorting each side on its own", async () => {
+    // Kept: "./b\n./a\n./sp" | 500 characters cut | "lit\n./d\n./c\n".
+    const head = "./b\n./a\n./sp";
+    const { cell } = fakeCell({ stdout: `${head}lit\n./d\n./c\n`, stdoutCut: { at: head.length, chars: 500 } });
+    const backend = createCellBackend(cell, { toolTimeoutSeconds: 10 });
+    expect(await backend.listDirectory(".", 1)).toEqual([
+      { kind: "kept", text: "a\nb\n" },
+      { kind: "cut", chars: 4 + 500 + 4 },
+      { kind: "kept", text: "c\nd\n" },
+    ]);
   });
 
   it("rejects absolute paths and '..' escapes before any exec", async () => {

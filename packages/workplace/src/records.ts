@@ -1,15 +1,19 @@
 import type { TokenUsage } from "@ashara/llm-gateway";
-import { serializeError } from "@ashara/shared";
-import type { SerializedError } from "@ashara/shared";
+import { cutText, keepEnds, renderElided, serializeError } from "@ashara/shared";
+import type { ElidedText, SerializedError } from "@ashara/shared";
 import type { Outcome } from "./outcome.js";
 
 /** Longest tool output, input or model text kept, in the conversation and in the records alike. */
 const MAX_TEXT_CHARS = 30_000;
 
-/** Cuts `text` to `limit` characters and says so in the text itself, so a reader never mistakes a cut for the whole. */
-export function truncateText(text: string, limit: number = MAX_TEXT_CHARS): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n[truncated by Ashara: ${limit} of ${text.length} characters shown]`;
+/** `text` cut to MAX_TEXT_CHARS, both ends kept, the characters cut counted in the text itself. */
+export function truncateText(text: string): string {
+  return cutText(text, MAX_TEXT_CHARS);
+}
+
+/** A text the output caps may already have cut, cut to MAX_TEXT_CHARS: its earlier cuts and this one are counted together. */
+export function truncateElided(text: ElidedText): string {
+  return renderElided(keepEnds(text, MAX_TEXT_CHARS));
 }
 
 export function describeInput(input: unknown): string {

@@ -25,7 +25,7 @@ function ours(version: string | null): Record<string, string> {
 function substrateListing(images: unknown[], containers: unknown[], rmExit: (imageId: string) => number = () => 0) {
   const calls: string[][] = [];
   const done = (stdout: string, exitCode = 0, stderr = "") => ({
-    exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null, statusReport: null,
+    exitCode, signal: null, stdout, stdoutCut: null, stderr, stderrCut: null, killedByHost: false, stdinError: null, statusReport: null,
   });
   const substrate = new PodmanSubstrate({
     podmanPath: "podman",

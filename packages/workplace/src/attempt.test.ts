@@ -6,7 +6,7 @@ import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, CostMeasurement, ResolvedModel, TurnResult } from "@ashara/llm-gateway";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
@@ -81,20 +81,20 @@ function fakeCell(overrides: Partial<CellBackend> = {}) {
     async readFile(path) {
       const text = files.get(path);
       if (text === undefined) throw new CellToolFailed("readFile", ["cat", "--", path], 1, `cat: ${path}: No such file or directory`, false);
-      return { text, truncated: false };
+      return wholeText(text);
     },
     async writeFile(path, content) {
       files.set(path, content);
     },
     async listDirectory() {
-      return { entries: [...files.keys()].sort(), truncated: false };
+      return wholeText([...files.keys()].sort().join("\n"));
     },
     async search() {
-      return { text: "", truncated: false };
+      return wholeText("");
     },
     async run(command, timeoutSeconds): Promise<ExecResult> {
       commands.push({ command, timeoutSeconds });
-      return { exitCode: 0, stdout: "ok\n", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: false };
+      return { exitCode: 0, stdout: "ok\n", stderr: "", timedOut: false, stdoutCut: null, stderrCut: null, statusLost: false };
     },
     ...overrides,
   };
@@ -236,7 +236,7 @@ describe("runAttempt", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
     ]);
     const { cell } = fakeCell({
-      run: async () => ({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: false }),
+      run: async () => ({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false, stdoutCut: null, stderrCut: null, statusLost: false }),
     });
 
     const outcome = await runAttempt(assignment(), deps(llm, cell).deps);
@@ -254,7 +254,7 @@ describe("runAttempt", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
     ]);
     const { cell } = fakeCell({
-      run: async () => ({ exitCode: null, stdout: "partial", stderr: "", timedOut: false, stdoutTruncated: false, stderrTruncated: false, statusLost: true }),
+      run: async () => ({ exitCode: null, stdout: "partial", stderr: "", timedOut: false, stdoutCut: null, stderrCut: null, statusLost: true }),
     });
 
     const outcome = await runAttempt(assignment(), deps(llm, cell).deps);
@@ -466,13 +466,13 @@ describe("runAttempt", () => {
 });
 
 describe("build_environment", () => {
-  const empty = { text: "", truncated: false };
-  const probe: EnvironmentTestRun = { command: "echo ok", exitCode: 0, timedOut: false, stdout: { text: "ok\n", truncated: false }, stderr: empty };
+  const empty = wholeText("");
+  const probe: EnvironmentTestRun = { command: "echo ok", exitCode: 0, timedOut: false, stdout: wholeText("ok\n"), stderr: empty };
   const tested: EnvironmentCheckReport = {
     kind: "tested",
     version: "v".repeat(64),
     imageRef: "localhost/ashara-env-p:vvvv",
-    build: { kind: "built", log: { text: "STEP 1/1: FROM base", truncated: false } },
+    build: { kind: "built", log: wholeText("STEP 1/1: FROM base") },
     probe,
   };
   const STATEMENT = "A shell-only environment, because nothing more is needed.";
@@ -565,12 +565,12 @@ describe("build_environment", () => {
       kind: "build_failed",
       version: "v".repeat(64),
       detail: "podman build exited 1",
-      log: { text: "Error: no such image", truncated: true },
+      log: [{ kind: "cut", chars: 120 }, { kind: "kept", text: "Error: no such image" }],
     };
     for (const [report, expected] of [
       [silent, "FAILED: the probe command printed nothing"],
       [outside, "- src/x"],
-      [failed, "Image build log (truncated: only its end is shown):\nError: no such image"],
+      [failed, "Image build log:\n[truncated by Ashara: 120 characters cut here]\nError: no such image"],
     ] as const) {
       const { llm, requests } = scriptedLlm([
         () => turn([{ name: "build_environment", input: {} }]),

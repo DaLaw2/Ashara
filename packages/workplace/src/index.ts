@@ -13,6 +13,6 @@ export {
   formatEnvironmentCommands,
   formatEnvironmentProbe,
 } from "./environment-check.js";
-export type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun, LogTail } from "./environment-check.js";
+export type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun } from "./environment-check.js";
 export type { Outcome } from "./outcome.js";
 export type { AttemptCellImage, AttemptRecord, AttemptRecordSink } from "./records.js";

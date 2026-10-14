@@ -1,15 +1,16 @@
 import { z } from "zod";
-import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace } from "@ashara/execution-infra";
+import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, elidedOutput } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
-import type { WorkKind } from "@ashara/shared";
+import { joinElided, uncutText, wholeText } from "@ashara/shared";
+import type { ElidedText, WorkKind } from "@ashara/shared";
 import { CHECK_RUNNER } from "./check-definition.js";
 import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
 import { checkPassed, formatCheckRunReport } from "./check-run.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
-import { truncateText } from "./records.js";
+import { truncateElided } from "./records.js";
 
 const MAX_LIST_DEPTH = 5;
 const DEFAULT_LIST_DEPTH = 2;
@@ -299,28 +300,34 @@ export interface ToolContext {
   readonly taskChecks: TaskCheckRunPort | null;
 }
 
-function toolError(message: string): ToolExecution {
-  return { kind: "result", output: message, isError: true };
+/**
+ * A tool's execution before the conversation's bound: a result's output may already carry the output caps' cuts,
+ * which the bound then counts together with its own.
+ */
+type RanTool = Exclude<ToolExecution, { readonly kind: "result" }> | { readonly kind: "result"; readonly output: ElidedText; readonly isError: boolean };
+
+function result(output: string, isError: boolean): RanTool {
+  return { kind: "result", output: wholeText(output), isError };
 }
 
-function ok(output: string): ToolExecution {
+function toolError(message: string): RanTool {
+  return result(message, true);
+}
+
+function ok(output: ElidedText): RanTool {
   return { kind: "result", output, isError: false };
 }
 
-function argsError(toolName: string, error: z.ZodError): ToolExecution {
+function argsError(toolName: string, error: z.ZodError): RanTool {
   const issues = error.issues.map((issue) => `${issue.path.join(".") || "(arguments)"}: ${issue.message}`);
   return toolError(`Invalid arguments for ${toolName}: ${issues.join("; ")}. Fix the arguments and call it again.`);
-}
-
-function withCellMarker(text: string, truncated: boolean): string {
-  return truncated ? `${text}\n[truncated by the workspace: output exceeded its size limit]` : text;
 }
 
 /**
  * A cell error the model can act on (a bad path, a missing file, a utility's own non-zero exit) is
  * a tool error; anything else means the substrate failed, which the model cannot fix.
  */
-function classifyCellError(toolName: string, error: unknown): ToolExecution {
+function classifyCellError(toolName: string, error: unknown): RanTool {
   if (error instanceof PathOutsideWorkspace || error instanceof InvalidCellRequest) return toolError(error.message);
   if (error instanceof CellToolFailed && error.exitCode !== null) {
     return toolError(`${toolName} failed (exit ${error.exitCode}${error.timedOut ? ", timed out" : ""}): ${error.stderr.trim() || "(no stderr)"}`);
@@ -333,29 +340,31 @@ const STATUS_LOST =
   "A command that kills processes by pattern (pkill -f, kill $(pgrep -f ...)) can match the shell running it. " +
   "Everything the command left running was stopped; the workspace is intact.";
 
-function formatRun(result: ExecResult, timeoutSeconds: number): ToolExecution {
-  const parts = [
-    result.statusLost
-      ? STATUS_LOST
-      : result.timedOut
-        ? `Timed out after ${timeoutSeconds}s and was killed (exit ${result.exitCode})`
-        : `Exit code: ${result.exitCode}`,
+function formatRun(run: ExecResult, timeoutSeconds: number): RanTool {
+  const parts: ElidedText[] = [
+    wholeText(
+      run.statusLost
+        ? STATUS_LOST
+        : run.timedOut
+          ? `Timed out after ${timeoutSeconds}s and was killed (exit ${run.exitCode})`
+          : `Exit code: ${run.exitCode}`,
+    ),
   ];
-  if (result.stdout !== "") parts.push(`STDOUT:\n${withCellMarker(result.stdout, result.stdoutTruncated)}`);
-  if (result.stderr !== "") parts.push(`STDERR:\n${withCellMarker(result.stderr, result.stderrTruncated)}`);
-  return { kind: "result", output: parts.join("\n"), isError: result.statusLost || result.timedOut || result.exitCode !== 0 };
+  if (run.stdout !== "") parts.push(wholeText("\nSTDOUT:\n"), elidedOutput(run.stdout, run.stdoutCut));
+  if (run.stderr !== "") parts.push(wholeText("\nSTDERR:\n"), elidedOutput(run.stderr, run.stderrCut));
+  return { kind: "result", output: joinElided(parts), isError: run.statusLost || run.timedOut || run.exitCode !== 0 };
 }
 
 /** define_check's answer: what was recorded and how its immediate red run on main went. */
-function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult, { readonly kind: "recorded" }>): ToolExecution {
+function formatDefinedCheck(name: string, defined: Extract<CheckDefinitionResult, { readonly kind: "recorded" }>): RanTool {
   const discarded =
-    result.discarded.length === 0
+    defined.discarded.length === 0
       ? []
       : [
-          `Discarded, outside your checks directory (not kept, not placed on the foundation): ${result.discarded.join(", ")}.`,
+          `Discarded, outside your checks directory (not kept, not placed on the foundation): ${defined.discarded.join(", ")}.`,
         ];
-  const recorded = [`${result.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${result.defined} defined so far).`, ...discarded].join("\n");
-  const { redRun } = result;
+  const recorded = [`${defined.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${defined.defined} defined so far).`, ...discarded].join("\n");
+  const { redRun } = defined;
   if (redRun.kind === "files_refused" || redRun.kind === "product_changed") {
     return toolError(`${recorded}\nIt could not be red-run: ${redRun.detail}\nAt finish this rejects every check of the task.`);
   }
@@ -373,22 +382,21 @@ function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult,
         : `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
           `syntax error or a file that does not exist: such a check can never pass.`,
   ];
-  return { kind: "result", output: lines.join("\n"), isError: redRun.rejection !== null };
+  return result(lines.join("\n"), redRun.rejection !== null);
 }
 
 /** probe_foundation's answer: the command's run on the foundation; nothing was recorded. */
-function formatFoundationProbe(probe: FoundationProbe): ToolExecution {
+function formatFoundationProbe(probe: FoundationProbe): RanTool {
   if (probe.kind !== "ran") return toolError(`It could not run on the foundation: ${probe.detail}\nNothing was recorded.`);
   const { run } = probe;
-  return {
-    kind: "result",
-    output: [
+  return result(
+    [
       `Run on the plan's foundation (limit ${probe.timeoutSeconds}s); no check was defined:`,
       `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
       `  output: ${run.output === "" ? "(empty)" : run.output}`,
     ].join("\n"),
-    isError: run.timedOut || run.exitCode !== 0,
-  };
+    run.timedOut || run.exitCode !== 0,
+  );
 }
 
 function countOccurrences(text: string, needle: string): { readonly count: number; readonly first: number } {
@@ -404,7 +412,7 @@ function countOccurrences(text: string, needle: string): { readonly count: numbe
   }
 }
 
-async function runTool(toolName: string, input: unknown, context: ToolContext): Promise<ToolExecution> {
+async function runTool(toolName: string, input: unknown, context: ToolContext): Promise<RanTool> {
   const { cell } = context;
   if (!Object.hasOwn(context.tools, toolName)) {
     return toolError(`Unknown tool "${toolName}". Available tools: ${Object.keys(context.tools).join(", ")}.`);
@@ -414,42 +422,40 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = readFileArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       const file = await cell.readFile(args.data.path);
-      return ok(withCellMarker(file.text, file.truncated));
+      return ok(file);
     }
     case "write_file": {
       const args = writeFileArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       await cell.writeFile(args.data.path, args.data.content);
       context.checks?.fileWritten(args.data.path);
-      return ok(`Wrote ${args.data.path} (${args.data.content.length} characters).`);
+      return ok(wholeText(`Wrote ${args.data.path} (${args.data.content.length} characters).`));
     }
     case "edit_file": {
       const args = editFileArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       const { path, old_text: oldText, new_text: newText } = args.data;
-      const file = await cell.readFile(path);
-      if (file.truncated) return toolError(`${path} is larger than the workspace read limit; edit_file cannot rewrite it safely.`);
-      const { count, first } = countOccurrences(file.text, oldText);
+      const text = uncutText(await cell.readFile(path));
+      if (text === null) return toolError(`${path} is larger than the workspace read limit; edit_file cannot rewrite it safely.`);
+      const { count, first } = countOccurrences(text, oldText);
       if (count === 0) return toolError(`old_text not found in ${path}. Read the file and copy the exact text.`);
       if (count > 1) return toolError(`old_text matches ${count} locations in ${path}. Include more surrounding text.`);
       // Spliced by index: String.replace would interpret `$&` and `$1` in new_text.
-      await cell.writeFile(path, file.text.slice(0, first) + newText + file.text.slice(first + oldText.length));
+      await cell.writeFile(path, text.slice(0, first) + newText + text.slice(first + oldText.length));
       context.checks?.fileWritten(path);
-      return ok(`Edited ${path}: replaced ${oldText.split("\n").length} line(s) with ${newText.split("\n").length} line(s).`);
+      return ok(wholeText(`Edited ${path}: replaced ${oldText.split("\n").length} line(s) with ${newText.split("\n").length} line(s).`));
     }
     case "list_directory": {
       const args = listDirectoryArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       const listing = await cell.listDirectory(args.data.path ?? ".", args.data.depth ?? DEFAULT_LIST_DEPTH);
-      const text = listing.entries.length === 0 ? "(empty)" : listing.entries.join("\n");
-      return ok(withCellMarker(text, listing.truncated));
+      return ok(uncutText(listing) === "" ? wholeText("(empty)") : listing);
     }
     case "search_codebase": {
       const args = searchArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       const found = await cell.search(args.data.pattern, args.data.path ?? ".");
-      const text = found.text.trim() === "" ? "No matches." : found.text;
-      return ok(withCellMarker(text, found.truncated));
+      return ok(uncutText(found)?.trim() === "" ? wholeText("No matches.") : found);
     }
     case "run_command": {
       const args = runCommandArgs.safeParse(input);
@@ -472,7 +478,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (!args.success) return argsError(toolName, args.error);
       if (context.environment === null) return toolError(`build_environment is not available in this attempt.`);
       const report = await context.environment.check(context.commandTimeoutSeconds);
-      return { kind: "result", output: formatEnvironmentCheck(report), isError: !environmentCheckPassed(report) };
+      return result(formatEnvironmentCheck(report), !environmentCheckPassed(report));
     }
     case "define_check": {
       const args = defineCheckArgs.safeParse(input);
@@ -495,7 +501,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (context.taskChecks === null) return toolError(`run_checks is not available in this attempt.`);
       const report = await context.taskChecks.run(context.commandTimeoutSeconds);
       const allPass = report.kind === "ran" && report.runs.length > 0 && report.runs.every(checkPassed);
-      return { kind: "result", output: formatCheckRunReport(report), isError: !allPass };
+      return result(formatCheckRunReport(report), !allPass);
     }
     case "dispute_check": {
       const args = disputeCheckArgs.safeParse(input);
@@ -538,11 +544,11 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
 
 /** Executes one tool call through the cell. Never touches the host filesystem. */
 export async function executeTool(toolName: string, input: unknown, context: ToolContext): Promise<ToolExecution> {
-  let execution: ToolExecution;
+  let execution: RanTool;
   try {
     execution = await runTool(toolName, input, context);
   } catch (error) {
-    return classifyCellError(toolName, error);
+    execution = classifyCellError(toolName, error);
   }
-  return execution.kind === "result" ? { ...execution, output: truncateText(execution.output) } : execution;
+  return execution.kind === "result" ? { ...execution, output: truncateElided(execution.output) } : execution;
 }

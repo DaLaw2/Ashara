@@ -185,10 +185,10 @@ describe("a check run that changes a tracked file of the checkout", () => {
       exec: async (argv) => {
         try {
           const { stdout, stderr } = await promisify(execFile)(argv[0] ?? "sh", argv.slice(1), { cwd: hostPath });
-          return { exitCode: 0, stdout, stderr, timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false };
+          return { exitCode: 0, stdout, stderr, timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null };
         } catch (err) {
           const code = typeof err === "object" && err !== null && "code" in err && typeof err.code === "number" ? err.code : 1;
-          return { exitCode: code, stdout: "", stderr: String(err), timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false };
+          return { exitCode: code, stdout: "", stderr: String(err), timedOut: false, statusLost: false, stdoutCut: null, stderrCut: null };
         }
       },
       teardown: async () => {},

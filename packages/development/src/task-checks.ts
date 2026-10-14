@@ -1,8 +1,9 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, posix } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
-import { runHostGit } from "@ashara/execution-infra";
-import type { ProjectId, WorkItemId } from "@ashara/shared";
+import { elidedOutput, runHostGit } from "@ashara/execution-infra";
+import { joinElided, keepEnds, renderElided } from "@ashara/shared";
+import type { ElidedText, ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
 import type {
   CheckDefinition,
@@ -29,7 +30,7 @@ const MAX_CHECKS = 50;
 const MAX_CHECK_FILES = 200;
 const MAX_CHECK_FILE_BYTES = 256 * 1024;
 const MAX_CHECK_FILES_BYTES = 1024 * 1024;
-/** Longest end of a check's output kept for the record and the model. */
+/** Most characters of a check's output kept, head and tail, for the record and the model. */
 const MAX_CHECK_OUTPUT_CHARS = 2000;
 const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** `sh` exits 126 for a command it cannot execute and 127 for one it cannot find. */
@@ -201,8 +202,8 @@ export class StoredChecksStale extends Error {
 /** The environment's build on a red run's foundation, as a record and a brief read it: its command, exit and output's end. */
 export function describeFoundationBuild(build: EnvironmentTestRun): string {
   const exit = build.timedOut ? "timed out" : build.exitCode === null ? "killed without an exit code" : `exit code ${build.exitCode}`;
-  const output = `${build.stdout.text}${build.stderr.text}`.trim();
-  return `\`${build.command}\`: ${exit}\n${output === "" ? "(no output)" : tailOf(output)}`;
+  const output = checkOutput([build.stdout, build.stderr]);
+  return `\`${build.command}\`: ${exit}\n${output === "" ? "(no output)" : output}`;
 }
 
 /**
@@ -432,8 +433,9 @@ async function collectCheckFiles(
   return { kind: "harvested", files, discarded };
 }
 
-function tailOf(text: string): string {
-  return text.length <= MAX_CHECK_OUTPUT_CHARS ? text : text.slice(-MAX_CHECK_OUTPUT_CHARS);
+/** Streams together, their middle cut past MAX_CHECK_OUTPUT_CHARS with the cut counted, as a record and the model read them. */
+function checkOutput(streams: readonly ElidedText[]): string {
+  return renderElided(keepEnds(joinElided(streams), MAX_CHECK_OUTPUT_CHARS)).trim();
 }
 
 /** What running checks needs: cells mounting a host tree, and their bounds. */
@@ -507,7 +509,7 @@ export async function runSuitesOnCheckout(
           command: check.command,
           exitCode: result.exitCode,
           timedOut: result.timedOut,
-          output: tailOf(`${result.stdout}${result.stderr}`.trim()),
+          output: checkOutput([elidedOutput(result.stdout, result.stdoutCut), elidedOutput(result.stderr, result.stderrCut)]),
         });
         const changed = await changedSinceCheckout();
         if (changed.length > 0) {
