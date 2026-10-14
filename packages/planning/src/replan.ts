@@ -15,7 +15,9 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
 // t-replan-on-change, migration 042), asked for in one of two ways. A client answer that changed an
-// assumption the plan was built on flags the project (migration 038). A task given up, for any cause
+// assumption the plan was built on is recorded as a request (replan_requests, migration 052); every
+// such answer awaiting a revision is taken in by the next one, and its report names each (smoke1
+// D2). A task given up, for any cause
 // (the failure router's attempt bound, a dispute or review bound, the environment-change bound, an
 // unsatisfiable dependency: ADR-074 addendum 2 d74 D, d76; migrations 045, 048), opens a plan repair:
 // no person releases its dependents; the remaining work is planned again around it. Either stops the project's
@@ -23,7 +25,7 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 // the completed work, and for a repair the given-up work and its evidence, as context: completed work
 // stays Completed, open work (not started, Blocked or Failed, and the Epic that held it) is
 // superseded, and the new tasks build on the environment already set up unless an environment change
-// is needed. Revision, supersession and the cleared request commit together; the Liaison reports the
+// is needed. Revision, supersession and the requests it took in commit together; the Liaison reports the
 // revision from what is recorded.
 
 /** Failed attempts to revise the plan for one request after which Delivery stops and blocks the project. */
@@ -69,8 +71,8 @@ type GivenUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded
 interface ProjectAwaitingReplan {
   readonly projectId: ProjectId;
   readonly projectName: string;
-  /** The client answer whose flag this revision clears (projects.replan_requested_by); null when only repairs are awaited. */
-  readonly requestedBy: string | null;
+  /** The client answers whose revision the project awaits (replan_requests), oldest first; empty when only repairs are awaited. */
+  readonly changesAwaited: readonly string[];
   /** The ids of the tasks given up whose repair the project awaits (plan_repairs), oldest first; empty when none. */
   readonly repairsAwaited: readonly string[];
   readonly visionVersion: number;
@@ -91,9 +93,9 @@ interface ProjectAwaitingReplan {
   readonly items: readonly PlannedItem[];
 }
 
-/** What asked for a revision: a client's answer, or tasks given up. */
+/** What asked for a revision: the client's answers, in the order they were sent, or tasks given up. */
 type RevisionCause =
-  | { readonly kind: "client-change"; readonly requestedBy: string; readonly change: ChangeRequest }
+  | { readonly kind: "client-change"; readonly changes: readonly [ChangeRequest, ...ChangeRequest[]] }
   | { readonly kind: "repair"; readonly abandoned: readonly AbandonedTask[] };
 
 /** The part of a revision's summary that says what it planned, whatever asked for it. */
@@ -108,22 +110,22 @@ interface PlanRevisionWork {
   readonly keptCompleted: number;
 }
 
+/** One change a revision took in: the client's words and what work now proceeds on. */
+interface RevisionChange {
+  /** The client's words, as the answer that asked for the change carries them. */
+  readonly answer: string;
+  /** What work now proceeds on, as the vision states it. */
+  readonly decision: string;
+}
+
 /**
  * What a revision did, recorded with it (plan_revisions.summary) for the Liaison's report.
  * Titles are the client's goal tasks; check and environment tasks are counted apart. A revision
- * for a client's change carries their words and the decision; a repair, the titles of the tasks
- * given up.
+ * for the client's changes carries every change it took in, in the order the answers were sent;
+ * a repair, the titles of the tasks given up.
  */
 type PlanRevisionSummary = PlanRevisionWork &
-  (
-    | {
-        /** The client's words, as the answer that asked for the change carries them. */
-        readonly answer: string;
-        /** What work now proceeds on, as the vision states it. */
-        readonly decision: string;
-      }
-    | { readonly repaired: readonly string[] }
-  );
+  ({ readonly changes: readonly [RevisionChange, ...RevisionChange[]] } | { readonly repaired: readonly string[] });
 
 /** A superseded item with the status it was read in: the write refuses it if the row moved since. */
 interface SupersededItem {
@@ -135,8 +137,8 @@ interface PlanRevisionWrite {
   readonly projectId: ProjectId;
   readonly revision: number;
   readonly visionVersion: number;
-  /** The client answer the revision answers; null for a plan repair. */
-  readonly requestedBy: string | null;
+  /** The client answers the revision takes in, in the order they were sent; empty for a plan repair. */
+  readonly answers: readonly string[];
   /** The given-up tasks whose awaited repair the revision records, whatever asked for it. */
   readonly repaired: readonly string[];
   readonly superseded: readonly SupersededItem[];
@@ -152,10 +154,10 @@ interface PlanRevisionWrite {
 export interface ReplanStore {
   projectsAwaitingReplan(): Promise<readonly ProjectAwaitingReplan[]>;
   /**
-   * Supersedes the open items, writes the new ones, records the revision, clears the client's flag
-   * when it answers one and records the repairs it answers, together; "moved" and nothing written
-   * when the project, its vision or an item read for it changed since it was read (a task started,
-   * an answer arrived, the request cleared).
+   * Supersedes the open items, writes the new ones, records the revision and records the client's
+   * answers and the repairs it takes in, together; "moved" and nothing written when the project,
+   * its vision, the answers it awaits or an item read for it changed since it was read (a task
+   * started, an answer arrived).
    */
   writeRevision(write: PlanRevisionWrite): Promise<"written" | "moved">;
   /** Counts a failed attempt with its error; returns the count after it. */
@@ -189,12 +191,12 @@ class ReplanBoundReached extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly revisions: number,
-    readonly requestedBy: string,
+    readonly answers: readonly string[],
   ) {
     super(
       `project ${projectId}: the plan was revised ${revisions} time(s) for client changes since the operator last ` +
-        `reviewed it, the bound of ${MAX_REVISIONS_PER_REVIEW}; answer ${requestedBy}'s change is not planned until ` +
-        `the operator reviews the project and unblocks it`,
+        `reviewed it, the bound of ${MAX_REVISIONS_PER_REVIEW}; the change(s) of answer(s) ${answers.join(", ")} are not ` +
+        `planned until the operator reviews the project and unblocks it`,
     );
     this.name = "ReplanBoundReached";
   }
@@ -230,7 +232,7 @@ class ReplanAttemptsExhausted extends Error {
   }
 }
 
-/** The flag names an answer the current vision holds no Stated assumption for: there is no change on record to plan. */
+/** A recorded request names an answer the current vision holds no Stated assumption for: there is no change on record to plan. */
 class ReplanRequestUnfounded extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -265,8 +267,9 @@ const RequestInferencesSchema = z.array(
   }),
 );
 
-/** The client's change the flag stands for: their question, their words and what work now proceeds on. */
+/** The client's change a recorded request stands for: the answer, their question, their words and what work now proceeds on. */
 interface ChangeRequest {
+  readonly answerId: string;
   readonly question: string;
   readonly answer: string;
   readonly decision: string;
@@ -278,7 +281,7 @@ function changeOf(project: ProjectAwaitingReplan, requestedBy: string): ChangeRe
   if (!parsed.success) throw unfounded(`its assumptions do not parse: ${z.prettifyError(parsed.error)}`);
   const stated = parsed.data.find((a) => a.status === "Stated" && a.clientAnswer?.messageId === requestedBy);
   if (stated?.clientAnswer === undefined) throw unfounded("no Stated assumption carries that answer");
-  return { question: stated.clientAnswer.question, answer: stated.clientAnswer.answer, decision: stated.statement };
+  return { answerId: requestedBy, question: stated.clientAnswer.question, answer: stated.clientAnswer.answer, decision: stated.statement };
 }
 
 /** An awaited repair names a task that is not an Abandoned task of the project given up for a recorded cause. */
@@ -354,13 +357,24 @@ function abandonedOf(project: ProjectAwaitingReplan): AbandonedTask[] {
   });
 }
 
-/** A client's answer comes first: its revision re-plans every open item, so it answers the awaited repairs too. */
+/**
+ * The client's answers come first: their revision re-plans every open item, so it answers the awaited
+ * repairs too. Every answer awaiting a revision is taken in by this one, each a change on record.
+ */
 function causeOf(project: ProjectAwaitingReplan): RevisionCause {
-  if (project.requestedBy !== null) {
-    return { kind: "client-change", requestedBy: project.requestedBy, change: changeOf(project, project.requestedBy) };
+  const [first, ...rest] = project.changesAwaited;
+  if (first !== undefined) {
+    return { kind: "client-change", changes: [changeOf(project, first), ...rest.map((answerId) => changeOf(project, answerId))] };
   }
   if (project.repairsAwaited.length === 0) throw new ReplanRequestMissing(project.projectId);
   return { kind: "repair", abandoned: abandonedOf(project) };
+}
+
+/** The changes as the summary records them: the client's words and the decision, in the order sent. */
+function revisionChanges(changes: readonly [ChangeRequest, ...ChangeRequest[]]): readonly [RevisionChange, ...RevisionChange[]] {
+  const [first, ...rest] = changes;
+  const recorded = (change: ChangeRequest): RevisionChange => ({ answer: change.answer, decision: change.decision });
+  return [recorded(first), ...rest.map(recorded)];
 }
 
 function firstLine(text: string): string {
@@ -380,14 +394,18 @@ function abandonmentSection(abandoned: readonly AbandonedTask[]): string {
   ].join("\n");
 }
 
+/** One change as the planner reads it: the question, the client's words and the decision. */
+function changeLines(change: ChangeRequest): string {
+  return `They were asked: ${change.question}\nThey answered: ${change.answer}\nWork now proceeds on: ${change.decision}`;
+}
+
 /** What the revision is asked for, as the planner reads it beside the vision. */
 function causeSection(cause: RevisionCause): string {
   if (cause.kind === "client-change") {
-    const { change } = cause;
-    return (
-      `The client changed what is built after work began. They were asked: ${change.question}\n` +
-      `They answered: ${change.answer}\nWork now proceeds on: ${change.decision}`
-    );
+    return cause.changes.length === 1
+      ? `The client changed what is built after work began. ${changeLines(cause.changes[0])}`
+      : `The client changed what is built after work began, in ${cause.changes.length} answers; plan for every one of them.\n` +
+          cause.changes.map((change, i) => `Change ${i + 1}. ${changeLines(change)}`).join("\n");
   }
   return (
     `${abandonmentSection(cause.abandoned)}\n` +
@@ -403,18 +421,20 @@ function environmentPrompt(cause: RevisionCause, statement: string | null): stri
     cause.kind === "client-change"
       ? [
           `After work on a project began, the client changed what is built.`,
-          `Say whether this change needs the project environment changed: how the project is built and tested, the`,
+          `Say whether ${cause.changes.length === 1 ? "this change" : `what the client changed, in ${cause.changes.length} answers taken together,`} needs the project environment changed: how the project is built and tested, the`,
           `technology it is built with, or the tools its build and tests run on. A change to what the product does that`,
           `the environment as it is can build and test is not an environment change.`,
-          ``,
-          `The question the client answered:`,
-          JSON.stringify(cause.change.question),
-          ``,
-          `The client's answer:`,
-          JSON.stringify(cause.change.answer),
-          ``,
-          `What work now proceeds on:`,
-          JSON.stringify(cause.change.decision),
+          ...cause.changes.flatMap((change) => [
+            ``,
+            `The question the client answered:`,
+            JSON.stringify(change.question),
+            ``,
+            `The client's answer:`,
+            JSON.stringify(change.answer),
+            ``,
+            `What work now proceeds on:`,
+            JSON.stringify(change.decision),
+          ]),
         ]
       : [
           `Work on a project stopped: the team gave up work after its attempts failed. Say whether the evidence shows`,
@@ -549,7 +569,7 @@ export class Replanner implements Replanning {
     const { projectId } = project;
     const cause = causeOf(project);
     if (cause.kind === "client-change" && project.revisionsSinceReview >= MAX_REVISIONS_PER_REVIEW) {
-      const err = new ReplanBoundReached(projectId, project.revisionsSinceReview, cause.requestedBy);
+      const err = new ReplanBoundReached(projectId, project.revisionsSinceReview, cause.changes.map((change) => change.answerId));
       return this.block(projectId, { ...projectBlockCause(err), category: "replan_bound" });
     }
     if (cause.kind === "repair" && project.repairsSinceReview >= MAX_REPAIRS_PER_REVIEW) {
@@ -584,7 +604,10 @@ export class Replanner implements Replanning {
       return this.fail(project, err);
     }
     if (result === "moved") return { kind: "moved", projectId };
-    const why = cause.kind === "client-change" ? `answer ${cause.requestedBy}` : `given-up task(s) ${cause.abandoned.map((task) => task.id).join(", ")}`;
+    const why =
+      cause.kind === "client-change"
+        ? `answer(s) ${cause.changes.map((change) => change.answerId).join(", ")}`
+        : `given-up task(s) ${cause.abandoned.map((task) => task.id).join(", ")}`;
     console.log(`[replan] project ${projectId}: revision ${write.revision} written for ${why}`);
     return {
       kind: "revised",
@@ -649,7 +672,7 @@ export class Replanner implements Replanning {
                 epicId: "done",
                 title: "Work already done",
                 completedStories: completed.map(({ item }) => item.title),
-                keyDecisions: cause.kind === "client-change" ? [cause.change.decision] : [],
+                keyDecisions: cause.kind === "client-change" ? cause.changes.map((change) => change.decision) : [],
                 deliveredCapabilities: [],
               },
             ],
@@ -675,6 +698,7 @@ export class Replanner implements Replanning {
     const existingEdges = plan.edges.filter((edge) => !tempIds.has(edge.to));
     const revision = project.nextRevision;
     const repairOf = [...project.repairsAwaited];
+    const answers = cause.kind === "client-change" ? cause.changes.map((change) => change.answerId) : [];
 
     const events: DomainEvent[] = [];
     const superseded = open.map(({ item }): SupersededItem => {
@@ -685,10 +709,10 @@ export class Replanner implements Replanning {
           ? {
               source: "superseded",
               planRevision: revision,
-              requestedBy: cause.requestedBy,
+              requestedBy: cause.changes[0].answerId,
               reason:
-                `replaced by plan revision ${revision} from vision v${project.visionVersion}: the client's answer ` +
-                `${cause.requestedBy} changed what is built`,
+                `replaced by plan revision ${revision} from vision v${project.visionVersion}: the client's ` +
+                `answer(s) ${answers.join(", ")} changed what is built`,
             }
           : {
               source: "superseded",
@@ -718,7 +742,7 @@ export class Replanner implements Replanning {
       projectId: project.projectId,
       revision,
       visionVersion: project.visionVersion,
-      requestedBy: cause.kind === "client-change" ? cause.requestedBy : null,
+      answers,
       repaired: repairOf,
       superseded,
       plan: { ...plan, edges: plan.edges.filter((edge) => tempIds.has(edge.to)) },
@@ -726,7 +750,7 @@ export class Replanner implements Replanning {
       events,
       summary:
         cause.kind === "client-change"
-          ? { ...work, answer: cause.change.answer, decision: cause.change.decision }
+          ? { ...work, changes: revisionChanges(cause.changes) }
           : { ...work, repaired: cause.abandoned.map((task) => task.title) },
     };
   }
@@ -735,7 +759,8 @@ export class Replanner implements Replanning {
     const { projectId } = project;
     const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
-    const asked = project.requestedBy !== null ? `answer ${project.requestedBy}` : `repair of ${project.repairsAwaited.join(", ")}`;
+    const asked =
+      project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
     console.warn(`[replan] project ${projectId} (vision v${project.visionVersion}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
     return this.block(projectId, projectBlockCause(new ReplanAttemptsExhausted(projectId, attempt, error)));

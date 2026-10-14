@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, postPlanReport, ProjectRepository, SuiteReviewFindingRepository } from "@ashara/db";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
-import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 
@@ -67,7 +67,7 @@ async function statusOf(projectId: ProjectId): Promise<string | undefined> {
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status;
 }
 
-const budgetCap = { category: "budget_cap", errorClass: "BudgetExceeded", reason: "project cap $5 reached" } as const;
+const budgetCap = { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: "project cap $5 reached" } as const;
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -101,7 +101,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await reports().runPending();
 
     // The cause told is the recorded kind in the client's words; the chain stays in the record (W11b D3).
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("Ashara recorded the cause as this: a spending limit set for this work was reached")]);
+    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("Ashara recorded the cause as this: the spending limit set for this project was reached")]);
     expect((await messagesOf(projectId))[0]).not.toMatch(/BudgetExceeded|project cap \$5 reached/);
     expect((await messagesOf(projectId))[0]).toContain("The budget set for this project has to be raised");
 

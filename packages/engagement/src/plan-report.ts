@@ -7,7 +7,9 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 // Liaison, the only writer to the client, tells the client about it. Reports are
 // read from recorded outcomes, not handed over in memory, so one written before a
 // crash is still reported after the restart; the store posts each at most once. A revision
-// of the plan for a client's change (migration 042) is reported the same way, once each.
+// of the plan for a client's change (migration 042) is reported the same way, once each, naming
+// every answer it took in (migration 052; smoke1 D2): each of them was promised the client would
+// be told what changed.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
 
@@ -32,6 +34,8 @@ interface RevisionBeforeReport {
   readonly revisionId: string;
   readonly revision: number;
   readonly summary: unknown;
+  /** The client answers recorded as taken in by the revision; its summary must name exactly these many. */
+  readonly answersTaken: number;
 }
 
 /** Ordering hints between tasks that decomposition dropped; unrecorded for a plan written before they were recorded. */
@@ -61,6 +65,8 @@ interface DuePlanRevisionReport {
   readonly projectId: ProjectId;
   readonly revision: number;
   readonly summary: unknown;
+  /** The client answers recorded as taken in by the revision; its summary must name exactly these many. */
+  readonly answersTaken: number;
 }
 
 type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unreadable" }>;
@@ -135,19 +141,45 @@ const revisionWorkFields = {
   keptCompleted: z.number().int().min(0),
 };
 
-// A revision for a client's change carries their words and the decision; a plan repair (migration
-// 045), the titles of the tasks the team gave up.
+// A revision for the client's changes carries every change it took in, each with their words and
+// the decision (migration 052); a plan repair (migration 045), the titles of the tasks the team gave up.
+const RevisionChangeSchema = z.object({ answer: z.string().min(1), decision: z.string().min(1) });
 const PlanRevisionSummarySchema = z.union([
-  z.object({ answer: z.string().min(1), decision: z.string().min(1), ...revisionWorkFields }),
+  z.object({ changes: z.array(RevisionChangeSchema).min(1), ...revisionWorkFields }),
   z.object({ repaired: z.array(z.string().min(1)).min(1), ...revisionWorkFields }),
 ]);
 
 type PlanRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
 
-/** A client change taken in before the first plan was reported: what the client said and what was decided. */
-interface ChangeBeforeReport {
-  readonly answer: string;
-  readonly decision: string;
+/** A client change a revision took in: what the client said and what was decided. */
+type RevisionChange = z.infer<typeof RevisionChangeSchema>;
+
+/**
+ * A revision's summary does not name exactly the client answers recorded as taken in by it: a change
+ * it took in would go untold, or a change no answer asked for would be told. Nothing is reported.
+ */
+class RevisionChangesUnrecorded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly revisionId: string,
+    readonly answersTaken: number,
+    readonly changesNamed: number,
+  ) {
+    super(
+      `project ${projectId}: plan revision ${revisionId} is recorded as taking in ${answersTaken} client answer(s), ` +
+        `but its summary names ${changesNamed} change(s); no report is posted`,
+    );
+    this.name = "RevisionChangesUnrecorded";
+  }
+}
+
+/** The summary, parsed, with its changes checked against the answers recorded as taken in. */
+function readRevision(projectId: ProjectId, revisionId: string, summary: unknown, answersTaken: number): PlanRevisionSummary {
+  const parsed = PlanRevisionSummarySchema.safeParse(summary);
+  if (!parsed.success) throw new PlanRevisionSummaryUnreadable(projectId, revisionId, z.prettifyError(parsed.error));
+  const named = "changes" in parsed.data ? parsed.data.changes.length : 0;
+  if (named !== answersTaken) throw new RevisionChangesUnrecorded(projectId, revisionId, answersTaken, named);
+  return parsed.data;
 }
 
 /**
@@ -196,18 +228,23 @@ function firstPlanReport(
   goalTasks: number,
   checkTasks: number,
   droppedHints: number,
-  changes: readonly ChangeBeforeReport[],
+  changes: readonly RevisionChange[],
 ): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
-    // The client was told their answer changes the plan (answers.ts); this is where they read what it changed.
-    ...changes.map(
-      (change) =>
-        `This plan already takes in your answer. Because you said "${change.answer}", the team revised the plan it had ` +
-        `made before your answer arrived, before any of that plan's work started. Work proceeds on: ${change.decision}`,
-    ),
+    // The client was told each changing answer changes the plan (answers.ts); this is where they read what each changed.
+    ...(changes.length === 0
+      ? []
+      : [
+          changes.length === 1
+            ? `This plan already takes in your answer. The team revised the plan it had made before your answer arrived, ` +
+              `before any of that plan's work started. ${changeSentence(changes[0])}`
+            : `This plan already takes in your ${changes.length} answers that changed it. The team revised the plan it had ` +
+              `made before they arrived, before any of that plan's work started:\n` +
+              changes.map((change) => `- ${changeSentence(change)}`).join("\n"),
+        ]),
     `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
       `before any of those tasks starts. Then a developer sets up the product's layout, which every later task builds on.`,
     `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
@@ -224,6 +261,11 @@ function firstPlanReport(
   return paragraphs.join("\n\n");
 }
 
+/** One change in plain words: what the client said, and what work proceeds on because of it. */
+function changeSentence(change: RevisionChange): string {
+  return `Because you said "${change.answer}", work proceeds on: ${change.decision}`;
+}
+
 function quotedList(titles: readonly string[]): string {
   return titles.map((title) => `- ${title}`).join("\n");
 }
@@ -231,8 +273,13 @@ function quotedList(titles: readonly string[]): string {
 /** Plain words: what the client said, what the team now does, what was set aside and what stays done. */
 function planRevisionReport(summary: PlanRevisionSummary): string {
   const paragraphs =
-    "answer" in summary
-      ? [`Because you said "${summary.answer}", the team has revised the plan for this project. Work now proceeds on: ${summary.decision}`]
+    "changes" in summary
+      ? summary.changes.length === 1
+        ? [`The team has revised the plan for this project for your answer. ${changeSentence(summary.changes[0])}`]
+        : [
+            `The team has revised the plan for this project for your ${summary.changes.length} answers that changed it:\n` +
+              summary.changes.map((change) => `- ${changeSentence(change)}`).join("\n"),
+          ]
       : [
           `The team could not complete ${summary.repaired.length === 1 ? "this task" : "these tasks"} after repeated attempts ` +
             `and has given ${summary.repaired.length === 1 ? "it" : "them"} up:\n${quotedList(summary.repaired)}\n` +
@@ -240,8 +287,8 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
         ];
   if (summary.newEnvironmentTask) {
     paragraphs.push(
-      "answer" in summary
-        ? `This change affects how the project is built and tested, so the team first sets up the project environment again.`
+      "changes" in summary
+        ? `${summary.changes.length === 1 ? "This change affects" : "These changes affect"} how the project is built and tested, so the team first sets up the project environment again.`
         : `What went wrong needs a change to how the project is built and tested, so the team first sets up the project environment again.`,
     );
   }
@@ -296,7 +343,12 @@ export class PlanReports implements LiaisonPlanReports {
       try {
         body = this.compose(due);
       } catch (err) {
-        if (!(err instanceof PlanReportUnfounded) && !(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RepairBeforeFirstPlanReport)) {
+        if (
+          !(err instanceof PlanReportUnfounded) &&
+          !(err instanceof PlanRevisionSummaryUnreadable) &&
+          !(err instanceof RevisionChangesUnrecorded) &&
+          !(err instanceof RepairBeforeFirstPlanReport)
+        ) {
           throw err;
         }
         outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
@@ -311,13 +363,15 @@ export class PlanReports implements LiaisonPlanReports {
     const blocked = new Set(outcomes.filter((o) => o.kind === "project-blocked").map((o) => o.projectId));
     for (const due of await this.store.dueRevisionReports()) {
       if (blocked.has(due.projectId)) continue;
-      const parsed = PlanRevisionSummarySchema.safeParse(due.summary);
-      if (!parsed.success) {
-        const err = new PlanRevisionSummaryUnreadable(due.projectId, due.revisionId, z.prettifyError(parsed.error));
+      let summary: PlanRevisionSummary;
+      try {
+        summary = readRevision(due.projectId, due.revisionId, due.summary, due.answersTaken);
+      } catch (err) {
+        if (!(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RevisionChangesUnrecorded)) throw err;
         outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
         continue;
       }
-      const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(parsed.data));
+      const kind = await this.store.postRevisionReport(due.revisionId, planRevisionReport(summary));
       outcomes.push({ kind, projectId: due.projectId, subject: "plan-revision" });
     }
     return outcomes;
@@ -347,11 +401,10 @@ export class PlanReports implements LiaisonPlanReports {
     ) {
       throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, tasks, dropped);
     }
-    const changes = due.revisions.map((revision): ChangeBeforeReport => {
-      const parsed = PlanRevisionSummarySchema.safeParse(revision.summary);
-      if (!parsed.success) throw new PlanRevisionSummaryUnreadable(due.projectId, revision.revisionId, z.prettifyError(parsed.error));
-      if (!("answer" in parsed.data)) throw new RepairBeforeFirstPlanReport(due.projectId, revision.revisionId, revision.revision);
-      return { answer: parsed.data.answer, decision: parsed.data.decision };
+    const changes = due.revisions.flatMap((revision): readonly RevisionChange[] => {
+      const summary = readRevision(due.projectId, revision.revisionId, revision.summary, revision.answersTaken);
+      if (!("changes" in summary)) throw new RepairBeforeFirstPlanReport(due.projectId, revision.revisionId, revision.revision);
+      return summary.changes;
     });
     return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count, changes);
   }

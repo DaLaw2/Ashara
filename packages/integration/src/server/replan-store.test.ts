@@ -134,13 +134,28 @@ const REPAIRED_TASKS = {
   ],
 };
 
+/** The intake of INTAKE with a second question, whose assumption a second answer can change. */
+const TWO_QUESTION_INTAKE = {
+  ...INTAKE,
+  questions: [
+    ...INTAKE.questions,
+    {
+      text: "Do classes need a teacher named?",
+      whyItMatters: "It decides what a booking shows.",
+      assumption: { statement: "A class shows no teacher.", rationale: "The tender names none.", kind: "client-visible" },
+    },
+  ],
+};
+
 /** One model for every call, answering each by what its prompt asks. */
-function pipelineModel(options: { readonly reading?: unknown; readonly environmentChange?: boolean } = {}): MockLanguageModelV4 {
+function pipelineModel(
+  options: { readonly reading?: unknown; readonly environmentChange?: boolean; readonly intake?: unknown } = {},
+): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
     doGenerate: async (call) => {
       const prompt = JSON.stringify(call.prompt);
       if (prompt.includes("Read their answer and say what it does")) return jsonResult(options.reading ?? { verdict: "confirms" });
-      if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
+      if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(options.intake ?? INTAKE);
       if (prompt.includes("structured knowledge graph")) return jsonResult(KNOWLEDGE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
       if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
@@ -182,11 +197,13 @@ function blockReports(): BlockReports {
 }
 
 /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
-async function plannedProject(options: { readonly reported: boolean } = { reported: true }): Promise<{ projectId: ProjectId; questionId: string }> {
+async function plannedProject(
+  options: { readonly reported: boolean; readonly intake?: unknown } = { reported: true },
+): Promise<{ projectId: ProjectId; questionId: string; questionIds: string[] }> {
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
   const projectId = created.project.id;
   ourProjects.add(projectId);
-  pipelineModel();
+  pipelineModel({ intake: options.intake });
   const intakeStore = createIntakeStore(db);
   const intake: IntakeStore = { ...intakeStore, openTenders: ours(() => intakeStore.openTenders()) };
   expect((await new TenderIntake({ llm: gateway, store: intake }).runPending()).map((o) => o.kind)).toEqual(["recorded"]);
@@ -197,20 +214,23 @@ async function plannedProject(options: { readonly reported: boolean } = { report
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
   expect((await new FirstPlanner({ llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
   if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
-  const question = (await new ClientMessageRepository(db).listByProject(projectId)).find((m) => m.kind === "question");
+  const questions = (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "question");
+  const [question] = questions;
   if (question === undefined) throw new Error("intake posted no question");
-  return { projectId, questionId: question.id };
+  return { projectId, questionId: question.id, questionIds: questions.map((q) => q.id) };
 }
 
-/** The client's answer changing the plan's assumption, read by the Liaison: the project is flagged. */
-async function contradict(projectId: ProjectId, questionId: string): Promise<string> {
+const HILL_FIRST = { body: "No, the hill studio opens first.", statement: "The hill studio opens first." };
+
+/** The client's answer changing the plan's assumption, read by the Liaison: the project awaits a revision for it. */
+async function contradict(projectId: ProjectId, questionId: string, change: { readonly body: string; readonly statement: string } = HILL_FIRST): Promise<string> {
   const row = await new ClientMessageRepository(db).insertInbound({
     projectId,
     kind: "answer",
-    body: "No, the hill studio opens first.",
+    body: change.body,
     inReplyTo: questionId,
   });
-  pipelineModel({ reading: { verdict: "changes", statement: "The hill studio opens first.", kind: "client-visible" } });
+  pipelineModel({ reading: { verdict: "changes", statement: change.statement, kind: "client-visible" } });
   const answerStore = createAnswerStore(db);
   const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
   const outcomes = await new ClientAnswers({ llm: gateway, store: narrowed }).runPending();
@@ -254,10 +274,16 @@ async function dependenciesOf(id: string): Promise<string[]> {
   return z.array(z.object({ to: z.string() })).parse(result.rows).map((row) => row.to);
 }
 
+/** The project's status and category, and the answers whose revision it awaits (replan_requests), oldest first. */
 async function projectRow(projectId: ProjectId) {
   const result = await db.execute(sql`
-    SELECT status, replan_requested_by AS "flag", blocked_category AS "category" FROM projects WHERE id = ${projectId}`);
-  const [row] = z.array(z.object({ status: z.string(), flag: z.string().nullable(), category: z.string().nullable() })).parse(result.rows);
+    SELECT status, blocked_category AS "category",
+      COALESCE((SELECT json_agg(rr.answer_id ORDER BY rr.created_at) FROM replan_requests rr
+        WHERE rr.project_id = projects.id AND rr.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
+    FROM projects WHERE id = ${projectId}`);
+  const [row] = z
+    .array(z.object({ status: z.string(), awaiting: z.array(z.string()), category: z.string().nullable() }))
+    .parse(result.rows);
   if (row === undefined) throw new Error(`project ${projectId} not found`);
   return row;
 }
@@ -305,7 +331,7 @@ beforeEach(() => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`UPDATE projects SET replan_requested_by = NULL WHERE name LIKE ${pattern}`);
+  await db.execute(sql`DELETE FROM replan_requests WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
@@ -337,7 +363,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     // Before the fix: every item counted, two Sprint 0 tasks, two scaffolds, two reviews: PlanReportUnfounded.
     expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
     expect(await planReports().runPending()).toEqual([]);
-    expect(await projectRow(projectId)).toEqual({ status: "active", flag: null, category: null });
+    expect(await projectRow(projectId)).toEqual({ status: "active", awaiting: [], category: null });
 
     const reports = await reportsOf(projectId);
     const plans = reports.filter((m) => m.body.startsWith("Ashara has made the first plan"));
@@ -347,12 +373,55 @@ describe("the client is told one plan, and never what the team will now do on a 
     expect(plan.body).toContain("1 epic (");
     expect(plan.body).toContain("split into 1 task for what you asked for.");
     expect(plan.body).toContain("(1 check task)");
-    expect(plan.body).toContain(`Because you said "No, the hill studio opens first."`);
-    expect(plan.body).toContain("Work proceeds on: The hill studio opens first.");
+    expect(plan.body).toContain(`Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(reports.some((m) => m.body.includes("The team will now do") || m.body.includes("set aside"))).toBe(false);
     // The revision is recorded as told by that one report, so it is never told again on its own.
     const revisions = await db.execute(sql`SELECT requested_by AS "requestedBy", report_id AS "reportId" FROM plan_revisions WHERE project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ requestedBy: answerId, reportId: plan.id }]);
+  });
+
+  // smoke1 D2: two changing answers were folded into one revision, and the first-plan report named only the first.
+  test("two changing answers read before the first plan's report are one revision, and the report names both", async () => {
+    const { projectId, questionIds } = await plannedProject({ reported: false, intake: TWO_QUESTION_INTAKE });
+    const [studioQuestion, teacherQuestion] = questionIds;
+    if (studioQuestion === undefined || teacherQuestion === undefined) throw new Error("intake posted fewer than two questions");
+    const first = await contradict(projectId, studioQuestion);
+    const second = await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher." });
+    expect((await projectRow(projectId)).awaiting).toEqual([first, second]);
+
+    const mock = pipelineModel({ environmentChange: false });
+    expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
+    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    expect(prompts.some((p) => p.includes("in 2 answers") && p.includes("Each class shows its teacher.") && p.includes("The hill studio opens first."))).toBe(true);
+    expect((await projectRow(projectId)).awaiting).toEqual([]);
+    const taken = await db.execute(sql`
+      SELECT rr.answer_id AS "answerId" FROM replan_requests rr JOIN plan_revisions r ON r.id = rr.plan_revision_id
+      WHERE r.project_id = ${projectId} AND r.revision = 2 ORDER BY rr.created_at`);
+    expect(taken.rows).toEqual([{ answerId: first }, { answerId: second }]);
+
+    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
+    const plan = (await reportsOf(projectId)).find((m) => m.body.startsWith("Ashara has made the first plan"));
+    expect(plan?.body).toContain("This plan already takes in your 2 answers that changed it.");
+    expect(plan?.body).toContain(`- Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
+    expect(plan?.body).toContain(`- Because you said "Yes, name the teacher.", work proceeds on: Each class shows its teacher.`);
+  });
+
+  test("a revision recorded as taking in an answer its summary does not name is not reported, and blocks the project", async () => {
+    const { projectId, questionIds } = await plannedProject({ reported: false, intake: TWO_QUESTION_INTAKE });
+    const [studioQuestion, teacherQuestion] = questionIds;
+    if (studioQuestion === undefined || teacherQuestion === undefined) throw new Error("intake posted fewer than two questions");
+    await contradict(projectId, studioQuestion);
+    await contradict(projectId, teacherQuestion, { body: "Yes, name the teacher.", statement: "Each class shows its teacher." });
+    pipelineModel({ environmentChange: false });
+    expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
+    // The record as COALESCE left it before migration 052: the summary names one change of the two taken in.
+    await db.execute(sql`
+      UPDATE plan_revisions SET summary = jsonb_set(summary, '{changes}', (summary->'changes') - 1) WHERE project_id = ${projectId}`);
+
+    const outcomes = await planReports().runPending();
+
+    expect(outcomes).toMatchObject([{ kind: "project-blocked", projectId, cause: { errorClass: "RevisionChangesUnrecorded" } }]);
+    expect((await reportsOf(projectId)).some((m) => m.body.startsWith("Ashara has made the first plan"))).toBe(false);
   });
 
   test("a revision of a halted project is told only after it resumes, after the pause and the resumption", async () => {
@@ -400,7 +469,7 @@ describe("a late client change is planned", () => {
     await startTask(check.id);
 
     const answerId = await contradict(projectId, questionId);
-    expect((await projectRow(projectId)).flag).toBe(answerId);
+    expect((await projectRow(projectId)).awaiting).toEqual([answerId]);
 
     pipelineModel();
     expect(await replanner().runPending()).toEqual([]);
@@ -458,7 +527,7 @@ describe("a late client change is planned", () => {
 
     const revisions = await db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ revision: 2, requestedBy: answerId }]);
-    expect((await projectRow(projectId)).flag).toBeNull();
+    expect((await projectRow(projectId)).awaiting).toEqual([]);
     expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
 
     const reportsBefore = (await reportsOf(projectId)).length;
@@ -468,7 +537,7 @@ describe("a late client change is planned", () => {
     expect(reports).toHaveLength(reportsBefore + 1);
     const report = reports[reports.length - 1];
     expect(report?.inReplyTo).toBe(answerId);
-    expect(report?.body).toContain(`Because you said "No, the hill studio opens first."`);
+    expect(report?.body).toContain(`Because you said "No, the hill studio opens first.", work proceeds on: The hill studio opens first.`);
     expect(report?.body).toContain("- Open hill studio bookings");
     expect(report?.body).toContain("- Open harbour studio bookings");
 
@@ -554,7 +623,7 @@ describe("a late client change is planned", () => {
 
     expect(outcomes).toMatchObject([{ kind: "project-blocked", projectId, cause: { category: "replan_bound", errorClass: "ReplanBoundReached" } }]);
     expect(mock.doGenerateCalls).toHaveLength(0);
-    expect(await projectRow(projectId)).toEqual({ status: "blocked", flag: answerId, category: "replan_bound" });
+    expect(await projectRow(projectId)).toEqual({ status: "blocked", awaiting: [answerId], category: "replan_bound" });
     const before = (await reportsOf(projectId)).length;
     expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
     expect(await blockReports().runPending()).toEqual([]);

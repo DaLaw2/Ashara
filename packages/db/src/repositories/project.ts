@@ -46,6 +46,14 @@ export const noOpenStop = (projectId: AnyColumn) =>
 export const pendingRepair = (projectId: AnyColumn) =>
   sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
 
+/**
+ * The project awaits a plan revision for a client's change (migration 052): an answer that changed
+ * an assumption the plan was built on, which no revision has taken in yet. Its dispatch is held
+ * until one has (listActiveIds).
+ */
+export const pendingChange = (projectId: AnyColumn) =>
+  sql`EXISTS (SELECT 1 FROM replan_requests rr WHERE rr.project_id = ${projectId} AND rr.plan_revision_id IS NULL)`;
+
 class WorkspacePathNotRecorded extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -114,8 +122,8 @@ export class ProjectRepository {
 
   /**
    * The projects whose work may be dispatched: status 'active', no stop
-   * awaiting the Liaison and no replanning requested (migration 038: a client
-   * answer contradicted an assumption the plan was built on), oldest first.
+   * awaiting the Liaison, no revision awaited for a client's change (migration 052: a client
+   * answer contradicted an assumption the plan was built on) and no plan repair awaited, oldest first.
    * This read is the dispatch decision: a stop committed after it is ordered
    * after the dispatch it gated.
    */
@@ -123,7 +131,7 @@ export class ProjectRepository {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy), sql`NOT ${pendingRepair(projects.id)}`))
+      .where(and(eq(projects.status, "active"), noOpenStop(projects.id), sql`NOT ${pendingChange(projects.id)}`, sql`NOT ${pendingRepair(projects.id)}`))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }

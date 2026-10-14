@@ -80,16 +80,19 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
 /**
  * One stop, in one transaction: the stop consumed first (its row lock
  * serialises two consumers of it), then an active or blocked project moved to
- * 'stopped' and the report, composed from the project's merged tasks, posted
- * once. A project already stopped gets only the consumption.
+ * 'stopped' and the report, composed from the project's merged tasks and whether
+ * it was paused (blocked) when the stop arrived, posted once. A project already
+ * stopped gets only the consumption.
  */
 export async function recordClientStop(
   db: Database,
   stop: OpenStopRow,
-  composeReport: (merged: readonly MergedTaskRow[]) => string,
+  composeReport: (merged: readonly MergedTaskRow[], paused: boolean) => string,
 ): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
+
+    const [before] = await tx.select({ status: projects.status }).from(projects).where(eq(projects.id, stop.projectId)).for("update");
 
     // An accepted project (migration 049) waits for exactly this.
     const [moved] = await tx
@@ -138,7 +141,7 @@ export async function recordClientStop(
         projectId: stop.projectId,
         direction: "outbound",
         kind: "report",
-        body: composeReport(merged),
+        body: composeReport(merged, before?.status === "blocked"),
         inReplyTo: stop.id,
         reportsOn: "client-stop",
       })

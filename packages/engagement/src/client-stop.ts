@@ -17,6 +17,10 @@ import type { ProjectId } from "@ashara/shared";
 // process is running; an attempt that was running when the client pressed Stop
 // ran to its end first, and if it was merged it is in the report. A stop pressed
 // mid-cycle therefore waits for that cycle's attempts (up to the agent timeout).
+//
+// A stop is taken in while the project is paused, and while the loop itself is halted (the
+// deployment's spend cap: the runner keeps answering stops, smoke1 D3): the project moves from
+// 'blocked' to 'stopped', so lifting the pause later does not resume it, and the report says so.
 
 /** An inbound stop not yet consumed. */
 interface OpenStop {
@@ -42,10 +46,11 @@ interface MergedTask {
 export interface ClientStopStore {
   openStops(): Promise<readonly OpenStop[]>;
   /**
-   * Consumes the stop and, unless the project is already stopped, stops it and
-   * posts the report composed from its tasks' merge records, in one transaction.
+   * Consumes the stop and, unless the project is already stopped, stops it and posts the report
+   * composed from its tasks' merge records and whether it was paused when the stop arrived, in one
+   * transaction.
    */
-  recordStop(stop: OpenStop, composeReport: (merged: readonly MergedTask[]) => string): Promise<ClientStopCommit>;
+  recordStop(stop: OpenStop, composeReport: (merged: readonly MergedTask[], paused: boolean) => string): Promise<ClientStopCommit>;
 }
 
 type ClientStopOutcome = ClientStopCommit & { readonly stopId: string; readonly projectId: ProjectId };
@@ -68,16 +73,23 @@ function mergedLine(task: MergedTask): string {
 
 /**
  * Plain words, only what is on record: that work stopped because the client
- * asked, and each task with a commit on record, the commit and how it closed
- * the task. Never a claim that the plan is complete.
+ * asked, that a pause already in place does not end the stop, and each task
+ * with a commit on record, the commit and how it closed the task. Never a claim
+ * that the plan is complete.
  */
-function stopReport(mergedTasks: readonly MergedTask[]): string {
+function stopReport(mergedTasks: readonly MergedTask[], paused: boolean): string {
   const merged =
     mergedTasks.length === 0
       ? "No merged work is on record for this project."
       : `What is on main for this project, as recorded:\n${mergedTasks.map(mergedLine).join("\n")}`;
   return [
     "Work on this project has stopped at your request. Ashara will not start any further work on it.",
+    ...(paused
+      ? [
+          "Work on it was already paused when your request arrived. Your request is recorded: the project stays " +
+            "stopped, and clearing what paused it does not restart it.",
+        ]
+      : []),
     merged,
   ].join("\n\n");
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseProjectId } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS, parseProjectId } from "@ashara/shared";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 
@@ -37,6 +37,28 @@ describe("project block reports", () => {
       expect(posted[0].body).toContain("waiting on its operator");
     },
   );
+
+  // smoke1 D4: a deployment-cap halt was told as "The budget set for this project has to be raised".
+  test.each([
+    [
+      SPEND_CAP_ERROR_CLASS.deployment,
+      "the spending limit set for all of Ashara's work, across every project it runs, was reached",
+      "The spending limit for all of Ashara's work has to be raised before more is spent on any project, this one included.",
+    ],
+    [SPEND_CAP_ERROR_CLASS.project, "the spending limit set for this project was reached", "The budget set for this project has to be raised before more is spent."],
+    ["SomethingElse", "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record", "The spending limit that was reached has to be raised before more is spent."],
+  ])("a budget_cap halt recorded as %s names the limit its record names", async (errorClass, cause, next) => {
+    // The message names the other cap: the report is chosen by the recorded class, never by the message's words.
+    const reason = "budget_cap: the spend cap of project p is $1; Raise ASHARA_PROJECT_BUDGET_LIMIT_USD (the deployment cap)";
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass, reason } },
+    ]);
+    await reports.runPending();
+    expect(posted[0].body).toContain(`Ashara recorded the cause as this: ${cause}`);
+    expect(posted[0].body).toContain(next);
+    expect(posted[0].body).not.toContain(errorClass);
+    if (errorClass !== SPEND_CAP_ERROR_CLASS.project) expect(posted[0].body).not.toContain("The budget set for this project");
+  });
 
   test("a halt with no cause recorded says so, and claims none", async () => {
     const { reports, posted } = reportsFor([

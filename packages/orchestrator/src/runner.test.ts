@@ -10,9 +10,11 @@ function scriptedCycles(script: Array<(runner: ContinuousRunner) => CycleResult>
   loop: CycleRunner;
   bind: (runner: ContinuousRunner) => void;
   calls: () => number;
+  haltedCalls: () => number;
 } {
   let runner: ContinuousRunner | null = null;
   let count = 0;
+  let halted = 0;
   return {
     loop: {
       runCycle: async () => {
@@ -21,11 +23,19 @@ function scriptedCycles(script: Array<(runner: ContinuousRunner) => CycleResult>
         if (!runner || !step) throw new Error("scriptedCycles: runner not bound");
         return step(runner);
       },
+      runHaltedCycle: async () => {
+        halted += 1;
+      },
     },
     bind: (r) => { runner = r; },
     calls: () => count,
+    haltedCalls: () => halted,
   };
 }
+
+const noHalt = async (): Promise<void> => {
+  throw new Error("no cycle of this test reports a stop");
+};
 
 const idle = (): CycleResult => ({ tasksProcessed: 0, results: [], stop: null });
 
@@ -51,7 +61,7 @@ describe("ContinuousRunner wakePending", () => {
     cycles.bind(runner);
     const abort = new AbortController();
 
-    const running = runner.run(abort.signal);
+    const running = runner.run(abort.signal, noHalt);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(cycles.calls()).toBe(2);
@@ -75,7 +85,7 @@ describe("ContinuousRunner wakePending", () => {
     cycles.bind(runner);
     const abort = new AbortController();
 
-    const running = runner.run(abort.signal);
+    const running = runner.run(abort.signal, noHalt);
     await vi.advanceTimersByTimeAsync(0);
     expect(cycles.calls()).toBe(1);
 
@@ -89,15 +99,31 @@ describe("ContinuousRunner wakePending", () => {
 });
 
 describe("ContinuousRunner stop", () => {
-  test("a cycle that reports a stop ends the run with its reason; no further cycle runs", async () => {
+  // smoke1 D3: after the deployment cap stopped the runner, a client's stop was accepted and never answered.
+  test("a cycle that reports a stop halts the work for good; from then on only the client's stops are taken in, until shutdown", async () => {
     const stop = { reason: "budget_cap: deployment cap reached" };
     const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
     const runner = new ContinuousRunner(cycles.loop, { idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
+    const halts: string[] = [];
+    const abort = new AbortController();
 
-    const ended = await runner.run(new AbortController().signal);
+    const running = runner.run(abort.signal, async (halt) => void halts.push(halt.reason));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(halts).toEqual([stop.reason]);
+    expect(cycles.haltedCalls()).toBe(1);
 
-    expect(ended).toEqual(stop);
+    // A stop the client posts NOTIFYs: it is taken in at once, not after the idle interval.
+    runner.wake();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cycles.haltedCalls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(IDLE_MS);
+    expect(cycles.haltedCalls()).toBe(3);
+
+    abort.abort();
+    expect(await running).toEqual(stop);
+    // No full cycle after the one that stopped: nothing is planned or dispatched past the cap.
     expect(cycles.calls()).toBe(1);
+    expect(halts).toHaveLength(1);
   });
 });

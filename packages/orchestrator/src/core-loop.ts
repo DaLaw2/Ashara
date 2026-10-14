@@ -1,3 +1,4 @@
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, ReplanOutcome, WorkItem } from "./acl/planning-acl.js";
@@ -76,9 +77,7 @@ export class CoreLoop {
     // stopped here is not active, so no step below takes it in, plans it,
     // reports on it or dispatches its tasks. Nothing of this process is running
     // for it now: the previous cycle awaited every task it dispatched.
-    for (const stop of await deps.clientStops.runPending()) {
-      console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
-    }
+    await this.takeClientStops();
 
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
@@ -114,8 +113,8 @@ export class CoreLoop {
 
     // Then the client's answers, before planning: one read now appends the vision version
     // the first plan is made from. One that changes an assumption an existing plan was
-    // built on sets the project's replanning flag, and the gate below does not dispatch
-    // a flagged project's tasks (ProjectRepository.listActiveIds) until the replanning
+    // built on records a request to revise it (replan_requests), and the gate below does not dispatch
+    // the tasks of a project awaiting that revision (ProjectRepository.listActiveIds) until the replanning
     // step revises its plan.
     const answers = await this.readAnswers();
     if (answers !== null) return this.haltAtCap(answers);
@@ -205,6 +204,21 @@ export class CoreLoop {
     return { tasksProcessed: batch.length, results, stop: null };
   }
 
+  /**
+   * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
+   * stops, each recorded and answered with no LLM call (smoke1 D3). A project stopped here stays
+   * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
+   */
+  async runHaltedCycle(): Promise<void> {
+    await this.takeClientStops();
+  }
+
+  private async takeClientStops(): Promise<void> {
+    for (const stop of await this.deps.clientStops.runPending()) {
+      console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
+    }
+  }
+
   /** The client's answers not yet read, each read once; the spend cap's stop when a call was refused, else null. */
   private async readAnswers(): Promise<LoopStop | null> {
     const answers = await this.step("liaison-answers", () => this.deps.liaisonAnswers.runPending());
@@ -234,7 +248,7 @@ export class CoreLoop {
   private async haltAtCap(stop: LoopStop): Promise<CycleResult> {
     const halted = await this.deps.projectRepo.blockAllActive({
       category: "budget_cap",
-      errorClass: "DeploymentSpendCapReached",
+      errorClass: SPEND_CAP_ERROR_CLASS.deployment,
       reason: stop.reason,
     });
     if (halted.length > 0) console.warn(`[budget_cap] ${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`);

@@ -35,7 +35,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
         rows.map(async (row) => ({
           projectId: row.projectId,
           projectName: row.projectName,
-          requestedBy: row.requestedBy,
+          changesAwaited: row.changesAwaited,
           repairsAwaited: row.repairsAwaited,
           visionVersion: row.vision.version,
           visionText: row.vision.visionText,
@@ -59,14 +59,14 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
     async writeRevision(write) {
       // The supersession and the bulk-plan path run inside the locked revision transaction, so
       // the superseded items, the new items with their edges and owners, the contract, the
-      // revision record and the cleared flag commit together.
+      // revision record and the answers and repairs it took in commit together.
       return withPlanRevisionTransaction(
         db,
         {
           projectId: write.projectId,
           revision: write.revision,
           visionVersion: write.visionVersion,
-          requestedBy: write.requestedBy,
+          answers: write.answers,
           repaired: write.repaired,
           summary: write.summary,
           events: write.events,

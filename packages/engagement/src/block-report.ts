@@ -1,3 +1,4 @@
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
 import type { ProjectId, StoredBlockedReason } from "@ashara/shared";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
@@ -105,16 +106,60 @@ function cut(text: string): string {
 }
 
 /**
+ * Whose spending limit a budget_cap halt records, from its recorded error class (SPEND_CAP_ERROR_CLASS),
+ * never from its message: the deployment's, binding every project, or the project's own (smoke1 D4).
+ * A class that is neither is not guessed at: the report says which limit is not on record.
+ */
+type SpendLimit = "deployment" | "project" | "unrecorded";
+
+function spendLimitOf(cause: RecordedCause): SpendLimit {
+  switch (cause.errorClass) {
+    case SPEND_CAP_ERROR_CLASS.deployment:
+      return "deployment";
+    case SPEND_CAP_ERROR_CLASS.project:
+      return "project";
+    default:
+      return "unrecorded";
+  }
+}
+
+/** The halt as the report tells it: its recorded kind, and for a budget_cap halt whose limit was reached. */
+type ToldHalt = { readonly kind: Exclude<ProjectBlockKind, "budget_cap"> } | { readonly kind: "budget_cap"; readonly limit: SpendLimit };
+
+function toldHalt(kind: ProjectBlockKind, cause: RecordedCause): ToldHalt {
+  return kind === "budget_cap" ? { kind, limit: spendLimitOf(cause) } : { kind };
+}
+
+function spendLimitReached(limit: SpendLimit): string {
+  switch (limit) {
+    case "deployment":
+      return "the spending limit set for all of Ashara's work, across every project it runs, was reached, so the next step of the work was not paid for";
+    case "project":
+      return "the spending limit set for this project was reached, so the next step of the work was not paid for";
+    case "unrecorded":
+      return "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record";
+  }
+}
+
+/**
  * What the episode's recorded kind says paused the project, in the client's words: only what every
  * halt recorded with that kind is by definition (ProjectBlockCategory), stated as Ashara's own
  * record, so a misrecorded kind reads as Ashara's record and not as an observed fact (M2 trial M3).
  * Exported for the lifecycle simulator's I4 oracle, which states it from the episode's kind as read
  * from project_blocks.
  */
-export function recordedKind(kind: ProjectBlockKind): string {
-  switch (kind) {
+/**
+ * The recorded cause in the client's words, from the episode's kind and, for a budget_cap halt, its
+ * recorded error class. Exported as the seam the simulator's I4 oracle judges halt reports with.
+ */
+export function recordedKindOf(kind: ProjectBlockKind, cause: RecordedCause): string {
+  return recordedKind(toldHalt(kind, cause));
+}
+
+function recordedKind(halt: ToldHalt): string {
+  switch (halt.kind) {
     case "budget_cap":
-      return "a spending limit set for this work was reached, so the next step of the work was not paid for";
+      return spendLimitReached(halt.limit);
     case "configuration":
       return "a step of the work needed something Ashara's own setup does not provide, for a reason other than a spending limit";
     case "fault":
@@ -133,21 +178,33 @@ export function recordedKind(kind: ProjectBlockKind): string {
  * class and its chain) stays in project_blocks for the operator, and the report names that record
  * (W11b D3). A halt with no cause recorded says so.
  */
-function recordedCause(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause): string {
+function recordedCause(episodeId: string, halt: ToldHalt, cause: RecordedCause): string {
   if (cause.reason === null && cause.errorClass === null) return "No cause was recorded for this pause.";
   return (
-    `Ashara recorded the cause as this: ${recordedKind(kind)}. ` +
+    `Ashara recorded the cause as this: ${recordedKind(halt)}. ` +
     `Ashara keeps the technical detail in its own record of this pause, record ${episodeId}.`
   );
 }
 
 const WAITS_ON_OPERATOR = "Until then nothing more is done on this project. The team is waiting on its operator for this, and you will be told when work resumes.";
 
-/** What happens next after a halt of `kind`: who or what ends it. The cause is stated apart, from the record. */
-function nextStep(kind: ProjectBlockKind): string {
-  switch (kind) {
+/** What has to be raised for a budget_cap halt to end: the limit that was reached, as recorded. */
+function limitToRaise(limit: SpendLimit): string {
+  switch (limit) {
+    case "deployment":
+      return "The spending limit for all of Ashara's work has to be raised before more is spent on any project, this one included.";
+    case "project":
+      return "The budget set for this project has to be raised before more is spent.";
+    case "unrecorded":
+      return "The spending limit that was reached has to be raised before more is spent.";
+  }
+}
+
+/** What happens next after a halt: who or what ends it. The cause is stated apart, from the record. */
+function nextStep(halt: ToldHalt): string {
+  switch (halt.kind) {
     case "budget_cap":
-      return `The budget set for this project has to be raised before more is spent. ${WAITS_ON_OPERATOR}`;
+      return `${limitToRaise(halt.limit)} ${WAITS_ON_OPERATOR}`;
     case "configuration":
       return `Ashara's own setup has to be corrected. ${WAITS_ON_OPERATOR}`;
     case "fault":
@@ -169,7 +226,8 @@ function nextStep(kind: ProjectBlockKind): string {
 /** What the client reads when a project is paused: that it is, the recorded cause, and what happens next. */
 function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause): string {
   const opening = kind === "planning_stopped" ? "Ashara could not turn this project's vision into a plan, so work on this project has stopped." : "Work on this project is paused.";
-  return [opening, recordedCause(episodeId, kind, cause), nextStep(kind)].join("\n\n");
+  const halt = toldHalt(kind, cause);
+  return [opening, recordedCause(episodeId, halt, cause), nextStep(halt)].join("\n\n");
 }
 
 /** Plain words: what stopped, why, and what the client can do (a halt recorded before migration 048). */

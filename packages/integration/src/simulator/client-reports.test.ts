@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recordedKind } from "@ashara/engagement";
+import { recordedKindOf } from "@ashara/engagement";
 import { checkReports } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
@@ -21,10 +21,10 @@ const stated = (sentence: string, record: string): string =>
 
 describe("checkReports, a halt's cause", () => {
   it("holds a report to its episode's recorded kind and its episode's record", () => {
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKind("fault"), "e1")), "blocked")).toEqual([]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("fault", { errorClass: "MergeFailed", reason: "git exited 1" }), "e1")), "blocked")).toEqual([]);
     // Another kind's sentence, or another record's id, is not the cause on record.
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKind("infrastructure"), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKind("fault"), "e2")), "blocked")).toEqual(["halt-cause:fault"]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("infrastructure", { errorClass: "MergeFailed", reason: "git exited 1" }), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("fault", { errorClass: "MergeFailed", reason: "git exited 1" }), "e2")), "blocked")).toEqual(["halt-cause:fault"]);
   });
 
   it("holds a halt with no cause recorded to saying so, and one with a cause to not saying so", () => {

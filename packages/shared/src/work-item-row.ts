@@ -95,6 +95,16 @@ export interface ProjectBlockCause {
   readonly reason: string;
 }
 
+/**
+ * The error class a `budget_cap` block records, which says whose cap it was: the deployment's, which
+ * halts every active project at once (the core loop's halt at the cap), or the project's own (the
+ * spend cap's refusal of one project's call). The Liaison's report names the cap from it (smoke1 D4).
+ */
+export const SPEND_CAP_ERROR_CLASS = {
+  deployment: "DeploymentSpendCapReached",
+  project: "BudgetExceeded",
+} as const;
+
 /** A project's own record or step failed: Ashara's fault, which the team must repair. */
 export function projectBlockCause(err: Error): ProjectBlockCause {
   return { category: "fault", errorClass: err.name, reason: describeErrorChain(err) };

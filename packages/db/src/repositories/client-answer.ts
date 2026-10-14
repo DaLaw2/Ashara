@@ -2,7 +2,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { clientMessages, projects, visionDocuments } from "../schema.js";
+import { clientMessages, projects, replanRequests, visionDocuments } from "../schema.js";
 import { noOpenStop } from "./project.js";
 
 // The client's answers to the Liaison's questions (migration 038): each inbound
@@ -154,14 +154,14 @@ interface AnswerWrite {
     readonly openQuestions: unknown;
     readonly changeReason: string;
   } | null;
-  /** A planned project's replanning request: the flag set and the report posted, in reply to the answer. */
+  /** A planned project's replanning request: the request recorded (replan_requests) and the report posted, in reply to the answer. */
   readonly replanReport: string | null;
 }
 
 /**
  * In one transaction, with the project row locked (the first-plan transaction
  * locks it too): the answer consumed, the vision version appended, and for a
- * replanning request the project flagged and the report posted. An answer
+ * replanning request the request recorded and the report posted. An answer
  * already consumed gets nothing new ("already-consumed"). One composed against a
  * state that no longer holds (another answer of the project wrote a vision version
  * first, or the first plan was written meanwhile) is rolled back whole and returned
@@ -241,11 +241,8 @@ function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded"
     }
 
     if (write.replanReport !== null) {
-      // The first contradicting answer stays on record; a later one adds its report only.
-      await tx
-        .update(projects)
-        .set({ replanRequestedBy: sql`COALESCE(${projects.replanRequestedBy}, ${write.answerId}::uuid)` })
-        .where(eq(projects.id, write.projectId));
+      // Every changing answer is on record: the revision that takes it in names it, and its report says what it changed.
+      await tx.insert(replanRequests).values({ answerId: write.answerId, projectId: write.projectId });
       await tx.insert(clientMessages).values({
         projectId: write.projectId,
         direction: "outbound",

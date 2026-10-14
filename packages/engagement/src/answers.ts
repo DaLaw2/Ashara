@@ -11,9 +11,9 @@ import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 // append-only) in which the assumption is Stated and carries the answer, the client
 // message id as its provenance. Delivery plans from the current version, so an answer
 // read before the first plan is planned on. One read after it that changes an
-// assumption the plan was built on flags the project for replanning, which stops its
+// assumption the plan was built on is recorded as a request to revise the plan, which stops its
 // dispatch, and is reported to the client once. Delivery revises the plan once the work
-// in progress has finished (planning replan.ts), and the Liaison reports the revision.
+// in progress has finished (planning replan.ts), taking in every such answer recorded, and the Liaison reports the revision, naming each.
 
 /** Failed attempts to read one answer after which the Liaison stops and blocks the project. */
 const MAX_ANSWER_ATTEMPTS = 3;
@@ -61,7 +61,7 @@ export interface AnswerStore {
   openAnswer(answerId: string): Promise<OpenAnswer | null>;
   /**
    * Consumes the answer and, together with it, appends the vision version and
-   * flags the project for replanning with its report; an answer already consumed
+   * records the request to revise the plan, with its report; an answer already consumed
    * gets nothing new. A write composed against a vision version or a plan state
    * that is no longer current writes nothing and returns "moved".
    */

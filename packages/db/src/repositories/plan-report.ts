@@ -11,7 +11,8 @@ import {
 import type { DbHandle } from "../connection.js";
 import { clientMessages, planRevisions, projects, workItems } from "../schema.js";
 import type { DroppedPlanDependency } from "./first-plan.js";
-import { noOpenStop } from "./project.js";
+import { noOpenStop, pendingChange } from "./project.js";
+import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 
 // The Liaison's reports on planning outcomes (migration 020). A report is due
 // while the outcome is stamped on the project and no report on it exists.
@@ -41,6 +42,8 @@ interface RevisionBeforeReport {
   readonly revisionId: string;
   readonly revision: number;
   readonly summary: unknown;
+  /** The client answers recorded as taken in by it (replan_requests, migration 052). */
+  readonly answersTaken: number;
 }
 
 /** How many ordering hints the plan dropped; unrecorded on a project planned before migration 033. */
@@ -116,7 +119,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       and(
         eq(projects.status, "active"),
         isNotNull(projects.firstPlannedAt),
-        isNull(projects.replanRequestedBy),
+        sql`NOT ${pendingChange(projects.id)}`,
         unreported("first-plan"),
         noOpenStop(projects.id),
       ),
@@ -153,11 +156,18 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
     }
     const tasks = standing.filter((i) => i.level === "Task");
     const origins = tasks.map((i) => i.origin);
-    const revisions = await db
-      .select({ revisionId: planRevisions.id, revision: planRevisions.revision, summary: planRevisions.summary })
-      .from(planRevisions)
-      .where(and(eq(planRevisions.projectId, row.id), isNull(planRevisions.reportId)))
-      .orderBy(asc(planRevisions.revision));
+    const revisions = (
+      await db
+        .select({
+          revisionId: planRevisions.id,
+          revision: planRevisions.revision,
+          summary: planRevisions.summary,
+          answersTaken: answersTakenBy(planRevisions.id),
+        })
+        .from(planRevisions)
+        .where(and(eq(planRevisions.projectId, row.id), isNull(planRevisions.reportId)))
+        .orderBy(asc(planRevisions.revision))
+    ).map((revision) => ({ ...revision, answersTaken: parseAnswersTaken(revision.revisionId, revision.answersTaken) }));
     due.push({
       subject: "first-plan",
       projectId,

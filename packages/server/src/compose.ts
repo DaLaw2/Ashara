@@ -467,7 +467,10 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const coreLoop = new CoreLoop(coreLoopDeps);
 
-  const cycles: CycleRunner = { runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()) };
+  const cycles: CycleRunner = {
+    runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()),
+    runHaltedCycle: () => withGitRunner(ports.git, () => coreLoop.runHaltedCycle()),
+  };
 
   const runner = new ContinuousRunner(cycles, { databaseUrl: config.databaseUrl });
 

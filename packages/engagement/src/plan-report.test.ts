@@ -9,11 +9,10 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000010", "test")
 type Dropped = { kind: "recorded"; count: number } | { kind: "unrecorded" };
 
 type Counts = { decomposition: number; sprint0: number; scaffolds: number; checks: number; reviews: number; unrecorded: number; started: number };
-type Revision = { revisionId: string; revision: number; summary: unknown };
+type Revision = { revisionId: string; revision: number; summary: unknown; answersTaken: number };
 
 const CHANGE_SUMMARY = {
-  answer: "Keys contain no whitespace.",
-  decision: "Keys are non-empty and contain no whitespace.",
+  changes: [{ answer: "Keys contain no whitespace.", decision: "Keys are non-empty and contain no whitespace." }],
   newTasks: ["Store text keys"],
   newCheckTasks: 1,
   newEnvironmentTask: true,
@@ -108,7 +107,7 @@ describe("first-plan report", () => {
 
   test("a plan revised before it was reported is one report of the plan that stands, which also tells the revision", async () => {
     const { reports, posted, folded, revisionPosts, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [
-      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY },
+      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY, answersTaken: 1 },
     ]);
 
     expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
@@ -118,19 +117,52 @@ describe("first-plan report", () => {
     expect(folded).toEqual([["rev-2"]]);
     expect(revisionPosts).toEqual([]);
     expect(posted[0]).toContain("split into 6 tasks for what you asked for.");
-    expect(posted[0]).toContain(
-      `This plan already takes in your answer. Because you said "Keys contain no whitespace.", the team revised the plan`,
-    );
-    expect(posted[0]).toContain("Work proceeds on: Keys are non-empty and contain no whitespace.");
+    expect(posted[0]).toContain(`This plan already takes in your answer. The team revised the plan`);
+    expect(posted[0]).toContain(`Because you said "Keys contain no whitespace.", work proceeds on: Keys are non-empty and contain no whitespace.`);
     // Nothing of the replaced plan is described: the client never saw it.
     expect(posted[0]).not.toMatch(/Store keys without newlines|set aside/);
+  });
+
+  test("a revision that took in two changing answers names both, each with what it changed (smoke1 D2)", async () => {
+    const twoChanges = {
+      ...CHANGE_SUMMARY,
+      changes: [
+        { answer: "Count words like wc does.", decision: "Words are counted as wc counts them." },
+        { answer: "Use Python 3.", decision: "The tool is written in Python 3." },
+      ],
+    };
+    const { reports, posted, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [
+      { revisionId: "rev-2", revision: 2, summary: twoChanges, answersTaken: 2 },
+    ]);
+
+    await reports.runPending();
+
+    expect(blocked).toEqual([]);
+    expect(posted[0]).toContain("This plan already takes in your 2 answers that changed it.");
+    expect(posted[0]).toContain(`- Because you said "Count words like wc does.", work proceeds on: Words are counted as wc counts them.`);
+    expect(posted[0]).toContain(`- Because you said "Use Python 3.", work proceeds on: The tool is written in Python 3.`);
+  });
+
+  test.each([
+    ["names fewer changes than the answers it took in", CHANGE_SUMMARY, 2],
+    ["is a client change with no answer recorded as taken in", CHANGE_SUMMARY, 0],
+  ] as const)("a revision whose summary %s is not reported and blocks the project", async (_case, summary, answersTaken) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [{ revisionId: "rev-2", revision: 2, summary, answersTaken }]);
+
+    await reports.runPending();
+
+    expect(posted).toHaveLength(0);
+    expect(blocked.map((cause) => cause.errorClass)).toEqual(["RevisionChangesUnrecorded"]);
   });
 
   test("a repair recorded before the first plan was reported cannot be described, and blocks the project", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { newTasks, newCheckTasks, newEnvironmentTask, supersededTasks, supersededOther, keptCompleted } = CHANGE_SUMMARY;
     const repair = { repaired: ["Store keys"], newTasks, newCheckTasks, newEnvironmentTask, supersededTasks, supersededOther, keptCompleted };
-    const { reports, posted, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [{ revisionId: "rev-2", revision: 2, summary: repair }]);
+    const { reports, posted, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [
+      { revisionId: "rev-2", revision: 2, summary: repair, answersTaken: 0 },
+    ]);
 
     await reports.runPending();
 
@@ -141,7 +173,7 @@ describe("first-plan report", () => {
   test("a project blocked by its first-plan report is not told what the team will now do", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { reports, posted, revisionPosts, blocked } = reportsFor({ ...FOUNDED, sprint0: 2 }, { kind: "recorded", count: 0 }, [], [
-      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY },
+      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY, answersTaken: 1 },
     ]);
 
     await reports.runPending();
@@ -153,7 +185,7 @@ describe("first-plan report", () => {
 });
 
 describe("plan revision report", () => {
-  function revisionReports(summary: unknown) {
+  function revisionReports(summary: unknown, answersTaken = 1) {
     const posted: Array<{ revisionId: string; body: string }> = [];
     const blocked: ProjectBlockCause[] = [];
     const store: PlanReportStore = {
@@ -161,7 +193,7 @@ describe("plan revision report", () => {
       postReport: async () => {
         throw new Error("no first-plan report is due");
       },
-      dueRevisionReports: async () => [{ revisionId: "rev-2", projectId, revision: 2, summary }],
+      dueRevisionReports: async () => [{ revisionId: "rev-2", projectId, revision: 2, summary, answersTaken }],
       postRevisionReport: async (revisionId, body) => {
         posted.push({ revisionId, body });
         return "posted";
@@ -176,8 +208,7 @@ describe("plan revision report", () => {
 
   test("says what the client said, what the team now does, what is set aside and what stays done", async () => {
     const { reports, posted } = revisionReports({
-      answer: "The hill studio opens first.",
-      decision: "The hill studio opens first.",
+      changes: [{ answer: "The hill studio opens first.", decision: "The hill studio opens first." }],
       newTasks: ["Open hill studio bookings"],
       newCheckTasks: 1,
       newEnvironmentTask: false,
@@ -190,7 +221,7 @@ describe("plan revision report", () => {
 
     expect(posted).toHaveLength(1);
     const body = posted[0]?.body ?? "";
-    expect(body).toMatch(/^Because you said "The hill studio opens first\.", the team has revised the plan/);
+    expect(body).toMatch(/^The team has revised the plan for this project for your answer\. Because you said "The hill studio opens first\.", work proceeds on: The hill studio opens first\./);
     expect(body).toContain("The team will now do 1 task:\n- Open hill studio bookings");
     expect(body).toContain("set aside and will not be done as planned:\n- Open harbour studio bookings");
     expect(body).toContain("1 task already finished stays done");
@@ -205,5 +236,52 @@ describe("plan revision report", () => {
 
     expect(posted).toHaveLength(0);
     expect(blocked.map((cause) => cause.errorClass)).toEqual(["PlanRevisionSummaryUnreadable"]);
+  });
+
+  test("a revision that took in two answers names both, each with what it changed", async () => {
+    const { reports, posted, blocked } = revisionReports(
+      {
+        changes: [
+          { answer: "The hill studio opens first.", decision: "The hill studio opens first." },
+          { answer: "Bookings close at 18:00.", decision: "Bookings close at 18:00." },
+        ],
+        newTasks: ["Open hill studio bookings"],
+        newCheckTasks: 1,
+        newEnvironmentTask: false,
+        supersededTasks: [],
+        supersededOther: 0,
+        keptCompleted: 0,
+      },
+      2,
+    );
+
+    await reports.runPending();
+
+    expect(blocked).toEqual([]);
+    const body = posted[0]?.body ?? "";
+    expect(body).toContain("for your 2 answers that changed it:");
+    expect(body).toContain(`- Because you said "The hill studio opens first.", work proceeds on: The hill studio opens first.`);
+    expect(body).toContain(`- Because you said "Bookings close at 18:00.", work proceeds on: Bookings close at 18:00.`);
+  });
+
+  test("a revision recorded as taking in an answer its summary does not name is not reported", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, blocked } = revisionReports(
+      {
+        changes: [{ answer: "The hill studio opens first.", decision: "The hill studio opens first." }],
+        newTasks: ["Open hill studio bookings"],
+        newCheckTasks: 1,
+        newEnvironmentTask: false,
+        supersededTasks: [],
+        supersededOther: 0,
+        keptCompleted: 0,
+      },
+      2,
+    );
+
+    await reports.runPending();
+
+    expect(posted).toHaveLength(0);
+    expect(blocked.map((cause) => cause.errorClass)).toEqual(["RevisionChangesUnrecorded"]);
   });
 });

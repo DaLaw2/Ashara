@@ -191,11 +191,11 @@ async function visionsOf(projectId: ProjectId) {
   return z.array(VisionRowSchema).parse(result.rows);
 }
 
-async function replanFlagOf(projectId: ProjectId): Promise<string | null> {
-  const result = await db.execute(sql`SELECT replan_requested_by AS "flag" FROM projects WHERE id = ${projectId}`);
-  const [row] = z.array(z.object({ flag: z.string().nullable() })).parse(result.rows);
-  if (row === undefined) throw new Error(`project ${projectId} not found`);
-  return row.flag;
+/** The answers whose plan revision the project awaits (replan_requests, migration 052), oldest first. */
+async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
+  const result = await db.execute(sql`
+    SELECT answer_id AS "answerId" FROM replan_requests WHERE project_id = ${projectId} AND plan_revision_id IS NULL ORDER BY created_at`);
+  return z.array(z.object({ answerId: z.string() })).parse(result.rows).map((row) => row.answerId);
 }
 
 beforeAll(async () => {
@@ -233,7 +233,7 @@ beforeEach(() => {
 afterAll(async () => {
   const pattern = `${NAME_PREFIX}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
-  await db.execute(sql`UPDATE projects SET replan_requested_by = NULL WHERE name LIKE ${pattern}`);
+  await db.execute(sql`DELETE FROM replan_requests WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
@@ -301,7 +301,7 @@ describe("the client's answers", () => {
     expect(prompts.some((p) => p.includes("Client clarifications") && p.includes("How many seats does a class have? -> Eight seats, not twelve."))).toBe(true);
     expect(prompts.some((p) => p.includes("A class has twelve seats."))).toBe(false);
     // Before the first plan a changed assumption needs no replanning.
-    expect(await replanFlagOf(projectId)).toBeNull();
+    expect(await awaitedChangesOf(projectId)).toEqual([]);
   });
 
   test("an answer after the first plan that changes an assumption it was built on is reported once and stops dispatch", async () => {
@@ -328,7 +328,7 @@ describe("the client's answers", () => {
       kind: "internal-design",
       clientAnswer: { messageId: answerId },
     });
-    expect(await replanFlagOf(projectId)).toBe(answerId);
+    expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);
     // Beside intake's report of the unasked assumptions, in reply to the tender (ADR-074 addendum 2 d89 C).
     const reports = (await new ClientMessageRepository(db).listByProject(projectId)).filter(
@@ -353,7 +353,7 @@ describe("the client's answers", () => {
     await answer(projectId, first, "Yes, harbour first.");
     pipelineModel({ verdict: "confirms" });
     expect((await answers().runPending()).map((o) => o.kind === "stated" && o.replanRequested)).toEqual([false]);
-    expect(await replanFlagOf(projectId)).toBeNull();
+    expect(await awaitedChangesOf(projectId)).toEqual([]);
     expect(
       (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report" && m.inReplyTo !== tenderId),
     ).toHaveLength(0);

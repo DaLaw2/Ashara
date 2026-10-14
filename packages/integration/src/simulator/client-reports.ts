@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { recordedKind } from "@ashara/engagement";
+import { recordedKindOf } from "@ashara/engagement";
 import type { ProjectBlockKind } from "@ashara/engagement";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/shared";
 import type { StoredBlockedReason, VisionSource } from "@ashara/shared";
@@ -174,7 +174,7 @@ function recordedWhy(raw: unknown): RecordedWhy {
 function statedCause(episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null }, kind: StatedKind): string {
   if (episode.reason === null && episode.errorClass === null) return "No cause was recorded for this pause.";
   return (
-    `Ashara recorded the cause as this: ${recordedKind(kind)}. ` +
+    `Ashara recorded the cause as this: ${recordedKindOf(kind, episode)}. ` +
     `Ashara keeps the technical detail in its own record of this pause, record ${episode.id}.`
   );
 }

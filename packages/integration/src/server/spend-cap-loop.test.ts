@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import {
+  ClientMessageRepository,
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
@@ -19,6 +20,8 @@ import {
   WorkItemRepository,
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
+import { ClientStops } from "@ashara/engagement";
+import type { ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
@@ -26,7 +29,8 @@ import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
+import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
@@ -150,6 +154,8 @@ afterAll(async () => {
   );
   await db.execute(sql`DELETE FROM failed_approaches WHERE task_id IN (SELECT id FROM work_items WHERE project_id IN ${projectIds})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN ${projectIds}`);
+  await db.execute(sql`DELETE FROM client_messages WHERE direction = 'outbound' AND project_id IN ${projectIds}`);
+  await db.execute(sql`DELETE FROM client_messages WHERE project_id IN ${projectIds}`);
   await db.execute(sql`DELETE FROM projects WHERE name = ${NAME}`);
   await db.execute(sql`DELETE FROM clients WHERE name LIKE ${`${NAME}%`}`);
   await db.$client.end();
@@ -194,12 +200,67 @@ describe("the deployment spend cap stops the loop", () => {
       },
     });
 
-    const stop = await new ContinuousRunner(new CoreLoop(deps)).run(new AbortController().signal);
+    // The halt ends the work; the test then ends the halted runner, as SIGTERM does.
+    const abort = new AbortController();
+    const stop = await new ContinuousRunner(new CoreLoop(deps)).run(abort.signal, async () => abort.abort());
 
     expect(intake).toHaveBeenCalledTimes(1);
     expect(roster).not.toHaveBeenCalled();
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(stop?.reason).toMatch(/^budget_cap: the spend cap of the deployment/);
+  });
+});
+
+// smoke1 D3: after the deployment cap stopped the runner, a client's stop returned 201 and was never consumed or answered.
+describe("a stop the client sends after the deployment cap halted the loop", () => {
+  test("is recorded and answered by the halted runner, and holds when the halt is lifted", async () => {
+    const projects = new ProjectRepository(db);
+    const messages = new ClientMessageRepository(db);
+    const client = await new ClientRepository(db).create(`${NAME}-halted-stop`);
+    const projectId = (await projects.create(NAME, client.id)).id;
+    const stopStore = createClientStopStore(db);
+    const narrowed: ClientStopStore = { ...stopStore, openStops: async () => (await stopStore.openStops()).filter((s) => s.projectId === projectId) };
+    const clientStops = new ClientStops(narrowed);
+    const abort = new AbortController();
+    const base = loopDeps({ spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null } });
+    const capReason = "budget_cap: the deployment has spent $1.000000 (llm_calls) of its $1.000000 cap";
+    const deps = loopDeps({
+      // Only this suite's project is halted: blockAllActive over the shared database would halt other suites' projects.
+      projectRepo: {
+        ...base.projectRepo,
+        blockAllActive: async (cause) => ((await projects.block(projectId, cause)) === "blocked" ? [projectId] : []),
+      },
+      clientStops: {
+        runPending: async () => {
+          const outcomes = await clientStops.runPending();
+          // Once the stop is answered, the test ends the halted runner, as SIGTERM does.
+          if (outcomes.length > 0) abort.abort();
+          return outcomes;
+        },
+      },
+      spendCap: { deploymentStop: async () => ({ reason: capReason }), refusalOf: () => null },
+    });
+    let stopId = "";
+
+    const ended = await new ContinuousRunner(new CoreLoop(deps), { idleIntervalMs: 60_000 }).run(abort.signal, async () => {
+      // The halt is recorded as the deployment's cap before the client sends its stop.
+      const halted = await db.execute(sql`SELECT status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
+      expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
+      stopId = (await messages.insertInbound({ projectId, kind: "stop", body: "Please stop.", inReplyTo: null })).id;
+    });
+
+    expect(ended).toEqual({ reason: capReason });
+    const stopRow = await messages.findById(stopId);
+    expect(stopRow?.consumedAt).not.toBeNull();
+    const reports = (await messages.listByProject(projectId)).filter((m) => m.inReplyTo === stopId);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.body).toContain("Work on this project has stopped at your request.");
+    expect(reports[0]?.body).toContain("Work on it was already paused when your request arrived.");
+    expect(reports[0]?.body).toContain("clearing what paused it does not restart it");
+    // The owner's raise of the cap and unblock does not resume a stopped project.
+    await expect(projects.unblock(projectId, "operator-a", "cap raised")).rejects.toMatchObject({ name: "ProjectNotBlocked" });
+    expect((await projects.get(projectId))?.status).toBe("stopped");
+    expect(await projects.listActiveIds()).not.toContain(projectId);
   });
 });
 
@@ -344,7 +405,8 @@ describe("a turn refused at the project's spend cap", () => {
     const project = await db.execute(
       sql`SELECT status, blocked_error_class AS "errorClass", blocked_reason AS reason FROM projects WHERE id = ${projectId}`,
     );
-    expect(project.rows).toEqual([{ status: "blocked", errorClass: "BudgetExceeded", reason: expect.stringMatching(/^budget_cap: the spend cap of project/) }]);
+    // The class the Liaison names the project's own cap by (SPEND_CAP_ERROR_CLASS), as finance records it.
+    expect(project.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: expect.stringMatching(/^budget_cap: the spend cap of project/) }]);
 
     // The blocked project's item waits: the next cycle dispatches nothing.
     expect((await loop.runCycle()).tasksProcessed).toBe(0);

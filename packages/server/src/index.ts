@@ -48,7 +48,16 @@ async function main(): Promise<void> {
   // Startup reconciliation (Discipline B) — MUST run before the runner starts cycling.
   await ashara.startup();
 
-  const runnerPromise = ashara.runner.run(ashara.shutdownSignal);
+  // A halt (the deployment's spend cap) stops the work for good but not the process: HTTP stays up,
+  // and the runner keeps taking in and answering the client's stops until SIGTERM (smoke1 D3). No
+  // attempt runs from the halt on, so every cell is removed then.
+  const runnerPromise = ashara.runner.run(ashara.shutdownSignal, async (stop) => {
+    console.error(
+      `FATAL: the continuous runner stopped its work: ${stop.reason}. HTTP stays up and the client's stops are still ` +
+        `answered; SIGTERM to exit.`,
+    );
+    await ashara.teardownCells();
+  });
 
   const server = serve({
     fetch: ashara.app.fetch,
@@ -78,13 +87,8 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
 
-  const loopStop = await runnerPromise;
-  if (loopStop && !ashara.shutdownSignal.aborted) {
-    console.error(`FATAL: the continuous runner stopped: ${loopStop.reason}. HTTP stays up; SIGTERM to exit.`);
-    await ashara.teardownCells();
-    console.log("Continuous runner stopped; HTTP still serving");
-    return;
-  }
+  // The runner returns only once the shutdown signal aborted it.
+  await runnerPromise;
   await shutdown();
   console.log("Server and continuous runner stopped");
 }

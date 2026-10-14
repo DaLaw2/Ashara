@@ -6,7 +6,7 @@ export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
 export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
-export { BlockReports, recordedKind } from "./block-report.js";
+export { BlockReports, recordedKindOf } from "./block-report.js";
 export type { BlockReportStore, LiaisonBlockReports, ProjectBlockKind } from "./block-report.js";
 export { DeliveredReports } from "./delivered-report.js";
 export type { DeliveredReportStore, LiaisonDeliveredReports } from "./delivered-report.js";

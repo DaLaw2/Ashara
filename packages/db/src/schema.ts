@@ -62,10 +62,6 @@ export const projects = pgTable("projects", {
   // instead of failing every project's cycle. Recorded together, on blocked rows only.
   blockedErrorClass: text("blocked_error_class"),
   blockedReason: text("blocked_reason"),
-  // Migration 038: the answer that contradicted an assumption the plan was built on;
-  // while set, none of the project's tasks is dispatched. A plan revision clears it
-  // (migration 042).
-  replanRequestedBy: uuid("replan_requested_by").references((): AnyPgColumn => clientMessages.id),
   // Migration 042: failed attempts to revise the plan for the current request, with the
   // last error; reset by a written revision and by the operator's unblock.
   replanAttempts: integer("replan_attempts").notNull().default(0),
@@ -671,7 +667,10 @@ export const planRevisions = pgTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     revision: integer().notNull(),
     visionVersion: integer("vision_version").notNull(),
-    /** The client's answer that asked for it; null for a plan repair (migration 045). */
+    /**
+     * The earliest client answer it took in, which its report replies to; null for a plan repair
+     * (migration 045). Every answer it took in is a replan_requests row naming it (migration 052).
+     */
     requestedBy: uuid("requested_by").references(() => clientMessages.id, { onDelete: "cascade" }),
     /** 'client_change' or 'repair' (migration 045). */
     kind: text().notNull().default("client_change"),
@@ -718,5 +717,22 @@ export const planRepairs = pgTable("plan_repairs", {
     .notNull()
     .references(() => projects.id, { onDelete: "cascade" }),
   planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "set null" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// replan_requests (migration 052): one row per client answer that changed an assumption the plan
+// was built on. While a row has no plan_revision_id the project awaits a revision and none of its
+// tasks is dispatched; the revision that took the answer in is recorded on it.
+// ---------------------------------------------------------------------------
+
+export const replanRequests = pgTable("replan_requests", {
+  answerId: uuid("answer_id")
+    .primaryKey()
+    .references(() => clientMessages.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "cascade" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });

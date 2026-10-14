@@ -87,7 +87,7 @@ export { BlockedReasonCorrupt, blockedExitOf, blockedReasonToRecord, parseStored
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 
 export type { ProjectBlockCause } from "./work-item-row.js";
-export { WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./work-item-row.js";
+export { SPEND_CAP_ERROR_CLASS, WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./work-item-row.js";
 
 export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 

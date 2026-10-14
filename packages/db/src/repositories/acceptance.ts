@@ -4,7 +4,7 @@ import { parseProjectId, parseStoredTaskSpec, type ProjectId, type VisionSource 
 import type { Database, DbHandle } from "../connection.js";
 import { acceptanceSweeps, clientMessages, projects, taskChecks, workItems } from "../schema.js";
 import { noOpenAnswer } from "./first-plan.js";
-import { noOpenStop, pendingRepair } from "./project.js";
+import { noOpenStop, pendingChange, pendingRepair } from "./project.js";
 import { WorkItemRepository } from "./work-item.js";
 
 // A delivered project is accepted on one sweep of main HEAD (migration 049; story
@@ -18,7 +18,7 @@ import { WorkItemRepository } from "./work-item.js";
 /** Every condition of readiness, on the projects row in scope. */
 const readyForAcceptance = sql`(${projects.status} = 'active'
   AND ${projects.firstPlannedAt} IS NOT NULL
-  AND ${projects.replanRequestedBy} IS NULL
+  AND NOT ${pendingChange(projects.id)}
   AND NOT ${pendingRepair(projects.id)}
   AND ${noOpenStop(projects.id)}
   AND ${noOpenAnswer()}
