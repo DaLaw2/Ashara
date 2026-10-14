@@ -36,6 +36,7 @@ import {
   resolveKeyFilePath,
 } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
+import { describeErrorChain } from "@ashara/shared";
 import { readPipedStdin } from "./read-piped-stdin.js";
 
 const USAGE =
@@ -163,6 +164,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\n${describeErrorChain(err)}\n`);
   process.exit(1);
 });

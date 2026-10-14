@@ -1,4 +1,6 @@
 import type { TokenUsage } from "@ashara/llm-gateway";
+import { serializeError } from "@ashara/shared";
+import type { SerializedError } from "@ashara/shared";
 import type { Outcome } from "./outcome.js";
 
 /** Longest tool output, input or model text kept, in the conversation and in the records alike. */
@@ -59,7 +61,7 @@ export type AttemptRecord =
       readonly usage: TokenUsage;
       readonly costUsd: number | null;
     }
-  | { readonly kind: "turn_failed"; readonly at: number; readonly turn: number; readonly errorName: string; readonly errorMessage: string }
+  | { readonly kind: "turn_failed"; readonly at: number; readonly turn: number; readonly error: SerializedError }
   | {
       readonly kind: "tool_result";
       readonly at: number;
@@ -71,10 +73,10 @@ export type AttemptRecord =
     }
   | { readonly kind: "outcome"; readonly at: number; readonly outcome: RecordedOutcome };
 
-/** The outcome as recorded: an error object becomes its name and message, so the record stays plain data. */
+/** The outcome as recorded: an error (or a cancellation reason) becomes its serialized chain, so the record stays plain data. */
 export type RecordedOutcome = Plain<Outcome>;
 type Plain<O> = O extends Outcome
-  ? Omit<O, "error" | "reason"> & { readonly errorName?: string; readonly errorMessage?: string }
+  ? Omit<O, "error" | "reason"> & { readonly error?: SerializedError }
   : never;
 
 /**
@@ -85,25 +87,15 @@ export interface AttemptRecordSink {
   append(record: AttemptRecord): Promise<void>;
 }
 
-export function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
-}
-
-export function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  const json = JSON.stringify(error);
-  return json === undefined ? String(error) : json;
-}
-
 export function toRecordedOutcome(outcome: Outcome): RecordedOutcome {
   const { kind } = outcome;
   if (kind === "transport_exhausted" || kind === "environment_failure" || kind === "refused") {
     const { error, ...rest } = outcome;
-    return { ...rest, errorName: errorName(error), errorMessage: errorMessage(error) };
+    return { ...rest, error: serializeError(error) };
   }
   if (kind === "cancelled") {
     const { reason, ...rest } = outcome;
-    return { ...rest, errorName: errorName(reason), errorMessage: errorMessage(reason) };
+    return { ...rest, error: serializeError(reason) };
   }
   return outcome;
 }

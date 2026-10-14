@@ -14,7 +14,7 @@ import {
 } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
-import { createSessionId, createAgentBrief, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRunPreview, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import {
@@ -34,7 +34,7 @@ import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./curren
 import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runPostMergeEnvironmentCommands, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
-import { environmentErrorOf, typedErrorLayer, unavailableOf } from "./environment-failure.js";
+import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
 import { targetRepo } from "./host-git.js";
 import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
@@ -205,7 +205,7 @@ function substrateBlocked(
       stage,
       errorClass: e.name,
       message: e.message,
-      chain: chain ?? wrapError("development", stage, typedErrorLayer(e), { taskId: task.id, unavailable, errorClass: e.name }),
+      chain: chain ?? wrapError("development", stage, e, { taskId: task.id, unavailable, errorClass: e.name }),
       unavailable,
       ...agent,
     },
@@ -238,7 +238,7 @@ function redRunBlocked(
       stage: "checkRedRun",
       errorClass: fault.name,
       message: fault.message,
-      chain: wrapError("development", "checkRedRun", typedErrorLayer(fault), { taskId, unavailable, errorClass: fault.name }),
+      chain: wrapError("development", "checkRedRun", fault, { taskId, unavailable, errorClass: fault.name }),
       unavailable,
       ...agent,
     },
@@ -1348,7 +1348,7 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
-      console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[buildKnowledgeContext] Failed to retrieve recent findings: ${describeErrorChain(e)}`);
     }
 
     try {
@@ -1364,7 +1364,7 @@ export class DevelopmentService {
         if (lines.length > 1) sections.push(lines.join("\n"));
       }
     } catch (e: unknown) {
-      console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${describeErrorChain(e)}`);
     }
 
     return sections.length > 1 ? sections.join("\n\n") : "";
@@ -1661,7 +1661,7 @@ export class DevelopmentService {
             stage: "branchWork",
             errorClass: fault.name,
             message: fault.message,
-            chain: wrapError("development", "branchWork", typedErrorLayer(fault), { taskId: task.id, errorClass: fault.name }),
+            chain: wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name }),
             unavailable: `verification infrastructure (${fault.step})`,
             output,
             agentWork: "kept",
@@ -1698,7 +1698,7 @@ export class DevelopmentService {
           stage: "ownershipGate",
           errorClass: fault.name,
           message: fault.message,
-          chain: wrapError("development", "ownershipGate", typedErrorLayer(fault), { taskId: task.id, errorClass: fault.name }),
+          chain: wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name }),
           unavailable: `verification infrastructure (${fault.step})`,
           output,
           agentWork: "kept",
@@ -2304,7 +2304,7 @@ export class DevelopmentService {
           stage: "agentAttempt",
           errorClass,
           message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
-          chain: wrapError("development", "agentAttempt", typedErrorLayer(outcome.error), { ...context, source: outcome.source, errorClass }),
+          chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
           unavailable,
           output,
           agentWork: agentWorkOf(d.work),
@@ -2464,7 +2464,7 @@ export async function withSessionLifecycle(
     await closeSession(taskId, sessionId, () =>
       sessionStore.fail(sessionId, {
         outcome: "errored",
-        detail: e instanceof Error ? e.message : String(e),
+        detail: describeErrorChain(e),
       }),
     );
     throw e;

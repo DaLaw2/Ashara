@@ -21,6 +21,7 @@ import {
   loadMasterKey,
   resolveKeyFilePath,
 } from "@ashara/security";
+import { describeErrorChain } from "@ashara/shared";
 import { importLegacyCredentials } from "./import-legacy-credentials.js";
 import { readPipedStdin } from "./read-piped-stdin.js";
 
@@ -101,6 +102,6 @@ async function main(): Promise<void> {
 
 // Exit 2 distinguishes "absent" from every other failure for scripted `check` callers.
 main().catch((err: unknown) => {
-  console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\n${describeErrorChain(err)}\n`);
   process.exit(err instanceof SecretNotFound ? 2 : 1);
 });

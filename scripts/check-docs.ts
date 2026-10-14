@@ -18,6 +18,7 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { describeErrorChain } from "@ashara/shared";
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -28,7 +29,7 @@ class DocumentReadError extends Error {
   readonly cause_: unknown;
 
   constructor(filePath: string, cause: unknown) {
-    super(`Cannot read ${filePath}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    super(`Cannot read ${filePath}: ${describeErrorChain(cause)}`);
     this.name = "DocumentReadError";
     this.filePath = filePath;
     this.cause_ = cause;
@@ -350,7 +351,7 @@ function main(): void {
   try {
     documents = discoverDocuments(root);
   } catch (err: unknown) {
-    console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
+    console.error(`\nERROR: ${describeErrorChain(err)}\n`);
     process.exit(1);
   }
 
@@ -374,7 +375,7 @@ function main(): void {
         commandLine: 0,
         command: "(read file)",
         expected: "(readable)",
-        actual: err instanceof Error ? err.message : String(err),
+        actual: describeErrorChain(err),
         kind: "unreadable",
       });
       continue;
@@ -400,7 +401,7 @@ function main(): void {
           commandLine: 0,
           command: "(parse)",
           expected: "(valid document)",
-          actual: err instanceof Error ? err.message : String(err),
+          actual: describeErrorChain(err),
           kind: "parse-error",
         });
       }

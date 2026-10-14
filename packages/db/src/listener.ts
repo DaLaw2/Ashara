@@ -1,5 +1,6 @@
 import pg from "pg";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 
 export interface PgListener {
   /** Backend pid of the live LISTEN connection; null while not connected. */
@@ -9,13 +10,10 @@ export interface PgListener {
 
 const BackendPidRowSchema = z.object({ pid: z.number().int() });
 
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 function endQuietly(c: pg.Client, context: string): Promise<void> {
   return c.end().catch((err: unknown) => {
-    console.warn(`[PG listener] ending the ${context} client failed:`, errorMessage(err));
+    console.warn(`[PG listener] ending the ${context} client failed:`, describeErrorChain(err));
   });
 }
 
@@ -50,7 +48,7 @@ export async function listenForEvents(
     // late events cannot schedule a second reconnect.
     c.on("error", (err: Error) => {
       if (client !== c) return;
-      console.warn("[PG listener] connection error, reconnecting:", err.message);
+      console.warn("[PG listener] connection error, reconnecting:", describeErrorChain(err));
       drop(c, "errored");
       scheduleReconnect();
     });
@@ -96,7 +94,7 @@ export async function listenForEvents(
       } catch (e) {
         console.warn(
           `[PG listener] reconnect attempt ${attempt} failed, next in ${Math.min(1000 * 2 ** (attempt + 1), 30_000)}ms:`,
-          errorMessage(e),
+          describeErrorChain(e),
         );
         scheduleReconnect();
       }
@@ -106,7 +104,7 @@ export async function listenForEvents(
   try {
     await connect();
   } catch (e) {
-    console.warn("[PG listener] initial connection failed, will retry:", errorMessage(e));
+    console.warn("[PG listener] initial connection failed, will retry:", describeErrorChain(e));
     scheduleReconnect();
   }
 

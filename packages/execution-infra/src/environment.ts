@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNotAFile } from "./errors.js";
 import { runHostGitObjects } from "./host-git.js";
 
@@ -124,9 +125,6 @@ function issuesOf(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Parses `environment/environment.toml` text. `source` names where it was read from, for the error.
@@ -136,7 +134,7 @@ export function parseEnvironmentDefinition(text: string, source: string): Enviro
   try {
     raw = parseToml(text);
   } catch (err) {
-    throw new EnvironmentDefinitionInvalid(source, [`invalid TOML: ${messageOf(err)}`], { cause: err });
+    throw new EnvironmentDefinitionInvalid(source, [`invalid TOML: ${describeErrorChain(err)}`], { cause: err });
   }
   const parsed = definitionSchema.safeParse(raw);
   if (!parsed.success) throw new EnvironmentDefinitionInvalid(source, issuesOf(parsed.error));
@@ -153,7 +151,7 @@ async function resolveCommit(gitDir: string, rev: string): Promise<string> {
   try {
     stdout = await runHostGitObjects(gitDir, ["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`]);
   } catch (err) {
-    throw new EnvironmentVersionUnresolved(gitDir, rev, `it does not name a commit: ${messageOf(err)}`, { cause: err });
+    throw new EnvironmentVersionUnresolved(gitDir, rev, `it does not name a commit: ${describeErrorChain(err)}`, { cause: err });
   }
   const hash = commitHash.safeParse(stdout.toString("utf8").trim());
   if (!hash.success) throw new EnvironmentVersionUnresolved(gitDir, rev, `rev-parse printed ${JSON.stringify(stdout.toString("utf8"))}`);
@@ -170,7 +168,7 @@ export async function readEnvironmentDefinition(gitDir: string, commit: string):
   try {
     text = await runHostGitObjects(gitDir, ["cat-file", "blob", source]);
   } catch (err) {
-    throw new EnvironmentDefinitionInvalid(source, [`the file cannot be read at that commit: ${messageOf(err)}`], { cause: err });
+    throw new EnvironmentDefinitionInvalid(source, [`the file cannot be read at that commit: ${describeErrorChain(err)}`], { cause: err });
   }
   return parseEnvironmentDefinition(text.toString("utf8"), source);
 }
@@ -212,7 +210,7 @@ export async function snapshotEnvironment(
   try {
     listing = await runHostGitObjects(gitDir, ["ls-tree", "-r", "-z", "--full-tree", resolvedCommit, "--", ...definition.owned]);
   } catch (err) {
-    return fail(`ls-tree failed: ${messageOf(err)}`, err);
+    return fail(`ls-tree failed: ${describeErrorChain(err)}`, err);
   }
   const blobs: OwnedBlob[] = [];
   for (const record of listing.toString("utf8").split("\0")) {
@@ -251,7 +249,7 @@ export async function snapshotEnvironment(
   try {
     lastTouch = await runHostGitObjects(gitDir, ["log", "-1", "--format=%H", resolvedCommit, "--", ...definition.owned]);
   } catch (err) {
-    return fail(`log failed: ${messageOf(err)}`, err);
+    return fail(`log failed: ${describeErrorChain(err)}`, err);
   }
   const touched = commitHash.safeParse(lastTouch.toString("utf8").trim());
   if (!touched.success) return fail(`no commit touching the owned paths: log printed ${JSON.stringify(lastTouch.toString("utf8"))}`);

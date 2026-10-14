@@ -18,6 +18,7 @@ import {
   readEnvironmentDefinition,
   runHostGit,
 } from "@ashara/execution-infra";
+import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { environmentBuildPassed } from "@ashara/workplace";
 import type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun, LogTail } from "@ashara/workplace";
@@ -117,9 +118,6 @@ function tailOf(text: string, alreadyTruncated: boolean): LogTail {
   return { text: text.slice(-TEST_LOG_TAIL_CHARS), truncated: true };
 }
 
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 async function runCommand(cell: Cell, command: string, timeoutSeconds: number): Promise<EnvironmentTestRun> {
   const result = await cell.exec(["sh", "-c", command], { timeoutSeconds });
@@ -278,7 +276,7 @@ export function environmentCheckPort(scope: EnvironmentCheckScope): EnvironmentC
         committed = await readEnvironmentDefinition(scope.repo.gitDir, commit);
       } catch (err) {
         if (err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved) {
-          return { kind: "definition_refused", detail: messageOf(err) };
+          return { kind: "definition_refused", detail: describeErrorChain(err) };
         }
         throw err;
       }
@@ -308,7 +306,7 @@ export async function runSubstrateGate(scope: EnvironmentCheckScope, testTimeout
     definition = await readEnvironmentDefinition(scope.repo.gitDir, head);
   } catch (err) {
     if (err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved) {
-      return { report: { kind: "definition_refused", detail: messageOf(err) }, tested: null };
+      return { report: { kind: "definition_refused", detail: describeErrorChain(err) }, tested: null };
     }
     throw err;
   }

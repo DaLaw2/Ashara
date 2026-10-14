@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import {
   CellExecFailed,
   CellStartFailed,
@@ -256,15 +257,12 @@ function issuesOf(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function parseJson(text: string): { ok: true; value: unknown } | { ok: false; error: string } {
   try {
     return { ok: true, value: JSON.parse(text) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: describeErrorChain(err) };
   }
 }
 
@@ -550,12 +548,12 @@ export class PodmanSubstrate {
     try {
       root = await realpath(this.mountRoot);
     } catch (err) {
-      throw new MountPathRejected(hostPath, null, this.mountRoot, `the mount root cannot be resolved: ${messageOf(err)}`, { cause: err });
+      throw new MountPathRejected(hostPath, null, this.mountRoot, `the mount root cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
     }
     try {
       canonical = await realpath(hostPath);
     } catch (err) {
-      throw new MountPathRejected(hostPath, null, root, `the path cannot be resolved: ${messageOf(err)}`, { cause: err });
+      throw new MountPathRejected(hostPath, null, root, `the path cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
     }
     if (canonical === root || !canonical.startsWith(`${root}${sep}`)) {
       throw new MountPathRejected(hostPath, canonical, root, "it is not strictly inside the mount root");
@@ -581,7 +579,7 @@ export class PodmanSubstrate {
     try {
       canonical = await realpath(path);
     } catch (err) {
-      throw new MountPathRejected(path, null, canonicalHostPath, `the masked entry cannot be resolved: ${messageOf(err)}`, { cause: err });
+      throw new MountPathRejected(path, null, canonicalHostPath, `the masked entry cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
     }
     if (canonical !== path) {
       throw new MountPathRejected(path, canonical, canonicalHostPath, "the masked entry is a symlink or resolves elsewhere");
@@ -601,7 +599,7 @@ export class PodmanSubstrate {
     try {
       root = await realpath(this.mountRoot);
     } catch (err) {
-      throw new MountPathRejected(this.mountRoot, null, this.mountRoot, `the mount root cannot be resolved: ${messageOf(err)}`, { cause: err });
+      throw new MountPathRejected(this.mountRoot, null, this.mountRoot, `the mount root cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
     }
     const dir = join(root, MASK_DIR);
     const source = join(dir, kind === "file" ? "empty-file" : "empty-directory");
@@ -611,7 +609,7 @@ export class PodmanSubstrate {
       else await mkdir(source, { mode: 0o555 });
     } catch (err) {
       if (!(err instanceof Error && "code" in err && err.code === "EEXIST")) {
-        throw new MountPathRejected(source, null, root, `the mask stand-in cannot be created: ${messageOf(err)}`, { cause: err });
+        throw new MountPathRejected(source, null, root, `the mask stand-in cannot be created: ${describeErrorChain(err)}`, { cause: err });
       }
     }
     const made = await lstat(source);
@@ -628,7 +626,7 @@ export class PodmanSubstrate {
       return `removing a container named ${name} failed (exit ${removal.exitCode ?? "none"}: ${removal.stderr.trim() || "no stderr"}); it stays tracked for teardownAll`;
     } catch (err) {
       this.unconfirmed.add(name);
-      return `removing a container named ${name} failed (${messageOf(err)}); it stays tracked for teardownAll`;
+      return `removing a container named ${name} failed (${describeErrorChain(err)}); it stays tracked for teardownAll`;
     }
   }
 

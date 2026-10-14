@@ -1,3 +1,4 @@
+import { describeErrorChain } from "@ashara/shared";
 import type { BuiltEnvironment, EnvironmentDefinition, HostRepo } from "@ashara/execution-infra";
 import {
   EnvironmentBuildFailed,
@@ -59,7 +60,7 @@ async function mainCommit(repo: HostRepo): Promise<{ readonly commit: string } |
   try {
     ({ stdout } = await runHostGit(repo, ["rev-parse", "--verify", "--end-of-options", `${MAIN}^{commit}`]));
   } catch (err) {
-    return { problem: `the target repository has no readable ${MAIN} branch: ${err instanceof Error ? err.message : String(err)}` };
+    return { problem: `the target repository has no readable ${MAIN} branch: ${describeErrorChain(err)}` };
   }
   const hash = stdout.trim();
   return COMMIT_HASH.test(hash) ? { commit: hash } : { problem: `rev-parse ${MAIN} printed ${JSON.stringify(stdout)}` };

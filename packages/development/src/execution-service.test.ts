@@ -215,7 +215,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
     expect(store.phases.get("sess")).toBe("Failed");
     expect(store.failures.get("sess")).toMatchObject({
       outcome: "errored",
-      detail: "the attempt threw before an outcome",
+      detail: "Error: the attempt threw before an outcome",
     });
   });
 

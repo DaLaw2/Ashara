@@ -2,6 +2,7 @@ import { describe, test, expect } from "vitest";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
+import { describeErrorChain, serializeError } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -28,5 +29,22 @@ describe("createDb pool", () => {
       await admin.end();
       await db.$client.end();
     }
+  });
+});
+
+describe("a refused connect through the one serializer", () => {
+  // localhost resolves to ::1 and 127.0.0.1, so node's connect rejects with an AggregateError whose
+  // own message is empty and whose per-address errors sit in its non-enumerable `errors`.
+  test("keeps every per-address refusal of the AggregateError", async () => {
+    const client = new pg.Client({ host: "localhost", port: 1, user: "nobody", database: "nothing" });
+    const thrown: unknown = await client.connect().then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(thrown).toBeInstanceOf(AggregateError);
+    const serialized = serializeError(thrown);
+    expect(serialized.fields).toMatchObject({ code: "ECONNREFUSED" });
+    expect(serialized.errors?.map((e) => e.message).sort()).toEqual(["connect ECONNREFUSED 127.0.0.1:1", "connect ECONNREFUSED ::1:1"]);
+    expect(describeErrorChain(thrown)).toMatch(/^AggregateError:  \[2 errors: Error: connect ECONNREFUSED .*; Error: connect ECONNREFUSED .*\]$/);
   });
 });

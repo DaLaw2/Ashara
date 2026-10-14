@@ -46,7 +46,7 @@ describe("TenderIntake failure accounting", () => {
 
     expect(outcome?.kind).toBe("failed");
     expect(recorded).toHaveLength(1);
-    expect(recorded[0]).toMatch(/non-Error thrown: Object \(not serializable: .*circular/i);
+    expect(recorded[0]).toContain('non-Error thrown: {"reason":"provider exploded","self":"[circular]"}');
   });
 
   test("a model that never validates is asked 2 times per tier on 2 tiers before the tender attempt fails", async () => {

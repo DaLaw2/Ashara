@@ -3,6 +3,7 @@ import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { CapabilityLevel } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
 import {
   InvalidGatewayCatalog,
   NoProviderAvailableError,
@@ -157,7 +158,7 @@ export class ProviderRegistry {
     try {
       return this.resolve(capability, [failedProvider], site);
     } catch (err) {
-      console.warn(`[ProviderRegistry] no fallback for ${capability} (excluding ${failedProvider}):`, err instanceof Error ? err.message : err);
+      console.warn(`[ProviderRegistry] no fallback for ${capability} (excluding ${failedProvider}):`, describeErrorChain(err));
       return null;
     }
   }

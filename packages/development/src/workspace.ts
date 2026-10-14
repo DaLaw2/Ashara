@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { describeErrorChain } from "@ashara/shared";
 import { initHostRepo, runHostGit, type HostRepo } from "@ashara/execution-infra";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
@@ -26,8 +27,7 @@ class WorkspaceError extends Error {
     public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskId?: string },
     cause?: unknown,
   ) {
-    const causeMsg = cause instanceof Error ? cause.message : String(cause ?? "");
-    super(`workspace ${operation} failed: ${causeMsg}`);
+    super(`workspace ${operation} failed: ${cause === undefined ? "no cause given" : describeErrorChain(cause)}`, { cause });
     this.name = "WorkspaceError";
   }
 }
@@ -166,7 +166,7 @@ function gitFailureDetail(e: unknown): string {
     const stderr = "stderr" in e && typeof e.stderr === "string" ? e.stderr.trim() : "";
     return stderr.length > 0 ? `${e.message.split("\n")[0]}; stderr: ${stderr}` : e.message;
   }
-  return String(e);
+  return describeErrorChain(e);
 }
 
 /**
@@ -224,7 +224,7 @@ export async function commitPartialWork(
     await runHostGit(repo, ["commit", "-m", message]);
     return { committed: true, filesCount: files.length };
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = describeErrorChain(e);
     console.warn(`[commitPartialWork] git failure in ${repo.workTree}: ${msg}`);
     return { committed: false, reason: "git-error", message: msg };
   }
@@ -327,7 +327,7 @@ async function resolveAsharaRepoRoot(): Promise<string> {
     // Fail closed: if the repo root can't be determined, refuse rather than
     // proceed as if the target were safe.
     throw new Error(
-      `could not determine the Ashara repository root (git rev-parse failed) from "${moduleDir}": ${err instanceof Error ? err.message : String(err)}`,
+      `could not determine the Ashara repository root (git rev-parse failed) from "${moduleDir}": ${describeErrorChain(err)}`,
     );
   }
 }
@@ -392,7 +392,7 @@ async function canonicalizeAllowingMissing(inputPath: string): Promise<string> {
       const parent = dirname(current);
       if (parent === current) {
         throw new Error(
-          `no existing ancestor could be resolved for "${inputPath}": ${err instanceof Error ? err.message : String(err)}`,
+          `no existing ancestor could be resolved for "${inputPath}": ${describeErrorChain(err)}`,
         );
       }
       missing.push(basename(current));
@@ -425,7 +425,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       targetProjectPath,
-      `path could not be canonicalized (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      `path could not be canonicalized (fail-closed): ${describeErrorChain(err)}`,
     );
   }
 
@@ -435,7 +435,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       canonical,
-      `could not resolve the Ashara repository root (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      `could not resolve the Ashara repository root (fail-closed): ${describeErrorChain(err)}`,
     );
   }
 
@@ -455,7 +455,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string): P
   } catch (err) {
     throw new InvalidTargetProjectPath(
       canonical,
-      `parent git-worktree inspection failed (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      `parent git-worktree inspection failed (fail-closed): ${describeErrorChain(err)}`,
     );
   }
   if (gitAncestor !== null) {

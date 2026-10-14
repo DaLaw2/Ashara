@@ -15,6 +15,7 @@
  */
 
 import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, runMigrations } from "@ashara/db";
+import { describeErrorChain } from "@ashara/shared";
 
 async function main(): Promise<void> {
   const databaseUrl = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -28,6 +29,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\n${describeErrorChain(err)}\n`);
   process.exit(1);
 });

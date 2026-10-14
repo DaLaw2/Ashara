@@ -1,6 +1,7 @@
 import { jsonSchema } from "ai";
 import type { AssistantModelMessage, JSONSchema7, ModelMessage, Tool } from "ai";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { TurnToolExecutable } from "./errors.js";
 import type { ResolvedModel } from "./gateway.js";
 import type { CostMeasurement, TokenUsage } from "./types.js";
@@ -99,9 +100,8 @@ const ToolCallSchema = z.looseObject({
 });
 
 function describeToolCallError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`;
   if (error === undefined) return "the SDK flagged the call invalid without an error";
-  return JSON.stringify(error) ?? String(error);
+  return describeErrorChain(error);
 }
 
 /**

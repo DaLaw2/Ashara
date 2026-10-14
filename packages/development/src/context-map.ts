@@ -1,3 +1,4 @@
+import { describeErrorChain } from "@ashara/shared";
 import { EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import { readManifestContext } from "./dispatch-utils.js";
 import { readTreeFile } from "./tree-read.js";
@@ -30,7 +31,7 @@ export async function buildContextMap(
       sections.push("## File Tree\n" + tree);
     }
   } catch (e: unknown) {
-    console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[buildContextMap] Failed to build file tree for ${targetProjectPath}: ${describeErrorChain(e)}`);
   }
 
   try {
@@ -39,7 +40,7 @@ export async function buildContextMap(
       sections.push(`## Project Manifests\n${manifestContent}`);
     }
   } catch (e: unknown) {
-    console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[buildContextMap] Failed to read manifests in ${targetProjectPath}: ${describeErrorChain(e)}`);
   }
 
   if (contractEntryPointPath) {
@@ -52,7 +53,7 @@ export async function buildContextMap(
         console.warn(`[buildContextMap] Entry point ${contractEntryPointPath} does not exist in ${targetProjectPath}`);
       }
     } catch (e: unknown) {
-      console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${e instanceof Error ? e.message : String(e)}`);
+      console.warn(`[buildContextMap] Failed to read entry point ${contractEntryPointPath} in ${targetProjectPath}: ${describeErrorChain(e)}`);
     }
   }
 

@@ -22,7 +22,7 @@ describe("branded id parsers", () => {
       }
       expect(thrown).toBeInstanceOf(InvalidId);
       expect(thrown).toMatchObject({ brand, field, raw });
-      expect(thrown instanceof Error ? thrown.message : "").toContain(`Invalid ${brand} in ${field}`);
+      expect(thrown).toHaveProperty("message", expect.stringContaining(`Invalid ${brand} in ${field}`));
     }
   });
 });

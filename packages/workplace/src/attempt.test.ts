@@ -282,7 +282,7 @@ describe("runAttempt", () => {
   });
 
   it("ends as transport_exhausted on a generateTurn failure, cost unmeasured rather than 0", async () => {
-    const failure = new Error("provider unreachable");
+    const failure = new Error("provider unreachable", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
     const { llm } = scriptedLlm([
       () => turn([{ name: "list_directory", input: {} }]),
       () => {
@@ -290,8 +290,14 @@ describe("runAttempt", () => {
       },
     ]);
 
-    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
+    const run = deps(llm, fakeCell().cell);
+    const outcome = await runAttempt(assignment(), run.deps);
 
+    // The attempt record keeps the whole serialized chain, the cause's typed field included.
+    const chain = { name: "Error", message: "provider unreachable", cause: { name: "Error", message: "socket hang up", fields: { code: "ECONNRESET" } } };
+    expect(run.records.find((r) => r.kind === "turn_failed")).toMatchObject({ error: chain });
+    expect(run.records.find((r) => r.kind === "outcome")).toMatchObject({ outcome: { kind: "transport_exhausted", error: chain } });
+    expect(outcome.detail).toContain("socket hang up");
     expect(outcome).toMatchObject({ kind: "transport_exhausted", error: failure, turnsUsed: 2 });
     expect(outcome.cost).toEqual({
       measured: false,

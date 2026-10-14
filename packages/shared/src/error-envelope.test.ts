@@ -111,11 +111,30 @@ describe("wrapError", () => {
     expect(layer.timestamp).toBeTruthy();
   });
 
-  test("wraps a standard Error", () => {
+  test("wraps a standard Error, the error itself kept as the origin cause", () => {
     const err = new Error("connection refused");
     const layer = wrapError("agent-runner", "gateway.complete", err);
     expect(layer.message).toBe("connection refused");
-    expect(layer.cause).toBeUndefined();
+    expect(layer.cause?.boundary).toBe("origin");
+    expect(layer.cause?.operation).toBe("Error");
+    expect(layer.cause?.cause).toBeUndefined();
+  });
+
+  test("a 3-deep typed chain keeps every class, typed field and cause, and parses back as an envelope", () => {
+    class CellExec extends Error {
+      constructor(readonly argv: readonly string[], readonly exitCode: number, options?: ErrorOptions) {
+        super(`exec failed with ${exitCode}`, options);
+        this.name = "CellExec";
+      }
+    }
+    const root = new CellExec(["podman", "exec"], 125);
+    const mid = new Error("check run failed", { cause: root });
+    const top = new TypeError("gate could not run", { cause: mid });
+    const layer = wrapError("development", "postMergeVerify", top, { taskId: "t-1" });
+    const parsed = errorEnvelopeSchema.parse(JSON.parse(JSON.stringify({ outcome: "blocked", summary: "s", chain: layer })));
+    const ops = flattenChain(parsed.chain).map((l) => l.operation);
+    expect(ops).toEqual(["postMergeVerify", "TypeError", "Error", "CellExec"]);
+    expect(flattenChain(parsed.chain)[3]?.context).toMatchObject({ errorClass: "CellExec", argv: ["podman", "exec"], exitCode: 125 });
   });
 
   test("wraps an Error with structured context as cause", () => {
@@ -135,7 +154,7 @@ describe("wrapError", () => {
     expect(layer.cause).toBeDefined();
     expect(layer.cause?.boundary).toBe("origin");
     expect(layer.cause?.operation).toBe("AgentSpawnError");
-    expect(layer.cause?.context).toEqual({ pid: 1234 });
+    expect(layer.cause?.context).toEqual({ errorClass: "AgentSpawnError", context: { pid: 1234 } });
   });
 
   test("wraps an existing ErrorLayer as cause", () => {
@@ -155,6 +174,25 @@ describe("wrapError", () => {
   test("includes context when provided", () => {
     const layer = wrapError("dev", "op", "err", { attempt: 3, taskId: "t-5" });
     expect(layer.context).toEqual({ attempt: 3, taskId: "t-5" });
+  });
+
+  test("a throwing message getter and a revoked Proxy are described, never thrown", () => {
+    const getter = new Error("unused");
+    Object.defineProperty(getter, "message", {
+      get() {
+        throw new Error("message getter threw");
+      },
+    });
+    const fromGetter = wrapError("dev", "op", getter);
+    expect(fromGetter.message).toBe("[unreadable: message getter threw]");
+    expect(fromGetter.cause?.boundary).toBe("origin");
+
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const fromRevoked = wrapError("dev", "op", proxy);
+    expect(fromRevoked.boundary).toBe("dev");
+    expect(typeof fromRevoked.message).toBe("string");
+    expect(fromRevoked.cause).toBeUndefined();
   });
 });
 

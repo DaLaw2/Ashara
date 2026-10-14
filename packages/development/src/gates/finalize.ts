@@ -1,7 +1,7 @@
 import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
-import { wrapError } from "@ashara/shared";
-import { environmentErrorOf, typedErrorLayer } from "../environment-failure.js";
+import { describeErrorChain, wrapError } from "@ashara/shared";
+import { environmentErrorOf } from "../environment-failure.js";
 import type { EnvironmentError } from "../environment-failure.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
 import { targetRepo } from "../host-git.js";
@@ -31,8 +31,7 @@ export class VerificationInfrastructureFault extends Error {
     readonly step: string,
     options: { readonly cause: unknown },
   ) {
-    const cause = options.cause instanceof Error ? `${options.cause.name}: ${options.cause.message}` : String(options.cause);
-    super(`verification of task ${taskId} could not run: ${step} failed: ${cause}`, { cause: options.cause });
+    super(`verification of task ${taskId} could not run: ${step} failed: ${describeErrorChain(options.cause)}`, { cause: options.cause });
     this.name = "VerificationInfrastructureFault";
   }
 }
@@ -100,7 +99,7 @@ async function abortAndFail(
   failedLogMessage: string,
   gateFailureContext: string,
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
-  errorLayerInfo: { operation: string; gateOutput: string | ErrorLayer; gateContext?: Record<string, unknown> },
+  errorLayerInfo: { operation: string; gateOutput: string | Error; gateContext?: Record<string, unknown> },
   environmentFailure: EnvironmentError | null = null,
   infrastructureFault: VerificationInfrastructureFault | null = null,
 ): Promise<FinalizeResult> {
@@ -199,7 +198,7 @@ export async function finalizeSuccess(
     // throw says nothing about the task or the merged tree: a substrate failure
     // and a fault of Z0's own machinery are each carried out typed for the
     // caller to block on, never reported as a failed post-merge verify.
-    const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    const detail = describeErrorChain(e);
     const environmentFailure = environmentErrorOf(e);
     if (environmentFailure !== null) {
       return abortAndFail(
@@ -208,7 +207,7 @@ export async function finalizeSuccess(
         `post-merge verification could not run, the verifier cell's environment failed (${environmentFailure.name}) — aborting tentative merge`,
         `Post-merge verify could not run: ${detail}`,
         // The typed error itself is the cause, its class and fields intact, never a flattened string.
-        { operation: "postMergeVerify", gateOutput: typedErrorLayer(environmentFailure), gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
+        { operation: "postMergeVerify", gateOutput: environmentFailure, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
         environmentFailure,
       );
     }
@@ -218,7 +217,7 @@ export async function finalizeSuccess(
       targetProjectPath,
       `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
       `Post-merge verify could not run: ${fault.message}`,
-      { operation: POST_MERGE_CHECK_RUN, gateOutput: typedErrorLayer(fault), gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
       null,
       fault,
     );
@@ -247,7 +246,7 @@ export async function finalizeSuccess(
   try {
     dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
   } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e);
+    const detail = describeErrorChain(e);
     return abortAndFail(
       task.id,
       targetProjectPath,

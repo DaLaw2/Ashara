@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { InvalidRoutingProfiles } from "./errors.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";
@@ -102,7 +103,7 @@ export function loadRoutingProfilesFromToml(configPath: string): RoutingProfiles
   } catch (err) {
     console.warn(
       `[RoutingProfiles] failed to load routing profiles from ${configPath}, proceeding with none:`,
-      err instanceof Error ? err.message : err,
+      describeErrorChain(err),
     );
     return {};
   }

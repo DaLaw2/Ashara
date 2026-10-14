@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { materializeSnapshot, snapshotEnvironment, type EnvironmentDefinition } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentBuildUnrecorded, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
@@ -87,9 +88,6 @@ export type BuiltEnvironment = EnvironmentBuildIdentity & { readonly imageId: st
     | { readonly reused: false; readonly log: BuildLogTail }
   );
 
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function tailOf(log: string): BuildLogTail {
   return log.length <= LOG_TAIL_CHARS ? { text: log, truncated: false } : { text: log.slice(-LOG_TAIL_CHARS), truncated: true };
@@ -115,7 +113,7 @@ async function existingImageId(substrate: PodmanSubstrate, imageRef: string, pro
   try {
     json = JSON.parse(inspect.stdout);
   } catch (err) {
-    throw new PodmanCommandFailed("image inspect", inspectArgs, inspect.exitCode, `invalid JSON: ${messageOf(err)}`);
+    throw new PodmanCommandFailed("image inspect", inspectArgs, inspect.exitCode, `invalid JSON: ${describeErrorChain(err)}`);
   }
   const parsed = inspectSchema.safeParse(json);
   if (!parsed.success) {
@@ -155,7 +153,7 @@ async function podmanJson(substrate: PodmanSubstrate, operation: string, args: r
   try {
     return JSON.parse(result.stdout);
   } catch (err) {
-    throw new PodmanCommandFailed(operation, args, result.exitCode, `invalid JSON: ${messageOf(err)}`);
+    throw new PodmanCommandFailed(operation, args, result.exitCode, `invalid JSON: ${describeErrorChain(err)}`);
   }
 }
 
@@ -250,7 +248,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     } catch (recordErr) {
       throw new EnvironmentBuildFailed(
         request.projectId, snapshot.version, exitCode, timedOut, tail.text, tail.truncated,
-        `${detail}; recording the failed build also failed: ${messageOf(recordErr)}`,
+        `${detail}; recording the failed build also failed: ${describeErrorChain(recordErr)}`,
         { cause: error },
       );
     }
@@ -265,7 +263,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       await mkdir(context);
       await materializeSnapshot(request.repoGitDir, snapshot, context);
     } catch (err) {
-      return await fail(null, false, "", `the owned files could not be exported: ${messageOf(err)}`, err);
+      return await fail(null, false, "", `the owned files could not be exported: ${describeErrorChain(err)}`, err);
     }
 
     const args = [
@@ -292,12 +290,12 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
     try {
       imageId = imageIdSchema.parse((await readFile(iidFile, "utf8")).trim());
     } catch (err) {
-      return await fail(result.exitCode, false, log, `podman build succeeded but wrote no valid image id: ${messageOf(err)}`, err);
+      return await fail(result.exitCode, false, log, `podman build succeeded but wrote no valid image id: ${describeErrorChain(err)}`, err);
     }
     try {
       await deps.recorder.recordSucceeded({ ...identity, imageId, logDigest: sha256(log) });
     } catch (err) {
-      throw new EnvironmentBuildUnrecorded({ ...identity, imageId }, messageOf(err), { cause: err });
+      throw new EnvironmentBuildUnrecorded({ ...identity, imageId }, describeErrorChain(err), { cause: err });
     }
     return { ...identity, imageId, reused: false, log: tailOf(log) };
   } finally {

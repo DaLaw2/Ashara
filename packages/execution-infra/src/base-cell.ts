@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { BaseCellConfigInvalid } from "./errors.js";
 
 /** Module-anchored, so the server's cwd cannot change which file is read. */
@@ -33,13 +34,13 @@ export async function loadBaseCell(path: string = DEFAULT_BASE_CELL_PATH): Promi
   try {
     text = await readFile(path, "utf8");
   } catch (err) {
-    throw new BaseCellConfigInvalid(path, `cannot read the file: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    throw new BaseCellConfigInvalid(path, `cannot read the file: ${describeErrorChain(err)}`, { cause: err });
   }
   let raw: unknown;
   try {
     raw = parseToml(text);
   } catch (err) {
-    throw new BaseCellConfigInvalid(path, `invalid TOML: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    throw new BaseCellConfigInvalid(path, `invalid TOML: ${describeErrorChain(err)}`, { cause: err });
   }
   const parsed = baseCellSchema.safeParse(raw);
   if (!parsed.success) {

@@ -35,6 +35,8 @@ void Promise.reject(new Error("outer failure", { cause: new Error("inner root ca
       expect(run.stderr).toContain("unhandledRejection");
       expect(run.stderr).toContain("outer failure");
       expect(run.stderr).toContain("inner root cause");
+      // Logged through the one serializer: its JSON form, the cause nested under the error.
+      expect(run.stderr).toMatch(/"cause": \{\s*"name": "Error",\s*"message": "inner root cause"/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -71,6 +73,36 @@ void Promise.reject(new Error("outer failure", { cause: new Error("inner root ca
     expect(lines.join("\n")).toContain("FATAL: server refused to start. the loop could not start");
     expect(lines.join("\n")).toContain("FATAL: main;");
     expect(lines.join("\n")).toContain("root");
+  });
+
+  test("an error whose report is hostile (huge fields, a revoked Proxy) still runs the shutdown and exits", async () => {
+    const shared = "s".repeat(9_000_000);
+    const huge = Object.assign(new Error("huge"), Object.fromEntries(Array.from({ length: 64 }, (_, i) => [`f${i}`, shared])));
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    for (const err of [huge, proxy]) {
+      const exit = vi.fn<(code: number) => void>();
+      const shutdown = vi.fn(async () => {});
+      const fatal = createFatalExit({ deadlineMs: 1000, exit, log: () => {} });
+      fatal.setShutdown(shutdown);
+      fatal.onFatal("uncaughtException", err);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    }
+
+    const exit = vi.fn<(code: number) => void>();
+    const shutdown = vi.fn(async () => {});
+    const fatal = createFatalExit({
+      deadlineMs: 1000,
+      exit,
+      log: () => {
+        throw new Error("stderr closed");
+      },
+    });
+    fatal.setShutdown(shutdown);
+    expect(() => fatal.onFatal("uncaughtException", new Error("x"))).toThrow("stderr closed");
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   test("before the shutdown exists the exit is immediate", () => {

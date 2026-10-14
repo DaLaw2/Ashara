@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { InvalidThinkingPolicy } from "./errors.js";
 import { KNOWN_LLM_SITES, THINKING_MODES } from "./types.js";
 import type { KnownLLMSite, ProviderType, ThinkingMode, ThinkingPolicy } from "./types.js";
@@ -32,7 +33,7 @@ export function loadThinkingPolicyFromToml(configPath: string): ThinkingPolicy {
   } catch (err) {
     console.warn(
       `[ThinkingPolicy] failed to read ${configPath}, thinking is off at every site (ADR-074 D13):`,
-      err instanceof Error ? err.message : err,
+      describeErrorChain(err),
     );
     return THINKING_OFF;
   }

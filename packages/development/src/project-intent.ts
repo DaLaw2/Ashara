@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import type { AgentBrief, WorkItemId } from "@ashara/shared";
 
 /** The project's current vision as stored: its version, its text verbatim, and its inferences jsonb unparsed. */
@@ -45,7 +46,7 @@ export async function loadProjectIntent(source: ProjectIntentSource, taskId: Wor
   try {
     vision = await source.loadIntent(taskId);
   } catch (err) {
-    throw new ProjectIntentUnavailable(taskId, `the lookup threw: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    throw new ProjectIntentUnavailable(taskId, `the lookup threw: ${describeErrorChain(err)}`, { cause: err });
   }
   if (vision === null || vision.visionText.trim() === "") throw new ProjectIntentUnavailable(taskId, "no vision text is recorded for its project");
   const assumptions = StoredAssumptionsSchema.safeParse(vision.inferences);

@@ -13,7 +13,7 @@
 
 import { userInfo } from "node:os";
 import { createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { describeErrorChain, parseProjectId, type ProjectId } from "@ashara/shared";
 
 class ProjectCliUsageError extends Error {
   constructor(detail: string) {
@@ -61,6 +61,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\n${describeErrorChain(err)}\n`);
   process.exit(1);
 });

@@ -11,7 +11,7 @@ import {
   parseClientMessage,
   replyTargetProblem,
 } from "@ashara/engagement";
-import { parseProjectId } from "@ashara/shared";
+import { describeErrorChain, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
 // The client channel's handlers (K1), shared by the operator's bearer API and the
@@ -51,7 +51,7 @@ export async function readJsonBody(read: () => Promise<unknown>): Promise<JsonBo
   try {
     return { ok: true, value: await read() };
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    return { ok: false, reason: describeErrorChain(e) };
   }
 }
 

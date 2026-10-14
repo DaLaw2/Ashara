@@ -1,6 +1,7 @@
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, readlink, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { describeErrorChain } from "@ashara/shared";
 
 /**
  * Z0's only way to read a tree a cell can write: a task worktree, the target checkout, a target
@@ -66,7 +67,7 @@ async function linkTarget(path: string): Promise<string> {
   try {
     return await readlink(path);
   } catch (err) {
-    return `<unreadable link: ${err instanceof Error ? err.message : String(err)}>`;
+    return `<unreadable link: ${describeErrorChain(err)}>`;
   }
 }
 
@@ -113,7 +114,7 @@ async function assertUnchanged(root: string, relPath: string, walked: Walked): P
     try {
       now = await lstat(path, { bigint: true });
     } catch (err) {
-      throw new TreePathRefused(root, relPath, null, `${JSON.stringify(path)} vanished while it was read (${errorCode(err) ?? String(err)})`);
+      throw new TreePathRefused(root, relPath, null, `${JSON.stringify(path)} vanished while it was read (${errorCode(err) ?? describeErrorChain(err)})`);
     }
     if (now.isSymbolicLink()) {
       throw new TreePathRefused(root, relPath, await linkTarget(path), `${JSON.stringify(path)} became a symbolic link while it was read`);

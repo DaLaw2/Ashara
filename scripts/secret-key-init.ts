@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SecretKeyFileExists, generateKeyFileContent, resolveKeyFilePath } from "@ashara/security";
+import { describeErrorChain } from "@ashara/shared";
 
 function main(): void {
   const keyFilePath = resolveKeyFilePath(process.env);
@@ -42,6 +43,6 @@ function main(): void {
 try {
   main();
 } catch (err: unknown) {
-  console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\n${describeErrorChain(err)}\n`);
   process.exit(1);
 }

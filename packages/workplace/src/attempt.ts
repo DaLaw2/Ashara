@@ -2,6 +2,7 @@ import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, TurnResult } from "@ashara/llm-gateway";
 import { PreCallRefusal } from "@ashara/llm-gateway";
+import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
 import type { CheckDefinitionPort } from "./check-definition.js";
@@ -11,7 +12,7 @@ import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } fro
 import { CostTally } from "./outcome.js";
 import type { LastToolCall, Outcome, Terminal } from "./outcome.js";
 import { FIRST_MESSAGE, buildSystemPrompt } from "./prompt.js";
-import { describeInput, errorMessage, errorName, toRecordedOutcome, truncateText } from "./records.js";
+import { describeInput, toRecordedOutcome, truncateText } from "./records.js";
 import type { AttemptRecord, AttemptRecordSink } from "./records.js";
 import { executeTool, toolSchemasFor } from "./tools.js";
 
@@ -59,7 +60,7 @@ function preCallRefusalOf(error: unknown): PreCallRefusal | null {
 
 class RecordWriteFailed extends Error {
   constructor(record: AttemptRecord["kind"], options: ErrorOptions) {
-    super(`Writing the "${record}" attempt record failed: ${errorMessage(options.cause)}`, options);
+    super(`Writing the "${record}" attempt record failed: ${describeErrorChain(options.cause)}`, options);
     this.name = "RecordWriteFailed";
   }
 }
@@ -138,7 +139,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
   /** The terminal for a stop signal observed between steps, or null to keep going. */
   function interruption(): Terminal | null {
     if (signal.aborted) {
-      return { kind: "cancelled", reason: signal.reason, detail: `cancelled after ${turnsUsed} turn(s): ${errorMessage(signal.reason)}` };
+      return { kind: "cancelled", reason: signal.reason, detail: `cancelled after ${turnsUsed} turn(s): ${describeErrorChain(signal.reason)}` };
     }
     const elapsedMs = clock.now() - startedAt;
     if (elapsedMs >= limits.wallClockMs) {
@@ -192,8 +193,9 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     } catch (error) {
       const refusal = preCallRefusalOf(error);
       // A refused request was never sent, so it cost nothing: it is not an unmeasured turn.
-      if (refusal === null) costs.addUnknown(turn, `the call failed before returning a cost (${errorName(error)})`);
-      const failed = await record({ kind: "turn_failed", at: clock.now(), turn, errorName: errorName(error), errorMessage: truncateText(errorMessage(error)) });
+      const serialized = serializeError(error);
+      if (refusal === null) costs.addUnknown(turn, `the call failed before returning a cost (${serialized.name})`);
+      const failed = await record({ kind: "turn_failed", at: clock.now(), turn, error: serialized });
       if (failed !== null) return recordsFailed(failed);
       if (refusal !== null) {
         return conclude({
@@ -216,7 +218,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
       return conclude({
         kind: "transport_exhausted",
         error,
-        detail: `turn ${turn} model call to ${assignment.model.provider}/${assignment.model.modelId} failed (${errorName(error)}): ${errorMessage(error)}`,
+        detail: `turn ${turn} model call to ${assignment.model.provider}/${assignment.model.modelId} failed: ${describeErrorChain(error)}`,
       });
     } finally {
       clearTimeout(timer);
@@ -300,7 +302,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
           kind: "environment_failure",
           source: "cell",
           error: execution.error,
-          detail: `turn ${turn}: ${execution.toolName} could not run in the cell (${errorName(execution.error)}): ${errorMessage(execution.error)}`,
+          detail: `turn ${turn}: ${execution.toolName} could not run in the cell: ${describeErrorChain(execution.error)}`,
         });
       }
 

@@ -1,3 +1,4 @@
+import { describeErrorChain } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
@@ -94,7 +95,7 @@ async function abandonFailClosed(
   }
   await applyAbandon(deps, fresh, {
     reason: "failure_router_error",
-    detail: error instanceof Error ? error.message : String(error),
+    detail: describeErrorChain(error),
     attempts: priorAttempts,
     lastFailure: failure,
     source: "failure_router",

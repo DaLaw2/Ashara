@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { runHostGit } from "@ashara/execution-infra";
 import type { TaskDescriptor } from "./execution-service.js";
 import { targetRepo } from "./host-git.js";
@@ -90,7 +91,7 @@ export async function resetCheckoutToHead(targetPath: string): Promise<CheckoutR
       await runHostGit(targetRepo(targetPath), args);
     } catch (e) {
       const stderr = stderrOf(e);
-      const message = e instanceof Error ? e.message : String(e);
+      const message = describeErrorChain(e);
       return {
         status: "error",
         message: `git ${args.join(" ")} failed in ${targetPath}: ${message.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}`,
@@ -106,7 +107,7 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     await runHostGit(targetRepo(targetPath), ["merge", "--no-commit", "--no-ff", branch]);
     return { status: "clean" };
   } catch (e) {
-    const errMsg = e instanceof Error ? e.message : String(e);
+    const errMsg = describeErrorChain(e);
     const stderr = stderrOf(e);
     console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
     const files = await getConflictingFiles(targetPath);
@@ -149,12 +150,12 @@ export async function abortMerge(targetPath: string): Promise<void> {
   try {
     await runHostGit(targetRepo(targetPath), ["checkout", "--", "."]);
   } catch (e) {
-    console.warn(`[abortMerge] git checkout -- . failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[abortMerge] git checkout -- . failed: ${describeErrorChain(e)}`);
   }
   try {
     await runHostGit(targetRepo(targetPath), ["clean", "-fd"]);
   } catch (e) {
-    console.warn(`[abortMerge] git clean -fd failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[abortMerge] git clean -fd failed: ${describeErrorChain(e)}`);
   }
   await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
 }
@@ -175,7 +176,7 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
       await runHostGit(targetRepo(targetPath), ["checkout", "main"]);
     }
   } catch (e: unknown) {
-    console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${e instanceof Error ? e.message : String(e)}`);
+    console.warn(`[recoverOrphanedMerge] Failed to check/restore HEAD in ${targetPath}: ${describeErrorChain(e)}`);
   }
 }
 

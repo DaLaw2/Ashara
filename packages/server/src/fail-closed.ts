@@ -1,12 +1,12 @@
-import { inspect } from "node:util";
+import { describeErrorChain, serializeError } from "@ashara/shared";
 import { ServerStartupRefused } from "./secrets.js";
 
 /** `main`: main() itself rejected, the same corrupted process reached through the boot's own await chain. */
 type FatalOrigin = "uncaughtException" | "unhandledRejection" | "main";
 
-/** The error, its stack, its own fields and every `cause` beneath it, as one log line set. */
-function describeErrorChain(err: unknown): string {
-  return inspect(err, { depth: 12, breakLength: 120 });
+/** The error, its stack, its own fields and every `cause` beneath it, through the one serializer, for the log. */
+function fatalReport(err: unknown): string {
+  return JSON.stringify(serializeError(err), null, 2);
 }
 
 interface FatalExitDeps {
@@ -14,6 +14,15 @@ interface FatalExitDeps {
   readonly deadlineMs: number;
   readonly exit: (code: number) => void;
   readonly log: (line: string) => void;
+}
+
+/** Whether the value is a refused start. A value whose prototype check throws (a revoked Proxy) is not one. */
+function isStartupRefused(err: unknown): err is ServerStartupRefused {
+  try {
+    return err instanceof ServerStartupRefused;
+  } catch {
+    return false;
+  }
 }
 
 interface FatalExit {
@@ -40,38 +49,51 @@ export function createFatalExit(deps: FatalExitDeps): FatalExit {
     deps.exit(1);
   };
 
+  const beginShutdown = (): void => {
+    const run = shutdown;
+    if (run === null) {
+      exitOnce();
+      return;
+    }
+    const deadline = setTimeout(() => {
+      try {
+        deps.log(`FATAL: the graceful shutdown did not finish within ${deps.deadlineMs}ms; exiting without it.`);
+      } finally {
+        exitOnce();
+      }
+    }, deps.deadlineMs);
+    run().then(
+      () => {
+        clearTimeout(deadline);
+        exitOnce();
+      },
+      (shutdownErr: unknown) => {
+        clearTimeout(deadline);
+        try {
+          deps.log(`FATAL: the graceful shutdown itself failed:\n${fatalReport(shutdownErr)}`);
+        } finally {
+          exitOnce();
+        }
+      },
+    );
+  };
+
   return {
     setShutdown(fn) {
       shutdown = fn;
     },
     onFatal(origin, err) {
-      if (err instanceof ServerStartupRefused) deps.log(`FATAL: server refused to start. ${err.message}`);
-      deps.log(`FATAL: ${origin}; the process stops and exits non-zero.\n${describeErrorChain(err)}`);
-      if (stopping) {
-        deps.log("FATAL: a further error arrived while the fatal shutdown runs; it continues under its deadline.");
-        return;
-      }
+      // Stopping is decided before anything reads the error, and the shutdown starts in a finally, so neither a
+      // hostile error nor a throwing log sink can skip it; such a throw still surfaces to the caller.
+      const alreadyStopping = stopping;
       stopping = true;
-      const run = shutdown;
-      if (run === null) {
-        exitOnce();
-        return;
+      try {
+        if (isStartupRefused(err)) deps.log(`FATAL: server refused to start. ${err.message}`);
+        deps.log(`FATAL: ${origin}; the process stops and exits non-zero.\n${fatalReport(err)}`);
+        if (alreadyStopping) deps.log("FATAL: a further error arrived while the fatal shutdown runs; it continues under its deadline.");
+      } finally {
+        if (!alreadyStopping) beginShutdown();
       }
-      const deadline = setTimeout(() => {
-        deps.log(`FATAL: the graceful shutdown did not finish within ${deps.deadlineMs}ms; exiting without it.`);
-        exitOnce();
-      }, deps.deadlineMs);
-      run().then(
-        () => {
-          clearTimeout(deadline);
-          exitOnce();
-        },
-        (shutdownErr: unknown) => {
-          clearTimeout(deadline);
-          deps.log(`FATAL: the graceful shutdown itself failed:\n${describeErrorChain(shutdownErr)}`);
-          exitOnce();
-        },
-      );
     },
   };
 }
@@ -85,9 +107,7 @@ export async function reconcileOrRefuse(reconcile: () => Promise<unknown>, where
     await reconcile();
   } catch (err: unknown) {
     throw new ServerStartupRefused(
-      `Startup reconciliation failed, so the board's state after the last process is unknown: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      `Startup reconciliation failed, so the board's state after the last process is unknown: ${describeErrorChain(err)}`,
       where,
       "Fix the cause in the error chain (most often the database is unreachable) and start the server again; " +
         "the loop never runs on an unreconciled board.",

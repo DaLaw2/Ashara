@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { ProjectId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
-import { parseWorkItemStatus, parseProjectId, InvalidStatusTransition } from "@ashara/shared";
+import { InvalidStatusTransition, describeErrorChain, parseProjectId, parseWorkItemStatus } from "@ashara/shared";
 import {
   WorkItemRepository,
   EventStoreRepository,
@@ -86,7 +86,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       newStatus = parseWorkItemStatus(body.status);
     } catch (e) {
       return c.json(
-        { error: e instanceof Error ? e.message : `invalid status: ${String(body.status)}` },
+        { error: describeErrorChain(e) },
         400,
       );
     }
@@ -165,7 +165,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
                   {
                     error:
                       `cannot unblock ${item.id}: its branch, which holds environment edits, could not be deleted ` +
-                      `(${e instanceof Error ? e.message : String(e)}); it stays Blocked`,
+                      `(${describeErrorChain(e)}); it stays Blocked`,
                   },
                   409,
                 );

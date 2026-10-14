@@ -19,6 +19,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { describeErrorChain } from "@ashara/shared";
 
 // ---------------------------------------------------------------------------
 // TOML parser (minimal: [section] headers, `allow = [...]`, `restrict.x = [...]`)
@@ -360,6 +361,6 @@ function main(): void {
 try {
   main();
 } catch (err) {
-  console.error(`\nERROR: ${err instanceof Error ? err.message : String(err)}\n`);
+  console.error(`\nERROR: ${describeErrorChain(err)}\n`);
   process.exit(1);
 }

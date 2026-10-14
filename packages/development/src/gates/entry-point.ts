@@ -1,4 +1,5 @@
 import { runHostGit } from "@ashara/execution-infra";
+import { describeErrorChain } from "@ashara/shared";
 import { targetRepo } from "../host-git.js";
 import { readTreeFile } from "../tree-read.js";
 import type { GateResult } from "./types.js";
@@ -132,7 +133,7 @@ export async function checkEntryPointRewrite(
     // block the sync rather than let a possible rewrite through.
     return {
       passed: false,
-      output: `entry-point-rewrite check error (fail-closed): ${String(e).slice(0, 500)}`,
+      output: `entry-point-rewrite check error (fail-closed): ${describeErrorChain(e).slice(0, 500)}`,
     };
   }
 }

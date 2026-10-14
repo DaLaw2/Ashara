@@ -1,5 +1,4 @@
 import { CellExecFailed, CellStartFailed, MountPathRejected, PodmanCommandFailed, SubstrateUnavailable } from "@ashara/execution-infra";
-import type { ErrorLayer } from "@ashara/shared";
 import { WorktreeCommitFailed } from "./workspace.js";
 
 /**
@@ -39,39 +38,4 @@ export function unavailableOf(e: EnvironmentError, cell: string): string {
   if (e instanceof CellStartFailed || e instanceof CellExecFailed) return cell;
   if (e instanceof WorktreeCommitFailed) return `host git (${e.step} of the task worktree)`;
   return `${cell} mount (${e.hostPath})`;
-}
-
-/** Deep enough for any chain Ashara builds; a deeper one is cut and says so. */
-const MAX_CAUSE_DEPTH = 8;
-
-/**
- * A thrown error as an error layer that keeps what the error was: its class, its message, its own
- * typed fields (argv, exit code, stderr, paths), then its cause the same way. wrapError keeps a
- * cause only for an error that carries a `context`, which no typed error here does, so a block
- * built from the error alone would keep only its message (Discipline C).
- */
-export function typedErrorLayer(e: unknown, depth = 0): ErrorLayer {
-  const timestamp = new Date().toISOString();
-  if (!(e instanceof Error)) {
-    return { boundary: "origin", operation: typeof e, message: String(e), timestamp };
-  }
-  const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(e)) {
-    if (key !== "name") fields[key] = value;
-  }
-  let cause: ErrorLayer | undefined;
-  if (e.cause !== undefined) {
-    cause =
-      depth + 1 < MAX_CAUSE_DEPTH
-        ? typedErrorLayer(e.cause, depth + 1)
-        : { boundary: "origin", operation: "truncated", message: `cause chain deeper than ${MAX_CAUSE_DEPTH} layers`, timestamp };
-  }
-  return {
-    boundary: "origin",
-    operation: e.name,
-    message: e.message,
-    context: { errorClass: e.name, ...fields },
-    ...(cause !== undefined ? { cause } : {}),
-    timestamp,
-  };
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 
 // The runner owns its tracking table, so the table and its columns are created
 // here, not by a numbered migration: a numbered migration cannot describe the
@@ -44,9 +45,6 @@ function extractPgDiagnostics(err: unknown): PgDiagnostics | undefined {
   };
 }
 
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 type TransactionOperation = "apply" | "backfill_hashes";
 
@@ -68,7 +66,7 @@ class MigrationTransactionError extends Error {
   }) {
     const pgDiag = extractPgDiagnostics(args.cause);
     const label = args.operation === "apply" ? "Migration failed" : "Migration hash backfill failed";
-    const parts = [`${label} [${args.filenames.join(", ")}]: ${messageOf(args.cause)}`];
+    const parts = [`${label} [${args.filenames.join(", ")}]: ${describeErrorChain(args.cause)}`];
     if (pgDiag?.code) parts.push(`code=${pgDiag.code}`);
     if (pgDiag?.position) parts.push(`position=${pgDiag.position}`);
     if (pgDiag?.detail) parts.push(`detail: ${pgDiag.detail}`);
@@ -78,7 +76,7 @@ class MigrationTransactionError extends Error {
     if (pgDiag?.table) parts.push(`table=${pgDiag.table}`);
     if (pgDiag?.constraint) parts.push(`constraint=${pgDiag.constraint}`);
     if (args.rollbackError !== undefined) {
-      parts.push(`ROLLBACK ALSO FAILED (${messageOf(args.rollbackError)}): database state unknown, inspect it before retrying`);
+      parts.push(`ROLLBACK ALSO FAILED (${describeErrorChain(args.rollbackError)}): database state unknown, inspect it before retrying`);
     }
 
     super(parts.join(" | "), { cause: args.cause });
@@ -176,7 +174,7 @@ function readMigrationFiles(migrationsDir: string): MigrationFile[] {
 async function connectClient(databaseUrl: string): Promise<pg.Client> {
   const client = new pg.Client({ connectionString: databaseUrl });
   client.on("error", (err: Error) => {
-    console.warn(`[migrate] WARN: the migration connection reported an error while idle: ${err.message}`);
+    console.warn(`[migrate] WARN: the migration connection reported an error while idle: ${describeErrorChain(err)}`);
   });
   await client.connect();
   return client;

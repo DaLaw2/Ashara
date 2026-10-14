@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
-import { extractJson } from "@ashara/shared";
+import { describeErrorChain, extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import {
   LlmCallContextMissing,
@@ -175,7 +175,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
         request.site,
       );
       if (!fallback) {
-        const rootMsg = error instanceof Error ? error.message : String(error);
+        const rootMsg = describeErrorChain(error);
         throw new ProviderError(
           resolved.providerName,
           `${label} failed (${rootMsg}) and no fallback available`,
@@ -185,7 +185,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
 
       console.warn(
         `[LLMGateway] ${label} on provider=${resolved.providerName} model=${resolved.modelConfig.id} failed ` +
-          `(${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}); ` +
+          `(${describeErrorChain(error)}); ` +
           `one failover request to provider=${fallback.providerName} model=${fallback.modelConfig.id} ` +
           `for site=${request.site ?? "none"}`,
       );
@@ -601,7 +601,7 @@ function structuredFailureOf(
       { cause: error },
     );
   }
-  return new SchemaValidationError([`${error.name}: ${error.message}`, `Raw LLM response: ${text.slice(0, 500)}`], {
+  return new SchemaValidationError([describeErrorChain(error), `Raw LLM response: ${text.slice(0, 500)}`], {
     cause: error,
   });
 }

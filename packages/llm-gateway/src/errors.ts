@@ -1,3 +1,5 @@
+import { describeErrorChain } from "@ashara/shared";
+
 export class GatewayError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -412,7 +414,7 @@ export class LlmCallNotRecorded extends GatewayError {
   readonly context: LlmCallNotRecordedContext;
 
   constructor(context: LlmCallNotRecordedContext, options: ErrorOptions) {
-    const writeError = options.cause instanceof Error ? options.cause.message : String(options.cause);
+    const writeError = describeErrorChain(options.cause);
     super(
       `llm_calls row not written for provider="${context.provider}" model="${context.model}" ` +
         `operation="${context.operation}" callSite="${context.callSite}" project=${context.projectId} ` +

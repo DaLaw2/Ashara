@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import { describeErrorChain } from "@ashara/shared";
 import * as schema from "./schema.js";
 
 /**
@@ -35,7 +36,7 @@ export function createDb(databaseUrl: string) {
   pool.on("error", (err: Error) => {
     const code = "code" in err ? String(err.code) : "none";
     console.warn(
-      `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${err.message}`,
+      `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${describeErrorChain(err)}`,
     );
   });
   return drizzle(pool, { schema });
