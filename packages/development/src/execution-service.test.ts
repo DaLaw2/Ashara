@@ -754,6 +754,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       finishReason: "tool_calls",
       rawFinishReason: null,
       usage: { inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      reportedOutputTokens: 1,
       cost: { measured: true, inputCost: 0.001, outputCost: 0.001, cacheSavings: 0, totalCost: 0.002 },
       provider: "fake",
       model: "fake-model",
@@ -1474,6 +1475,8 @@ function terminal(kind: FailedKind): Outcome {
       return { ...base, kind, wallClockMs: 1000, elapsedMs: 1001 };
     case "model_stopped_without_finish":
       return { ...base, kind, finishReason: "stop", rawFinishReason: "end_turn", finalText: "bye" };
+    case "output_truncated":
+      return { ...base, kind, turn: 3, provider: "fake", model: "m", finishReason: "truncated", rawFinishReason: "max_tokens", outputTokens: 4096, droppedToolCalls: 1 };
     case "transport_exhausted":
       return { ...base, kind, error: new Error("provider down") };
     case "cancelled":
@@ -1500,7 +1503,7 @@ describe("toAgentOutput", () => {
     expect(output.error_detail?.message).toBe("needs a key");
   });
 
-  test.each(["turn_cap", "wall_clock", "model_stopped_without_finish", "transport_exhausted", "cancelled", "environment_failure"] as const)(
+  test.each(["turn_cap", "wall_clock", "model_stopped_without_finish", "output_truncated", "transport_exhausted", "cancelled", "environment_failure"] as const)(
     "%s is failed, never done, and names the terminal",
     (kind) => {
       const output = toAgentOutput(terminal(kind), "m", { input: 0, output: 0 });

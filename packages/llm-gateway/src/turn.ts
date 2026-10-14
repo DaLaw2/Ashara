@@ -52,7 +52,10 @@ export interface TurnResult {
   readonly finishReason: TurnFinishReason;
   /** The provider's own finish reason string, `null` when it sent none. */
   readonly rawFinishReason: string | null;
+  /** Zero-filled where the provider reported no count: a tally, never evidence of what was produced. */
   readonly usage: TokenUsage;
+  /** The output token count the provider reported, `null` when it reported none. */
+  readonly reportedOutputTokens: number | null;
   readonly cost: CostMeasurement;
   readonly provider: string;
   readonly model: string;

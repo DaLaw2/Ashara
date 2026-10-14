@@ -47,6 +47,7 @@ function turn(calls: readonly Call[], options: { text?: string; finishReason?: T
     finishReason: options.finishReason ?? (calls.length > 0 ? "tool_calls" : "stop"),
     rawFinishReason: null,
     usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    reportedOutputTokens: 10,
     cost: options.cost ?? MEASURED,
     provider: "fake",
     model: "fake-model",
@@ -322,6 +323,38 @@ describe("runAttempt", () => {
     const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
 
     expect(outcome).toMatchObject({ kind: "model_stopped_without_finish", finishReason: "stop", finalText: "All done!", turnsUsed: 1 });
+  });
+
+  it("runs none of a cut turn's tool calls and ends as output_truncated", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => ({
+        ...turn([{ name: "run_command", input: { command: "echo hi" } }, { name: "finish", input: { status: "done", summary: "done" } }], {
+          finishReason: "truncated",
+        }),
+        rawFinishReason: "max_tokens",
+        reportedOutputTokens: 4096,
+      }),
+    ]);
+    const { cell, commands } = fakeCell();
+    const { deps: d, records } = deps(llm, cell);
+
+    const outcome = await runAttempt(assignment(), d);
+
+    expect(outcome).toMatchObject({
+      kind: "output_truncated",
+      turn: 1,
+      provider: "fake",
+      model: "fake-model",
+      finishReason: "truncated",
+      rawFinishReason: "max_tokens",
+      outputTokens: 4096,
+      droppedToolCalls: 2,
+      turnsUsed: 1,
+      lastToolCall: null,
+    });
+    expect(requests).toHaveLength(1);
+    expect(commands).toHaveLength(0);
+    expect(records.filter((r) => r.kind === "tool_result")).toHaveLength(0);
   });
 
   it("ends as transport_exhausted on a generateTurn failure, cost unmeasured rather than 0", async () => {

@@ -250,6 +250,23 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
       const error = new ProviderErrorFinish(turn, result.provider, result.model, result.rawFinishReason);
       return conclude({ kind: "transport_exhausted", error, detail: error.message });
     }
+    // Checked before any tool call runs: a call in a cut response may be cut itself.
+    if (result.finishReason === "truncated") {
+      const tokens = result.reportedOutputTokens === null ? "an unreported number of" : String(result.reportedOutputTokens);
+      return conclude({
+        kind: "output_truncated",
+        turn,
+        provider: result.provider,
+        model: result.model,
+        finishReason: result.finishReason,
+        rawFinishReason: result.rawFinishReason,
+        outputTokens: result.reportedOutputTokens,
+        droppedToolCalls: result.toolCalls.length,
+        detail:
+          `turn ${turn}: ${result.provider}/${result.model} output was cut at the output token limit after ${tokens} output tokens ` +
+          `(raw finish reason: ${result.rawFinishReason ?? "none sent"}); none of its ${result.toolCalls.length} tool call(s) ran`,
+      });
+    }
     if (result.toolCalls.length === 0) {
       return conclude({
         kind: "model_stopped_without_finish",

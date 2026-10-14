@@ -303,6 +303,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       finishReason,
       rawFinishReason,
       usage: extraction.usage,
+      reportedOutputTokens: extraction.reported.outputTokens,
       cost,
       provider: target.providerName,
       model: target.modelConfig.id,

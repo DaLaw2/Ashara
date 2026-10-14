@@ -64,6 +64,22 @@ export type Outcome =
       readonly rawFinishReason: string | null;
       readonly finalText: string;
     })
+  | (OutcomeBase & {
+      /**
+       * A turn's output was cut at the output token limit. None of its tool calls ran: a call
+       * written in a cut response may itself be cut, so it is never executed (ADR-074 d92 c).
+       */
+      readonly kind: "output_truncated";
+      readonly turn: number;
+      readonly provider: string;
+      readonly model: string;
+      readonly finishReason: "truncated";
+      readonly rawFinishReason: string | null;
+      /** As the provider reported it; null when it reported no count. */
+      readonly outputTokens: number | null;
+      /** The tool calls the cut turn carried, none of them executed. */
+      readonly droppedToolCalls: number;
+    })
   | (OutcomeBase & { readonly kind: "turn_cap"; readonly maxTurns: number })
   | (OutcomeBase & { readonly kind: "wall_clock"; readonly wallClockMs: number; readonly elapsedMs: number })
   | (OutcomeBase & {
