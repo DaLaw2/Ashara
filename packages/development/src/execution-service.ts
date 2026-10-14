@@ -54,15 +54,14 @@ import {
   discardCheckWorkdir,
   dropCheckBranch,
   formatChecksForBrief,
+  formatFoundationForCheckAuthor,
   formatProjectChecksForCheckAuthor,
-  formatReauthoringRuleForCheckAuthor,
   harvestCheckFiles,
   headCommit,
   mainCommit,
   previewCheckFiles,
   redRunPreview,
   redRunProblem,
-  redRunRuleFor,
   redRunSetProblem,
   redRunVerdict,
   runChecksOnCheckout,
@@ -70,7 +69,7 @@ import {
   tentativeMergeCommit,
   worktreeSnapshotCommit,
 } from "./task-checks.js";
-import type { CheckCells, CheckSuite, CompletedTaskChecks, RedRunRule, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
+import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
   commitAllChanges,
@@ -395,15 +394,30 @@ function briefEnvironment(environment: DispatchEnvironment): AgentBrief["project
 type WorkPlan =
   | { readonly kind: "substrate" }
   | { readonly kind: "scaffold" }
-  | { readonly kind: "stored-checks"; readonly stored: TaskChecks }
+  | {
+      readonly kind: "stored-checks";
+      readonly stored: TaskChecks;
+      /**
+       * The latest checks of every task of the project already merged: the regression suite the
+       * merge must pass, any check of which the implementer may dispute (ADR-074 addendum 2 d74 D).
+       */
+      readonly merged: readonly CompletedTaskChecks[];
+    }
   | {
       readonly kind: "check-authoring";
       readonly checkedTaskId: string;
       readonly environment: CurrentEnvironment;
       /** The checked task's latest stored revision, when its checks are being written again. */
       readonly prior: TaskChecks | null;
-      readonly redRunRule: RedRunRule;
+      /** The commit every authoring of these checks is red-run on (ADR-074 addendum 2 d74 A). */
+      readonly foundation: CheckFoundation;
     };
+
+/** The plan revision's foundation a check task red-runs on: the merged task and its recorded merge commit. */
+interface CheckFoundation {
+  readonly taskId: string;
+  readonly commit: string;
+}
 
 /** A check task's plan once its throwaway worktree exists. */
 interface CheckAuthoring {
@@ -411,7 +425,7 @@ interface CheckAuthoring {
   readonly checkedTaskId: string;
   readonly environment: CurrentEnvironment;
   readonly prior: TaskChecks | null;
-  readonly redRunRule: RedRunRule;
+  readonly foundation: CheckFoundation;
   readonly branch: string;
   /** The main commit the worktree started from: the attempt's files are its diff against it. */
   readonly startCommit: string;
@@ -725,6 +739,11 @@ interface ChecksStaleResult {
  */
 interface DisputedResult {
   readonly status: "disputed";
+  /**
+   * The task whose stored checks hold the disputed check: the dispatched task itself, or a task
+   * already merged whose check blocks its merge (ADR-074 addendum 2 d74 D).
+   */
+  readonly checksOf: string;
   /** The check task that wrote the disputed check: the one to reopen. */
   readonly checkTaskId: string;
   /** The revision of the task's checks the disputed check belongs to. */
@@ -844,6 +863,12 @@ type Delivery =
    */
   | { readonly kind: "already-delivered"; readonly mainCommit: string }
   | { readonly kind: "checks-recorded"; readonly revision: number }
+  /**
+   * A check task whose author finished blocked, and whose checked task's stored checks (`revision`),
+   * the environment's test and the regression suite all pass on main at `mainCommit` (ADR-074
+   * addendum 2 d74 A): no new revision; the checked task's delivered sweep closes it.
+   */
+  | { readonly kind: "checked-task-delivered"; readonly checkedTaskId: string; readonly mainCommit: string; readonly revision: number }
   /** A review of the plan's suites that found no problem in the suites of `reviewed` check tasks. */
   | { readonly kind: "suites-reviewed"; readonly reviewed: readonly string[] };
 
@@ -874,6 +899,24 @@ interface Dispatch {
   /** What the task cell, the red-run and gate cells and the post-merge verifier cell are started from. */
   readonly environment: DispatchEnvironment;
   readonly work: DispatchWork;
+}
+
+/**
+ * The stored check a dispute names, with the revision holding it and the task it decides: one of
+ * the dispatched task's own checks when `ofTask` is null, else one of the merged task `ofTask`'s
+ * latest checks (the regression suite its merge must pass). null when no stored check is so named.
+ */
+function disputedCheckOf(
+  taskId: string,
+  work: Extract<DispatchWork, { readonly kind: "stored-checks" }>,
+  checkName: string,
+  ofTask: string | null,
+): { readonly revision: TaskChecks; readonly check: TaskChecks["checks"][number]; readonly checksOf: string } | null {
+  const revision = ofTask === null ? work.stored : work.merged.find((prior) => prior.taskId === ofTask);
+  if (revision === undefined) return null;
+  const check = revision.checks.find((candidate) => candidate.name === checkName);
+  if (check === undefined) return null;
+  return { revision, check, checksOf: ofTask ?? taskId };
 }
 
 /** Why an implementer's done with nothing to merge is not taken at its word. */
@@ -1387,8 +1430,20 @@ export class DevelopmentService {
             `${checked.length} implementation task(s) on record [${checked.join(", ")}]`,
         };
       }
+      // Every authoring, the first and each one after a dispute, a review or staleness, is red-run
+      // on the same fixed commit, never on main as later merges left it (ADR-074 addendum 2 d74 A).
+      const foundation = await this.deps.checks.foundationOf(task.id);
+      if (foundation.kind === "none") {
+        return { kind: "unplannable", operation: "resolveCheckFoundation", reason: `no foundation to red-run the checks on: ${foundation.reason}` };
+      }
       const prior = await this.deps.checks.latest(parseWorkItemId(only, "TaskCheckStore.checkedTasksOf"));
-      return { kind: "check-authoring", checkedTaskId: only, environment, prior, redRunRule: redRunRuleFor(prior, environment.version) };
+      return {
+        kind: "check-authoring",
+        checkedTaskId: only,
+        environment,
+        prior,
+        foundation: { taskId: foundation.taskId, commit: foundation.commit },
+      };
     }
     const stored = await this.deps.checks.latest(task.id);
     if (stored === null || stored.checks.length === 0) {
@@ -1398,7 +1453,8 @@ export class DevelopmentService {
         reason: `no checks are stored for task ${task.id}: its check task has not recorded any, so nothing could decide its work`,
       };
     }
-    return { kind: "stored-checks", stored };
+    const merged = (await this.deps.checks.completedOf(task.projectId, task.id)).checked;
+    return { kind: "stored-checks", stored, merged };
   }
 
   /** Cells for checks: from the dispatch's environment image, each mounting one throwaway checkout. */
@@ -1421,6 +1477,7 @@ export class DevelopmentService {
       | "verify-probe"
       | "post-merge-checks"
       | "delivered-on-main"
+      | "delivered-sweep"
       | `run-checks-${number}`
       | `define-check-${number}`
       | "environment-check"
@@ -1465,10 +1522,7 @@ export class DevelopmentService {
     if (plan.kind === "stored-checks") taskContext = `${specContext}\n\n${formatChecksForBrief(plan.stored)}`;
     if (plan.kind === "check-authoring") {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
-      taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}`;
-      if (plan.redRunRule === "one-check-fails" && plan.prior !== null) {
-        taskContext = `${taskContext}\n\n${formatReauthoringRuleForCheckAuthor(plan.prior, plan.environment.version)}`;
-      }
+      taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation)}`;
     }
     const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
     // Named before work starts (ADR-074 addendum 2 d66 c, d72): what the ownership gate refuses,
@@ -1563,11 +1617,16 @@ export class DevelopmentService {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, brief, staff, workDir, targetProjectPath, sessionId } = d;
 
-    // The checks were red-run on the environment of their check task; on any other version they
-    // are trusted only once they fail on main there too, before the model is called at all.
+    // Before every implementation dispatch, before the model is called at all (ADR-074 addendum 2
+    // d74 A): checks red-run on another environment version are trusted only once they hold the
+    // red-run rule on their baseline in this dispatch's image; then work already on main is closed as
+    // delivered, whoever delivered it. In that order: a set that cannot tell the task's work from its
+    // absence would pass on main whatever main holds, and close the task on nothing.
     if (d.work.kind === "stored-checks") {
-      const stale = await this.revalidateChecks(d, d.work.stored);
+      const stale = await this.revalidateOnBaseline(d, d.work.stored);
       if (stale !== null) return stale;
+      const delivered = await this.sweepDelivered(d, d.work.stored);
+      if (delivered !== null) return delivered;
     }
 
     eventSink?.emit({
@@ -1602,7 +1661,7 @@ export class DevelopmentService {
         signal: this.deps.shutdownSignal,
         environment: task.workKind === "environment" ? environmentCheckPort(this.environmentScope(d)) : null,
         checks: d.work.kind === "check-authoring" ? this.checkDefinitionPort(d, d.work) : null,
-        taskChecks: d.work.kind === "stored-checks" ? this.taskCheckRunPort(d, d.work.stored) : null,
+        taskChecks: d.work.kind === "stored-checks" ? this.taskCheckRunPort(d, d.work.stored, d.work.merged) : null,
       },
     );
     const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
@@ -1673,9 +1732,11 @@ export class DevelopmentService {
         postMergeVerify: (path) => this.postMergeEnvironmentTest(d, path, gate.tested),
       };
     } else if (d.work.kind === "scaffold") {
+      // No gate ran the scaffold's build and test before its merge: their verdict there is its
+      // own attempt's, never a regression of the tree (ADR-074 addendum 2 d74 D).
       finalizeDeps = {
         eventSink,
-        postMergeOperation: "postMergeVerify",
+        postMergeOperation: "postMergeScaffold",
         postMergeVerify: (path) => this.postMergeScaffold(d, path),
       };
     } else {
@@ -1805,7 +1866,7 @@ export class DevelopmentService {
   }
 
   /**
-   * Before any model is called, revalidateChecks found every stored check passing on main: an
+   * Before any model is called, sweepDelivered found every stored check passing on main: an
    * earlier task may have delivered this one's work. All suites pass on main: completed as already
    * delivered. The task's own checks pass but main's environment test or an earlier task's check
    * fails there (ADR-074 addendum 2 d68 a): nothing was delivered and no model ran, so this is not
@@ -1851,18 +1912,22 @@ export class DevelopmentService {
    * environment's test, the latest checks of every Completed implementation task of the project (the
    * regression suite) and this task's own checks, each with its files written over the checkout.
    * `ownPassed` when every one of this task's own checks ran and passed, whatever the other suites
-   * did. A run that could not run at all is environment-blocked, the workdir cleaned.
+   * did. A run that could not run at all is environment-blocked, the workdir cleaned. `subject` is
+   * the task whose checks `stored` are: the dispatch's own task, or the task a check task decides
+   * (whose worktree the caller has already discarded, so it is not cleaned here).
    */
   private async mainSuitesRun(
     d: Dispatch,
     stored: TaskChecks,
     agent: AgentPart,
+    subject: { readonly taskId: WorkItemId; readonly cleanWorkdir: boolean } = { taskId: d.task.id, cleanWorkdir: true },
   ): Promise<
     | { readonly kind: "blocked"; readonly result: ExecutionResult }
     | { readonly kind: "ran"; readonly main: string; readonly verdict: PostMergeVerdict; readonly ownPassed: boolean }
   > {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
+    const subjectLabel = subject.taskId === task.id ? "this task's" : `task ${subject.taskId}'s`;
     let main: string;
     let suites: readonly CheckSuite[];
     let own: CheckSuite;
@@ -1873,10 +1938,10 @@ export class DevelopmentService {
       if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
       const environment = d.environment;
       main = await mainCommit(targetProjectPath, task.id);
-      const completed = await this.deps.checks.completedOf(task.projectId, task.id);
+      const completed = await this.deps.checks.completedOf(task.projectId, subject.taskId);
       earlier = completed.checked;
       unchecked = completed.unchecked;
-      own = { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files };
+      own = { label: `${subjectLabel} checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files };
       suites = [
         { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.definition.test }], files: [] },
         ...earlier.map((prior) => ({
@@ -1888,7 +1953,7 @@ export class DevelopmentService {
       ];
       runs = await runSuitesOnCheckout(this.checkCells(d), RED_RUN_ROLE, environment.imageId, main, this.checkoutDir(d, "delivered-on-main"), suites);
     } catch (e) {
-      await cleanupWorkdir(workDir, targetProjectPath);
+      if (subject.cleanWorkdir) await cleanupWorkdir(workDir, targetProjectPath);
       return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main") };
     }
     const ran = suitesVerdict(suites, runs, earlier.length, "main");
@@ -1902,6 +1967,7 @@ export class DevelopmentService {
       attempt: task.attempt,
       verdict: verdict.passed ? "passed" : "failed",
       mainCommit: main,
+      checkedTaskId: subject.taskId,
       revision: stored.revision,
       regressionTasks: earlier.map((prior) => prior.taskId),
       uncheckedTasks: unchecked,
@@ -2429,10 +2495,11 @@ export class DevelopmentService {
    * VerificationInfrastructureFault. Either ends the attempt as its environment failing, and
    * endWithoutDone names which.
    */
-  private taskCheckRunPort(d: Dispatch, stored: TaskChecks): TaskCheckRunPort {
+  private taskCheckRunPort(d: Dispatch, stored: TaskChecks, merged: readonly CompletedTaskChecks[]): TaskCheckRunPort {
     let runs = 0;
     return {
       checkNames: stored.checks.map((check) => check.name),
+      mergedChecks: merged.flatMap((prior) => prior.checks.map((check) => ({ taskId: prior.taskId, name: check.name }))),
       run: async (timeoutSeconds) => {
         runs += 1;
         let report: CheckRunReport;
@@ -2468,10 +2535,11 @@ export class DevelopmentService {
    * define_check's port (ADR-074 addendum 2 d65 a): records the definition, the last of a name
    * winning, then red-runs that one check at once by the harvest's own machinery: the files the
    * attempt has changed so far (a snapshot of its throwaway worktree, by the harvest's rules) are
-   * written over a fresh checkout of the current main, and the check runs in a CI cell from the
-   * environment image. The author is shown its exit code and output and whether the red run at
-   * finish would reject it; that red run still decides, unchanged. A substrate failure throws as it
-   * is; a failure of Z0's own machinery throws as a VerificationInfrastructureFault.
+   * written over a fresh checkout of the plan's foundation (ADR-074 addendum 2 d74 A), and the check
+   * runs in a CI cell from the environment image. The author is shown its exit code and output and
+   * whether the red run at finish would reject it; that red run still decides, unchanged. A
+   * substrate failure throws as it is; a failure of Z0's own machinery throws as a
+   * VerificationInfrastructureFault.
    */
   private checkDefinitionPort(d: Dispatch, work: CheckAuthoring): CheckDefinitionPort {
     let runs = 0;
@@ -2487,18 +2555,17 @@ export class DevelopmentService {
           if (harvest.kind === "rejected") {
             redRun = { kind: "files_refused", detail: harvest.reason };
           } else {
-            const main = await mainCommit(d.targetProjectPath, d.task.id);
             const dir = this.checkoutDir(d, `define-check-${runs}`);
             const report = await runChecksOnCheckout(
               { ...this.checkCells(d), timeoutSeconds },
               RED_RUN_ROLE,
               work.environment.imageId,
-              main,
+              work.foundation.commit,
               dir,
               [check],
               harvest.files,
             );
-            redRun = redRunPreview(report, timeoutSeconds, dir, work.redRunRule);
+            redRun = redRunPreview(report, timeoutSeconds, dir);
           }
         } catch (e) {
           if (environmentErrorOf(e) !== null) throw e;
@@ -2522,60 +2589,92 @@ export class DevelopmentService {
   }
 
   /**
-   * Stored checks were red-run on their check task's environment version. On a dispatch from another
-   * version they are red-run again on main in a CI cell from this dispatch's image: if every check
-   * still fails there decisively they are trusted; if every check passes there the task's work may
-   * already be on main, and deliveredBeforeModel decides it before any model is called (ADR-074
-   * addendum 2 d67 b, d68 a: a failing environment test or earlier check on main sends the task
-   * to its implementer instead); otherwise the task is checks_stale before the
-   * model is called, naming both versions and the check task, since a check that no longer fails on
-   * main cannot tell the task's work from its absence, and the implementer could not answer for it.
-   * A red run that could not run at all is environment-blocked. null when the checks may be trusted.
+   * The delivered sweep, before every dispatch of an implementation task and before any model is
+   * called (ADR-074 addendum 2 d74 A), once revalidateOnBaseline has trusted them: the task's stored
+   * checks run on main in a CI cell from this dispatch's image. Every one passing: the task's work may be on main already, whoever delivered
+   * it, and deliveredBeforeModel decides it by the environment's test, the regression suite and those
+   * checks on main (d67 b, d68 a). Any failing: null, and the dispatch goes on; partial progress is
+   * not staleness. A run that could not run at all is environment-blocked.
    */
-  private async revalidateChecks(d: Dispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
+  private async sweepDelivered(d: Dispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
     const { eventSink } = this.deps;
     const { task, sessionId, workDir, targetProjectPath } = d;
-    const current = sessionEnvironmentVersion(d.environment);
-    if (current === stored.environmentVersion) return null;
-
-    let redRun: CheckRunReport;
+    let onMain: CheckRunReport;
+    let main: string;
     try {
-      const main = await mainCommit(targetProjectPath, task.id);
-      redRun = await runChecksOnCheckout(
+      main = await mainCommit(targetProjectPath, task.id);
+      onMain = await runChecksOnCheckout(
         this.checkCells(d),
         RED_RUN_ROLE,
         cellImageOf(d.environment),
         main,
-        this.checkoutDir(d, "red-run"),
+        this.checkoutDir(d, "delivered-sweep"),
         stored.checks,
         stored.files,
       );
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on main");
+      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "deliveredCheckRun", "delivered sweep on main");
     }
-    // Every check passing on main is the over-delivered case (d67 b), not a stale one: an earlier
-    // implementation did this task's work, and the version moved because it touched the build context.
-    // Reopening the check task could never end, since its red run rejects every check that passes.
-    const allPass = redRun.kind === "ran" && redRun.runs.length > 0 && redRun.runs.every(checkPassed);
-    if (allPass) {
-      eventSink?.emit({
-        event: "checks_revalidated",
-        taskId: task.id,
-        attempt: task.attempt,
-        revision: stored.revision,
-        storedVersion: stored.environmentVersion,
-        currentVersion: current,
-        trusted: false,
-      });
-      return this.deliveredBeforeModel(d, stored);
+    const passed = onMain.kind === "ran" ? onMain.runs.filter(checkPassed).map((run) => run.name) : [];
+    const allPass = onMain.kind === "ran" && onMain.runs.length === stored.checks.length && passed.length === stored.checks.length;
+    eventSink?.emit({
+      event: "delivered_sweep",
+      taskId: task.id,
+      attempt: task.attempt,
+      mainCommit: main,
+      revision: stored.revision,
+      passed,
+      allPass,
+      ...(onMain.kind === "files_refused" ? { filesRefused: onMain.detail } : {}),
+    });
+    return allPass ? this.deliveredBeforeModel(d, stored) : null;
+  }
+
+  /**
+   * Stored checks were red-run on their baseline in their check task's environment version. On a
+   * dispatch from another version they are red-run again on that baseline in a CI cell from this
+   * dispatch's image, by the same set rule (ADR-074 addendum 2 d74 A): every check runs to a verdict
+   * and at least one fails decisively. Holding: trusted, null. Not holding, or no baseline on record
+   * (a revision stored before migration 045): checks_stale before the model is called, naming both
+   * versions and the check task, since such a set cannot tell the task's work from its absence and
+   * the implementer could not answer for it. A red run that could not run at all is environment-blocked.
+   */
+  private async revalidateOnBaseline(d: Dispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
+    const { eventSink } = this.deps;
+    const { task, sessionId, workDir, targetProjectPath } = d;
+    const current = sessionEnvironmentVersion(d.environment);
+    if (current === stored.environmentVersion) return null;
+
+    let problem: string | null;
+    if (stored.baselineCommit === null) {
+      problem = `revision ${stored.revision} records no baseline commit (it was stored before baselines were recorded), so it cannot be red-run again`;
+    } else {
+      let redRun: CheckRunReport;
+      try {
+        redRun = await runChecksOnCheckout(
+          this.checkCells(d),
+          RED_RUN_ROLE,
+          cellImageOf(d.environment),
+          stored.baselineCommit,
+          this.checkoutDir(d, "red-run"),
+          stored.checks,
+          stored.files,
+        );
+      } catch (e) {
+        await cleanupWorkdir(workDir, targetProjectPath);
+        return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on the baseline");
+      }
+      if (redRun.kind === "files_refused") {
+        problem = `the check files cannot be placed on the baseline: ${redRun.detail}`;
+      } else {
+        const setProblem = redRunSetProblem(redRun.runs);
+        problem =
+          redRun.runs.some((run) => redRunProblem(run) !== null) || setProblem !== null
+            ? `${formatCheckRuns(redRun.runs, redRunVerdict)}${setProblem === null ? "" : `\nREJECTED, the set: ${setProblem}`}`
+            : null;
+      }
     }
-    const problem =
-      redRun.kind === "files_refused"
-        ? `the check files cannot be placed on main: ${redRun.detail}`
-        : redRun.runs.some((run) => redRunProblem(run, "every-check-fails") !== null)
-          ? formatCheckRuns(redRun.runs, (run) => redRunVerdict(run, "every-check-fails"))
-          : null;
     eventSink?.emit({
       event: "checks_revalidated",
       taskId: task.id,
@@ -2583,6 +2682,7 @@ export class DevelopmentService {
       revision: stored.revision,
       storedVersion: stored.environmentVersion,
       currentVersion: current,
+      baselineCommit: stored.baselineCommit,
       trusted: problem === null,
     });
     if (problem === null) return null;
@@ -2608,6 +2708,7 @@ export class DevelopmentService {
           revision: stored.revision,
           storedVersion: stored.environmentVersion,
           currentVersion: current,
+          baselineCommit: stored.baselineCommit,
         }),
       },
     };
@@ -2631,16 +2732,18 @@ export class DevelopmentService {
 
   /**
    * Harvests a finished check attempt: its defined checks and the files it added or changed, then
-   * the red run on a fresh checkout of the current main in a CI cell from the environment image.
-   * A command that cannot run rejects the whole set. A first authoring needs every check to fail
-   * there; a re-authoring after the environment moved needs at least one to (ADR-074 addendum 2
-   * d68 b). The kept
-   * revision is appended to Quality's task_checks for the implementation task; the throwaway
-   * branch is discarded either way.
+   * the red run on a fresh checkout of the plan's foundation in a CI cell from the environment
+   * image (ADR-074 addendum 2 d74 A), whatever authoring this is: the first, or one after a dispute,
+   * a review or staleness. A check that times out or whose command cannot run rejects the whole
+   * set; a check that passes there is kept as a guard of behaviour that already holds; the set is
+   * kept only when at least one of its checks fails there decisively. The kept revision is appended
+   * to Quality's task_checks for the implementation task with the foundation as its baseline; the
+   * throwaway branch is discarded either way.
    */
   private async keepChecks(d: Dispatch, work: CheckAuthoring, output: AgentOutputJson): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
     const { task, sessionId, targetProjectPath } = d;
+    const { foundation } = work;
     try {
       const defined = work.recorder.checks();
       if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check");
@@ -2649,33 +2752,46 @@ export class DevelopmentService {
 
       let redRun: CheckRunReport;
       try {
-        const main = await mainCommit(targetProjectPath, task.id);
         redRun = await runChecksOnCheckout(
           this.checkCells(d),
           RED_RUN_ROLE,
           work.environment.imageId,
-          main,
+          foundation.commit,
           this.checkoutDir(d, "red-run"),
           defined,
           harvest.files,
         );
       } catch (e) {
-        return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on main");
+        return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on the foundation");
       }
-      if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
-      const rule = work.redRunRule;
-      const runsReport = formatCheckRuns(redRun.runs, (run) => redRunVerdict(run, rule));
-      const problems = redRun.runs.filter((run) => redRunProblem(run, rule) !== null);
-      const setProblem = redRunSetProblem(redRun.runs, rule);
+      if (redRun.kind === "files_refused") {
+        return this.checksRejected(d, output, `the check files cannot be placed on the foundation ${foundation.commit}: ${redRun.detail}`);
+      }
+      const runsReport = formatCheckRuns(redRun.runs, redRunVerdict);
+      const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
+      const setProblem = redRunSetProblem(redRun.runs);
       const report = setProblem === null ? runsReport : `${runsReport}\nREJECTED, the set: ${setProblem}`;
-      eventSink?.emit({ event: "check_red_run", taskId: task.id, attempt: task.attempt, rejected: problems.map((run) => run.name), report });
-      if (problems.length > 0 || setProblem !== null) return this.checksRejected(d, output, `red run on main:\n${report}`);
+      eventSink?.emit({
+        event: "check_red_run",
+        taskId: task.id,
+        attempt: task.attempt,
+        baselineCommit: foundation.commit,
+        foundationTaskId: foundation.taskId,
+        rejected: problems.map((run) => run.name),
+        holdsAlready: redRun.runs.filter((run) => run.exitCode === 0 && redRunProblem(run) === null).map((run) => run.name),
+        setRejected: setProblem !== null,
+        report,
+      });
+      if (problems.length > 0 || setProblem !== null) {
+        return this.checksRejected(d, output, `red run on the foundation ${foundation.commit} (the merge of task ${foundation.taskId}):\n${report}`);
+      }
 
       const revision = await this.deps.checks.append({
         projectId: task.projectId,
         taskId: work.checkedTaskId,
         checkTaskId: task.id,
         environmentVersion: work.environment.version,
+        baselineCommit: foundation.commit,
         checks: defined,
         files: harvest.files,
       });
@@ -2684,6 +2800,7 @@ export class DevelopmentService {
         taskId: task.id,
         checkedTaskId: work.checkedTaskId,
         revision,
+        baselineCommit: foundation.commit,
         checks: defined.map((check) => check.name),
         files: harvest.files.map((file) => file.path),
       });
@@ -2691,7 +2808,9 @@ export class DevelopmentService {
       return {
         status: "completed",
         delivered: { kind: "checks-recorded", revision },
-        detail: `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}; each fails on main`,
+        detail:
+          `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}, red-run on the ` +
+          `foundation ${foundation.commit}`,
         output,
         sessionId,
         attempt: task.attempt,
@@ -2702,9 +2821,49 @@ export class DevelopmentService {
   }
 
   /**
+   * A check author that finished `blocked` (ADR-074 addendum 2 d74 A): its reason may be that the
+   * task its checks decide is already on main. Z0 does not take that word for it: when the checked
+   * task has stored checks, they run on main with the environment's test and the regression suite
+   * (mainSuitesRun), the evaluation that closes delivered work. Every suite passing: the check task is
+   * completed with no new revision, and the checked task's delivered sweep closes it before any
+   * implementer is dispatched. Otherwise null: the blocked result stands, with what the evaluation
+   * found. The check task's worktree is already discarded.
+   */
+  private async checkedTaskOnMain(d: Dispatch, work: CheckAuthoring, output: AgentOutputJson): Promise<ExecutionResult | { readonly kind: "not-delivered"; readonly why: string }> {
+    const { task, sessionId } = d;
+    if (work.prior === null) {
+      return { kind: "not-delivered", why: `task ${work.checkedTaskId} has no stored checks to run on main, so nothing shows it is delivered` };
+    }
+    const checkedTaskId = parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId");
+    const onMain = await this.mainSuitesRun(d, work.prior, { output, agentWork: "discarded" }, { taskId: checkedTaskId, cleanWorkdir: false });
+    if (onMain.kind === "blocked") return onMain.result;
+    if (!onMain.verdict.passed) {
+      return {
+        kind: "not-delivered",
+        why: `task ${work.checkedTaskId}'s checks revision ${work.prior.revision} and every suite do not all pass on main ${onMain.main}:\n${onMain.verdict.details}`,
+      };
+    }
+    console.log(`[${task.id}] the check author finished blocked and task ${work.checkedTaskId} is delivered on main ${onMain.main}: its checks and every suite pass there`);
+    this.deps.eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "checked_task_delivered" });
+    return {
+      status: "completed",
+      delivered: { kind: "checked-task-delivered", checkedTaskId: work.checkedTaskId, mainCommit: onMain.main, revision: work.prior.revision },
+      detail:
+        `the check author finished blocked (${output.summary}); task ${work.checkedTaskId}'s checks revision ` +
+        `${work.prior.revision}, the environment's test and the regression suite all pass on main ${onMain.main}, so no ` +
+        `new revision is written: its delivered sweep closes it`,
+      output,
+      sessionId,
+      attempt: task.attempt,
+    };
+  }
+
+
+  /**
    * Every terminal except finished(done): finished(blocked) is `blocked`; a cell that failed under
    * the attempt is environment-blocked (the operator's to fix); every other terminal is `failed`
-   * with the terminal named. None of them is ever read as completed.
+   * with the terminal named. None of them is read as completed on the agent's word: only a check
+   * author's `blocked` whose checked task Z0 finds delivered on main completes (checkedTaskOnMain).
    */
   private async endWithoutDone(d: Dispatch, outcome: Outcome, output: AgentOutputJson): Promise<ExecutionResult> {
     const { task, staff, workDir, targetProjectPath, sessionId } = d;
@@ -2804,32 +2963,33 @@ export class DevelopmentService {
       };
     }
 
-    // Workplace offers dispute_check only to implementation work with stored checks and only for
-    // their names; a dispute that names no stored check falls through to failed below.
-    const disputed =
-      outcome.kind === "disputed" && d.work.kind === "stored-checks"
-        ? d.work.stored.checks.find((check) => check.name === outcome.checkName)
-        : undefined;
-    if (outcome.kind === "disputed" && d.work.kind === "stored-checks" && disputed !== undefined) {
-      const { stored } = d.work;
+    // Workplace offers dispute_check only to implementation work with stored checks, and only for
+    // the names of its own checks or of a merged task's (ADR-074 addendum 2 d74 D); a dispute that
+    // names no stored check falls through to failed below.
+    const disputed = outcome.kind === "disputed" && d.work.kind === "stored-checks" ? disputedCheckOf(task.id, d.work, outcome.checkName, outcome.ofTask) : null;
+    if (outcome.kind === "disputed" && disputed !== null) {
+      const { revision: stored, check, checksOf } = disputed;
+      const whose = checksOf === task.id ? "" : ` of merged task ${checksOf}`;
       const summary =
-        `check ${JSON.stringify(disputed.name)} (revision ${stored.revision}, check task ${stored.checkTaskId}) disputed ` +
+        `check ${JSON.stringify(check.name)}${whose} (revision ${stored.revision}, check task ${stored.checkTaskId}) disputed ` +
         `after ${outcome.turnsUsed} turn(s): ${outcome.reason}; ${describeAgentWork(agentWorkOf(d.work))}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({
         event: "check_disputed",
         taskId: task.id,
         attempt: task.attempt,
+        checksOf,
         checkTaskId: stored.checkTaskId,
         revision: stored.revision,
-        check: disputed.name,
+        check: check.name,
         reason: outcome.reason,
       });
       return {
         status: "disputed",
+        checksOf,
         checkTaskId: stored.checkTaskId,
         revision: stored.revision,
-        check: { name: disputed.name, command: disputed.command },
+        check: { name: check.name, command: check.command },
         reason: outcome.reason,
         evidence: outcome.evidence,
         detail: summary,
@@ -2839,17 +2999,24 @@ export class DevelopmentService {
         errorEnvelope: {
           outcome: "blocked",
           summary,
-          chain: wrapError("development", "agentAttempt", outcome.reason, { ...context, checkTaskId: stored.checkTaskId, check: disputed.name }),
+          chain: wrapError("development", "agentAttempt", outcome.reason, { ...context, checksOf, checkTaskId: stored.checkTaskId, check: check.name }),
           agentOutput: output,
         },
       };
     }
 
+    let notDelivered = "";
+    if (outcome.kind === "finished" && d.work.kind === "check-authoring") {
+      const evaluated = await this.checkedTaskOnMain(d, d.work, output);
+      if ("status" in evaluated) return evaluated;
+      notDelivered = `; Z0 does not find it delivered: ${evaluated.why}`;
+    }
+
     if (outcome.kind === "finished") {
-      const chain = wrapError("development", "agentAttempt", outcome.blockedReason ?? outcome.summary, context);
+      const chain = wrapError("development", "agentAttempt", `${outcome.blockedReason ?? outcome.summary}${notDelivered}`, context);
       const envelope: ErrorEnvelope = {
         outcome: "blocked",
-        summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${output.summary}`,
+        summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${output.summary}${notDelivered}`,
         chain,
         agentOutput: output,
       };
@@ -2862,6 +3029,7 @@ export class DevelopmentService {
         errorEnvelope: envelope,
       };
     }
+
 
     const cause = outcome.kind === "transport_exhausted" ? outcome.error : outcome.kind === "cancelled" ? outcome.reason : outcome.detail;
     const chain = wrapError("development", "agentAttempt", cause, context);

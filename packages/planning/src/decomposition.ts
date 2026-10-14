@@ -477,6 +477,7 @@ export class DecompositionEngine {
                 ? `- The project environment, including its technology choices, is set up once by a separate first task before these, outside this decomposition. Plan only the product's behavior here.`
                 : `- The project environment, including its technology choices, is already set up and stays as it is. Plan only the product's behavior here.`,
             `- Each task must be a complete vertical slice: build the behavior AND make it reachable by the product's users in the same task. Do not create a separate "wiring" or "integration" task. Example: "${examples.verticalSliceExample}"`,
+            `- Each task is a small, complete behaviour a user can use and observe end to end, never a layer or a stage of processing. Do not split the work into steps such as reading the input, parsing it, computing and printing the output: none of them is usable alone, and each could only be confirmed through the final output. Example: "${examples.sliceSequenceExample}"`,
             ...CAPABILITY_GRADING,
         );
 
@@ -501,6 +502,7 @@ interface ContextExamples {
     readonly endStateExample: string;
     readonly scopeExample: string;
     readonly verticalSliceExample: string;
+    readonly sliceSequenceExample: string;
 }
 
 const DECOMPOSITION_EXAMPLES: ContextExamples = {
@@ -510,6 +512,10 @@ const DECOMPOSITION_EXAMPLES: ContextExamples = {
     endStateExample: '"a registered user can sign in and sees their own account"',
     scopeExample: '"user registration and sign-in"',
     verticalSliceExample: "Build the registration behavior and make it reachable by visitors, end to end.",
+    sliceSequenceExample:
+        "for a product that turns an input into one report, the first task produces the report for the simplest valid " +
+        "input from end to end; each later task adds one more case the report covers, or one kind of input it refuses " +
+        "with a message, again from end to end.",
 };
 
 /**
@@ -558,8 +564,10 @@ const SCAFFOLD_DESCRIPTION =
     "Set up the product's skeleton in the environment the platform role defined: its module root, its manifests " +
     "and its entry point, laid out so that the environment's build and test commands pass from the repository root " +
     "on a fresh checkout and leave it clean. Implement none of the behaviour the vision asks for: each later task " +
-    "delivers its own, and its checks are written against this layout. Say in your finish summary where the entry " +
-    "point is and how the product is run.";
+    "delivers its own, and its checks are written against this layout. The entry point is a placeholder that " +
+    "refuses every input: however it is run, with any arguments or input, it prints a message saying the product " +
+    "does not do that yet and exits with a non-zero status, so that a check of any behaviour fails on it. Say in " +
+    "your finish summary where the entry point is and how the product is run.";
 
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
 
@@ -585,6 +593,7 @@ function addProductScaffold(
         "build and test leave the checkout clean",
         "the work changes no recipe file",
         "no behaviour a vision item asks for is implemented yet",
+        "the entry point refuses every input: it prints a message and exits with a non-zero status",
     ];
     const scaffold: PlannedTask = {
         id: generateId("task"),
@@ -600,6 +609,7 @@ function addProductScaffold(
             scope: "the product's module root, manifests and entry point; no behaviour of the vision",
             deliverables: [
                 "the product's skeleton, on which the environment's build and test commands pass",
+                "a placeholder entry point that refuses every input with a message and a non-zero exit",
                 "a finish summary naming the entry point and how the product is run",
             ],
             capability: PLANNER_SET_LEVEL,
@@ -641,7 +651,7 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
     ].join("\n\n");
     const successCriteria = [
         "every check is defined with define_check",
-        `every check fails on the project as it is now, because "${task.title}" is not done yet`,
+        `at least one check fails on the plan's foundation, because "${task.title}" is not done there`,
     ];
     return {
         id: generateId("task"),
@@ -776,8 +786,8 @@ function dependOnEnvironment(
  * Gives every decomposed task its check task, each depending on the plan's foundation (the product
  * scaffold of a new project, d72 B2, or the environment task of a revision), and makes every
  * decomposed task depend on every check task of the plan (ADR-074 addendum 2 d67 a): all checks
- * are authored and red-run against main as the foundation left it, before any implementation
- * changes it, as a QA team writes a sprint's acceptance tests up front. Each check task is placed
+ * are authored before any implementation starts, as a QA team writes a sprint's acceptance tests up
+ * front, and every authoring is red-run against the foundation's recorded merge (d74 A). Each check task is placed
  * right after the task it decides, so the plan's writer meets that task before the reference to it.
  */
 function addCheckTasks(

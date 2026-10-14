@@ -15,7 +15,7 @@ const CHECK_B = "check-b";
 const VISION = ["In: monthly totals of a CSV of expenses", "Malformed rows are refused with their line number"];
 
 function stored(checkTaskId: string, name: string, command: string): TaskChecks {
-  return { checkTaskId, revision: 1, environmentVersion: "v1", checks: [{ name, command }], files: [{ path: "checks/t.sh", content: "exit 1" }] };
+  return { checkTaskId, revision: 1, environmentVersion: "v1", baselineCommit: "b".repeat(40), checks: [{ name, command }], files: [{ path: "checks/t.sh", content: "exit 1" }] };
 }
 
 function source(statusB = "Completed"): SuiteReviewSource {

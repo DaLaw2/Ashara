@@ -35,6 +35,7 @@ const MAX_DISPUTE_REASON_CHARS = 4000;
 const disputeCheckArgs = z
   .object({
     name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"),
+    task: nonBlank.optional(),
     reason: nonBlank.pipe(z.string().max(MAX_DISPUTE_REASON_CHARS)),
   })
   .strict();
@@ -210,17 +211,25 @@ const RUN_CHECKS_SCHEMA: TurnToolSchema = {
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
 
-/** Only implementation work decided by stored checks may dispute one (ADR-074 addendum 2 d65 c). */
+/**
+ * Only implementation work decided by stored checks may dispute one (ADR-074 addendum 2 d65 c): one
+ * of its own, or one of an already merged task's that verification also runs on its merge (d74 D).
+ */
 const DISPUTE_CHECK_SCHEMA: TurnToolSchema = {
   description:
-    "End the attempt by disputing one of the task's checks: use it only when that check cannot pass on correct " +
-    "work (for example the check itself is broken or contradicts the task), never because your work does not pass " +
-    "it yet. The check goes back to its author with your reason and the output of your last run_checks; this task " +
-    "waits until the checks are written again. Your work so far is kept for the next attempt.",
+    "End the attempt by disputing one check that blocks your merge: one of the task's own checks, or a check of a " +
+    "task already merged that verification also runs. Use it only when that check cannot pass on correct work (for " +
+    "example the check itself is broken or contradicts the task), never because your work does not pass it yet. The " +
+    "check goes back to its author with your reason and the output of your last run_checks; this task waits until " +
+    "the checks are written again. Your work so far is kept for the next attempt.",
   inputSchema: {
     type: "object",
     properties: {
-      name: { type: "string", maxLength: MAX_CHECK_NAME, description: "The disputed check's name, exactly as run_checks reports it." },
+      name: { type: "string", maxLength: MAX_CHECK_NAME, description: "The disputed check's name, exactly as run_checks or verification reports it." },
+      task: {
+        type: "string",
+        description: "For a check of a task already merged: that task's id, as verification names it. Omit it for this task's own checks.",
+      },
       reason: {
         type: "string",
         maxLength: MAX_DISPUTE_REASON_CHARS,
@@ -254,7 +263,7 @@ export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): T
 export type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
-  | { readonly kind: "dispute"; readonly checkName: string; readonly reason: string }
+  | { readonly kind: "dispute"; readonly checkName: string; readonly ofTask: string | null; readonly reason: string }
   | { readonly kind: "environment_failure"; readonly error: unknown; readonly toolName: string };
 
 export interface ToolContext {
@@ -317,15 +326,15 @@ function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult,
   const { run } = redRun;
   const lines = [
     recorded,
-    `Red run on the project as it is now (limit ${redRun.timeoutSeconds}s):`,
+    `Red run on the plan's foundation (limit ${redRun.timeoutSeconds}s):`,
     `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
     `  output: ${run.output === "" ? "(empty)" : run.output}`,
     redRun.rejection !== null
       ? `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`
-      : redRun.passesAllowed
-        ? `It does not fail now. On this re-authoring that is allowed, but at finish at least one check of the set ` +
-          `must fail now for the reason the task's work is missing.`
-        : `It fails now, as it must. Make sure it fails for the reason the task's work is missing, not because of a ` +
+      : redRun.holdsAlready
+        ? `It passes on the foundation: it is kept as a guard of behaviour that already holds there. At finish at ` +
+          `least one check of the set must fail on the foundation for the reason the task's work is missing.`
+        : `It fails on the foundation. Make sure it fails for the reason the task's work is missing, not because of a ` +
           `syntax error or a file that does not exist: such a check can never pass.`,
   ];
   return { kind: "result", output: lines.join("\n"), isError: redRun.rejection !== null };
@@ -435,11 +444,28 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (!args.success) return argsError(toolName, args.error);
       if (context.taskChecks === null) return toolError(`dispute_check is not available in this attempt.`);
       const name = args.data.name.trim();
+      const reason = args.data.reason.trim();
+      const ofTask = args.data.task?.trim();
+      if (ofTask !== undefined) {
+        const merged = context.taskChecks.mergedChecks;
+        if (!merged.some((check) => check.taskId === ofTask && check.name === name)) {
+          const known = merged.filter((check) => check.taskId === ofTask).map((check) => JSON.stringify(check.name));
+          return toolError(
+            known.length === 0
+              ? `dispute_check: no task already merged has id ${JSON.stringify(ofTask)} with stored checks.`
+              : `dispute_check: task ${ofTask} has no check named ${JSON.stringify(name)}. Its checks are: ${known.join(", ")}.`,
+          );
+        }
+        return { kind: "dispute", checkName: name, ofTask, reason };
+      }
       if (!context.taskChecks.checkNames.includes(name)) {
         const known = context.taskChecks.checkNames.map((check) => JSON.stringify(check)).join(", ");
-        return toolError(`dispute_check: no check of this task is named ${JSON.stringify(name)}. Its checks are: ${known}.`);
+        return toolError(
+          `dispute_check: no check of this task is named ${JSON.stringify(name)}. Its checks are: ${known}. For a check of a ` +
+            `task already merged, give that task's id as "task".`,
+        );
       }
-      return { kind: "dispute", checkName: name, reason: args.data.reason.trim() };
+      return { kind: "dispute", checkName: name, ofTask: null, reason };
     }
     case "finish": {
       // The finish parsed is the finish offered: environment work's carries the statement.

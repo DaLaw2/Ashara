@@ -213,8 +213,8 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
           return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
         case "run":
           return ok(`${"a".repeat(64)}\n`);
-        // Every command exits 1: the stored check, red-run again on the BaseCell (its version differs
-        // from the check's), still fails on main, so the dispatch reaches the model.
+        // Every command exits 1: the stored check, red-run again on its baseline on the BaseCell (its
+        // version differs from the check's), still fails there and on main, so the dispatch reaches the model.
         case "exec":
           return { ...ok(), exitCode: 1, statusReport: "1\n" };
         case "rm":
@@ -241,6 +241,7 @@ describe("a turn refused at the project's spend cap", () => {
     await writeFile(join(target, "README"), "a greeting project\n");
     await run("git", ["add", "README"], { cwd: target });
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "init"], { cwd: target });
+    const baselineCommit = (await run("git", ["rev-parse", "main"], { cwd: target })).stdout.trim();
 
     const itemId = createWorkItemId();
     await new WorkItemRepository(db).create({
@@ -287,12 +288,13 @@ describe("a turn refused at the project's spend cap", () => {
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
       checks: {
+        foundationOf: notExercised("foundationOf"),
         checkFilesOf: notExercised("checkFilesOf"),
-        completedOf: notExercised("completedOf"),
+        completedOf: async () => ({ checked: [], unchecked: [] }),
         checkedTasksOf: notExercised("checkedTasksOf"),
         storedOfProject: notExercised("storedOfProject"),
         append: notExercised("append"),
-        latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), checks: [{ name: "noop", command: "true" }], files: [] }),
+        latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), baselineCommit, checks: [{ name: "noop", command: "true" }], files: [] }),
       },
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,

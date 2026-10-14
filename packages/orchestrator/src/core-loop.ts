@@ -52,7 +52,7 @@ function logFirstPlan(outcome: FirstPlanOutcome): void {
 function logReplan(outcome: ReplanOutcome): void {
   if (outcome.kind === "revised") {
     console.log(
-      `[replan] project ${outcome.projectId}: plan revision ${outcome.revision}, ${outcome.tasks} new task(s), ` +
+      `[replan] project ${outcome.projectId}: plan revision ${outcome.revision} (${outcome.cause}), ${outcome.tasks} new task(s), ` +
         `${outcome.superseded} superseded${outcome.newEnvironment ? ", environment set up again" : ""}`,
     );
   }
@@ -129,7 +129,9 @@ export class CoreLoop {
     const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
     if (plans.kind === "stop") return stopped(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
-    // Then a revision of each flagged plan whose project has no task in progress: the previous
+    // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (ADR-074
+    // addendum 2 d74 D; the gate dispatches neither project's tasks meanwhile, so no dependent of a
+    // given-up task is parked for the operator), whose project has no task in progress: the previous
     // cycle awaited every task it dispatched, so in-flight work has finished before its plan is
     // revised. Only Tasks count: the plan's Epic stays InProgress while any child is open, and the
     // revision supersedes it with the open tasks. The Liaison's report on the revision follows with the other planning reports.

@@ -24,7 +24,9 @@ export class GateKeeper {
    * transitively, or a cycle; an Abandoned check task only for the task it checks) is parked at
    * Blocked with a dependency_unsatisfiable reason here, and its work_item.blocked event published:
    * nothing else ever moves it, and left Pending it would stall with no record. Its exit is the
-   * operator's.
+   * operator's. A task the failure router gives up never reaches this park: its project awaits a
+   * plan repair (migration 045), listActiveIds omits it until the repair is written, and the repair
+   * supersedes the task's dependents (Replanner, ADR-074 addendum 2 d74 D).
    */
   static async filterAvailable(
     repo: WorkItemRepository,

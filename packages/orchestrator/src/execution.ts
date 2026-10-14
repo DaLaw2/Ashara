@@ -81,6 +81,8 @@ interface StaleChecksResult {
 
 /** An implementer's dispute of one stored check, as development returned it. */
 interface DisputedCheckResult {
+  /** The task whose stored checks hold the disputed check: the item itself, or a task already merged. */
+  readonly checksOf: string;
   readonly checkTaskId: string;
   readonly revision: number;
   readonly check: { readonly name: string; readonly command: string };
@@ -579,6 +581,12 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
       return;
     }
     await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
+    // A disputed check of a task already merged (ADR-074 addendum 2 d74 D) may be written by a
+    // check task of another plan revision, which the item does not depend on: the edge is what
+    // holds it at Pending until the check task has written them again.
+    if (!(await deps.workItemRepo.getDependencies(item.id)).includes(checkTask.id)) {
+      await deps.workItemRepo.addDependency(item.id, checkTask.id);
+    }
   }
 
   try {
@@ -592,8 +600,9 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
 
   if (exit.kind === "rewrite") {
     const dispatchCount = await refundBestEffort(deps, task.id, "a check dispute");
+    const whose = dispute.checksOf === task.id ? "" : ` of merged task ${dispute.checksOf}`;
     console.warn(
-      `[${task.id}] check ${JSON.stringify(dispute.check.name)} disputed (dispute ${disputes} of its check task); check task ` +
+      `[${task.id}] check ${JSON.stringify(dispute.check.name)}${whose} disputed (dispute ${disputes} of its check task); check task ` +
         `${dispute.checkTaskId} reopened with the dispute, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
     );
     return;

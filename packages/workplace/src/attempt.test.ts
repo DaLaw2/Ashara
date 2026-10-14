@@ -522,7 +522,7 @@ describe("define_check", () => {
     run: { name: check.name, command: check.command, exitCode: 1, timedOut: false, output: "no greeting" },
     timeoutSeconds: 60,
     rejection: null,
-    passesAllowed: false,
+    holdsAlready: false,
   })) {
     const defined: CheckDefinition[] = [];
     const timeouts: number[] = [];
@@ -581,14 +581,14 @@ describe("define_check", () => {
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: 'sh: 1: Syntax error: "(" unexpected' },
             timeoutSeconds: 60,
             rejection: null,
-            passesAllowed: false,
+            holdsAlready: false,
           }
         : {
             kind: "ran",
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: "grep: greet.txt: No such file or directory" },
             timeoutSeconds: 60,
             rejection: null,
-            passesAllowed: false,
+            holdsAlready: false,
           },
     );
 
@@ -597,7 +597,7 @@ describe("define_check", () => {
     expect(outcome).toMatchObject({ kind: "finished", status: "done" });
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("define_check");
     expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("build_environment");
-    expect(requests[0]?.system).toContain("Every check must FAIL on the project as it is now");
+    expect(requests[0]?.system).toContain("At least one check must FAIL on the foundation");
     expect(timeouts).toEqual([60, 60]);
     const [first] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(first).toMatchObject({ value: expect.stringContaining('Defined check "greets" (1 defined so far)') });
@@ -617,10 +617,10 @@ describe("define_check", () => {
       check.name === "vacuous"
         ? {
             kind: "ran",
-            run: { name: check.name, command: check.command, exitCode: 0, timedOut: false, output: "fine" },
+            run: { name: check.name, command: check.command, exitCode: 127, timedOut: false, output: "sh: missing: not found" },
             timeoutSeconds: 60,
-            rejection: "it already passes on main",
-            passesAllowed: false,
+            rejection: "its command cannot be run in the project environment (exit 127)",
+            holdsAlready: false,
           }
         : { kind: "files_refused", detail: "check files overlap the environment's owned paths [environment]: environment/x" },
     );
@@ -629,7 +629,7 @@ describe("define_check", () => {
 
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({
       type: "error-text",
-      value: expect.stringContaining("WOULD BE REJECTED at finish: it already passes on main"),
+      value: expect.stringContaining("WOULD BE REJECTED at finish: its command cannot be run"),
     });
     expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({
       type: "error-text",
@@ -658,7 +658,7 @@ describe("define_check", () => {
     expect(prompt).toContain("Check every assumption among those items");
     expect(prompt).toContain("write a check that gives that input and requires it to be refused");
     expect(prompt).toContain("## Assumptions work proceeds on");
-    expect(prompt).toContain("That task has not started: what it");
+    expect(prompt).toContain("the project as it stood before any task of the plan did its work");
     expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Check every assumption among those items");
   });
 
@@ -691,6 +691,7 @@ describe("run_checks", () => {
     const timeouts: number[] = [];
     const port: TaskCheckRunPort = {
       checkNames: report.kind === "ran" ? report.runs.map((run) => run.name) : [],
+      mergedChecks: [],
       run: async (timeoutSeconds) => {
         timeouts.push(timeoutSeconds);
         return report;
@@ -769,7 +770,22 @@ describe("run_checks", () => {
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Its checks are: "lists"') });
     expect(outcome).toMatchObject({ kind: "disputed", checkName: "lists", reason: "the check uses bash syntax under sh", turnsUsed: 3 });
     expect(outcome.kind === "disputed" ? outcome.evidence : null).toContain("sh: [[: not found");
-    expect(records.at(-1)).toMatchObject({ kind: "outcome", outcome: { kind: "disputed", checkName: "lists" } });
+    expect(records.at(-1)).toMatchObject({ kind: "outcome", outcome: { kind: "disputed", checkName: "lists", ofTask: null } });
+  });
+
+  // ADR-074 addendum 2 d74 D: a merged task's check that blocks this task's merge may be disputed by its task id.
+  it("dispute_check names a merged task's check by that task, and refuses a check that task does not hold", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "dispute_check", input: { name: "lists", task: "t-merged", reason: "x" } }]),
+      () => turn([{ name: "dispute_check", input: { name: "totals", task: "t-merged", reason: "it fixes a format the vision never states" } }]),
+    ]);
+    const { port: own } = taskChecks({ kind: "ran", runs: [{ name: "lists", command: "true", exitCode: 0, timedOut: false, output: "" }] });
+    const port: TaskCheckRunPort = { ...own, mergedChecks: [{ taskId: "t-merged", name: "totals" }] };
+
+    const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell, { taskChecks: port }).deps);
+
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text" });
+    expect(outcome).toMatchObject({ kind: "disputed", checkName: "totals", ofTask: "t-merged" });
   });
 
   it("dispute_check is offered only to implementation work that runs stored checks", async () => {

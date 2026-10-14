@@ -21,7 +21,7 @@ import { buildGateway } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner, PlanningService, Replanner, startWorkItem } from "@ashara/planning";
+import { FirstPlanner, PlanningService, Replanner, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
 import type { FirstPlanStore, ReplanStore } from "@ashara/planning";
 import { parseWorkItemId, type ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "./answer-store.js";
@@ -119,6 +119,16 @@ const REVISED_TASKS = {
   ],
 };
 
+const REPAIRED_TASKS = {
+  tasks: [
+    {
+      ref: "t1", title: "Book a harbour class by its date", description: "Harbour bookings, smaller.", dependsOn: [],
+      endState: "A harbour class can be booked by its date", scope: "harbour bookings by date", deliverables: ["harbour booking"], visionItems: ["S1"],
+      capability: "Medium", capabilityReason: "graded for the test",
+    },
+  ],
+};
+
 /** One model for every call, answering each by what its prompt asks. */
 function pipelineModel(options: { readonly reading?: unknown; readonly environmentChange?: boolean } = {}): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
@@ -128,10 +138,11 @@ function pipelineModel(options: { readonly reading?: unknown; readonly environme
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
       if (prompt.includes("structured knowledge graph")) return jsonResult(KNOWLEDGE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
-      if (prompt.includes("needs the project environment changed")) {
+      if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
         return jsonResult({ environmentChange: options.environmentChange ?? false, reason: "Only what is booked changes." });
       }
       if (prompt.includes("changed what is built after work began")) return jsonResult(REVISED_TASKS);
+      if (prompt.includes("Plan the work still to do again")) return jsonResult(REPAIRED_TASKS);
       return jsonResult(FIRST_TASKS);
     },
   });
@@ -336,7 +347,7 @@ describe("a late client change is planned", () => {
     const mock = pipelineModel({ environmentChange: false });
     const outcomes = await replanner().runPending();
 
-    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, tasks: 4, superseded: 3, newEnvironment: false }]);
+    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, cause: "client-change", tasks: 4, superseded: 3, newEnvironment: false }]);
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("Already done, and kept") && p.includes(`merged as ${MERGE_COMMIT}`))).toBe(true);
 
@@ -444,5 +455,125 @@ describe("a late client change is planned", () => {
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(before + 1);
     expect(reports[reports.length - 1]?.body).toContain("the plan has already been revised for your changes");
+  });
+});
+
+/** Starts, fails and gives up a task as a dispatch's failure and the failure router's abandonment do. */
+async function giveUp(id: string, attempts: number): Promise<void> {
+  await startTask(id);
+  const repo = adaptWorkItemRepo(new WorkItemRepository(db));
+  const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
+  if (task === null) throw new Error(`task ${id} not found`);
+  failWorkItem(task, { source: "task_failed", reason: "the check author's red run kept failing" });
+  await PlanningService.saveWorkItem(repo, task, "InProgress");
+  const failure = { detail: "red run on the foundation: REJECTED, the set: no check of the set fails on the foundation", raw: {} };
+  const decision = await recoverFailedItem(
+    {
+      workItemRepo: repo,
+      eventPublisher: { publish: async () => {} },
+      failureRouter: { route: () => ({ action: "abandon", reason: `the task failed ${attempts} time(s)`, attempts, failure }) },
+    },
+    task,
+    failure,
+  );
+  expect(decision).toBe("abandon");
+}
+
+/** Pending tasks of our projects only, gated as the core loop gates them. */
+async function gateOurs(): Promise<void> {
+  const projects = new ProjectRepository(db);
+  await PlanningService.gate(
+    adaptWorkItemRepo(new WorkItemRepository(db)),
+    { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
+    { publish: async () => {} },
+  );
+}
+
+// ADR-074 addendum 2 d74 D: a task the failure router gave up parked every task depending on it as
+// dependency_unsatisfiable, each for the operator. The project is held and its plan repaired instead.
+describe("a task the team gives up is planned around", () => {
+  test("the project is held, no dependent is parked, and a repair supersedes the open work around the given-up task and is reported once", async () => {
+    const { projectId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const sprint0 = first.find((i) => i.origin === "sprint0");
+    const check = first.find((i) => i.origin === "check");
+    const harbour = first.find((i) => i.origin === "decomposition");
+    if (sprint0 === undefined || check === undefined || harbour === undefined) throw new Error("the first plan is not Sprint 0, a check task and a task");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
+
+    await giveUp(check.id, 3);
+
+    expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
+    await gateOurs();
+    const held = await itemsOf(projectId);
+    expect(held.find((i) => i.id === harbour.id)?.status).toBe("Pending");
+    expect(held.filter((i) => z.object({ source: z.literal("dependency_unsatisfiable") }).safeParse(i.reason).success)).toEqual([]);
+
+    const mock = pipelineModel();
+    const outcomes = await replanner().runPending();
+
+    expect(outcomes).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair", newEnvironment: false }]);
+    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    expect(prompts.some((p) => p.includes(`after 3 attempt(s)`) && p.includes("no check of the set fails on the foundation"))).toBe(true);
+    const after = await itemsOf(projectId);
+    expect(after.find((i) => i.id === check.id)).toMatchObject({ status: "Abandoned", reason: { source: "failure_router" } });
+    expect(after.find((i) => i.id === harbour.id)).toMatchObject({
+      status: "Abandoned",
+      reason: { source: "superseded", planRevision: 2, requestedBy: null, repairOf: [check.id] },
+    });
+    expect(after.some((i) => i.title === "Book a harbour class by its date" && i.status === "Pending")).toBe(true);
+    const revisions = await db.execute(sql`SELECT revision, kind, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
+    expect(revisions.rows).toEqual([{ revision: 2, kind: "repair", requestedBy: null }]);
+    const repairs = await db.execute(sql`SELECT work_item_id AS "id", plan_revision_id IS NOT NULL AS "answered" FROM plan_repairs WHERE project_id = ${projectId}`);
+    expect(repairs.rows).toEqual([{ id: check.id, answered: true }]);
+    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+
+    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+    expect(await planReports().runPending()).toEqual([]);
+    const reports = await reportsOf(projectId);
+    const report = reports[reports.length - 1];
+    expect(report?.inReplyTo).toBeNull();
+    expect(report?.body).toContain(`- ${check.title}`);
+    expect(report?.body).toContain("what you asked for has not changed");
+    expect(await replanner().runPending()).toEqual([]);
+  });
+
+  test("past the bound of repairs the next abandonment blocks the project with one report naming the task given up", async () => {
+    const { projectId } = await plannedProject();
+    const sprint0 = (await itemsOf(projectId)).find((i) => i.origin === "sprint0");
+    if (sprint0 === undefined) throw new Error("the first plan has no Sprint 0");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+
+    const givenUp: string[] = [];
+    for (const round of [1, 2, 3]) {
+      const open = (await itemsOf(projectId)).find((i) => i.origin === "check" && i.status === "Pending");
+      if (open === undefined) throw new Error(`round ${round}: no open check task to give up`);
+      givenUp.push(open.title);
+      await giveUp(open.id, 3);
+      pipelineModel();
+      const outcomes = await replanner().runPending();
+      if (round < 3) {
+        expect(outcomes, `round ${round}`).toMatchObject([{ kind: "revised", cause: "repair", revision: round + 1 }]);
+        expect(await planReports().runPending()).toMatchObject([{ kind: "posted" }]);
+      } else {
+        expect(outcomes).toMatchObject([{ kind: "project-blocked", projectId, cause: { category: "plan_repair", errorClass: "PlanRepairBoundReached" } }]);
+      }
+    }
+
+    expect(await projectRow(projectId)).toMatchObject({ status: "blocked", category: "plan_repair" });
+    await gateOurs();
+    const items = await itemsOf(projectId);
+    expect(items.filter((i) => z.object({ source: z.literal("dependency_unsatisfiable") }).safeParse(i.reason).success)).toEqual([]);
+    const before = (await reportsOf(projectId)).length;
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect(await blockReports().runPending()).toEqual([]);
+    const reports = await reportsOf(projectId);
+    expect(reports).toHaveLength(before + 1);
+    const body = reports[reports.length - 1]?.body ?? "";
+    expect(body).toContain(`"${givenUp[2] ?? ""}" (after`);
+    expect(body).not.toContain(givenUp[0] ?? "");
   });
 });

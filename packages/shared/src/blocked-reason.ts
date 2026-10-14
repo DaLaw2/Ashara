@@ -200,15 +200,17 @@ const mergeUnrecordedSchema = z.object({
 });
 
 /**
- * The task was open (not started, Blocked or Failed) when the client changed what is built, and a
- * revision of the plan (migration 042) replaced it: it is Abandoned and never dispatched. Written
- * only on Abandoned items. `planRevision` is the revision that replaced it, `requestedBy` the
- * client answer that asked for it.
+ * The task was open (not started, Blocked or Failed) when a revision of the plan replaced it: the
+ * client changed what is built (migration 042), or a task was given up and the remaining work was
+ * re-planned around it (a plan repair, migration 045). It is Abandoned and never dispatched. Written
+ * only on Abandoned items. `planRevision` is the revision that replaced it; `requestedBy` the client
+ * answer that asked for it, null for a plan repair, whose given-up tasks `repairOf` names.
  */
 const supersededSchema = z.object({
   source: z.literal("superseded"),
   planRevision: z.number().int().min(2),
-  requestedBy: z.string().min(1),
+  requestedBy: z.string().min(1).nullable(),
+  repairOf: z.array(z.string().min(1)).min(1).optional(),
   reason: z.string().min(1),
   ...augmentationFields,
 });

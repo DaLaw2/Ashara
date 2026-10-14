@@ -108,16 +108,21 @@ class PlanReportUnfounded extends Error {
 }
 
 // What a revision did, as Delivery records it on plan_revisions.summary (planning replan.ts).
-const PlanRevisionSummarySchema = z.object({
-  answer: z.string().min(1),
-  decision: z.string().min(1),
+const revisionWorkFields = {
   newTasks: z.array(z.string().min(1)).min(1),
   newCheckTasks: z.number().int().min(0),
   newEnvironmentTask: z.boolean(),
   supersededTasks: z.array(z.string().min(1)),
   supersededOther: z.number().int().min(0),
   keptCompleted: z.number().int().min(0),
-});
+};
+
+// A revision for a client's change carries their words and the decision; a plan repair (migration
+// 045), the titles of the tasks the team gave up.
+const PlanRevisionSummarySchema = z.union([
+  z.object({ answer: z.string().min(1), decision: z.string().min(1), ...revisionWorkFields }),
+  z.object({ repaired: z.array(z.string().min(1)).min(1), ...revisionWorkFields }),
+]);
 
 type PlanRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
 
@@ -174,11 +179,20 @@ function quotedList(titles: readonly string[]): string {
 
 /** Plain words: what the client said, what the team now does, what was set aside and what stays done. */
 function planRevisionReport(summary: PlanRevisionSummary): string {
-  const paragraphs = [
-    `Because you said "${summary.answer}", the team has revised the plan for this project. Work now proceeds on: ${summary.decision}`,
-  ];
+  const paragraphs =
+    "answer" in summary
+      ? [`Because you said "${summary.answer}", the team has revised the plan for this project. Work now proceeds on: ${summary.decision}`]
+      : [
+          `The team could not complete ${summary.repaired.length === 1 ? "this task" : "these tasks"} after repeated attempts ` +
+            `and has given ${summary.repaired.length === 1 ? "it" : "them"} up:\n${quotedList(summary.repaired)}\n` +
+            `So the team has revised the plan for the work still to do; what you asked for has not changed.`,
+        ];
   if (summary.newEnvironmentTask) {
-    paragraphs.push(`This change affects how the project is built and tested, so the team first sets up the project environment again.`);
+    paragraphs.push(
+      "answer" in summary
+        ? `This change affects how the project is built and tested, so the team first sets up the project environment again.`
+        : `What went wrong needs a change to how the project is built and tested, so the team first sets up the project environment again.`,
+    );
   }
   paragraphs.push(
     `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,

@@ -142,7 +142,7 @@ describe("a project whose workspace path is refused", () => {
         images: { build: notExercised("build"), prune: notExercised("prune") },
         statements: { record: notExercised("record"), forVersion: notExercised("forVersion") },
       },
-      checks: { checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), storedOfProject: notExercised("storedOfProject"), append: notExercised("append"), latest: notExercised("latest") },
+      checks: { foundationOf: notExercised("foundationOf"), checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), storedOfProject: notExercised("storedOfProject"), append: notExercised("append"), latest: notExercised("latest") },
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
     });

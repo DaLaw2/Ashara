@@ -10,7 +10,7 @@ import {
   type StoredBlockedReason,
 } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { checkDisputes, clientMessages, projectBlocks, projects, workItems } from "../schema.js";
+import { checkDisputes, clientMessages, planRepairs, projectBlocks, projects, workItems } from "../schema.js";
 import { noOpenStop } from "./project.js";
 import { blockingReview } from "./suite-review.js";
 
@@ -28,8 +28,38 @@ const ProjectBlockKindSchema = z.enum([
   "check_dispute",
   "replan_bound",
   "suite_review",
+  "plan_repair",
 ]);
-type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review">;
+type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
+
+/** A task given up whose repair a plan_repair block left awaited. */
+interface BlockingAbandonmentRow {
+  readonly title: string;
+  readonly attempts: number;
+}
+
+/** A plan_repair block has no awaited repair of its project recorded at or before it: nothing to report it by. */
+class BlockingRepairMissing extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly projectId: string,
+  ) {
+    super(`project_blocks row ${episodeId} (project ${projectId}) is a plan_repair block, but no awaited plan_repairs row of the project precedes it`);
+    this.name = "BlockingRepairMissing";
+  }
+}
+
+/** The given-up tasks whose awaited repair the plan_repair block stopped (migration 045), oldest first. */
+async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
+  const rows = await db
+    .select({ title: workItems.title, attempts: workItems.dispatchCount })
+    .from(planRepairs)
+    .innerJoin(workItems, eq(workItems.id, planRepairs.workItemId))
+    .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), lte(planRepairs.createdAt, blockedAt)))
+    .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
+  if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
+  return rows;
+}
 
 /** The review a suite_review block was written on: the last one recorded before the block. */
 interface BlockingReviewRow {
@@ -71,6 +101,13 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "suite_review";
       readonly review: BlockingReviewRow;
+    }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: "plan_repair";
+      readonly abandoned: readonly BlockingAbandonmentRow[];
     }
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId }
   | {
@@ -191,6 +228,9 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
       const review = await blockingReview(db, row.projectId, row.blockedAt);
       if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review });
+    } else if (kind.data === "plan_repair") {
+      const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
+      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned });
     } else {
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data });
     }

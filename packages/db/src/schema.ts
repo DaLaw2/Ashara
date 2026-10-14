@@ -536,6 +536,8 @@ export const taskChecks = pgTable(
     command: text().notNull(),
     files: jsonb().notNull(),
     environmentVersion: text("environment_version").notNull(),
+    /** The commit the revision was red-run on, its plan revision's foundation (migration 045); null before 045. */
+    baselineCommit: text("baseline_commit"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => ({
@@ -625,9 +627,10 @@ export const planRevisions = pgTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     revision: integer().notNull(),
     visionVersion: integer("vision_version").notNull(),
-    requestedBy: uuid("requested_by")
-      .notNull()
-      .references(() => clientMessages.id, { onDelete: "cascade" }),
+    /** The client's answer that asked for it; null for a plan repair (migration 045). */
+    requestedBy: uuid("requested_by").references(() => clientMessages.id, { onDelete: "cascade" }),
+    /** 'client_change' or 'repair' (migration 045). */
+    kind: text().notNull().default("client_change"),
     summary: jsonb().notNull(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
@@ -636,6 +639,22 @@ export const planRevisions = pgTable(
     oneNumber: unique("plan_revisions_one_per_number").on(t.projectId, t.revision),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// plan_repairs (migration 045): one row per task the failure router abandoned, written by a
+// trigger on the abandonment; the plan revision that re-planned around it is recorded on it.
+// ---------------------------------------------------------------------------
+
+export const planRepairs = pgTable("plan_repairs", {
+  workItemId: uuid("work_item_id")
+    .primaryKey()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "set null" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // blocked_task_reports (migration 040): the Liaison's one report per time a task

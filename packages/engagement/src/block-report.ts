@@ -8,7 +8,9 @@ import type { BlockedExit, ProjectBlockCause, ProjectId, StoredBlockedReason } f
 // episodes, so a block written before a crash is still reported after the restart; the store
 // posts each at most once. A project blocked because its check disputes passed their bound
 // (ADR-074 addendum 2 d65 c) is one of these blocks: its report names the disputed check. So is a
-// project blocked because the review of a plan's checks kept finding problems in them (d71 c).
+// project blocked because the review of a plan's checks kept finding problems in them (d71 c), and
+// one blocked because the team gave up work again after the plan was repaired its bound of times
+// (d74 D, migration 045): its report names the work given up.
 
 /** What paused a project, as recorded on its block episode; a check dispute's and a suite review's block carry their own. */
 type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound";
@@ -30,6 +32,13 @@ interface BlockingReview {
   readonly problems: readonly string[];
 }
 
+/** A task the team gave up again after the plan was repaired its bound of times, as recorded when the project was blocked. */
+interface BlockingAbandonment {
+  readonly title: string;
+  /** Its dispatches, the failed ones that led to it being given up. */
+  readonly attempts: number;
+}
+
 /** A recorded block, resumption or task block the client has not been told about. */
 type DueBlockReport =
   | { readonly subject: "project-blocked"; readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind }
@@ -39,6 +48,13 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: "suite_review";
       readonly review: BlockingReview;
+    }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: "plan_repair";
+      readonly abandoned: readonly BlockingAbandonment[];
     }
   | {
       readonly subject: "project-blocked";
@@ -208,6 +224,22 @@ function suiteReviewBoundReport(review: BlockingReview): string {
   ].join("\n\n");
 }
 
+/** Plain words: which work the team gave up again, and that the operator looks the project over first. */
+function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): string {
+  return [
+    `Work on this project is paused. The team could not complete ` +
+      abandoned.map((task) => `"${task.title}" (after ${plural(task.attempts, "attempt")})`).join(", ") +
+      `, and the plan has already been revised around work it gave up as many times as the team revises it before its ` +
+      `operator looks over the project.`,
+    `Nothing more is built until the operator has looked the project over; you will be told when work resumes. If you ` +
+      `can say more about what this part should do, send a change describing it.`,
+  ].join("\n\n");
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function projectResumedReport(): string {
   return "Work on this project has resumed: the team cleared what paused it, and the work goes on from where it stopped.";
 }
@@ -318,7 +350,9 @@ export class BlockReports implements LiaisonBlockReports, LiaisonCheckDisputes, 
               ? disputeBoundReport(due.dispute)
               : due.kind === "suite_review"
                 ? suiteReviewBoundReport(due.review)
-                : projectBlockedReport(due.kind);
+                : due.kind === "plan_repair"
+                  ? planRepairBoundReport(due.abandoned)
+                  : projectBlockedReport(due.kind);
           const kind = await this.store.postProjectReport(due.episodeId, "blocked", body);
           outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
           break;

@@ -22,6 +22,8 @@ interface NewTaskChecks {
   readonly taskId: string;
   readonly checkTaskId: string;
   readonly environmentVersion: string;
+  /** The commit the checks were red-run on: their plan revision's foundation (migration 045). */
+  readonly baselineCommit: string;
   readonly checks: readonly TaskCheckDefinition[];
   readonly files: readonly TaskCheckFile[];
 }
@@ -31,9 +33,27 @@ interface TaskChecksRecord {
   readonly checkTaskId: string;
   readonly revision: number;
   readonly environmentVersion: string;
+  /** null for a revision written before migration 045, whose red run's commit nothing recorded. */
+  readonly baselineCommit: string | null;
   readonly checks: readonly TaskCheckDefinition[];
   readonly files: readonly TaskCheckFile[];
 }
+
+/**
+ * A check task's foundation: the merged task its checks are red-run against (ADR-074 addendum 2
+ * d74 A), or why there is none to red-run against.
+ */
+type CheckFoundation =
+  | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
+  | { readonly kind: "none"; readonly reason: string };
+
+const FoundationRowSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  mergeCommit: z.string().nullable(),
+  origin: z.string().nullable(),
+  workKind: z.string().nullable(),
+});
 
 /** A revision with no check: an empty revision would read as "nothing to check". */
 class TaskChecksEmpty extends Error {
@@ -98,6 +118,37 @@ export class TaskCheckRepository {
       )
       .orderBy(asc(workItems.id));
     return rows.map((row) => row.id);
+  }
+
+  /**
+   * The check task's foundation (ADR-074 addendum 2 d74 A): among the tasks it depends on, the
+   * product scaffold's recorded merge commit (migration 041), or, for a plan revision with no
+   * scaffold of its own, its environment task's (Sprint 0 or an environment task). A foundation
+   * that is not Completed with a merge commit on record is no foundation: the reason says which.
+   */
+  async foundationOf(checkTaskId: string): Promise<CheckFoundation> {
+    const result = await this.db.execute(sql`
+      SELECT w.id, w.status, w.merge_commit AS "mergeCommit", w.task_spec->>'origin' AS origin, w.work_kind AS "workKind"
+      FROM dependencies d JOIN work_items w ON w.id = d.to_id
+      WHERE d.from_id = ${checkTaskId}
+        AND (w.task_spec->>'origin' IN ('product-scaffold', 'sprint0') OR w.work_kind = 'environment')
+      ORDER BY w.updated_at DESC, w.id`);
+    const rows = z.array(FoundationRowSchema).parse(result.rows);
+    const scaffold = rows.find((row) => row.origin === "product-scaffold");
+    const foundation = scaffold ?? rows[0];
+    if (foundation === undefined) {
+      return { kind: "none", reason: `check task ${checkTaskId} depends on no product scaffold and no environment task` };
+    }
+    const what = scaffold !== undefined ? "product scaffold" : "environment task";
+    if (foundation.status !== "Completed" || foundation.mergeCommit === null) {
+      return {
+        kind: "none",
+        reason:
+          `check task ${checkTaskId}'s foundation, ${what} ${foundation.id}, is ${foundation.status} with ` +
+          `${foundation.mergeCommit === null ? "no merge commit on record" : `merge commit ${foundation.mergeCommit}`}`,
+      };
+    }
+    return { kind: "found", taskId: foundation.id, commit: foundation.mergeCommit };
   }
 
   /**
@@ -227,6 +278,7 @@ export class TaskCheckRepository {
           command: check.command,
           files,
           environmentVersion: write.environmentVersion,
+          baselineCommit: write.baselineCommit,
         })),
       );
       return revision;
@@ -249,8 +301,12 @@ export class TaskCheckRepository {
     if (!parsed.success) throw new TaskChecksCorrupt(taskId, revision, `files: ${z.prettifyError(parsed.error)}`);
     const filesText = JSON.stringify(parsed.data);
     for (const row of rows) {
-      if (row.checkTaskId !== first.checkTaskId || row.environmentVersion !== first.environmentVersion) {
-        throw new TaskChecksCorrupt(taskId, revision, "its rows name different check tasks or environment versions");
+      if (
+        row.checkTaskId !== first.checkTaskId ||
+        row.environmentVersion !== first.environmentVersion ||
+        row.baselineCommit !== first.baselineCommit
+      ) {
+        throw new TaskChecksCorrupt(taskId, revision, "its rows name different check tasks, environment versions or baselines");
       }
       if (JSON.stringify(TaskCheckFilesSchema.safeParse(row.files).data ?? null) !== filesText) {
         throw new TaskChecksCorrupt(taskId, revision, `the files of check ${JSON.stringify(row.name)} differ from the revision's`);
@@ -261,6 +317,7 @@ export class TaskCheckRepository {
       checkTaskId: first.checkTaskId,
       revision,
       environmentVersion: first.environmentVersion,
+      baselineCommit: first.baselineCommit,
       checks: rows.map((row) => ({ name: row.name, command: row.command })),
       files: parsed.data,
     };

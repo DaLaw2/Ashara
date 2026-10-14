@@ -645,8 +645,11 @@ describe("a disputed check: the check task is reopened with the dispute and the 
   const reason = "the check uses [[ ]], which the runner's sh rejects with exit 2 on any work";
   const evidence = 'Check "lists": FAILED: exited 2\n  output: sh: [[: not found';
 
-  function buildDisputeDeps(priorDisputes: number) {
+  /** `merged`: the disputed check is a merged task's, written by a check task the item does not depend on. */
+  function buildDisputeDeps(priorDisputes: number, whose: "own" | "merged" = "own") {
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    const edges: Array<{ readonly from: string; readonly to: string }> = [];
+    const mergedTaskId = createWorkItemId();
     const rows = new Map<string, WorkItem>([
       [ITEM_ID, freshPendingItem()],
       [CHECK_ID, { ...freshPendingItem(), id: CHECK_ID, title: "write the checks", workKind: "check", status: "Completed", dispatchCount: 1 }],
@@ -687,8 +690,11 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       findByProjectAndStatus: notExercised("findByProjectAndStatus"),
       projectIdsWithStatus: notExercised("projectIdsWithStatus"),
       listIdsByStatus: notExercised("listIdsByStatus"),
-      addDependency: notExercised("addDependency"),
-      getDependencies: async () => [],
+      addDependency: async (from, to) => {
+        edges.push({ from, to });
+      },
+      // The item's own check task is the edge the plan wrote; a merged task's check task is not on it.
+      getDependencies: async (id) => (id === ITEM_ID && whose === "own" ? [CHECK_ID] : []),
       findChildren: async () => [],
       listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
@@ -698,6 +704,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       developmentService: {
         execute: async () => ({
           status: "disputed",
+          checksOf: whose === "own" ? ITEM_ID : mergedTaskId,
           checkTaskId: CHECK_ID,
           revision: 1,
           check: { name: "lists", command: "[[ -f out.txt ]] && cat out.txt" },
@@ -729,8 +736,27 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
     });
-    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, reports, routed: () => routed, approaches: () => approaches };
+    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, reports, edges, routed: () => routed, approaches: () => approaches };
   }
+
+  // ADR-074 addendum 2 d74 D: a merged task's check that blocks the item's merge may be disputed.
+  test("a dispute of a merged task's check reopens that check's own check task, and the item waits on it by a new edge", async () => {
+    const { deps, item, check, edges, routed } = buildDisputeDeps(0, "merged");
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(check().status).toBe("Pending");
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(edges).toEqual([{ from: ITEM_ID, to: CHECK_ID }]);
+    expect(routed()).toBe(0);
+  });
+
+  test("a dispute of the item's own check adds no edge: the plan's is there", async () => {
+    const { deps, edges } = buildDisputeDeps(0);
+    await processTask(deps, freshPendingItem());
+    expect(edges).toEqual([]);
+  });
 
   test("a dispute: the check task back at Pending with the dispute and the current check in its brief, the item waiting, no failure counted", async () => {
     const { deps, item, check, disputes, reports, routed, approaches } = buildDisputeDeps(0);

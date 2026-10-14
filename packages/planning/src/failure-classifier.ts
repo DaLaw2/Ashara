@@ -40,8 +40,10 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
     case "postMergeVerify":
       return "TREE_REGRESSION";
 
-    // The stored checks are the task's only verdict: a failure is the task's work, not the tree.
+    // The stored checks are the task's only verdict: a failure is the task's work, not the tree. So
+    // is the product scaffold's build and test on its merge (ADR-074 addendum 2 d74 D).
     case "postMergeTaskChecks":
+    case "postMergeScaffold":
     case "entryPointRewriteCheck":
     // The branch wrote another role's files (a stored check file): the task's own work, retried with the reason.
     case "ownershipGate":

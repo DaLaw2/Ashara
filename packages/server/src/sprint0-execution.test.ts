@@ -141,7 +141,7 @@ async function environmentChangeTask(product: "present" | "absent"): Promise<Tas
  * An implementation task on record, as a first plan writes it after Sprint 0, with the check its
  * check task stored for it (s-independent-verify-m1).
  */
-async function implementationTask(check: string, environmentVersion: string): Promise<TaskDescriptor> {
+async function implementationTask(check: string, environmentVersion: string, baselineCommit = "0".repeat(40)): Promise<TaskDescriptor> {
   const id = createWorkItemId();
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
@@ -153,6 +153,7 @@ async function implementationTask(check: string, environmentVersion: string): Pr
     taskId: id,
     checkTaskId,
     environmentVersion,
+    baselineCommit,
     checks: [{ name: "hello", command: check }],
     files: [],
   });
@@ -599,7 +600,8 @@ describe("Sprint 0", () => {
     const { stdout: mainBefore } = await run("git", ["-C", join(root, "owned", "projects", "p"), "rev-parse", "main"]);
     const { result, events, target, taskId } = await runTask(
       "owned",
-      await implementationTask("cat /workspace/fourth.txt", "0".repeat(64)),
+      // Stored on another environment: red-run again on its baseline, today's main.
+      await implementationTask("cat /workspace/fourth.txt", "0".repeat(64), mainBefore.trim()),
       [
         toolCallTurn("write_file", { path: "fourth.txt", content: "fourth\n" }),
         toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),

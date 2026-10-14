@@ -13,21 +13,20 @@ import {
   formatProjectChecksForCheckAuthor,
   redRunPreview,
   redRunProblem,
-  redRunRuleFor,
   redRunSetProblem,
 } from "./task-checks.js";
 import type { TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
 
-const priorRevision: TaskChecks = { checkTaskId: "k", revision: 1, environmentVersion: "v1", checks: [{ name: "c", command: "make check" }], files: [] };
-
-// The 30fb60d5 review (b): a check that timed out on main was kept as "fails on main".
+// The 30fb60d5 review (b): a check that timed out on main was kept as "fails on main". ADR-074
+// addendum 2 d74 A: one rule for every authoring, on the plan's foundation.
 describe("the red-run rule", () => {
-  test("a check fails on main only by a non-zero exit within its time limit", () => {
-    expect(redRunProblem(run(1, false), "every-check-fails")).toBeNull();
-    expect(redRunProblem(run(0, false), "every-check-fails")).toContain("already passes on main");
-    expect(redRunProblem(run(127, false), "every-check-fails")).toContain("cannot be run");
+  test("a check is rejected only when it reaches no verdict on the foundation", () => {
+    expect(redRunProblem(run(1, false))).toBeNull();
+    expect(redRunProblem(run(0, false))).toBeNull();
+    expect(redRunProblem(run(127, false))).toContain("cannot be run");
+    expect(redRunProblem(run(126, false))).toContain("cannot be run");
   });
 
   test.each([
@@ -35,29 +34,14 @@ describe("the red-run rule", () => {
     [null, true],
     [1, true],
   ] as const)("exit %s with a timeout is rejected: a timeout proves nothing", (exitCode, timedOut) => {
-    expect(redRunProblem(run(exitCode, timedOut), "every-check-fails")).toContain("timed out on main");
-    expect(redRunProblem(run(exitCode, timedOut), "one-check-fails")).toContain("timed out on main");
+    expect(redRunProblem(run(exitCode, timedOut))).toContain("timed out on the foundation");
   });
 
-  // ADR-074 addendum 2 d68 b: a check task reopened after the environment moved under its stored
-  // revision may keep a check another task already delivered, as long as one of the set fails.
-  test("a re-authoring accepts a mixed set and rejects a set where every check passes", () => {
-    const rule = redRunRuleFor(priorRevision, "v2");
-    expect(rule).toBe("one-check-fails");
-    const mixed = [run(0, false), run(1, false)];
-    expect(mixed.map((r) => redRunProblem(r, rule))).toEqual([null, null]);
-    expect(redRunSetProblem(mixed, rule)).toBeNull();
-    const allPass = [run(0, false), run(0, false)];
-    expect(allPass.map((r) => redRunProblem(r, rule))).toEqual([null, null]);
-    expect(redRunSetProblem(allPass, rule)).toContain("no check of the set fails on main");
-    expect(redRunSetProblem([run(0, false), run(127, false)], rule)).toContain("no check of the set fails on main");
-  });
-
-  test("a first authoring, or one on the stored revision's own environment, keeps the every-check rule", () => {
-    expect(redRunRuleFor(null, "v2")).toBe("every-check-fails");
-    expect(redRunRuleFor(priorRevision, "v1")).toBe("every-check-fails");
-    expect(redRunProblem(run(0, false), "every-check-fails")).toContain("already passes on main");
-    expect(redRunSetProblem([run(0, false)], "every-check-fails")).toBeNull();
+  test("the set holds only with at least one decisive failure on the foundation", () => {
+    expect(redRunSetProblem([run(0, false), run(1, false)])).toBeNull();
+    expect(redRunSetProblem([run(0, false), run(0, false)])).toContain("no check of the set fails on the foundation");
+    expect(redRunSetProblem([run(0, false), run(127, false)])).toContain("no check of the set fails on the foundation");
+    expect(redRunSetProblem([run(1, true)])).toContain("no check of the set fails on the foundation");
   });
 });
 
@@ -77,18 +61,18 @@ describe("define_check's record", () => {
 
   test("the red run's preview carries the run and the red-run rule's verdict on it", () => {
     const syntax = { ...run(2, false), output: 'sh: 1: Syntax error: "(" unexpected' };
-    expect(redRunPreview({ kind: "ran", runs: [syntax] }, 30, "/d", "every-check-fails")).toEqual({
+    expect(redRunPreview({ kind: "ran", runs: [syntax] }, 30, "/d")).toEqual({
       kind: "ran",
       run: syntax,
       timeoutSeconds: 30,
       rejection: null,
-      passesAllowed: false,
+      holdsAlready: false,
     });
-    expect(redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d", "every-check-fails")).toMatchObject({ rejection: expect.stringContaining("already passes") });
-    expect(redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d", "one-check-fails")).toMatchObject({ rejection: null, passesAllowed: true });
-    expect(redRunPreview({ kind: "files_refused", detail: "link" }, 30, "/d", "every-check-fails")).toEqual({
+    expect(redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d")).toMatchObject({ rejection: null, holdsAlready: true });
+    expect(redRunPreview({ kind: "ran", runs: [run(1, true)] }, 30, "/d")).toMatchObject({ rejection: expect.stringContaining("timed out"), holdsAlready: false });
+    expect(redRunPreview({ kind: "files_refused", detail: "link" }, 30, "/d")).toEqual({
       kind: "files_refused",
-      detail: "the check files cannot be placed on main: link",
+      detail: "the check files cannot be placed on the foundation: link",
     });
   });
 });
@@ -143,6 +127,7 @@ describe("the implementer's brief of its checks", () => {
     checkTaskId: "check-1",
     revision: 1,
     environmentVersion: "v",
+    baselineCommit: "b".repeat(40),
     checks: [{ name: "greets", command: "sh checks/greet.sh" }],
     files,
   });
@@ -179,6 +164,7 @@ describe("the check author's brief of the project's stored checks", () => {
     checkTaskId: `check-of-${taskId}`,
     revision: 1,
     environmentVersion: "v",
+    baselineCommit: "b".repeat(40),
     checks: [{ name: `${taskId}-check`, command: `sh checks/${taskId}.sh` }],
     files,
   });

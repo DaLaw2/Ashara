@@ -11,10 +11,11 @@ import { cleanupWorkdir } from "./workspace.js";
 
 // Independent verification (story s-independent-verify-m1, ADR-074 addendum 2 d63): the check
 // author writes an implementation task's checks in its check task, before the implementation
-// starts. Z0 keeps a check only if it fails on the target's main (the red-run rule), stores it in
-// Quality's task_checks, and decides the implementation task by running the stored checks, with
-// their stored files written over whatever the implementer left at those paths, on a throwaway
-// checkout of its tentative merge. Nothing a check runs is on the host: every command runs in a cell.
+// starts. Z0 keeps a set of checks only if it fails on the plan revision's foundation (the red-run
+// rule, d74 A: a fixed commit, never today's main), stores it in Quality's task_checks, and decides
+// the implementation task by running the stored checks, with their stored files written over
+// whatever the implementer left at those paths, on a throwaway checkout of its tentative merge.
+// Nothing a check runs is on the host: every command runs in a cell.
 
 const MAX_CHECKS = 50;
 const MAX_CHECK_FILES = 200;
@@ -36,9 +37,19 @@ export interface TaskChecks {
   readonly checkTaskId: string;
   readonly revision: number;
   readonly environmentVersion: string;
+  /**
+   * The commit the revision was red-run on, its plan revision's foundation; null for a revision
+   * stored before baselines were recorded (migration 045), which cannot be red-run again.
+   */
+  readonly baselineCommit: string | null;
   readonly checks: readonly CheckDefinition[];
   readonly files: readonly CheckFile[];
 }
+
+/** A check task's foundation: the merged task whose commit its checks are red-run on, or why there is none. */
+type CheckFoundation =
+  | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
+  | { readonly kind: "none"; readonly reason: string };
 
 /** The latest checks of an implementation task already merged: what a later merge must still pass. */
 export interface CompletedTaskChecks extends TaskChecks {
@@ -79,6 +90,11 @@ export interface TaskCheckStore {
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /**
+   * The check task's foundation (ADR-074 addendum 2 d74 A): the recorded merge of the product
+   * scaffold it depends on, or of its environment task for a plan revision with no scaffold.
+   */
+  foundationOf(checkTaskId: WorkItemId): Promise<CheckFoundation>;
+  /**
    * The latest checks of every other task of the project that has any (Abandoned tasks left out),
    * with its title: what a check author must not contradict.
    */
@@ -89,6 +105,7 @@ export interface TaskCheckStore {
     readonly taskId: string;
     readonly checkTaskId: WorkItemId;
     readonly environmentVersion: string;
+    readonly baselineCommit: string;
     readonly checks: readonly CheckDefinition[];
     readonly files: readonly CheckFile[];
   }): Promise<number>;
@@ -138,8 +155,9 @@ export class CheckRecorder {
 
 /**
  * A task's stored checks were red-run on another environment version than the dispatch's, and on
- * the dispatch's they no longer all fail on main: they cannot decide the task until the check task
- * writes them again on the current environment.
+ * the dispatch's image the set no longer holds the red-run rule on its baseline (or has no baseline
+ * on record to be red-run on): they cannot decide the task until the check task writes them again
+ * on the current environment.
  */
 export class StoredChecksStale extends Error {
   readonly checkTaskId: string;
@@ -158,7 +176,8 @@ export class StoredChecksStale extends Error {
       `the checks of task ${taskId} (revision ${stored.revision}, check task ${stored.checkTaskId}) were red-run on ` +
         `environment version ${stored.environmentVersion}, but this dispatch runs on ` +
         `${currentVersion === null ? "the BaseCell" : `environment version ${currentVersion}`}, where they no longer ` +
-        `all fail on main; the check task must write them again on the current environment:\n${redRun}`,
+        `hold the red-run rule on their baseline ${stored.baselineCommit ?? "(none recorded)"}; the check task must ` +
+        `write them again on the current environment:\n${redRun}`,
     );
     this.name = "StoredChecksStale";
     this.checkTaskId = stored.checkTaskId;
@@ -451,81 +470,62 @@ export async function runChecksOnCheckout(
 }
 
 /**
- * The red-run rule on a check's run on main: it must fail there decisively, by a non-zero exit
- * within its time limit, and its command must be one the environment can run. A timeout proves
- * nothing about main: the same check could time out on the task's work too. null when it holds.
+ * The red-run rule on one check's run on the foundation (ADR-074 addendum 2 d74 A): it must run to
+ * a verdict there, an exit within its time limit by a command the environment can run. A timeout
+ * proves nothing: the same check could time out on the task's work too. A check that passes on the
+ * foundation is kept: it guards behaviour that already holds, and the set rule (redRunSetProblem)
+ * is what proves the set can tell the task's work from its absence. null when it holds.
  */
-export function redRunProblem(run: CheckRun, rule: RedRunRule): string | null {
+export function redRunProblem(run: CheckRun): string | null {
   if (run.timedOut) {
-    return "it timed out on main instead of failing there; a check must fail on main by a non-zero exit within its time limit";
+    return "it timed out on the foundation instead of exiting there; a check must exit within its time limit";
   }
-  if (run.exitCode === null) return "it was killed on main without an exit code, so it did not fail there decisively";
-  if (run.exitCode === 0) {
-    return rule === "one-check-fails" ? null : "it already passes on main, so it cannot tell the task's work from its absence";
-  }
+  if (run.exitCode === null) return "it was killed on the foundation without an exit code, so it reached no verdict there";
   if (COMMAND_UNRUNNABLE.has(run.exitCode)) {
     return `its command cannot be run in the project environment (exit ${run.exitCode})`;
   }
   return null;
 }
 
-/**
- * Which red run a check task's set must pass on main (ADR-074 addendum 2 d68 b).
- * "every-check-fails": a first authoring, every check fails there. "one-check-fails": a re-authoring
- * after the environment moved under the stored revision, when another task may have delivered part
- * of the checked task's behaviour already: a check may pass on main, but at least one of the set
- * must fail there decisively, and none may time out or be unrunnable.
- */
-export type RedRunRule = "every-check-fails" | "one-check-fails";
-
-/**
- * The rule a check task's red run follows: "one-check-fails" only when the checked task already has
- * a stored revision written on another environment version than the one the check task runs on, as
- * a check task reopened for stale checks finds it; every first authoring is "every-check-fails".
- */
-export function redRunRuleFor(prior: TaskChecks | null, environmentVersion: string): RedRunRule {
-  return prior !== null && prior.environmentVersion !== environmentVersion ? "one-check-fails" : "every-check-fails";
-}
-
-/** Whether a check's run on main is a decisive failure there, by the strict rule. */
+/** Whether a check's run on the foundation is a decisive failure there. */
 function failsDecisively(run: CheckRun): boolean {
-  return run.exitCode !== 0 && redRunProblem(run, "every-check-fails") === null;
+  return run.exitCode !== 0 && redRunProblem(run) === null;
 }
 
-/** The red run's verdict on the whole set, beyond each check's own: null when it holds. */
-export function redRunSetProblem(runs: readonly CheckRun[], rule: RedRunRule): string | null {
-  if (rule === "every-check-fails" || runs.some(failsDecisively)) return null;
-  return "no check of the set fails on main; on a re-authoring at least one must fail there, for the reason the task's work is missing";
+/**
+ * The red run's verdict on the whole set, beyond each check's own: at least one check must fail
+ * on the foundation decisively, for the reason the task's work is missing there. null when it holds.
+ */
+export function redRunSetProblem(runs: readonly CheckRun[]): string | null {
+  if (runs.some(failsDecisively)) return null;
+  return "no check of the set fails on the foundation; at least one must fail there, for the reason the task's work is missing";
 }
 
-/** One check's line in a red run's report, by the rule. */
-export function redRunVerdict(run: CheckRun, rule: RedRunRule): string {
-  const problem = redRunProblem(run, rule);
+/** One check's line in a red run's report. */
+export function redRunVerdict(run: CheckRun): string {
+  const problem = redRunProblem(run);
   if (problem !== null) return `REJECTED: ${problem}`;
-  return failsDecisively(run) ? "fails on main, as it must" : "passes on main, allowed on this re-authoring";
+  return failsDecisively(run) ? "fails on the foundation" : "passes on the foundation: kept, as a guard of behaviour that already holds";
 }
 
-/** define_check's red run of its one check, as the author is shown it, judged by the red-run rule. */
-export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string, rule: RedRunRule): CheckRedRunPreview {
-  if (report.kind === "files_refused") return { kind: "files_refused", detail: `the check files cannot be placed on main: ${report.detail}` };
+/** define_check's red run of its one check on the foundation, as the author is shown it. */
+export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string): CheckRedRunPreview {
+  if (report.kind === "files_refused") {
+    return { kind: "files_refused", detail: `the check files cannot be placed on the foundation: ${report.detail}` };
+  }
   const [run] = report.runs;
   if (run === undefined) throw new SuiteRunMissing(checkoutDir);
-  const rejection = redRunProblem(run, rule);
-  return { kind: "ran", run, timeoutSeconds, rejection, passesAllowed: rejection === null && !failsDecisively(run) };
+  const rejection = redRunProblem(run);
+  return { kind: "ran", run, timeoutSeconds, rejection, holdsAlready: rejection === null && !failsDecisively(run) };
 }
 
-/**
- * The relaxed red-run rule as a re-authoring check task's brief states it: the system prompt's
- * "every check must fail" holds for a first authoring only.
- */
-export function formatReauthoringRuleForCheckAuthor(prior: TaskChecks, environmentVersion: string): string {
+/** Where a check task's checks are red-run, as its brief states it: the foundation, never today's main. */
+export function formatFoundationForCheckAuthor(foundation: { readonly taskId: string; readonly commit: string }): string {
   return [
-    `## Red run for this re-authoring`,
-    `The checks of this task were written before (revision ${prior.revision}, on environment version ${prior.environmentVersion})`,
-    `and the environment has moved since (now version ${environmentVersion}). Another task may have delivered part of`,
-    `this task's behaviour already, so on this re-authoring a check MAY pass on the project as it is now: at finish at`,
-    `least one check of the set must fail there for the reason the task's work is missing, and none may time out or`,
-    `have a command that cannot be run. This replaces the rule that every check must fail now.`,
+    `## Red run on the foundation`,
+    `Your checks are red-run on the foundation of this plan: commit ${foundation.commit}, the merge of task`,
+    `${foundation.taskId}, which every task of the plan builds on, before any of them did its work. Your workspace`,
+    `shows the project as it is now, which other tasks may already have changed; the red run does not use it.`,
   ].join("\n");
 }
 
@@ -538,7 +538,9 @@ export function formatChecksForBrief(stored: TaskChecks): string {
     `Call run_checks to run them on your current work before you finish: it reports each check's exit code and output`,
     `exactly as verification would.`,
     `Verification on the merge also runs the environment's test and the checks of every task already merged:`,
-    `if your work breaks any of them, this task fails as a regression and nothing is merged.`,
+    `if your work breaks any of them, this task fails as a regression and nothing is merged. Any of these checks that`,
+    `cannot pass on correct work, an already merged task's included, may be disputed with dispute_check: for an`,
+    `already merged task's check, give that task's id as the verification failure names it.`,
     ...stored.checks.map((check) => `- ${check.name}: \`${check.command}\``),
   ];
   if (stored.files.length > 0) lines.push("", checkFilesForBrief(stored.files));

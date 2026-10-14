@@ -292,9 +292,12 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
         return conclude({
           kind: "disputed",
           checkName: execution.checkName,
+          ofTask: execution.ofTask,
           reason: execution.reason,
           evidence: lastCheckRun,
-          detail: `turn ${turn}: the model disputed check ${JSON.stringify(execution.checkName)}: ${execution.reason}`,
+          detail:
+            `turn ${turn}: the model disputed check ${JSON.stringify(execution.checkName)}` +
+            `${execution.ofTask === null ? "" : ` of merged task ${execution.ofTask}`}: ${execution.reason}`,
         });
       }
       if (execution.kind === "environment_failure") {

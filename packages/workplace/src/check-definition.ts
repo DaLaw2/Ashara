@@ -16,8 +16,9 @@ export const CHECK_RUNNER =
   "environment's image, with no network.";
 
 /**
- * Z0's immediate red run of one defined check on main, with the files the attempt has changed so
- * far written over it: what the check author is shown so a broken check is fixed before finishing.
+ * Z0's immediate red run of one defined check on the plan's foundation, with the files the attempt
+ * has changed so far written over it: what the check author is shown so a broken check is fixed
+ * before finishing.
  */
 export type CheckRedRunPreview =
   | {
@@ -28,12 +29,13 @@ export type CheckRedRunPreview =
       /** Why the red run at finish would reject this check as it ran here; null when it would keep it. */
       readonly rejection: string | null;
       /**
-       * It does not fail on main and the red run at finish would still keep it: a re-authoring's rule
-       * lets a check pass there as long as one of the set fails (ADR-074 addendum 2 d68 b).
+       * It passes on the foundation and the red run at finish keeps it, as a guard of behaviour
+       * that already holds there: the set is kept only if another of its checks fails there
+       * (ADR-074 addendum 2 d74 A).
        */
-      readonly passesAllowed: boolean;
+      readonly holdsAlready: boolean;
     }
-  /** The attempt's files could not be kept or placed on main, so the check could not run. */
+  /** The attempt's files could not be kept or placed on the foundation, so the check could not run. */
   | { readonly kind: "files_refused"; readonly detail: string };
 
 export type CheckDefinitionResult =

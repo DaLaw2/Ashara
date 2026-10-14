@@ -10,7 +10,7 @@ import { blockWorkItem } from "./work-item.js";
  */
 const CHECK_REWRITE_BOUND = 2;
 
-/** An implementation task's stored checks no longer all fail on main on its dispatch's environment. */
+/** An implementation task's stored checks no longer hold the red-run rule on their baseline in its dispatch's environment. */
 interface StaleChecks {
   readonly checkTaskId: string;
   /** The stale revision: 1 is the check task's first write, each rewrite adds one. */
@@ -122,9 +122,9 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
   reopenCheckTask(
     reopenable.item,
     task.id,
-    `the checks this task recorded for task ${task.id} (revision ${stale.revision}) no longer all fail on main ` +
-      `on the project's current environment, so they cannot decide that task; define them again so that each fails on ` +
-      `main on the current environment. The red run that rejected them:\n${stale.detail}`,
+    `the checks this task recorded for task ${task.id} (revision ${stale.revision}) no longer hold the red-run rule ` +
+      `on the plan's foundation in the project's current environment, so they cannot decide that task; define them ` +
+      `again so that they run there and at least one fails there. The red run that rejected them:\n${stale.detail}`,
     { staleRevision: stale.revision },
     { stale_revision: stale.revision },
   );
@@ -167,7 +167,7 @@ function disputeBrief(taskId: string, dispute: CheckDispute): string {
     `The implementer of task ${taskId} disputes check ${JSON.stringify(dispute.check.name)} of the checks this task ` +
       `recorded for it (revision ${dispute.revision}): it holds that the check cannot pass on correct work. Weigh the ` +
       `dispute and define the task's checks again: fix the check if the dispute is right, or keep it if it is wrong, ` +
-      `so that each check fails on main and can pass on correct work.`,
+      `so that each check can pass on correct work and at least one fails on the plan's foundation.`,
     `The disputed check: ${JSON.stringify(dispute.check.name)}, command: ${dispute.check.command}`,
     `The implementer's reason:\n${dispute.reason}`,
     dispute.evidence === null

@@ -35,8 +35,9 @@ import { createTaskCheckStore } from "./task-check-store.js";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
-// no skip. A check task's checks are red-run on main and stored; an implementation task is decided
-// by them on its tentative merge.
+// no skip. A check task's checks are red-run on the plan's foundation (the Sprint 0 merge here,
+// ADR-074 addendum 2 d74 A) and stored; an implementation task is swept for delivery on main, then
+// decided by them on its tentative merge.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/anthropic", () => ({ createAnthropic: () => () => stub.model }));
@@ -84,6 +85,10 @@ let substrate: PodmanSubstrate;
 
 const HELLO_CHECK = "grep hello hello.txt\n";
 
+/** The Sprint 0 task on record whose merge is the plan's foundation, and that merge commit. */
+let foundationTaskId: WorkItemId;
+let foundation = "";
+
 async function git(...args: string[]): Promise<string> {
   const { stdout } = await run("git", args, { cwd: target });
   return stdout.trim();
@@ -100,7 +105,7 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
     VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
            (${checkId}, 'Task', 'InProgress', ${checkTitle}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()},
             ${JSON.stringify(checkSpec)}::jsonb)`);
-  await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${implementationId}, ${checkId})`);
+  await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${implementationId}, ${checkId}), (${checkId}, ${foundationTaskId})`);
   const descriptor = (id: WorkItemId, taskTitle: string, workKind: WorkKind, taskSpec?: TaskDescriptor["taskSpec"]): TaskDescriptor => ({
     id,
     projectId,
@@ -197,12 +202,14 @@ const CheckRowSchema = z.object({
   command: z.string(),
   files: z.array(z.object({ path: z.string(), content: z.string() })),
   environmentVersion: z.string(),
+  baselineCommit: z.string().nullable(),
   checkTaskId: z.string(),
 });
 
 async function checkRowsOf(taskId: WorkItemId) {
   const result = await db.execute(sql`
-    SELECT revision, name, command, files, environment_version AS "environmentVersion", check_task_id AS "checkTaskId"
+    SELECT revision, name, command, files, environment_version AS "environmentVersion", baseline_commit AS "baselineCommit",
+           check_task_id AS "checkTaskId"
     FROM task_checks WHERE task_id = ${taskId} ORDER BY revision, name`);
   return z.array(CheckRowSchema).parse(result.rows);
 }
@@ -234,6 +241,13 @@ beforeAll(async () => {
   await run("git", ["init", "-q", "-b", "main"], { cwd: target });
   await git("add", "environment");
   await git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
+  foundation = await git("rev-parse", "main");
+  foundationTaskId = createWorkItemId();
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
+    VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the project environment', ${RUN_SCOPE_AD_HOC}, ${projectId},
+            'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
+            ${foundation})`);
   substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
 }, 60_000);
 
@@ -259,7 +273,7 @@ let hello: { readonly implementation: TaskDescriptor; readonly check: TaskDescri
 
 describe("independent verification", () => {
 
-  it("a check task's check that fails on main is stored; nothing of the check task reaches main", async () => {
+  it("a check task's check that fails on the foundation is stored with it as baseline; nothing of the check task reaches main", async () => {
     hello = await plannedPair("Write hello.txt");
     const mainBefore = await git("rev-parse", "main");
 
@@ -272,7 +286,8 @@ describe("independent verification", () => {
     expect(result.status, result.detail).toBe("completed");
     expect(toolNames(mock)).toContain("define_check");
     expect(toolNames(mock)).not.toContain("build_environment");
-    expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [] });
+    expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [], baselineCommit: foundation, foundationTaskId });
+    expect(promptText(mock)).toContain(`commit ${foundation}, the merge of task`);
     const rows = await checkRowsOf(hello.implementation.id);
     expect(rows).toEqual([
       {
@@ -281,6 +296,7 @@ describe("independent verification", () => {
         command: "sh checks/hello.sh",
         files: [{ path: "checks/hello.sh", content: HELLO_CHECK }],
         environmentVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
+        baselineCommit: foundation,
         checkTaskId: hello.check.id,
       },
     ]);
@@ -326,7 +342,7 @@ describe("independent verification", () => {
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
 
-  it("a vacuous check, one that already passes on main, is rejected and nothing is stored", async () => {
+  it("a vacuous set, none of whose checks fails on the foundation, is rejected and nothing is stored", async () => {
     const vacuous = await plannedPair("Write a page");
 
     const { result } = await runTask(vacuous.check, [
@@ -335,7 +351,7 @@ describe("independent verification", () => {
     ]);
 
     expect(result.status).toBe("failed");
-    expect(result.detail).toContain("already passes on main");
+    expect(result.detail).toContain("no check of the set fails on the foundation");
     expect(await checkRowsOf(vacuous.implementation.id)).toEqual([]);
     expect(await git("branch", "--list", `check/${vacuous.check.id}`)).toBe("");
   }, 300_000);
@@ -353,54 +369,23 @@ describe("independent verification", () => {
     expect(await checkRowsOf(unrunnable.implementation.id)).toEqual([]);
   }, 300_000);
 
-  // t-delivered-paths-exits (ADR-074 addendum 2 d68 b): a check task reopened after the environment
-  // moved rejected every check another task had already delivered, so it could never finish.
-  describe("a check task re-authoring checks stored on another environment version", () => {
-    async function reauthoring(title: string) {
-      const pair = await plannedPair(title);
-      await new TaskCheckRepository(db).append({
-        projectId,
-        taskId: pair.implementation.id,
-        checkTaskId: pair.check.id,
-        environmentVersion: "f".repeat(64),
-        checks: [{ name: "old", command: "false" }],
-        files: [],
-      });
-      return pair;
-    }
+  // ADR-074 addendum 2 d74 A: one set rule for every authoring. A check that passes on the foundation
+  // guards behaviour that already holds; the set is kept when another fails there.
+  it("keeps a set where one check passes on the foundation and another fails there, and tells the author so", async () => {
+    const pair = await plannedPair("Write bye.txt");
 
-    it("keeps a set where one check passes on main and another fails there, and its brief states that rule", async () => {
-      const pair = await reauthoring("Write bye.txt");
+    const { result, mock, events } = await runTask(pair.check, [
+      toolCallTurn("define_check", { name: "already there", command: "test -f environment/environment.toml" }),
+      toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt" }),
+      toolCallTurn("finish", { status: "done", summary: "Two checks." }),
+    ]);
 
-      const { result, mock, events } = await runTask(pair.check, [
-        toolCallTurn("define_check", { name: "already there", command: "echo fine" }),
-        toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt" }),
-        toolCallTurn("finish", { status: "done", summary: "Two checks." }),
-      ]);
-
-      expect(result.status, result.detail).toBe("completed");
-      expect(promptText(mock)).toContain("Red run for this re-authoring");
-      expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null)).toContain("On this re-authoring that is allowed");
-      expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [] });
-      expect((await checkRowsOf(pair.implementation.id)).filter((row) => row.revision === 2).map((row) => row.name)).toEqual([
-        "already there",
-        "says bye",
-      ]);
-    }, 300_000);
-
-    it("rejects a set where every check passes on main, and stores nothing", async () => {
-      const pair = await reauthoring("Write ok.txt");
-
-      const { result } = await runTask(pair.check, [
-        toolCallTurn("define_check", { name: "always", command: "echo fine" }),
-        toolCallTurn("finish", { status: "done", summary: "One check." }),
-      ]);
-
-      expect(result.status).toBe("failed");
-      expect(result.detail).toContain("no check of the set fails on main");
-      expect((await checkRowsOf(pair.implementation.id)).map((row) => row.revision)).toEqual([1]);
-    }, 300_000);
-  });
+    expect(result.status, result.detail).toBe("completed");
+    expect(promptText(mock)).toContain("Red run on the foundation");
+    expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null)).toContain("kept as a guard of behaviour that already holds");
+    expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [], holdsAlready: ["already there"], setRejected: false });
+    expect((await checkRowsOf(pair.implementation.id)).map((row) => row.name)).toEqual(["already there", "says bye"]);
+  }, 300_000);
 
   it("an implementation task whose stored check passes on its merge completes, and the check files are not merged", async () => {
     const { result, mock, events } = await runTask(hello.implementation, [
@@ -431,6 +416,7 @@ describe("independent verification", () => {
       taskId: goodbye.implementation.id,
       checkTaskId: goodbye.check.id,
       environmentVersion: "e".repeat(64),
+      baselineCommit: foundation,
       checks: [{ name: "says goodbye", command: "sh checks/bye.sh" }],
       files: [{ path: "checks/bye.sh", content: original }],
     });
@@ -487,6 +473,7 @@ describe("post-merge regression suite", () => {
       taskId: pair.implementation.id,
       checkTaskId: pair.check.id,
       environmentVersion: helloRow.environmentVersion,
+      baselineCommit: foundation,
       checks: [check],
       files: [],
     });
@@ -594,6 +581,7 @@ describe("post-merge regression suite", () => {
     expect(first.result.status, first.result.detail).toBe("disputed");
     if (first.result.status !== "disputed") return;
     expect(first.result).toMatchObject({
+      checksOf: reef.implementation.id,
       checkTaskId: reef.check.id,
       revision: 1,
       check: { name: "reefs", command: "grep reef reef.txt" },
@@ -626,16 +614,19 @@ describe("post-merge regression suite", () => {
     expect(result.detail).toContain('check "empties" FAILED: exited 2');
   }, 300_000);
 
-  // Fourth run N13: work an earlier task delivered beyond its scope parked the later task for the operator.
-  it("no change against main, and its checks and the regression suite pass on main itself: completed as already delivered at main, nothing merged", async () => {
+  // Fourth run N13: work an earlier task delivered beyond its scope parked the later task for the
+  // operator. ADR-074 addendum 2 d74 A: the sweep before dispatch closes it with no implementer.
+  it("its checks and the regression suite pass on main itself: completed as already delivered at main before any model call, nothing merged", async () => {
     const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt" });
     const mainBefore = await git("rev-parse", "main");
 
-    const { result, events } = await runTask(again.implementation, [toolCallTurn("finish", { status: "done", summary: "wave.txt is already on main." })]);
+    const { result, events, mock } = await runTask(again.implementation, []);
 
     expect(result.status, result.detail).toBe("completed");
     if (result.status !== "completed") return;
+    expect(mock.doGenerateCalls).toHaveLength(0);
     expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    expect(events.find((e) => e.event === "delivered_sweep")).toMatchObject({ allPass: true, mainCommit: mainBefore });
     const verify = events.find((e) => e.event === "delivered_on_main_verify");
     expect(verify).toMatchObject({ verdict: "passed", mainCommit: mainBefore, regressionTasks: [hello.implementation.id] });
     expect(verify?.["details"]).toContain('Check "environment test": PASSED');
@@ -643,6 +634,121 @@ describe("post-merge regression suite", () => {
     expect(verify?.["details"]).toContain('Check "waves again": PASSED');
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await git("branch", "--list", `task/${again.implementation.id}`)).toBe("");
+  }, 300_000);
+
+  // Run 7 (ADR-074 addendum 2 d74 A): a check task re-authoring checks for work an earlier task had
+  // already delivered red-ran them on main, where every one passed, so it could never finish; the
+  // later task was never dispatched. On the foundation they fail, the set is kept, and the sweep
+  // closes the task as already delivered with no implementer dispatched.
+  it("a re-authored set is red-run on the foundation, not main; the task it decides is then closed already delivered with no model call", async () => {
+    const later = await plannedPair("Greet the user with hello");
+    await new TaskCheckRepository(db).append({
+      projectId,
+      taskId: later.implementation.id,
+      checkTaskId: later.check.id,
+      environmentVersion: "f".repeat(64),
+      baselineCommit: foundation,
+      checks: [{ name: "old", command: "false" }],
+      files: [],
+    });
+    const mainBefore = await git("rev-parse", "main");
+    expect(await git("show", `${mainBefore}:hello.txt`)).toBe("hello");
+
+    const authored = await runTask({ ...later.check, attempt: 2, dispatchCount: 1 }, [
+      toolCallTurn("define_check", { name: "says hello", command: "grep hello hello.txt" }),
+      toolCallTurn("finish", { status: "done", summary: "One check: hello.txt says hello." }),
+    ]);
+
+    expect(authored.result.status, authored.result.detail).toBe("completed");
+    expect(authored.events.find((e) => e.event === "check_red_run")).toMatchObject({ baselineCommit: foundation, rejected: [], setRejected: false });
+    const revision2 = (await checkRowsOf(later.implementation.id)).filter((row) => row.revision === 2);
+    expect(revision2).toEqual([expect.objectContaining({ name: "says hello", baselineCommit: foundation })]);
+
+    const implemented = await runTask(later.implementation, []);
+
+    expect(implemented.result.status, implemented.result.detail).toBe("completed");
+    expect(implemented.mock.doGenerateCalls).toHaveLength(0);
+    if (implemented.result.status !== "completed") return;
+    expect(implemented.result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+  }, 600_000);
+
+  it("a check author finishing blocked because its task is delivered completes when Z0 finds that task's checks and every suite pass on main", async () => {
+    const delivered = await checkedPair("Say hello", { name: "hello again", command: "grep hello hello.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result, events } = await runTask({ ...delivered.check, attempt: 2, dispatchCount: 1 }, [
+      toolCallTurn("finish", { status: "blocked", summary: "hello.txt already says hello on main.", blockedReason: "The task is already delivered." }),
+    ]);
+
+    expect(result.status, result.detail).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.delivered).toEqual({ kind: "checked-task-delivered", checkedTaskId: delivered.implementation.id, mainCommit: mainBefore, revision: 1 });
+    expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "passed", checkedTaskId: delivered.implementation.id });
+    expect((await checkRowsOf(delivered.implementation.id)).map((row) => row.revision)).toEqual([1]);
+  }, 300_000);
+
+  it("a check author finishing blocked whose task is not on main stays blocked, with what Z0 found", async () => {
+    const missing = await checkedPair("Write missing.txt", { name: "missing", command: "grep missing missing.txt" });
+
+    const { result } = await runTask({ ...missing.check, attempt: 2, dispatchCount: 1 }, [
+      toolCallTurn("finish", { status: "blocked", summary: "It is already there.", blockedReason: "The task is already delivered." }),
+    ]);
+
+    expect(result.status).toBe("blocked");
+    expect(result.detail).toContain("Z0 does not find it delivered");
+    expect(result.detail).toContain('check "missing" FAILED');
+  }, 300_000);
+
+  // ADR-074 addendum 2 d74 D: a merged task's check blocking this merge could only be read as this
+  // task's regression; the implementer may now dispute it, which reopens that check's own check task.
+  it("an implementer disputes a merged task's check by that task's id: the dispute names that task's check task", async () => {
+    const echo = await checkedPair("Write echo.txt", { name: "echoes", command: "grep echo echo.txt" });
+
+    const { result, mock } = await runTask(echo.implementation, [
+      toolCallTurn("dispute_check", { name: "says hello", task: hello.implementation.id, reason: "echo.txt must replace hello.txt, as the vision says" }),
+    ]);
+
+    expect(promptText(mock)).toContain("dispute");
+    expect(result.status, result.detail).toBe("disputed");
+    if (result.status !== "disputed") return;
+    expect(result).toMatchObject({
+      checksOf: hello.implementation.id,
+      checkTaskId: hello.check.id,
+      revision: 1,
+      check: { name: "says hello", command: "sh checks/hello.sh" },
+    });
+  }, 300_000);
+
+  // ADR-074 addendum 2 d74 D: the scaffold's own build and test failing on its merge was read as a
+  // tree regression and abandoned at once; it is the scaffold's own work, retried.
+  it("a product scaffold whose merge fails the build and test is a verification gap the router retries, never a tree regression", async () => {
+    const scaffoldId = createWorkItemId();
+    const taskSpec = { goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" } as const;
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec)
+      VALUES (${scaffoldId}, 'Task', 'InProgress', 'Set up the product layout', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation',
+              ${randomUUID()}, ${JSON.stringify(taskSpec)}::jsonb)`);
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result } = await runTask(
+      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
+      [
+        toolCallTurn("write_file", { path: "BROKEN", content: "a layout whose test fails\n" }),
+        toolCallTurn("finish", { status: "done", summary: "Layout set up." }),
+      ],
+    );
+
+    expect(result.status).toBe("failed");
+    if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
+    expect(result.errorEnvelope.chain.operation).toBe("postMergeScaffold");
+    const category = classifyFailure(result.errorEnvelope);
+    expect(category).toBe("VERIFICATION_GAP");
+    expect(new FailureRouter(3).route({ item: { id: scaffoldId }, failure: { detail: result.detail, raw: {} }, priorAttempts: 1, category })).toMatchObject({
+      action: "replan",
+      attempt: 2,
+    });
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
   }, 300_000);
 });
 

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -126,13 +126,14 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
   if (status === "disputed") {
     return {
       status,
+      checksOf: "task",
       checkTaskId: "check-task",
       revision: 1,
       check: { name: "greets", command: "cat greet.txt" },
       reason: "the check cannot pass",
       evidence: null,
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "disputed", checkName: "greets", reason: "the check cannot pass", evidence: null }, "m", { input: 0, output: 0 }),
+      output: toAgentOutput({ ...base, kind: "disputed", checkName: "greets", ofTask: null, reason: "the check cannot pass", evidence: null }, "m", { input: 0, output: 0 }),
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "disputed", chain: wrapError("development", "agentAttempt", "disputed") },
@@ -313,12 +314,14 @@ const STORED_CHECKS: TaskChecks = {
   checkTaskId: "33333333-3333-4333-8333-333333333333",
   revision: 1,
   environmentVersion: "e".repeat(64),
+  baselineCommit: "b".repeat(40),
   checks: [{ name: "greets", command: "cat greet.txt" }],
   files: [],
 };
 
 function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] = [], checkFiles: readonly StoredCheckFile[] = []): TaskCheckStore {
   return {
+    foundationOf: async () => ({ kind: "none", reason: "no foundation in this unit test" }),
     checkFilesOf: async () => checkFiles,
     completedOf: async () => ({ checked: [], unchecked: [] }),
     checkedTasksOf: async () => checkedTasks,
@@ -686,7 +689,21 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly rebuildFails?: boolean;
     /** The agent finishes done at once, writing nothing: its branch holds no change against main. */
     readonly agentWritesNothing?: boolean;
+    /**
+     * The exit code of every stored check in the delivered sweep's cell on main (ADR-074 addendum 2
+     * d74 A); 1 when absent: the task's work is not on main yet, so it is dispatched.
+     */
+    readonly sweepExit?: number;
+    /** The exit code of every check red-run on the stored baseline (a revalidation); ciExit when absent. */
+    readonly baselineExit?: number;
+    /** Like checkoutsBlocked, but only from the model's first call: the checkouts before the model are made. */
+    readonly checkoutsBlockedAfterSweep?: boolean;
   }
+
+  /** The delivered sweep's CI cell: told apart by its checkout, and kept out of `started` and `runs`. */
+  const SWEEP_ID = "e".repeat(64);
+  /** A CI cell red-running on the stored baseline: in `started` as "ci", told apart only for baselineExit. */
+  const BASELINE_ID = "f".repeat(64);
 
   const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
     exitCode, signal: null, stdout, stdoutTruncated: false, stderr, stderrTruncated: false, killedByHost: false, stdinError: null, statusReport,
@@ -726,8 +743,9 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const mainBefore = await git(target, "rev-parse", "main");
     const workdirBase = join(root, "cells", "work");
     const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
-    /** Every `podman run`'s argv, as the substrate built it. */
+    /** Every `podman run`'s argv, as the substrate built it, but the delivered sweep's. */
     const runs: string[][] = [];
+    const sweepRuns: string[][] = [];
 
     const substrate = new PodmanSubstrate({
       podmanPath: "podman",
@@ -737,13 +755,20 @@ describe("a substrate failure at any stage blocks the task on the environment", 
           case "info":
             return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
           case "run": {
+            if (args.some((arg) => arg.includes("/checkouts/delivered-sweep-"))) {
+              sweepRuns.push([...args]);
+              return ok(`${SWEEP_ID}\n`);
+            }
             runs.push([...args]);
             const role: Role = args.includes("ashara.role=verifier") ? "verifier" : args.includes("ashara.role=ci") ? "ci" : "developer";
             started.push({ role, image: args.find((arg) => arg.startsWith("sha256:") || arg.includes("@sha256:")) });
-            return faults.startFails === role ? ok("", 125, "Error: OCI runtime error") : ok(`${ids[role]}\n`);
+            if (faults.startFails === role) return ok("", 125, "Error: OCI runtime error");
+            return ok(`${role === "ci" && args.some((arg) => arg.includes("/checkouts/red-run-")) ? BASELINE_ID : ids[role]}\n`);
           }
           case "exec": {
-            const role = roleOf(args[5]);
+            if (args[5] === SWEEP_ID) return ran(faults.sweepExit === 0 ? "hello\n" : "", faults.sweepExit ?? 1);
+            if (args[5] === BASELINE_ID && faults.execFails !== "ci") return ran(faults.ciStdout ?? "hello\n", faults.baselineExit ?? faults.ciExit ?? 0);
+            const role = args[5] === BASELINE_ID ? "ci" : roleOf(args[5]);
             // No status report: podman exec itself failed, the command never ran.
             if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
             if (role === "ci" && faults.ciFailsCommand !== undefined && args.at(-1) === faults.ciFailsCommand) return ran("broken\n", 1);
@@ -773,9 +798,15 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     // Read when the dispatch plans its work, after the environment's build reported its version.
     const stored = (probe: Probe): TaskCheckStore => ({
       ...checkStore(null, checkWork ? [createWorkItemId()] : [], faults.checkFiles ?? []),
-      latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", files: faults.storedFiles ?? [] }),
+      // The plan's foundation: the environment's commit, main as the dispatch starts.
+      foundationOf: async () => ({ kind: "found", taskId: createWorkItemId(), commit: mainBefore }),
+      latest: async () => ({ ...STORED_CHECKS, environmentVersion: faults.storedVersion ?? probe.version ?? "", baselineCommit: mainBefore, files: faults.storedFiles ?? [] }),
     });
     const { service, events, probe } = serviceOn(substrate, workdirBase, (probe) => {
+      if (faults.checkoutsBlockedAfterSweep === true && probe.modelCalls === 1) {
+        rmSync(join(workdirBase, "checkouts"), { recursive: true, force: true });
+        writeFileSync(join(workdirBase, "checkouts"), "not a directory\n");
+      }
       if (shutdown !== undefined) {
         if (probe.modelCalls === 2) {
           shutdown.abort();
@@ -818,7 +849,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const result = await service.execute(task, target);
     const branches = await git(target, "branch", "--list", taskBranchName(task.id));
     return {
-      result, events, warns, target, started, runs, probe, workdirBase, taskId: task.id,
+      result, events, warns, target, started, runs, sweepRuns, probe, workdirBase, taskId: task.id,
       mainBefore, mainAfter: await git(target, "rev-parse", "main"), branchKept: branches !== "",
     };
   }
@@ -904,12 +935,13 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   );
 
   // Teardown never ends a stage: the cell is left to teardownAll and reconcileOrphans.
-  test("a failed teardown of both cells: the task still completes, the failures logged and emitted", async () => {
+  test("a failed teardown of every cell: the task still completes, the failures logged and emitted", async () => {
     const { result, events, warns, mainBefore, mainAfter } = await dispatch({ teardownFails: true });
 
     expect(result.status).toBe("completed");
     expect(mainAfter).not.toBe(mainBefore);
-    expect(events.filter((e) => e.event === "cell_teardown_failed")).toHaveLength(2);
+    // The task's, the delivered sweep's and the verifier's.
+    expect(events.filter((e) => e.event === "cell_teardown_failed")).toHaveLength(3);
     expect(warns.some((w) => w.includes("still on disk"))).toBe(false);
   });
 
@@ -933,7 +965,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // The 30fb60d5 review (a): a git step around the stored checks blamed the task as a verification gap.
   test("Z0 cannot make the checks' checkout: blocked under postMergeCheckRun, never a failure of the task", async () => {
-    const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ checkoutsBlocked: true });
+    const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ checkoutsBlockedAfterSweep: true });
 
     expect(result.status, result.detail).toBe("environment_blocked");
     if (result.status !== "environment_blocked") return;
@@ -944,6 +976,40 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "gate_failed" || e.event === "task_failed" || e.event === "task_completed")).toBe(false);
     expect(mainAfter).toBe(mainBefore);
     expect(branchKept).toBe(true);
+  });
+
+  // ADR-074 addendum 2 d74 A: the delivered sweep runs before every implementation dispatch.
+  test("Z0 cannot make the delivered sweep's checkout: blocked under deliveredCheckRun before the model, never a failure", async () => {
+    const { result, probe, events, sweepRuns } = await dispatch({ checkoutsBlocked: true });
+
+    expect(result.status, result.detail).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.errorEnvelope.chain.operation).toBe("deliveredCheckRun");
+    expect(result.unavailable).toBe("verification infrastructure (delivered sweep on main)");
+    expect(probe.modelCalls).toBe(0);
+    expect(sweepRuns).toEqual([]);
+    expect(events.some((e) => e.event === "task_failed" || e.event === "agent_launched")).toBe(false);
+  });
+
+  test("stored checks that all pass on main: closed as already delivered by the sweep before the model, nothing merged", async () => {
+    const { result, probe, events, sweepRuns, mainBefore, mainAfter } = await dispatch({ sweepExit: 0, ciExit: 0 });
+
+    expect(result.status, result.detail).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    expect(probe.modelCalls).toBe(0);
+    expect(sweepRuns).toHaveLength(1);
+    expect(events.find((e) => e.event === "delivered_sweep")).toMatchObject({ allPass: true, mainCommit: mainBefore, passed: ["greets"] });
+    expect(mainAfter).toBe(mainBefore);
+  });
+
+  test("a stored check failing on main: the sweep dispatches the implementer", async () => {
+    const { result, probe, events, sweepRuns } = await dispatch({});
+
+    expect(result.status, result.detail).toBe("completed");
+    expect(probe.modelCalls).toBeGreaterThan(0);
+    expect(sweepRuns).toHaveLength(1);
+    expect(events.find((e) => e.event === "delivered_sweep")).toMatchObject({ allPass: false, passed: [] });
   });
 
   // (c): checks red-run on another environment version are red-run again on this one before the model.
@@ -967,8 +1033,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // t-checks-before-work review: an over-delivering task that moved the environment version sent the
   // next task's passing checks to checks_stale, whose check task's red run could never accept a check.
-  test("checks from another environment version that all pass on main: already delivered before the model, nothing merged", async () => {
-    const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0 });
+  test("checks from another environment version that hold on their baseline and all pass on main: already delivered before the model, nothing merged", async () => {
+    const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: 1, sweepExit: 0, ciExit: 0 });
 
     expect(result.status, result.detail).toBe("completed");
     if (result.status !== "completed") return;
@@ -985,7 +1051,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // t-delivered-paths-exits (ADR-074 addendum 2 d68 a): main's own regression failed the task before any model ran.
   test("checks from another environment version that all pass on main while main's environment test fails: dispatched to the implementer, never failed before the model", async () => {
-    const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0, ciFailsCommand: "true" });
+    const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: 1, sweepExit: 0, ciExit: 0, ciFailsCommand: "true" });
 
     expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "failed" });
     expect(events.some((e) => e.event === "agent_launched")).toBe(true);
@@ -995,7 +1061,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   });
 
   // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.
-  test("checks from another environment version that exit 0 on main without passing: checks_stale before the model, naming the check task and both versions", async () => {
+  test("checks from another environment version none of which fails on their baseline: checks_stale before the model, naming the check task and both versions", async () => {
     const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0, ciStdout: "" });
 
     expect(result.status, result.detail).toBe("checks_stale");
@@ -1009,7 +1075,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_failed")).toBe(false);
     expect(result.detail).toContain(`environment version ${"e".repeat(64)}`);
     expect(result.detail).toContain(`environment version ${String(probe.version)}`);
-    expect(result.detail).toContain("already passes on main");
+    expect(result.detail).toContain("no check of the set fails on the foundation");
     expect(probe.modelCalls).toBe(0);
     expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: false });
     expect(events.some((e) => e.event === "agent_launched")).toBe(false);
@@ -1024,7 +1090,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     if (result.status !== "environment_blocked") return;
     expect(result.errorEnvelope.chain.operation).toBe("checkRedRun");
     expect(result.detail).toContain("stage checkRedRun (VerificationInfrastructureFault)");
-    expect(result.unavailable).toBe("verification infrastructure (red run on main)");
+    expect(result.unavailable).toBe("verification infrastructure (red run on the baseline)");
     expect(probe.modelCalls).toBe(0);
     expect(events.some((e) => e.event === "task_failed" || e.event === "agent_launched")).toBe(false);
     expect(mainAfter).toBe(mainBefore);
@@ -1074,7 +1140,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // The 93f7aeb7 review (a): a fault of Z0's own machinery inside run_checks was labelled "task cell".
   test("Z0 cannot make run_checks' checkout: blocked as verification infrastructure, never the task cell", async () => {
-    const { result, events } = await dispatch({ agentRunsChecks: true, checkoutsBlocked: true });
+    const { result, events } = await dispatch({ agentRunsChecks: true, checkoutsBlockedAfterSweep: true });
 
     expect(result.status, result.detail).toBe("environment_blocked");
     if (result.status !== "environment_blocked") return;
@@ -1130,7 +1196,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   });
 
   test("no change against main and Z0 cannot make main's checkout: blocked under deliveredCheckRun, never completed or failed", async () => {
-    const { result, events } = await dispatch({ agentWritesNothing: true, checkoutsBlocked: true });
+    const { result, events } = await dispatch({ agentWritesNothing: true, checkoutsBlockedAfterSweep: true });
 
     expect(result.status, result.detail).toBe("environment_blocked");
     if (result.status !== "environment_blocked") return;
@@ -1324,7 +1390,7 @@ function terminal(kind: FailedKind): Outcome {
     case "refused":
       return { ...base, kind, error: new PreCallRefusal("budget_cap: refused") };
     case "disputed":
-      return { ...base, kind, checkName: "greets", reason: "the check cannot pass", evidence: null };
+      return { ...base, kind, checkName: "greets", ofTask: null, reason: "the check cannot pass", evidence: null };
   }
 }
 

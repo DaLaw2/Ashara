@@ -112,6 +112,9 @@ describe("a task runs on cells end to end", () => {
     // author stored it before the task started (s-independent-verify-m1).
     const check = "test -f /workspace/hello.txt && grep cell /workspace/hello.txt";
     const checks: TaskCheckStore = {
+      foundationOf: async () => {
+        throw new Error("an implementation task resolves no foundation");
+      },
       checkFilesOf: async () => [],
       completedOf: async () => ({ checked: [], unchecked: [] }),
       checkedTasksOf: async () => [],
@@ -119,10 +122,12 @@ describe("a task runs on cells end to end", () => {
       append: async () => {
         throw new Error("an implementation task appends no checks");
       },
+      // Red-run on the commit the environment below makes: main as the task starts.
       latest: async () => ({
         checkTaskId: createWorkItemId(),
         revision: 1,
         environmentVersion: "e".repeat(64),
+        baselineCommit: (await run("git", ["rev-parse", "main"], { cwd: target })).stdout.trim(),
         checks: [{ name: "hello", command: check }],
         files: [],
       }),

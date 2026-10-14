@@ -48,8 +48,10 @@ export type Outcome =
        * check's author, never to the failure router.
        */
       readonly kind: "disputed";
-      /** The disputed check, one of the task's stored check names. */
+      /** The disputed check: one of the task's stored check names, or of the merged task `ofTask`'s. */
       readonly checkName: string;
+      /** The task already merged whose check is disputed; null for one of the task's own checks. */
+      readonly ofTask: string | null;
       readonly reason: string;
       /** The output of the attempt's last run_checks, or null when it never ran them. */
       readonly evidence: string | null;

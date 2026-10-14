@@ -36,6 +36,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           projectId: row.projectId,
           projectName: row.projectName,
           requestedBy: row.requestedBy,
+          repairsAwaited: row.repairsAwaited,
           visionVersion: row.vision.version,
           visionText: row.vision.visionText,
           summary: row.vision.summary,
@@ -45,6 +46,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           replanAttempts: row.replanAttempts,
           replanLastError: row.replanLastError,
           revisionsSinceReview: row.revisionsSinceReview,
+          repairsSinceReview: row.repairsSinceReview,
           nextRevision: row.nextRevision,
           items: (await workItems.listByProject(row.projectId)).map((item) => ({
             item: rowToWorkItem(item),
@@ -65,6 +67,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           revision: write.revision,
           visionVersion: write.visionVersion,
           requestedBy: write.requestedBy,
+          repaired: write.repaired,
           summary: write.summary,
           events: write.events,
         },

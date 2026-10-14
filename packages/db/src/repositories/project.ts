@@ -39,6 +39,13 @@ export const noOpenStop = (projectId: AnyColumn) =>
   sql`NOT EXISTS (SELECT 1 FROM client_messages s WHERE s.project_id = ${projectId}
     AND s.direction = 'inbound' AND s.kind = 'stop' AND s.consumed_at IS NULL)`;
 
+/**
+ * The project awaits a plan repair (migration 045): a task the failure router gave up that no plan
+ * revision has re-planned around yet. Its dispatch is held until one has (listActiveIds).
+ */
+export const pendingRepair = (projectId: AnyColumn) =>
+  sql`EXISTS (SELECT 1 FROM plan_repairs pr WHERE pr.project_id = ${projectId} AND pr.plan_revision_id IS NULL)`;
+
 class WorkspacePathNotRecorded extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -116,7 +123,7 @@ export class ProjectRepository {
     const rows = await this.db
       .select({ id: projects.id })
       .from(projects)
-      .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy)))
+      .where(and(eq(projects.status, "active"), noOpenStop(projects.id), isNull(projects.replanRequestedBy), sql`NOT ${pendingRepair(projects.id)}`))
       .orderBy(asc(projects.createdAt), asc(projects.id));
     return rows.map((row) => parseProjectId(row.id, "projects.id"));
   }
