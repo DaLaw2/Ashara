@@ -837,7 +837,6 @@ interface SuiteReviewProblemsResult {
 /**
  * Every status an ExecutionResult can carry. `satisfies` keeps each member a real status;
  * execution-service.test.ts checks the converse, that no status is missing.
- * @testseam execution-service.test.ts checks it names every status; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
  */
 export const EXECUTION_STATUSES = [
   "completed",

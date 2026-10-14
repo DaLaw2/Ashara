@@ -31,8 +31,8 @@ import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createTaskCheckStore } from "./task-check-store.js";
+import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
+import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
 // Sprint 0 end to end on real podman, real git and the real recorded gateway, with a scripted
 // model: no real LLM call and no skip. The environment role writes a minimal environment, calls

@@ -28,7 +28,6 @@ export {
   recordReplanFailure,
   withPlanRevisionTransaction,
 } from "./repositories/replan.js";
-/** @testseam lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
 export { listDueBlockReports, postProjectBlockReport, postTaskBlockedReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";

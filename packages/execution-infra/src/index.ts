@@ -18,7 +18,7 @@ export {
   SubstrateUnavailable,
 } from "./errors.js";
 export { CellExecFailed } from "./errors.js";
-export { execFileGitRunner, initHostRepo, runHostGit, runOwnRepoGit, useGitRunner } from "./host-git.js";
+export { execFileGitRunner, initHostRepo, runHostGit, runOwnRepoGit, withGitRunner } from "./host-git.js";
 export type { GitRunner, HostRepo } from "./host-git.js";
 export { spawnProcess } from "./process-runner.js";
 export type { ProcessRunner } from "./process-runner.js";

@@ -22,7 +22,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other

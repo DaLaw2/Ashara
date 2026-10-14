@@ -20,9 +20,9 @@ import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { createClientStopStore } from "./client-stop-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // Story s-client-channel-m1: a client's stop halts its project. Every row belongs
 // to a project this suite creates under a unique name, and every step is

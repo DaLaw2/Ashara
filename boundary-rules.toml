@@ -61,3 +61,10 @@ allow = ["shared", "llm-gateway", "execution-infra"]
 # Organization's language, so its structured call on the `roster` site lives here, through llm-gateway
 # like Engagement's and Delivery's own sites.
 allow = ["shared", "llm-gateway"]
+
+[integration]
+# Story s-independent-verify-m1 L2: the lifecycle simulator and the cross-package integration
+# tests compose the real system, so they may import whatever the composition root wires. Nothing
+# may import them back: test harness code never becomes a production dependency.
+allow = ["*"]
+importers = []

@@ -10,9 +10,7 @@ export {
   parseWorkItemLevel,
   parseWorkItemStatus,
 } from "./enums.js";
-/** @testseam db lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { WORK_ITEM_STATUSES } from "./enums.js";
-/** @testseam db lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { PROJECT_STATUSES } from "./enums.js";
 
 export { loadModelsConfigPathEnvOverride } from "./env.js";
@@ -61,16 +59,14 @@ export {
   RepositoryError,
   ContractVersionConflict,
 } from "./transitions.js";
-/** @testseam transitions.test.ts walks it; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { OUTBOUND_TRANSITIONS } from "./transitions.js";
 
 
 export type { StoredTaskSpec } from "./task-spec.js";
 
 export type { BlockedExit, StoredBlockedReason } from "./blocked-reason.js";
-/** @testseam blocked-reason.test.ts checks it names every source; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { BLOCKED_REASON_SOURCES } from "./blocked-reason.js";
-export { blockedExitOf, blockedReasonToRecord, withSalvagedResult } from "./blocked-reason.js";
+export { BlockedReasonCorrupt, blockedExitOf, blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } from "./blocked-reason.js";
 
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 

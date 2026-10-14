@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -39,14 +40,20 @@ export const execFileGitRunner: GitRunner = {
   },
 };
 
-let gitRunner: GitRunner = execFileGitRunner;
+const scopedRunner = new AsyncLocalStorage<GitRunner>();
 
 /**
- * Chooses the runner every later host git call of this process uses. Called by the composition
- * root only: git calls are module functions here, so the choice is process-wide.
+ * Runs `work` with `runner` as the runner of every host git call made inside it, however deep in
+ * its async call tree. Each composed process passes its own, so two composed in one Node process (a
+ * dead one and its restart) never share a runner. Outside any scope the policy default runs: the
+ * host's `git` by execFile.
  */
-export function useGitRunner(runner: GitRunner): void {
-  gitRunner = runner;
+export function withGitRunner<T>(runner: GitRunner, work: () => T): T {
+  return scopedRunner.run(runner, work);
+}
+
+function gitRunner(): GitRunner {
+  return scopedRunner.getStore() ?? execFileGitRunner;
 }
 
 /**
@@ -85,7 +92,7 @@ function hostGitEnv(): NodeJS.ProcessEnv {
 
 /** git against an explicit git dir and work tree, hardened; rejects on a non-zero exit like execFile. */
 export async function runHostGit(repo: HostRepo, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
-  return gitRunner.text({
+  return gitRunner().text({
     args: [`--git-dir=${repo.gitDir}`, `--work-tree=${repo.workTree}`, ...HARDENING, ...args],
     cwd: repo.workTree,
     env: hostGitEnv(),
@@ -99,7 +106,7 @@ export async function runHostGit(repo: HostRepo, args: readonly string[]): Promi
  * pathspec magic. stdout is bytes: a blob is not necessarily text.
  */
 export async function runHostGitObjects(gitDir: string, args: readonly string[]): Promise<Buffer> {
-  return gitRunner.bytes({
+  return gitRunner().bytes({
     args: [`--git-dir=${gitDir}`, "--literal-pathspecs", ...HARDENING, ...args],
     cwd: gitDir,
     env: hostGitEnv(),
@@ -138,7 +145,7 @@ export async function snapshotRepository(workTree: string, gitDir: string): Prom
   const git = async (step: string, args: readonly string[]): Promise<string> => {
     const argv = [...SNAPSHOT_HARDENING, ...args];
     try {
-      const { stdout } = await gitRunner.text({ args: argv, cwd: workTree, env, maxBuffer: MAX_OUTPUT_BYTES });
+      const { stdout } = await gitRunner().text({ args: argv, cwd: workTree, env, maxBuffer: MAX_OUTPUT_BYTES });
       return stdout.trim();
     } catch (err) {
       const failure = execFailureSchema.safeParse(err);
@@ -158,7 +165,7 @@ export async function snapshotRepository(workTree: string, gitDir: string): Prom
 
 /** `git init` creates the git dir, so it runs before there is a HostRepo; hardened all the same. */
 export async function initHostRepo(path: string): Promise<void> {
-  await gitRunner.text({ args: [...HARDENING, "init", "-b", "main", "--", path], cwd: path, env: hostGitEnv() });
+  await gitRunner().text({ args: [...HARDENING, "init", "-b", "main", "--", path], cwd: path, env: hostGitEnv() });
 }
 
 /**
@@ -166,5 +173,5 @@ export async function initHostRepo(path: string): Promise<void> {
  * environment, as a developer's own `git` there runs.
  */
 export async function runOwnRepoGit(cwd: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
-  return gitRunner.text({ args, cwd });
+  return gitRunner().text({ args, cwd });
 }

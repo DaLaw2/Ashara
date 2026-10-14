@@ -7,7 +7,7 @@ import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { createBlockReportStore } from "./block-report-store.js";
+import { createBlockReportStore } from "@ashara/server/block-report-store";
 
 // Story s-loop-never-stop-m1, migration 040: every block is told to the client once, in plain
 // words, and an operator's unblock is recorded and told once. Every row belongs to a project this

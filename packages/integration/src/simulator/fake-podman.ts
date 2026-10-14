@@ -1,0 +1,463 @@
+import { createHash } from "node:crypto";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, posix, sep } from "node:path";
+import { z } from "zod";
+import type { ProcessRunner } from "@ashara/execution-infra";
+import {
+  CheckSpecSchema,
+  HUNG,
+  LAYOUT_FILE,
+  RECIPE_DEFECT_SYMPTOM,
+  RECIPE_DEFECT_TOKEN,
+  TOOLCHAIN_TOKEN,
+  exited,
+  recipeTokens,
+} from "./product.js";
+import type { SimOutcome } from "./product.js";
+import type { Tape } from "./tape.js";
+
+type ProcessRequest = Parameters<ProcessRunner>[0];
+type ProcessResult = Awaited<ReturnType<ProcessRunner>>;
+
+/** The cell's mount point of its tree: the podman contract of execution-infra's substrate. */
+const WORKSPACE = "/workspace";
+/** The write tool's script (cell-backend.ts): `"$1"` is the path, the content comes on stdin. */
+const WRITE_SCRIPT = 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"';
+
+interface FakeMount {
+  readonly hostPath: string;
+  readonly containerPath: string;
+  readonly readOnly: boolean;
+}
+
+interface FakeImage {
+  readonly id: string;
+  readonly refs: Set<string>;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly tokens: readonly string[];
+}
+
+/** One container as `podman run` created it: what I3 judges, from the actual run arguments. */
+export interface FakeCell {
+  readonly id: string;
+  readonly name: string;
+  readonly labels: Readonly<Record<string, string>>;
+  readonly imageId: string;
+  readonly tokens: readonly string[];
+  readonly mounts: readonly FakeMount[];
+}
+
+/** What the fake container runtime saw, for the trace and the invariant checker. */
+export type PodmanEvent =
+  | { readonly kind: "cell-started"; readonly cell: FakeCell }
+  | { readonly kind: "cell-removed"; readonly id: string }
+  | { readonly kind: "image-built"; readonly id: string; readonly tokens: readonly string[]; readonly contextFiles: readonly string[] }
+  | { readonly kind: "command"; readonly cellId: string; readonly command: string; readonly exitCode: number; readonly hung: boolean };
+
+interface FakePodmanOptions {
+  /** The BaseCell image reference (config/base-cell.toml): known to the runtime, with no recipe tokens. */
+  readonly baseImage: string;
+  /** Flaky checks draw from it. */
+  readonly tape: Tape;
+  readonly observe: (event: PodmanEvent) => void;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function result(request: ProcessRequest, outcome: SimOutcome): ProcessResult {
+  if (outcome.hung) {
+    return {
+      exitCode: null, signal: "SIGKILL", stdout: outcome.stdout, stdoutTruncated: false, stderr: outcome.stderr,
+      stderrTruncated: false, killedByHost: true, stdinError: null, statusReport: request.statusChannel === true ? "" : null,
+    };
+  }
+  return {
+    exitCode: outcome.exitCode,
+    signal: null,
+    stdout: outcome.stdout,
+    stdoutTruncated: false,
+    stderr: outcome.stderr,
+    stderrTruncated: false,
+    killedByHost: false,
+    stdinError: null,
+    statusReport: request.statusChannel === true ? `${outcome.exitCode}\n` : null,
+  };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/** Every file under `root`, repo-relative, sorted, never descending into `.git`. */
+async function listFiles(root: string, under = ""): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(join(root, under), { withFileTypes: true })) {
+    if (entry.name === ".git") continue;
+    const path = under === "" ? entry.name : `${under}/${entry.name}`;
+    if (entry.isDirectory()) files.push(...(await listFiles(root, path)));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files.sort();
+}
+
+const imageListFilter = z.string().regex(/^label=([^=]+)=(.*)$/);
+
+/**
+ * A ProcessRunner that answers every podman subcommand the substrate and the environment build
+ * issue, over a table of cells and images per run. Commands run in a cell are interpreted: the
+ * file tools' POSIX utilities on the mounted host directory, and `sh -c` only for `sim ...`
+ * commands; anything else exits 127, so an unrunnable check is really unrunnable.
+ */
+export class FakePodman {
+  private readonly images = new Map<string, FakeImage>();
+  private readonly cells = new Map<string, FakeCell>();
+  private counter = 0;
+
+  constructor(private readonly options: FakePodmanOptions) {
+    const id = sha256(options.baseImage);
+    this.images.set(id, { id, refs: new Set([options.baseImage]), labels: {}, tokens: [] });
+  }
+
+  readonly runner: ProcessRunner = (request) => this.handle(request);
+
+  /** Cells still "running": a dead process's cells stay here until a reconcile removes them. */
+  liveCells(): readonly FakeCell[] {
+    return [...this.cells.values()];
+  }
+
+  private nextId(what: string): string {
+    this.counter += 1;
+    return sha256(`${what}-${this.counter}`);
+  }
+
+  private async handle(request: ProcessRequest): Promise<ProcessResult> {
+    const args = request.args;
+    const ok = (stdout = ""): ProcessResult => result(request, exited(0, stdout));
+    const fail = (code: number, stderr: string): ProcessResult => result(request, exited(code, "", stderr));
+    switch (args[0]) {
+      case "info":
+        return ok(JSON.stringify({ version: { Version: "5.0.0-sim" }, host: { security: { rootless: true } } }));
+      case "run":
+        return this.run(request);
+      case "exec":
+        return this.exec(request);
+      case "rm": {
+        const target = args.at(-1) ?? "";
+        const cell = [...this.cells.values()].find((c) => c.id === target || c.name === target);
+        if (cell !== undefined) {
+          this.cells.delete(cell.id);
+          this.options.observe({ kind: "cell-removed", id: cell.id });
+        } else if (!args.includes("--ignore")) {
+          return fail(1, `Error: no container with name or ID "${target}" found: no such container`);
+        }
+        return ok();
+      }
+      case "ps": {
+        const filters = this.labelFilters(args);
+        const rows = [...this.cells.values()]
+          .filter((cell) => filters.every(([key, value]) => cell.labels[key] === value))
+          .map((cell) => ({ Id: cell.id, Labels: cell.labels, ImageID: cell.imageId }));
+        return ok(JSON.stringify(rows));
+      }
+      case "images": {
+        const filters = this.labelFilters(args);
+        const rows = [...this.images.values()]
+          .filter((image) => filters.every(([key, value]) => image.labels[key] === value))
+          .map((image) => ({ Id: image.id, Labels: image.labels }));
+        return ok(JSON.stringify(rows));
+      }
+      case "image": {
+        const ref = args.at(-1) ?? "";
+        const image = this.imageOf(ref);
+        switch (args[1]) {
+          case "exists":
+            return image === null ? fail(1, "") : ok();
+          case "inspect":
+            return image === null ? fail(125, `Error: ${ref}: image not known`) : ok(JSON.stringify([{ Id: image.id, Labels: image.labels }]));
+          case "rm": {
+            if (image === null) return fail(1, `Error: ${ref}: image not known`);
+            if ([...this.cells.values()].some((cell) => cell.imageId === image.id)) return fail(2, `Error: image ${image.id} is in use by a container`);
+            this.images.delete(image.id);
+            return ok(`Untagged: ${[...image.refs].join(", ")}\nDeleted: ${image.id}\n`);
+          }
+          default:
+            return fail(125, `fake podman: unknown image subcommand ${args[1] ?? ""}`);
+        }
+      }
+      case "build":
+        return this.build(request);
+      default:
+        return fail(125, `fake podman: unknown subcommand ${args[0] ?? "(none)"}`);
+    }
+  }
+
+  private labelFilters(args: readonly string[]): Array<[string, string]> {
+    const filters: Array<[string, string]> = [];
+    args.forEach((arg, i) => {
+      if (arg !== "--filter") return;
+      const parsed = imageListFilter.safeParse(args[i + 1]);
+      const match = parsed.success ? /^label=([^=]+)=(.*)$/.exec(parsed.data) : null;
+      if (match?.[1] !== undefined && match[2] !== undefined) filters.push([match[1], match[2]]);
+    });
+    return filters;
+  }
+
+  private imageOf(ref: string): FakeImage | null {
+    const bare = ref.replace(/^sha256:/, "");
+    return this.images.get(bare) ?? [...this.images.values()].find((image) => image.refs.has(ref)) ?? null;
+  }
+
+  private async run(request: ProcessRequest): Promise<ProcessResult> {
+    const args = request.args.slice(1);
+    const labels: Record<string, string> = {};
+    const mounts: FakeMount[] = [];
+    let name = "";
+    let image: string | null = null;
+    for (let i = 0; i < args.length && image === null; i++) {
+      const arg = args[i] ?? "";
+      const value = args[i + 1] ?? "";
+      if (arg === "--name") {
+        name = value;
+        i++;
+      } else if (arg === "--label") {
+        const at = value.indexOf("=");
+        labels[value.slice(0, at)] = value.slice(at + 1);
+        i++;
+      } else if (arg === "-e") {
+        i++;
+      } else if (arg === "-v") {
+        const [hostPath = "", containerPath = "", options = ""] = value.split(":");
+        mounts.push({ hostPath, containerPath, readOnly: options.split(",").includes("ro") });
+        i++;
+      } else if (!arg.startsWith("-")) {
+        image = arg;
+      }
+    }
+    const known = image === null ? null : this.imageOf(image);
+    if (known === null) return result(request, exited(125, "", `Error: ${image ?? "(none)"}: image not known`));
+    const cell: FakeCell = { id: this.nextId("cell"), name, labels, imageId: known.id, tokens: known.tokens, mounts };
+    this.cells.set(cell.id, cell);
+    this.options.observe({ kind: "cell-started", cell });
+    return result(request, exited(0, `${cell.id}\n`));
+  }
+
+  private async exec(request: ProcessRequest): Promise<ProcessResult> {
+    const args = request.args;
+    // The standalone sweep after a host-killed exec: nothing is left running in a fake cell.
+    if (args[2] === "sh" && args[4] !== undefined && args.at(-1) === "ashara-sweep") return result(request, exited(0, ""));
+    // exec -i --preserve-fds=1 -w <workdir> (-e ASHARA_ARGC=<n> -e ASHARA_ARG_<i>=<arg>)... <cell> sh -c WRAPPER ashara-exec <grace> <seconds>
+    const workdirAt = args.indexOf("-w");
+    const workdir = args[workdirAt + 1] ?? WORKSPACE;
+    const environment = new Map<string, string>();
+    let at = workdirAt + 2;
+    while (args[at] === "-e") {
+      const variable = args[at + 1] ?? "";
+      const eq = variable.indexOf("=");
+      environment.set(variable.slice(0, eq), variable.slice(eq + 1));
+      at += 2;
+    }
+    const cell = this.cells.get(args[at] ?? "");
+    if (cell === undefined) return result(request, { exitCode: 125, stdout: "", stderr: "Error: no such container", hung: false });
+    const argc = Number(environment.get("ASHARA_ARGC") ?? "");
+    if (!Number.isInteger(argc) || argc < 1) return result(request, { exitCode: 125, stdout: "", stderr: "ashara-exec: no argv in ASHARA_ARGC", hung: false });
+    const argv = Array.from({ length: argc }, (_, i) => environment.get(`ASHARA_ARG_${i}`) ?? "");
+    const outcome = await this.command(cell, workdir, argv, request.stdin);
+    this.options.observe({ kind: "command", cellId: cell.id, command: argv.join(" ").slice(0, 200), exitCode: outcome.exitCode, hung: outcome.hung });
+    return result(request, outcome);
+  }
+
+  /** The host path of a cell path, and whether its mount is read-only; null outside every mount. */
+  private hostOf(cell: FakeCell, workdir: string, path: string): { readonly host: string; readonly readOnly: boolean } | null {
+    const absolute = posix.resolve(workdir, path);
+    const mount = [...cell.mounts]
+      .sort((a, b) => b.containerPath.length - a.containerPath.length)
+      .find((m) => absolute === m.containerPath || absolute.startsWith(`${m.containerPath}/`));
+    if (mount === undefined) return null;
+    const rest = posix.relative(mount.containerPath, absolute);
+    return { host: rest === "" ? mount.hostPath : join(mount.hostPath, ...rest.split("/")), readOnly: mount.readOnly };
+  }
+
+  private async command(cell: FakeCell, workdir: string, argv: readonly string[], stdin: string | Buffer | undefined): Promise<SimOutcome> {
+    const [program, ...rest] = argv;
+    switch (program) {
+      case "cat": {
+        const path = rest.at(-1) ?? "";
+        const host = this.hostOf(cell, workdir, path);
+        if (host === null || !(await exists(host.host))) return exited(1, "", `cat: ${path}: No such file or directory`);
+        return exited(0, await readFile(host.host, "utf8"));
+      }
+      case "find": {
+        const path = rest[1] ?? ".";
+        const depth = Number(rest[rest.indexOf("-maxdepth") + 1] ?? "1");
+        const host = this.hostOf(cell, workdir, path);
+        if (host === null || !(await exists(host.host))) return exited(1, "", `find: '${path}': No such file or directory`);
+        const lines: string[] = [];
+        const walk = async (dir: string, shown: string, level: number): Promise<void> => {
+          for (const entry of await readdir(dir, { withFileTypes: true })) {
+            if (entry.name === ".git") continue;
+            const entryShown = `${shown}/${entry.name}`;
+            lines.push(entry.isDirectory() ? `${entryShown}/` : entryShown);
+            if (entry.isDirectory() && level < depth) await walk(join(dir, entry.name), entryShown, level + 1);
+          }
+        };
+        await walk(host.host, path, 1);
+        return exited(0, lines.map((line) => `${line}\n`).join(""));
+      }
+      case "grep": {
+        const pattern = rest[rest.indexOf("-e") + 1] ?? "";
+        const path = rest.at(-1) ?? ".";
+        const host = this.hostOf(cell, workdir, path);
+        if (host === null) return exited(2, "", `grep: ${path}: No such file or directory`);
+        let regex: RegExp;
+        try {
+          regex = new RegExp(pattern);
+        } catch (err) {
+          return exited(2, "", `grep: invalid pattern: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const matches: string[] = [];
+        for (const file of await listFiles(host.host)) {
+          const lines = (await readFile(join(host.host, file), "utf8")).split("\n");
+          lines.forEach((line, i) => {
+            if (regex.test(line)) matches.push(`${path}/${file}:${i + 1}:${line}`);
+          });
+        }
+        return matches.length === 0 ? exited(1, "") : exited(0, matches.map((m) => `${m}\n`).join(""));
+      }
+      case "sh": {
+        if (rest[0] !== "-c") return exited(127, "", "sh: only -c is interpreted in a fake cell");
+        if (rest[1] === WRITE_SCRIPT) {
+          const path = rest[3] ?? "";
+          const host = this.hostOf(cell, workdir, path);
+          if (host === null) return exited(1, "", `sh: ${path}: outside every mount`);
+          if (host.readOnly) return exited(1, "", `sh: ${path}: Read-only file system`);
+          await mkdir(dirname(host.host), { recursive: true });
+          await writeFile(host.host, stdin ?? "");
+          return exited(0, "");
+        }
+        return this.shell(cell, workdir, rest[1] ?? "");
+      }
+      default:
+        return exited(127, "", `sh: ${program ?? ""}: not found`);
+    }
+  }
+
+  /** `sh -c <command>`: only `sim` commands exist in a fake cell. */
+  private async shell(cell: FakeCell, workdir: string, command: string): Promise<SimOutcome> {
+    const words = command.trim().split(/\s+/);
+    if (words[0] !== "sim") return exited(127, "", `sh: 1: ${words[0] ?? ""}: not found`);
+    const root = this.hostOf(cell, workdir, ".");
+    if (root === null) return exited(1, "", "sim: the working directory is outside every mount");
+    const has = (path: string): Promise<boolean> => exists(join(root.host, ...path.split("/")));
+    switch (words[1]) {
+      case "probe":
+        return cell.tokens.includes(TOOLCHAIN_TOKEN) ? exited(0, "sim toolchain ok\n") : exited(1, "", "sim: no toolchain in this image\n");
+      case "build":
+        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN)) return exited(1, "", `sim build: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
+        if (!(await has(LAYOUT_FILE))) return exited(1, "", `sim build: ${LAYOUT_FILE} is missing: the product has no layout\n`);
+        return exited(0, "sim build ok\n");
+      case "test":
+        if (cell.tokens.includes(RECIPE_DEFECT_TOKEN)) return exited(1, "", `sim test: permission denied: ${RECIPE_DEFECT_SYMPTOM}\n`);
+        if (!(await has(LAYOUT_FILE))) return exited(1, "", `sim test: ${LAYOUT_FILE} is missing\n`);
+        return exited(0, "sim tests ok\n");
+      case "rm": {
+        if (root.readOnly) return exited(1, "", "sim rm: Read-only file system\n");
+        await rm(join(root.host, ...(words[2] ?? "").split("/")), { force: true });
+        return exited(0, "");
+      }
+      case "sleep":
+        return HUNG;
+      case "check":
+        return this.check(root.host, root.readOnly, words[2] ?? "", has);
+      default:
+        return exited(127, "", `sim: unknown command ${words[1] ?? ""}\n`);
+    }
+  }
+
+  private async check(root: string, readOnly: boolean, specPath: string, has: (path: string) => Promise<boolean>): Promise<SimOutcome> {
+    const file = join(root, ...specPath.split("/"));
+    if (!(await exists(file))) return exited(2, "", `sim check: ${specPath}: no such check file\n`);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await readFile(file, "utf8"));
+    } catch (err) {
+      return exited(2, "", `sim check: ${specPath} is not JSON: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    const spec = CheckSpecSchema.safeParse(raw);
+    if (!spec.success) return exited(2, "", `sim check: ${specPath}: ${z.prettifyError(spec.error)}\n`);
+    for (const harness of spec.data.harness) {
+      if (readOnly) return exited(1, "", "sim check: Read-only file system\n");
+      const target = join(root, ...harness.path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, harness.content);
+    }
+    switch (spec.data.kind) {
+      case "unrunnable":
+        return exited(127, "", "sh: 1: sim-check-runner: not found\n");
+      case "slow":
+        return HUNG;
+      case "vacuous":
+        return exited(0, "ok\n");
+      default:
+        break;
+    }
+    const missing: string[] = [];
+    for (const behaviour of spec.data.requires) if (!(await has(`product/behaviours/${behaviour}`))) missing.push(behaviour);
+    const present: string[] = [];
+    for (const behaviour of spec.data.forbids) if (await has(`product/behaviours/${behaviour}`)) present.push(behaviour);
+    if (missing.length > 0 || present.length > 0) {
+      return exited(1, "", `sim check ${specPath}: missing [${missing.join(", ")}], forbidden present [${present.join(", ")}]\n`);
+    }
+    if (spec.data.kind === "flaky" && this.options.tape.chance("podman.flaky-check", 0.3)) {
+      return exited(1, "", `sim check ${specPath}: flaked\n`);
+    }
+    return exited(0, `sim check ${specPath}: pass\n`);
+  }
+
+  private async build(request: ProcessRequest): Promise<ProcessResult> {
+    const args = request.args;
+    const labels: Record<string, string> = {};
+    let iidFile = "";
+    let containerfile = "";
+    let tag = "";
+    for (let i = 1; i < args.length - 1; i++) {
+      const arg = args[i] ?? "";
+      const value = args[i + 1] ?? "";
+      if (arg === "--label") {
+        const at = value.indexOf("=");
+        labels[value.slice(0, at)] = value.slice(at + 1);
+        i++;
+      } else if (arg === "--iidfile") {
+        iidFile = value;
+        i++;
+      } else if (arg === "-f") {
+        containerfile = value;
+        i++;
+      } else if (arg === "-t") {
+        tag = value;
+        i++;
+      }
+    }
+    const context = args.at(-1) ?? "";
+    if (!(await exists(containerfile))) return result(request, exited(125, "", `Error: ${containerfile}: no such file\n`));
+    const text = await readFile(containerfile, "utf8");
+    if (!/^FROM\s+\S+/m.test(text)) return result(request, exited(125, "", "Error: the containerfile has no FROM instruction\n"));
+    const files = await listFiles(context);
+    const contents = await Promise.all(files.map(async (file) => `${file}\0${await readFile(join(context, file), "utf8")}`));
+    const id = sha256(contents.join("\0\0"));
+    const tokens = recipeTokens(text);
+    const existing = this.images.get(id);
+    if (existing !== undefined) existing.refs.add(tag);
+    else this.images.set(id, { id, refs: new Set([tag]), labels, tokens });
+    await writeFile(iidFile, `sha256:${id}`);
+    this.options.observe({ kind: "image-built", id, tokens, contextFiles: files.map((f) => f.split(sep).join("/")) });
+    return result(request, exited(0, `STEP 1/1: ${text.split("\n")[0] ?? ""}\nCOMMIT ${tag}\n${id}\n`));
+  }
+}

@@ -35,7 +35,7 @@ import {
   EventLogger,
   reconcileOnStartup,
 } from "@ashara/orchestrator";
-import type { CoreLoopDeps } from "@ashara/orchestrator";
+import type { CoreLoopDeps, CycleRunner } from "@ashara/orchestrator";
 import {
   FailureRouter,
   FirstPlanner,
@@ -60,7 +60,7 @@ import {
   buildEnvironmentImage,
   loadBaseCell,
   pruneEnvironmentImages,
-  useGitRunner,
+  withGitRunner,
 } from "@ashara/execution-infra";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import {
@@ -149,7 +149,8 @@ export interface AsharaPorts {
 
 /** One composed Ashara process: what its main starts, serves and shuts down. */
 export interface AsharaInstance {
-  readonly coreLoop: CoreLoop;
+  /** One cycle of the core loop, every host git call in it through this instance's runner. */
+  readonly cycles: CycleRunner;
   readonly runner: ContinuousRunner;
   readonly app: Hono;
   readonly port: number;
@@ -169,7 +170,6 @@ export interface AsharaInstance {
 
 export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   const { masterKey, databaseUrl } = ports;
-  useGitRunner(ports.git);
   // Fail closed on schema drift: a database that ran a different draft of a
   // migration otherwise surfaces only as a runtime query error.
   try {
@@ -447,7 +447,9 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const coreLoop = new CoreLoop(coreLoopDeps);
 
-  const runner = new ContinuousRunner(coreLoop, { databaseUrl: config.databaseUrl });
+  const cycles: CycleRunner = { runCycle: () => withGitRunner(ports.git, () => coreLoop.runCycle()) };
+
+  const runner = new ContinuousRunner(cycles, { databaseUrl: config.databaseUrl });
 
   const appDeps: AppDeps = {
     workItemRepo: dbWorkItemRepo,
@@ -461,7 +463,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     async discardTaskBranch(projectId, taskId) {
       const project = await projectRepo.get(projectId);
       if (project === null || project.workspacePath === null) return;
-      const result = await discardTaskBranch(project.workspacePath, taskId);
+      const workspacePath = project.workspacePath;
+      const result = await withGitRunner(ports.git, () => discardTaskBranch(workspacePath, taskId));
       console.log(`[unblock] task ${taskId}: branch ${result === "deleted" ? "deleted" : "absent"}; it restarts from main`);
     },
   };
@@ -482,12 +485,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   });
 
   return {
-    coreLoop,
+    cycles,
     runner,
     app,
     port: config.port,
     shutdownSignal: abortController.signal,
-    async startup() {
+    startup: () => withGitRunner(ports.git, async () => {
       // One process drives a target: the checkout lock that serialises its finalizes is
       // in-process only, so the claim is taken in the database before anything touches a target,
       // and a second process on the same targets refuses to start. Recorded targets are claimed
@@ -524,7 +527,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       for (const project of await projectRepo.listWithWorkspace()) {
         await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages);
       }
-    },
+    }),
     abort: () => abortController.abort(),
     teardownCells: () => teardownCellsAtShutdown(cellSubstrate),
     async closeDatabase() {

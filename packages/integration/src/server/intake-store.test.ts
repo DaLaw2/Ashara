@@ -18,7 +18,7 @@ import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import type { ProjectId } from "@ashara/shared";
-import { createIntakeStore } from "./intake-store.js";
+import { createIntakeStore } from "@ashara/server/intake-store";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.

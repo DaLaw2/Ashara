@@ -10,6 +10,8 @@
  * Two rule shapes:
  *   allow            = [...]        which packages this package may import
  *   restrict.<pkg>   = [glob, ...]  which files inside this package may import <pkg>
+ *   importers        = [...]        which packages may import this package; checked even
+ *                                   against a wildcard `allow`, so `[]` means none may
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -52,6 +54,8 @@ interface PackageRule {
   readonly allow: readonly string[];
   /** importedPkg -> file globs (relative to the package root) permitted to import it. */
   readonly restrict: ReadonlyMap<string, readonly string[]>;
+  /** Packages that may import this one; null when the section states none. */
+  readonly importers: readonly string[] | null;
 }
 
 type BoundaryRules = ReadonlyMap<string, PackageRule>;
@@ -63,7 +67,7 @@ function parseList(inner: string): string[] {
 }
 
 function parseRules(toml: string, rulesPath: string): BoundaryRules {
-  const rules = new Map<string, { allow: string[]; restrict: Map<string, string[]> }>();
+  const rules = new Map<string, { allow: string[]; restrict: Map<string, string[]>; importers: string[] | null }>();
   let currentSection: string | null = null;
   const lines = toml.split("\n");
 
@@ -77,7 +81,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map() });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null });
       }
       continue;
     }
@@ -94,6 +98,12 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     const allowMatch = /^allow\s*=\s*\[([^\]]*)\]$/.exec(line);
     if (allowMatch) {
       rule.allow = parseList(allowMatch[1]);
+      continue;
+    }
+
+    const importersMatch = /^importers\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (importersMatch) {
+      rule.importers = parseList(importersMatch[1]);
       continue;
     }
 
@@ -129,7 +139,12 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         );
       }
     }
-    result.set(pkg, { allow: rule.allow, restrict: rule.restrict });
+    for (const importer of rule.importers ?? []) {
+      if (!rules.has(importer)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
+      }
+    }
+    result.set(pkg, { allow: rule.allow, restrict: rule.restrict, importers: rule.importers });
   }
 
   return result;
@@ -325,6 +340,12 @@ function main(): void {
 
         if (ref.pkg === null) {
           violations.push(violation("relative import leaves packages/"));
+          continue;
+        }
+
+        const importers = rules.get(ref.pkg)?.importers ?? null;
+        if (importers !== null && !importers.includes(pkgName)) {
+          violations.push(violation(`package "${ref.pkg}" admits only importers [${importers.join(", ")}]`));
           continue;
         }
 

@@ -18,8 +18,8 @@ import { FailureRouter, PlanningService } from "@ashara/planning";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { createPlanReportStore } from "./first-plan-store.js";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { createPlanReportStore } from "@ashara/server/first-plan-store";
+import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // Story s-loop-never-stop-m1: one project's bad record blocks that project, with
 // the cause on its row, and the other projects proceed. Every row belongs to a

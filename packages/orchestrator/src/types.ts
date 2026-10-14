@@ -19,7 +19,6 @@ import type { EventLogger } from "./event-logger.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
-  readonly baseBranch: string;
   readonly maxBatchSize: number;
   readonly maxRetries: number;
   readonly decompositionTimeoutMs: number;
@@ -34,7 +33,6 @@ export interface CoreLoopConfig {
  * absent here forces every spread to supply it.
  */
 export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
-  baseBranch: "master",
   maxBatchSize: 2,
   maxRetries: 1,
   decompositionTimeoutMs: 120_000,

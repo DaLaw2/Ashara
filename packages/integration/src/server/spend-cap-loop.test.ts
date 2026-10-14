@@ -27,7 +27,7 @@ import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.

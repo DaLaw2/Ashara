@@ -30,8 +30,8 @@ import type { ModelConfig } from "@ashara/llm-gateway";
 import { FailureRouter, classifyFailure } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
-import { createBlockReportStore } from "./block-report-store.js";
-import { createTaskCheckStore } from "./task-check-store.js";
+import { createBlockReportStore } from "@ashara/server/block-report-store";
+import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and

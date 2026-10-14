@@ -34,7 +34,6 @@ import type { WorkItemStatus } from "./enums.js";
  * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
  * `merge_unrecorded` block, for work already merged on main whose merge record is written late.
  * Unblocking such an item to Pending would re-dispatch merged work.
- * @testseam transitions.test.ts walks it; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
  */
 export const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {
   Pending: ["InProgress", "Blocked", "Abandoned"],

@@ -1,6 +1,5 @@
 import path from "node:path";
 import os from "node:os";
-import { execSync } from "node:child_process";
 import type { CoreLoopConfig } from "@ashara/orchestrator";
 import { DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
@@ -48,17 +47,11 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
 
   const port = parseIntOr(process.env["ASHARA_PORT"], 3000);
 
-  const repoPathRaw = process.env["REPO_PATH"] ?? ".";
-  const repoPath = path.resolve(repoPathRaw);
-
   const workdirBaseRaw = process.env["WORKDIR_BASE"]
     ?? path.join(os.tmpdir(), "ashara-work");
   const workdirBase = path.isAbsolute(workdirBaseRaw)
     ? workdirBaseRaw
     : path.resolve(workdirBaseRaw);
-
-  const baseBranch =
-    process.env["BASE_BRANCH"] ?? detectDefaultBranch(repoPath) ?? "master";
 
   const maxBatchSize = parseIntOr(process.env["MAX_BATCH_SIZE"], 2);
   // Finding (a), E2E Run 11: the owner's $1 cap lived in ASHARA_BUDGET_TOTAL
@@ -80,7 +73,6 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const coreLoop: CoreLoopConfig = {
     ...DEFAULT_CONFIG,
     workdirBase,
-    baseBranch,
     maxBatchSize,
   };
 
@@ -120,18 +112,4 @@ function parseBudgetLimit(variable: string, raw: string | undefined): number {
   const parsed = Number(raw.trim());
   if (!Number.isFinite(parsed) || parsed <= 0) throw new InvalidBudgetLimit(variable, raw);
   return parsed;
-}
-
-function detectDefaultBranch(repoPath: string): string | null {
-  try {
-    const output = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    if (!output || output === "HEAD") return null;
-    return output;
-  } catch {
-    return null;
-  }
 }

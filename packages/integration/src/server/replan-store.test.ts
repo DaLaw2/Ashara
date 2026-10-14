@@ -24,13 +24,13 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner, PlanningService, Replanner, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
 import type { FirstPlanStore, ReplanStore } from "@ashara/planning";
 import { parseWorkItemId, type ProjectId } from "@ashara/shared";
-import { createAnswerStore } from "./answer-store.js";
-import { createBlockReportStore } from "./block-report-store.js";
-import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import { createReplanStore } from "./replan-store.js";
-import { createRosterStore } from "./roster-store.js";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
+import { createAnswerStore } from "@ashara/server/answer-store";
+import { createBlockReportStore } from "@ashara/server/block-report-store";
+import { createFirstPlanStore, createPlanReportStore } from "@ashara/server/first-plan-store";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import { createReplanStore } from "@ashara/server/replan-store";
+import { createRosterStore } from "@ashara/server/roster-store";
+import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // A late client change is planned (t-replan-on-change). Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store

@@ -266,7 +266,6 @@ export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 /**
  * Every `source` a stored blocked reason can carry. `satisfies` keeps each member a real source;
  * blocked-reason.test.ts checks the converse, that no source is missing.
- * @testseam blocked-reason.test.ts checks it names every source; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
  */
 export const BLOCKED_REASON_SOURCES = [
   "task_failed",

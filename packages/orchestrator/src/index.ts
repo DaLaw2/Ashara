@@ -8,6 +8,7 @@ export type { ParkedExitChecks } from "./parked-exits.js";
 export { CoreLoop } from "./core-loop.js";
 
 export { ContinuousRunner } from "./runner.js";
+export type { CycleRunner } from "./runner.js";
 
 export { EventLogger } from "./event-logger.js";
 

@@ -22,10 +22,10 @@ import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
 import type { ProjectId } from "@ashara/shared";
-import { createAnswerStore } from "./answer-store.js";
-import { createFirstPlanStore } from "./first-plan-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import { createRosterStore } from "./roster-store.js";
+import { createAnswerStore } from "@ashara/server/answer-store";
+import { createFirstPlanStore } from "@ashara/server/first-plan-store";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import { createRosterStore } from "@ashara/server/roster-store";
 
 // Every row here belongs to a project this suite creates under a unique name, and
 // afterAll deletes exactly those rows. Each store is narrowed to this suite's

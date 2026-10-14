@@ -5,7 +5,6 @@ export { DevelopmentService } from "./execution-service.js";
 export { withSessionLifecycle } from "./execution-service.js";
 /** @testseam scripts/run-report.test.ts maps its scripted attempt as runExecution does */
 export { toSessionAttempt } from "./cell-execution.js";
-/** @testseam execution-service.test.ts checks it names every status; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
 export { EXECUTION_STATUSES } from "./execution-service.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
 export { discardTaskBranch } from "./merge.js";

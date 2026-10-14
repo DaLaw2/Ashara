@@ -18,7 +18,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { cellInstanceFor, reconcileCellsAtStartup } from "./cells.js";
+import { cellInstanceFor, reconcileCellsAtStartup } from "@ashara/server/cells";
 
 // Real podman cells from the BaseCell image, the real recorded gateway writing llm_calls, a mock
 // model: no real LLM call, and no skip (CI rejects skipped tests).

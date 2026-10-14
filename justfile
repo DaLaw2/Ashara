@@ -46,6 +46,13 @@ typecheck-full:
 test:
     npx vitest run
 
+# The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, one
+# at a time, each on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL
+# (default DATABASE_URL). Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
+# Example: just simulate --seeds 50 --start 100 --minimize
+simulate *ARGS:
+    npx tsx scripts/simulate.ts {{ARGS}}
+
 # Secret scan. Deliberately NOT part of `just check`: it calls the GitGuardian API,
 # and a gate that needs the network is a gate that fails for the wrong reason.
 #

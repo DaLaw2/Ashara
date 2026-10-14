@@ -19,10 +19,10 @@ import {
 } from "@ashara/db";
 import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import type { Database } from "../../db/src/connection.js";
-import { bearerAuth } from "./middleware.js";
-import { createRoutes } from "./routes.js";
-import type { AppDeps } from "./routes.js";
+import { bearerAuth } from "@ashara/server/middleware";
+import { createRoutes } from "@ashara/server/routes";
+import type { AppDeps } from "@ashara/server/routes";
+import type { Database } from "../simulator/database.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 const API_TOKEN = `test-token-${randomUUID().slice(0, 8)}`;

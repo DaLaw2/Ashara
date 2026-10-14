@@ -32,14 +32,14 @@ import {
 import { ClientStops } from "@ashara/engagement";
 import { clientAccessCodeSecretName, generateKeyFileContent, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
-import type { Database } from "../../db/src/connection.js";
-import { buildApp } from "./app.js";
-import { createClientStopStore } from "./client-stop-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import type { AppDeps } from "./routes.js";
-import type { SecretReader } from "./secrets.js";
-import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "./web-client.js";
-import type { WebClientDeps } from "./web-client.js";
+import { buildApp } from "@ashara/server/app";
+import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { createIntakeStore } from "@ashara/server/intake-store";
+import type { AppDeps } from "@ashara/server/routes";
+import type { SecretReader } from "@ashara/server/secrets";
+import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "@ashara/server/web-client";
+import type { WebClientDeps } from "@ashara/server/web-client";
+import type { Database } from "../simulator/database.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 const NONCE = randomUUID().slice(0, 8);
@@ -47,7 +47,7 @@ const API_TOKEN = `web-client-test-${randomUUID()}`;
 const FAILURE_DELAY_MS = 150;
 const TTL_SECONDS = 3600;
 const THROTTLE = { windowSeconds: 15 * 60, perNameAndSource: 5, perSource: 20 };
-const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
+const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..", "..", "..");
 const CLIENT_HEADER = { "X-Ashara-Client": "1" };
 const JSON_HEADERS = { "Content-Type": "application/json", ...CLIENT_HEADER };
 

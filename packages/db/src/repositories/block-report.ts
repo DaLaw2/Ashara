@@ -22,7 +22,6 @@ import { blockingReview } from "./suite-review.js";
 
 /**
  * Every kind a project block episode can record.
- * @testseam lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
  */
 export const PROJECT_BLOCK_KINDS = [
   "budget_cap",

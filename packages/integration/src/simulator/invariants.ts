@@ -1,0 +1,357 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { sql } from "drizzle-orm";
+import { z } from "zod";
+import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, blockedExitOf, parseStoredBlockedReason } from "@ashara/shared";
+import type { StoredBlockedReason } from "@ashara/shared";
+import type { Database } from "./database.js";
+import type { FakeCell } from "./fake-podman.js";
+
+const run = promisify(execFile);
+
+/** The invariants of design §2.9, as judged on today's schema. */
+const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8"] as const;
+type InvariantId = (typeof INVARIANTS)[number];
+
+export interface Violation {
+  readonly invariant: InvariantId;
+  readonly step: number;
+  /** One line, the rows involved named: what a reader acts on. */
+  readonly statement: string;
+  /**
+   * The invariant and the violation's subject, named by what a seed reproduces (a task's title, a
+   * state, a block kind), never by a database id or a commit hash: equal for the same defect seen
+   * again at a later step, so each is reported once, and stable across runs of one seed, so
+   * expected-failures.ts can name it.
+   */
+  readonly key: string;
+}
+
+const itemRow = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  level: z.string(),
+  workKind: z.string().nullable(),
+  origin: z.string().nullable(),
+  checksFor: z.string().nullable(),
+  blockedReason: z.unknown(),
+  mergeCommit: z.string().nullable(),
+  ownerRoleId: z.string().nullable(),
+  dispatchCount: z.number(),
+  blockedAt: z.string().nullable(),
+});
+type ItemRow = z.infer<typeof itemRow>;
+
+const projectRow = z.object({
+  status: z.string(),
+  blockedCategory: z.string().nullable(),
+  blockedReason: z.string().nullable(),
+  planStopped: z.boolean(),
+  workspacePath: z.string().nullable(),
+});
+type ProjectRow = z.infer<typeof projectRow>;
+
+const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
+const taskReportRow = z.object({ workItemId: z.string(), blockedAt: z.string(), reportId: z.string() });
+const checkRow = z.object({
+  taskId: z.string(),
+  checkTaskId: z.string(),
+  revision: z.number(),
+  name: z.string(),
+  files: z.array(z.object({ path: z.string() })),
+});
+const eventRow = z.object({ seq: z.number(), eventType: z.string(), workItemId: z.string().nullable() });
+
+interface MainCommit {
+  readonly commit: string;
+  readonly subject: string;
+}
+
+export interface Snapshot {
+  readonly project: ProjectRow;
+  readonly items: readonly ItemRow[];
+  readonly episodes: ReadonlyArray<z.infer<typeof episodeRow>>;
+  readonly taskReports: ReadonlyArray<z.infer<typeof taskReportRow>>;
+  readonly checks: ReadonlyArray<z.infer<typeof checkRow>>;
+  readonly spendUsd: number;
+  readonly unrecordedCalls: number;
+  readonly events: ReadonlyArray<z.infer<typeof eventRow>>;
+  readonly main: readonly MainCommit[];
+}
+
+/** A snapshot query returned no row where it always returns one: the invariants cannot be judged. */
+class SnapshotRowMissing extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly table: string,
+    readonly expected: string,
+  ) {
+    super(`snapshot of project ${projectId}: ${table} returned no row; expected ${expected}`);
+    this.name = "SnapshotRowMissing";
+  }
+}
+
+/** Every lifecycle row of the run's one project, and main's first-parent log (design §4.8). */
+export async function readSnapshot(db: Database, projectId: string): Promise<Snapshot> {
+  const [project] = z.array(projectRow).parse(
+    (
+      await db.execute(sql`
+        SELECT status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
+               plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath"
+        FROM projects WHERE id = ${projectId}`)
+    ).rows,
+  );
+  if (project === undefined) throw new SnapshotRowMissing(projectId, "projects", "the run's project row");
+  const items = z.array(itemRow).parse(
+    (
+      await db.execute(sql`
+        SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
+               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
+               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount", blocked_at::text AS "blockedAt"
+        FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
+    ).rows,
+  );
+  const episodes = z.array(episodeRow).parse(
+    (
+      await db.execute(sql`
+        SELECT id, kind, report_id AS "reportId", ended_at IS NOT NULL AS ended
+        FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`)
+    ).rows,
+  );
+  const taskReports = z.array(taskReportRow).parse(
+    (
+      await db.execute(sql`
+        SELECT r.work_item_id AS "workItemId", r.blocked_at::text AS "blockedAt", r.report_id AS "reportId"
+        FROM blocked_task_reports r JOIN work_items w ON w.id = r.work_item_id
+        WHERE w.project_id = ${projectId}`)
+    ).rows,
+  );
+  const checks = z.array(checkRow).parse(
+    (
+      await db.execute(sql`
+        SELECT task_id AS "taskId", check_task_id AS "checkTaskId", revision, name, files
+        FROM task_checks WHERE project_id = ${projectId} ORDER BY task_id, revision, name`)
+    ).rows,
+  );
+  const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
+    (
+      await db.execute(sql`
+        SELECT coalesce(sum(coalesce(cost_usd, estimated_cost_usd)), 0) AS spend,
+               count(*) FILTER (WHERE cost_usd IS NULL AND estimated_cost_usd IS NULL) AS unrecorded
+        FROM llm_calls WHERE project_id = ${projectId}`)
+    ).rows,
+  );
+  // I5 is judged on this row: without it the spend would read as zero and the cap could not be seen crossed.
+  if (spend === undefined) throw new SnapshotRowMissing(projectId, "llm_calls", "the spend aggregate row");
+  const events = z.array(eventRow).parse(
+    (
+      await db.execute(sql`
+        SELECT row_number() OVER (ORDER BY created_at, timestamp, event_id)::int AS seq, event_type AS "eventType",
+               payload->>'work_item_id' AS "workItemId"
+        FROM domain_events
+        WHERE payload->>'work_item_id' IN (SELECT id::text FROM work_items WHERE project_id = ${projectId})
+        ORDER BY created_at, timestamp, event_id`)
+    ).rows,
+  );
+  return {
+    project,
+    items,
+    episodes,
+    taskReports,
+    checks,
+    spendUsd: spend.spend,
+    unrecordedCalls: spend.unrecorded,
+    events,
+    main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
+  };
+}
+
+/** main's first-parent history, read by the host's git outside every seam (the observer is never faulted). */
+async function mainLog(repository: string): Promise<MainCommit[]> {
+  try {
+    const { stdout } = await run("git", ["-C", repository, "log", "--first-parent", "--format=%H%x00%s", "main"]);
+    return stdout
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => {
+        const [commit = "", subject = ""] = line.split("\0");
+        return { commit, subject };
+      });
+  } catch (err) {
+    // A repository with no commit on main yet has no history: that is the snapshot, not a failure.
+    console.warn(`[simulator] git log of ${repository} read nothing: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+    return [];
+  }
+}
+
+/** The files main holds, read like mainLog; none when main has no commit. */
+export async function mainFiles(repository: string): Promise<string[]> {
+  try {
+    const { stdout } = await run("git", ["-C", repository, "ls-tree", "-r", "--name-only", "main"]);
+    return stdout.split("\n").filter((line) => line !== "");
+  } catch (err) {
+    console.warn(`[simulator] git ls-tree of ${repository} read nothing: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+    return [];
+  }
+}
+
+const sourceSchema = z.object({ source: z.enum(BLOCKED_REASON_SOURCES) });
+
+/** The blocked reason's source, or null when the row has none or one this checkout does not know. */
+export function sourceOf(raw: unknown): (typeof BLOCKED_REASON_SOURCES)[number] | null {
+  const parsed = sourceSchema.safeParse(raw);
+  return parsed.success ? parsed.data.source : null;
+}
+
+/** What a run ended in, in design §2.2's terms mapped onto today's project states. */
+export type Outcome =
+  | { readonly kind: "accepted" }
+  | { readonly kind: "halted"; readonly cause: "spend_cap" | "infrastructure" | "undeliverable"; readonly detail: string }
+  | { readonly kind: "stopped" }
+  | { readonly kind: "open" };
+
+const SPEND = new Set(["budget_cap"]);
+const INFRASTRUCTURE = new Set(["configuration", "fault"]);
+
+export function outcomeOf(snapshot: Snapshot): Outcome {
+  const { project, items } = snapshot;
+  if (project.status === "stopped") return { kind: "stopped" };
+  if (project.status === "blocked") {
+    const category = project.blockedCategory ?? (project.planStopped ? "planning_stopped" : "unknown");
+    const cause = SPEND.has(category) ? "spend_cap" : INFRASTRUCTURE.has(category) ? "infrastructure" : "undeliverable";
+    return { kind: "halted", cause, detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
+  }
+  const tasks = items.filter((item) => item.level === "Task");
+  // A repaired plan abandons the tasks it replaces: the goals are the decomposition's live ones.
+  const goals = tasks.filter((item) => item.origin === "decomposition" && item.status !== "Abandoned");
+  const open = tasks.filter((item) => item.status !== "Completed" && item.status !== "Abandoned");
+  if (goals.length > 0 && open.length === 0) return { kind: "accepted" };
+  return { kind: "open" };
+}
+
+/** I2-I7, judged on one snapshot (design §4.8). I1 and I8 (checkTotality) are judged by the run over its whole course. */
+export function checkSnapshot(step: number, snapshot: Snapshot, context: { readonly spendCapUsd: number; readonly cells: readonly FakeCell[]; readonly final: boolean }): Violation[] {
+  const violations: Violation[] = [];
+  const add = (invariant: InvariantId, key: string, statement: string): void => {
+    violations.push({ invariant, step, statement, key: `${invariant}:${key}` });
+  };
+  const byId = new Map(snapshot.items.map((item) => [item.id, item]));
+
+  // I2: no work item waits on a person; every halt episode has exactly one report.
+  for (const item of snapshot.items) {
+    if (item.status !== "Blocked") continue;
+    const source = sourceOf(item.blockedReason);
+    const parsed = blockedReasonOf(item.blockedReason);
+    const exit = parsed === null ? "operator" : blockedExitOf(parsed).kind;
+    if (exit === "operator") add("I2", `${item.title}:${source ?? "none"}`, `task "${item.title}" is Blocked (${source ?? "no reason"}) and only an operator can release it`);
+  }
+  for (const episode of context.final ? snapshot.episodes : []) {
+    if (!episode.ended && episode.reportId === null && snapshot.project.status === "blocked") {
+      add("I2", `episode:${episode.kind}`, `project block episode ${episode.kind} has no report to the client`);
+    }
+  }
+
+  // I3: independence.
+  for (const check of snapshot.checks) {
+    const task = byId.get(check.taskId);
+    const author = byId.get(check.checkTaskId);
+    if (task !== undefined && author !== undefined && task.ownerRoleId !== null && task.ownerRoleId === author.ownerRoleId) {
+      add("I3", `same-role:${task.title}`, `the checks of "${task.title}" were written by its own owner role`);
+    }
+    for (const file of check.files) {
+      if (file.path.startsWith("product/")) {
+        add("I3", `product-file:${task?.title ?? check.taskId}:${file.path}`, `check set r${check.revision} of "${task?.title ?? check.taskId}" holds product file ${file.path}: a check that supplies what it checks (run 8 E1)`);
+      }
+    }
+  }
+  for (const cell of context.cells) {
+    const taskId = cell.labels["ashara.task"];
+    const role = cell.labels["ashara.role"];
+    const task = taskId === undefined ? undefined : byId.get(taskId);
+    if (task !== undefined && task.ownerRoleId !== null && role !== undefined && role !== task.ownerRoleId && task.workKind !== "check") {
+      add("I3", `cell-role:${task.title}:${role}`, `a cell of "${task.title}" ran as role ${role}, not its owner ${task.ownerRoleId}`);
+    }
+  }
+
+  // I4: a client report on a task's current block episode is true when the snapshot is read.
+  for (const report of snapshot.taskReports) {
+    const item = byId.get(report.workItemId);
+    if (item !== undefined && item.blockedAt === report.blockedAt && item.status !== "Blocked") {
+      add("I4", `task-report:${item.title}:${item.status}`, `the report on "${item.title}"'s block stands while the task is ${item.status}`);
+    }
+  }
+
+  // I5: spend within the cap; every call has a recorded cost.
+  if (snapshot.spendUsd > context.spendCapUsd + 1e-9) {
+    add("I5", "over-cap", `recorded spend $${snapshot.spendUsd.toFixed(6)} exceeds the cap $${context.spendCapUsd}`);
+  }
+  if (snapshot.unrecordedCalls > 0) add("I5", "unpriced", `${snapshot.unrecordedCalls} llm_calls row(s) carry no cost`);
+
+  // I6: no Done without its evidence.
+  const checkedTasks = new Set(snapshot.checks.map((check) => check.taskId));
+  for (const item of snapshot.items) {
+    if (item.status !== "Completed" || item.level !== "Task") continue;
+    if (item.workKind === "implementation" && item.mergeCommit === null) {
+      add("I6", `no-record:${item.title}`, `"${item.title}" is Completed with no merge record`);
+    }
+    if (item.origin === "check" && item.checksFor !== null && !checkedTasks.has(item.checksFor)) {
+      add("I6", `no-checks:${item.title}`, `check task "${item.title}" is Completed with no checks stored for the task it checks`);
+    }
+  }
+
+  // I7: exactly once, main against the records.
+  const recorded = new Map<string, ItemRow[]>();
+  for (const item of snapshot.items) {
+    if (item.mergeCommit === null) continue;
+    recorded.set(item.mergeCommit, [...(recorded.get(item.mergeCommit) ?? []), item]);
+  }
+  const onMain = new Set(snapshot.main.map((entry) => entry.commit));
+  for (const entry of snapshot.main) {
+    const named = /^merge: task (\S+)$/.exec(entry.subject)?.[1];
+    if (named === undefined) continue;
+    const records = (recorded.get(entry.commit) ?? []).filter((item) => item.id === named && item.status === "Completed");
+    if (records.length !== 1) {
+      const item = byId.get(named);
+      add("I7", `unrecorded:${item?.title ?? named}`, `main commit ${entry.commit.slice(0, 12)} ("${entry.subject}") has no item Completed recording it (the item is ${item?.status ?? "absent"})`);
+    }
+  }
+  for (const [commit, items] of recorded) {
+    if (!onMain.has(commit)) add("I7", `off-main:${items.map((i) => i.title).join(",")}`, `${items.map((i) => `"${i.title}"`).join(", ")} record ${commit.slice(0, 12)}, which is not on main`);
+  }
+  return violations;
+}
+
+/**
+ * I8, judged on the final snapshot of a run that stalled: the loop kept cycling with no state
+ * change, so no exit of any state still held was taken, and a state with an enabled exit would
+ * have left. Every non-terminal task state of that snapshot is reported once, keyed by the state
+ * (status and blocked-reason source), its items named. A run that ended any other way (ended,
+ * past its cycles or its wall clock) is not judged here: its states were still moving.
+ */
+export function checkTotality(step: number, stalled: Snapshot): Violation[] {
+  const states = new Map<string, string[]>();
+  for (const item of stalled.items) {
+    if (item.level !== "Task" || item.status === "Completed" || item.status === "Abandoned") continue;
+    const source = sourceOf(item.blockedReason);
+    const state = source === null ? item.status : `${item.status}(${source})`;
+    states.set(state, [...(states.get(state) ?? []), `"${item.title}"`]);
+  }
+  return [...states].map(([state, titles]) => ({
+    invariant: "I8",
+    step,
+    statement: `state ${state} took no exit while the loop ran on with nothing else to do: ${titles.join(", ")}`,
+    key: `I8:${state}`,
+  }));
+}
+
+/** The stored reason as production parses it; an unreadable one has no exit but the operator's. */
+function blockedReasonOf(raw: unknown): StoredBlockedReason | null {
+  try {
+    return parseStoredBlockedReason(raw) ?? null;
+  } catch (err) {
+    if (!(err instanceof BlockedReasonCorrupt)) throw err;
+    console.warn(`[simulator] an unreadable blocked reason is judged as operator-only: ${err.message}`);
+    return null;
+  }
+}
