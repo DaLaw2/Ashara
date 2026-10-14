@@ -1663,6 +1663,7 @@ export class DevelopmentService {
     if (!source) return "";
 
     const scope: KnowledgeScope = {
+      projectId: task.projectId,
       epicId: task.epicId ?? null,
       queryText: buildKnowledgeQueryText(task.title, spec),
     };
@@ -1904,7 +1905,7 @@ export class DevelopmentService {
       console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
     }
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
-    await storeKnowledge(this.deps.knowledgeSink, task, output, workChanged);
+    await storeKnowledge(this.deps.knowledgeSink, task, output);
     return {
       status: "completed",
       delivered: { kind: "merged", mergeCommit: finalizeResult.mergeCommit },

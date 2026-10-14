@@ -297,6 +297,11 @@ export async function runMigrations(databaseUrl: string, migrationsDir: string):
     if (drift !== undefined) throw drift;
 
     const pending = files.filter((f) => !applied.has(f.filename));
+    // A migration reports what it did to existing rows (a backfill, a deletion) through RAISE
+    // NOTICE; without a listener pg drops it and the count is never seen.
+    client.on("notice", (notice) => {
+      console.log(`  [migrate] ${notice.severity ?? "NOTICE"}: ${notice.message ?? "(no message)"}`);
+    });
     for (const file of pending) {
       await inTransaction(client, "apply", [file.filename], async () => {
         await client.query(file.sql);

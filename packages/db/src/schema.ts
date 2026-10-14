@@ -209,6 +209,10 @@ export const knowledgeEntries = pgTable("knowledge_entries", {
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   freshness: varchar({ length: 10 }).notNull().default("fresh"),
   sourceTaskId: uuid("source_task_id").references(() => workItems.id),
+  // Migration 050: every entry belongs to one project, and every read filters by it.
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id),
 });
 
 // ---------------------------------------------------------------------------
@@ -274,6 +278,10 @@ export const failedApproaches = pgTable("failed_approaches", {
     onDelete: "set null",
   }),
   epicId: uuid("epic_id").references(() => workItems.id),
+  // Migration 050: every lesson belongs to one project, and every read filters by it.
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id),
   title: text().notNull(),
   approachDescription: text("approach_description").notNull(),
   failureReason: text("failure_reason").notNull(),

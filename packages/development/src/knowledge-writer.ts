@@ -1,34 +1,31 @@
+import type { ProjectId } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { TaskDescriptor, ExecutionResult } from "./execution-service.js";
 import type { TaskSpec } from "./types.js";
 
 export interface KnowledgeSink {
   storeFinding(
+    projectId: ProjectId,
     taskId: string,
     epicId: string | null,
     title: string,
     content: string,
     tags: string[],
   ): Promise<void>;
-  storeInsight(
-    taskId: string | null,
-    epicId: string | null,
-    title: string,
-    content: string,
-  ): Promise<void>;
 }
 
 /**
- * Task-scoping input for `KnowledgeSource` queries (kl-t2). `epicId` is the
- * task's true Epic ancestor (`TaskDescriptor.epicId`, `null` when the walk
- * found none) — the predicate that closes the cross-project leak Q5
- * identified (`recentFindings` previously had no scope predicate at all).
- * `queryText` is embedder-free lexical signal derived from the task's own
- * spec (title + goal + endState + scope + deliverables), letting the
- * port rank same-epic rows by relevance to THIS task instead of returning an
- * identical top-N to every task in the epic (Q3b).
+ * Task-scoping input for `KnowledgeSource` queries (kl-t2). `projectId` is the
+ * task's project: a read never returns another project's rows (migration 051,
+ * ADR-074 d92 a). `epicId` is the task's true Epic ancestor
+ * (`TaskDescriptor.epicId`, `null` when the walk found none), narrowing within
+ * the project. `queryText` is embedder-free lexical signal derived from the
+ * task's own spec (title + goal + endState + scope + deliverables), letting the
+ * port rank rows by relevance to THIS task instead of returning an identical
+ * top-N to every task in the epic (Q3b).
  */
 export interface KnowledgeScope {
+  readonly projectId: ProjectId;
   readonly epicId: string | null;
   readonly queryText: string;
 }
@@ -62,16 +59,14 @@ export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
 }
 
 /**
- * Persists agent output as knowledge entries. `filesChanged` is the
- * host-computed list from `getChangedFiles(workDir)` (execution-service),
- * not the agent's own observation — the cell's `.git` is a throwaway repository
- * of its own, never the task branch, so Z0 is the single source.
+ * Persists the agent's findings as knowledge entries of the task's project. The
+ * summary and changed files are not stored: git already records them (lessons
+ * H3), and a note restating them only crowded the brief.
  */
 export async function storeKnowledge(
   knowledgeSink: KnowledgeSink,
   task: TaskDescriptor,
   output: AgentOutputJson,
-  filesChanged: readonly string[],
 ): Promise<void> {
   // task.epicId is the true walked-up Epic id the orchestrator resolves
   // (kl-t2/Q5); task.parentId is a fallback for
@@ -83,6 +78,7 @@ export async function storeKnowledge(
     if (finding.length > 0) {
       try {
         await knowledgeSink.storeFinding(
+          task.projectId,
           task.id,
           epicId,
           finding.slice(0, 100),
@@ -92,17 +88,6 @@ export async function storeKnowledge(
       } catch (e) {
         console.warn(`[${task.id}] failed to store finding:`, e);
       }
-    }
-  }
-
-  const summary = output.summary;
-  if (summary) {
-    const fileList = filesChanged.join(", ");
-    const content = `Task completed: ${summary}\n\nFiles changed: ${fileList}`;
-    try {
-      await knowledgeSink.storeInsight(task.id, epicId, summary.slice(0, 100), content);
-    } catch (e) {
-      console.warn(`[${task.id}] failed to store task insight:`, e);
     }
   }
 }
@@ -126,7 +111,7 @@ export async function storeFailureKnowledge(
   const title = `${task.title} — ${result.status}`.slice(0, 100);
   const content = `Task '${task.title}' ${result.status} on attempt ${result.attempt}: ${result.detail}`;
   try {
-    await knowledgeSink.storeFinding(task.id, epicId, title, content, [
+    await knowledgeSink.storeFinding(task.projectId, task.id, epicId, title, content, [
       "task-failure",
       `outcome:${result.status}`,
     ]);

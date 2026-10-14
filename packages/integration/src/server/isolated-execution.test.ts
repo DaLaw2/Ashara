@@ -182,7 +182,7 @@ describe("a task runs on cells end to end", () => {
     const service = new DevelopmentService({
       config: { workdirBase },
       sessionStore: sessions,
-      knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+      knowledgeSink: { storeFinding: async () => {} },
       eventSink: { emit: (event) => void events.push(event) },
       intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
       cells: { substrate, baseCell: base, instance },

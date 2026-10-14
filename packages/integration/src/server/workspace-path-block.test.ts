@@ -129,7 +129,7 @@ describe("a project whose workspace path is refused", () => {
     const developmentService = new DevelopmentService({
       config: { workdirBase },
       sessionStore: { insert: notExercised("insert"), complete: notExercised("complete"), fail: notExercised("fail") },
-      knowledgeSink: { storeFinding: notExercised("storeFinding"), storeInsight: notExercised("storeInsight") },
+      knowledgeSink: { storeFinding: notExercised("storeFinding") },
       intentSource: { loadIntent: notExercised("loadIntent") },
       cells: {
         substrate,

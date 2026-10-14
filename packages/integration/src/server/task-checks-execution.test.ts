@@ -158,7 +158,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
-    knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+    knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", inferences: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },

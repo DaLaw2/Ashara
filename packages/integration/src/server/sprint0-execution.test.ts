@@ -210,7 +210,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: sessions,
-    knowledgeSink: { storeFinding: async () => {}, storeInsight: async () => {} },
+    knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", inferences: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },

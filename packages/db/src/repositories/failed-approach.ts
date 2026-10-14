@@ -1,4 +1,4 @@
-import { desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../connection.js";
 import { failedApproaches } from "../schema.js";
 
@@ -6,6 +6,7 @@ export class FailedApproachRepository {
   constructor(private readonly db: Database) {}
 
   async record(
+    projectId: string,
     taskId: string | null,
     epicId: string | null,
     title: string,
@@ -15,6 +16,7 @@ export class FailedApproachRepository {
     affectedArea: string,
   ) {
     await this.db.insert(failedApproaches).values({
+      projectId,
       taskId,
       epicId,
       title,
@@ -26,12 +28,12 @@ export class FailedApproachRepository {
   }
 
   /**
-   * Task-scoped counterpart to `recentFindingsScoped` (kl-t2) — same epic-scope
-   * + lexical-relevance combination, mirrored here because `failed_approaches`
-   * is a separate table from `knowledge_entries`, not a shared query. See
-   * `KnowledgeRepository.recentFindingsScoped` for the full rationale.
+   * Task-scoped counterpart to `recentFindingsScoped` (kl-t2) — same project-scope,
+   * epic-scope and lexical-relevance combination, mirrored here because
+   * `failed_approaches` is a separate table from `knowledge_entries`, not a shared
+   * query. See `KnowledgeRepository.recentFindingsScoped` for the full rationale.
    */
-  async failedApproachesScoped(epicId: string | null, queryText: string, limit: number) {
+  async failedApproachesScoped(projectId: string, epicId: string | null, queryText: string, limit: number) {
     const trimmedQuery = queryText.trim();
     const epicScope = epicId
       ? or(eq(failedApproaches.epicId, epicId), isNull(failedApproaches.epicId))
@@ -52,7 +54,7 @@ export class FailedApproachRepository {
         affectedArea: failedApproaches.affectedArea,
       })
       .from(failedApproaches)
-      .where(epicScope)
+      .where(and(eq(failedApproaches.projectId, projectId), epicScope))
       .orderBy(desc(relevance), desc(failedApproaches.recordedAt))
       .limit(limit);
   }

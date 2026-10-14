@@ -375,7 +375,7 @@ function serviceOn(
   const service = new DevelopmentService({
     config: { workdirBase },
     sessionStore: probe.sessions,
-    knowledgeSink: { storeFinding: async () => void probe.findings++, storeInsight: async () => {} },
+    knowledgeSink: { storeFinding: async () => void probe.findings++ },
     intentSource: { loadIntent: async () => VISION },
     cells: {
       substrate,

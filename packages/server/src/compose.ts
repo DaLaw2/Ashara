@@ -281,10 +281,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   const knowledgeSink: KnowledgeSink = {
-    storeFinding: (tid, eid, title, content, tags) =>
-      knowledgeRepo.storeKnowledgeFinding(tid, eid, title, content, tags),
-    storeInsight: (tid, eid, title, content) =>
-      knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
+    storeFinding: (pid, tid, eid, title, content, tags) =>
+      knowledgeRepo.storeKnowledgeFinding(pid, tid, eid, title, content, tags),
   };
 
   // Execution infrastructure: every tool call and every check runs in a cell on
@@ -325,9 +323,10 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   });
 
   const knowledgeSource: KnowledgeSource = {
-    recentFindings: (scope, limit) => knowledgeRepo.recentFindingsScoped(scope.epicId, scope.queryText, limit),
+    recentFindings: (scope, limit) =>
+      knowledgeRepo.recentFindingsScoped(scope.projectId, scope.epicId, scope.queryText, limit),
     failedApproaches: (scope, limit) =>
-      failedApproachRepo.failedApproachesScoped(scope.epicId, scope.queryText, limit),
+      failedApproachRepo.failedApproachesScoped(scope.projectId, scope.epicId, scope.queryText, limit),
   };
 
   const devEventSink: ExecutionEventSink = {

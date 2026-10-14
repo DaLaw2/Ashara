@@ -6,6 +6,7 @@ export class KnowledgeRepository {
   constructor(private readonly db: Database) {}
 
   async storeKnowledgeFinding(
+    projectId: string,
     taskId: string,
     epicId: string | null,
     title: string,
@@ -17,6 +18,7 @@ export class KnowledgeRepository {
       title,
       content,
       source: `task:${taskId}`,
+      projectId,
       epicId,
       sourceTaskId: taskId,
       eventTime: new Date(),
@@ -24,40 +26,18 @@ export class KnowledgeRepository {
     });
   }
 
-  async storeKnowledgeInsight(taskId: string | null, epicId: string | null, title: string, content: string) {
-    await this.db.insert(knowledgeEntries).values({
-      kind: "insight",
-      title,
-      content,
-      source: taskId ? `task:${taskId}` : `task:insight`,
-      epicId,
-      sourceTaskId: taskId,
-      eventTime: new Date(),
-    });
-  }
-
   /**
-   * Task-scoped knowledge injection (kl-t2, investigation Q3/Q5). Replaces the
-   * unscoped `recentFindings(limit)` — every one of Run 10's 29 tasks got the
-   * same byte-identical global top-10 because that query carried no epic or
-   * relevance predicate at all. This combines both embedder-free levers the
-   * investigation confirmed available:
-   *   - epic scope (Q3a): `epic_id = epicId`, so a task in epic B never cites
-   *     epic A's findings (the cross-project leak Q5 identified — `epic_id`
-   *     had no predicate before). Rows with `epic_id IS NULL` are treated as
-   *     explicitly global — they were never written into any epic's scope in
-   *     the first place, so surfacing them everywhere is not a leak of
-   *     someone else's project, just an unscoped note. A task with no epic
-   *     ancestor (`epicId === null`) matches only that same explicitly-global
-   *     set, never another task's epic-scoped rows (fail-closed).
-   *   - lexical relevance (Q3b): `ts_rank` over `plainto_tsquery` ranks
-   *     epic-scope matches by relevance to the task's own spec text instead of
-   *     recency alone, so two tasks in the same epic no longer see an
-   *     identical ordering either. An empty/blank `queryText` (or a query with
-   *     no lexical overlap at all) falls back to recency via the `eventTime`
-   *     tiebreak — never an empty result and never a crash.
+   * Task-scoped knowledge injection (kl-t2, investigation Q3/Q5). Combines:
+   *   - project scope (migration 051, ADR-074 d92 a): only `projectId`'s rows, so two
+   *     projects on one database never see each other's findings.
+   *   - epic scope (Q3a): within the project, `epic_id = epicId` or a row written
+   *     outside any epic (`epic_id IS NULL`, a project-wide note). A task with no epic
+   *     ancestor (`epicId === null`) matches only the project-wide rows.
+   *   - lexical relevance (Q3b): `ts_rank` over `plainto_tsquery` ranks matches by
+   *     relevance to the task's own spec text; a blank query or no lexical overlap
+   *     falls back to recency via the `eventTime` tiebreak.
    */
-  async recentFindingsScoped(epicId: string | null, queryText: string, limit: number) {
+  async recentFindingsScoped(projectId: string, epicId: string | null, queryText: string, limit: number) {
     const trimmedQuery = queryText.trim();
     const epicScope = epicId
       ? or(eq(knowledgeEntries.epicId, epicId), isNull(knowledgeEntries.epicId))
@@ -79,6 +59,7 @@ export class KnowledgeRepository {
       .from(knowledgeEntries)
       .where(
         and(
+          eq(knowledgeEntries.projectId, projectId),
           ne(knowledgeEntries.freshness, "archived"),
           ne(knowledgeEntries.kind, "decision"),
           epicScope,

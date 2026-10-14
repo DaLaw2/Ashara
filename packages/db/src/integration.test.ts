@@ -336,6 +336,7 @@ describe("KnowledgeRepository", () => {
 
   test("storeKnowledgeFinding inserts a finding and it can be read back", async () => {
     await repo.storeKnowledgeFinding(
+      testProjectId,
       taskId,
       epicId,
       "Test Finding Title",
@@ -397,6 +398,7 @@ describe("FailedApproachRepository", () => {
 
   test("record inserts a failed approach and it can be read back", async () => {
     await repo.record(
+      testProjectId,
       taskId,
       epicId,
       "Bad Architecture Choice",
@@ -420,5 +422,65 @@ describe("FailedApproachRepository", () => {
     expect(row.failureReason).toBe("Over-engineering, latency issues");
     expect(row.learned).toBe("Keep it simple for solo projects");
     expect(row.affectedArea).toBe("architecture");
+    expect(row.projectId).toBe(testProjectId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Two projects on one database (migration 051, ADR-074 d92 a)
+// ---------------------------------------------------------------------------
+
+describe("project-scoped knowledge", () => {
+  const projectTasks = new Map<ProjectId, string>();
+  let otherProjectId: ProjectId;
+
+  beforeAll(async () => {
+    otherProjectId = (await new ProjectRepository(db).create(`db-intg-other-${randomUUID().slice(0, 8)}`, testClientId)).id;
+    const wiRepo = new WorkItemRepository(db);
+    for (const projectId of [testProjectId, otherProjectId]) {
+      const taskId = randomUUID();
+      await wiRepo.create({ id: taskId, level: "Task", status: "Pending", title: "Scoped Task", runScope: "test-run", projectId });
+      createdWorkItemIds.push(taskId);
+      projectTasks.set(projectId, taskId);
+    }
+  });
+
+  afterAll(async () => {
+    for (const projectId of projectTasks.keys()) {
+      await db.execute(sql`DELETE FROM knowledge_entries WHERE project_id = ${projectId}`);
+      await db.execute(sql`DELETE FROM failed_approaches WHERE project_id = ${projectId}`);
+    }
+    const otherTask = projectTasks.get(otherProjectId);
+    if (otherTask !== undefined) await db.execute(sql`DELETE FROM work_items WHERE id = ${otherTask}`);
+    await db.execute(sql`DELETE FROM projects WHERE id = ${otherProjectId}`);
+  });
+
+  function taskOf(projectId: ProjectId): string {
+    const taskId = projectTasks.get(projectId);
+    if (taskId === undefined) throw new Error(`test setup: no task for project ${projectId}`);
+    return taskId;
+  }
+
+  test("each project's read returns only its own findings and failed approaches", async () => {
+    const knowledge = new KnowledgeRepository(db);
+    const approaches = new FailedApproachRepository(db);
+    for (const projectId of projectTasks.keys()) {
+      const taskId = taskOf(projectId);
+      await knowledge.storeKnowledgeFinding(projectId, taskId, null, `finding of ${projectId}`, "shared words", []);
+      await approaches.record(projectId, taskId, null, `approach of ${projectId}`, "d", "shared words", "l", "a");
+    }
+
+    for (const projectId of projectTasks.keys()) {
+      const findings = await knowledge.recentFindingsScoped(projectId, null, "shared words", 50);
+      expect(findings.map((f) => f.title)).toEqual([`finding of ${projectId}`]);
+      const failed = await approaches.failedApproachesScoped(projectId, null, "shared words", 50);
+      expect(failed.map((f) => f.title)).toEqual([`approach of ${projectId}`]);
+    }
+  });
+
+  test("a dependency edge across two projects is refused", async () => {
+    await expect(
+      db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${taskOf(testProjectId)}, ${taskOf(otherProjectId)})`),
+    ).rejects.toThrow();
   });
 });

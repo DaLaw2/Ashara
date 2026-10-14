@@ -80,6 +80,7 @@ export async function recordFailedApproach(
     const affectedArea = task.title.toLowerCase();
 
     await failedApproachRepo.record(
+      task.projectId,
       task.id,
       epicId,
       task.title,

@@ -280,7 +280,7 @@ describe("a turn refused at the project's spend cap", () => {
     const developmentService = new DevelopmentService({
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
-      knowledgeSink: { storeFinding: notExercised("storeFinding"), storeInsight: notExercised("storeInsight") },
+      knowledgeSink: { storeFinding: notExercised("storeFinding") },
       intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
       cells: {
         substrate: scriptedSubstrate(root),
