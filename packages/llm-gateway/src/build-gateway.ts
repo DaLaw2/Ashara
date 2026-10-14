@@ -1,4 +1,5 @@
 import { LLMGateway } from "./gateway.js";
+import type { LanguageModelFactory } from "./provider-registry.js";
 import { NoLLMProvidersConfigured, RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { resolveModelsConfigPath } from "./pricing.js";
 import { computeProviderCombo } from "./routing-profiles.js";
@@ -102,6 +103,8 @@ export interface BuildGatewayOptions {
    * of a time-windowed model depends on it.
    */
   readonly clock: () => Date;
+  /** What each resolved route's requests are sent to: the AI SDK adapters in production. */
+  readonly models: LanguageModelFactory;
 }
 
 /**
@@ -125,5 +128,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
 
   assertRoutingProfileComplete(config);
   assertRoutingProfileModelsPresent(config);
-  return new LLMGateway(config, options.recording, options.clock);
+  return new LLMGateway(config, options.recording, options.clock, options.models);
 }

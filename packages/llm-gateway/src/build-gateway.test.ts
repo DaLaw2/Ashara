@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { sdkLanguageModels } from "./provider-registry.js";
 import { buildGateway } from "./build-gateway.js";
 import { RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
 import { LLMGateway } from "./gateway.js";
@@ -32,6 +33,7 @@ function completeProfile(): Record<string, string> {
 
 function build(routingProfiles: RoutingProfiles): ReturnType<typeof buildGateway> {
   return buildGateway({
+    models: sdkLanguageModels,
     config: makeConfig(routingProfiles),
     checkedSources: ["test"],
     recording: { kind: "unrecorded", reason: "routing-profile boot checks make no call" },

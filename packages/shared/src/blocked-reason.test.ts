@@ -1,5 +1,5 @@
-import { describe, test, expect } from "vitest";
-import { blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, withSalvagedResult } from "./blocked-reason.js";
+import { describe, test, expect, expectTypeOf } from "vitest";
+import { BLOCKED_REASON_SOURCES, blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, withSalvagedResult } from "./blocked-reason.js";
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
@@ -194,5 +194,13 @@ describe("blockedReasonToRecord", () => {
     expect(record["source"]).toBe("replan");
     expect(record["reason"]).toBeUndefined();
     expect(record["replanContext"]).toEqual({ attempt: 1, detail: "gate failed", raw: {} });
+  });
+});
+
+describe("BLOCKED_REASON_SOURCES", () => {
+  test("names every source a stored reason can carry, each once", () => {
+    // Its `satisfies` admits no member that is not a source; this is the converse, checked by tsc.
+    expectTypeOf<(typeof BLOCKED_REASON_SOURCES)[number]>().toEqualTypeOf<StoredBlockedReason["source"]>();
+    expect(new Set(BLOCKED_REASON_SOURCES).size).toBe(BLOCKED_REASON_SOURCES.length);
   });
 });

@@ -29,11 +29,11 @@ export interface ResolvedProvider {
   providerType: ProviderType;
 }
 
-/** The adapter is chosen by the row's provider type; its name is identity only. */
-function createLanguageModel(
-  providerConfig: ProviderConfig,
-  modelConfig: ModelConfig,
-): LanguageModel {
+/** Makes the model a resolved route sends its requests to; the composition root chooses it. */
+export type LanguageModelFactory = (providerConfig: ProviderConfig, modelConfig: ModelConfig) => LanguageModel;
+
+/** The policy default: the AI SDK adapter of the row's provider type; its name is identity only. */
+export const sdkLanguageModels: LanguageModelFactory = (providerConfig, modelConfig) => {
   const type = providerConfig.providerType;
   switch (type) {
     case "anthropic": {
@@ -81,7 +81,7 @@ function createLanguageModel(
       ]);
     }
   }
-}
+};
 
 function findBestModel(
   models: ModelConfig[],
@@ -110,9 +110,11 @@ export class ProviderRegistry {
    * logic over the remaining providers — see resolveFromProfile).
    */
   private readonly enabledCombo: string;
+  private readonly createLanguageModel: LanguageModelFactory;
 
-  constructor(config: GatewayConfig) {
+  constructor(config: GatewayConfig, models: LanguageModelFactory) {
     this.config = config;
+    this.createLanguageModel = models;
     this.routingProfiles = config.routingProfiles;
     this.enabledCombo = computeProviderCombo(
       config.providers.filter((p) => p.enabled).map((p) => p.name),
@@ -230,7 +232,7 @@ export class ProviderRegistry {
       const model = providerConfig.models.find((m) => m.id === modelId);
       if (model) {
         return {
-          provider: createLanguageModel(providerConfig, model),
+          provider: this.createLanguageModel(providerConfig, model),
           modelConfig: model,
           providerName: providerConfig.name,
           providerType: providerConfig.providerType,
@@ -273,7 +275,7 @@ export class ProviderRegistry {
       const modelConfig = findBestModel(providerConfig.models, capability);
       if (modelConfig) {
         return {
-          provider: createLanguageModel(providerConfig, modelConfig),
+          provider: this.createLanguageModel(providerConfig, modelConfig),
           modelConfig,
           providerName: providerConfig.name,
           providerType: providerConfig.providerType,

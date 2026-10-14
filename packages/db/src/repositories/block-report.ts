@@ -20,7 +20,11 @@ import { blockingReview } from "./suite-review.js";
 // against that episode in the same transaction, so a retried or concurrent post tells the client
 // once.
 
-const ProjectBlockKindSchema = z.enum([
+/**
+ * Every kind a project block episode can record.
+ * @testseam lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
+ */
+export const PROJECT_BLOCK_KINDS = [
   "budget_cap",
   "configuration",
   "fault",
@@ -29,7 +33,9 @@ const ProjectBlockKindSchema = z.enum([
   "replan_bound",
   "suite_review",
   "plan_repair",
-]);
+] as const;
+
+const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
 
 /** A task given up whose repair a plan_repair block left awaited. */

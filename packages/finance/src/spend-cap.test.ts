@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { BudgetExceeded } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
@@ -63,6 +63,7 @@ function stubModel(usage: { input: number | undefined; output: number | undefine
 function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]): { readonly gateway: LLMGateway; readonly cap: SpendCap } {
   const cap = new SpendCap({ ledger: calls, projects, caps });
   const gateway = buildGateway({
+    models: sdkLanguageModels,
     config: {
       providers: [
         { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [MODEL], enabled: true },

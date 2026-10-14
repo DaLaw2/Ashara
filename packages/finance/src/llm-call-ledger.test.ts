@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { buildGateway, withStructuredLadder } from "@ashara/llm-gateway";
+import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
 import { LlmCallLedger } from "./llm-call-ledger.js";
@@ -71,6 +71,7 @@ function gateway(
     thinking,
   };
   return buildGateway({
+    models: sdkLanguageModels,
     config,
     checkedSources: ["test"],
     recording: {

@@ -7,6 +7,7 @@ import {
   loadRoutingProfilesFromToml,
   measureCost,
   resolveModelsConfigPath,
+  sdkLanguageModels,
   toModelConfig,
 } from "@ashara/llm-gateway";
 
@@ -84,6 +85,7 @@ describe("the model catalog", () => {
       },
       { kind: "unrecorded", reason: "resolution only: no request is sent" },
       () => new Date(),
+      sdkLanguageModels,
     );
 
     expect(gateway.resolveModel("Strong", "decomposition").modelId).toBe("claude-sonnet-5-5");

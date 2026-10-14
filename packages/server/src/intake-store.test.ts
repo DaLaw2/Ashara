@@ -15,7 +15,7 @@ import {
 import { TenderIntake } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import type { ProjectId } from "@ashara/shared";
 import { createIntakeStore } from "./intake-store.js";
@@ -149,6 +149,7 @@ beforeAll(async () => {
     defaultProvider: "deepseek",
   };
   gateway = buildGateway({
+    models: sdkLanguageModels,
     config,
     checkedSources: ["test"],
     recording: { kind: "recorded", recorder: new LlmCallLedger(

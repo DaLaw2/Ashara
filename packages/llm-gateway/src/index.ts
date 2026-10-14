@@ -7,6 +7,8 @@ export { describeUnmeasuredCost, measureCost, resolveModelsConfigPath } from "./
 export { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 export { loadThinkingPolicyFromToml } from "./thinking.js";
 export { buildGateway } from "./build-gateway.js";
+export { sdkLanguageModels } from "./provider-registry.js";
+export type { LanguageModelFactory } from "./provider-registry.js";
 export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
 export { NoLLMProvidersConfigured, PreCallRefusal } from "./errors.js";

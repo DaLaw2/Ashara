@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { TaskDescriptor } from "@ashara/development";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import type { CapabilityLevel, StoredTaskSpec } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
@@ -22,6 +22,7 @@ function model(id: string, capabilityLevel: CapabilityLevel, outputCostPer1M: nu
 
 // No routing profile for the combo: agent-runner requests take capability logic (findBestModel).
 const gateway = buildGateway({
+  models: sdkLanguageModels,
   config: {
     providers: [{
       name: "deepseek", providerType: "deepseek", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", enabled: true,

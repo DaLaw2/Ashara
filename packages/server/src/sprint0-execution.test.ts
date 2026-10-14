@@ -27,9 +27,9 @@ import type { SessionStore, TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
@@ -189,6 +189,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
   });
   stub.model = mock;
   const gateway = buildGateway({
+    models: sdkLanguageModels,
     config: {
       providers: [
         { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
@@ -237,6 +238,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     checks: createTaskCheckStore(db),
     suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
     shutdownSignal: new AbortController().signal,
+    clock: systemClock,
   });
   try {
     const result = await service.execute(task, target);

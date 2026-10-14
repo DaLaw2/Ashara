@@ -12,7 +12,10 @@ export class TaskSelector {
         const wb = unlockWeights.get(b.id) ?? 0;
         if (wa !== wb) return wb - wa;
       }
-      return a.createdAt.getTime() - b.createdAt.getTime();
+      const byAge = a.createdAt.getTime() - b.createdAt.getTime();
+      if (byAge !== 0) return byAge;
+      // Items created in one transaction share a timestamp: the id makes their order a function of the items, not of the input order.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
     return sorted.slice(0, maxBatchSize);
   }

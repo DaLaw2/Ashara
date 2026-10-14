@@ -15,7 +15,7 @@ import {
 } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
-import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
+import type { ProjectId, WorkItemId, AgentBrief, Clock, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRunPreview, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
@@ -824,6 +824,26 @@ interface SuiteReviewProblemsResult {
   readonly errorEnvelope: ErrorEnvelope;
 }
 
+/**
+ * Every status an ExecutionResult can carry. `satisfies` keeps each member a real status;
+ * execution-service.test.ts checks the converse, that no status is missing.
+ * @testseam execution-service.test.ts checks it names every status; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
+ */
+export const EXECUTION_STATUSES = [
+  "completed",
+  "failed",
+  "blocked",
+  "suite_review_problems",
+  "environment_blocked",
+  "environment_undefined",
+  "refused",
+  "checks_stale",
+  "disputed",
+  "environment_change_requested",
+  "owner_unresolved",
+  "interrupted",
+] as const satisfies readonly ExecutionResult["status"][];
+
 export type ExecutionResult =
   | AgentExecutionResult
   | CompletedResult
@@ -994,6 +1014,8 @@ export interface DevelopmentServiceDeps {
   readonly suiteReview: SuiteReviewing;
   /** Aborted on shutdown: an attempt in flight ends as cancelled. */
   readonly shutdownSignal: AbortSignal;
+  /** What an attempt's wall clock reads. */
+  readonly clock: Clock;
 }
 
 export class DevelopmentService {
@@ -1656,7 +1678,7 @@ export class DevelopmentService {
       {
         llm: this.deps.llm,
         cell: createCellBackend(d.cell, { toolTimeoutSeconds: attemptPolicy.toolTimeoutSeconds }),
-        clock: { now: () => Date.now() },
+        clock: this.deps.clock,
         records: d.records,
         signal: this.deps.shutdownSignal,
         environment: task.workKind === "environment" ? environmentCheckPort(this.environmentScope(d)) : null,

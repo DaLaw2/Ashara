@@ -264,6 +264,31 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
 export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
 /**
+ * Every `source` a stored blocked reason can carry. `satisfies` keeps each member a real source;
+ * blocked-reason.test.ts checks the converse, that no source is missing.
+ * @testseam blocked-reason.test.ts checks it names every source; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
+ */
+export const BLOCKED_REASON_SOURCES = [
+  "task_failed",
+  "orchestrator_error",
+  "replan",
+  "failure_router",
+  "environment_unavailable",
+  "environment_undefined",
+  "checks_stale",
+  "environment_change_needed",
+  "owner_unresolved",
+  "checks_rewrite_bound",
+  "check_disputed",
+  "suite_review_unresolved",
+  "dependency_unsatisfiable",
+  "merge_unrecorded",
+  "superseded",
+  "operator_unblock",
+  "api",
+] as const satisfies readonly StoredBlockedReason["source"][];
+
+/**
  * Typed failure for a blocked_reason jsonb value that is present but unreadable.
  */
 export class BlockedReasonCorrupt extends Error {

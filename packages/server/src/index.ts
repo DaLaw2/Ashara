@@ -1,127 +1,13 @@
-import { join } from "node:path";
 import { serve } from "@hono/node-server";
-import {
-  createDb,
-  WorkItemRepository as DbWorkItemRepository,
-  EventStoreRepository,
-  DevSessionRepository,
-  VisionRepository,
-  ProjectRepository,
-  ConfigRepository,
-  KnowledgeRepository,
-  FailedApproachRepository,
-  ContractRepository,
-  SecretRepository,
-  LlmCallRepository,
-  ClientMessageRepository,
-  ClientSessionRepository,
-  ClientRepository,
-  ClientLoginFailureRepository,
-  EnvironmentBuildRepository,
-  CheckDisputeRepository,
-  SuiteReviewFindingRepository,
-  createProjectWithTender,
-  latestRosterRevision,
-  latestRosterRoles,
-  assertMigrationsCurrent,
-  MIGRATIONS_DIR,
-  MigrationDriftError,
-} from "@ashara/db";
-import {
-  CoreLoop,
-  ContinuousRunner,
-  EventLogger,
-  reconcileOnStartup,
-} from "@ashara/orchestrator";
-import type { CoreLoopDeps } from "@ashara/orchestrator";
-import {
-  FailureRouter,
-  FirstPlanner,
-  Replanner,
-} from "@ashara/planning";
-import { DevelopmentService, SuiteReviewer, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
-import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
-import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import type {
-  AgentStaffing,
-  SessionStore,
-  KnowledgeSink,
-  KnowledgeSource,
-  ExecutionEventSink,
-  ContractSource,
-  ProjectIntentSource,
-  EnvironmentImages,
-} from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
-import {
-  buildGateway,
-  buildGatewayConfig,
-  loadRoutingProfilesFromToml,
-  loadThinkingPolicyFromToml,
-  resolveModelsConfigPath,
-  toModelConfig,
-  LLMGateway,
-  NoLLMProvidersConfigured,
-} from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { SecretStore } from "@ashara/security";
-import type { ProjectId, ProjectContract } from "@ashara/shared";
-import { parseWorkItemId } from "@ashara/shared";
-import type { WorkItemRepository } from "@ashara/planning";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
-import { buildApp } from "./app.js";
-import { loadServerConfig, loadDatabaseUrl } from "./config.js";
-import type { AppDeps } from "./routes.js";
-import { cellInstanceFor, reconcileCellsAtStartup, teardownCellsAtShutdown } from "./cells.js";
-import {
-  ServerStartupRefused,
-  loadApiToken,
-  loadServerMasterKey,
-  resolveProviderCredentials,
-} from "./secrets.js";
-import { loadWebClientAssets } from "./web-client.js";
-import { createAnswerStore } from "./answer-store.js";
-import { createClientStopStore } from "./client-stop-store.js";
-import { createIntakeStore } from "./intake-store.js";
-import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
-import { createReplanStore } from "./replan-store.js";
-import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
-import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
-import { createFatalExit, reconcileOrRefuse } from "./fail-closed.js";
-import { createRosterStore } from "./roster-store.js";
-import { createAgentStaffing } from "./staffing.js";
-import { determineCapability } from "./task-capability.js";
-
-// Policy defaults for the web client's sessions (ADR-076). A session lasts a
-// working day; a failed login answers one second after it arrived.
-const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
-const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
-// Login throttle, per fifteen-minute window and per source (an IPv4 address or an
-// IPv6 /64, source-network.ts), task t-login-hardening:
-// - 5 per (name, source): a client is closed out only by its own source's failures.
-// - 20 per source across names: one source cannot walk many names.
-// No cap counts across sources, so no number of sources locks out a client, or
-// every client, that they are not. The price is that distributed guessing is
-// bounded per source, not in total; against that the code itself carries the
-// entropy (MIN_CLIENT_ACCESS_CODE_LENGTH).
-// The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
-// (ADR-074 d56); 25 turns is the cap the agent loop has always had.
-const ATTEMPT_POLICY = {
-  maxTurns: 25,
-  perCommandTimeoutSeconds: 300,
-  toolTimeoutSeconds: 60,
-};
-// Wall clock of one `podman build` of an environment version (build_environment and the
-// Sprint 0 gate); the podman client is killed after it.
-const ENVIRONMENT_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
-
-const CLIENT_LOGIN_THROTTLE = {
-  windowSeconds: 15 * 60,
-  perNameAndSource: 5,
-  perSource: 20,
-};
+import { createPgPool } from "@ashara/db";
+import { execFileGitRunner, spawnProcess } from "@ashara/execution-infra";
+import { NoLLMProvidersConfigured, sdkLanguageModels } from "@ashara/llm-gateway";
+import { systemClock } from "@ashara/shared";
+import { composeAshara } from "./compose.js";
+import type { AsharaInstance } from "./compose.js";
+import { loadDatabaseUrl } from "./config.js";
+import { loadServerMasterKey } from "./secrets.js";
+import { createFatalExit } from "./fail-closed.js";
 
 // Policy: how long a fatal error waits for the graceful shutdown (cancelled attempts,
 // cell removal, pool close) before the process exits without it.
@@ -132,91 +18,20 @@ async function main(): Promise<void> {
   // can be read (ADR-075 C2). Then the database URL from env or policy default.
   const masterKey = loadServerMasterKey(process.env);
   const databaseUrl = loadDatabaseUrl();
-  // Fail closed on schema drift: a database that ran a different draft of a
-  // migration otherwise surfaces only as a runtime query error.
+
+  // The production ports: a plain pg pool, the AI SDK providers, podman spawned directly, the
+  // host's git and the host's clock.
+  let ashara: AsharaInstance;
   try {
-    await assertMigrationsCurrent(databaseUrl, MIGRATIONS_DIR);
-  } catch (err: unknown) {
-    if (err instanceof MigrationDriftError) {
-      throw new ServerStartupRefused(
-        `The database schema does not match migrations/: ${err.message}`,
-        `schema_migrations in ${redactedDatabaseUrl(databaseUrl)}`,
-        driftFixes(err),
-        { cause: err },
-      );
-    }
-    throw err;
-  }
-  const db = createDb(databaseUrl);
-  const secretStore = new SecretStore(new SecretRepository(db), masterKey);
-  console.log(`Secret store: master key ${masterKey.id}`);
-
-  const dbWorkItemRepo = new DbWorkItemRepository(db);
-  const eventStore = new EventStoreRepository(db);
-  const devSessionRepo = new DevSessionRepository(db);
-  const visionRepo = new VisionRepository(db);
-  const projectRepo = new ProjectRepository(db);
-  const configRepo = new ConfigRepository(db);
-  const knowledgeRepo = new KnowledgeRepository(db);
-  const failedApproachRepo = new FailedApproachRepository(db);
-  const contractRepo = new ContractRepository(db);
-
-  const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
-
-  // Phase 2: API token from the secret store (ADR-075 C4). Fail-closed: a
-  // missing token means the server cannot authenticate any request.
-  const apiToken = await loadApiToken(secretStore);
-
-  const config = loadServerConfig(databaseUrl, apiToken);
-
-  // Single composition-root call for the LLM gateway (ADR-030). There is no
-  // silent fallback here: zero providers -> NoLLMProvidersConfigured
-  // propagates out of this block and the server refuses to start (see catch
-  // below).
-  const pipelineLogPath = join(config.coreLoop.workdirBase, "pipeline.jsonl");
-  const eventLogger = new EventLogger(pipelineLogPath);
-  console.log(`Pipeline event log: ${pipelineLogPath}`);
-
-  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => {
-    eventLogger.emit({ event: "ladder_attempt", ...attempt });
-  };
-
-  // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
-  // every provider request the gateway refuses an unpriced model and a call whose
-  // worst case would cross the project's or the deployment's cap; after it, one
-  // llm_calls row. The loop reads the same cap to stop at the deployment's.
-  const llmCallRepo = new LlmCallRepository(db);
-  const spendCap = new SpendCap({ ledger: llmCallRepo, projects: projectRepo, caps: config.spendCaps });
-  console.log(
-    `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls)`,
-  );
-  const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
-  let llmGateway: LLMGateway;
-  try {
-    // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
-    // Load from DB, convert to the llm-gateway ModelConfig shape, and build the
-    // gateway config. Routing profiles remain deployment-specific TOML config.
-    const dbModelRows = await configRepo.listModelConfigs();
-    const models: Record<string, ModelConfig> = {};
-    for (const row of dbModelRows) {
-      models[row.modelId] = toModelConfig("model_configs", row);
-    }
-    // Provider keys from the secret store, one per provider_configs row
-    // (ADR-075 C2): their only source. The agent's turns run in this process
-    // through this gateway, so no key leaves it.
-    const dbProviderRows = await configRepo.listProviderConfigs();
-    const credentials = await resolveProviderCredentials(secretStore, dbProviderRows);
-    const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
-    const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
-    gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
-    llmGateway = buildGateway({
-      config: gwConfig,
-      checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
-      recording: { kind: "recorded", recorder: llmCallLedger },
-      clock: () => new Date(),
+    ashara = await composeAshara({
+      masterKey,
+      databaseUrl,
+      createPool: createPgPool,
+      models: sdkLanguageModels,
+      processRunner: spawnProcess,
+      git: execFileGitRunner,
+      clock: systemClock,
     });
-    console.log("LLM gateway initialized");
-    console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
   } catch (err) {
     if (err instanceof NoLLMProvidersConfigured) {
       console.error("FATAL: LLM gateway refused to start (ADR-030) -- server will not boot.");
@@ -228,260 +43,17 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  const failureRouter = new FailureRouter(3);
-  // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
-  const abortController = new AbortController();
+  // Startup reconciliation (Discipline B) — MUST run before the runner starts cycling.
+  await ashara.startup();
 
-  const sessionStore: SessionStore = {
-    insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
-    complete: (sid) => devSessionRepo.complete(sid),
-    fail: (sid, vr) => devSessionRepo.fail(sid, vr),
-  };
-
-  const knowledgeSink: KnowledgeSink = {
-    storeFinding: (tid, eid, title, content, tags) =>
-      knowledgeRepo.storeKnowledgeFinding(tid, eid, title, content, tags),
-    storeInsight: (tid, eid, title, content) =>
-      knowledgeRepo.storeKnowledgeInsight(tid, eid, title, content),
-  };
-
-  // Execution infrastructure: every tool call and every check runs in a cell on
-  // this podman (s-isolated-worker-m1). The cells are labelled with this
-  // deployment's instance, so startup reconciliation removes only its own.
-  const cellSubstrate = new PodmanSubstrate({
-    podmanPath: config.podmanBinary,
-    mountRoot: config.coreLoop.workdirBase,
-  });
-  const cellInstance = cellInstanceFor(config.coreLoop.workdirBase);
-  const environmentBuildRepo = new EnvironmentBuildRepository(db);
-  const baseCell = await loadBaseCell();
-  console.log(`Cells: substrate ${config.podmanBinary}, instance ${cellInstance}, base image ${baseCell.image}`);
-
-  // The agent half of each task's Assignment, resolved once per attempt: the work item's owner
-  // role from the project's latest stored roster (s-team-roster-m1), and the model.
-  const staffing: AgentStaffing = createAgentStaffing({
-    async ownerOf(taskId) {
-      const row = await dbWorkItemRepo.findById(taskId);
-      return row === null ? { kind: "absent" } : { kind: "found", ownerRoleId: row.ownerRoleId };
-    },
-    latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
-    latestRosterRevision: (projectId) => latestRosterRevision(db, projectId),
-    resolveModel(task) {
-      const capability = determineCapability(task);
-      const graded = task.taskSpec?.capability;
-      if (capability !== graded) {
-        console.log(`[${task.id}] model escalated from graded ${graded ?? "(none)"} to ${capability} (attempt ${task.attempt})`);
-      }
-      return llmGateway.resolveModel(capability, "agent-runner");
-    },
-  });
-
-  const knowledgeSource: KnowledgeSource = {
-    recentFindings: (scope, limit) => knowledgeRepo.recentFindingsScoped(scope.epicId, scope.queryText, limit),
-    failedApproaches: (scope, limit) =>
-      failedApproachRepo.failedApproachesScoped(scope.epicId, scope.queryText, limit),
-  };
-
-  const devEventSink: ExecutionEventSink = {
-    emit: (event) => eventLogger.emit(event),
-  };
-
-  // A task's project is the project_id on its own row (migration 014): the
-  // contract and the vision are both keyed by it, so no reader walks the parent
-  // chain or falls back on a global latest. A task that cannot be found yields
-  // null and blocks the dispatch — handing an agent some other project's
-  // contract or intent would be worse than stopping.
-  const findTaskProjectId = async (taskId: string): Promise<ProjectId | null> => {
-    const task = await workItemRepo.findById(parseWorkItemId(taskId, "taskId"));
-    return task ? task.projectId : null;
-  };
-
-  // The task's project contract: its knowledge graph names the entry point.
-  const contractSource: ContractSource = {
-    async loadForTask(taskId: string): Promise<ProjectContract | null> {
-      const projectId = await findTaskProjectId(taskId);
-      return projectId ? contractRepo.getLatest(projectId) : null;
-    },
-  };
-
-  // The brief's intent: the task's project's current vision, its VERBATIM
-  // visionText (never the summary: the paraphrase is the step that dropped "Go"
-  // in Run 36) and its assumptions, which Development parses.
-  const intentSource: ProjectIntentSource = {
-    async loadIntent(taskId: string) {
-      const projectId = await findTaskProjectId(taskId);
-      if (!projectId) return null;
-      const vision = await visionRepo.getCurrent(projectId);
-      return vision === null ? null : { version: vision.version, visionText: vision.visionText, inferences: vision.inferences };
-    },
-  };
-
-  const environmentImages: EnvironmentImages = {
-    build: (request) =>
-      buildEnvironmentImage(request, {
-        substrate: cellSubstrate,
-        recorder: environmentBuildRepo,
-        timeoutMs: ENVIRONMENT_BUILD_TIMEOUT_MS,
-      }),
-    prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
-  };
-
-  const developmentService = new DevelopmentService({
-    config: {
-      workdirBase: config.coreLoop.workdirBase,
-    },
-    sessionStore,
-    knowledgeSink,
-    knowledgeSource,
-    eventSink: devEventSink,
-    intentSource,
-    contractSource,
-    cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
-    llm: llmGateway,
-    staffing,
-    attemptPolicy: ATTEMPT_POLICY,
-    environment: {
-      images: environmentImages,
-      statements: {
-        record: (taskId, statement, version) => dbWorkItemRepo.recordEnvironmentStatement(taskId, statement, version),
-        forVersion: (projectId, version) => dbWorkItemRepo.environmentStatementFor(projectId, version),
-      },
-    },
-    checks: createTaskCheckStore(db),
-    suiteReview: new SuiteReviewer({ llm: llmGateway, source: createSuiteReviewSource(db), onAttempt: ladderAttemptSink }),
-    shutdownSignal: abortController.signal,
-  });
-
-  // One Liaison path for every project block's report: a dispute-bound block is reported by it too.
-  const blockReports = new BlockReports(createBlockReportStore(db));
-  const coreLoopDeps: CoreLoopDeps = {
-    config: config.coreLoop,
-    workItemRepo,
-    eventStore,
-    failedApproachRepo,
-    projectRepo,
-    developmentService,
-    eventLogger,
-    failureRouter,
-    spendCap,
-    clientStops: new ClientStops(createClientStopStore(db)),
-    liaisonIntake: new TenderIntake({
-      llm: llmGateway,
-      store: createIntakeStore(db),
-      onAttempt: ladderAttemptSink,
-    }),
-    liaisonAnswers: new ClientAnswers({
-      llm: llmGateway,
-      store: createAnswerStore(db),
-      onAttempt: ladderAttemptSink,
-    }),
-    rosterDerivation: new RosterDerivation({
-      llm: llmGateway,
-      store: createRosterStore(db),
-      onAttempt: ladderAttemptSink,
-    }),
-    firstPlanning: new FirstPlanner({
-      llm: llmGateway,
-      store: createFirstPlanStore(db),
-      onAttempt: ladderAttemptSink,
-    }),
-    replanning: new Replanner({
-      llm: llmGateway,
-      store: createReplanStore(db),
-      onAttempt: ladderAttemptSink,
-    }),
-    planReports: new PlanReports(createPlanReportStore(db)),
-    stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
-    checkDisputes: new CheckDisputeRepository(db),
-    blockReports,
-    disputeReports: blockReports,
-    suiteReviewFindings: new SuiteReviewFindingRepository(db),
-    suiteReviewReports: blockReports,
-    parkedExits: createParkedExitChecks(db),
-    // The environment task an implementation needs is owned by the role doing environment work.
-    async environmentOwner(projectId) {
-      const roster = parseStoredRoster(projectId, await latestRosterRoles(db, projectId));
-      try {
-        return { kind: "role", roleId: ownerOf(roster, "environment").id };
-      } catch (e) {
-        if (!(e instanceof WorkKindOwnerUnresolved)) throw e;
-        return { kind: "none", why: e.message };
-      }
-    },
-  };
-
-  const coreLoop = new CoreLoop(coreLoopDeps);
-
-  const runner = new ContinuousRunner(coreLoop, { databaseUrl: config.databaseUrl });
-
-  const appDeps: AppDeps = {
-    workItemRepo: dbWorkItemRepo,
-    eventStore,
-    devSessionRepo,
-    visionRepo,
-    projectRepo,
-    clientMessageRepo: new ClientMessageRepository(db),
-    clientRepo: new ClientRepository(db),
-    createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
-    async discardTaskBranch(projectId, taskId) {
-      const project = await projectRepo.get(projectId);
-      if (project === null || project.workspacePath === null) return;
-      const result = await discardTaskBranch(project.workspacePath, taskId);
-      console.log(`[unblock] task ${taskId}: branch ${result === "deleted" ? "deleted" : "absent"}; it restarts from main`);
-    },
-  };
-
-  // The web client (ADR-076) authenticates with a session cookie, never the API token.
-  const app = buildApp(config.apiToken, appDeps, {
-    projectRepo: appDeps.projectRepo,
-    clientMessageRepo: appDeps.clientMessageRepo,
-    clientRepo: appDeps.clientRepo,
-    createTender: appDeps.createTender,
-    secrets: secretStore,
-    sessionRepo: new ClientSessionRepository(db),
-    loginFailureRepo: new ClientLoginFailureRepository(db),
-    loginThrottle: CLIENT_LOGIN_THROTTLE,
-    sessionTtlSeconds: CLIENT_SESSION_TTL_SECONDS,
-    loginFailureDelayMs: CLIENT_LOGIN_FAILURE_DELAY_MS,
-    assets: loadWebClientAssets(),
-  });
-
-  // Startup reconciliation (Discipline B) — MUST run before the runner starts
-  // cycling. A prior process may have crashed mid-dispatch, leaving items InProgress
-  // with no owning agent, or Failed with no recovery routed. Reset orphans to Pending
-  // and route parked Failed items through the same FailureRouter policy so the gate
-  // (Pending-only) sees the recovered work on the first cycle. Idempotent, and
-  // per-item fail-closed inside; a pass that throws as a whole refuses the start.
-  await reconcileOrRefuse(
-    () =>
-      reconcileOnStartup({
-        workItemRepo,
-        projects: projectRepo,
-        eventStore,
-        failureRouter,
-        devSessionStore: devSessionRepo,
-        workdirBase: config.coreLoop.workdirBase,
-      }),
-    `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${config.coreLoop.workdirBase}`,
-  );
-
-  // Cells a previous process of this instance leaked, removed before any dispatch.
-  await reconcileCellsAtStartup(cellSubstrate, cellInstance);
-
-  // Environment images an earlier process left of versions main no longer uses (third run N12).
-  // Pruning never fails the start: each project's failure is logged and retried next time.
-  for (const project of await projectRepo.listWithWorkspace()) {
-    await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages);
-  }
-
-  const runnerPromise = runner.run(abortController.signal);
+  const runnerPromise = ashara.runner.run(ashara.shutdownSignal);
 
   const server = serve({
-    fetch: app.fetch,
-    port: config.port,
+    fetch: ashara.app.fetch,
+    port: ashara.port,
   });
 
-  console.log(`Ashara server listening on port ${config.port}`);
+  console.log(`Ashara server listening on port ${ashara.port}`);
   console.log("Continuous runner started in background");
 
   // One shutdown, shared by SIGTERM/SIGINT and the fatal-error exit: stop accepting
@@ -492,11 +64,11 @@ async function main(): Promise<void> {
       console.log("Shutting down...");
       // The abort cancels every attempt in flight; each dispatch then tears its
       // own cells down, and the drain below removes whatever is left.
-      abortController.abort();
+      ashara.abort();
       server.close();
       await runnerPromise;
-      await teardownCellsAtShutdown(cellSubstrate);
-      await db.$client.end();
+      await ashara.teardownCells();
+      await ashara.closeDatabase();
     })();
     return shutdownRun;
   };
@@ -505,44 +77,15 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown());
 
   const loopStop = await runnerPromise;
-  if (loopStop && !abortController.signal.aborted) {
+  if (loopStop && !ashara.shutdownSignal.aborted) {
     console.error(`FATAL: the continuous runner stopped: ${loopStop.reason}. HTTP stays up; SIGTERM to exit.`);
-    await teardownCellsAtShutdown(cellSubstrate);
+    await ashara.teardownCells();
     console.log("Continuous runner stopped; HTTP still serving");
     return;
   }
   await shutdown();
   console.log("Server and continuous runner stopped");
 }
-
-function redactedDatabaseUrl(databaseUrl: string): string {
-  return databaseUrl.replace(/\/\/[^@/]*@/, "//***@");
-}
-
-/** One repair per drifted file: the operator sees every file to fix, not the first. */
-function driftFixes(err: MigrationDriftError): string {
-  return err.drifts
-    .map((d) => {
-      switch (d.kind) {
-        case "hash_mismatch":
-          return (
-            `repair the schema by hand to match the committed ${d.filename}, then set its ` +
-            `schema_migrations.content_sha256 to ${d.fileSha256}; never edit an applied migration`
-          );
-        case "applied_without_file":
-          return `restore ${d.filename} under the name it ran as; never rename or delete an applied migration`;
-        case "not_applied":
-        case "hash_unrecorded":
-        case "tracking_table_missing":
-          return "run `just migrate` against this database";
-        case "no_migration_files":
-          return "check out the repository's migrations/ directory";
-      }
-    })
-    .filter((fix, i, all) => all.indexOf(fix) === i)
-    .join("; ");
-}
-
 
 const fatalExit = createFatalExit({
   deadlineMs: FATAL_SHUTDOWN_DEADLINE_MS,

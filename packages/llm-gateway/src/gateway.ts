@@ -17,6 +17,7 @@ import {
 import { describeUnmeasuredCost, measureCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
+import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
 import { thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
 import { assistantMessageOf, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
@@ -115,8 +116,8 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   private readonly clock: () => Date;
   private readonly thinking: ThinkingPolicy | undefined;
 
-  constructor(config: GatewayConfig, recording: CallRecording, clock: () => Date) {
-    this.registry = new ProviderRegistry(config);
+  constructor(config: GatewayConfig, recording: CallRecording, clock: () => Date, models: LanguageModelFactory) {
+    this.registry = new ProviderRegistry(config, models);
     this.recording = recording;
     this.clock = clock;
     this.thinking = config.thinking;

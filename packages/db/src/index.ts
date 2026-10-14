@@ -1,5 +1,5 @@
-export { DEFAULT_DATABASE_URL, createDb } from "./connection.js";
-export type { DbTransaction } from "./connection.js";
+export { DEFAULT_DATABASE_URL, createDb, createPgPool } from "./connection.js";
+export type { DbTransaction, PoolFactory } from "./connection.js";
 
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
@@ -26,6 +26,8 @@ export {
   recordReplanFailure,
   withPlanRevisionTransaction,
 } from "./repositories/replan.js";
+/** @testseam lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer */
+export { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
 export { listDueBlockReports, postProjectBlockReport, postTaskBlockedReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";

@@ -1,14 +1,10 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { execFile } from "node:child_process";
 import { access, mkdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { describeErrorChain } from "@ashara/shared";
-import { initHostRepo, runHostGit, type HostRepo } from "@ashara/execution-infra";
+import { initHostRepo, runHostGit, runOwnRepoGit, type HostRepo } from "@ashara/execution-infra";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
-
-const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Pure utility functions (no BC dependencies)
@@ -319,9 +315,7 @@ export async function ensureTargetGitInit(targetProjectPath: string): Promise<vo
 async function resolveAsharaRepoRoot(): Promise<string> {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: moduleDir,
-    });
+    const { stdout } = await runOwnRepoGit(moduleDir, ["rev-parse", "--show-toplevel"]);
     return await realpath(stdout.trim());
   } catch (err) {
     // Fail closed: if the repo root can't be determined, refuse rather than

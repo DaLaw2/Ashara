@@ -5,6 +5,50 @@ import { WorkspaceSnapshotFailed } from "./errors.js";
 
 const execFileAsync = promisify(execFile);
 
+/** One run of the `git` binary. Absent `env` inherits the process environment; absent `maxBuffer` is execFile's own. */
+interface GitInvocation {
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly maxBuffer?: number;
+}
+
+/**
+ * Every host git call goes through this port. Both methods reject like execFile on a non-zero
+ * exit: the rejection carries `code` and `stderr` (a string from `text`, a Buffer from `bytes`).
+ */
+export interface GitRunner {
+  text(invocation: GitInvocation): Promise<{ stdout: string; stderr: string }>;
+  bytes(invocation: GitInvocation): Promise<Buffer>;
+}
+
+function execOptions(invocation: GitInvocation): { cwd: string; env?: NodeJS.ProcessEnv; maxBuffer?: number } {
+  return {
+    cwd: invocation.cwd,
+    ...(invocation.env === undefined ? {} : { env: invocation.env }),
+    ...(invocation.maxBuffer === undefined ? {} : { maxBuffer: invocation.maxBuffer }),
+  };
+}
+
+/** The policy default: the host's `git`, by execFile, never a shell. */
+export const execFileGitRunner: GitRunner = {
+  text: (invocation) => execFileAsync("git", [...invocation.args], execOptions(invocation)),
+  async bytes(invocation) {
+    const { stdout } = await execFileAsync("git", [...invocation.args], { ...execOptions(invocation), encoding: "buffer" });
+    return stdout;
+  },
+};
+
+let gitRunner: GitRunner = execFileGitRunner;
+
+/**
+ * Chooses the runner every later host git call of this process uses. Called by the composition
+ * root only: git calls are module functions here, so the choice is process-wide.
+ */
+export function useGitRunner(runner: GitRunner): void {
+  gitRunner = runner;
+}
+
 /**
  * A repository as Z0 addresses it. Cells write the work tree, so Z0's git never discovers its
  * repository from that tree: a cell could rewrite a worktree's `.git` gitlink to a git dir it
@@ -41,11 +85,12 @@ function hostGitEnv(): NodeJS.ProcessEnv {
 
 /** git against an explicit git dir and work tree, hardened; rejects on a non-zero exit like execFile. */
 export async function runHostGit(repo: HostRepo, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync(
-    "git",
-    [`--git-dir=${repo.gitDir}`, `--work-tree=${repo.workTree}`, ...HARDENING, ...args],
-    { cwd: repo.workTree, env: hostGitEnv(), maxBuffer: MAX_OUTPUT_BYTES },
-  );
+  return gitRunner.text({
+    args: [`--git-dir=${repo.gitDir}`, `--work-tree=${repo.workTree}`, ...HARDENING, ...args],
+    cwd: repo.workTree,
+    env: hostGitEnv(),
+    maxBuffer: MAX_OUTPUT_BYTES,
+  });
 }
 
 /**
@@ -54,12 +99,12 @@ export async function runHostGit(repo: HostRepo, args: readonly string[]): Promi
  * pathspec magic. stdout is bytes: a blob is not necessarily text.
  */
 export async function runHostGitObjects(gitDir: string, args: readonly string[]): Promise<Buffer> {
-  const { stdout } = await execFileAsync(
-    "git",
-    [`--git-dir=${gitDir}`, "--literal-pathspecs", ...HARDENING, ...args],
-    { cwd: gitDir, env: hostGitEnv(), maxBuffer: MAX_OUTPUT_BYTES, encoding: "buffer" },
-  );
-  return stdout;
+  return gitRunner.bytes({
+    args: [`--git-dir=${gitDir}`, "--literal-pathspecs", ...HARDENING, ...args],
+    cwd: gitDir,
+    env: hostGitEnv(),
+    maxBuffer: MAX_OUTPUT_BYTES,
+  });
 }
 
 /**
@@ -93,7 +138,7 @@ export async function snapshotRepository(workTree: string, gitDir: string): Prom
   const git = async (step: string, args: readonly string[]): Promise<string> => {
     const argv = [...SNAPSHOT_HARDENING, ...args];
     try {
-      const { stdout } = await execFileAsync("git", argv, { cwd: workTree, env, maxBuffer: MAX_OUTPUT_BYTES });
+      const { stdout } = await gitRunner.text({ args: argv, cwd: workTree, env, maxBuffer: MAX_OUTPUT_BYTES });
       return stdout.trim();
     } catch (err) {
       const failure = execFailureSchema.safeParse(err);
@@ -113,5 +158,13 @@ export async function snapshotRepository(workTree: string, gitDir: string): Prom
 
 /** `git init` creates the git dir, so it runs before there is a HostRepo; hardened all the same. */
 export async function initHostRepo(path: string): Promise<void> {
-  await execFileAsync("git", [...HARDENING, "init", "-b", "main", "--", path], { cwd: path, env: hostGitEnv() });
+  await gitRunner.text({ args: [...HARDENING, "init", "-b", "main", "--", path], cwd: path, env: hostGitEnv() });
+}
+
+/**
+ * git in a directory of Ashara's own checkout, never a target's: unhardened and with the process
+ * environment, as a developer's own `git` there runs.
+ */
+export async function runOwnRepoGit(cwd: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
+  return gitRunner.text({ args, cwd });
 }

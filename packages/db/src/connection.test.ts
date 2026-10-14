@@ -32,6 +32,23 @@ describe("createDb pool", () => {
   });
 });
 
+describe("createDb's pool factory", () => {
+  test("every query runs on the pool the factory made for the database URL", async () => {
+    const configs: pg.PoolConfig[] = [];
+    const db = createDb(DATABASE_URL, (config) => {
+      configs.push(config);
+      return new pg.Pool({ ...config, application_name: "pool-factory-probe" });
+    });
+    try {
+      const result = await db.execute(sql`SELECT current_setting('application_name') AS name`);
+      expect(z.object({ name: z.string() }).parse(result.rows[0]).name).toBe("pool-factory-probe");
+      expect(configs).toEqual([{ connectionString: DATABASE_URL }]);
+    } finally {
+      await db.$client.end();
+    }
+  });
+});
+
 describe("a refused connect through the one serializer", () => {
   // localhost resolves to ::1 and 127.0.0.1, so node's connect rejects with an AggregateError whose
   // own message is empty and whose per-address errors sit in its non-enumerable `errors`.

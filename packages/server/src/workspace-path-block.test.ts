@@ -18,10 +18,10 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
@@ -96,6 +96,7 @@ describe("a project whose workspace path is refused", () => {
     stub.model = mock;
     const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
     const gateway = buildGateway({
+      models: sdkLanguageModels,
       config: {
         providers: [
           {
@@ -145,6 +146,7 @@ describe("a project whose workspace path is refused", () => {
       checks: { foundationOf: notExercised("foundationOf"), checkFilesOf: notExercised("checkFilesOf"), completedOf: notExercised("completedOf"), checkedTasksOf: notExercised("checkedTasksOf"), storedOfProject: notExercised("storedOfProject"), append: notExercised("append"), latest: notExercised("latest") },
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
+      clock: systemClock,
     });
 
     const workItems = new WorkItemRepository(db);

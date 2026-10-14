@@ -25,10 +25,10 @@ import { BlockReports } from "@ashara/engagement";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { FailureRouter, classifyFailure } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createTaskCheckStore } from "./task-check-store.js";
@@ -138,6 +138,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   });
   stub.model = mock;
   const gateway = buildGateway({
+    models: sdkLanguageModels,
     config: {
       providers: [
         { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
@@ -189,6 +190,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     checks: createTaskCheckStore(db),
     suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
     shutdownSignal: new AbortController().signal,
+    clock: systemClock,
   });
   const result = await service.execute(task, target);
   const { stdout } = await run("podman", ["ps", "-a", "-q", "--filter", `label=ashara.task=${task.id}`]);

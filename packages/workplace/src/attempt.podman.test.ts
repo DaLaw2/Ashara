@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PodmanSubstrate, createCellBackend, loadBaseCell } from "@ashara/execution-infra";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LlmCallRecorder, LlmProviderCall, ModelConfig } from "@ashara/llm-gateway";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { runAttempt } from "./attempt.js";
@@ -76,6 +76,7 @@ describe("runAttempt on a real cell", () => {
     const rows: LlmProviderCall[] = [];
     const recorder: LlmCallRecorder = { assertPriced: () => {}, record: async (call) => void rows.push(call) };
     const gateway = buildGateway({
+      models: sdkLanguageModels,
       config: {
         providers: [
           { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },

@@ -21,12 +21,12 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
@@ -62,6 +62,7 @@ function notExercised(label: string): () => never {
 
 function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): LLMGateway {
   return buildGateway({
+    models: sdkLanguageModels,
     config: {
       providers: [
         { name: "deepseek", providerType: "deepseek", apiKey: "k", baseUrl: "https://stub.invalid/v1", models: [MODEL], enabled: true },
@@ -298,6 +299,7 @@ describe("a turn refused at the project's spend cap", () => {
       },
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
+      clock: systemClock,
     });
 
     const workItems = new WorkItemRepository(db);

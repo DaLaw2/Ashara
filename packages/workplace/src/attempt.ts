@@ -3,6 +3,7 @@ import type { CellBackend } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, TurnResult } from "@ashara/llm-gateway";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import { describeErrorChain, serializeError } from "@ashara/shared";
+import type { Clock } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
 import type { CheckDefinitionPort } from "./check-definition.js";
@@ -22,16 +23,12 @@ import { executeTool, toolSchemasFor } from "./tools.js";
  */
 const AGENT_CALL_SITE = "agent-runner";
 
-interface Clock {
-  /** Milliseconds; only differences are used. */
-  now(): number;
-}
-
 export interface AttemptDeps {
   /** The recorded gateway: every turn is one generateTurn call, one llm_calls row. */
   readonly llm: ContextualTurnLlm;
   /** The task's cell; every tool call goes through it, none touches the host filesystem. */
   readonly cell: CellBackend;
+  /** Only differences of its readings are used. */
   readonly clock: Clock;
   readonly records: AttemptRecordSink;
   /** Aborting it ends the attempt as cancelled, the in-flight model call included. */

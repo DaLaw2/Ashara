@@ -26,8 +26,14 @@ export type DbTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0
 /** Either a pooled connection or an open transaction. Repositories accept both. */
 export type DbHandle = Database | DbTransaction;
 
-export function createDb(databaseUrl: string) {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+/** Makes the pool every query of one Database runs on; the composition root chooses it. */
+export type PoolFactory = (config: pg.PoolConfig) => pg.Pool;
+
+/** The policy default: a plain node-postgres pool. */
+export const createPgPool: PoolFactory = (config) => new pg.Pool(config);
+
+export function createDb(databaseUrl: string, createPool: PoolFactory = createPgPool) {
+  const pool = createPool({ connectionString: databaseUrl });
   // pg-pool emits 'error' when an IDLE pooled client loses its connection (database restart,
   // pg_terminate_backend, network drop) and has already evicted that client. Without a listener the
   // emit throws and reaches the server's fatal uncaughtException path, so an unreachable database

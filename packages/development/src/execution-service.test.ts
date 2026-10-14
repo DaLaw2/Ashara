@@ -4,17 +4,17 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import { EnvironmentBuildFailed, PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
-import { createAgentBrief, createWorkItemId, parseProjectId, wrapError } from "@ashara/shared";
+import { createAgentBrief, createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
 import type { Outcome } from "@ashara/workplace";
 import { toAgentOutput } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
-import { DevelopmentService, withSessionLifecycle } from "./execution-service.js";
+import { DevelopmentService, EXECUTION_STATUSES, withSessionLifecycle } from "./execution-service.js";
 import { taskBranchName } from "./merge.js";
 import { checkBranchName } from "./task-checks.js";
 import type { StoredCheckFile, TaskCheckStore, TaskChecks } from "./task-checks.js";
@@ -411,6 +411,7 @@ function serviceOn(
       },
     },
     shutdownSignal,
+    clock: systemClock,
   });
   return { service, probe, events };
 }
@@ -1438,5 +1439,13 @@ describe("toAgentOutput", () => {
       { input: 0, output: 0 },
     );
     expect(output).toMatchObject({ total_cost: 0.1, cost_measured: false });
+  });
+});
+
+describe("EXECUTION_STATUSES", () => {
+  test("names every status an ExecutionResult can carry, each once", () => {
+    // Its `satisfies` admits no member that is not a status; this is the converse, checked by tsc.
+    expectTypeOf<(typeof EXECUTION_STATUSES)[number]>().toEqualTypeOf<ExecutionResult["status"]>();
+    expect(new Set(EXECUTION_STATUSES).size).toBe(EXECUTION_STATUSES.length);
   });
 });

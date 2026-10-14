@@ -2,7 +2,20 @@ import { z } from "zod";
 
 export type WorkItemLevel = "Epic" | "Task";
 
-export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
+/**
+ * Every status a work item can hold; the type is derived from it so the list cannot fall behind.
+ * @testseam db lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
+ */
+export const WORK_ITEM_STATUSES = ["Pending", "InProgress", "Completed", "Blocked", "Failed", "Abandoned"] as const;
+
+export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
+
+/**
+ * Every status a project can hold: the `projects_status_known` CHECK constraint
+ * (migrations/028_project_client_stop.sql) admits exactly these.
+ * @testseam db lifecycle-lists.test.ts compares it with the CHECK constraint; the lifecycle model of story s-independent-verify-m1 L2 is its consumer
+ */
+export const PROJECT_STATUSES = ["active", "blocked", "stopped"] as const;
 
 export type CapabilityLevel = "Frontier" | "Strong" | "Medium" | "Light";
 
@@ -26,14 +39,6 @@ export const TERMINAL_SESSION_PHASES: readonly SessionPhase[] = ["Completed", "F
 
 const CAPABILITY_LEVELS: readonly CapabilityLevel[] = ["Frontier", "Strong", "Medium", "Light"] as const;
 const WORK_ITEM_LEVELS: readonly WorkItemLevel[] = ["Epic", "Task"] as const;
-const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = [
-    "Pending",
-    "InProgress",
-    "Completed",
-    "Blocked",
-    "Failed",
-    "Abandoned",
-] as const;
 
 export function parseCapabilityLevel(raw: string): CapabilityLevel {
     if (!(CAPABILITY_LEVELS as readonly string[]).includes(raw)) {

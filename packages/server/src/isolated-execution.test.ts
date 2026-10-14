@@ -14,9 +14,9 @@ import { DevelopmentService } from "@ashara/development";
 import type { SessionStore, TaskCheckStore } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { createWorkItemId } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { cellInstanceFor, reconcileCellsAtStartup } from "./cells.js";
 
@@ -147,6 +147,7 @@ describe("a task runs on cells end to end", () => {
     stub.model = mock;
 
     const gateway = buildGateway({
+      models: sdkLanguageModels,
       config: {
         providers: [
           { name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true },
@@ -203,6 +204,7 @@ describe("a task runs on cells end to end", () => {
       checks,
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,
+      clock: systemClock,
     });
 
     try {
