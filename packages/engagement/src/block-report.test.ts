@@ -19,28 +19,28 @@ function reportsFor(due: readonly Due[]) {
   return { reports: new BlockReports(store), posted };
 }
 
-/** Words that would leak Ashara's internals into the client channel. */
-const INTERNAL = /[a-z]+_[a-z]+|[A-Z][a-z]+[A-Z][A-Za-z]+|Error|roster|operator_|blocked_reason/;
-
 describe("project block reports", () => {
   test.each(["budget_cap", "configuration", "fault", "planning_stopped"] as const)(
-    "%s: one plain report saying work is paused, what the team needs, and that the operator is awaited",
+    "%s: one report saying work is paused, the recorded cause, and that the operator is awaited",
     async (kind) => {
-      const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind }]);
+      const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded` };
+      const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }]);
 
       expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
 
       expect(posted).toHaveLength(1);
       expect(posted[0].key).toBe("e1:blocked");
-      expect(posted[0].body).not.toMatch(INTERNAL);
+      expect(posted[0].body).toContain(`SomethingFailed: the ${kind} cause as recorded`);
       expect(posted[0].body).toContain("waiting on its operator");
     },
   );
 
-  test("the budget cap is named as the budget being reached", async () => {
-    const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap" }]);
+  test("a halt with no cause recorded says so, and claims none", async () => {
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "fault", cause: { errorClass: null, reason: null } },
+    ]);
     await reports.runPending();
-    expect(posted[0].body).toContain("the budget set for it has been reached");
+    expect(posted[0].body).toContain("No cause was recorded for this pause.");
   });
 
   test("a resumption after an unblock is told once, on its own episode", async () => {
@@ -50,19 +50,22 @@ describe("project block reports", () => {
   });
 });
 
-// Story s-loop-never-stop-m1 W6: each halt's one report states its observed cause.
+// Story s-independent-verify-m1 W7 (M2 trial M3): the cause told is the one observed, never a
+// sentence fixed per kind of halt.
 describe("halt reports state the observed cause", () => {
-  test("an infrastructure halt names the task and its failures, says it is not charged and resumes by itself", async () => {
+  test("an infrastructure halt quotes the recorded fault chain, says it is not charged and resumes by itself", async () => {
+    const reason =
+      "task t1 met 4 infrastructure fault(s), past the budget of 3 uncharged requeues; the project halts until the " +
+      "substrate probe passes. The last fault: task cell unavailable: exec wrapper killed by the command's own kill -9";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", fault: { taskTitle: "Write the lock checks", faults: 4 } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", cause: { errorClass: "InfrastructureFaultBudgetSpent", reason } },
     ]);
     await reports.runPending();
     expect(posted).toHaveLength(1);
-    expect(posted[0].body).toContain(`failed 4 times while working on "Write the lock checks"`);
+    expect(posted[0].body).toContain(`InfrastructureFaultBudgetSpent: ${reason}`);
     expect(posted[0].body).toContain("not charged");
     expect(posted[0].body).toContain("resumes this project by itself");
     expect(posted[0].body).not.toContain("operator");
-    expect(posted[0].body).not.toMatch(INTERNAL);
   });
 
   test("its resumption says the machines work again", async () => {
@@ -71,7 +74,7 @@ describe("halt reports state the observed cause", () => {
     expect(posted).toEqual([{ key: "e1:resumed", body: expect.stringContaining("the machines Ashara runs the work on work again") }]);
   });
 
-  test("an undeliverable halt names each task given up and why, in plain words", async () => {
+  test("an undeliverable halt names each task given up with the cause its record holds", async () => {
     const { reports, posted } = reportsFor([
       {
         subject: "project-blocked",
@@ -79,9 +82,13 @@ describe("halt reports state the observed cause", () => {
         projectId,
         kind: "plan_repair",
         abandoned: [
-          { title: "Lock the data directory", attempts: 3, cause: "failure_router" },
-          { title: "Review the checks", attempts: 1, cause: "suite_review_unresolved" },
-          { title: "Compact the log", attempts: 2, cause: "check_disputed" },
+          { title: "Lock the data directory", attempts: 3, cause: { source: "failure_router", reason: "attempts exhausted (3/3)", detail: "flock: lock held by pid 41" } },
+          { title: "Review the checks", attempts: 1, cause: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "checks 2 and 5 contradict" } },
+          {
+            title: "Acceptance on main 0123456789ab",
+            attempts: 0,
+            cause: { source: "acceptance_failed", mainCommit: "0123456789abcdef0123456789abcdef01234567", reason: `check "get" exited 1` },
+          },
         ],
       },
     ]);
@@ -89,9 +96,29 @@ describe("halt reports state the observed cause", () => {
     expect(posted).toHaveLength(1);
     const body = posted[0].body;
     expect(body).toContain("cannot deliver it as planned");
-    expect(body).toContain(`"Lock the data directory" (after 3 attempts: every attempt at it failed)`);
-    expect(body).toContain(`"Review the checks" (after 1 attempt: the review of the checks written for the plan kept finding problems in them)`);
-    expect(body).toContain(`"Compact the log" (after 2 attempts: its developer and the team could not settle whether a check`);
-    expect(body).not.toMatch(INTERNAL);
+    expect(body).toContain(`"Lock the data directory", after 3 attempts. As recorded: attempts exhausted (3/3) flock: lock held by pid 41`);
+    expect(body).toContain(`"Review the checks", after 1 attempt. As recorded: checks 2 and 5 contradict`);
+    expect(body).toContain(`the acceptance run on main 0123456789abcdef0123456789abcdef01234567 did not pass: check "get" exited 1`);
+    // The fixed per-source sentences are gone (Discipline D).
+    expect(body).not.toContain("every attempt at it failed");
+  });
+
+  test("a task given up through the API quotes the reason its caller stored, and says when none was", async () => {
+    const { reports, posted } = reportsFor([
+      {
+        subject: "project-blocked",
+        episodeId: "e1",
+        projectId,
+        kind: "plan_repair",
+        abandoned: [
+          { title: "Port the importer", attempts: 2, cause: { source: "api", reason: "superseded by the new importer" } },
+          { title: "Drop the cache", attempts: 0, cause: { source: "api" } },
+        ],
+      },
+    ]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).toContain(`"Port the importer", after 2 attempts. As recorded: it was moved by hand through Ashara's API, with this recorded: {"reason":"superseded by the new importer"}`);
+    expect(body).toContain(`"Drop the cache", after 0 attempts. As recorded: it was moved by hand through Ashara's API; no cause beyond that is recorded`);
   });
 });

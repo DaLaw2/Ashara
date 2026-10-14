@@ -33,8 +33,10 @@ const storedTaskSpecSchema = z.object({
   // together before any implementation starts (ADR-074 addendum 2 d71 c), or the product scaffold
   // decomposition adds after Sprint 0 and before the check tasks, in which the implementer role
   // sets up the product's module root, manifests and entry point (d72 B2; not the pre-033
-  // 'scaffold', which was Sprint 0). Absent on rows written before it was recorded.
-  origin: z.enum(["decomposition", "sprint0", "check", "environment-change", "review", "product-scaffold"]).optional(),
+  // 'scaffold', which was Sprint 0), or the defect Z0 opens for a failed acceptance sweep on main
+  // (migration 049), given up at once so the plan is repaired around it and never dispatched.
+  // Absent on rows written before it was recorded.
+  origin: z.enum(["decomposition", "sprint0", "check", "environment-change", "review", "product-scaffold", "acceptance"]).optional(),
   // What checks the task's work: "substrate" means the checks are the environment
   // substrate's own, so the task carries none of its own: for environment work the
   // definition parses, the image builds and its probe passes; for the product scaffold

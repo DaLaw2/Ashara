@@ -459,7 +459,9 @@ describe("a late client change is planned", () => {
     expect(await blockReports().runPending()).toEqual([]);
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(before + 1);
-    expect(reports[reports.length - 1]?.body).toContain("the plan has already been revised for your changes");
+    // The recorded cause (story s-independent-verify-m1 W7): the replanner's own ReplanBoundReached chain.
+    expect(reports[reports.length - 1]?.body).toContain("The cause, as Ashara recorded it: ReplanBoundReached: project ");
+    expect(reports[reports.length - 1]?.body).toContain("for client changes since the operator last reviewed it");
   });
 });
 
@@ -605,7 +607,8 @@ describe("a task the team gives up is planned around", () => {
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(before + 1);
     const body = reports[reports.length - 1]?.body ?? "";
-    expect(body).toContain(`"${givenUp[2] ?? ""}" (after`);
+    expect(body).toContain(`"${givenUp[2] ?? ""}", after`);
+    expect(body).toContain("As recorded: ");
     expect(body).not.toContain(givenUp[0] ?? "");
   });
 });

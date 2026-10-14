@@ -1,11 +1,41 @@
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { z } from "zod";
+import { PROJECT_STATUSES, parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { clientMessages, projects, workItems } from "../schema.js";
 import { ClientMessageRepository } from "./client-message.js";
 
 // The client's stop (migration 028). The Liaison consumes each inbound 'stop',
 // moves the project to 'stopped' and posts one report on it, together.
+
+/** work_items.merge_kind (migration 049); NULL on a record from before it. */
+const MergeKindSchema = z.enum(["merged", "already_delivered"]).nullable();
+
+/** A work item's stored merge_kind is none the migration 049 CHECK admits: the stop report cannot state how it closed. */
+class MergeKindUnreadable extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly workItemId: string,
+    readonly stored: unknown,
+    readonly detail: string,
+  ) {
+    super(
+      `cannot report the stop of project ${projectId}: work item ${workItemId} records merge_kind ` +
+        `${JSON.stringify(stored)}, expected 'merged', 'already_delivered' or NULL: ${detail}`,
+    );
+    this.name = "MergeKindUnreadable";
+  }
+}
+
+/** Every status the stop moves to 'stopped'; 'stopped' itself is already stopped. */
+const STOPPABLE_STATUSES = PROJECT_STATUSES.filter((status) => status !== "stopped");
+
+/** A task with a commit on record, and how that commit closed it (null: not recorded). */
+interface MergedTaskRow {
+  readonly title: string;
+  readonly commit: string;
+  readonly kind: z.infer<typeof MergeKindSchema>;
+}
 
 interface OpenStopRow {
   readonly id: string;
@@ -24,7 +54,7 @@ class ProjectStatusUnknown extends Error {
     readonly status: string | null,
   ) {
     super(
-      `cannot stop project ${projectId}: expected status active, blocked or stopped, found ` +
+      `cannot stop project ${projectId}: expected one of the statuses ${PROJECT_STATUSES.join(", ")}, found ` +
         `${status === null ? "no project row" : `'${status}'`}`,
     );
     this.name = "ProjectStatusUnknown";
@@ -56,15 +86,16 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
 export async function recordClientStop(
   db: Database,
   stop: OpenStopRow,
-  composeReport: (mergedTaskTitles: readonly string[]) => string,
+  composeReport: (merged: readonly MergedTaskRow[]) => string,
 ): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
 
+    // An accepted project (migration 049) waits for exactly this.
     const [moved] = await tx
       .update(projects)
       .set({ status: "stopped" })
-      .where(and(eq(projects.id, stop.projectId), inArray(projects.status, ["active", "blocked"])))
+      .where(and(eq(projects.id, stop.projectId), inArray(projects.status, STOPPABLE_STATUSES)))
       .returning({ id: projects.id });
     if (!moved) {
       const [existing] = await tx
@@ -82,8 +113,8 @@ export async function recordClientStop(
     // a Task Completed over the HTTP API with nothing merged, a Task preempted to
     // Abandoned may have merged before the preemption, and a session's terminal
     // write is fail-soft.
-    const merged = await tx
-      .select({ title: workItems.title })
+    const rows = await tx
+      .select({ id: workItems.id, title: workItems.title, commit: workItems.mergeCommit, kind: workItems.mergeKind })
       .from(workItems)
       .where(
         and(
@@ -93,7 +124,13 @@ export async function recordClientStop(
         ),
       )
       .orderBy(asc(workItems.updatedAt), asc(workItems.id));
-    const titles = merged.map((row) => row.title);
+    const merged: MergedTaskRow[] = [];
+    for (const row of rows) {
+      if (row.commit === null) continue;
+      const kind = MergeKindSchema.safeParse(row.kind);
+      if (!kind.success) throw new MergeKindUnreadable(stop.projectId, row.id, row.kind, z.prettifyError(kind.error));
+      merged.push({ title: row.title, commit: row.commit, kind: kind.data });
+    }
 
     const inserted = await tx
       .insert(clientMessages)
@@ -101,7 +138,7 @@ export async function recordClientStop(
         projectId: stop.projectId,
         direction: "outbound",
         kind: "report",
-        body: composeReport(titles),
+        body: composeReport(merged),
         inReplyTo: stop.id,
         reportsOn: "client-stop",
       })
@@ -110,6 +147,6 @@ export async function recordClientStop(
         where: isNotNull(clientMessages.reportsOn),
       })
       .returning({ id: clientMessages.id });
-    return { kind: "stopped", reported: inserted.length === 1, merged: titles.length };
+    return { kind: "stopped", reported: inserted.length === 1, merged: merged.length };
   });
 }

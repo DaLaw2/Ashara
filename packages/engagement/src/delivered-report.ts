@@ -1,0 +1,139 @@
+import type { ProjectId } from "@ashara/shared";
+
+// The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8; eighth run E3):
+// once a project is accepted on its sweep of main, the client is told, once, what was delivered:
+// each goal task and how its record says it closed, and which items of what they asked for no
+// stored check covers. Every sentence is rendered from a record (past-designs sweep #1): a close
+// whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
+// folded into "delivered" or into what passed: the opening claims only the run that happened.
+
+/** How a goal task's record says it closed. */
+type GoalClose =
+  | { readonly kind: "merged"; readonly commit: string }
+  /** Its checks passed on main at `commit` with nothing of its own merged; `by` is the task whose merge made that commit. */
+  | { readonly kind: "already-delivered"; readonly commit: string; readonly by: string | null }
+  | { readonly kind: "unrecorded-kind"; readonly commit: string }
+  | { readonly kind: "no-record" };
+
+/** The plan's vision items and those the checks the sweep ran trace to; or none recorded. */
+type VisionCoverage =
+  | { readonly kind: "recorded"; readonly items: readonly string[]; readonly checked: readonly string[] }
+  | { readonly kind: "unrecorded" };
+
+/** An accepted project whose delivered report the client has not been sent. */
+interface DueDeliveredReport {
+  readonly sweepId: string;
+  readonly projectId: ProjectId;
+  /** The commit on main the acceptance sweep passed on. */
+  readonly mainCommit: string;
+  readonly goals: ReadonlyArray<{ readonly title: string; readonly close: GoalClose }>;
+  /** The completed tasks whose stored checks the sweep ran, by title. */
+  readonly checked: readonly string[];
+  /** The completed tasks with no stored check, by title: nothing of theirs ran in the sweep. */
+  readonly unchecked: readonly string[];
+  /** Goal tasks given up, which the plan was repaired around, by title. */
+  readonly givenUp: readonly string[];
+  readonly vision: VisionCoverage;
+}
+
+/** Engagement's persistence port for delivered reports. */
+export interface DeliveredReportStore {
+  dueReports(): Promise<readonly DueDeliveredReport[]>;
+  /** Posts the report on the accepted sweep unless one is posted. */
+  postReport(sweepId: string, body: string): Promise<"posted" | "already-posted">;
+}
+
+interface DeliveredReportOutcome {
+  readonly kind: "posted" | "already-posted";
+  readonly projectId: ProjectId;
+}
+
+/** What the core loop asks of the Liaison each cycle (no LLM call). */
+export interface LiaisonDeliveredReports {
+  runPending(): Promise<readonly DeliveredReportOutcome[]>;
+}
+
+function closeLine(title: string, close: GoalClose): string {
+  switch (close.kind) {
+    case "merged":
+      return `- "${title}": built and merged, commit ${close.commit}.`;
+    case "already-delivered":
+      return (
+        `- "${title}": already delivered when its turn came; nothing of its own was merged. Its checks, and every ` +
+        `check of the work before it, passed on commit ${close.commit}` +
+        (close.by === null ? ", which no task's merge is recorded as making." : `, the merge of "${close.by}".`)
+      );
+    case "unrecorded-kind":
+      return `- "${title}": closed on commit ${close.commit}; whether it was merged or already delivered there is not on record.`;
+    case "no-record":
+      return `- "${title}": closed with no commit on record.`;
+  }
+}
+
+function coverageSection(vision: VisionCoverage): string {
+  if (vision.kind === "unrecorded") {
+    return "Which parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
+  }
+  const checked = new Set(vision.checked);
+  const uncovered = vision.items.filter((item) => !checked.has(item));
+  if (uncovered.length === 0) return "Every item of what you asked for is covered by at least one stored check that passed on main.";
+  return [
+    `These items of what you asked for are not checked: no stored check covers them, so nothing confirms them either way:`,
+    ...uncovered.map((item) => `- ${item}`),
+  ].join("\n");
+}
+
+/** What ran on main, and only that: the environment's test and the stored checks of the tasks named. */
+function opening(due: DueDeliveredReport): string {
+  const ran =
+    due.checked.length === 0
+      ? `the environment's test passed on main, commit ${due.mainCommit}; no stored check of any task ran with it`
+      : `the environment's test and the stored checks of ${plural(due.checked.length, "completed task")} passed together on main, commit ${due.mainCommit}`;
+  return `Your project is delivered. Every task of the plan is settled, and ${ran}.`;
+}
+
+/** Completed tasks with no stored check: done, but nothing confirmed them, kept apart from what passed. */
+function uncheckedSection(unchecked: readonly string[]): string[] {
+  if (unchecked.length === 0) return [];
+  return [
+    [
+      `These tasks are done but not checked by a stored check: none was written for them, so nothing in the run above confirms them:`,
+      ...unchecked.map((title) => `- "${title}"`),
+    ].join("\n"),
+  ];
+}
+
+function givenUpSection(givenUp: readonly string[]): string[] {
+  if (givenUp.length === 0) return [];
+  return [[`These tasks were given up, and the plan was revised around them:`, ...givenUp.map((title) => `- "${title}"`)].join("\n")];
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** The client's delivered report, every line from the records. */
+function deliveredReport(due: DueDeliveredReport): string {
+  return [
+    opening(due),
+    `What was delivered:\n${due.goals.map((goal) => closeLine(goal.title, goal.close)).join("\n")}`,
+    ...uncheckedSection(due.unchecked),
+    ...givenUpSection(due.givenUp),
+    coverageSection(due.vision),
+    `Nothing more is built on this project; it waits until you stop it.`,
+  ].join("\n\n");
+}
+
+export class DeliveredReports implements LiaisonDeliveredReports {
+  constructor(private readonly store: DeliveredReportStore) {}
+
+  /** A store failure throws through and fails the cycle. */
+  async runPending(): Promise<readonly DeliveredReportOutcome[]> {
+    const outcomes: DeliveredReportOutcome[] = [];
+    for (const due of await this.store.dueReports()) {
+      const kind = await this.store.postReport(due.sweepId, deliveredReport(due));
+      outcomes.push({ kind, projectId: due.projectId });
+    }
+    return outcomes;
+  }
+}

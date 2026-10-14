@@ -7,10 +7,12 @@ import type {
   LiaisonAnswers,
   LiaisonBlockReports,
   LiaisonClientStops,
+  LiaisonDeliveredReports,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
 } from "./acl/engagement-acl.js";
+import type { AcceptanceStore } from "./acceptance.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
@@ -122,6 +124,12 @@ export interface CoreLoopDeps {
    */
   readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts;
   readonly developmentService: Pick<DevelopmentService, "execute">;
+  /** Z0's acceptance sweep of a project on main HEAD (Development; no model is called). */
+  readonly acceptanceSweeper: Pick<DevelopmentService, "sweepForAcceptance">;
+  /** The acceptance sweeps recorded on main (migration 049): which projects are ready, and their verdicts. */
+  readonly acceptance: AcceptanceStore;
+  /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */
+  readonly deliveredReports: LiaisonDeliveredReports;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */

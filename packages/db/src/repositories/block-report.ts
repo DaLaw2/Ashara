@@ -1,6 +1,6 @@
-import { and, asc, count, desc, eq, gt, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { BLOCKED_REASON_SOURCES, parseProjectId, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
+import { BlockedReasonCorrupt, parseProjectId, parseStoredBlockedReason, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { checkDisputes, clientMessages, planRepairs, projectBlocks, projects, workItems } from "../schema.js";
 import { noOpenStop } from "./project.js";
@@ -28,27 +28,38 @@ export const PROJECT_BLOCK_KINDS = [
 ] as const;
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
-type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair" | "infrastructure">;
+type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
 
-/** A task given up whose repair a plan_repair block left awaited, with the cause it was given up for. */
+/** A task given up whose repair a plan_repair block left awaited, with the reason it was given up for, as stored. */
 interface BlockingAbandonmentRow {
   readonly title: string;
   readonly attempts: number;
-  readonly cause: StoredBlockedReason["source"];
+  readonly cause: StoredBlockedReason;
 }
 
-const GivenUpCauseSchema = z.enum(BLOCKED_REASON_SOURCES);
-
-/** A given-up task's stored blocked_reason names no known cause: the halt cannot be reported truthfully. */
+/** A given-up task's stored blocked_reason is absent or unreadable: the halt cannot be reported truthfully. */
 class GivenUpCauseUnreadable extends Error {
   constructor(
     readonly episodeId: string,
     readonly workItemId: string,
-    readonly source: string | null,
+    readonly detail: string,
   ) {
-    super(`project_blocks row ${episodeId}: given-up task ${workItemId} records cause ${JSON.stringify(source)}, which is no blocked-reason source`);
+    super(`project_blocks row ${episodeId}: given-up task ${workItemId} records no readable cause: ${detail}`);
     this.name = "GivenUpCauseUnreadable";
   }
+}
+
+/** The stored reason of a given-up task; one that is absent or does not parse throws. */
+function givenUpCause(episodeId: string, workItemId: string, raw: unknown): StoredBlockedReason {
+  let cause: StoredBlockedReason | undefined;
+  try {
+    cause = parseStoredBlockedReason(raw);
+  } catch (err) {
+    if (!(err instanceof BlockedReasonCorrupt)) throw err;
+    throw new GivenUpCauseUnreadable(episodeId, workItemId, err.message);
+  }
+  if (cause === undefined) throw new GivenUpCauseUnreadable(episodeId, workItemId, "blocked_reason is NULL");
+  return cause;
 }
 
 /** A plan_repair block has no awaited repair of its project recorded at or before it: nothing to report it by. */
@@ -65,46 +76,19 @@ class BlockingRepairMissing extends Error {
 /** The given-up tasks whose awaited repair the plan_repair block stopped (migration 045), oldest first. */
 async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
   const rows = await db
-    .select({ id: workItems.id, title: workItems.title, attempts: workItems.dispatchCount, source: sql<string | null>`${workItems.blockedReason}->>'source'` })
+    .select({ id: workItems.id, title: workItems.title, attempts: workItems.dispatchCount, reason: workItems.blockedReason })
     .from(planRepairs)
     .innerJoin(workItems, eq(workItems.id, planRepairs.workItemId))
     .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), lte(planRepairs.createdAt, blockedAt)))
     .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
   if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
-  return rows.map((row) => {
-    const cause = GivenUpCauseSchema.safeParse(row.source);
-    if (!cause.success) throw new GivenUpCauseUnreadable(episodeId, row.id, row.source);
-    return { title: row.title, attempts: row.attempts, cause: cause.data };
-  });
+  return rows.map((row) => ({ title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.id, row.reason) }));
 }
 
-/** The task whose infrastructure faults an infrastructure halt was written on. */
-interface BlockingFaultRow {
-  readonly taskTitle: string;
-  readonly faults: number;
-}
-
-/** An infrastructure block has no task of its project with a recorded fault: nothing to report it by. */
-class BlockingFaultMissing extends Error {
-  constructor(
-    readonly episodeId: string,
-    readonly projectId: string,
-  ) {
-    super(`project_blocks row ${episodeId} (project ${projectId}) is an infrastructure block, but no task of the project records an infrastructure fault`);
-    this.name = "BlockingFaultMissing";
-  }
-}
-
-/** The project's task with the most infrastructure faults (migration 048), the latest written on a tie. */
-async function blockingFault(db: DbHandle, episodeId: string, projectId: string): Promise<BlockingFaultRow> {
-  const [row] = await db
-    .select({ taskTitle: workItems.title, faults: workItems.infrastructureFaults })
-    .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), gt(workItems.infrastructureFaults, 0)))
-    .orderBy(desc(workItems.infrastructureFaults), desc(workItems.updatedAt), asc(workItems.id))
-    .limit(1);
-  if (!row) throw new BlockingFaultMissing(episodeId, projectId);
-  return row;
+/** The cause recorded on a block episode (migration 040): the error's class and its described chain. */
+interface RecordedCauseRow {
+  readonly errorClass: string | null;
+  readonly reason: string | null;
 }
 
 /** The review a suite_review block was written on: the last one recorded before the block. */
@@ -133,7 +117,13 @@ interface BlockingDisputeRow {
 }
 
 type DueBlockReportRow =
-  | { readonly subject: "project-blocked"; readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: ProjectBlockKind;
+      readonly cause: RecordedCauseRow;
+    }
   | {
       readonly subject: "project-blocked";
       readonly episodeId: string;
@@ -154,13 +144,6 @@ type DueBlockReportRow =
       readonly projectId: ProjectId;
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonmentRow[];
-    }
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: "infrastructure";
-      readonly fault: BlockingFaultRow;
     }
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
 
@@ -248,7 +231,14 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
   }
 
   const blocked = await db
-    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId, kind: projectBlocks.kind, blockedAt: projectBlocks.blockedAt })
+    .select({
+      id: projectBlocks.id,
+      projectId: projectBlocks.projectId,
+      kind: projectBlocks.kind,
+      blockedAt: projectBlocks.blockedAt,
+      errorClass: projectBlocks.errorClass,
+      reason: projectBlocks.reason,
+    })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
     .where(
@@ -275,11 +265,8 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
     } else if (kind.data === "plan_repair") {
       const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned });
-    } else if (kind.data === "infrastructure") {
-      const fault = await blockingFault(db, row.id, row.projectId);
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, fault });
     } else {
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data });
+      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause: { errorClass: row.errorClass, reason: row.reason } });
     }
   }
 

@@ -105,8 +105,8 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     async recordInfrastructureFault(id) {
       return db.recordInfrastructureFault(id);
     },
-    async recordMergeCommit(id, commit) {
-      await db.recordMergeCommit(id, commit);
+    async recordMergeCommit(id, commit, kind) {
+      await db.recordMergeCommit(id, commit, kind);
     },
     async addDependency(fromId, toId) {
       await db.addDependency(fromId, toId);

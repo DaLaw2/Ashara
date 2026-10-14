@@ -97,6 +97,9 @@ function coreLoopDeps(
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: notExercised("taskLanes"),
+    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
+    acceptance: { readyForAcceptance: notExercised("readyForAcceptance"), recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
+    deliveredReports: { runPending: notExercised("deliveredReports") },
     ...parts,
   };
 }

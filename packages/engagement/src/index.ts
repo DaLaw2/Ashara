@@ -8,6 +8,8 @@ export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
 export { BlockReports } from "./block-report.js";
 export type { BlockReportStore, LiaisonBlockReports } from "./block-report.js";
+export { DeliveredReports } from "./delivered-report.js";
+export type { DeliveredReportStore, LiaisonDeliveredReports } from "./delivered-report.js";
 export { StackChoiceReports } from "./stack-choice.js";
 export type { LiaisonStackChoices, StackChoiceStore } from "./stack-choice.js";
 export {

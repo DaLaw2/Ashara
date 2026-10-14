@@ -67,7 +67,7 @@ export { OUTBOUND_TRANSITIONS } from "./transitions.js";
 
 export type { StoredTaskSpec } from "./task-spec.js";
 
-export type { StoredBlockedReason } from "./blocked-reason.js";
+export type { MergeKind, StoredBlockedReason } from "./blocked-reason.js";
 export { BLOCKED_REASON_SOURCES } from "./blocked-reason.js";
 export { BlockedReasonCorrupt, blockedExitOf, blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } from "./blocked-reason.js";
 

@@ -1,4 +1,4 @@
-import type { ProjectBlockCause, ProjectId, WorkItemId, WorkItemStatus } from "@ashara/shared";
+import type { MergeKind, ProjectBlockCause, ProjectId, WorkItemId, WorkItemStatus } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
 
 /** Which projects' work may be dispatched (projects.status = 'active'), and blocking one. */
@@ -61,9 +61,10 @@ export interface WorkItemRepository {
    * Records the merge commit Z0's merge step made on the target's main for the task (migration
    * 041): the one record of what was merged, which reports to the client read. Throws when the
    * item does not exist; the caller writes it before completing the task, so a failed write
-   * leaves the task not Completed.
+   * leaves the task not Completed. `kind` is how the commit closed it (migration 049); null only
+   * for a merge whose kind was parked before 049 and so never recorded.
    */
-  recordMergeCommit(id: WorkItemId, commit: string): Promise<void>;
+  recordMergeCommit(id: WorkItemId, commit: string, kind: MergeKind | null): Promise<void>;
   /** Records that fromId depends on toId — fromId cannot start until toId completes. */
   addDependency(fromId: WorkItemId, toId: WorkItemId): Promise<void>;
   getDependencies(itemId: WorkItemId): Promise<WorkItemId[]>;

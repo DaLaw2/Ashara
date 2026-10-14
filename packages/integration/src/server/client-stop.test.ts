@@ -56,7 +56,7 @@ async function projectWith(tasks: ReadonlyArray<readonly [string, string, ("merg
       INSERT INTO work_items (id, level, status, parent_id, title, run_scope, project_id)
       VALUES (${taskId}, 'Task', ${status}, ${epicId}, ${title}, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
     if (merged === "merged") {
-      await new WorkItemRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"));
+      await new WorkItemRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"), "merged");
       await db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Preparing')`);
     }
     if (merged === "session-only") {

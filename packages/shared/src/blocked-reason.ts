@@ -206,6 +206,11 @@ const dependencyUnsatisfiableSchema = z.object({
 const mergeUnrecordedSchema = z.object({
   source: z.literal("merge_unrecorded"),
   mergeCommit: z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/),
+  /**
+   * How the commit closed the task (migration 049): Z0's own merge, or main's commit its checks
+   * passed on when it changed nothing. Absent on a row written before it: recorded as not known.
+   */
+  mergeKind: z.enum(["merged", "already_delivered"]).optional(),
   reason: z.string().min(1),
   ...augmentationFields,
 });
@@ -222,6 +227,23 @@ const supersededSchema = z.object({
   planRevision: z.number().int().min(2),
   requestedBy: z.string().min(1).nullable(),
   repairOf: z.array(z.string().min(1)).min(1).optional(),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
+ * The acceptance sweep on main HEAD failed (story s-independent-verify-m1 W7, migration 049): once
+ * every task of the plan was settled with a goal task done, Z0 ran the environment's test and the
+ * latest checks of every completed implementation task on main, and they did not all pass. Written
+ * on the defect item Z0 opens for that sweep, given up (Abandoned) at once, so the plan is repaired
+ * around it; the project is never accepted on it. Also written when the sweep could not run for a
+ * fault that is not the substrate's, within the fault budget (orchestrator acceptance.ts).
+ * `mainCommit` is the commit the sweep ran on, null when it faulted before main could be read;
+ * `reason` the run as its verdict states it, or the fault as recorded.
+ */
+const acceptanceFailedSchema = z.object({
+  source: z.literal("acceptance_failed"),
+  mainCommit: z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/).nullable(),
   reason: z.string().min(1),
   ...augmentationFields,
 });
@@ -254,10 +276,17 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   supersededSchema,
+  acceptanceFailedSchema,
   apiSchema,
 ]);
 
 export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
+
+/**
+ * How a task's recorded commit closed it (migration 049): Z0's own merge, or main's commit at which
+ * the task, having changed nothing, passed its checks and the regression suite (already delivered).
+ */
+export type MergeKind = "merged" | "already_delivered";
 
 /**
  * Every `source` a stored blocked reason can carry. `satisfies` keeps each member a real source;
@@ -280,6 +309,7 @@ export const BLOCKED_REASON_SOURCES = [
   "dependency_unsatisfiable",
   "merge_unrecorded",
   "superseded",
+  "acceptance_failed",
   "api",
 ] as const satisfies readonly StoredBlockedReason["source"][];
 
@@ -342,6 +372,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "superseded":
+    case "acceptance_failed":
     case "api":
       return { ...reason };
   }
@@ -359,7 +390,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * is given up (Abandoned) and its plan repaired (migration 045, widened by 048).
  */
 export type BlockedExit =
-  | { readonly kind: "merge-recorded"; readonly mergeCommit: string }
+  | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
   | { readonly kind: "requeue" }
   | { readonly kind: "give-up" };
 
@@ -374,7 +405,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
   if (reason === undefined) return { kind: "give-up" };
   switch (reason.source) {
     case "merge_unrecorded":
-      return { kind: "merge-recorded", mergeCommit: reason.mergeCommit };
+      return { kind: "merge-recorded", mergeCommit: reason.mergeCommit, mergeKind: reason.mergeKind ?? null };
     case "environment_unavailable":
       return { kind: "requeue" };
     case "owner_unresolved":
@@ -391,6 +422,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "replan":
     case "failure_router":
     case "superseded":
+    case "acceptance_failed":
       return { kind: "give-up" };
   }
   const _: never = reason;

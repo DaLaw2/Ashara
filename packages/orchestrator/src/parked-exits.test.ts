@@ -132,6 +132,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },
     superseded: { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" },
+    acceptance_failed: { source: "acceptance_failed", mainCommit: MERGE, reason: "check failed on main" },
     api: { source: "api" },
   };
   // Each exit names the production code that takes it; a new exit kind fails to compile here until

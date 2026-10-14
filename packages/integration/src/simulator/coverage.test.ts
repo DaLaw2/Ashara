@@ -4,7 +4,7 @@ import type { Snapshot } from "./invariants.js";
 
 function snapshotWith(events: Snapshot["events"]): Snapshot {
   return {
-    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null },
+    project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null, deliveredReported: false },
     items: [],
     episodes: [],
     checks: [],

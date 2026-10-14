@@ -137,6 +137,9 @@ function buildDeps(
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
     taskLanes: concurrentTaskLanes,
+    acceptanceSweeper: { sweepForAcceptance: notExercised("sweepForAcceptance") },
+    acceptance: { readyForAcceptance: async () => [], recordAccepted: notExercised("recordAccepted"), recordSweepFault: notExercised("recordSweepFault"), recordDefect: notExercised("recordDefect") },
+    deliveredReports: { runPending: async () => [] },
   };
 }
 

@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, StoredBlockedReason } from "@ashara/shared";
+import type { DomainEvent, MergeKind, StoredBlockedReason } from "@ashara/shared";
 import {
   describeErrorChain,
   wrapError,
@@ -57,7 +57,7 @@ type GiveUpCause = Extract<
  * project, and one more fault on the same task after that gives the task up: the probe passes but
  * this task's machines keep failing, so the fault is not one the halt can wait out.
  */
-const INFRASTRUCTURE_FAULT_BUDGET = 3;
+export const INFRASTRUCTURE_FAULT_BUDGET = 3;
 
 /** Policy: the waits between attempts at the merge record; three attempts in all. */
 const MERGE_RECORD_BACKOFF_MS: readonly number[] = [250, 1000];
@@ -66,11 +66,11 @@ const MERGE_RECORD_BACKOFF_MS: readonly number[] = [250, 1000];
  * Writes the task's merge record, retrying with bounded backoff. Null once it is written; the
  * last attempt's error, described, when every attempt failed.
  */
-async function recordMergeWithRetry(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], mergeCommit: string): Promise<string | null> {
+async function recordMergeWithRetry(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], mergeCommit: string, kind: MergeKind): Promise<string | null> {
   let last = "";
   for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1; attempt++) {
     try {
-      await deps.workItemRepo.recordMergeCommit(taskId, mergeCommit);
+      await deps.workItemRepo.recordMergeCommit(taskId, mergeCommit, kind);
       if (attempt > 1) console.warn(`[${taskId}] merge record for ${mergeCommit} written on attempt ${attempt}`);
       return null;
     } catch (e) {
@@ -326,11 +326,12 @@ async function executeTask(
       // startup reconciler would requeue and so re-dispatch merged work. Work already delivered
       // (ADR-074 addendum 2 d67 b) merged nothing: its record is main's commit its checks passed on.
       const mergeCommit = delivered.kind === "merged" ? delivered.mergeCommit : delivered.mainCommit;
-      const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit);
+      const mergeKind: MergeKind = delivered.kind === "merged" ? "merged" : "already_delivered";
+      const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit, mergeKind);
       if (unrecorded !== null) {
         const what = delivered.kind === "merged" ? `merged on main as ${mergeCommit}` : `already delivered on main at ${mergeCommit}`;
         const detail = `${what}, but the merge record could not be written: ${unrecorded}`;
-        await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, reason: detail });
+        await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, mergeKind, reason: detail });
         return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
       }
     }

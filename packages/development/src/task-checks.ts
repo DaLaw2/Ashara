@@ -85,8 +85,8 @@ export interface TaskCheckStore {
    * only the check author writes, which no implementation task's branch may change.
    */
   checkFilesOf(projectId: ProjectId): Promise<readonly StoredCheckFile[]>;
-  /** Every Completed implementation task of the project except `exceptTaskId`, checked or not. */
-  completedOf(projectId: ProjectId, exceptTaskId: WorkItemId): Promise<CompletedTasksChecks>;
+  /** Every Completed implementation task of the project except `exceptTaskId` (every one when null), checked or not. */
+  completedOf(projectId: ProjectId, exceptTaskId: WorkItemId | null): Promise<CompletedTasksChecks>;
   /** The implementation tasks that depend on the check task: the tasks its checks decide. */
   checkedTasksOf(checkTaskId: WorkItemId): Promise<readonly string[]>;
   /**

@@ -42,7 +42,7 @@ import {
   Replanner,
 } from "@ashara/planning";
 import { DevelopmentService, SuiteReviewer, canonicalizeAllowingMissing, pruneStaleEnvironmentImages } from "@ashara/development";
-import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
+import { BlockReports, ClientAnswers, ClientStops, DeliveredReports, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
   AgentStaffing,
@@ -95,6 +95,7 @@ import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 import { createReplanStore } from "./replan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
+import { createAcceptanceStore, createDeliveredReportStore } from "./acceptance-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
@@ -403,6 +404,9 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     failedApproachRepo,
     projectRepo,
     developmentService,
+    acceptanceSweeper: developmentService,
+    acceptance: createAcceptanceStore(db),
+    deliveredReports: new DeliveredReports(createDeliveredReportStore(db)),
     eventLogger,
     failureRouter,
     spendCap,

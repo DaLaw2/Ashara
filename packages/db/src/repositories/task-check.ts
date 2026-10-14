@@ -184,12 +184,12 @@ export class TaskCheckRepository {
   }
 
   /**
-   * The latest checks of every Completed implementation task of the project except `exceptTaskId`,
+   * The latest checks of every Completed implementation task of the project except `exceptTaskId` (none when null),
    * oldest completion first, and separately the ids of those with no stored check at all (completed
    * before checks existed), so a caller states them instead of reading their absence as "nothing to
    * regress".
    */
-  async completedOf(projectId: string, exceptTaskId: string): Promise<CompletedChecks> {
+  async completedOf(projectId: string, exceptTaskId: string | null): Promise<CompletedChecks> {
     const tasks = await this.db
       .select({ id: workItems.id })
       .from(workItems)
@@ -198,7 +198,7 @@ export class TaskCheckRepository {
           eq(workItems.projectId, projectId),
           eq(workItems.workKind, "implementation"),
           eq(workItems.status, "Completed"),
-          ne(workItems.id, exceptTaskId),
+          exceptTaskId === null ? undefined : ne(workItems.id, exceptTaskId),
         ),
       )
       .orderBy(asc(workItems.updatedAt), asc(workItems.id));

@@ -11,9 +11,9 @@ export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
 
 /**
  * Every status a project can hold: the `projects_status_known` CHECK constraint
- * (migrations/028_project_client_stop.sql) admits exactly these.
+ * (migrations/049_project_accepted.sql) admits exactly these.
  */
-export const PROJECT_STATUSES = ["active", "blocked", "stopped"] as const;
+export const PROJECT_STATUSES = ["active", "blocked", "stopped", "accepted"] as const;
 
 /**
  * Every typed end a Workplace attempt can record on its dev_sessions row: the Outcome kind, with a

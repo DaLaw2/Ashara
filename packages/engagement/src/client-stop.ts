@@ -28,14 +28,24 @@ type ClientStopCommit =
   | { readonly kind: "stopped"; readonly reported: boolean; readonly merged: number }
   | { readonly kind: "already-stopped" };
 
+/**
+ * A task with a commit on record (migration 041) and how that commit closed it (migration 049):
+ * null when the record predates 049 and does not say.
+ */
+interface MergedTask {
+  readonly title: string;
+  readonly commit: string;
+  readonly kind: "merged" | "already_delivered" | null;
+}
+
 /** Engagement's persistence port for client stops. */
 export interface ClientStopStore {
   openStops(): Promise<readonly OpenStop[]>;
   /**
    * Consumes the stop and, unless the project is already stopped, stops it and
-   * posts the report composed from its merged task titles, in one transaction.
+   * posts the report composed from its tasks' merge records, in one transaction.
    */
-  recordStop(stop: OpenStop, composeReport: (mergedTaskTitles: readonly string[]) => string): Promise<ClientStopCommit>;
+  recordStop(stop: OpenStop, composeReport: (merged: readonly MergedTask[]) => string): Promise<ClientStopCommit>;
 }
 
 type ClientStopOutcome = ClientStopCommit & { readonly stopId: string; readonly projectId: ProjectId };
@@ -45,15 +55,27 @@ export interface LiaisonClientStops {
   runPending(): Promise<readonly ClientStopOutcome[]>;
 }
 
+function mergedLine(task: MergedTask): string {
+  switch (task.kind) {
+    case "merged":
+      return `- "${task.title}": merged, commit ${task.commit}`;
+    case "already_delivered":
+      return `- "${task.title}": already delivered on commit ${task.commit}, nothing of its own merged`;
+    case null:
+      return `- "${task.title}": closed on commit ${task.commit}; whether it was merged or already delivered there is not on record`;
+  }
+}
+
 /**
  * Plain words, only what is on record: that work stopped because the client
- * asked, and the merged tasks by title. Never a claim that the plan is complete.
+ * asked, and each task with a commit on record, the commit and how it closed
+ * the task. Never a claim that the plan is complete.
  */
-function stopReport(mergedTaskTitles: readonly string[]): string {
+function stopReport(mergedTasks: readonly MergedTask[]): string {
   const merged =
-    mergedTaskTitles.length === 0
+    mergedTasks.length === 0
       ? "No merged work is on record for this project."
-      : `Merged on this project: ${mergedTaskTitles.map((title) => `"${title}"`).join(", ")}.`;
+      : `What is on main for this project, as recorded:\n${mergedTasks.map(mergedLine).join("\n")}`;
   return [
     "Work on this project has stopped at your request. Ashara will not start any further work on it.",
     merged,

@@ -48,6 +48,8 @@ const projectRow = z.object({
   blockedReason: z.string().nullable(),
   planStopped: z.boolean(),
   workspacePath: z.string().nullable(),
+  /** A passed acceptance sweep's delivered report is posted (migration 049). */
+  deliveredReported: z.boolean(),
 });
 type ProjectRow = z.infer<typeof projectRow>;
 
@@ -95,7 +97,8 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     (
       await db.execute(sql`
         SELECT status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
-               plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath"
+               plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
+               EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed AND s.report_id IS NOT NULL) AS "deliveredReported"
         FROM projects WHERE id = ${projectId}`)
     ).rows,
   );
@@ -203,18 +206,16 @@ const SPEND = new Set(["budget_cap"]);
 const INFRASTRUCTURE = new Set(["configuration", "fault", "infrastructure"]);
 
 export function outcomeOf(snapshot: Snapshot): Outcome {
-  const { project, items } = snapshot;
+  const { project } = snapshot;
   if (project.status === "stopped") return { kind: "stopped" };
   if (project.status === "blocked") {
     const category = project.blockedCategory ?? (project.planStopped ? "planning_stopped" : "unknown");
     const cause = SPEND.has(category) ? "spend_cap" : INFRASTRUCTURE.has(category) ? "infrastructure" : "undeliverable";
     return { kind: "halted", cause, detail: `${category}: ${project.blockedReason ?? "(no reason)"}` };
   }
-  const tasks = items.filter((item) => item.level === "Task");
-  // A repaired plan abandons the tasks it replaces: the goals are the decomposition's live ones.
-  const goals = tasks.filter((item) => item.origin === "decomposition" && item.status !== "Abandoned");
-  const open = tasks.filter((item) => item.status !== "Completed" && item.status !== "Abandoned");
-  if (goals.length > 0 && open.length === 0) return { kind: "accepted" };
+  // Accepted is production's own state since migration 049: every goal task done is not acceptance
+  // until the sweep on main passes.
+  if (project.status === "accepted") return { kind: "accepted" };
   return { kind: "open" };
 }
 
@@ -264,10 +265,12 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
     }
   }
 
-  // I4: its one judged subject, the per-task block report, is gone with migration 048 (W6): the
-  // client hears about the project, whose halt episodes the database keeps whole (040's trigger)
-  // and I2 checks for their one report. A report's claims against the snapshot are story
-  // s-independent-verify-m1 L8.
+  // I4: an accepted project has its delivered report (E3), once the run ends; halt episodes'
+  // reports are I2's. A report's claims against the snapshot are not judged here (L8's snapshot
+  // rendering is deferred, mvp-rescope §1.3).
+  if (context.final && snapshot.project.status === "accepted" && !snapshot.project.deliveredReported) {
+    add("I4", "accepted-unreported", "the project is accepted but its delivered report was never posted");
+  }
 
   // I5: spend within the cap; every call has a recorded cost.
   if (snapshot.spendUsd > context.spendCapUsd + 1e-9) {

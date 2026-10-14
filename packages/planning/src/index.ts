@@ -17,6 +17,8 @@ export {
   exitDisputedCheck,
   exitSuiteReview,
   requestEnvironmentChange,
+  openAcceptanceDefect,
+  giveUpAcceptanceDefect,
   PlanningService,
 } from "./domain/index.js";
 

@@ -1,5 +1,5 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, ProjectId } from "@ashara/shared";
+import type { DomainEvent, MergeKind, ProjectId } from "@ashara/shared";
 import { blockedExitOf, describeErrorChain, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./acl/planning-acl.js";
@@ -39,7 +39,7 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
       let left: boolean;
       switch (exit.kind) {
         case "merge-recorded":
-          left = await completeRecordedMerge(deps, item, exit.mergeCommit);
+          left = await completeRecordedMerge(deps, item, exit.mergeCommit, exit.mergeKind);
           break;
         case "give-up":
           left = await giveUp(deps, item);
@@ -59,9 +59,9 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
  * it holds the task is Completed (never Pending: its work is on main). A write that fails leaves
  * it Blocked for the next cycle.
  */
-async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, mergeCommit: string): Promise<boolean> {
+async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, mergeCommit: string, mergeKind: MergeKind | null): Promise<boolean> {
   try {
-    await deps.workItemRepo.recordMergeCommit(item.id, mergeCommit);
+    await deps.workItemRepo.recordMergeCommit(item.id, mergeCommit, mergeKind);
   } catch (err) {
     console.warn(`[parked-exits] task ${item.id}: the record of merge ${mergeCommit} still cannot be written; it stays Blocked:`, err);
     return false;

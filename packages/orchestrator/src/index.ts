@@ -5,6 +5,9 @@ export type {
 } from "./types.js";
 export { DEFAULT_CONFIG } from "./types.js";
 export type { InfrastructureProbe } from "./infrastructure-halts.js";
+export type { AcceptanceStore } from "./acceptance.js";
+/** @testseam the integration acceptance.test.ts drives the sweep's records against Postgres through it; CoreLoop.runCycle is its production caller */
+export { runAcceptanceSweeps } from "./acceptance.js";
 
 export { CoreLoop, concurrentTaskLanes } from "./core-loop.js";
 /** @testseam the server replan-store.test.ts sweeps a Blocked owner_unresolved row against Postgres through it; CoreLoop.runCycle is its production caller */

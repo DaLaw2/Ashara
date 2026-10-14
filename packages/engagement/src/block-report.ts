@@ -1,16 +1,22 @@
 import type { ProjectId, StoredBlockedReason } from "@ashara/shared";
 
-// The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048): the
-// client hears, once and in plain words, that a project is paused, what caused it and what happens
-// next, and that it resumed. Nothing internal reaches the client: no error class, no component
-// name, no stored reason text. Reports are read from recorded block episodes, so a halt written
-// before a crash is still reported after the restart; the store posts each at most once. A project
-// halts as undeliverable after the plan was repaired its bound of times (d74 D, d76): its report
-// names each task given up and why. One halted on infrastructure resumes by itself, and its report
-// says so. No task is reported on its own: no task waits on a person (W6).
+// The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
+// s-independent-verify-m1 W7): the client hears, once, that a project is paused, the cause as it
+// was observed and recorded, and what happens next; and that it resumed. The cause is never a
+// sentence chosen by the kind of halt (M2 trial M3: a fixed sentence told the client a false
+// cause): it is the record's own text, the error chain or the reason written when the halt or the
+// give-up happened, and a halt with none recorded says so. Reports are read from recorded block
+// episodes, so a halt written before a crash is still reported after the restart; the store posts
+// each at most once. No task is reported on its own: no task waits on a person (W6).
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
-type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound";
+type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound" | "infrastructure";
+
+/** The cause recorded on a block episode: the error's class and its described chain, each null when none was written. */
+interface RecordedCause {
+  readonly errorClass: string | null;
+  readonly reason: string | null;
+}
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it (before migration 048). */
 interface BlockingDispute {
@@ -34,20 +40,19 @@ interface BlockingAbandonment {
   readonly title: string;
   /** Its dispatches, the failed ones that led to it being given up. */
   readonly attempts: number;
-  /** The cause it was given up for, as its blocked_reason recorded it. */
-  readonly cause: StoredBlockedReason["source"];
-}
-
-/** The task whose infrastructure faults halted the project, as recorded when it halted. */
-interface BlockingFault {
-  readonly taskTitle: string;
-  /** The infrastructure faults its dispatches met. */
-  readonly faults: number;
+  /** Why it was given up, its blocked_reason as stored. */
+  readonly cause: StoredBlockedReason;
 }
 
 /** A recorded halt or resumption the client has not been told about. */
 type DueBlockReport =
-  | { readonly subject: "project-blocked"; readonly episodeId: string; readonly projectId: ProjectId; readonly kind: ProjectBlockKind }
+  | {
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
+      readonly projectId: ProjectId;
+      readonly kind: ProjectBlockKind;
+      readonly cause: RecordedCause;
+    }
   | {
       readonly subject: "project-blocked";
       readonly episodeId: string;
@@ -68,13 +73,6 @@ type DueBlockReport =
       readonly projectId: ProjectId;
       readonly kind: "check_dispute";
       readonly dispute: BlockingDispute;
-    }
-  | {
-      readonly subject: "project-blocked";
-      readonly episodeId: string;
-      readonly projectId: ProjectId;
-      readonly kind: "infrastructure";
-      readonly fault: BlockingFault;
     }
   /** `how` the halt ended: an owner's unblock, or the substrate probe passing after an infrastructure halt. */
   | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
@@ -97,38 +95,50 @@ export interface LiaisonBlockReports {
   runPending(): Promise<readonly BlockReportOutcome[]>;
 }
 
-const NO_MORE_WORK = "Until then nothing more is done on this project. The team is waiting on its operator for this, and you will be told when work resumes.";
+/** Longest part of one recorded cause the client is shown; the rest is cut, and the cut is stated. */
+const MAX_CAUSE_CHARS = 2000;
 
-/** What the client reads when a project is paused: what stopped, and what the team needs. */
-function projectBlockedReport(kind: ProjectBlockKind): string {
+function cut(text: string): string {
+  return text.length <= MAX_CAUSE_CHARS ? text : `${text.slice(0, MAX_CAUSE_CHARS)} [${text.length - MAX_CAUSE_CHARS} more characters not shown]`;
+}
+
+/** The recorded cause, quoted as it was written; a halt with none recorded says so. */
+function recordedCause(cause: RecordedCause): string {
+  if (cause.reason === null && cause.errorClass === null) return "No cause was recorded for this pause.";
+  // A described chain already opens with its class (describeErrorChain); it is not named twice.
+  const head = cause.errorClass === null || (cause.reason ?? "").startsWith(cause.errorClass) ? "" : `${cause.errorClass}: `;
+  return `The cause, as Ashara recorded it: ${head}${cut(cause.reason ?? "(no description recorded)")}`;
+}
+
+const WAITS_ON_OPERATOR = "Until then nothing more is done on this project. The team is waiting on its operator for this, and you will be told when work resumes.";
+
+/** What happens next after a halt of `kind`: who or what ends it. The cause is stated apart, from the record. */
+function nextStep(kind: ProjectBlockKind): string {
   switch (kind) {
     case "budget_cap":
-      return ["Work on this project is paused: the budget set for it has been reached.", "The budget has to be raised before more is spent. " + NO_MORE_WORK].join("\n\n");
+      return `The budget set for this project has to be raised before more is spent. ${WAITS_ON_OPERATOR}`;
     case "configuration":
-      return [
-        "Work on this project is paused: a step of the work needs something in Ashara's own setup that is missing or not allowed, " +
-          "such as a model whose price is not known.",
-        "The team has to correct that setup. " + NO_MORE_WORK,
-      ].join("\n\n");
+      return `Ashara's own setup has to be corrected. ${WAITS_ON_OPERATOR}`;
     case "fault":
-      return [
-        "Work on this project is paused: Ashara found a problem on its own side, in what it has recorded about this project " +
-          "or in a step it could not finish.",
-        "The team has to repair it. " + NO_MORE_WORK,
-      ].join("\n\n");
+      return `The team has to repair it. ${WAITS_ON_OPERATOR}`;
     case "planning_stopped":
-      return [
-        "Ashara again could not turn this project's vision into a plan, so work on this project has stopped.",
-        "The team has to look into it before planning is tried again. " + NO_MORE_WORK,
-      ].join("\n\n");
+      return `The team has to look into it before planning is tried again. ${WAITS_ON_OPERATOR}`;
     case "replan_bound":
-      return [
-        "Work on this project is paused: you changed what is built again, and the plan has already been revised for " +
-          "your changes as many times as the team revises it before its operator looks over the project.",
-        "Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. " +
-          NO_MORE_WORK,
-      ].join("\n\n");
+      return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${WAITS_ON_OPERATOR}`;
+    case "infrastructure":
+      // Not a claim about the cause, which is the record's own text above: only what ends this
+      // halt (infrastructure-halts.ts, the substrate probe each cycle) and that it is not charged.
+      return (
+        `This pause is not charged as an attempt at the work. Ashara checks the machines it runs the work on again ` +
+        `on every round of work and resumes this project by itself as soon as they answer; you will be told when it does.`
+      );
   }
+}
+
+/** What the client reads when a project is paused: that it is, the recorded cause, and what happens next. */
+function projectBlockedReport(kind: ProjectBlockKind, cause: RecordedCause): string {
+  const opening = kind === "planning_stopped" ? "Ashara could not turn this project's vision into a plan, so work on this project has stopped." : "Work on this project is paused.";
+  return [opening, recordedCause(cause), nextStep(kind)].join("\n\n");
 }
 
 /** Plain words: what stopped, why, and what the client can do (a halt recorded before migration 048). */
@@ -155,58 +165,52 @@ function suiteReviewBoundReport(review: BlockingReview): string {
   ].join("\n\n");
 }
 
-/** Why a task was given up, in the client's words. */
-function givenUpCause(cause: StoredBlockedReason["source"]): string {
-  switch (cause) {
+/** The text a given-up task's stored reason recorded of why: the record's own words, never a sentence per source. */
+function observedCause(cause: StoredBlockedReason): string {
+  switch (cause.source) {
     case "failure_router":
-      return "every attempt at it failed";
-    case "check_disputed":
-      return "its developer and the team could not settle whether a check written to confirm it can be passed by correct work";
-    case "suite_review_unresolved":
-      return "the review of the checks written for the plan kept finding problems in them";
-    case "checks_stale":
-    case "checks_rewrite_bound":
-      return "the checks that decide whether it is done kept failing to hold on the project's build and test environment";
-    case "environment_change_needed":
-      return "it needed a change to the project's build and test environment that the team could not make for it";
-    case "dependency_unsatisfiable":
-      return "it depended on work that could not be done";
+      return [cause.reason, ...(cause.detail === undefined ? [] : [cause.detail])].join(" ");
+    case "replan":
+      return cause.replanContext.detail;
     case "environment_unavailable":
-      return "the machines it ran on kept failing";
-    case "environment_undefined":
-      return "the project's build and test environment could not be set up for it";
-    case "owner_unresolved":
-      return "no one on the team was assigned the kind of work it is";
-    case "api":
-      return "the team stopped it by hand";
+      return `${cause.unavailable} unavailable: ${cause.reason}`;
+    case "environment_change_needed":
+      return `${cause.reason} (recipe files: ${cause.paths.join(", ")})`;
+    case "check_disputed":
+      return `check "${cause.checkName}" disputed: ${cause.reason}`;
+    case "acceptance_failed":
+      return cause.mainCommit === null
+        ? `the acceptance run could not read main: ${cause.reason}`
+        : `the acceptance run on main ${cause.mainCommit} did not pass: ${cause.reason}`;
+    case "api": {
+      // The route stores the caller's own fields beside `source` (passthrough): quoted as written.
+      const written = Object.fromEntries(Object.entries(cause).filter(([key]) => key !== "source"));
+      return Object.keys(written).length === 0
+        ? "it was moved by hand through Ashara's API; no cause beyond that is recorded"
+        : `it was moved by hand through Ashara's API, with this recorded: ${JSON.stringify(written)}`;
+    }
     case "task_failed":
     case "orchestrator_error":
-    case "replan":
+    case "environment_undefined":
+    case "checks_stale":
+    case "checks_rewrite_bound":
+    case "suite_review_unresolved":
+    case "owner_unresolved":
+    case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "superseded":
-      return "it hit a problem the team could not resolve";
+      return cause.reason;
   }
 }
 
-/** Plain words: which work the team gave up again and why, and what can resume the project. */
+/** Plain words: which work the team gave up again and the recorded cause of each, and what can resume the project. */
 function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): string {
   return [
-    `Work on this project has stopped: the team cannot deliver it as planned. It could not complete ` +
-      abandoned.map((task) => `"${task.title}" (after ${plural(task.attempts, "attempt")}: ${givenUpCause(task.cause)})`).join(", ") +
-      `, and the plan has already been revised around work it gave up as many times as the team revises it on its own.`,
+    `Work on this project has stopped: the team cannot deliver it as planned. The plan has already been revised around ` +
+      `work it gave up as many times as the team revises it on its own, and it gave up again:`,
+    abandoned.map((task) => `- "${task.title}", after ${plural(task.attempts, "attempt")}. As recorded: ${cut(observedCause(task.cause))}`).join("\n"),
     `Nothing more is built until the scope changes or the operator looks the project over; you will be told when work ` +
       `resumes. If you can say more about what this part should do, or what can be left out, send a change describing it.`,
-  ].join("\n\n");
-}
-
-/** Plain words: the machines failed under one task, and the project resumes by itself. */
-function infrastructureReport(fault: BlockingFault): string {
-  return [
-    `Work on this project is paused: the machines Ashara runs the work on failed ${plural(fault.faults, "time")} while ` +
-      `working on "${fault.taskTitle}". This is a fault on Ashara's side, not in your project, and it is not charged ` +
-      `as an attempt at the work.`,
-    `Ashara checks its machines again on every round of work and resumes this project by itself as soon as they work; ` +
-      `you will be told when it does.`,
   ].join("\n\n");
 }
 
@@ -220,6 +224,19 @@ function projectResumedReport(how: "unblocked" | "probe_passed"): string {
     : "Work on this project has resumed: the team cleared what paused it, and the work goes on from where it stopped.";
 }
 
+function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-blocked" }>): string {
+  switch (due.kind) {
+    case "check_dispute":
+      return disputeBoundReport(due.dispute);
+    case "suite_review":
+      return suiteReviewBoundReport(due.review);
+    case "plan_repair":
+      return planRepairBoundReport(due.abandoned);
+    default:
+      return projectBlockedReport(due.kind, due.cause);
+  }
+}
+
 export class BlockReports implements LiaisonBlockReports {
   constructor(private readonly store: BlockReportStore) {}
 
@@ -229,17 +246,7 @@ export class BlockReports implements LiaisonBlockReports {
     for (const due of await this.store.dueReports()) {
       switch (due.subject) {
         case "project-blocked": {
-          const body =
-            due.kind === "check_dispute"
-              ? disputeBoundReport(due.dispute)
-              : due.kind === "suite_review"
-                ? suiteReviewBoundReport(due.review)
-                : due.kind === "plan_repair"
-                  ? planRepairBoundReport(due.abandoned)
-                  : due.kind === "infrastructure"
-                    ? infrastructureReport(due.fault)
-                    : projectBlockedReport(due.kind);
-          const kind = await this.store.postProjectReport(due.episodeId, "blocked", body);
+          const kind = await this.store.postProjectReport(due.episodeId, "blocked", blockedBody(due));
           outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
           break;
         }

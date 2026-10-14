@@ -45,6 +45,8 @@ export {
   exitDisputedCheck,
   exitSuiteReview,
   requestEnvironmentChange,
+  openAcceptanceDefect,
+  giveUpAcceptanceDefect,
 } from "@ashara/planning";
 
 // Failure recovery

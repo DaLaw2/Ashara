@@ -4,6 +4,7 @@ import type { FirstPlanOutcome, ReplanOutcome, WorkItem } from "./acl/planning-a
 import { PlanningService } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
+import { runAcceptanceSweeps } from "./acceptance.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 
@@ -99,6 +100,8 @@ export class CoreLoop {
     // plain report each to the client. No LLM call, so before the spend-cap check: a project the
     // budget cap halted is told so.
     await this.postBlockReports();
+    // An acceptance recorded before a restart, or before the cap stopped the loop, is told here.
+    await this.postDeliveredReports();
 
     // Every step below makes LLM calls, each admitted by Finance's spend cap.
     const atCap = await deps.spendCap.deploymentStop();
@@ -154,6 +157,11 @@ export class CoreLoop {
       projects: deps.projectRepo,
     });
 
+    // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
+    // and told so, or a defect whose repair the next cycle's replanning plans.
+    await runAcceptanceSweeps(deps);
+    await this.postDeliveredReports();
+
     const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore);
     if (eligible.length === 0) return { tasksProcessed: 0, results: [], stop: null };
 
@@ -186,6 +194,12 @@ export class CoreLoop {
     const stop = refusedAtDeployment ?? (await deps.spendCap.deploymentStop());
     if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };
     return { tasksProcessed: batch.length, results, stop: null };
+  }
+
+  private async postDeliveredReports(): Promise<void> {
+    for (const report of await this.deps.deliveredReports.runPending()) {
+      console.log(`[liaison-delivered-report] project ${report.projectId}: delivered report ${report.kind}`);
+    }
   }
 
   private async postBlockReports(): Promise<void> {

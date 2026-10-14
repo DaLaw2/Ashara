@@ -28,6 +28,7 @@ function row(overrides: Partial<Row>): Row {
     environmentStatementVersion: null,
     infrastructureFaults: 0,
     mergeCommit: null,
+    mergeKind: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,

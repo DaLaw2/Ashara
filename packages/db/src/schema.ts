@@ -1,6 +1,7 @@
 import {
   pgTable,
   uuid,
+  boolean,
   varchar,
   text,
   jsonb,
@@ -71,6 +72,9 @@ export const projects = pgTable("projects", {
   replanLastError: text("replan_last_error"),
   // Migration 040: the cause's category, which the Liaison's plain report is chosen by.
   blockedCategory: text("blocked_category"),
+  // Migration 049: acceptance sweeps that could not run, counted against the fault budget
+  // (orchestrator acceptance.ts); never reset.
+  acceptanceFaults: integer("acceptance_faults").notNull().default(0),
 });
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,9 @@ export const workItems = pgTable("work_items", {
   // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
   // the only record of what was merged. NULL when nothing of the task was merged.
   mergeCommit: text("merge_commit"),
+  // Migration 049: how merge_commit closed the task, 'merged' or 'already_delivered'; NULL when
+  // not recorded (a record from before 049).
+  mergeKind: text("merge_kind"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
@@ -668,6 +675,27 @@ export const planRevisions = pgTable(
     oneNumber: unique("plan_revisions_one_per_number").on(t.projectId, t.revision),
   }),
 );
+
+// ---------------------------------------------------------------------------
+// acceptance_sweeps (migration 049): one row per acceptance sweep Z0 ran on main HEAD; a passed
+// one made its project 'accepted', a failed one opened its defect item.
+// ---------------------------------------------------------------------------
+
+export const acceptanceSweeps = pgTable("acceptance_sweeps", {
+  id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  mainCommit: text("main_commit"),
+  environmentVersion: text("environment_version"),
+  checkedTasks: jsonb("checked_tasks").notNull(),
+  uncheckedTasks: jsonb("unchecked_tasks").notNull(),
+  passed: boolean().notNull(),
+  details: text().notNull(),
+  defectItemId: uuid("defect_item_id").references(() => workItems.id, { onDelete: "cascade" }),
+  reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
 
 // ---------------------------------------------------------------------------
 // plan_repairs (migration 045): one row per task the failure router abandoned, written by a

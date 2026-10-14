@@ -100,8 +100,9 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await reports().runPending();
     await reports().runPending();
 
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("the budget set for it has been reached")]);
-    expect((await messagesOf(projectId))[0]).not.toContain("BudgetExceeded");
+    // The cause told is the recorded one (story s-independent-verify-m1 W7), not a sentence per kind.
+    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("The cause, as Ashara recorded it: BudgetExceeded: project cap $5 reached")]);
+    expect((await messagesOf(projectId))[0]).toContain("The budget set for this project has to be raised");
 
     await projects.unblock(projectId, "operator-a", "raised the project cap to $10");
     expect(await statusOf(projectId)).toBe("active");
@@ -170,7 +171,9 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(3);
     expect(bodies[1]).toContain("has resumed");
-    expect(bodies[2]).toContain("again could not turn this project's vision into a plan");
+    expect(bodies[2]).toContain("could not turn this project's vision into a plan");
+    // first planning's last error is what the episode recorded (migration 040's trigger).
+    expect(bodies[2]).toContain("The cause, as Ashara recorded it: x");
   });
 });
 
@@ -197,9 +200,9 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
     expect(await projects.listInfrastructureHalted()).toContain(projectId);
 
     const [halted] = await messagesOf(projectId);
-    expect(halted).toContain(`failed 4 times while working on "Write the lock checks"`);
+    // The recorded cause, not a sentence fixed for every infrastructure halt (M2 trial M3).
+    expect(halted).toContain("The cause, as Ashara recorded it: InfrastructureFaultBudgetSpent: task cell unavailable");
     expect(halted).toContain("resumes this project by itself");
-    expect(halted).not.toContain("InfrastructureFaultBudgetSpent");
 
     expect(await projects.resumeFromInfrastructureHalt(projectId, "substrate answered: version 5.4")).toBe("resumed");
     expect(await statusOf(projectId)).toBe("active");
@@ -236,7 +239,7 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
 
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(2);
-    expect(bodies[0]).toContain(`failed 4 times while working on "Start the task cell"`);
+    expect(bodies[0]).toContain("InfrastructureFaultBudgetSpent: task cell unavailable");
     expect(bodies[1]).toContain("the machines Ashara runs the work on work again");
   });
 
@@ -278,9 +281,10 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toContain("cannot deliver it as planned");
-    expect(bodies[0]).toContain(`"Compact the log" (after 0 attempts: its developer and the team could not settle`);
-    expect(bodies[0]).toContain(`"Review the plan's checks" (after 0 attempts: the review of the checks written for the plan kept finding problems in them)`);
-    expect(bodies[0]).toContain(`"Lock the data directory" (after 0 attempts: every attempt at it failed)`);
+    // Each cause as its blocked_reason recorded it (story s-independent-verify-m1 W7).
+    expect(bodies[0]).toContain(`"Compact the log", after 0 attempts. As recorded: check "compacts" disputed: past the bound`);
+    expect(bodies[0]).toContain(`"Review the plan's checks", after 0 attempts. As recorded: past the bound`);
+    expect(bodies[0]).toContain(`"Lock the data directory", after 0 attempts. As recorded: max_attempts`);
     expect(bodies[0]).not.toContain("Replaced work");
   });
 });

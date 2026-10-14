@@ -322,6 +322,12 @@ function givenUpEvidence(reason: GivenUpReason): string {
       return `The project's environment on main is not one its cells can be built from: ${reason.reason}`;
     case "owner_unresolved":
       return `No role of the team's roster could be assigned it (owner ${reason.ownerRoleId ?? "none"}): ${reason.reason}`;
+    case "acceptance_failed":
+      return (
+        `Every task of the plan was done, but the acceptance run on main ` +
+        `(${reason.mainCommit === null ? "main could not be read" : `commit ${reason.mainCommit}`}) of the ` +
+        `environment's test and every completed task's checks did not pass, or could not be carried out:\n${reason.reason}`
+      );
     case "task_failed":
     case "orchestrator_error":
     case "merge_unrecorded":
@@ -452,7 +458,14 @@ function isTask(planned: PlannedItem): boolean {
 
 function isGoalTask(item: WorkItem): boolean {
   const origin = item.taskSpec?.origin;
-  return origin !== "check" && origin !== "sprint0" && origin !== "product-scaffold" && item.workKind !== "environment" && item.workKind !== "check";
+  return (
+    origin !== "check" &&
+    origin !== "sprint0" &&
+    origin !== "product-scaffold" &&
+    origin !== "acceptance" &&
+    item.workKind !== "environment" &&
+    item.workKind !== "check"
+  );
 }
 
 function isEnvironmentTask(item: WorkItem): boolean {

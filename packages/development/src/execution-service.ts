@@ -913,6 +913,42 @@ type Delivery =
   /** A review of the plan's suites that found no problem in the suites of `reviewed` check tasks. */
   | { readonly kind: "suites-reviewed"; readonly reviewed: readonly string[] };
 
+/**
+ * An acceptance sweep on main HEAD (DevelopmentService.sweepForAcceptance): `ran` with its verdict
+ * and the run as the verdict states it, `environmentVersion` null when main defines no environment
+ * its cells can be built from; `unrunnable`, nothing decided, when the substrate failed under it
+ * (its probe failed, or an EnvironmentError stopped a stage); or `faulted`, nothing decided, when
+ * anything else stopped it (Z0's git or checkout machinery, a store, a bug): not the machines, so
+ * never reported as the machines. `mainCommit` of a fault is null when main could not be read.
+ */
+export type AcceptanceSweep =
+  | {
+      readonly kind: "ran";
+      readonly passed: boolean;
+      readonly mainCommit: string;
+      readonly environmentVersion: string | null;
+      /** Completed implementation tasks whose latest stored checks ran. */
+      readonly checkedTasks: readonly string[];
+      /** Completed implementation tasks with no stored check: nothing of theirs ran, so they are not checked. */
+      readonly uncheckedTasks: readonly string[];
+      readonly details: string;
+    }
+  | { readonly kind: "unrunnable"; readonly error: EnvironmentError }
+  | { readonly kind: "faulted"; readonly mainCommit: string | null; readonly error: AcceptanceSweepFault };
+
+/** A step of an acceptance sweep failed on something other than the substrate: no verdict exists. */
+class AcceptanceSweepFault extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    /** What Z0 was doing when it failed, e.g. "read main". */
+    readonly step: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`the acceptance sweep of project ${projectId} could not run: ${step} failed: ${describeErrorChain(options.cause)}`, { cause: options.cause });
+    this.name = "AcceptanceSweepFault";
+  }
+}
+
 interface CompletedResult {
   readonly status: "completed";
   readonly delivered: Delivery;
@@ -2044,6 +2080,111 @@ export class DevelopmentService {
       output: agent.output,
       sessionId,
       attempt: task.attempt,
+    };
+  }
+
+  /**
+   * The acceptance sweep (story s-independent-verify-m1 W7, design P11): once every task of a
+   * project's plan is settled with its goal tasks done, Z0 runs, on main HEAD in one CI cell from
+   * main's environment image, the environment's test and the latest checks of every Completed
+   * implementation task (the regression suite), each suite's files written over the checkout, with
+   * no model called. Passed only when every suite ran every check and each passed, and every goal
+   * task in `goalTaskIds` has checks stored: a goal never checked is not accepted on its word.
+   * Completed tasks with no stored check are named apart (`uncheckedTasks`), never counted as
+   * passed. A main with no environment its cells can be built from fails the sweep, with the
+   * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
+   * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
+   * bounds both (orchestrator acceptance.ts).
+   */
+  async sweepForAcceptance(projectId: ProjectId, targetProjectPath: string, goalTaskIds: readonly string[]): Promise<AcceptanceSweep> {
+    const label = `acceptance-${projectId}`;
+    let step = "probe the substrate";
+    let main: string | null = null;
+    try {
+      await this.deps.cells.substrate.probeSubstrate();
+      step = "read main";
+      main = await mainCommit(targetProjectPath, label);
+      return await this.runAcceptanceSweep(projectId, targetProjectPath, goalTaskIds, main, (next) => {
+        step = next;
+      });
+    } catch (e) {
+      const substrate = environmentErrorOf(e);
+      if (substrate !== null) return { kind: "unrunnable", error: substrate };
+      return { kind: "faulted", mainCommit: main, error: new AcceptanceSweepFault(projectId, step, { cause: e }) };
+    }
+  }
+
+  /** The sweep once the substrate answered and main was read; `at` names each step, for a fault. */
+  private async runAcceptanceSweep(
+    projectId: ProjectId,
+    targetProjectPath: string,
+    goalTaskIds: readonly string[],
+    main: string,
+    at: (step: string) => void,
+  ): Promise<AcceptanceSweep> {
+    const { cells, eventSink } = this.deps;
+    const label = `acceptance-${projectId}`;
+    at("resolve main's environment");
+    const resolution = await resolveCurrentEnvironment(projectId, targetRepo(targetProjectPath), this.deps.environment.images, this.deps.environment.statements);
+    if (resolution.kind === "undefined") {
+      return {
+        kind: "ran",
+        passed: false,
+        mainCommit: main,
+        environmentVersion: null,
+        checkedTasks: [],
+        uncheckedTasks: [],
+        details: `no environment its cells can be built from: ${resolution.reason}`,
+      };
+    }
+    const environment: CurrentEnvironment = resolution.environment;
+    at("read the stored checks of the completed tasks");
+    const completed = await this.deps.checks.completedOf(projectId, null);
+    const checkedIds = new Set(completed.checked.map((prior) => prior.taskId));
+    const neverChecked = goalTaskIds.filter((id) => !checkedIds.has(id));
+    const suites: CheckSuite[] = [
+      { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.definition.test }], files: [] },
+      ...completed.checked.map((prior) => ({
+        label: `task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
+        checks: prior.checks,
+        files: prior.files,
+      })),
+    ];
+    at("run the suites on a checkout of main");
+    const checkCells: CheckCells = {
+      targetProjectPath,
+      createCell: ({ image, role, hostPath }) =>
+        cells.substrate.createCell({ image, project: projectId, task: label, role, instance: cells.instance, mount: { hostPath, shared: true } }),
+      teardownCell: (cell) => this.teardownCell(label, cell),
+      timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
+    };
+    const dir = join(this.deps.config.workdirBase, "checkouts", `acceptance-${projectId}-${createSessionId()}`);
+    const runs: readonly SuiteRun[] = await runSuitesOnCheckout(checkCells, RED_RUN_ROLE, environment.imageId, main, dir, suites);
+    const ran = suitesVerdict(suites, runs, completed.checked.length, "main");
+    const gaps = [
+      ...(neverChecked.length === 0 ? [] : [`Goal task(s) with no stored checks, so never checked: ${neverChecked.join(", ")}`]),
+      ...(completed.unchecked.length === 0 ? [] : [`Not re-run, no check is stored for them: ${completed.unchecked.join(", ")}`]),
+    ];
+    const passed = ran.passed && neverChecked.length === 0;
+    const details = [ran.details, ...gaps].join("\n");
+    const checkedTasks = completed.checked.map((prior) => prior.taskId);
+    eventSink?.emit({
+      event: "acceptance_sweep",
+      projectId,
+      mainCommit: main,
+      verdict: passed ? "passed" : "failed",
+      checkedTasks,
+      neverChecked,
+      details,
+    });
+    return {
+      kind: "ran",
+      passed,
+      mainCommit: main,
+      environmentVersion: environment.version,
+      checkedTasks,
+      uncheckedTasks: completed.unchecked,
+      details,
     };
   }
 

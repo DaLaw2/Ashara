@@ -7,7 +7,7 @@
  * client's answers into the vision, to report
  * recorded planning outcomes to the client, and to record the stack a merged
  * Sprint 0 task chose as an assumption in the vision and report it, and to
- * report each project halt and resumption, and reads back what happened.
+ * report each project halt and resumption and each delivered project, and reads back what happened.
  */
 
 export type {
@@ -16,6 +16,7 @@ export type {
   LiaisonAnswers,
   LiaisonBlockReports,
   LiaisonClientStops,
+  LiaisonDeliveredReports,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
