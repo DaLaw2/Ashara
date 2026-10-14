@@ -141,7 +141,8 @@ describe("TenderIntake response schema", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const response = (question: Record<string, unknown>) => ({
       summary: "A booking page.",
-      scopeBoundaries: ["In: booking"],
+      inScope: ["booking"],
+      outOfScope: [],
       questions: [question],
       assumptions: [],
     });
@@ -193,7 +194,8 @@ describe("TenderIntake assumption label", () => {
   test("a statement that repeats the label's lead-in is posted and recorded once, without it", async () => {
     const raw = {
       summary: "A command-line tool.",
-      scopeBoundaries: ["In: merging the exports"],
+      inScope: ["merging the exports"],
+      outOfScope: [],
       questions: [
         {
           text: "Which Windows version?",
@@ -253,7 +255,8 @@ describe("TenderIntake assumption label", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const response = (statement: string) => ({
       summary: "A tool.",
-      scopeBoundaries: ["In: a tool"],
+      inScope: ["a tool"],
+      outOfScope: [],
       questions: [],
       assumptions: [{ statement, rationale: "None given.", kind: "client-visible" }],
     });
@@ -297,7 +300,8 @@ describe("TenderIntake assumption label", () => {
 describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
   const raw = (assumptions: readonly Record<string, unknown>[]) => ({
     summary: "A key-value store.",
-    scopeBoundaries: ["In: put, get, list"],
+    inScope: ["put, get, list"],
+    outOfScope: [],
     questions: [
       {
         text: "May values hold spaces?",
@@ -356,6 +360,15 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
       ["A1", "client-visible", "asked"],
       ["A2", "client-visible", "reported"],
       ["A3", "internal-design", "reported"],
+    ]);
+  });
+
+  // W11c D3: the vision records which side of the scope each line is on, so no report reads it from the wording.
+  test("the vision records each scope line with its side, in scope first", async () => {
+    const write = await intakeOf({ ...raw([]), inScope: ["put and get"], outOfScope: ["any network service"] });
+    expect(write.vision(["q0"]).scopeBoundaries).toEqual([
+      { text: "put and get", side: "in" },
+      { text: "any network service", side: "out" },
     ]);
   });
 

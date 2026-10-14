@@ -46,11 +46,15 @@ export {
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
 
-export type { AssumptionDisclosure, AssumptionKind } from "./vision-assumption.js";
+export type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-assumption.js";
 export {
+  ASSUMPTION_KIND_LABEL,
+  ASSUMPTION_STANDING_LABEL,
   AssumptionKindSchema,
   PUBLIC_INTERFACE_FILE,
+  StoredAssumptionDisclosureSchema,
   StoredAssumptionKindSchema,
+  StoredScopeLineSchema,
   assumptionStanding,
 } from "./vision-assumption.js";
 
@@ -74,7 +78,7 @@ export { OUTBOUND_TRANSITIONS } from "./transitions.js";
 
 
 export type { StoredTaskSpec, VisionSource } from "./task-spec.js";
-export { visionSourceLine } from "./task-spec.js";
+export { parseStoredTaskSpec, visionSourceLine } from "./task-spec.js";
 
 export type { MergeKind, StoredBlockedReason } from "./blocked-reason.js";
 export { BLOCKED_REASON_SOURCES } from "./blocked-reason.js";

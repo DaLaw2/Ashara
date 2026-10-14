@@ -945,7 +945,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     }
     // sprint0-run-2026-10-14 D9: the brief carries the vision's assumptions, not only its text.
     expect(system).toContain("vision version 2");
-    expect(system).toContain("- A1 (Inferred; reported to the client, who has not objected; client-visible behaviour): Greetings are written in lower case.");
+    expect(system).toContain("- A1 (Inferred; reported to the client; client-visible behaviour): Greetings are written in lower case.");
     expect(system).toContain("- A2 (Stated by the client; client-visible behaviour): The greeting file is plain text, one line.");
   });
 

@@ -83,7 +83,8 @@ function jsonResult(value: unknown) {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
+  inScope: ["Class booking for both studios"],
+  outOfScope: ["Payments"],
   assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {
@@ -209,7 +210,7 @@ async function contradict(projectId: ProjectId, questionId: string): Promise<str
     body: "No, the hill studio opens first.",
     inReplyTo: questionId,
   });
-  pipelineModel({ reading: { verdict: "changes", statement: "The hill studio opens first." } });
+  pipelineModel({ reading: { verdict: "changes", statement: "The hill studio opens first.", kind: "client-visible" } });
   const answerStore = createAnswerStore(db);
   const narrowed: AnswerStore = { ...answerStore, openAnswers: ours(() => answerStore.openAnswers()) };
   const outcomes = await new ClientAnswers({ llm: gateway, store: narrowed }).runPending();

@@ -72,7 +72,8 @@ function jsonResult(value: unknown) {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
+  inScope: ["Class booking for both studios"],
+  outOfScope: ["Payments"],
   assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {
@@ -291,7 +292,7 @@ describe("the client's answers", () => {
 
     expect(await planner().runPending()).toEqual([]);
 
-    pipelineModel({ verdict: "changes", statement: "A class has eight seats." });
+    pipelineModel({ verdict: "changes", statement: "A class has eight seats.", kind: "client-visible" });
     expect((await answers().runPending()).map((o) => o.kind)).toEqual(["stated"]);
     const mock = pipelineModel({ verdict: "confirms" });
     expect((await planner().runPending()).map((o) => o.kind)).toEqual(["planned"]);
@@ -314,7 +315,7 @@ describe("the client's answers", () => {
     expect(await projectRepo.listActiveIds()).toContain(projectId);
 
     const answerId = await answer(projectId, first, "No, the hill studio opens first.");
-    pipelineModel({ verdict: "changes", statement: "The hill studio opens first." });
+    pipelineModel({ verdict: "changes", statement: "The hill studio opens first.", kind: "internal-design" });
     const outcomes = await answers().runPending();
 
     expect(outcomes).toEqual([
@@ -323,6 +324,8 @@ describe("the client's answers", () => {
     expect((await visionsOf(projectId))[1]?.inferences.find((a) => a.key === "A1")).toMatchObject({
       statement: "The hill studio opens first.",
       status: "Stated",
+      // The changed decision is classified again, never carried over from the one it replaced.
+      kind: "internal-design",
       clientAnswer: { messageId: answerId },
     });
     expect(await replanFlagOf(projectId)).toBe(answerId);

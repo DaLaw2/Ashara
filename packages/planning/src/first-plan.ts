@@ -1,8 +1,15 @@
 import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import { StoredAssumptionKindSchema, assumptionStanding, describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId, ProjectKnowledge, WorkItemLevel, WorkKind } from "@ashara/shared";
+import {
+  StoredAssumptionDisclosureSchema,
+  StoredAssumptionKindSchema,
+  StoredScopeLineSchema,
+  assumptionStanding,
+  describeErrorChain,
+  projectBlockCause,
+} from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId, ProjectKnowledge, ScopeSide, WorkItemLevel, WorkKind } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type {
@@ -129,7 +136,9 @@ class VisionUnreadable extends Error {
   }
 }
 
-const ScopeBoundariesSchema = z.array(z.string().min(1));
+// Intake writes each scope line with its side; a vision written before sides were recorded holds
+// bare strings, read as unclassified.
+const ScopeBoundariesSchema = z.array(StoredScopeLineSchema);
 
 // The answer a Stated assumption carries (migration 038): the Liaison writes it when
 // the client answers the question that named the assumption.
@@ -141,11 +150,12 @@ const ClientAnswerSchema = z.object({ question: z.string().min(1), answer: z.str
 // inference and are still in the database. Both are read; a Stated record without
 // its answer, or anything else, stops the attempt rather than planning without them.
 // Each record's key, kind and disclosure are read as stored (ADR-074 addendum 2 d89): a record
-// written before them has no kind, so no line may cite it, and its id is its place in the list.
+// written before them has no kind, so no line may cite it, and its id is its place in the list; a
+// disclosure that is neither "asked" nor "reported" makes the vision unreadable.
 const RecordFieldsSchema = z.object({
   key: z.string().min(1).optional(),
   kind: StoredAssumptionKindSchema,
-  disclosed: z.unknown().optional(),
+  disclosed: StoredAssumptionDisclosureSchema,
 });
 const InferencesSchema = z.union([
   z.array(
@@ -165,6 +175,8 @@ function parseField<T>(schema: z.ZodType<T>, value: unknown, project: StoredVisi
   return parsed.data;
 }
 
+const SCOPE_SIDE_LEAD: Readonly<Record<ScopeSide, string>> = { in: "In scope: ", out: "Out of scope: ", unclassified: "" };
+
 /**
  * The north star decomposition plans toward: the vision's summary, its scope, and
  * the assumptions work proceeds on. The decomposition prompt itself stays in
@@ -180,7 +192,7 @@ export function northStarOf(project: StoredVisionReading): string {
     : Object.entries(inferences).map(([category, inference]) => `${category}: ${inference}`);
 
   const sections = [project.summary];
-  if (scope.length > 0) sections.push(`Scope:\n${scope.map((s) => `- ${s}`).join("\n")}`);
+  if (scope.length > 0) sections.push(`Scope:\n${scope.map((s) => `- ${SCOPE_SIDE_LEAD[s.side]}${s.text}`).join("\n")}`);
   if (answers.length > 0) {
     sections.push(
       `Client clarifications (Stated by the client; these override any assumption):\n` +
@@ -228,7 +240,7 @@ export function visionItemsOf(project: StoredVisionReading): VisionItem[] {
     }
     ids.add(item.id);
   }
-  return [...scope.map((text, i): VisionItem => ({ type: "scope", id: `S${i + 1}`, text })), ...assumptions];
+  return [...scope.map((line, i): VisionItem => ({ type: "scope", id: `S${i + 1}`, text: line.text, side: line.side })), ...assumptions];
 }
 
 function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {

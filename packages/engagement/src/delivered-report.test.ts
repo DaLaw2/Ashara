@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
+import type { AssumptionStanding, VisionSource } from "@ashara/shared";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportStore } from "./delivered-report.js";
 
@@ -8,6 +9,14 @@ const MAIN = "c".repeat(40);
 const MERGE_A = "a".repeat(40);
 
 type Due = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
+
+function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): VisionSource {
+  return { type: "scope", id, text, side };
+}
+
+function assumption(id: string, text: string, standing: AssumptionStanding, kind: "client-visible" | "internal-design" | "unclassified"): VisionSource {
+  return { type: "assumption", id, text, status: standing === "stated" ? "Stated" : "Inferred", standing, kind };
+}
 
 async function render(due: Due): Promise<string> {
   const posted: string[] = [];
@@ -41,8 +50,11 @@ describe("the delivered report", () => {
       givenUp: [],
       vision: {
         kind: "recorded",
-        items: ["A key can be stored and read back", "A key can be deleted", "Concurrent writers never corrupt the store"],
-        checked: ["A key can be stored and read back", "A key can be deleted"],
+        items: [
+          { source: scope("S1", "A key can be stored and read back"), checked: true },
+          { source: scope("S2", "A key can be deleted"), checked: true },
+          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false },
+        ],
       },
     });
     expect(body).toContain(`the environment's test and the stored checks of 3 completed tasks passed together on main, commit ${MAIN}`);
@@ -50,7 +62,7 @@ describe("the delivered report", () => {
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store and read keys".`);
     expect(body).toContain(`"List keys": closed on commit ${MERGE_A}; whether it was merged or already delivered there is not on record.`);
-    expect(body).toContain("not checked");
+    expect(body).toContain("named by no acceptance criterion of a task whose stored checks passed on main");
     expect(body).toContain("- Concurrent writers never corrupt the store");
     expect(body).not.toContain("- A key can be deleted\n");
   });
@@ -78,10 +90,83 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: ["Keys can be stored"], checked: ["Keys can be stored"] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true }] },
     });
-    expect(body).toContain("Every item of what you asked for is covered by at least one stored check that passed on main.");
+    expect(body).toContain("Every item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.");
     expect(body).not.toContain("not checked");
+  });
+
+  test("a record with no item of what the client asked for claims no coverage", async () => {
+    const body = await render({
+      sweepId: "s3b",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false }] },
+    });
+    expect(body).toContain("The plan's record holds no item of what you asked for, so none of it is stated as checked.");
+    expect(body).not.toContain("Every item");
+  });
+
+  // W11c D3: the run's coverage list named both exclusions and every internal-design assumption as
+  // unchecked items of what the client asked for. The shape below is that run's vision.
+  test("the W11c shape: exclusions and the team's design choices are never listed; an uncited assumption is Ashara's, as the client saw it", async () => {
+    const body = await render({
+      sweepId: "s6",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Implement persistent put and get with required data directory", close: { kind: "merged", commit: MAIN } }],
+      checked: ["Implement persistent put and get with required data directory"],
+      unchecked: ["Set up the product's layout"],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "put stores a value under a key"), checked: true },
+          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true },
+          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true },
+          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false },
+          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false },
+          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true },
+          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false },
+          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false },
+          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false },
+          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false },
+          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false },
+          { source: assumption("A27", "Empty keys are refused.", "not-shown", "unclassified"), checked: false },
+        ],
+      },
+    });
+    const coverage = body.split("\n\n").find((section) => section.includes("acceptance criterion"));
+    expect(coverage).toBe(
+      [
+        "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:",
+        "- Keys and values are UTF-8 text. (your answer)",
+        "- Ashara's assumption, which was reported to you: No artificial limit is imposed on key or value size.",
+        "- Ashara's assumption, which you were asked about and have not answered: Values print with a trailing newline.",
+        "- Ashara's assumption, which was never shown to you: Empty keys are refused. (not recorded as what you see or as how it is built)",
+      ].join("\n"),
+    );
+    expect(body).not.toContain("network");
+    expect(body).not.toContain("advisory lock");
+    expect(body).not.toContain("Several processes");
+  });
+
+  test("a scope line recorded without its side is listed, and says so", async () => {
+    const body = await render({
+      sweepId: "s7",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false }] },
+    });
+    expect(body).toContain("- Out of scope: non-Linux platforms. (recorded without saying whether it is in or out of scope)");
   });
 
   test("a completed task with no stored check is listed as not checked, apart from what passed, and the opening claims only what ran", async () => {
@@ -93,7 +178,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: ["Set up the product's module root"],
       givenUp: ["Shard the store"],
-      vision: { kind: "recorded", items: ["Keys can be stored"], checked: ["Keys can be stored"] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true }] },
     });
     const [opening] = body.split("\n\n");
     expect(opening).toBe(

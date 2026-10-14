@@ -30,6 +30,11 @@ describe("the brief's project intent is the current vision's text and its assump
     { case: "a blank vision text", vision: { version: 1, visionText: "  ", inferences: [] } },
     { case: "the keyless map shape", vision: { version: 1, visionText: "x", inferences: { stack: "Go" } } },
     { case: "an assumption without a key", vision: { version: 1, visionText: "x", inferences: [{ statement: "s", status: "Inferred" }] } },
+    // Never read as "never shown to the client" (W11 residual).
+    {
+      case: "a disclosure that is neither asked nor reported",
+      vision: { version: 1, visionText: "x", inferences: [{ key: "A1", statement: "s", status: "Inferred", disclosed: "emailed" }] },
+    },
   ])("$case: ProjectIntentUnavailable, never a brief without the assumptions", async ({ vision }) => {
     await expect(loadProjectIntent(source(vision), taskId)).rejects.toBeInstanceOf(ProjectIntentUnavailable);
   });

@@ -1,4 +1,5 @@
 import { environmentDefinitionRules } from "@ashara/execution-infra";
+import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "@ashara/shared";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
 import { CHECK_RUNNER } from "./check-definition.js";
@@ -216,22 +217,6 @@ function environmentSection(environment: AssignmentBrief["projectEnvironment"]):
   ].join("\n");
 }
 
-type BriefAssumption = AssignmentBrief["assumptions"][number];
-
-/** What the client has seen of an assumption, as the record says: nothing is claimed beyond it (ADR-074 addendum 2 d89 C). */
-const STANDING: Readonly<Record<BriefAssumption["standing"], string>> = {
-  stated: "Stated by the client",
-  asked: "Inferred; the client was asked about it and has not answered",
-  reported: "Inferred; reported to the client, who has not objected",
-  "not-shown": "Inferred; never shown to the client",
-};
-
-const KIND: Readonly<Record<BriefAssumption["kind"], string>> = {
-  "client-visible": "client-visible behaviour",
-  "internal-design": "internal design",
-  unclassified: "not classified",
-};
-
 /** The assumptions work proceeds on, by id, each with where it stands with the client, so the agent never contradicts one. */
 function assumptionsSection(brief: AssignmentBrief): string {
   const header = [
@@ -245,7 +230,7 @@ function assumptionsSection(brief: AssignmentBrief): string {
   if (brief.assumptions.length === 0) return [...header, `None are recorded.`].join("\n");
   return [
     ...header,
-    ...brief.assumptions.map((a) => `- ${a.key} (${STANDING[a.standing]}; ${KIND[a.kind]}): ${a.statement}`),
+    ...brief.assumptions.map((a) => `- ${a.key} (${ASSUMPTION_STANDING_LABEL[a.standing]}; ${ASSUMPTION_KIND_LABEL[a.kind]}): ${a.statement}`),
   ].join("\n");
 }
 

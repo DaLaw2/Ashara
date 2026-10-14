@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, parseStoredTaskSpec, type ProjectId, type VisionSource } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { acceptanceSweeps, clientMessages, projects, taskChecks, workItems } from "../schema.js";
 import { noOpenAnswer } from "./first-plan.js";
@@ -169,10 +169,13 @@ type GoalClose =
   /** Completed with no commit recorded at all. */
   | { readonly kind: "no-record" };
 
-/** The vision items the delivered plan traced to, and those the stored checks that ran trace to. */
+/**
+ * Every item of the vision the delivered plan was reviewed against, each with whether an acceptance
+ * line of a check task whose stored checks ran in the sweep cites it.
+ */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: readonly string[]; readonly checked: readonly string[] }
-  /** No completed review of the plan's suites records the vision's items: coverage cannot be stated. */
+  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: VisionSource; readonly checked: boolean }> }
+  /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
 
 interface DueDeliveredReportRow {
@@ -188,8 +191,6 @@ interface DueDeliveredReportRow {
   readonly givenUp: readonly string[];
   readonly vision: VisionCoverage;
 }
-
-const VisionItemsSchema = z.array(z.string().min(1));
 
 const SweepTaskIdsSchema = z.array(z.guid());
 
@@ -247,21 +248,40 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
   return rows.map((row) => row.title);
 }
 
-/** A stored task_spec.visionItems is present but not a list of items. */
-class VisionItemsUnreadable extends Error {
+/** A check task's acceptance line cites an item id its own task_spec.sources does not hold. */
+class AcceptanceTraceBroken extends Error {
   constructor(
-    readonly workItemId: string,
-    readonly detail: string,
+    readonly checkTaskId: string,
+    readonly line: string,
+    readonly sourceId: string,
   ) {
-    super(`work item ${workItemId}: task_spec.visionItems is not a list of vision items: ${detail}`);
-    this.name = "VisionItemsUnreadable";
+    super(`check task ${checkTaskId}: acceptance line "${line}" cites ${sourceId}, which its task_spec.sources does not hold`);
+    this.name = "AcceptanceTraceBroken";
   }
 }
 
-function visionItemsOf(row: { readonly id: string; readonly items: unknown }): string[] {
-  const parsed = VisionItemsSchema.safeParse(row.items);
-  if (!parsed.success) throw new VisionItemsUnreadable(row.id, z.prettifyError(parsed.error));
-  return parsed.data;
+/** An item is the same across the plan's revisions only when its type, id and text all match. */
+function sourceIdentity(source: VisionSource): string {
+  return JSON.stringify([source.type, source.id, source.text]);
+}
+
+/**
+ * The items a check task's acceptance lines cite, by identity; null when the task records no traced
+ * lines (written before d89), so what it covers is not on record.
+ */
+function citedBy(checkTaskId: string, rawSpec: unknown): Set<string> | null {
+  const spec = parseStoredTaskSpec(rawSpec);
+  if (spec?.acceptance === undefined || spec.sources === undefined) return null;
+  const sources = new Map(spec.sources.map((source) => [source.id, source]));
+  const cited = new Set<string>();
+  for (const line of spec.acceptance) {
+    for (const id of line.sources) {
+      const source = sources.get(id);
+      if (source === undefined) throw new AcceptanceTraceBroken(checkTaskId, line.line, id);
+      cited.add(sourceIdentity(source));
+    }
+  }
+  return cited;
 }
 
 async function goalCloses(db: DbHandle, projectId: string): Promise<DueDeliveredReportRow["goals"]> {
@@ -282,30 +302,10 @@ async function goalCloses(db: DbHandle, projectId: string): Promise<DueDelivered
   });
 }
 
-/**
- * The vision items of the plan as its latest completed review recorded them (every item of the
- * vision its revision was decomposed from), and the items traced by the check task of each goal
- * task's latest stored checks: the sets the sweep ran.
- */
-async function visionCoverage(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<VisionCoverage> {
-  const [review] = await db
-    .select({ id: workItems.id, items: sql<unknown>`${workItems.taskSpec}->'visionItems'` })
-    .from(workItems)
-    .where(
-      and(
-        eq(workItems.projectId, projectId),
-        eq(workItems.status, "Completed"),
-        sql`${workItems.taskSpec}->>'origin' = 'review'`,
-        sql`${workItems.taskSpec} ? 'visionItems'`,
-      ),
-    )
-    .orderBy(desc(workItems.createdAt), desc(workItems.id))
-    .limit(1);
-  if (!review) return { kind: "unrecorded" };
-  const items = visionItemsOf(review);
-  if (goalIds.length === 0) return { kind: "recorded", items, checked: [] };
-  const authors = await db
-    .select({ id: workItems.id, items: sql<unknown>`${workItems.taskSpec}->'visionItems'` })
+/** The check tasks that wrote each goal task's latest stored checks, with their task specs. */
+async function checkAuthors(db: DbHandle, goalIds: readonly string[]): Promise<Array<{ readonly id: string; readonly taskSpec: unknown }>> {
+  return db
+    .select({ id: workItems.id, taskSpec: workItems.taskSpec })
     .from(workItems)
     .where(
       inArray(
@@ -321,12 +321,37 @@ async function visionCoverage(db: DbHandle, projectId: string, goalIds: readonly
           ),
       ),
     );
-  const checked = new Set<string>();
-  for (const author of authors) {
-    if (author.items === null) continue;
-    for (const item of visionItemsOf(author)) checked.add(item);
+}
+
+/**
+ * Every item of the vision as the plan's latest completed review recorded it (every item of the
+ * vision its revision was decomposed from), each checked exactly when an acceptance line of the
+ * check task of a goal task's latest stored checks (the sets the sweep ran) cites it (W11c D3). A
+ * stored check is not recorded against one line, so the trace reaches the check task's lines, not
+ * one check. Unrecorded when the review, or one of those check tasks, holds no traced items.
+ */
+async function visionCoverage(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<VisionCoverage> {
+  const [review] = await db
+    .select({ taskSpec: workItems.taskSpec })
+    .from(workItems)
+    .where(
+      and(
+        eq(workItems.projectId, projectId),
+        eq(workItems.status, "Completed"),
+        sql`${workItems.taskSpec}->>'origin' = 'review'`,
+      ),
+    )
+    .orderBy(desc(workItems.createdAt), desc(workItems.id))
+    .limit(1);
+  const items = review ? parseStoredTaskSpec(review.taskSpec)?.sources : undefined;
+  if (items === undefined) return { kind: "unrecorded" };
+  const cited = new Set<string>();
+  for (const author of goalIds.length === 0 ? [] : await checkAuthors(db, goalIds)) {
+    const lines = citedBy(author.id, author.taskSpec);
+    if (lines === null) return { kind: "unrecorded" };
+    for (const identity of lines) cited.add(identity);
   }
-  return { kind: "recorded", items, checked: [...checked] };
+  return { kind: "recorded", items: items.map((source) => ({ source, checked: cited.has(sourceIdentity(source)) })) };
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */

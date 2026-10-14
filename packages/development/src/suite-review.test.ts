@@ -19,7 +19,7 @@ const IMPL_A = createWorkItemId();
 const IMPL_B = createWorkItemId();
 const CHECK_A = "check-a";
 const CHECK_B = "check-b";
-const SCOPE: VisionSource = { type: "scope", id: "S1", text: "In: monthly totals of a CSV of expenses" };
+const SCOPE: VisionSource = { type: "scope", id: "S1", text: "In: monthly totals of a CSV of expenses", side: "in" };
 const REFUSAL: VisionSource = {
   type: "assumption",
   id: "A3",
@@ -156,7 +156,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompt).toContain(`PUBLIC_INTERFACE.md at commit ${BASELINE}, the foundation the checks were written against`);
     expect(prompt).toContain(INTERFACE_TEXT);
     const [, suiteB = ""] = prompt.split(`## Check task ${CHECK_B}`);
-    expect(suiteB).toContain("- A3 (assumption; Inferred; reported to the client; client-visible): Malformed rows are refused with their line number");
+    expect(suiteB).toContain("- A3 (assumption; Inferred; reported to the client; client-visible behaviour): Malformed rows are refused with their line number");
     expect(prompt).toContain("- A4 (assumption; Inferred; reported to the client; internal design, not citable): Totals are cached in totals.db");
     // The rule: inside its task's cited items, whatever their status; outside what none of them asks for.
     expect(prompt).toContain("a check that requires behaviour none of the vision items its own task cites asks for");

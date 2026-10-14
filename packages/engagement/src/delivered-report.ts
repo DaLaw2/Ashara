@@ -1,4 +1,4 @@
-import type { ProjectId } from "@ashara/shared";
+import type { AssumptionStanding, ProjectId, VisionSource } from "@ashara/shared";
 
 // The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8; eighth run E3):
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
@@ -15,9 +15,12 @@ type GoalClose =
   | { readonly kind: "unrecorded-kind"; readonly commit: string }
   | { readonly kind: "no-record" };
 
-/** The plan's vision items and those the checks the sweep ran trace to; or none recorded. */
+/**
+ * Every item of the vision the plan was reviewed against, each with whether an acceptance line of a
+ * check task whose stored checks the sweep ran cites it; or none recorded.
+ */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: readonly string[]; readonly checked: readonly string[] }
+  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: VisionSource; readonly checked: boolean }> }
   | { readonly kind: "unrecorded" };
 
 /** An accepted project whose delivered report the client has not been sent. */
@@ -70,16 +73,47 @@ function closeLine(title: string, close: GoalClose): string {
   }
 }
 
+/**
+ * Whether the item is part of what the client asked for (W11c D3): a line the vision records as out
+ * of scope is not, nor is an assumption recorded as the team's own design choice, which the client
+ * was told their acceptance does not depend on. Everything else is, an unclassified one included.
+ */
+function askedFor(source: VisionSource): boolean {
+  return source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design";
+}
+
+/** How the client saw an Inferred assumption, as its record says, in the client's words. */
+const SEEN_BY_CLIENT: Readonly<Record<Exclude<AssumptionStanding, "stated">, string>> = {
+  asked: "which you were asked about and have not answered",
+  reported: "which was reported to you",
+  "not-shown": "which was never shown to you",
+};
+
+function coverageLine(source: VisionSource): string {
+  if (source.type === "scope") {
+    return source.side === "unclassified"
+      ? `- ${source.text} (recorded without saying whether it is in or out of scope)`
+      : `- ${source.text}`;
+  }
+  const unclassified = source.kind === "unclassified" ? " (not recorded as what you see or as how it is built)" : "";
+  if (source.standing === "stated") return `- ${source.text} (your answer)${unclassified}`;
+  return `- Ashara's assumption, ${SEEN_BY_CLIENT[source.standing]}: ${source.text}${unclassified}`;
+}
+
 function coverageSection(vision: VisionCoverage): string {
   if (vision.kind === "unrecorded") {
     return "Which parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
   }
-  const checked = new Set(vision.checked);
-  const uncovered = vision.items.filter((item) => !checked.has(item));
-  if (uncovered.length === 0) return "Every item of what you asked for is covered by at least one stored check that passed on main.";
+  const asked = vision.items.filter((item) => askedFor(item.source));
+  if (asked.length === 0) return "The plan's record holds no item of what you asked for, so none of it is stated as checked.";
+  const uncovered = asked.filter((item) => !item.checked);
+  if (uncovered.length === 0) {
+    return "Every item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.";
+  }
   return [
-    `These items of what you asked for are not checked: no stored check covers them, so nothing confirms them either way:`,
-    ...uncovered.map((item) => `- ${item}`),
+    `These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on ` +
+      `main, so nothing confirms them either way:`,
+    ...uncovered.map((item) => coverageLine(item.source)),
   ].join("\n");
 }
 

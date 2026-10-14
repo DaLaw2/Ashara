@@ -1,13 +1,21 @@
 import { z } from "zod";
 import { CapabilityLevelSchema } from "./enums.js";
+import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL, ScopeSideSchema } from "./vision-assumption.js";
+import type { ScopeSide } from "./vision-assumption.js";
 
 /**
  * One item of the vision a plan derives from, as a task cites it (ADR-074 addendum 2 d71 d, d89): a
- * scope line (S1..) or an assumption, by its key, with its status, what the client has seen of it and
- * its kind. `id` is the item's id in the vision version the plan was decomposed from.
+ * scope line (S1..) with its side, or an assumption, by its key, with its status, what the client has
+ * seen of it and its kind. `id` is the item's id in the vision version the plan was decomposed from.
+ * A scope source stored before sides were recorded reads as "unclassified".
  */
 const VisionSourceSchema = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("scope"), id: z.string().min(1), text: z.string().min(1) }),
+  z.strictObject({
+    type: z.literal("scope"),
+    id: z.string().min(1),
+    text: z.string().min(1),
+    side: ScopeSideSchema.default("unclassified"),
+  }),
   z.strictObject({
     type: z.literal("assumption"),
     id: z.string().min(1),
@@ -20,26 +28,13 @@ const VisionSourceSchema = z.discriminatedUnion("type", [
 
 export type VisionSource = z.infer<typeof VisionSourceSchema>;
 
-type AssumptionSource = Extract<VisionSource, { type: "assumption" }>;
-
-const STANDING: Readonly<Record<AssumptionSource["standing"], string>> = {
-  stated: "Stated by the client",
-  asked: "Inferred; asked of the client, not yet answered",
-  reported: "Inferred; reported to the client",
-  "not-shown": "Inferred; never shown to the client",
-};
-
-const KIND: Readonly<Record<AssumptionSource["kind"], string>> = {
-  "client-visible": "client-visible",
-  "internal-design": "internal design, not citable",
-  unclassified: "no recorded kind, not citable",
-};
+const SIDE: Readonly<Record<ScopeSide, string>> = { in: "in scope", out: "out of scope", unclassified: "scope" };
 
 /** A vision item as the plan's prompts and descriptions name it: its id, what it is, and its text. */
 export function visionSourceLine(item: VisionSource): string {
-  return item.type === "scope"
-    ? `${item.id} (scope): ${item.text}`
-    : `${item.id} (assumption; ${STANDING[item.standing]}; ${KIND[item.kind]}): ${item.text}`;
+  if (item.type === "scope") return `${item.id} (${SIDE[item.side]}): ${item.text}`;
+  const citability = item.kind === "client-visible" ? "" : ", not citable";
+  return `${item.id} (assumption; ${ASSUMPTION_STANDING_LABEL[item.standing]}; ${ASSUMPTION_KIND_LABEL[item.kind]}${citability}): ${item.text}`;
 }
 
 /** An acceptance line of a decomposed task with the ids of the vision items it serves (d89 A). */

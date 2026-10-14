@@ -77,19 +77,32 @@ export function thinkingProviderOptions(
 }
 
 /**
- * Output tokens added for reasoning to a request sent with thinking on. Why:
+ * The least output added for reasoning to a request sent with thinking on. Why:
  * DeepSeek counts reasoning against `max_tokens`, so a bound sized for the
  * answer alone can be spent entirely on reasoning. In the W5 trial
  * (2026-10-14) 7 of 12 deepseek-flash calls stopped at `length` with output
  * tokens equal to reasoning tokens and 0 characters of text, at bounds of
  * 2,048 and 4,096. DeepSeek's own default bound in thinking mode is 64K
  * (api-docs.deepseek.com/api/create-chat-completion, read 2026-10-14); half of
- * it for reasoning, on top of the answer, is a policy choice: the reasoning a
- * structured call needs was never measured, because every observed overrun
- * was cut off. A request still cut off reports this allowance in its
- * `StructuredOutputTruncated`.
+ * it for reasoning, on top of the answer, is a policy choice. A request still
+ * cut off reports its allowance in its `StructuredOutputTruncated`.
  */
-const REASONING_ALLOWANCE_TOKENS = 32_768;
+const MIN_REASONING_ALLOWANCE_TOKENS = 32_768;
+
+/**
+ * Reasoning tokens allowed per byte of a one-shot request's prompt, above the
+ * minimum. Why it scales with the prompt and not with the call site: in W11c
+ * (2026-10-14, llm_calls), every deepseek-flash call with a prompt of at most
+ * 3,975 input tokens reasoned at most 20,065 tokens, inside the minimum, while
+ * both suite-review calls, at 20,084 and 20,192 input tokens, spent all 36,864
+ * output tokens reasoning and were cut off. The review's prompt holds every
+ * stored suite of the plan, so it grows with the plan: a larger allowance for
+ * the site alone would be cut off again by a larger plan. One token per byte
+ * (about four per prompt token) gives that review about 80K; how much it
+ * actually needs is unmeasured, since both observed calls were cut off. The
+ * worst-case price follows, because Finance prices the bound this returns.
+ */
+const REASONING_TOKENS_PER_PROMPT_BYTE = 1;
 
 /** DeepSeek's documented `max_tokens` ceiling: "between 1 and 384K (393216)" (same page, read 2026-10-14). */
 const DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216;
@@ -106,9 +119,13 @@ export interface OutputBudget {
  * The bound for a request whose answer needs `answerTokens`. Only a request
  * that actually carries thinking on gets the allowance: the provider types
  * {@link thinkingProviderOptions} sends no switch to keep the caller's bound.
+ * `promptBytes` is the material the request reasons over; an agent turn passes
+ * 0, since its prompt is mostly the history earlier turns already reasoned over.
+ * The bound never exceeds DeepSeek's documented ceiling.
  */
-export function outputBudget(providerType: ProviderType, mode: ThinkingMode, answerTokens: number): OutputBudget {
+export function outputBudget(providerType: ProviderType, mode: ThinkingMode, answerTokens: number, promptBytes: number): OutputBudget {
   if (providerType !== "deepseek" || mode !== "on") return { maxOutputTokens: answerTokens, reasoningAllowance: 0 };
-  const maxOutputTokens = Math.min(answerTokens + REASONING_ALLOWANCE_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS);
+  const allowance = Math.max(MIN_REASONING_ALLOWANCE_TOKENS, Math.ceil(promptBytes * REASONING_TOKENS_PER_PROMPT_BYTE));
+  const maxOutputTokens = Math.min(answerTokens + allowance, DEEPSEEK_MAX_OUTPUT_TOKENS);
   return { maxOutputTokens, reasoningAllowance: maxOutputTokens - answerTokens };
 }

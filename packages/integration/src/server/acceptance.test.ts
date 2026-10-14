@@ -16,7 +16,7 @@ import { ClientStops, DeliveredReports } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { AcceptanceStore } from "@ashara/orchestrator";
 import { runAcceptanceSweeps } from "@ashara/orchestrator";
-import { RUN_SCOPE_AD_HOC, type ProjectId } from "@ashara/shared";
+import { RUN_SCOPE_AD_HOC, type ProjectId, type VisionSource } from "@ashara/shared";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 
@@ -40,12 +40,30 @@ interface Delivered {
   readonly goals: readonly string[];
   /** The product scaffold, Completed and checked only by the substrate: no stored check. */
   readonly scaffold: string;
+  readonly checksOfStore: string;
+}
+
+/** The vision the plan was reviewed against, in the W11c shape: lines in and out of scope, and assumptions of each kind and standing. */
+const VISION = {
+  stored: { type: "scope", id: "S1", text: "Keys can be stored and read", side: "in" },
+  deleted: { type: "scope", id: "S2", text: "Keys can be deleted", side: "in" },
+  writers: { type: "scope", id: "S3", text: "Two writers never corrupt the store", side: "in" },
+  network: { type: "scope", id: "S4", text: "Any network service", side: "out" },
+  missing: { type: "assumption", id: "A1", text: "A missing key exits 3", status: "Stated", standing: "stated", kind: "client-visible" },
+  logName: { type: "assumption", id: "A2", text: "The log file is kv.log", status: "Inferred", standing: "reported", kind: "internal-design" },
+  prefix: { type: "assumption", id: "A3", text: "An empty prefix lists every key", status: "Inferred", standing: "reported", kind: "client-visible" },
+} satisfies Record<string, VisionSource>;
+
+/** A task's traced items and acceptance lines (d89 A), as decomposition stores them. */
+function traced(sources: readonly VisionSource[], acceptance: ReadonlyArray<{ readonly line: string; readonly sources: readonly string[] }>) {
+  return { visionItems: sources.map((source) => source.text), sources, acceptance };
 }
 
 /**
  * A planned project whose every task is Completed: "Store keys" merged as MERGE_A, "Delete keys"
- * already delivered on MERGE_A, each with a check set whose author traces one vision item, and a
- * review recording three vision items, the third of which no check traces.
+ * already delivered on MERGE_A, each with a check set whose acceptance lines cite S1 and A1, and S2,
+ * and a review recording the whole vision: S3 and A3 no line cites, S4 is out of scope and A2 is the
+ * team's design choice.
  */
 async function deliveredProject(): Promise<Delivered> {
   const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build a key store.");
@@ -59,14 +77,17 @@ async function deliveredProject(): Promise<Delivered> {
     return id;
   };
   const scaffold = await task("Set up the module root", { origin: "product-scaffold", checkedBy: "substrate" });
-  const store = await task("Store keys", { origin: "decomposition", visionItems: ["Keys can be stored and read"] });
-  const remove = await task("Delete keys", { origin: "decomposition", visionItems: ["Keys can be deleted"] });
-  const checksOfStore = await task("Checks for Store keys", { origin: "check", checksFor: store, visionItems: ["Keys can be stored and read"] });
-  const checksOfRemove = await task("Checks for Delete keys", { origin: "check", checksFor: remove, visionItems: ["Keys can be deleted"] });
-  await task("Review the plan's checks", {
-    origin: "review",
-    visionItems: ["Keys can be stored and read", "Keys can be deleted", "Two writers never corrupt the store"],
-  });
+  const storeSpec = traced([VISION.stored, VISION.missing], [
+    { line: "put then get prints the value", sources: ["S1"] },
+    { line: "get of a missing key exits 3", sources: ["A1"] },
+  ]);
+  const removeSpec = traced([VISION.deleted], [{ line: "delete removes the key", sources: ["S2"] }]);
+  const store = await task("Store keys", { origin: "decomposition", ...storeSpec });
+  const remove = await task("Delete keys", { origin: "decomposition", ...removeSpec });
+  const checksOfStore = await task("Checks for Store keys", { origin: "check", checksFor: store, ...storeSpec });
+  const checksOfRemove = await task("Checks for Delete keys", { origin: "check", checksFor: remove, ...removeSpec });
+  const all = Object.values(VISION);
+  await task("Review the plan's checks", { origin: "review", visionItems: all.map((item) => item.text), sources: all });
   const workItems = new WorkItemRepository(db);
   await workItems.recordMergeCommit(store, MERGE_A, "merged");
   await workItems.recordMergeCommit(remove, MERGE_A, "already_delivered");
@@ -75,7 +96,17 @@ async function deliveredProject(): Promise<Delivered> {
       INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version)
       VALUES (${project.id}, ${taskId}, ${checkTaskId}, 1, 'works', 'sh checks/run.sh', '[]'::jsonb, ${"e".repeat(64)})`);
   }
-  return { projectId: project.id, goals: [store, remove], scaffold };
+  return { projectId: project.id, goals: [store, remove], scaffold, checksOfStore };
+}
+
+/** Rewrites one stored task_spec field of a work item, as a record written otherwise would hold it. */
+async function setSpec(workItemId: string, field: string, value: unknown): Promise<void> {
+  await db.execute(sql`
+    UPDATE work_items SET task_spec = jsonb_set(task_spec, ${`{${field}}`}::text[], ${JSON.stringify(value)}::jsonb) WHERE id = ${workItemId}`);
+}
+
+async function removeSpec(workItemId: string, field: string): Promise<void> {
+  await db.execute(sql`UPDATE work_items SET task_spec = task_spec - ${field} WHERE id = ${workItemId}`);
 }
 
 function acceptanceStore(): AcceptanceStore {
@@ -167,10 +198,47 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Store keys": built and merged, commit ${MERGE_A}.`);
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
-    // The vision item no stored check traces, stated as not checked.
-    expect(body).toContain("not checked");
-    expect(body).toContain("- Two writers never corrupt the store");
-    expect(body).not.toContain("- Keys can be deleted");
+    // W11c D3: the items of what the client asked for that no acceptance line of a passing check task
+    // cites, and only those; the exclusion and the team's design choice are never listed.
+    expect(body).toContain(
+      "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, " +
+        "so nothing confirms them either way:\n- Two writers never corrupt the store\n" +
+        "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
+    );
+    for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service", "kv.log"]) expect(body).not.toContain(absent);
+  });
+
+  test("coverage follows the trace: an item is checked only by a cited source of the same text, and a broken or missing trace is never read as covered", async () => {
+    const due = async (projectId: ProjectId) => {
+      const store = createDeliveredReportStore(db);
+      return (await store.dueReports()).find((row) => row.projectId === projectId);
+    };
+    const accepted = async (): Promise<Delivered> => {
+      const delivered = await deliveredProject();
+      await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: delivered.goals, unchecked: [delivered.scaffold] }));
+      return delivered;
+    };
+
+    // The answer behind A1 changed after its checks were written: the cited text is not the reviewed one.
+    const drifted = await accepted();
+    await setSpec(drifted.checksOfStore, "sources", [VISION.stored, { ...VISION.missing, text: "A missing key exits 1" }]);
+    const driftedRow = await due(drifted.projectId);
+    expect(driftedRow?.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id)).toEqual([
+      "S1",
+      "S2",
+    ]);
+
+    // A line citing an id its own task does not hold is a broken record, refused by name.
+    const broken = await accepted();
+    await setSpec(broken.checksOfStore, "acceptance", [{ line: "get works", sources: ["A9"] }]);
+    await expect(due(broken.projectId)).rejects.toThrow(/acceptance line "get works" cites A9, which its task_spec.sources does not hold/);
+    await removeSpec(broken.checksOfStore, "acceptance");
+
+    // A check task written before acceptance lines were traced: coverage is not on record.
+    expect((await due(broken.projectId))?.vision).toEqual({ kind: "unrecorded" });
+    const posted = await deliveredReports().runPending();
+    expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, broken.projectId].sort());
+    expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
   });
 
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {

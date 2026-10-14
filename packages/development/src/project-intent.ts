@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { StoredAssumptionKindSchema, assumptionStanding, describeErrorChain } from "@ashara/shared";
+import { StoredAssumptionDisclosureSchema, StoredAssumptionKindSchema, assumptionStanding, describeErrorChain } from "@ashara/shared";
 import type { AgentBrief, WorkItemId } from "@ashara/shared";
 
 /** The project's current vision as stored: its version, its text verbatim, and its inferences jsonb unparsed. */
@@ -37,14 +37,15 @@ export class ProjectIntentUnavailable extends Error {
 // The map shape the deleted CLI path wrote carries no ids, so a worker could not be told which
 // assumption it may not contradict: it is refused, never rendered without them.
 // Each carries its kind and how the client learned of it when the record says (ADR-074 addendum 2
-// d89); a record that says neither is rendered as unclassified and not shown to the client.
+// d89); a record that says neither is rendered as unclassified and not shown to the client, and one
+// whose disclosure is neither of the two values is unreadable, never read as not shown.
 const StoredAssumptionsSchema = z.array(
   z.looseObject({
     key: z.string().min(1),
     status: z.string().min(1),
     statement: z.string().min(1),
     kind: StoredAssumptionKindSchema,
-    disclosed: z.unknown().optional(),
+    disclosed: StoredAssumptionDisclosureSchema,
   }),
 );
 

@@ -16,7 +16,7 @@ const INPUT: DecompositionInput = {
     environment: { kind: "new" },
     layout: { kind: "new" },
     visionItems: [
-        { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio" },
+        { type: "scope", id: "S1", text: "In: booking a seat in a class of either studio", side: "in" },
         {
             type: "assumption",
             id: "A1",
@@ -355,8 +355,8 @@ describe("DecompositionEngine", () => {
         await new DecompositionEngine(llm).decompose(INPUT);
 
         const prompt = seen.prompts[1] ?? "";
-        expect(prompt).toContain("- S1 (scope): In: booking a seat in a class of either studio");
-        expect(prompt).toContain("- A1 (assumption; Inferred; reported to the client; client-visible): A class holds at most twenty members");
+        expect(prompt).toContain("- S1 (in scope): In: booking a seat in a class of either studio");
+        expect(prompt).toContain("- A1 (assumption; Inferred; reported to the client; client-visible behaviour): A class holds at most twenty members");
         expect(prompt).toContain("- A2 (assumption; Inferred; reported to the client; internal design, not citable): Bookings are recorded in one ledger");
         expect(prompt).toContain('Every deliverable and every acceptance line names in "sources" the ids of the citable vision items above it serves');
         expect(prompt).not.toContain('"visionItems"');
@@ -401,8 +401,8 @@ describe("DecompositionEngine", () => {
         const check = result.tasks.find((t) => t.taskSpec.origin === "check");
         expect(check?.taskSpec).toMatchObject({ visionItems: traced, acceptance: implementation?.taskSpec.origin === "decomposition" ? implementation.taskSpec.acceptance : [] });
         expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" cites (its checks may test only what these ask for, and the inputs they say to reject):`);
-        expect(check?.taskSpec.goal).toContain("- S1 (scope): In: booking a seat in a class of either studio");
-        expect(check?.taskSpec.goal).toContain("- A1 (assumption; Inferred; reported to the client; client-visible): A class holds at most twenty members");
+        expect(check?.taskSpec.goal).toContain("- S1 (in scope): In: booking a seat in a class of either studio");
+        expect(check?.taskSpec.goal).toContain("- A1 (assumption; Inferred; reported to the client; client-visible behaviour): A class holds at most twenty members");
         expect(check?.taskSpec.goal).toContain("- [A1, S1] the twenty-first booking is refused");
         expect(check?.taskSpec.goal).not.toContain("Bookings are recorded in one ledger");
     });

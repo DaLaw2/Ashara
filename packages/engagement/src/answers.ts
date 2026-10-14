@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PreCallRefusal, withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
-import { describeErrorChain, projectBlockCause } from "@ashara/shared";
+import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 
 // The client's answers to the Liaison's questions (story s-liaison-intake-m1, task
@@ -137,7 +137,9 @@ class AnswerReadingExhausted extends Error {
 
 const AnswerReadingSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ verdict: z.literal("confirms") }),
-  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1) }),
+  // A changed decision is classified again (W11 residual): the kind of the decision it replaced says
+  // nothing about the new one, and only a client-visible decision may be cited by an acceptance line.
+  z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: AssumptionKindSchema }),
   z.strictObject({ verdict: z.literal("does-not-answer") }),
 ]);
 
@@ -170,10 +172,13 @@ function buildAnswerPrompt(context: AnswerContext): string {
     ``,
     `Return exactly one of:`,
     `- {"verdict": "confirms"} when the answer agrees with the assumption as stated.`,
-    `- {"verdict": "changes", "statement": "..."} when the answer says something different from`,
+    `- {"verdict": "changes", "statement": "...", "kind": "client-visible"} when the answer says something different from`,
     `  the assumption, in any part. "statement" is the decision work now proceeds on, stated`,
     `  plainly as what will be built, in the client's terms. Do not add anything the answer and`,
-    `  the question do not say.`,
+    `  the question do not say. "kind" classifies that new decision:`,
+    `  - "client-visible": behaviour the client sees or relies on when using the deliverable, such`,
+    `    as what it outputs, which inputs it accepts or refuses, or what still holds after a failure.`,
+    `  - "internal-design": how the team builds it, which the client neither sees nor relies on.`,
     `- {"verdict": "does-not-answer"} when the answer neither agrees with nor changes the`,
     `  assumption (it asks something back, defers, or is about something else).`,
     ``,
@@ -408,6 +413,7 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
   const stated = {
     ...context.assumption,
     statement,
+    ...(reading.verdict === "changes" ? { kind: reading.kind } : {}),
     rationale:
       reading.verdict === "confirms"
         ? `The client confirmed this in answer to "${context.question.text}".`

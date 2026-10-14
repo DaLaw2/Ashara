@@ -170,7 +170,7 @@ export class StandIns {
     const format = options.responseFormat;
     if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
     const keys = schemaKeys(format.schema);
-    if (keys.includes("scopeBoundaries")) return this.structured("liaison-intake", () => this.intake());
+    if (keys.includes("inScope")) return this.structured("liaison-intake", () => this.intake());
     if (keys.includes("roles")) return this.structured("roster", () => this.roster());
     if (keys.includes("nodes")) return this.structured("decomposition.knowledge", () => ({ nodes: [], edges: [] }));
     if (keys.includes("tasks")) return this.structured("decomposition.tasks", () => this.plan());
@@ -200,7 +200,8 @@ export class StandIns {
     const { universe } = this.context;
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
-      scopeBoundaries: universe.behaviours.map((b) => `The product does ${b}.`),
+      inScope: universe.behaviours.map((b) => `The product does ${b}.`),
+      outOfScope: ["Any network service."],
       questions: [
         {
           text: "Which language should messages use?",
@@ -265,7 +266,7 @@ export class StandIns {
   }
 
   private answer(): unknown {
-    return { verdict: "changes", statement: "Messages are in French." };
+    return { verdict: "changes", statement: "Messages are in French.", kind: "client-visible" };
   }
 
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {

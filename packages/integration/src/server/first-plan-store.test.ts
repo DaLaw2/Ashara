@@ -131,7 +131,8 @@ function intake(): TenderIntake {
 
 const INTAKE = {
   summary: "A booking page for the client's two pottery studios.",
-  scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
+  inScope: ["Class booking for both studios"],
+  outOfScope: ["Payments"],
   assumptions: [{ statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "client-visible" }],
   questions: [
     {

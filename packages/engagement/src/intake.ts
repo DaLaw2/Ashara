@@ -2,7 +2,7 @@ import { z } from "zod";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { AssumptionDisclosure, AssumptionKind, ProjectBlockCause, ProjectId } from "@ashara/shared";
+import type { AssumptionDisclosure, AssumptionKind, ProjectBlockCause, ProjectId, ScopeLine } from "@ashara/shared";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
 // Proceed on silence at once (orchestrator 2026-10-13, on the board): the questions
@@ -48,7 +48,9 @@ const AssumptionSchema = z.strictObject({
 
 const IntakeResponseSchema = z.strictObject({
   summary: z.string().min(1),
-  scopeBoundaries: z.array(z.string().min(1)).min(1),
+  // Kept apart so the vision records each line's side, and no report has to read it from the wording.
+  inScope: z.array(z.string().min(1)).min(1),
+  outOfScope: z.array(z.string().min(1)),
   // Over the cap is rejected, never truncated: a dropped question would be a
   // question the client was never asked and no record says was cut. Each question
   // carries the assumption adopted until it is answered: a later answer is a change
@@ -95,7 +97,8 @@ interface OpenQuestion {
 interface IntakeVision {
   readonly visionText: string;
   readonly summary: string;
-  readonly scopeBoundaries: readonly string[];
+  /** What the client asked for, then what the tender leaves out, each with its side (W11c D3). */
+  readonly scopeBoundaries: readonly ScopeLine[];
   readonly inferences: readonly InferredAssumption[];
   readonly openQuestions: readonly OpenQuestion[];
 }
@@ -182,8 +185,10 @@ function buildIntakePrompt(tender: string): string {
     ``,
     `Return:`,
     `- "summary": what the client wants built, in a few sentences, in the tender's own terms.`,
-    `- "scopeBoundaries": what is in scope and what is explicitly out of scope, one item per`,
-    `  string, each grounded in the tender.`,
+    `- "inScope": what the client asks to be built, one item per string, each grounded in the`,
+    `  tender. Write each as the item itself, without a label such as "In scope:".`,
+    `- "outOfScope": what the tender explicitly leaves out, one item per string, in the same`,
+    `  form; an empty list when it leaves nothing out.`,
     `- "questions": at most ${MAX_QUESTIONS_PER_TENDER} questions to the client, most impactful first.`,
     `  For each: "text" is the question; "whyItMatters" says what gets built differently, or`,
     `  what stops working for the client, depending on the answer; "assumption" is the decision`,
@@ -225,7 +230,7 @@ function buildIntakePrompt(tender: string): string {
     `  not name. If the tender names one, record it as stated, not as an assumption.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
-    `Use exactly this format: {"summary": "...", "scopeBoundaries": ["..."], ` +
+    `Use exactly this format: {"summary": "...", "inScope": ["..."], "outOfScope": ["..."], ` +
       `"questions": [{"text": "...", "whyItMatters": "...", ` +
       `"assumption": {"statement": "...", "rationale": "...", "kind": "client-visible"}}], ` +
       `"assumptions": [{"statement": "...", "rationale": "...", "kind": "internal-design"}]}`,
@@ -417,7 +422,10 @@ export class TenderIntake implements LiaisonIntake {
       vision: (questionMessageIds) => ({
         visionText: tender.body,
         summary: response.summary,
-        scopeBoundaries: response.scopeBoundaries,
+        scopeBoundaries: [
+          ...response.inScope.map((text): ScopeLine => ({ text, side: "in" })),
+          ...response.outOfScope.map((text): ScopeLine => ({ text, side: "out" })),
+        ],
         inferences,
         openQuestions: response.questions.map((q, i) => {
           const messageId = questionMessageIds[i];

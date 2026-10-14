@@ -774,9 +774,9 @@ describe("define_check", () => {
     const prompt = buildSystemPrompt(brief, "implementation");
     expect(prompt).not.toContain("The client agreed");
     expect(prompt).toContain("- A1 (Stated by the client; client-visible behaviour): Values may hold spaces.");
-    expect(prompt).toContain("- A2 (Inferred; the client was asked about it and has not answered; client-visible behaviour)");
-    expect(prompt).toContain("- A3 (Inferred; reported to the client, who has not objected; client-visible behaviour)");
-    expect(prompt).toContain("- A4 (Inferred; reported to the client, who has not objected; internal design): The log is wal.log.");
+    expect(prompt).toContain("- A2 (Inferred; asked of the client, not yet answered; client-visible behaviour)");
+    expect(prompt).toContain("- A3 (Inferred; reported to the client; client-visible behaviour)");
+    expect(prompt).toContain("- A4 (Inferred; reported to the client; internal design): The log is wal.log.");
     expect(prompt).toContain("- A5 (Inferred; never shown to the client; not classified)");
   });
 

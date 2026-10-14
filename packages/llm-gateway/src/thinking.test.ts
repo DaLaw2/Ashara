@@ -52,14 +52,24 @@ describe("loadThinkingPolicyFromToml", () => {
 
 describe("outputBudget", () => {
   test("thinking on adds the reasoning allowance on top of the answer's bound, within DeepSeek's ceiling", () => {
-    const on = outputBudget("deepseek", "on", 4096);
+    const on = outputBudget("deepseek", "on", 4096, 0);
     expect(on.reasoningAllowance).toBeGreaterThan(0);
     expect(on.maxOutputTokens).toBe(4096 + on.reasoningAllowance);
-    expect(outputBudget("deepseek", "on", 393_216)).toEqual({ maxOutputTokens: 393_216, reasoningAllowance: 0 });
+    expect(outputBudget("deepseek", "on", 393_216, 0)).toEqual({ maxOutputTokens: 393_216, reasoningAllowance: 0 });
+    expect(outputBudget("deepseek", "on", 4096, 2_000_000)).toEqual({ maxOutputTokens: 393_216, reasoningAllowance: 393_216 - 4096 });
+  });
+
+  // W11c D4: the suite review's prompt (20,084 input tokens) was cut off at 36,864 output tokens twice.
+  test("the allowance grows with the prompt past the bound the W11c suite review was cut off at", () => {
+    const small = outputBudget("deepseek", "on", 4096, 4_000);
+    const review = outputBudget("deepseek", "on", 4096, 80_000);
+    expect(small.maxOutputTokens).toBe(outputBudget("deepseek", "on", 4096, 0).maxOutputTokens);
+    expect(review.reasoningAllowance).toBe(80_000);
+    expect(review.maxOutputTokens).toBeGreaterThan(36_864);
   });
 
   test("thinking off, or a provider type that takes no thinking switch, keeps the caller's bound", () => {
-    expect(outputBudget("deepseek", "off", 4096)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
-    expect(outputBudget("anthropic", "on", 4096)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
+    expect(outputBudget("deepseek", "off", 4096, 80_000)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
+    expect(outputBudget("anthropic", "on", 4096, 80_000)).toEqual({ maxOutputTokens: 4096, reasoningAllowance: 0 });
   });
 });

@@ -76,7 +76,8 @@ function jsonResult(value: unknown) {
 function intakeResponse(questionCount: number) {
   return {
     summary: "A booking page for the client's two pottery studios.",
-    scopeBoundaries: ["In: class booking for both studios", "Out: payments"],
+    inScope: ["Class booking for both studios"],
+    outOfScope: ["Payments"],
     assumptions: [
       { statement: "Each class has a fixed capacity set by the studio.", rationale: "The tender mentions full classes.", kind: "client-visible" },
       { statement: "Bookings need no account.", rationale: "The tender says walk-in customers book.", kind: "internal-design" },

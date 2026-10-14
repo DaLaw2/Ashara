@@ -3,7 +3,7 @@ import { SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
-import { FirstPlanner, visionItemsOf } from "./first-plan.js";
+import { FirstPlanner, northStarOf, visionItemsOf } from "./first-plan.js";
 import type { FirstPlanStore } from "./first-plan.js";
 
 function roleRow(roleId: string, name: string, capabilities: string[]) {
@@ -132,8 +132,8 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
 
     // Records written before kinds: placed by order, unclassified, never shown to the client.
     expect(items).toEqual([
-      { type: "scope", id: "S1", text: "In: booking" },
-      { type: "scope", id: "S2", text: "Out: payments" },
+      { type: "scope", id: "S1", text: "In: booking", side: "unclassified" },
+      { type: "scope", id: "S2", text: "Out: payments", side: "unclassified" },
       { type: "assumption", id: "A1", text: "Classes hold twenty", status: "Inferred", standing: "not-shown", kind: "unclassified" },
       { type: "assumption", id: "A2", text: "Bookings close an hour before", status: "Stated", standing: "stated", kind: "unclassified" },
     ]);
@@ -151,7 +151,7 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
         ]),
       ),
     ).toEqual([
-      { type: "scope", id: "S1", text: "In: put" },
+      { type: "scope", id: "S1", text: "In: put", side: "unclassified" },
       { type: "assumption", id: "A1", text: "Values are one word", status: "Inferred", standing: "asked", kind: "client-visible" },
       { type: "assumption", id: "A7", text: "The log is wal.log", status: "Inferred", standing: "reported", kind: "internal-design" },
     ]);
@@ -163,6 +163,30 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
         ]),
       ),
     ).toThrow(/two assumptions share the key A1/);
+  });
+
+  // W11c D3 and the W11 residual: a scope line keeps the side intake recorded, and a disclosure that
+  // is neither value is an unreadable vision, never an assumption the client was not shown.
+  test("a scope line carries its recorded side, and a malformed disclosure makes the vision unreadable", () => {
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
+    const reading = (inferences: unknown) => ({
+      projectId,
+      visionVersion: 2,
+      summary: "A store.",
+      scopeBoundaries: [
+        { text: "put and get", side: "in" },
+        { text: "any network service", side: "out" },
+      ],
+      inferences,
+    });
+    expect(visionItemsOf(reading([])).map((item) => (item.type === "scope" ? [item.id, item.side] : []))).toEqual([
+      ["S1", "in"],
+      ["S2", "out"],
+    ]);
+    expect(northStarOf(reading([]))).toContain("- In scope: put and get\n- Out of scope: any network service");
+    expect(() =>
+      visionItemsOf(reading([{ key: "A1", statement: "x", status: "Inferred", kind: "client-visible", disclosed: "emailed" }])),
+    ).toThrow(/inferences is not in a readable shape/);
   });
 
   test("a vision with no item fails the plan attempt before any model call", async () => {
