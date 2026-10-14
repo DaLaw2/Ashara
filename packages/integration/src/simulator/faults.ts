@@ -5,6 +5,7 @@ import type { PoolFactory } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import type { LanguageModelFactory } from "@ashara/llm-gateway";
 import type { Clock } from "@ashara/shared";
+import type { AdmissionLedger } from "./admissions.js";
 import type { CheckoutWatch } from "./checkout-watch.js";
 import type { Interleaver } from "./interleave.js";
 import type { FaultRates } from "./profile.js";
@@ -210,6 +211,11 @@ export class SimClock implements Clock {
     return this.current;
   }
 
+  /** The last instant read, without moving: every reading after it is later. */
+  peek(): number {
+    return this.current;
+  }
+
   jump(ms: number): void {
     this.current += ms;
   }
@@ -241,21 +247,43 @@ interface SeamContext {
   readonly checkouts: CheckoutWatch;
   /** The run's current cycle, for a violation's step. */
   readonly cycle: () => number;
+  /** Sees each llm_calls row written (I5, the admission clause). */
+  readonly admissions: AdmissionLedger;
+  /**
+   * The scenario's standing outage of the cell runtime: every `podman run` fails to start its
+   * cell. Not a fault of the tape's budget: the host stays broken for the whole run.
+   */
+  readonly cellOutage: boolean;
 }
 
 /** A deliberate defect planted in the queries one instance sends (the L3 mutation check). */
 export type QueryPlant = (args: readonly unknown[]) => unknown[];
 
-const mergeRecordText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
+const sentText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
 
 /** Records every merge under a commit that does not exist: I7 must name it. drizzle sends (query, params). */
 export const skipMergeRecord: QueryPlant = (args) => {
-  const parsed = mergeRecordText.safeParse(args[0]);
+  const parsed = sentText.safeParse(args[0]);
   const params = args[1];
   if (!parsed.success || !Array.isArray(params)) return [...args];
   const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
   if (!/set "merge_commit" = \$1/.test(text)) return [...args];
   return [args[0], ["0".repeat(40), ...params.slice(1)], ...args.slice(2)];
+};
+
+/**
+ * The task's infrastructure-fault count stops at 4, the fault that halts its project (execution.ts:
+ * a budget of 3 uncharged requeues, the 4th halts, the 5th gives the task up): every fault after
+ * the halt counts nothing toward giving the task up, so a standing outage halts and resumes the
+ * project forever. The count is written `infrastructure_faults + 1` (WorkItemRepository).
+ */
+export const pinInfrastructureFaults: QueryPlant = (args) => {
+  const parsed = sentText.safeParse(args[0]);
+  if (!parsed.success) return [...args];
+  const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
+  const pinned = text.replace(/((?:"work_items"\.)?"infrastructure_faults") \+ 1/, "least($1 + 1, 4)");
+  if (pinned === text) return [...args];
+  return [typeof parsed.data === "string" ? pinned : { ...parsed.data, text: pinned }, ...args.slice(1)];
 };
 
 const clientPid = z.object({ processID: z.number().int() });
@@ -279,6 +307,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
       if (fate.fault === "db-query-failed") throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
       if (fate.fault === "db-transaction-killed" && pid !== null) await context.terminateBackend(pid);
       const value = await run();
+      context.admissions.written(label, args);
       context.scheduler.leave(context.instance, fate, "db", label);
       await context.scheduler.returned("db", label);
       return value;
@@ -394,6 +423,7 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
     if (fate.fault === "cell-exec-failed") return failed(125, "Error: exec session exited unexpectedly (simulated)");
     if (fate.fault === "cell-teardown-failed") return failed(125, "Error: container is busy (simulated)");
     if (fate.fault === "image-build-failed") return failed(1, "Error: building at STEP \"RUN\": exit status 1 (simulated)");
+    if (context.cellOutage && subcommand === "run") return failed(126, "Error: crun: cannot start the container (simulated outage)");
     const value = await inner(request);
     context.scheduler.leave(context.instance, fate, "podman", label);
     await context.scheduler.returned("podman", label);

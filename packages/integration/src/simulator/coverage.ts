@@ -65,7 +65,8 @@ const EVENT_TARGET: Readonly<Record<string, WorkItemStatus | null>> = {
   "work_item.unblocked": "Pending",
   "work_item.replanned": "Pending",
   "work_item.abandoned": "Abandoned",
-  // giveUpWorkItem (W6), and the defect a failed acceptance sweep opens and gives up (W7).
+  // giveUpWorkItem (W6): an open item given up, its cause on record; also the defect a failed acceptance sweep
+  // opens and gives up (W7).
   "work_item.given_up": "Abandoned",
   "work_item.superseded": "Abandoned",
   "work_item.requeued": "Pending",

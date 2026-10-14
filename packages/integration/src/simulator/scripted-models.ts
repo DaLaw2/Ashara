@@ -34,13 +34,14 @@ class StandInUnanswerable extends Error {
   }
 }
 
-/** What the stand-ins read and decide with. The project is set once the tender is on record. */
+/** What the stand-ins read and decide with. Every project of the run shares one universe. */
 export interface StandInContext {
   readonly tape: Tape;
   readonly rates: AdversaryRates;
   readonly universe: Universe;
   readonly observer: Database;
-  projectId: string | null;
+  /** The run's projects (one, or two on one deployment's caps): an agent turn's task is one of theirs. */
+  readonly projectIds: readonly string[];
   /** Set by the run once the first merge of an implementation is recorded: a late client change may follow. */
   readonly onModelCall: (call: ModelCallRecord) => void;
   /** The task whose lane makes the call (Interleaver.currentTask), or null outside a batch's tasks. */
@@ -95,6 +96,7 @@ function schemaKeys(schema: unknown): string[] {
 
 const taskRowSchema = z.object({
   id: z.string(),
+  projectId: z.string(),
   title: z.string(),
   taskSpec: z.unknown(),
   workKind: z.string().nullable(),
@@ -245,7 +247,8 @@ export class StandIns {
 
   /** The suite review finds each wrong, contradictory or out-of-vision check with the profile's probability. */
   private async review(): Promise<unknown> {
-    const rows = await this.latestChecks();
+    // A review is a task of its own (origin review): the checks it reads are its project's.
+    const rows = await this.latestChecks((await this.taskInProgress()).projectId);
     const problems: unknown[] = [];
     for (const row of rows) {
       for (const spec of specsOf(row.files)) {
@@ -266,9 +269,8 @@ export class StandIns {
     return { verdict: "changes", statement: "Messages are in French." };
   }
 
-  private async latestChecks(): Promise<Array<z.infer<typeof checkRowSchema>>> {
-    const { observer, projectId } = this.context;
-    if (projectId === null) throw new StandInUnanswerable("suite-review", "no project is on record yet");
+  private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {
+    const { observer } = this.context;
     const result = await observer.execute(sql`
       SELECT c.check_task_id AS "checkTaskId", c.task_id AS "taskId", c.name, c.files
       FROM task_checks c
@@ -280,15 +282,16 @@ export class StandIns {
 
   /** The task of the lane making the call: two of a batch are InProgress at once. */
   private async taskInProgress(): Promise<z.infer<typeof taskRowSchema>> {
-    const { observer, projectId } = this.context;
-    if (projectId === null) throw new StandInUnanswerable("agent-runner", "no project is on record yet");
+    const { observer, projectIds } = this.context;
     const taskId = this.context.laneTask();
     if (taskId === null) throw new StandInUnanswerable("agent-runner", "an agent turn was made outside every task of a batch");
     const result = await observer.execute(sql`
-      SELECT id, title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount"
-      FROM work_items WHERE id = ${taskId} AND project_id = ${projectId} AND level = 'Task' AND status = 'InProgress'`);
+      SELECT id, project_id AS "projectId", title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount"
+      FROM work_items WHERE id = ${taskId} AND level = 'Task' AND status = 'InProgress'`);
     const [row] = z.array(taskRowSchema).parse(result.rows);
-    if (row === undefined) throw new StandInUnanswerable("agent-runner", `the lane's task ${taskId} is not an InProgress task of the project`);
+    if (row === undefined || !projectIds.includes(row.projectId)) {
+      throw new StandInUnanswerable("agent-runner", `the lane's task ${taskId} is not an InProgress task of the run's projects`);
+    }
     return row;
   }
 
@@ -424,7 +427,7 @@ export class StandIns {
     }
     if (tape.chance("agent.manifest", rates.overDelivery / 3)) steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
     if (tools.has("dispute_check")) {
-      const dispute = await this.disputeOf(task.id, underDelivers);
+      const dispute = await this.disputeOf(task, underDelivers);
       if (dispute !== null) {
         steps.push(["run_checks", {}]);
         steps.push(["dispute_check", dispute]);
@@ -436,9 +439,9 @@ export class StandIns {
   }
 
   /** A dispute of one of the task's own stored checks: right when the check is bad, wrong otherwise. */
-  private async disputeOf(taskId: string, underDelivered: boolean): Promise<{ name: string; reason: string } | null> {
+  private async disputeOf(task: z.infer<typeof taskRowSchema>, underDelivered: boolean): Promise<{ name: string; reason: string } | null> {
     const { tape, rates } = this.context;
-    const own = (await this.latestChecks()).filter((row) => row.taskId === taskId);
+    const own = (await this.latestChecks(task.projectId)).filter((row) => row.taskId === task.id);
     for (const row of own) {
       for (const spec of specsOf(row.files)) {
         const bad = spec.kind === "wrong" || spec.kind === "contradictory" || spec.kind === "out_of_vision" || spec.kind === "unrunnable" || spec.kind === "slow";

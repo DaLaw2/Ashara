@@ -5,7 +5,7 @@ import type { Decision } from "./tape.js";
 
 /** One run's verdict, for the terminal: the line a reader acts on first, then the evidence. */
 export function describeRun(result: RunResult, minimized: readonly Decision[] | null): string[] {
-  const head = `seed ${result.seed} (${result.profile}): ${result.outcome.kind}${result.outcome.kind === "halted" ? ` [${result.outcome.cause}] ${result.outcome.detail}` : ""}; ${result.cycles} cycles, ${result.dispatches} dispatches, ${result.restarts} restarts, ${result.faults.length} faults, ${result.durationMs} ms`;
+  const head = `seed ${result.seed} (${result.profile}): ${result.outcome.kind}${result.outcome.kind === "halted" ? ` [${result.outcome.cause}] ${result.outcome.detail}` : ""}; ${result.cycles} cycles, ${result.dispatches} dispatches, ${result.restarts} restarts, ${result.faults.length} faults, longest quiet ${result.longestQuiet}, ${result.durationMs} ms`;
   if (result.violations.length === 0) return [head];
   const lines = [head];
   for (const violation of result.violations) lines.push(`  ${violation.invariant} at cycle ${violation.step} [${violation.key}]: ${violation.statement}`);

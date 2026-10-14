@@ -3,6 +3,7 @@ import type { ModelConfig, PendingLlmCall } from "@ashara/llm-gateway";
 import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid } from "./errors.js";
 
 type ProjectId = PendingLlmCall["context"]["projectId"];
+type SpendScope = Parameters<LlmCallRepository["spentUsd"]>[0];
 
 /**
  * Every token of a byte-level BPE tokenizer (the Claude, GPT, DeepSeek and
@@ -157,8 +158,22 @@ export class SpendCap {
     return total;
   }
 
+  /**
+   * One scope's recorded spend and in-flight estimates, as an admission adds them. The in-flight
+   * sum is taken before the ledger read, never after: `release` runs only once a call's row is
+   * committed, so a call missing from this snapshot has its row committed before the read's
+   * statement starts, and the read counts it. Read the other way round, a call recorded after the
+   * read's snapshot and released before the in-flight sum counts in neither (B9). The cost is the
+   * safe direction: a call recorded during the read may count twice, as row and as estimate.
+   */
+  private async admissionView(scope: SpendScope): Promise<{ readonly spentUsd: number; readonly inFlightUsd: number }> {
+    const inFlightUsd = this.inFlightUsd(scope.kind === "project" ? scope.projectId : undefined);
+    const spentUsd = await this.deps.ledger.spentUsd(scope);
+    return { spentUsd, inFlightUsd };
+  }
+
   private async admitNow(call: PendingLlmCall): Promise<void> {
-    const { ledger, projects, caps } = this.deps;
+    const { projects, caps } = this.deps;
     const { projectId } = call.context;
     const estimatedCostUsd = worstCaseCostUsd(call.model, call.requestBytes, call.maxOutputTokens);
     const refusal = (scope: BudgetExceeded["scope"], capUsd: number, spentUsd: number, inFlightUsd: number) =>
@@ -172,8 +187,7 @@ export class SpendCap {
         estimatedCostUsd,
       });
 
-    const deploymentSpent = await ledger.spentUsd({ kind: "deployment" });
-    const deploymentInFlight = this.inFlightUsd();
+    const { spentUsd: deploymentSpent, inFlightUsd: deploymentInFlight } = await this.admissionView({ kind: "deployment" });
     if (deploymentSpent + deploymentInFlight + estimatedCostUsd > caps.deploymentUsd) {
       const refused = refusal({ kind: "deployment" }, caps.deploymentUsd, deploymentSpent, deploymentInFlight);
       this.deploymentRefusal ??= refused;
@@ -181,8 +195,7 @@ export class SpendCap {
       throw refused;
     }
 
-    const projectSpent = await ledger.spentUsd({ kind: "project", projectId });
-    const projectInFlight = this.inFlightUsd(projectId);
+    const { spentUsd: projectSpent, inFlightUsd: projectInFlight } = await this.admissionView({ kind: "project", projectId });
     if (projectSpent + projectInFlight + estimatedCostUsd > caps.perProjectUsd) {
       const refused = refusal({ kind: "project", projectId }, caps.perProjectUsd, projectSpent, projectInFlight);
       const blocked = await projects.block(projectId, { category: "budget_cap", errorClass: refused.name, reason: refused.message });

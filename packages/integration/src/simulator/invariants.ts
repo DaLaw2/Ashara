@@ -39,6 +39,7 @@ const itemRow = z.object({
   mergeCommit: z.string().nullable(),
   ownerRoleId: z.string().nullable(),
   dispatchCount: z.number(),
+  infrastructureFaults: z.number(),
 });
 type ItemRow = z.infer<typeof itemRow>;
 
@@ -108,7 +109,8 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
                task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
-               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount"
+               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
+               infrastructure_faults AS "infrastructureFaults"
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
     ).rows,
   );
@@ -219,7 +221,10 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
   return { kind: "open" };
 }
 
-/** I2-I7, judged on one snapshot (design §4.8). I1 and I8 (checkTotality) are judged by the run over its whole course. */
+/**
+ * I2-I7, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
+ * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
+ */
 export function checkSnapshot(step: number, snapshot: Snapshot, context: { readonly spendCapUsd: number; readonly cells: readonly FakeCell[]; readonly final: boolean }): Violation[] {
   const violations: Violation[] = [];
   const add = (invariant: InvariantId, key: string, statement: string): void => {
@@ -313,13 +318,39 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
 }
 
 /**
- * I8, judged on the final snapshot of a run that stalled: the loop kept cycling with no state
- * change, so no exit of any state still held was taken, and a state with an enabled exit would
- * have left. Every non-terminal task state of that snapshot is reported once, keyed by the state
- * (status and blocked-reason source), its items named. A run that ended any other way (ended,
- * past its cycles or its wall clock) is not judged here: its states were still moving.
+ * What a project has reached, as facts read from its records (I8's progress measure). Each is
+ * reached once: a fact seen again is no progress, so a loop that comes back to where it was (a
+ * requeue, a halt and its resumption) adds nothing however busy it is.
+ * - a work item in a status (and blocked-reason source) it never held before;
+ * - a merge recorded;
+ * - a check set's revision (a rewrite or a repair of the checks), and the plan's new items (above);
+ * - the project in a status (and block category) it never held before;
+ * - a bounded count reaching a new high: an item's charged attempts, its infrastructure faults.
+ *   Each moves the item toward the bound that ends it; a count refunded and charged again does not.
+ * Never a cycle, a model call, a dispatch refunded, or a halt episode alone.
  */
-export function checkTotality(step: number, stalled: Snapshot): Violation[] {
+export function progressFacts(snapshot: Snapshot): string[] {
+  const { project } = snapshot;
+  const facts = [`project:${project.status}(${project.blockedCategory ?? ""})`];
+  for (const item of snapshot.items) {
+    const source = sourceOf(item.blockedReason);
+    facts.push(`status:${item.id}:${item.status}(${source ?? ""})`);
+    if (item.mergeCommit !== null) facts.push(`merge:${item.id}:${item.mergeCommit}`);
+    facts.push(`attempts:${item.id}:${item.dispatchCount}`, `infrastructure:${item.id}:${item.infrastructureFaults}`);
+  }
+  for (const check of snapshot.checks) facts.push(`checks:${check.taskId}:${check.revision}`);
+  return facts;
+}
+
+/**
+ * I8, judged on the final snapshot of a run that made no progress (progressFacts) over the run's
+ * bound of fault-free cycles, busy or idle: every exit the loop took from the states it held led
+ * back to states already reached, so no state held at the end has an exit that progresses. Every
+ * non-terminal task state of that snapshot is reported once, keyed by the state (status and
+ * blocked-reason source), its items named. A run that ended any other way (ended, past its cycles
+ * or its wall clock) is not judged here: its states were still progressing.
+ */
+export function checkTotality(step: number, stalled: Snapshot, cycles: number): Violation[] {
   const states = new Map<string, string[]>();
   for (const item of stalled.items) {
     if (item.level !== "Task" || item.status === "Completed" || item.status === "Abandoned") continue;
@@ -330,7 +361,7 @@ export function checkTotality(step: number, stalled: Snapshot): Violation[] {
   return [...states].map(([state, titles]) => ({
     invariant: "I8",
     step,
-    statement: `state ${state} took no exit while the loop ran on with nothing else to do: ${titles.join(", ")}`,
+    statement: `state ${state} took no exit that progressed in ${cycles} fault-free cycles: ${titles.join(", ")}`,
     key: `I8:${state}`,
   }));
 }

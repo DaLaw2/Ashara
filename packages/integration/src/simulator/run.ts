@@ -13,16 +13,17 @@ import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
 import type { ContendedWaitKind } from "@ashara/shared";
+import { AdmissionLedger, plantLedgerReadFirst } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
 import type { PodmanEvent } from "./fake-podman.js";
-import { Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, skipMergeRecord } from "./faults.js";
-import type { FaultKind, FaultRecord, InstanceHandle } from "./faults.js";
+import { Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
+import type { FaultKind, FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
-import { checkSnapshot, checkTotality, mainFiles, outcomeOf, readSnapshot, sourceOf } from "./invariants.js";
+import { checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
 import type { Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, sample } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
@@ -36,20 +37,33 @@ import type { Decision, TapeMode } from "./tape.js";
 /**
  * A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one.
  * - skip-merge-record: every merge recorded under a commit main does not hold (I7, records clause);
- * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause).
- *
- * The spend cap's admission queue has no plant: with the run's one project, an admission's last
- * check (the project's) reads the in-flight estimates and adds its own with no await between, so
- * the queue's absence admits nothing more (baseline §7.6).
+ * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
+ * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,
+ *   admission clause). With one project it admits nothing more: the last check (the project's)
+ *   reads the in-flight estimates and adds its own with no await between (baseline §7.6), so it is
+ *   planted on a run of two projects, where only the deployment's check stands between them;
+ * - ledger-read-first: a spend-cap admission reads the recorded spend before the in-flight
+ *   estimates, the order B9 crossed the cap with (I5, admission clause; baseline §7.7);
+ * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8).
  */
-const MUTATIONS = ["skip-merge-record", "no-checkout-lock"] as const;
-/** @testseam simulator.test.ts plants each to prove I7 is not blind */
+const MUTATIONS = ["skip-merge-record", "no-checkout-lock", "no-admission-queue", "ledger-read-first", "infrastructure-fault-pinned"] as const;
+/** @testseam simulator.test.ts plants each to prove I5, I7 and I8 are not blind */
 export type Mutation = (typeof MUTATIONS)[number];
 
-/** The contended wait each mutation skips. */
-const BYPASSED: Readonly<Record<Mutation, readonly ContendedWaitKind[]>> = {
-  "skip-merge-record": [],
-  "no-checkout-lock": ["target-checkout"],
+interface Plant {
+  readonly bypassed: readonly ContendedWaitKind[];
+  readonly queries: QueryPlant | null;
+  /** Patches production code for the run; returns what undoes it. */
+  readonly code: (() => () => void) | null;
+}
+
+/** The contended wait each mutation skips, the queries it rewrites, and the code it patches. */
+const PLANTED: Readonly<Record<Mutation, Plant>> = {
+  "skip-merge-record": { bypassed: [], queries: skipMergeRecord, code: null },
+  "no-checkout-lock": { bypassed: ["target-checkout"], queries: null, code: null },
+  "no-admission-queue": { bypassed: ["spend-admission"], queries: null, code: null },
+  "ledger-read-first": { bypassed: [], queries: null, code: plantLedgerReadFirst },
+  "infrastructure-fault-pinned": { bypassed: [], queries: pinInfrastructureFaults, code: null },
 };
 
 export interface RunOptions {
@@ -65,6 +79,16 @@ export interface RunOptions {
   readonly mutation?: Mutation;
   /** Hard wall clock of the run; past it the run ends as an I1 violation (design §4.14). */
   readonly timeoutMs: number;
+  /**
+   * Projects on the one deployment (policy default 1). Two share the deployment's spend cap, so
+   * their tasks' admissions race on it (F11 across projects); both are judged, the second's
+   * violation keys marked `p2`.
+   */
+  readonly projects?: 1 | 2;
+  /** The deployment's spend cap instead of the tape's draw; each project's cap equals it. */
+  readonly capUsd?: number;
+  /** Every cell start fails for the whole run: the host's container runtime is broken (faults.ts). */
+  readonly cellOutage?: boolean;
 }
 
 export interface RunResult {
@@ -82,6 +106,8 @@ export interface RunResult {
   readonly faults: readonly FaultRecord[];
   readonly tickets: number;
   readonly durationMs: number;
+  /** The longest run of fault-free cycles with no progress (I8's measure), the run's end included. */
+  readonly longestQuiet: number;
   /** The last lines production logged: what a reader of a failure looks at first. */
   readonly log: readonly string[];
 }
@@ -92,7 +118,17 @@ const ATTEMPTS = 3;
 const CONTESTS = 2;
 const DEFAULT_CAP_USD = 25;
 const LOW_CAP_USD = 0.02;
-const IDLE_CYCLES_TO_STALL = 3;
+/**
+ * I8's bound: fault-free cycles in a row with no progress (invariants.ts progressFacts) after which
+ * the run is judged to make none. Why 6: a task's own work progresses on every charged attempt and
+ * every status it first reaches, and what may pass between two such facts without a fault is the
+ * loop's own bookkeeping: a parked exit taken on the next cycle's sweep, a replan waiting one cycle
+ * for its project's tasks to settle, a halt's report and the probe's resumption, each one cycle. A
+ * cycle that carried an injected fault or a restart does not count: the fault budget bounds those
+ * (design §4.9). Observed (baseline §7.7): the longest such stretch in seeds 1-80 was 2 cycles, so
+ * the bound is three times what any seed that progressed needed.
+ */
+const NO_PROGRESS_CYCLES = 6;
 const SETTLE_CYCLES = 2;
 const POLL_INTERVAL_MS = 10_000;
 const IDLE_INTERVAL_MS = 30_000;
@@ -291,13 +327,16 @@ function executionEvidence(snapshot: Snapshot, statuses: readonly string[]): str
   return [...seen];
 }
 
-function fingerprint(snapshot: Snapshot): string {
-  return JSON.stringify([
-    snapshot.project.status,
-    snapshot.items.map((item) => [item.id, item.status, item.dispatchCount]),
-    snapshot.episodes.length,
-    snapshot.main.length,
-  ]);
+/** A second project's violation is keyed and stated as its own. */
+function ofProject(index: number, violation: Violation): Violation {
+  if (index === 0) return violation;
+  const at = violation.key.indexOf(":");
+  return { ...violation, key: `${violation.key.slice(0, at)}:p${index + 1}${violation.key.slice(at)}`, statement: `project ${index + 1}: ${violation.statement}` };
+}
+
+/** Where a project's end stands: a halt that ends and begins again is not one end. */
+function standing(snapshot: Snapshot): string {
+  return `${snapshot.project.status}(${snapshot.project.blockedCategory ?? ""})#${snapshot.episodes.length}`;
 }
 
 /**
@@ -311,10 +350,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const rates = ADVERSARY[options.profile];
   const clock = new SimClock();
   const universe = drawUniverse(tape);
-  const capUsd = tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : DEFAULT_CAP_USD;
+  const capUsd = options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : DEFAULT_CAP_USD);
+  const projectCount = options.projects ?? 1;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
-  const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}`];
+  const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}${projectCount > 1 ? ` projects=${projectCount}` : ""}`];
   const log: string[] = [];
   const violations = new Map<string, Violation>();
   const coverage = emptyCoverage();
@@ -351,14 +391,18 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         break;
     }
   };
-  const interleaver = new Interleaver(tape, new Set(options.mutation === undefined ? [] : BYPASSED[options.mutation]), onInterleave);
+  const planted = options.mutation === undefined ? null : PLANTED[options.mutation];
+  const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
+  const admissions = new AdmissionLedger(clock);
+  let longestQuiet = 0;
 
   const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
   const restoreIds = seededIds(options.seed);
   const restoreConsole = capturedConsole(log);
   const restoreEnv = simulatedEnvironment(workdir, capUsd);
   const restoreWaits = observeContendedWaits(interleaver.contended);
+  const restoreCode = planted?.code?.() ?? null;
   let database: RunDatabase | null = null;
   let observer: Database | null = null;
   let instance: Live | null = null;
@@ -377,16 +421,28 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     await secrets.put("server/api_token", "simulator-api-token");
     await secrets.put("provider/openai/api_key", "simulator-provider-key");
 
-    const client = await new ClientRepository(observing).create(`sim-client-${options.seed}`);
-    const tender = await createProjectWithTender(observing, client.id, `sim-${options.seed}`, `Build a product with ${universe.behaviours.join(", ")}.`);
-    const projectId = tender.project.id;
+    const createProject = async (suffix: string) => {
+      const client = await new ClientRepository(observing).create(`sim-client-${options.seed}${suffix}`);
+      const tender = await createProjectWithTender(observing, client.id, `sim-${options.seed}${suffix}`, `Build a product with ${universe.behaviours.join(", ")}.`);
+      return tender.project.id;
+    };
+    // The client's late change and stop are the first project's; its outcome is the run's.
+    const projectId = await createProject("");
+    const projectIds = [projectId];
+    for (let index = 1; index < projectCount; index++) projectIds.push(await createProject(`-p${index + 1}`));
+    const snapshotsOf = async (): Promise<[Snapshot, ...Snapshot[]]> => {
+      const first = await readSnapshot(observing, projectId);
+      const rest: Snapshot[] = [];
+      for (const id of projectIds.slice(1)) rest.push(await readSnapshot(observing, id));
+      return [first, ...rest];
+    };
 
     const standIns = new StandIns({
       tape,
       rates,
       universe,
       observer: observing,
-      projectId,
+      projectIds,
       onModelCall: (call) => trace.push(`model ${call.site} ${call.action}`),
       laneTask: () => interleaver.currentTask(),
     });
@@ -444,12 +500,12 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map() };
         // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
         checkouts = new CheckoutWatch(report);
-        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles };
+        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles, admissions, cellOutage: options.cellOutage === true };
         try {
           const ashara = await composeAshara({
             masterKey,
             databaseUrl: instanceUrl(db.url, instanceName(generation)),
-            createPool: faultingPools(seam, instanceName(generation), options.mutation === "skip-merge-record" ? skipMergeRecord : null),
+            createPool: faultingPools(seam, instanceName(generation), planted?.queries ?? null),
             models: faultingModels(seam, standIns.factory),
             processRunner: faultingPodman(seam, podman.runner),
             git: faultingGit(seam, execFileGitRunner),
@@ -503,10 +559,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
       instance = await compose();
       // I7, restart clause: the reconciler leaves nothing InProgress and no cell of the dead process.
-      const after = await readSnapshot(observing, projectId);
-      for (const item of after.items.filter((i) => i.status === "InProgress" && i.level === "Task")) {
-        const violation: Violation = { invariant: "I7", step: cycles, statement: `after the restart, "${item.title}" is InProgress with no live attempt`, key: `I7:orphan:${item.title}:${restarts}` };
-        violations.set(violation.key, violation);
+      for (const [index, after] of (await snapshotsOf()).entries()) {
+        for (const item of after.items.filter((i) => i.status === "InProgress" && i.level === "Task")) {
+          const violation = ofProject(index, { invariant: "I7", step: cycles, statement: `after the restart, "${item.title}" is InProgress with no live attempt`, key: `I7:orphan:${item.title}:${restarts}` });
+          violations.set(violation.key, violation);
+        }
       }
       if (podman.liveCells().length > 0) {
         const violation: Violation = { invariant: "I7", step: cycles, statement: `after the restart, ${podman.liveCells().length} cell(s) of the dead process are still running`, key: `I7:cells:${restarts}` };
@@ -515,10 +572,14 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     };
 
     instance = await compose();
-    let idle = 0;
-    let previous = "";
+    const reached = new Set<string>();
+    let quiet = 0;
+    let faultsSeen = 0;
+    let restartsSeen = 0;
+    let noProgress = false;
     let changed = false;
     let settleLeft: number | null = null;
+    let settledOn = "";
     while (cycles < options.maxCycles) {
       if (Date.now() - started > options.timeoutMs) {
         const violation: Violation = { invariant: "I1", step: cycles, statement: `the seed ran past its ${options.timeoutMs} ms wall clock`, key: "I1:timeout" };
@@ -560,12 +621,19 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       if (current.handle.dead) await restart(current, current.handle.fatal === null ? "a crash" : "a fatal exit");
       else if (current.handle.sigtermed) await restart(current, "a SIGTERM");
 
-      const snapshot = await readSnapshot(observing, projectId);
-      for (const violation of checkSnapshot(cycles, snapshot, { spendCapUsd: capUsd, cells: podman.liveCells(), final: false })) {
-        if (!violations.has(violation.key)) violations.set(violation.key, violation);
+      const snapshots = await snapshotsOf();
+      const [snapshot] = snapshots;
+      for (const [index, each] of snapshots.entries()) {
+        for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: podman.liveCells(), final: false })) report(ofProject(index, violation));
+        sample(coverage, each, scheduler.faults(), executionEvidence(each, statuses));
       }
-      sample(coverage, snapshot, scheduler.faults(), executionEvidence(snapshot, statuses));
-      trace.push(`state ${snapshot.items.filter((i) => i.level === "Task").map((i) => `${i.title.slice(0, 40)}=${i.status}`).join("; ")} | project=${snapshot.project.status}`);
+      const overCommitted = await admissions.judge(observing, capUsd, cycles);
+      if (overCommitted !== null) report(overCommitted);
+      trace.push(
+        snapshots
+          .map((each) => `state ${each.items.filter((i) => i.level === "Task").map((i) => `${i.title.slice(0, 40)}=${i.status}`).join("; ")} | project=${each.project.status}`)
+          .join(" || "),
+      );
 
       if (lateChange && !changed && snapshot.items.some((i) => i.origin === "decomposition" && i.status === "Completed")) {
         const question = await firstQuestion(observing, projectId);
@@ -576,51 +644,84 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         }
       }
 
+      // I8's measure: a fact of any project reached for the first time. A cycle that carried an
+      // injected fault, a duplicated wake or a restart neither progresses nor counts against it.
+      let fresh = 0;
+      for (const [index, each] of snapshots.entries()) {
+        for (const fact of progressFacts(each)) {
+          if (reached.has(`${index}:${fact}`)) continue;
+          reached.add(`${index}:${fact}`);
+          fresh += 1;
+        }
+      }
+      const faulted = scheduler.faults().length > faultsSeen || restarts > restartsSeen || repeats > 1;
+      faultsSeen = scheduler.faults().length;
+      restartsSeen = restarts;
+      if (fresh > 0) quiet = 0;
+      else if (!faulted) quiet += 1;
+      longestQuiet = Math.max(longestQuiet, quiet);
+      if (quiet >= NO_PROGRESS_CYCLES) {
+        noProgress = true;
+        break;
+      }
+
       // An ended project runs a few more cycles: what it owes the client (a report) is sent on them.
-      // A late client change can reopen an accepted project: then it is open again, not settling.
+      // A late client change can reopen an accepted project, and a halt can end and begin again (a
+      // new episode): then it is not settling. Every project of the run ends before the run does.
       const spendHalt = outcome.kind === "halted" && outcome.cause === "spend_cap";
-      if (settleLeft !== null && !spendHalt && outcomeOf(snapshot).kind === "open") settleLeft = null;
+      const ends = snapshots.map(outcomeOf);
+      const stand = snapshots.map(standing).join(" ");
+      if (settleLeft !== null && !spendHalt && (ends.some((end) => end.kind === "open") || stand !== settledOn)) settleLeft = null;
       if (settleLeft !== null) {
         settleLeft -= 1;
         if (settleLeft <= 0) break;
         continue;
       }
-      if (!(outcome.kind === "halted" && outcome.cause === "spend_cap")) outcome = outcomeOf(snapshot);
-      if (outcome.kind !== "open") {
+      if (!spendHalt) outcome = outcomeOf(snapshot);
+      if (spendHalt || ends.every((end) => end.kind !== "open")) {
         settleLeft = SETTLE_CYCLES;
-        continue;
+        settledOn = stand;
       }
-      const print = fingerprint(snapshot);
-      idle = print === previous ? idle + 1 : 0;
-      previous = print;
-      if (idle >= IDLE_CYCLES_TO_STALL) break;
     }
 
-    const final = await readSnapshot(observing, projectId);
-    for (const violation of checkSnapshot(cycles, final, { spendCapUsd: capUsd, cells: podman.liveCells(), final: true })) {
-      if (!violations.has(violation.key)) violations.set(violation.key, violation);
+    const finals = await snapshotsOf();
+    const [final] = finals;
+    // The report clause needs the settle cycles a halt's report is posted on: a run cut off for no
+    // progress had none, and may end on a halt begun in its last cycle (I8 judges that run).
+    for (const [index, each] of finals.entries()) {
+      for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: podman.liveCells(), final: !noProgress })) report(ofProject(index, violation));
     }
-    if (outcome.kind !== "open" && !(outcome.kind === "halted" && outcome.cause === "spend_cap")) outcome = outcomeOf(final);
+    const overCommitted = await admissions.judge(observing, capUsd, cycles);
+    if (overCommitted !== null) report(overCommitted);
+    const spendHalted = outcome.kind === "halted" && outcome.cause === "spend_cap";
+    // A run that made no progress did not end, whatever its last snapshot shows (a halt it resumes).
+    if (noProgress) outcome = { kind: "open" };
+    else if (outcome.kind !== "open" && !spendHalted) outcome = outcomeOf(final);
     // I6, the product clause: an accepted project's main holds every behaviour the client asked for.
-    if (outcome.kind === "accepted" && final.project.workspacePath !== null) {
-      const files = new Set(await mainFiles(final.project.workspacePath));
+    for (const [index, each] of finals.entries()) {
+      const end = index === 0 ? outcome : outcomeOf(each);
+      if (end.kind !== "accepted" || each.project.workspacePath === null) continue;
+      const files = new Set(await mainFiles(each.project.workspacePath));
       const missing = universe.behaviours.filter((b) => !files.has(behaviourPath(b)));
       if (missing.length > 0) {
-        violations.set("I6:accepted-missing", { invariant: "I6", step: cycles, statement: `the project was accepted with behaviour(s) ${missing.join(", ")} absent from main`, key: "I6:accepted-missing" });
+        report(ofProject(index, { invariant: "I6", step: cycles, statement: `the project was accepted with behaviour(s) ${missing.join(", ")} absent from main`, key: "I6:accepted-missing" }));
       }
     }
-    const tasks = final.items.filter((item) => item.level === "Task").length;
+    const tasks = finals.reduce((sum, each) => sum + each.items.filter((item) => item.level === "Task").length, 0);
     const bound = (REPAIRS + 1) * Math.max(tasks, 1) * ATTEMPTS * (1 + CONTESTS * ATTEMPTS);
-    if (outcome.kind === "open") {
-      const stuck = final.items
+    const open = finals.filter((each, index) => noProgress || (index === 0 ? outcome.kind === "open" : !spendHalted && outcomeOf(each).kind === "open"));
+    if (open.length > 0) {
+      const stuck = open
+        .flatMap((each) => each.items)
         .filter((item) => item.level === "Task" && item.status !== "Completed" && item.status !== "Abandoned")
         .map((item) => `"${item.title}" ${item.status}${sourceOf(item.blockedReason) === null ? "" : ` (${sourceOf(item.blockedReason) ?? ""})`}`);
-      const statement =
-        idle >= IDLE_CYCLES_TO_STALL
-          ? `the project made no progress for ${IDLE_CYCLES_TO_STALL} cycles and is neither accepted, halted nor stopped: ${stuck.join(", ")}`
-          : `the project did not end within ${options.maxCycles} cycles: ${stuck.join(", ")}`;
+      const statement = noProgress
+        ? `the project made no progress for ${NO_PROGRESS_CYCLES} fault-free cycles and is neither accepted, halted nor stopped: ${stuck.join(", ")}`
+        : `the project did not end within ${options.maxCycles} cycles: ${stuck.join(", ")}`;
       violations.set("I1:open", { invariant: "I1", step: cycles, statement, key: "I1:open" });
-      if (idle >= IDLE_CYCLES_TO_STALL) for (const violation of checkTotality(cycles, final)) violations.set(violation.key, violation);
+      if (noProgress) {
+        for (const [index, each] of finals.entries()) for (const violation of checkTotality(cycles, each, NO_PROGRESS_CYCLES)) violations.set(ofProject(index, violation).key, ofProject(index, violation));
+      }
     }
     if (dispatches > bound) {
       violations.set("I1:bound", { invariant: "I1", step: cycles, statement: `${dispatches} dispatches exceed the bound ${bound}`, key: "I1:bound" });
@@ -639,6 +740,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
     if (observer !== null) await observer.$client.end();
     if (database !== null) await database.drop();
+    restoreCode?.();
     restoreWaits();
     restoreEnv();
     restoreConsole();
@@ -659,6 +761,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     faults: scheduler.faults(),
     tickets: scheduler.tickets(),
     durationMs: Date.now() - started,
+    longestQuiet,
     log,
   };
 }

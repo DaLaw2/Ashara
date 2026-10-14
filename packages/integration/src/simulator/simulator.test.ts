@@ -5,7 +5,7 @@ import { diffExpected } from "./expected-failures.js";
 import { minimize } from "./minimize.js";
 import { profileOfSeed } from "./profile.js";
 import { runSeed } from "./run.js";
-import type { Mutation, RunResult } from "./run.js";
+import type { Mutation, RunOptions, RunResult } from "./run.js";
 
 /**
  * The fast tier (design §4.13): fixed seeds on today's code, each judged against
@@ -29,7 +29,7 @@ afterAll(async () => {
   await dropStaleRunDatabases(databaseUrl);
 });
 
-function seeded(seed: number, mutation?: Mutation): Promise<RunResult> {
+function seeded(seed: number, mutation?: Mutation, scenario: Pick<RunOptions, "projects" | "capUsd" | "cellOutage"> = {}): Promise<RunResult> {
   return runSeed({
     seed,
     profile: profileOfSeed(seed),
@@ -39,7 +39,12 @@ function seeded(seed: number, mutation?: Mutation): Promise<RunResult> {
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
     ...(mutation === undefined ? {} : { mutation }),
+    ...scenario,
   });
+}
+
+function keys(result: RunResult): string[] {
+  return result.violations.map((v) => v.key).sort();
 }
 
 function failed(result: RunResult): string[] {
@@ -149,8 +154,52 @@ describe("lifecycle simulator, fast tier", () => {
     const clean = await seeded(30);
     expect(diffExpected(30, clean.violations), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
     expect([...clean.coverage.concurrency]).toContain("contended:target-checkout");
+    expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
     const planted = await seeded(30, "no-checkout-lock");
     expect(planted.violations.map((v) => v.key)).toContain("I7:checkout-overlap:merge --abort");
+  }, 90_000);
+
+  // ADR-074 d84 b. With one project the admission queue's absence admits nothing more (baseline
+  // §7.6), so here two projects share one deployment cap of $10: skipping the queue lets one task's
+  // admission pass the deployment's check while the other's stands between its check and its
+  // in-flight estimate (observed: still caught with the in-flight read moved before the spend read,
+  // B9's fix, so it is the queue's race and not B9's).
+  it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
+    const shared = { projects: 2, capUsd: 10 } as const;
+    const clean = await seeded(50, undefined, shared);
+    expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
+    expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
+    const planted = await seeded(50, "no-admission-queue", shared);
+    expect(keys(planted)).toEqual(["I5:over-committed"]);
+  }, 90_000);
+
+  // B9 (baseline §7.7), fixed in Finance: an admission sums the in-flight estimates before it reads
+  // the recorded spend. Planted back (ledger-read-first), the other task's call is recorded and
+  // released between the spend read and the in-flight sum and counts in neither. Seed 23 because
+  // the window needs the tape to hand the turn on at the read's return and back only after the
+  // other task's release: observed in seeds 1-80 at cap $10 on seed 23 alone (at cap $6, seed 7).
+  it("catches an admission that counts a just-recorded call in neither the spend nor the in-flight sum", async () => {
+    const shared = { projects: 2, capUsd: 10 } as const;
+    const clean = await seeded(23, undefined, shared);
+    expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
+    const planted = await seeded(23, "ledger-read-first", shared);
+    expect(keys(planted)).toEqual(["I5:over-committed"]);
+  }, 90_000);
+
+  // ADR-074 d84 b, I8 on no progress: the host cannot start a cell all run. Production requeues the
+  // environment task uncharged three times, halts the project on the fourth fault, the probe resumes
+  // it, and the fifth gives the task up, so the plan is repaired until it halts undeliverable. With
+  // the count pinned at the halt, the project halts and resumes forever: busy, every cycle a new
+  // halt episode, and nothing reached that was not reached before.
+  it("catches a halt and resumption that repeat with no progress", async () => {
+    const outage = { cellOutage: true } as const;
+    const clean = await seeded(10, undefined, outage);
+    expect(keys(clean)).toEqual([]);
+    expect(clean.outcome.kind).toBe("halted");
+    const planted = await seeded(10, "infrastructure-fault-pinned", outage);
+    expect(planted.trace.filter((line) => line.endsWith("1 task(s) [interrupted]")).length).toBeGreaterThan(4);
+    expect(keys(planted)).toEqual(["I1:open", "I8:Pending"]);
+    expect(planted.outcome.kind).toBe("open");
   }, 90_000);
 
   it("catches a merge recorded under a commit main does not hold", async () => {
