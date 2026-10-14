@@ -49,6 +49,29 @@ export function assumptionStanding(record: { readonly status: string; readonly d
 }
 
 /**
+ * What the client's answer did to the assumption it made Stated, as the Liaison records it on the
+ * Stated record's `clientAnswer`. A record written before it was recorded holds none.
+ */
+export const ClientAnswerVerdictSchema = z.enum(["confirms", "changes"]);
+
+/**
+ * Where an assumption stands with the client when the project is accepted (ADR-074 d95 a), read from
+ * the vision version current at acceptance and the client's replies, never from a plan's copy of the
+ * vision: Stated by an answer that confirmed it, or changed it, or one whose effect was not recorded
+ * ("stated"); Inferred and asked, with a reply read that settled nothing ("answered"), a reply not
+ * yet read ("answer-unread") or none ("asked"); reported; or never shown.
+ */
+export type AcceptedAssumptionStanding =
+  | "stated"
+  | "confirmed"
+  | "changed"
+  | "answered"
+  | "answer-unread"
+  | "asked"
+  | "reported"
+  | "not-shown";
+
+/**
  * The one wording of an assumption's standing and kind in Ashara's own prompts (a planner's vision
  * items, a check author's and a reviewer's, an agent's brief): what the record says, nothing beyond.
  */

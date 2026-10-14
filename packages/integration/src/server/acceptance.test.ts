@@ -10,14 +10,17 @@ import {
   DEFAULT_DATABASE_URL,
   EventStoreRepository,
   ProjectRepository,
+  VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { ClientStops, DeliveredReports } from "@ashara/engagement";
+import { ClientAnswers, ClientStops, DeliveredReports } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
+import type { ContextualLlm } from "@ashara/llm-gateway";
 import type { AcceptanceStore } from "@ashara/orchestrator";
 import { runAcceptanceSweeps } from "@ashara/orchestrator";
 import { RUN_SCOPE_AD_HOC, type ProjectId, type VisionSource } from "@ashara/shared";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
+import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 
 // Story s-independent-verify-m1 W7 (design P11, §2.8; eighth run E3): a project whose goal tasks are
@@ -60,14 +63,49 @@ function traced(sources: readonly VisionSource[], acceptance: ReadonlyArray<{ re
 }
 
 /**
+ * The project's vision v1 as intake and an earlier answer left it, matching VISION: A1 Stated by an
+ * answer recorded before its effect was, A2 and A3 Inferred and reported; or, with `prefixAsked`, A3
+ * asked by a question still open. Returns that question's id, or null.
+ */
+async function writeVision(projectId: ProjectId, tenderId: string, prefixAsked: boolean): Promise<string | null> {
+  const [question] = prefixAsked ? await new ClientMessageRepository(db).insertQuestions(projectId, tenderId, ["Does an empty prefix list every key?"]) : [];
+  const record = (source: Extract<VisionSource, { type: "assumption" }>, disclosed: "asked" | "reported") => ({
+    key: source.id,
+    statement: source.text,
+    rationale: "The tender implies it.",
+    status: "Inferred",
+    kind: source.kind,
+    disclosed,
+  });
+  await new VisionRepository(db).create(projectId, {
+    visionText: "Build a key store.",
+    summary: "A key store.",
+    scopeBoundaries: [VISION.stored, VISION.deleted, VISION.writers, VISION.network].map((line) => ({ text: line.text, side: line.side })),
+    inferences: [
+      {
+        ...record(VISION.missing, "asked"),
+        status: "Stated",
+        clientAnswer: { messageId: randomUUID(), questionMessageId: randomUUID(), question: "What does a missing key do?", answer: "Exit 3." },
+      },
+      record(VISION.logName, "reported"),
+      record(VISION.prefix, prefixAsked ? "asked" : "reported"),
+    ],
+    openQuestions: question === undefined ? [] : [{ messageId: question.id, text: question.body, assumptionKey: VISION.prefix.id }],
+  });
+  return question?.id ?? null;
+}
+
+/**
  * A planned project whose every task is Completed: "Store keys" merged as MERGE_A, "Delete keys"
  * already delivered on MERGE_A, each with a check set whose acceptance lines cite S1 and A1, and S2,
  * and a review recording the whole vision: S3 and A3 no line cites, S4 is out of scope and A2 is the
- * team's design choice.
+ * team's design choice. With `prefixAsked`, A3 was asked about when the plan was made, and the
+ * review recorded it so.
  */
-async function deliveredProject(): Promise<Delivered> {
-  const { project } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build a key store.");
+async function deliveredProject(options: { readonly prefixAsked: boolean } = { prefixAsked: false }): Promise<Delivered & { readonly question: string | null }> {
+  const { project, message } = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Build a key store.");
   ourProjects.add(project.id);
+  const question = await writeVision(project.id, message.id, options.prefixAsked);
   await db.execute(sql`UPDATE projects SET first_planned_at = now(), workspace_path = ${`/tmp/${NAME_PREFIX}`} WHERE id = ${project.id}`);
   const task = async (title: string, spec: unknown): Promise<string> => {
     const id = randomUUID();
@@ -86,7 +124,7 @@ async function deliveredProject(): Promise<Delivered> {
   const remove = await task("Delete keys", { origin: "decomposition", ...removeSpec });
   const checksOfStore = await task("Checks for Store keys", { origin: "check", checksFor: store, ...storeSpec });
   const checksOfRemove = await task("Checks for Delete keys", { origin: "check", checksFor: remove, ...removeSpec });
-  const all = Object.values(VISION);
+  const all = Object.values(options.prefixAsked ? { ...VISION, prefix: { ...VISION.prefix, standing: "asked" } } : VISION);
   await task("Review the plan's checks", { origin: "review", visionItems: all.map((item) => item.text), sources: all });
   const workItems = new WorkItemRepository(db);
   await workItems.recordMergeCommit(store, MERGE_A, "merged");
@@ -96,7 +134,7 @@ async function deliveredProject(): Promise<Delivered> {
       INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version)
       VALUES (${project.id}, ${taskId}, ${checkTaskId}, 1, 'works', 'sh checks/run.sh', '[]'::jsonb, ${"e".repeat(64)})`);
   }
-  return { projectId: project.id, goals: [store, remove], scaffold, checksOfStore };
+  return { projectId: project.id, goals: [store, remove], scaffold, checksOfStore, question };
 }
 
 /** Rewrites one stored task_spec field of a work item, as a record written otherwise would hold it. */
@@ -112,6 +150,13 @@ async function removeSpec(workItemId: string, field: string): Promise<void> {
 function acceptanceStore(): AcceptanceStore {
   const store = createAcceptanceStore(db);
   return { ...store, readyForAcceptance: async () => (await store.readyForAcceptance()).filter((ready) => ourProjects.has(ready.projectId)) };
+}
+
+/** The Liaison's reading of this suite's answers; the model's reading is stood in: it confirms. */
+function clientAnswers(): ClientAnswers {
+  const store = createAnswerStore(db);
+  const llm: ContextualLlm = { forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse({ verdict: "confirms" }) }) }) };
+  return new ClientAnswers({ llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 
 function deliveredReports(): DeliveredReports {
@@ -168,6 +213,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM plan_repairs WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours}) AND in_reply_to IS NOT NULL`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
@@ -239,6 +285,30 @@ describe("acceptance on main", () => {
     const posted = await deliveredReports().runPending();
     expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, broken.projectId].sort());
     expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
+  });
+
+  // smoke2 D1 (ADR-074 d95 a): the plan was made, then a confirming answer was read (no replan), then
+  // the project was accepted. The review's copy of the vision still says the item was asked about.
+  test("an answer confirming an assumption after the plan was made is reported as confirmed, and an unreadable standing is refused", async () => {
+    const { projectId, goals, scaffold, question } = await deliveredProject({ prefixAsked: true });
+    if (question === null) throw new Error("the fixture posted no question");
+    const answerId = (await new ClientMessageRepository(db).insertInbound({ projectId, kind: "answer", body: "Yes, every key.", inReplyTo: question })).id;
+    expect(await clientAnswers().runPending()).toEqual([
+      { kind: "stated", answerId, projectId, assumptionKey: "A3", verdict: "confirms", visionVersion: 2, replanRequested: false },
+    ]);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+
+    // The standing is read from the vision at acceptance: one it cannot read fails closed, never the review's copy.
+    const saved = await db.execute(sql`SELECT inferences FROM vision_documents WHERE project_id = ${projectId} AND version = 2`);
+    const inferences = z.array(z.object({ inferences: z.unknown() })).parse(saved.rows)[0]?.inferences;
+    await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${projectId} AND version = 2`);
+    await expect(deliveredReports().runPending()).rejects.toThrow(/assumption A3 is Stated but carries no client answer/);
+    await db.execute(sql`UPDATE vision_documents SET inferences = ${JSON.stringify(inferences)}::jsonb WHERE project_id = ${projectId} AND version = 2`);
+
+    expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
+    const [body] = await reportsOf(projectId);
+    expect(body).toContain("- An empty prefix lists every key (you confirmed this when asked)\n");
+    expect(body).not.toContain("have not answered");
   });
 
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {

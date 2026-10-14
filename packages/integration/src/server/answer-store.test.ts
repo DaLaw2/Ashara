@@ -175,7 +175,9 @@ const InferenceSchema = z.looseObject({
   key: z.string(),
   statement: z.string(),
   status: z.string(),
-  clientAnswer: z.object({ messageId: z.string(), questionMessageId: z.string(), question: z.string(), answer: z.string() }).optional(),
+  clientAnswer: z
+    .object({ messageId: z.string(), questionMessageId: z.string(), question: z.string(), answer: z.string(), verdict: z.string().optional() })
+    .optional(),
 });
 const VisionRowSchema = z.object({
   version: z.number(),
@@ -269,7 +271,7 @@ describe("the client's answers", () => {
     expect(v2?.inferences.find((a) => a.key === "A2")).toMatchObject({
       statement: "A class has twelve seats.",
       status: "Stated",
-      clientAnswer: { messageId: answerId, questionMessageId: second, answer: "Yes, twelve seats." },
+      clientAnswer: { messageId: answerId, questionMessageId: second, answer: "Yes, twelve seats.", verdict: "confirms" },
     });
     expect(v2?.inferences.filter((a) => a.status === "Inferred").map((a) => a.key)).toEqual(["A1", "A3"]);
     expect(v2?.openQuestions.map((q) => q.messageId)).toEqual([first]);
@@ -326,7 +328,7 @@ describe("the client's answers", () => {
       status: "Stated",
       // The changed decision is classified again, never carried over from the one it replaced.
       kind: "internal-design",
-      clientAnswer: { messageId: answerId },
+      clientAnswer: { messageId: answerId, verdict: "changes" },
     });
     expect(await awaitedChangesOf(projectId)).toEqual([answerId]);
     expect(await projectRepo.listActiveIds()).not.toContain(projectId);

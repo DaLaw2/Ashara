@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import type { AssumptionStanding, VisionSource } from "@ashara/shared";
+import type { AcceptedAssumptionStanding } from "@ashara/shared";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportStore } from "./delivered-report.js";
 
@@ -9,13 +9,14 @@ const MAIN = "c".repeat(40);
 const MERGE_A = "a".repeat(40);
 
 type Due = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
+type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
-function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): VisionSource {
+function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): Item {
   return { type: "scope", id, text, side };
 }
 
-function assumption(id: string, text: string, standing: AssumptionStanding, kind: "client-visible" | "internal-design" | "unclassified"): VisionSource {
-  return { type: "assumption", id, text, status: standing === "stated" ? "Stated" : "Inferred", standing, kind };
+function assumption(id: string, text: string, standing: AcceptedAssumptionStanding, kind: "client-visible" | "internal-design" | "unclassified"): Item {
+  return { type: "assumption", id, text, standing, kind };
 }
 
 async function render(due: Due): Promise<string> {
@@ -153,6 +154,37 @@ describe("the delivered report", () => {
     expect(body).not.toContain("network");
     expect(body).not.toContain("advisory lock");
     expect(body).not.toContain("Several processes");
+  });
+
+  // smoke2 D1 (d95 a): each uncited assumption is worded by where it stood at acceptance, an answer included.
+  test("an answered assumption is never said to be unanswered: each standing at acceptance has its own words", async () => {
+    const body = await render({
+      sweepId: "s8",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Count words", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Count words"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false },
+          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false },
+          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false },
+          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false },
+        ],
+      },
+    });
+    expect(body).toContain(
+      [
+        "- Python 3.12 is the runtime. (you confirmed this when asked)",
+        "- Totals print last. (your answer, which changed what we had assumed)",
+        "- Ashara's assumption, which you were asked about; your reply neither confirmed nor changed it: No argument prints usage.",
+        "- Ashara's assumption, which you were asked about; your reply had not been read when the project was accepted: Missing files exit 1.",
+      ].join("\n"),
+    );
+    expect(body).not.toContain("have not answered");
   });
 
   test("a scope line recorded without its side is listed, and says so", async () => {

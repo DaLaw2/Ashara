@@ -46,11 +46,18 @@ export {
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
 
-export type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-assumption.js";
+export type {
+  AcceptedAssumptionStanding,
+  AssumptionDisclosure,
+  AssumptionKind,
+  ScopeLine,
+  ScopeSide,
+} from "./vision-assumption.js";
 export {
   ASSUMPTION_KIND_LABEL,
   ASSUMPTION_STANDING_LABEL,
   AssumptionKindSchema,
+  ClientAnswerVerdictSchema,
   PUBLIC_INTERFACE_FILE,
   StoredAssumptionDisclosureSchema,
   StoredAssumptionKindSchema,

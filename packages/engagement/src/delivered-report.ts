@@ -1,4 +1,4 @@
-import type { AssumptionStanding, ProjectId, VisionSource } from "@ashara/shared";
+import type { AcceptedAssumptionStanding, ProjectId, VisionSource } from "@ashara/shared";
 
 // The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8; eighth run E3):
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
@@ -16,11 +16,25 @@ type GoalClose =
   | { readonly kind: "no-record" };
 
 /**
+ * An item of the vision the plan was reviewed against: a scope line, or an assumption with where it
+ * stood with the client at acceptance (d95 a), never as the plan's copy of the vision recorded it.
+ */
+type AcceptedVisionItem =
+  | Extract<VisionSource, { readonly type: "scope" }>
+  | {
+      readonly type: "assumption";
+      readonly id: string;
+      readonly text: string;
+      readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
+      readonly standing: AcceptedAssumptionStanding;
+    };
+
+/**
  * Every item of the vision the plan was reviewed against, each with whether an acceptance line of a
  * check task whose stored checks the sweep ran cites it; or none recorded.
  */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: VisionSource; readonly checked: boolean }> }
+  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean }> }
   | { readonly kind: "unrecorded" };
 
 /** An accepted project whose delivered report the client has not been sent. */
@@ -78,25 +92,40 @@ function closeLine(title: string, close: GoalClose): string {
  * of scope is not, nor is an assumption recorded as the team's own design choice, which the client
  * was told their acceptance does not depend on. Everything else is, an unclassified one included.
  */
-function askedFor(source: VisionSource): boolean {
+function askedFor(source: AcceptedVisionItem): boolean {
   return source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design";
 }
 
-/** How the client saw an Inferred assumption, as its record says, in the client's words. */
-const SEEN_BY_CLIENT: Readonly<Record<Exclude<AssumptionStanding, "stated">, string>> = {
+type StatedStanding = Extract<AcceptedAssumptionStanding, "stated" | "confirmed" | "changed">;
+
+/** What the client's answer made of a Stated assumption, as its record says, in the client's words. */
+const STATED_BY_CLIENT: Readonly<Record<StatedStanding, string>> = {
+  stated: "your answer",
+  confirmed: "you confirmed this when asked",
+  changed: "your answer, which changed what we had assumed",
+};
+
+/** How the client saw an Inferred assumption at acceptance, as the records say, in the client's words. */
+const SEEN_BY_CLIENT: Readonly<Record<Exclude<AcceptedAssumptionStanding, StatedStanding>, string>> = {
   asked: "which you were asked about and have not answered",
+  answered: "which you were asked about; your reply neither confirmed nor changed it",
+  "answer-unread": "which you were asked about; your reply had not been read when the project was accepted",
   reported: "which was reported to you",
   "not-shown": "which was never shown to you",
 };
 
-function coverageLine(source: VisionSource): string {
+function isStated(standing: AcceptedAssumptionStanding): standing is StatedStanding {
+  return standing === "stated" || standing === "confirmed" || standing === "changed";
+}
+
+function coverageLine(source: AcceptedVisionItem): string {
   if (source.type === "scope") {
     return source.side === "unclassified"
       ? `- ${source.text} (recorded without saying whether it is in or out of scope)`
       : `- ${source.text}`;
   }
   const unclassified = source.kind === "unclassified" ? " (not recorded as what you see or as how it is built)" : "";
-  if (source.standing === "stated") return `- ${source.text} (your answer)${unclassified}`;
+  if (isStated(source.standing)) return `- ${source.text} (${STATED_BY_CLIENT[source.standing]})${unclassified}`;
   return `- Ashara's assumption, ${SEEN_BY_CLIENT[source.standing]}: ${source.text}${unclassified}`;
 }
 

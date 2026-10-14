@@ -424,6 +424,8 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
       questionMessageId: answer.questionId,
       question: context.question.text,
       answer: answer.body,
+      // The delivered report says from it whether the client confirmed or changed the assumption (d95 a).
+      verdict: reading.verdict,
     },
   };
   const inferences = context.inferences.map((a, i) => (i === context.assumptionIndex ? stated : a));

@@ -1,8 +1,17 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, parseStoredTaskSpec, type ProjectId, type VisionSource } from "@ashara/shared";
+import {
+  ClientAnswerVerdictSchema,
+  parseProjectId,
+  parseStoredTaskSpec,
+  StoredAssumptionDisclosureSchema,
+  StoredAssumptionKindSchema,
+  type AcceptedAssumptionStanding,
+  type ProjectId,
+  type VisionSource,
+} from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { acceptanceSweeps, clientMessages, projects, taskChecks, workItems } from "../schema.js";
+import { acceptanceSweeps, clientMessages, projects, taskChecks, visionDocuments, workItems } from "../schema.js";
 import { noOpenAnswer } from "./first-plan.js";
 import { noOpenStop, pendingChange, pendingRepair } from "./project.js";
 import { WorkItemRepository } from "./work-item.js";
@@ -170,11 +179,25 @@ type GoalClose =
   | { readonly kind: "no-record" };
 
 /**
+ * An item of the vision as the delivered report names it: a scope line as the plan's review recorded
+ * it, or an assumption with where it stands with the client at acceptance (d95 a).
+ */
+type AcceptedVisionItem =
+  | Extract<VisionSource, { readonly type: "scope" }>
+  | {
+      readonly type: "assumption";
+      readonly id: string;
+      readonly text: string;
+      readonly kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"];
+      readonly standing: AcceptedAssumptionStanding;
+    };
+
+/**
  * Every item of the vision the delivered plan was reviewed against, each with whether an acceptance
  * line of a check task whose stored checks ran in the sweep cites it.
  */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: VisionSource; readonly checked: boolean }> }
+  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean }> }
   /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
 
@@ -323,14 +346,114 @@ async function checkAuthors(db: DbHandle, goalIds: readonly string[]): Promise<A
     );
 }
 
+/** Where an assumption stood with the client at acceptance cannot be read: the report never falls back to the plan's copy. */
+class AcceptedStandingUnreadable extends Error {
+  constructor(
+    readonly sweepId: string,
+    readonly projectId: string,
+    readonly visionVersion: number | null,
+    readonly detail: string,
+  ) {
+    super(
+      `acceptance sweep ${sweepId} of project ${projectId}: where the client stood on the vision at acceptance cannot be read` +
+        `${visionVersion === null ? "" : ` (vision v${visionVersion})`}: ${detail}`,
+    );
+    this.name = "AcceptedStandingUnreadable";
+  }
+}
+
+// The assumptions of a vision version, as intake, the stack choice and the Liaison's answers write
+// them; a record without a key is keyed by its place (as planning keys it).
+const AcceptedInferencesSchema = z.array(
+  z.looseObject({
+    key: z.string().min(1).optional(),
+    statement: z.string().min(1),
+    status: z.string().min(1),
+    kind: StoredAssumptionKindSchema,
+    disclosed: StoredAssumptionDisclosureSchema,
+    clientAnswer: z.looseObject({ messageId: z.string().min(1), verdict: ClientAnswerVerdictSchema.optional() }).optional(),
+  }),
+);
+const AcceptedOpenQuestionsSchema = z.array(z.looseObject({ messageId: z.guid(), assumptionKey: z.string().min(1) }));
+
+type AcceptedAssumption = Extract<AcceptedVisionItem, { readonly type: "assumption" }>;
+
+/**
+ * Each assumption of the vision version current at acceptance, by id, with where it then stood with
+ * the client (d95 a): a confirming answer asks for no replan, so the plan's own copy of the vision
+ * can predate it (smoke2 D1). A reply counts only if it was sent by acceptance, and as read only if
+ * it was read by then. Throws AcceptedStandingUnreadable when any of it cannot be read.
+ */
+async function assumptionsAtAcceptance(
+  db: DbHandle,
+  sweep: { readonly id: string; readonly projectId: string; readonly acceptedAt: Date },
+): Promise<ReadonlyMap<string, AcceptedAssumption>> {
+  const [vision] = await db
+    .select({ version: visionDocuments.version, inferences: visionDocuments.inferences, openQuestions: visionDocuments.openQuestions })
+    .from(visionDocuments)
+    .where(and(eq(visionDocuments.projectId, sweep.projectId), lte(visionDocuments.createdAt, sweep.acceptedAt)))
+    .orderBy(desc(visionDocuments.version))
+    .limit(1);
+  if (vision === undefined) throw new AcceptedStandingUnreadable(sweep.id, sweep.projectId, null, "no vision version was written by acceptance");
+  const unreadable = (detail: string) => new AcceptedStandingUnreadable(sweep.id, sweep.projectId, vision.version, detail);
+  const inferences = AcceptedInferencesSchema.safeParse(vision.inferences);
+  if (!inferences.success) throw unreadable(`its assumptions are not a list of assumption records: ${z.prettifyError(inferences.error)}`);
+  const questions = AcceptedOpenQuestionsSchema.safeParse(vision.openQuestions);
+  if (!questions.success) throw unreadable(`its open questions are not readable: ${z.prettifyError(questions.error)}`);
+  const replies = questions.data.length === 0
+    ? []
+    : await db
+        .select({ question: clientMessages.inReplyTo, consumedAt: clientMessages.consumedAt })
+        .from(clientMessages)
+        .where(
+          and(
+            eq(clientMessages.direction, "inbound"),
+            eq(clientMessages.kind, "answer"),
+            inArray(clientMessages.inReplyTo, questions.data.map((question) => question.messageId)),
+            lte(clientMessages.createdAt, sweep.acceptedAt),
+          ),
+        );
+
+  const standingOf = (id: string, record: (typeof inferences.data)[number]): AcceptedAssumptionStanding => {
+    if (record.status === "Stated") {
+      if (record.clientAnswer === undefined) throw unreadable(`assumption ${id} is Stated but carries no client answer`);
+      if (record.clientAnswer.verdict === undefined) return "stated";
+      return record.clientAnswer.verdict === "confirms" ? "confirmed" : "changed";
+    }
+    if (record.disclosed === undefined) return "not-shown";
+    if (record.disclosed === "reported") return "reported";
+    const question = questions.data.find((open) => open.assumptionKey === id);
+    if (question === undefined) throw unreadable(`assumption ${id} was asked about and is not Stated, yet no open question names it`);
+    const reply = replies.find((row) => row.question === question.messageId);
+    if (reply === undefined) return "asked";
+    return reply.consumedAt !== null && reply.consumedAt <= sweep.acceptedAt ? "answered" : "answer-unread";
+  };
+
+  const assumptions = new Map<string, AcceptedAssumption>();
+  inferences.data.forEach((record, i) => {
+    const id = record.key ?? `A${i + 1}`;
+    if (assumptions.has(id)) throw unreadable(`two assumptions share the key ${id}`);
+    assumptions.set(id, { type: "assumption", id, text: record.statement, kind: record.kind, standing: standingOf(id, record) });
+  });
+  return assumptions;
+}
+
 /**
  * Every item of the vision as the plan's latest completed review recorded it (every item of the
  * vision its revision was decomposed from), each checked exactly when an acceptance line of the
  * check task of a goal task's latest stored checks (the sets the sweep ran) cites it (W11c D3). A
  * stored check is not recorded against one line, so the trace reaches the check task's lines, not
- * one check. Unrecorded when the review, or one of those check tasks, holds no traced items.
+ * one check. Unrecorded when the review, or one of those check tasks, holds no traced items. Which
+ * items are checked comes from the trace; where each assumption stands with the client comes from
+ * the vision at acceptance (d95 a), and an assumption whose text there is not the one reviewed is
+ * refused, never reported on the plan's copy.
  */
-async function visionCoverage(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<VisionCoverage> {
+async function visionCoverage(
+  db: DbHandle,
+  sweep: { readonly id: string; readonly projectId: string; readonly acceptedAt: Date },
+  goalIds: readonly string[],
+): Promise<VisionCoverage> {
+  const { projectId } = sweep;
   const [review] = await db
     .select({ taskSpec: workItems.taskSpec })
     .from(workItems)
@@ -351,7 +474,27 @@ async function visionCoverage(db: DbHandle, projectId: string, goalIds: readonly
     if (lines === null) return { kind: "unrecorded" };
     for (const identity of lines) cited.add(identity);
   }
-  return { kind: "recorded", items: items.map((source) => ({ source, checked: cited.has(sourceIdentity(source)) })) };
+  const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
+  return {
+    kind: "recorded",
+    items: items.map((source) => {
+      const checked = cited.has(sourceIdentity(source));
+      if (source.type === "scope") return { source, checked };
+      const now = current.get(source.id);
+      if (now === undefined) {
+        throw new AcceptedStandingUnreadable(sweep.id, projectId, null, `the vision at acceptance holds no assumption ${source.id}, which the plan's review recorded`);
+      }
+      if (now.text !== source.text) {
+        throw new AcceptedStandingUnreadable(
+          sweep.id,
+          projectId,
+          null,
+          `assumption ${source.id} reads "${now.text}" at acceptance, not "${source.text}" as the plan's review recorded it`,
+        );
+      }
+      return { source: now, checked };
+    }),
+  };
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */
@@ -375,6 +518,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
       mainCommit: acceptanceSweeps.mainCommit,
       checkedTasks: acceptanceSweeps.checkedTasks,
       uncheckedTasks: acceptanceSweeps.uncheckedTasks,
+      acceptedAt: acceptanceSweeps.createdAt,
     })
     .from(acceptanceSweeps)
     .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
@@ -394,7 +538,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
       checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
       unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
       givenUp: await givenUpGoalTitles(db, row.projectId),
-      vision: await visionCoverage(db, row.projectId, goalIds),
+      vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
     });
   }
   return due;
