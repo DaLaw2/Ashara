@@ -2,7 +2,7 @@ import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome, ReplanOutcome, WorkItem } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
-import type { CoreLoopDeps, CycleResult, LoopStop, TaskResult } from "./types.js";
+import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
@@ -165,7 +165,7 @@ export class CoreLoop {
     // task makes is admitted by the spend cap; a refused call ends that task's
     // attempt and returns the item to Pending: a project refusal has already
     // blocked the project, and a deployment refusal stops the loop here.
-    const settled = await Promise.allSettled(batch.map((task) => processTask(deps, task)));
+    const settled = await deps.taskLanes(batch, (task) => processTask(deps, task));
     const results: TaskResult[] = [];
     let refusedAtDeployment: LoopStop | null = null;
     for (const [i, s] of settled.entries()) {
@@ -235,6 +235,9 @@ export class CoreLoop {
     return stop ? { kind: "stop", stop } : { kind: "ran", outcomes };
   }
 }
+
+/** The policy default: every task of the batch at once, each settled on its own. */
+export const concurrentTaskLanes: TaskLanes = (items, run) => Promise.allSettled(items.map(run));
 
 function stopped(stop: LoopStop): CycleResult {
   return { tasksProcessed: 0, results: [], stop };

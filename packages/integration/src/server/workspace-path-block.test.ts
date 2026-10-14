@@ -19,7 +19,7 @@ import { DevelopmentService } from "@ashara/development";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
+import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
@@ -180,6 +180,7 @@ describe("a project whose workspace path is refused", () => {
       blockReports: { runPending: async () => [] },
       infrastructureProbe: { probe: notExercised("infrastructureProbe") },
       environmentOwner: notExercised("environmentOwner"),
+      taskLanes: concurrentTaskLanes,
     });
 
     const cycle = await loop.runCycle();

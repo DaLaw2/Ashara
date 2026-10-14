@@ -11,13 +11,17 @@ import { SecretStore, generateKeyFileContent, loadMasterKey } from "@ashara/secu
 import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
+import type { ContendedWaitKind } from "@ashara/shared";
+import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
 import type { PodmanEvent } from "./fake-podman.js";
 import { Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, skipMergeRecord } from "./faults.js";
 import type { FaultKind, FaultRecord, InstanceHandle } from "./faults.js";
+import { Interleaver } from "./interleave.js";
+import type { InterleaveEvent } from "./interleave.js";
 import { checkSnapshot, checkTotality, mainFiles, outcomeOf, readSnapshot, sourceOf } from "./invariants.js";
 import type { Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, sample } from "./coverage.js";
@@ -29,10 +33,24 @@ import { StandIns } from "./scripted-models.js";
 import { Tape } from "./tape.js";
 import type { Decision, TapeMode } from "./tape.js";
 
-/** A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one. */
-const MUTATIONS = ["skip-merge-record"] as const;
-/** @testseam simulator.test.ts plants it to prove I7 is not blind */
+/**
+ * A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one.
+ * - skip-merge-record: every merge recorded under a commit main does not hold (I7, records clause);
+ * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause).
+ *
+ * The spend cap's admission queue has no plant: with the run's one project, an admission's last
+ * check (the project's) reads the in-flight estimates and adds its own with no await between, so
+ * the queue's absence admits nothing more (baseline §7.6).
+ */
+const MUTATIONS = ["skip-merge-record", "no-checkout-lock"] as const;
+/** @testseam simulator.test.ts plants each to prove I7 is not blind */
 export type Mutation = (typeof MUTATIONS)[number];
+
+/** The contended wait each mutation skips. */
+const BYPASSED: Readonly<Record<Mutation, readonly ContendedWaitKind[]>> = {
+  "skip-merge-record": [],
+  "no-checkout-lock": ["target-checkout"],
+};
 
 export interface RunOptions {
   readonly seed: number;
@@ -179,6 +197,7 @@ const SIM_ENV = [
   "ASHARA_BUDGET_LIMIT_USD",
   "ASHARA_BUDGET_TOTAL",
   "ASHARA_PROJECT_BUDGET_LIMIT_USD",
+  // Unset for the run: the batch size is production's default (server config.ts), a batch of two.
   "MAX_BATCH_SIZE",
   "ASHARA_CELL_MEMORY",
   "ASHARA_CELL_CPUS",
@@ -191,8 +210,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   process.env["ASHARA_BUDGET_LIMIT_USD"] = String(capUsd);
   delete process.env["ASHARA_BUDGET_TOTAL"];
   delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
-  // One task per cycle: the scheduler does not yet serialise two tasks' seam calls (see the baseline).
-  process.env["MAX_BATCH_SIZE"] = "1";
+  delete process.env["MAX_BATCH_SIZE"];
   // Required configuration since W9; the fake runtime accepts and ignores the caps they become.
   process.env["ASHARA_CELL_MEMORY"] = "4g";
   process.env["ASHARA_CELL_CPUS"] = "4";
@@ -291,25 +309,56 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const started = Date.now();
   const tape = new Tape(options.tape);
   const rates = ADVERSARY[options.profile];
-  const scheduler = new Scheduler(tape, FAULTS[options.profile], options.forcedFaults);
   const clock = new SimClock();
   const universe = drawUniverse(tape);
   const capUsd = tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : DEFAULT_CAP_USD;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
-  const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")} cap=${capUsd}`];
+  const trace: string[] = [`universe ${universe.tasks.map((t) => `${t.ref}=${t.behaviours.join("+")}`).join(" ")}${universe.independent ? " independent" : ""} cap=${capUsd}`];
   const log: string[] = [];
   const violations = new Map<string, Violation>();
   const coverage = emptyCoverage();
+  const report = (violation: Violation): void => {
+    if (!violations.has(violation.key)) violations.set(violation.key, violation);
+  };
   let outcome: Outcome = { kind: "open" };
   let cycles = 0;
   let dispatches = 0;
   let restarts = 0;
 
+  let checkouts = new CheckoutWatch(report);
+  const onInterleave = (event: InterleaveEvent): void => {
+    switch (event.kind) {
+      case "batch":
+        coverage.concurrency.add("batch-of-two");
+        break;
+      case "switch":
+        coverage.concurrency.add("turn-handed-on");
+        trace.push(`turn ${event.from}->${event.to} at ${event.at}`);
+        break;
+      case "contended":
+        coverage.concurrency.add(`contended:${event.wait}`);
+        trace.push(`task ${event.lane} waits on another task (${event.wait})`);
+        break;
+      case "bypassed":
+        trace.push(`mutation: ${event.wait} wait skipped`);
+        break;
+      case "lane-ended":
+        checkouts.taskEnded(event.taskId);
+        break;
+      case "stall":
+        report({ invariant: "I1", step: cycles, statement: `the batch stalled (an in-process wait between its tasks the simulator does not model, or a deadlock): ${event.detail}`, key: "I1:interleave-stall" });
+        break;
+    }
+  };
+  const interleaver = new Interleaver(tape, new Set(options.mutation === undefined ? [] : BYPASSED[options.mutation]), onInterleave);
+  const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
+
   const workdir = await realpath(await mkdtemp(join(tmpdir(), "ashara-sim-")));
   const restoreIds = seededIds(options.seed);
   const restoreConsole = capturedConsole(log);
   const restoreEnv = simulatedEnvironment(workdir, capUsd);
+  const restoreWaits = observeContendedWaits(interleaver.contended);
   let database: RunDatabase | null = null;
   let observer: Database | null = null;
   let instance: Live | null = null;
@@ -339,6 +388,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       observer: observing,
       projectId,
       onModelCall: (call) => trace.push(`model ${call.site} ${call.action}`),
+      laneTask: () => interleaver.currentTask(),
     });
     const baseCell = await loadBaseCell();
     const observe = (event: PodmanEvent): void => {
@@ -392,7 +442,9 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       for (;;) {
         generation += 1;
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map() };
-        const seam = { scheduler, instance: handle, clock, terminateBackend };
+        // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
+        checkouts = new CheckoutWatch(report);
+        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles };
         try {
           const ashara = await composeAshara({
             masterKey,
@@ -402,6 +454,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             processRunner: faultingPodman(seam, podman.runner),
             git: faultingGit(seam, execFileGitRunner),
             clock,
+            taskLanes: interleaver.lanes,
           });
           handle.abort = () => ashara.abort();
           await ashara.startup();
@@ -586,6 +639,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
     if (observer !== null) await observer.$client.end();
     if (database !== null) await database.drop();
+    restoreWaits();
     restoreEnv();
     restoreConsole();
     restoreIds();

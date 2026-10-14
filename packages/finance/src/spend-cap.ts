@@ -41,6 +41,12 @@ interface SpendCapDeps {
     ): Promise<"blocked" | "already-blocked">;
   };
   readonly caps: SpendCaps;
+  /**
+   * What an admission awaits the admissions ahead of it through (policy default: as is). The
+   * composition root passes Ashara's contended-wait seam, so a driver that runs one task at a
+   * time can see a task waiting behind another's admission.
+   */
+  readonly admissionTurn?: (ahead: Promise<unknown>) => Promise<unknown>;
 }
 
 function isPositiveAmount(value: number): boolean {
@@ -97,7 +103,8 @@ export class SpendCap {
    * caller catches the refusal, the project ends blocked.
    */
   admit(call: PendingLlmCall): Promise<void> {
-    const admission = this.admissions.then(() => this.admitNow(call));
+    const ahead = this.deps.admissionTurn?.(this.admissions) ?? this.admissions;
+    const admission = ahead.then(() => this.admitNow(call));
     this.admissions = admission.catch(() => undefined);
     return admission;
   }

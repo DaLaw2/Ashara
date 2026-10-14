@@ -27,9 +27,17 @@ export interface Universe {
   readonly behaviours: readonly string[];
   readonly outOfVision: string;
   readonly tasks: readonly SimTask[];
+  /**
+   * The plan's tasks depend on none of each other, so two implementations can run in one batch and
+   * finalize together (the checkout lock's race); otherwise each depends on the one before.
+   */
+  readonly independent: boolean;
 }
 
-/** 2-4 behaviours, one scope item each, cut into 1-3 vertical tasks in order. */
+/** How often a seed's plan has independent tasks. */
+const INDEPENDENT_PLAN_RATE = 0.5;
+
+/** 2-4 behaviours, one scope item each, cut into 1-3 vertical tasks, in order or independent. */
 export function drawUniverse(tape: Tape): Universe {
   const count = 2 + tape.pick("universe.extra-behaviours", 3);
   const behaviours = Array.from({ length: count }, (_, i) => `b${i + 1}`);
@@ -39,7 +47,7 @@ export function drawUniverse(tape: Tape): Universe {
     const mine = behaviours.filter((_, i) => i % taskCount === t);
     tasks.push({ ref: `t${t + 1}`, behaviours: mine, visionItems: mine.map((b) => `S${behaviours.indexOf(b) + 1}`) });
   }
-  return { behaviours, outOfVision: "x1", tasks };
+  return { behaviours, outOfVision: "x1", tasks, independent: tape.chance("universe.independent-tasks", INDEPENDENT_PLAN_RATE) };
 }
 
 const TASK_MARKER = /\[sim (t\d+)\]/;

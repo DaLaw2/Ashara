@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createPgPool } from "@ashara/db";
 import { execFileGitRunner, spawnProcess } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured, sdkLanguageModels } from "@ashara/llm-gateway";
+import { concurrentTaskLanes } from "@ashara/orchestrator";
 import { systemClock } from "@ashara/shared";
 import { composeAshara } from "./compose.js";
 import type { AsharaInstance } from "./compose.js";
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
       processRunner: spawnProcess,
       git: execFileGitRunner,
       clock: systemClock,
+      taskLanes: concurrentTaskLanes,
     });
   } catch (err) {
     if (err instanceof NoLLMProvidersConfigured) {

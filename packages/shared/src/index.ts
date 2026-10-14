@@ -23,6 +23,9 @@ export { describeErrorChain, serializeError } from "./error-chain.js";
 export type { Clock } from "./clock.js";
 export { systemClock } from "./clock.js";
 
+export type { ContendedWaitKind, ContendedWaitObserver } from "./contended-wait.js";
+export { contendedWait, observeContendedWaits } from "./contended-wait.js";
+
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
 

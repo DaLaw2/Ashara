@@ -23,7 +23,7 @@ import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
-import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
+import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
@@ -126,6 +126,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     blockReports: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
+    taskLanes: concurrentTaskLanes,
     ...parts,
   };
 }

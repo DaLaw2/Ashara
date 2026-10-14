@@ -5,6 +5,8 @@ import type { PoolFactory } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import type { LanguageModelFactory } from "@ashara/llm-gateway";
 import type { Clock } from "@ashara/shared";
+import type { CheckoutWatch } from "./checkout-watch.js";
+import type { Interleaver } from "./interleave.js";
 import type { FaultRates } from "./profile.js";
 import type { Tape } from "./tape.js";
 
@@ -12,7 +14,10 @@ import type { Tape } from "./tape.js";
 export const SEAM_KINDS = ["db", "git", "podman", "model"] as const;
 export type SeamKind = (typeof SEAM_KINDS)[number];
 
-/** The fault catalogue of design §4.9, as injected here (F11 needs a batch of two: not modelled, see the baseline). */
+/**
+ * The fault catalogue of design §4.9, as injected here. F11 (two admissions racing the spend cap)
+ * is no fault kind: it is the batch of two itself, interleaved at seam calls (interleave.ts).
+ */
 const FAULT_KINDS = [
   "crash-before",
   "crash-after",
@@ -116,8 +121,9 @@ function offeredFaults(instance: InstanceHandle, seam: SeamKind, label: string, 
 }
 
 /**
- * Every seam call takes a ticket here (design §4.10). A ticket may carry one fault from the
- * seed's tape while the fault budget lasts; a crash marks the instance dead.
+ * Every seam call takes a ticket here (design §4.10), after its task's turn (Interleaver.turn):
+ * tickets are taken one task at a time, in the order the seed's interleaving gives. A ticket may
+ * carry one fault from the seed's tape while the fault budget lasts; a crash marks the instance dead.
  */
 export class Scheduler {
   private ticket = 0;
@@ -129,6 +135,7 @@ export class Scheduler {
   constructor(
     private readonly tape: Tape,
     private readonly rates: FaultRates,
+    private readonly interleaver: Interleaver,
     forced: ReadonlyMap<number, FaultKind> = new Map(),
   ) {
     this.budgetLeft = rates.budget;
@@ -149,6 +156,7 @@ export class Scheduler {
    * the process faults that take effect now, so no fault is recorded that changed nothing.
    */
   async enter(instance: InstanceHandle, seam: SeamKind, label: string, effective: readonly FaultKind[]): Promise<Fate> {
+    await this.interleaver.turn(`${seam}:${label}`);
     if (instance.dead) throw new SimulatedCrash(instance.name, this.ticket, `${seam} ${label} (after death)`);
     this.ticket += 1;
     const ticket = this.ticket;
@@ -173,6 +181,15 @@ export class Scheduler {
       instance.abort?.();
     }
     return { kind: "run", fault, crashAfter: fault === "crash-after" };
+  }
+
+  /**
+   * After the call ran, before its caller sees the result: the other task may run first, as it
+   * may in production between a query's snapshot and the moment its rows reach the caller (a sum
+   * read before another task's row was written, then that task's in-flight estimate released).
+   */
+  async returned(seam: SeamKind, label: string): Promise<void> {
+    await this.interleaver.turn(`${seam}:${label}:returned`);
   }
 
   /** After the call returned: a crash-after point dies now, its effect on the world kept. */
@@ -219,6 +236,11 @@ interface SeamContext {
   readonly clock: SimClock;
   /** Terminates one backend from the observer's own connection (F3). */
   readonly terminateBackend: (pid: number) => Promise<void>;
+  readonly interleaver: Interleaver;
+  /** Judges each host git call of a batch's tasks before it runs (I7, merge-queue clause). */
+  readonly checkouts: CheckoutWatch;
+  /** The run's current cycle, for a violation's step. */
+  readonly cycle: () => number;
 }
 
 /** A deliberate defect planted in the queries one instance sends (the L3 mutation check). */
@@ -258,6 +280,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
       if (fate.fault === "db-transaction-killed" && pid !== null) await context.terminateBackend(pid);
       const value = await run();
       context.scheduler.leave(context.instance, fate, "db", label);
+      await context.scheduler.returned("db", label);
       return value;
     };
     return new Proxy(pool, {
@@ -272,9 +295,11 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
               throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), { code: "ECONNREFUSED" });
             }
             const client = await target.connect();
+            const handBack = context.interleaver.connectionHeld();
             try {
               context.scheduler.leave(context.instance, fate, "db", "connect");
             } catch (err) {
+              handBack();
               // The process died holding a connection nothing will release: the connection dies with
               // it. Left checked out, it would hold the pool's end (the run's teardown) forever.
               client.release(true);
@@ -294,6 +319,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
               get(inner, innerProperty, innerReceiver) {
                 if (innerProperty === "release") {
                   return (...args: unknown[]) => {
+                    handBack();
                     inner.removeListener("error", onError);
                     context.instance.checkouts.delete(inner);
                     return Reflect.apply(inner.release, inner, args);
@@ -320,7 +346,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
 
 /** The git runner of one instance (S4): git stays real; a fault rejects like execFile on exit 128. */
 export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
-  const guarded = async <T>(args: readonly string[], run: () => Promise<T>): Promise<T> => {
+  const guarded = async <T>(args: readonly string[], cwd: string, run: () => Promise<T>): Promise<T> => {
     // The subcommand alone: the next argument may be a commit, whose id varies from run to run, and
     // the label keys the fault draw (Scheduler.enter), which must be the same for one seed every run.
     const label = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? "git";
@@ -331,13 +357,15 @@ export function faultingGit(context: SeamContext, inner: GitRunner): GitRunner {
         stderr: "fatal: Unable to create 'index.lock': File exists. (simulated)\n",
       });
     }
+    context.checkouts.observe(context.interleaver.currentTask(), args, cwd, context.cycle());
     const value = await run();
     context.scheduler.leave(context.instance, fate, "git", label);
+    await context.scheduler.returned("git", label);
     return value;
   };
   return {
-    text: (invocation) => guarded(invocation.args, () => inner.text(invocation)),
-    bytes: (invocation) => guarded(invocation.args, () => inner.bytes(invocation)),
+    text: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.text(invocation)),
+    bytes: (invocation) => guarded(invocation.args, invocation.cwd, () => inner.bytes(invocation)),
   };
 }
 
@@ -368,6 +396,7 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
     if (fate.fault === "image-build-failed") return failed(1, "Error: building at STEP \"RUN\": exit status 1 (simulated)");
     const value = await inner(request);
     context.scheduler.leave(context.instance, fate, "podman", label);
+    await context.scheduler.returned("podman", label);
     return value;
   };
 }
@@ -385,6 +414,7 @@ export function faultingModels(context: SeamContext, inner: LanguageModelFactory
         if (fate.fault === "clock-jump") context.clock.jump(20 * 60 * 1000);
         const value = await resolved.doGenerate(options);
         context.scheduler.leave(context.instance, fate, "model", model.id);
+        await context.scheduler.returned("model", model.id);
         return value;
       },
     };

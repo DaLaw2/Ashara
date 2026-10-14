@@ -19,7 +19,16 @@ export interface Coverage {
   readonly blockKinds: Set<string>;
   readonly executionStatuses: Set<string>;
   readonly faults: Set<string>;
+  /** What the batch of two reached (CONCURRENCY), recorded by the run as its interleaver reports it. */
+  readonly concurrency: Set<string>;
 }
+
+/**
+ * - batch-of-two: a cycle dispatched two tasks at once;
+ * - turn-handed-on: a task gave the turn to the other at a seam call;
+ * - contended:<wait>: a task waited on the other's checkout lock or spend-cap admission (F11).
+ */
+const CONCURRENCY = ["batch-of-two", "turn-handed-on", "contended:target-checkout", "contended:spend-admission"] as const;
 
 export function emptyCoverage(): Coverage {
   return {
@@ -29,6 +38,7 @@ export function emptyCoverage(): Coverage {
     blockKinds: new Set(),
     executionStatuses: new Set(),
     faults: new Set(),
+    concurrency: new Set(),
   };
 }
 
@@ -39,6 +49,7 @@ const COVERAGE_KEYS = [
   "blockKinds",
   "executionStatuses",
   "faults",
+  "concurrency",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -129,5 +140,6 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("project block kinds", PROJECT_BLOCK_KINDS, coverage.blockKinds),
     split("execution statuses (inferred from their routing)", EXECUTION_STATUSES, coverage.executionStatuses),
     split("faults by seam", faultPairs, coverage.faults),
+    split("batch of two", CONCURRENCY, coverage.concurrency),
   ];
 }

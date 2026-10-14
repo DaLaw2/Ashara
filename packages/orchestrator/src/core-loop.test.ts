@@ -6,7 +6,7 @@ import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps, LoopStop, TaskResult } from "./types.js";
-import { CoreLoop } from "./core-loop.js";
+import { CoreLoop, concurrentTaskLanes } from "./core-loop.js";
 
 type SpendCapPort = CoreLoopDeps["spendCap"];
 
@@ -136,6 +136,7 @@ function buildDeps(
     blockReports: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
+    taskLanes: concurrentTaskLanes,
   };
 }
 

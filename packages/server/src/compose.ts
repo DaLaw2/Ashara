@@ -35,7 +35,7 @@ import {
   EventLogger,
   reconcileOnStartup,
 } from "@ashara/orchestrator";
-import type { CoreLoopDeps, CycleRunner } from "@ashara/orchestrator";
+import type { CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
 import {
   FailureRouter,
   FirstPlanner,
@@ -76,7 +76,7 @@ import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import type { Clock, ProjectId, ProjectContract } from "@ashara/shared";
-import { parseWorkItemId } from "@ashara/shared";
+import { contendedWait, parseWorkItemId } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
@@ -145,6 +145,8 @@ export interface AsharaPorts {
   readonly git: GitRunner;
   /** What attempts' wall clocks and the gateway's pricing instant read. */
   readonly clock: Clock;
+  /** How the tasks of one cycle's batch run together (production: concurrentTaskLanes). */
+  readonly taskLanes: TaskLanes;
 }
 
 /** One composed Ashara process: what its main starts, serves and shuts down. */
@@ -223,7 +225,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   // worst case would cross the project's or the deployment's cap; after it, one
   // llm_calls row. The loop reads the same cap to stop at the deployment's.
   const llmCallRepo = new LlmCallRepository(db);
-  const spendCap = new SpendCap({ ledger: llmCallRepo, projects: projectRepo, caps: config.spendCaps });
+  const spendCap = new SpendCap({
+    ledger: llmCallRepo,
+    projects: projectRepo,
+    caps: config.spendCaps,
+    admissionTurn: (ahead) => contendedWait("spend-admission", ahead),
+  });
   console.log(
     `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls)`,
   );
@@ -431,6 +438,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     blockReports,
     suiteReviewFindings: new SuiteReviewFindingRepository(db),
     infrastructureProbe: substrateProbe(cellSubstrate),
+    taskLanes: ports.taskLanes,
     // The environment task an implementation needs is owned by the role doing environment work.
     async environmentOwner(projectId) {
       const roster = parseStoredRoster(projectId, await latestRosterRoles(db, projectId));

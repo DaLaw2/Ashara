@@ -10,9 +10,10 @@ import type { Mutation, RunResult } from "./run.js";
 /**
  * The fast tier (design §4.13): fixed seeds on today's code, each judged against
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
- * other seed must pass every invariant. The soak tier is `just simulate`.
+ * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
+ * two (production's MAX_BATCH_SIZE default); seed 30 is judged in the checkout-lock test below.
  */
-const FAST_SEEDS = [1, 2, 4, 10, 14, 30, 41] as const;
+const FAST_SEEDS = [1, 2, 4, 10, 14, 41] as const;
 const MAX_CYCLES = 120;
 const SEED_TIMEOUT_MS = 60_000;
 
@@ -64,6 +65,8 @@ describe("lifecycle simulator, fast tier", () => {
       maxCycles: MAX_CYCLES,
       timeoutMs: SEED_TIMEOUT_MS,
     });
+    // The batch of two interleaves on this seed, so the equality covers the interleaving too.
+    expect(first.trace.filter((line) => line.startsWith("turn ")).length).toBeGreaterThan(0);
     expect(second.trace).toEqual(first.trace);
   }, 90_000);
 
@@ -137,6 +140,17 @@ describe("lifecycle simulator, fast tier", () => {
     expect(result.trace).toContain("cycle 1: 1 task(s) [interrupted]");
     expect(result.violations.map((v) => v.key)).toEqual([]);
     expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
+  // ADR-074 d82 W3: seed 30 runs two implementations in one batch, and one finalize waits on the
+  // other's checkout. Skipping that wait lets the second finalize's recovery abort the first's
+  // staged merge, which I7's merge-queue clause names.
+  it("catches two finalizes overlapping on one checkout when the checkout lock is skipped", async () => {
+    const clean = await seeded(30);
+    expect(diffExpected(30, clean.violations), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
+    expect([...clean.coverage.concurrency]).toContain("contended:target-checkout");
+    const planted = await seeded(30, "no-checkout-lock");
+    expect(planted.violations.map((v) => v.key)).toContain("I7:checkout-overlap:merge --abort");
   }, 90_000);
 
   it("catches a merge recorded under a commit main does not hold", async () => {

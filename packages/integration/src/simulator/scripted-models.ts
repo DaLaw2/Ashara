@@ -43,6 +43,8 @@ export interface StandInContext {
   projectId: string | null;
   /** Set by the run once the first merge of an implementation is recorded: a late client change may follow. */
   readonly onModelCall: (call: ModelCallRecord) => void;
+  /** The task whose lane makes the call (Interleaver.currentTask), or null outside a batch's tasks. */
+  readonly laneTask: () => string | null;
 }
 
 /** One model call as the trace records it. */
@@ -138,8 +140,8 @@ function assistantTurns(options: LanguageModelV4CallOptions): number {
 
 /**
  * The stand-in for every model call site (design §4.6). A pure function of the tape, the
- * universe, the call and the database: it reads the task in progress rather than parsing prompts,
- * since the model port sees no call context (projectId, taskId, callSite).
+ * universe, the call and the database: an agent turn reads its task from the lane making the call
+ * rather than parsing prompts, since the model port sees no call context (projectId, taskId, callSite).
  */
 export class StandIns {
   private readonly attempts = new Map<string, AttemptScript>();
@@ -229,7 +231,7 @@ export class StandIns {
         title: taskTitle(task),
         description: `Delivers ${task.behaviours.join(", ")}.`,
         successCriteria: task.behaviours.map((b) => `A user sees ${b}.`),
-        dependsOn: i === 0 ? [] : [universe.tasks[i - 1]?.ref ?? task.ref],
+        dependsOn: i === 0 || universe.independent ? [] : [universe.tasks[i - 1]?.ref ?? task.ref],
         goal: `Deliver ${task.behaviours.join(", ")}`,
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
@@ -276,18 +278,18 @@ export class StandIns {
     return z.array(checkRowSchema).parse(result.rows);
   }
 
+  /** The task of the lane making the call: two of a batch are InProgress at once. */
   private async taskInProgress(): Promise<z.infer<typeof taskRowSchema>> {
     const { observer, projectId } = this.context;
     if (projectId === null) throw new StandInUnanswerable("agent-runner", "no project is on record yet");
+    const taskId = this.context.laneTask();
+    if (taskId === null) throw new StandInUnanswerable("agent-runner", "an agent turn was made outside every task of a batch");
     const result = await observer.execute(sql`
       SELECT id, title, task_spec AS "taskSpec", work_kind AS "workKind", dispatch_count AS "dispatchCount"
-      FROM work_items WHERE project_id = ${projectId} AND level = 'Task' AND status = 'InProgress'`);
-    const rows = z.array(taskRowSchema).parse(result.rows);
-    const [only] = rows;
-    if (rows.length !== 1 || only === undefined) {
-      throw new StandInUnanswerable("agent-runner", `expected exactly one task in progress (batch size 1), found ${rows.length}`);
-    }
-    return only;
+      FROM work_items WHERE id = ${taskId} AND project_id = ${projectId} AND level = 'Task' AND status = 'InProgress'`);
+    const [row] = z.array(taskRowSchema).parse(result.rows);
+    if (row === undefined) throw new StandInUnanswerable("agent-runner", `the lane's task ${taskId} is not an InProgress task of the project`);
+    return row;
   }
 
   private async titleOf(id: string): Promise<string> {

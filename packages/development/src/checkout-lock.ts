@@ -1,6 +1,6 @@
 import { basename, dirname, join, resolve } from "node:path";
 import { realpath } from "node:fs/promises";
-import { describeErrorChain } from "@ashara/shared";
+import { contendedWait, describeErrorChain } from "@ashara/shared";
 
 /** Not even the filesystem root of a path resolves: it names no place a lock or a guard can key on. */
 class TargetPathUncanonical extends Error {
@@ -175,7 +175,7 @@ export async function withTargetCheckout<T>(targetProjectPath: string, holder: s
   };
 
   try {
-    await waitBehind(key, state, previous, holder);
+    await contendedWait("target-checkout", waitBehind(key, state, previous, holder));
   } catch (e) {
     // Passed through, not taken: the next waiter still queues behind the stuck holder.
     const current = state;

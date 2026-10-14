@@ -174,7 +174,19 @@ export interface CoreLoopDeps {
    * why, when the roster names no such role; a roster that cannot be read throws.
    */
   readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
+  /** How a cycle's batch runs: production's concurrentTaskLanes runs every task at once. */
+  readonly taskLanes: TaskLanes;
 }
+
+/**
+ * Runs `run` on every item at once and settles each on its own, in the items' order. The
+ * composition root chooses it, so whatever drives the process can also decide how the tasks of
+ * one batch interleave (the lifecycle simulator serialises them by its seed).
+ */
+export type TaskLanes = <I extends { readonly id: string }, T>(
+  items: readonly I[],
+  run: (item: I) => Promise<T>,
+) => Promise<Array<PromiseSettledResult<T>>>;
 
 /** Who does a project's environment work, as the latest roster says. */
 type EnvironmentOwner = { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };

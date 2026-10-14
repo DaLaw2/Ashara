@@ -96,6 +96,7 @@ function coreLoopDeps(
     blockReports: { runPending: notExercised("blockReports") },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
+    taskLanes: notExercised("taskLanes"),
     ...parts,
   };
 }
