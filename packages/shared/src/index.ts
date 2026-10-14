@@ -3,6 +3,7 @@ export { parseProjectId, parseWorkItemId, InvalidId, createWorkItemId, createSes
 
 export type { WorkItemLevel, WorkItemStatus, CapabilityLevel } from "./enums.js";
 export {
+  CapabilityLevelSchema,
   TERMINAL_SESSION_PHASES,
   parseCapabilityLevel,
   parseWorkItemLevel,

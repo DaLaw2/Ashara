@@ -30,9 +30,11 @@
 # default = "..." }` for a site whose requests legitimately vary in
 # capability across calls. agent-runner is the one such site today: it tags
 # every request "agent-runner" but the per-task capability ranges over
-# Light/Strong/Frontier (planning's inferCapability) -- a flat model here
-# would silently downgrade a Frontier-classified task (design/schema/
-# security/auth/perf) to whatever the flat entry names.
+# Light/Medium/Strong/Frontier: the planner's grade of each task's difficulty
+# (ADR-074 addendum 2 d70), or Frontier when a failed attempt escalates it
+# (server task-capability.ts) -- a flat model here would silently send a
+# Frontier task to whatever the flat entry names. A table maps only the
+# levels it names; every other level takes its "default".
 #
 # A combo with no table below, or an explicitly EMPTY table, is not an error:
 # every site falls through to capability-level logic. A NON-EMPTY table is a
@@ -72,8 +74,13 @@
 # protect the $20 Anthropic credit (E2E budget <= $1 total). The
 # judge tier that used to hold the third Anthropic slot was removed in
 # ADR-034, taking claude-opus-4-8 out of routing with it.
-# Frontier-classified agent tasks stay on DeepSeek's own Frontier model
-# (v4-pro) rather than downgrading to Flash or escaping to Anthropic.
+# Frontier agent tasks (graded so by the planner, or escalated after a failed
+# attempt) stay on DeepSeek's own Frontier model (v4-pro) rather than
+# downgrading to Flash or escaping to Anthropic. Every other grade takes the
+# default, so in this combo a planner's grade below Frontier picks the same
+# model as Strong: grading changes no agent-runner model here until an owner
+# maps Light or Medium (whether a Flash-class model can serve them is
+# unverified; see Runs 30-32 below). The "anthropic" table above is the same.
 # Agent default upgraded to V4 Pro: deepseek-v4-flash, since retired and aliased
 # to V4.1-Flash, could not produce compiling TypeScript+Hono code (Runs 30-32:
 # every attempt failed tsc baseline). Prices are model_configs' (migration 021):

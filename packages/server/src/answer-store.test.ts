@@ -103,6 +103,7 @@ const TASKS = {
     {
       ref: "t1", title: "Create the class list", description: "List classes.", dependsOn: [],
       endState: "Classes are listed", scope: "class listing", deliverables: ["class list"], visionItems: ["S1"],
+      capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
 };

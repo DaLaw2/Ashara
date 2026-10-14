@@ -986,7 +986,9 @@ export class DevelopmentService {
       event: "task_started",
       taskId: task.id,
       goal: task.taskSpec?.goal ?? task.title,
-      model: task.taskSpec?.capability ?? "Strong",
+      // The stored grade as it is (ADR-074 addendum 2 d70), never a default: staffing refuses a task
+      // without one, and the model it is staffed with is emitted when its attempt starts.
+      capability: task.taskSpec?.capability,
     });
 
     // A review of the plan's suites reads stored checks and the vision in one structured call: no

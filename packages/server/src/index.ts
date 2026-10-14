@@ -38,9 +38,6 @@ import {
   FailureRouter,
   FirstPlanner,
   Replanner,
-  classifyFailure,
-  shouldEscalate,
-  tryParseEnvelope,
 } from "@ashara/planning";
 import { DevelopmentService, SuiteReviewer, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
@@ -69,7 +66,7 @@ import {
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
-import type { CapabilityLevel, ProjectId, ProjectContract, StoredBlockedReason } from "@ashara/shared";
+import type { ProjectId, ProjectContract } from "@ashara/shared";
 import { parseWorkItemId } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -95,6 +92,7 @@ import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-stor
 import { createFatalExit, reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
 import { createAgentStaffing } from "./staffing.js";
+import { determineCapability } from "./task-capability.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -269,9 +267,10 @@ async function main(): Promise<void> {
     latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
     latestRosterRevision: (projectId) => latestRosterRevision(db, projectId),
     resolveModel(task) {
-      const capability = determineCapability(task.dispatchCount, task.blockedReason);
-      if (capability === "Frontier") {
-        console.log(`[${task.id}] model escalated to Frontier (attempt ${task.attempt})`);
+      const capability = determineCapability(task);
+      const graded = task.taskSpec?.capability;
+      if (capability !== graded) {
+        console.log(`[${task.id}] model escalated from graded ${graded ?? "(none)"} to ${capability} (attempt ${task.attempt})`);
       }
       return llmGateway.resolveModel(capability, "agent-runner");
     },
@@ -544,32 +543,6 @@ function driftFixes(err: MigrationDriftError): string {
     .join("; ");
 }
 
-
-// open-by-design: generic type guard — narrows unknown to Record as a stepping stone
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function extractPriorEnvelope(blockedReason: StoredBlockedReason | undefined): ReturnType<typeof tryParseEnvelope> {
-  if (!blockedReason) return null;
-  // Only the "replan" variant carries replanContext.
-  if (blockedReason.source !== "replan") return null;
-  const raw = blockedReason.replanContext.raw;
-  if (!isRecord(raw)) return null;
-  return tryParseEnvelope(raw);
-}
-
-function determineCapability(dispatchCount: number, blockedReason: StoredBlockedReason | undefined): CapabilityLevel {
-  if (dispatchCount === 0) return "Strong";
-
-  const envelope = extractPriorEnvelope(blockedReason);
-  if (!envelope) return "Strong";
-
-  const category = classifyFailure(envelope);
-  if (shouldEscalate(category, dispatchCount >= 2 ? [category] : [])) return "Frontier";
-
-  return "Strong";
-}
 
 const fatalExit = createFatalExit({
   deadlineMs: FATAL_SHUTDOWN_DEADLINE_MS,

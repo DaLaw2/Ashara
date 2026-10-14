@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { ProjectKnowledge } from "@ashara/shared";
+import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
+import { CapabilityLevelSchema } from "@ashara/shared";
 
 export interface WorkItemSpec {
     readonly id: string;
@@ -18,7 +19,11 @@ interface TaskSpecCore {
     readonly scope: string;
     /** Observable outcomes, never file paths: the stack is not chosen until Sprint 0. */
     readonly deliverables: string[];
-    readonly capability: import("@ashara/shared").CapabilityLevel;
+    /**
+     * The level the task's agent is dispatched at (ADR-074 addendum 2 d70): the planner's grade of a
+     * decomposed task, a fixed level for every task the plan adds itself.
+     */
+    readonly capability: CapabilityLevel;
 }
 
 /**
@@ -30,7 +35,8 @@ interface Traced {
 }
 
 /** A decomposed task's specification: what the client asked for that it delivers, and how it is seen done. */
-export type DecomposedTaskSpec = TaskSpecCore & Traced & { readonly origin: "decomposition" };
+export type DecomposedTaskSpec = TaskSpecCore &
+    Traced & { readonly origin: "decomposition"; readonly capabilityReason: string };
 
 /**
  * A planned task's specification. It carries no checks: the decomposer does not
@@ -182,6 +188,10 @@ export const TaskOutputSchema = z.object({
         // The ids (or exact texts) of the vision items the task delivers (ADR-074 addendum 2 d71 d).
         // Required: an empty list, or an entry naming no item, is the decomposer's semantic rejection.
         visionItems: z.array(z.string().trim().min(1)),
+        // The planner's grade of the work's difficulty (ADR-074 addendum 2 d70) and why. Required: a
+        // task without a grade is a schema failure the ladder re-asks, never a default level.
+        capability: CapabilityLevelSchema,
+        capabilityReason: z.string().trim().min(1),
     })).min(1),
 });
 

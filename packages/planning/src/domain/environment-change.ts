@@ -66,6 +66,9 @@ function environmentTaskSpec(
       `Its diff of the recipe (${request.paths.join(", ")}):\n${request.diff.trim() === "" ? "(empty)" : request.diff}`,
     ].join("\n\n"),
     deliverables: [`the recipe changed as the request needs, with build_environment reporting PASSED`],
+    // A fixed level, Sprint 0's (ADR-074 addendum 2 d70): no planner sees this task, and changing the
+    // recipe every later task builds on is environment work of the same kind.
+    capability: "Strong",
     origin: "environment-change",
     checkedBy: "substrate",
     product,

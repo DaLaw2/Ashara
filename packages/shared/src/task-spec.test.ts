@@ -76,10 +76,12 @@ describe("parseStoredTaskSpec", () => {
     expect((result as Record<string, unknown>)["customTag"]).toBeUndefined();
   });
 
-  test("capability accepts an unrecognised string (open domain, not an enum)", () => {
-    const result = parseStoredTaskSpec({ capability: "UltraFrontier9000" });
-    expect(result).toBeDefined();
-    expect(result!.capability).toBe("UltraFrontier9000");
+  test("a capability that is no level is corrupt: dispatch never routes on a guessed one", () => {
+    expect(() => parseStoredTaskSpec({ capability: "UltraFrontier9000" })).toThrow(TaskSpecCorrupt);
+    expect(parseStoredTaskSpec({ capability: "Medium", capabilityReason: "one module, clear spec" })).toMatchObject({
+      capability: "Medium",
+      capabilityReason: "one module, clear spec",
+    });
   });
 });
 

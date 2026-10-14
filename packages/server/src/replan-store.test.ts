@@ -105,6 +105,7 @@ const FIRST_TASKS = {
     {
       ref: "t1", title: "Open harbour studio bookings", description: "Harbour bookings.", dependsOn: [],
       endState: "Harbour classes can be booked", scope: "harbour bookings", deliverables: ["harbour booking"], visionItems: ["S1"],
+      capability: "Medium", capabilityReason: "graded for the test",
     },
   ],
 };
@@ -113,6 +114,7 @@ const REVISED_TASKS = {
     {
       ref: "t1", title: "Open hill studio bookings", description: "Hill bookings.", dependsOn: [],
       endState: "Hill classes can be booked", scope: "hill bookings", deliverables: ["hill booking"], visionItems: ["S1"],
+      capability: "Light", capabilityReason: "graded for the test",
     },
   ],
 };

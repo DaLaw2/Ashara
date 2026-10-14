@@ -1,8 +1,13 @@
+import { z } from "zod";
+
 export type WorkItemLevel = "Epic" | "Task";
 
 export type WorkItemStatus = "Pending" | "InProgress" | "Completed" | "Blocked" | "Failed" | "Abandoned";
 
 export type CapabilityLevel = "Frontier" | "Strong" | "Medium" | "Light";
+
+/** A capability level read from outside the process: a model's answer or a stored row. */
+export const CapabilityLevelSchema = z.enum(["Frontier", "Strong", "Medium", "Light"]);
 
 /**
  * The phases a dev_sessions row can hold. Only these three are ever written, and

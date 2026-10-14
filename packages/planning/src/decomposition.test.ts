@@ -1,10 +1,12 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
-import type { StructuredValidation } from "@ashara/llm-gateway";
+import { SchemaValidationError, StructuredOutputExhausted } from "@ashara/llm-gateway";
+import type { StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
 import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";
 import type { DecompositionLLM } from "./decomposition.js";
+import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 const INPUT: DecompositionInput = {
     epicTitle: "Studio bookings",
@@ -28,6 +30,8 @@ function task(ref: string, extra: Record<string, unknown> = {}): Record<string, 
         scope: `the ${ref} module`,
         deliverables: [`${ref} source`],
         visionItems: ["S1"],
+        capability: "Medium",
+        capabilityReason: `${ref} is one well-specified behavior`,
         ...extra,
     };
 }
@@ -337,5 +341,74 @@ describe("DecompositionEngine", () => {
         const waiting = result.dependencyEdges.filter((e) => e.to === review?.id).map((e) => e.from);
         expect(waiting.sort()).toEqual(result.tasks.filter((t) => t.taskSpec.origin === "decomposition").map((t) => t.id).sort());
         expect(review?.taskSpec).toMatchObject({ visionItems: INPUT.visionItems.map((item) => item.text) });
+    });
+
+    // ADR-074 addendum 2 d70: the planner grades each task; the plan's own tasks keep a fixed level.
+    test("each decomposed task keeps its grade and reason; checks never fall below Strong; the plan's own tasks are Strong", async () => {
+        const llm = scriptedLlm(
+            { nodes: [], edges: [] },
+            {
+                tasks: [
+                    task("t1", { capability: "Light", capabilityReason: "a fully specified one-part change" }),
+                    task("t2", { capability: "Frontier", capabilityReason: "a novel design cutting across the product" }),
+                ],
+            },
+            seen,
+        );
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const byTitle = new Map(result.tasks.map((t) => [t.title, t.taskSpec]));
+        expect(byTitle.get("Task t1")).toMatchObject({ capability: "Light", capabilityReason: "a fully specified one-part change" });
+        expect(byTitle.get("Task t2")).toMatchObject({ capability: "Frontier" });
+        expect(byTitle.get('Write the checks for "Task t1"')?.capability).toBe("Strong");
+        expect(byTitle.get('Write the checks for "Task t2"')?.capability).toBe("Frontier");
+        for (const origin of ["sprint0", "product-scaffold", "review"]) {
+            expect(result.tasks.find((t) => t.taskSpec.origin === origin)?.taskSpec.capability, origin).toBe("Strong");
+        }
+        expect(seen.prompts[1]).toContain('Grade every task\'s difficulty in "capability", one of Light, Medium, Strong, Frontier');
+    });
+
+    test.each([
+        ["no grade", { capability: undefined }],
+        ["a grade that is no level", { capability: "Expert" }],
+        ["no reason", { capabilityReason: "" }],
+    ])("a task with %s is re-asked through the ladder with the schema's complaint", async (_label, broken) => {
+        const answers = [{ tasks: [task("t1", broken)] }, { tasks: [task("t1", { capability: "Strong" })] }];
+        const taskPrompts: string[] = [];
+        const provider: StructuredProvider = {
+            async generateStructured(request) {
+                if (request.prompt.includes("structured knowledge graph")) {
+                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake" };
+                }
+                taskPrompts.push(request.prompt);
+                const parsed = request.schema.safeParse(answers[taskPrompts.length - 1]);
+                if (!parsed.success) {
+                    throw new SchemaValidationError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`), "fake");
+                }
+                return { data: parsed.data, model: "fake" };
+            },
+        };
+        const result = await new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT);
+
+        expect(taskPrompts).toHaveLength(2);
+        expect(taskPrompts[1]).toContain("Your previous response was REJECTED");
+        expect(taskPrompts[1]).toMatch(/tasks\.0\.capability/);
+        expect(result.tasks.find((t) => t.taskSpec.origin === "decomposition")?.taskSpec.capability).toBe("Strong");
+    });
+
+    test("a grade the model never gives exhausts the ladder: no plan is written on an assumed level", async () => {
+        const provider: StructuredProvider = {
+            async generateStructured(request) {
+                if (request.prompt.includes("structured knowledge graph")) {
+                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake" };
+                }
+                const parsed = request.schema.safeParse({ tasks: [task("t1", { capability: undefined })] });
+                if (parsed.success) throw new Error("the schema accepted a task without a grade");
+                throw new SchemaValidationError(parsed.error.issues.map((i) => i.message), "fake");
+            },
+        };
+        await expect(
+            new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT),
+        ).rejects.toBeInstanceOf(StructuredOutputExhausted);
     });
 });

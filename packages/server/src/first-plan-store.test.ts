@@ -93,10 +93,12 @@ const TASKS = {
     {
       ref: "t1", title: CLASS_LIST, description: "List classes.", dependsOn: [],
       endState: "Both studios' classes are listed", scope: "class listing", deliverables: ["class list"], visionItems: ["S1"],
+      capability: "Light", capabilityReason: "graded for the test",
     },
     {
       ref: "t2", title: BOOKING_FORM, description: "Book a seat.", dependsOn: ["t1"],
       endState: "A member books a seat", scope: "booking", deliverables: ["booking form"], visionItems: ["S1"],
+      capability: "Frontier", capabilityReason: "graded for the test",
     },
   ],
 };
@@ -453,6 +455,12 @@ describe("first plan", () => {
       ].sort(),
     );
     expect(rows.every((r) => !("priorWorkPointers" in r.taskSpec))).toBe(true);
+    // ADR-074 addendum 2 d70: the planner's grade and reason are stored; dispatch reads the grade.
+    const graded = new Map(rows.map((r) => [r.title, r.taskSpec]));
+    expect(graded.get(CLASS_LIST)).toMatchObject({ capability: "Light", capabilityReason: "graded for the test" });
+    expect(graded.get(BOOKING_FORM)).toMatchObject({ capability: "Frontier" });
+    expect(graded.get(checksOf(BOOKING_FORM))?.["capability"]).toBe("Frontier");
+    expect(graded.get(SPRINT0_TITLE)?.["capability"]).toBe("Strong");
   });
 
   test("each task is owned by the role holding the capability its kind of work needs", async () => {

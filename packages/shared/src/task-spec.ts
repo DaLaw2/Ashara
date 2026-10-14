@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CapabilityLevelSchema } from "./enums.js";
 
 /**
  * Published Language: the persisted task specification stored in the jsonb
@@ -14,8 +15,12 @@ const storedTaskSpecSchema = z.object({
   scope: z.string().optional(),
   deliverables: z.array(z.string()).optional(),
 
-  // Decomposition metadata
-  capability: z.string().optional(),
+  // The capability level the task's agent is dispatched at (ADR-074 addendum 2 d70): graded by the
+  // planner for a decomposed task, a fixed planner policy for the tasks the plan adds itself. Dispatch
+  // refuses a task without one (TaskCapabilityUngraded); absent only on rows written before it.
+  capability: CapabilityLevelSchema.optional(),
+  // Why the planner graded the task at that level, in its own words; absent on a fixed-level task.
+  capabilityReason: z.string().min(1).optional(),
   // Which producer wrote the task: the decomposition of the client's goal, or the
   // Sprint 0 task decomposition adds to every plan, in which the environment role
   // defines the project environment (story s-platform-role-m1; migration 033

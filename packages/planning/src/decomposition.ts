@@ -1,5 +1,5 @@
 import { z, type ZodType } from "zod";
-import type { ProjectKnowledge } from "@ashara/shared";
+import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
 import { ProjectKnowledgeSchema } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
@@ -218,7 +218,7 @@ export class DecompositionEngine {
                     "the recipe files environment/environment.toml names",
                     "a one-paragraph statement of the stack chosen and why, given as finish's statement",
                 ],
-                capability: "Strong",
+                capability: PLANNER_SET_LEVEL,
                 origin: "sprint0",
                 checkedBy: "substrate",
             },
@@ -307,7 +307,8 @@ export class DecompositionEngine {
                 endState: raw.endState,
                 scope: raw.scope,
                 deliverables: raw.deliverables,
-                capability: "Strong",
+                capability: raw.capability,
+                capabilityReason: raw.capabilityReason,
                 origin: "decomposition" as const,
                 visionItems: tracedTexts,
             },
@@ -420,7 +421,7 @@ export class DecompositionEngine {
         visionItems: readonly VisionItem[],
     ): string {
         const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
-        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "visionItems": ["S1"]}]}';
+        const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "successCriteria": ["..."], "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": ["..."], "visionItems": ["S1"], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [
             `${instruction}.`,
@@ -476,6 +477,7 @@ export class DecompositionEngine {
                 ? `- The project environment, including its technology choices, is set up once by a separate first task before these, outside this decomposition. Plan only the product's behavior here.`
                 : `- The project environment, including its technology choices, is already set up and stays as it is. Plan only the product's behavior here.`,
             `- Each task must be a complete vertical slice: build the behavior AND make it reachable by the product's users in the same task. Do not create a separate "wiring" or "integration" task. Example: "${examples.verticalSliceExample}"`,
+            ...CAPABILITY_GRADING,
         );
 
         lines.push(
@@ -509,6 +511,38 @@ const DECOMPOSITION_EXAMPLES: ContextExamples = {
     scopeExample: '"user registration and sign-in"',
     verticalSliceExample: "Build the registration behavior and make it reachable by visitors, end to end.",
 };
+
+/**
+ * How the planner grades a task (ADR-074 addendum 2 d70): by the difficulty of the work alone, never
+ * by its language, stack or kind of product, since the same grade must mean the same thing for every
+ * project. The grade picks the cheapest model at or above it; the escalation on failed attempts
+ * stays the safety net for a task graded too low.
+ */
+const CAPABILITY_GRADING: readonly string[] = [
+    `- Grade every task's difficulty in "capability", one of Light, Medium, Strong, Frontier, and say why in one sentence in "capabilityReason". Judge the work, not its technology:`,
+    `  - Light: a small, fully specified change with one obvious way to do it, confined to one part of the product.`,
+    `  - Medium: a well-specified behavior within one part of the product, with a few design choices that its success criteria settle.`,
+    `  - Strong: a behavior whose design must be worked out, that spans several parts of the product, or whose requirements leave real ambiguity to resolve.`,
+    `  - Frontier: a broad or novel design problem, a change cutting across most of the product, or one where a subtle mistake is likely and costly.`,
+    `- Grade honestly rather than high: a task that turns out harder than graded is retried at a higher level, while a task graded too high spends more on every attempt.`,
+];
+
+/**
+ * The level of every task the plan adds itself (Sprint 0, the product scaffold, the suite review):
+ * a planner policy, not a grade (ADR-074 addendum 2 d70). Sprint 0 chooses the stack for the whole
+ * product and the scaffold lays out its structure, both before any behaviour exists to judge
+ * difficulty by; the review's own call routes at its own level, so this level only labels it.
+ */
+const PLANNER_SET_LEVEL: CapabilityLevel = "Strong";
+
+/**
+ * A check task's level (ADR-074 addendum 2 d70): its checks are the verdict on the task they decide,
+ * so they are written at no lower level than that task's grade, and never below Strong, since a weak
+ * suite passes weak work whatever the implementation's level.
+ */
+function checkLevelFor(decided: CapabilityLevel): CapabilityLevel {
+    return decided === "Frontier" ? "Frontier" : "Strong";
+}
 
 const SPRINT0_TITLE = "Define and commit the project environment";
 
@@ -568,7 +602,7 @@ function addProductScaffold(
                 "the product's skeleton, on which the environment's build and test commands pass",
                 "a finish summary naming the entry point and how the product is run",
             ],
-            capability: "Strong",
+            capability: PLANNER_SET_LEVEL,
             origin: "product-scaffold",
             checkedBy: "substrate",
             visionItems,
@@ -625,7 +659,7 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
                 `checks of "${task.title}", each defined with define_check as a command the project environment can run`,
                 "the files those checks need",
             ],
-            capability: "Strong",
+            capability: checkLevelFor(task.taskSpec.capability),
             origin: "check",
             checksFor: task.id,
             visionItems: task.taskSpec.visionItems,
@@ -669,7 +703,7 @@ function reviewTaskFor(
             endState: successCriteria.join("; "),
             scope: "every check of this plan revision",
             deliverables: ["a structured review naming each problem, the check tasks involved and the evidence, or none"],
-            capability: "Strong",
+            capability: PLANNER_SET_LEVEL,
             origin: "review",
             visionItems: visionItems.map((item) => item.text),
         },
