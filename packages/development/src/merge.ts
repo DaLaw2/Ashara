@@ -9,6 +9,11 @@ function stderrOf(e: unknown): string {
   return typeof e === "object" && e !== null && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
 }
 
+/** execFile's rejection carries the child's exit status as a number `code`; a spawn failure's is a string. */
+function exitCodeOf(e: unknown): number | null {
+  return typeof e === "object" && e !== null && "code" in e && typeof e.code === "number" ? e.code : null;
+}
+
 export type MergeResult =
   | { readonly status: "clean" }
   | { readonly status: "conflict"; readonly files: string[] }
@@ -160,15 +165,30 @@ export async function abortMerge(targetPath: string): Promise<void> {
   await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
 }
 
+/**
+ * Whether the checkout holds a staged merge (MERGE_HEAD). Asked of git rather than of the
+ * filesystem: Z0 reads a target by path only through tree-read.ts. `rev-parse -q --verify` exits 1
+ * with no output for a missing ref; any other failure is no answer and throws.
+ */
+export async function mergeInProgress(targetPath: string): Promise<boolean> {
+  try {
+    await runHostGit(targetRepo(targetPath), ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+    return true;
+  } catch (e) {
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
+    throw e;
+  }
+}
+
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
 export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
-  // Asked of git rather than of the filesystem: Z0 reads a target by path only through tree-read.ts.
-  const mergeHeadExists = await runHostGit(targetRepo(targetPath), ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
-    () => true,
-    () => false,
-  );
-  if (mergeHeadExists) {
-    await runHostGit(targetRepo(targetPath), ["merge", "--abort"]).catch(() => {});
+  if (await mergeInProgress(targetPath)) {
+    try {
+      await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
+    } catch (e) {
+      // Not the verdict: finalize resets the checkout next and refuses to merge while a merge is still staged.
+      console.warn(`[recoverOrphanedMerge] git merge --abort failed in ${targetPath}: ${describeErrorChain(e)}`);
+    }
   }
   try {
     const { stdout } = await runHostGit(targetRepo(targetPath), ["symbolic-ref", "--short", "HEAD"]);

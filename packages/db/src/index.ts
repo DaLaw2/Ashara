@@ -3,6 +3,7 @@ export type { DbTransaction, PoolFactory } from "./connection.js";
 
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
+export { claimTargetCheckouts } from "./target-claim.js";
 
 export { WorkItemRepository } from "./repositories/work-item.js";
 export { DevSessionRepository } from "./repositories/dev-session.js";

@@ -70,6 +70,13 @@ export interface EnvironmentBuildRequest {
   readonly definition: EnvironmentDefinition;
 }
 
+/**
+ * Wall clock of one `podman build` of an environment version (build_environment, the Sprint 0
+ * gate, a merge's rebuild); the composition root passes it as `timeoutMs`, and a holder of a target
+ * checkout bounds a rebuild by it.
+ */
+export const ENVIRONMENT_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+
 interface EnvironmentBuildDeps {
   readonly substrate: PodmanSubstrate;
   readonly recorder: EnvironmentBuildRecorder;

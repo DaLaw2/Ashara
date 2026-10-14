@@ -17,6 +17,26 @@ export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number];
  */
 export const PROJECT_STATUSES = ["active", "blocked", "stopped"] as const;
 
+/**
+ * Every typed end a Workplace attempt can record on its dev_sessions row: the Outcome kind, with a
+ * finished attempt's status. The `attempt_terminal` CHECK (migrations/046_dev_session_attempt_evidence.sql)
+ * admits exactly these; db's lifecycle-lists.test.ts compares the two.
+ */
+export const ATTEMPT_TERMINALS = [
+  "finished:done",
+  "finished:blocked",
+  "disputed",
+  "model_stopped_without_finish",
+  "turn_cap",
+  "wall_clock",
+  "transport_exhausted",
+  "refused",
+  "environment_failure",
+  "cancelled",
+] as const;
+
+export type AttemptTerminal = (typeof ATTEMPT_TERMINALS)[number];
+
 export type CapabilityLevel = "Frontier" | "Strong" | "Medium" | "Light";
 
 /** A capability level read from outside the process: a model's answer or a stored row. */

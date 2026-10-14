@@ -3,13 +3,13 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, vi } from "vitest";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { TaskDescriptor } from "../execution-service.js";
-import { withTargetCheckout } from "../checkout-lock.js";
+import { CheckoutHolderOverran, withTargetCheckout } from "../checkout-lock.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
 import { ensureTargetGitInit } from "../workspace.js";
-import { finalizeSuccess } from "./finalize.js";
+import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 
 // ---------------------------------------------------------------------------
@@ -145,8 +145,98 @@ describe("finalize serialises per target checkout", () => {
 
   test("a holder that throws releases the checkout for the next", async () => {
     const target = await makeDir("ashara-finalize-throw-");
-    const thrown = await withTargetCheckout(target, () => Promise.reject(new Error("holder failed"))).catch((e: unknown) => e);
+    const thrown = await withTargetCheckout(target, "thrower", () => Promise.reject(new Error("holder failed"))).catch((e: unknown) => e);
     expect(thrown).toBeInstanceOf(Error);
-    expect(await withTargetCheckout(target, () => Promise.resolve("next"))).toBe("next");
+    expect(await withTargetCheckout(target, "next", () => Promise.resolve("next"))).toBe("next");
+  });
+
+  test("a waiter fails naming the holder once the holder outlasts its declared bound; the stuck checkout is never taken", async () => {
+    const target = await makeDir("ashara-finalize-stuck-");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      let releaseStuck: () => void = () => {};
+      let extended: () => void = () => {};
+      const leaseExtended = new Promise<void>((done) => {
+        extended = done;
+      });
+      const stuck = withTargetCheckout(target, "stuck holder", async (lease) => {
+        lease.extend(60_000, "a cell phase");
+        extended();
+        await new Promise<void>((done) => {
+          releaseStuck = done;
+        });
+      });
+      await leaseExtended;
+      let waiterSettled = false;
+      const waiter = withTargetCheckout(target, "waiter", () => Promise.resolve("ran")).catch((e: unknown) => e);
+      void waiter.then(() => {
+        waiterSettled = true;
+      });
+      const third = withTargetCheckout(target, "third", () => Promise.resolve("third ran")).catch((e: unknown) => e);
+
+      // Past the host-side allowance alone, but inside the extended bound: still waiting.
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 30_000);
+      expect(waiterSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      const failed = await waiter;
+      expect(failed).toBeInstanceOf(CheckoutHolderOverran);
+      if (!(failed instanceof CheckoutHolderOverran)) return;
+      expect(failed).toMatchObject({ holder: "stuck holder", waiter: "waiter", boundMs: 5 * 60 * 1000 + 60_000 });
+      expect(failed.message).toMatch(/a cell phase 60000 ms/);
+
+      // The third arrival waits behind the stuck holder too, never behind the waiter that gave up.
+      expect(await third).toMatchObject({ name: "CheckoutHolderOverran", holder: "stuck holder", waiter: "third" });
+      releaseStuck();
+      await stuck;
+      expect(await withTargetCheckout(target, "after", () => Promise.resolve("after ran"))).toBe("after ran");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a tentative merge that cannot be undone", () => {
+  test("is a typed infrastructure fault, and no later finalize merges on the checkout until it is restored", async () => {
+    const [a, b] = [task(), task()];
+    const target = await targetWithBranches([a, b]);
+    const lock = join(target, ".git", "index.lock");
+
+    // The check fails, and git's index lock then refuses both the abort and the reset to HEAD.
+    const first = await finalizeSuccess(
+      deps(async () => {
+        await writeFile(lock, "");
+        return { passed: false, details: "check failed" };
+      }),
+      a,
+      target,
+      1,
+    );
+    expect(first.success).toBe(false);
+    if (first.success) return;
+    expect(first.infrastructureFault).toBeInstanceOf(VerificationInfrastructureFault);
+    expect(first.infrastructureFault?.message).toMatch(/could not be aborted after postMergeTaskChecks.*no merge runs on this checkout until it is restored/s);
+    expect(first.errorLayer.operation).toBe("postMergeCheckRun");
+
+    let verified = false;
+    const blocked = await finalizeSuccess(
+      deps(async () => {
+        verified = true;
+        return { passed: true, details: "ok" };
+      }),
+      b,
+      target,
+      1,
+    );
+    expect(verified).toBe(false);
+    expect(blocked.success).toBe(false);
+    if (blocked.success) return;
+    expect(blocked.infrastructureFault?.step).toBe("restoring the target checkout to HEAD before the merge");
+
+    await rm(lock);
+    const restored = await finalizeSuccess(deps(async () => ({ passed: true, details: "ok" })), b, target, 1);
+    if (!restored.success) throw new Error(`the finalize after the restore failed: ${JSON.stringify(restored)}`);
+    expect(await git(target, "ls-tree", "--name-only", "main")).toBe("file-1.txt");
+    expect(await hasMergeHead(target)).toBe(false);
   });
 });

@@ -1,8 +1,9 @@
 export type { ProjectId, WorkItemId } from "./ids.js";
 export { parseProjectId, parseWorkItemId, InvalidId, createWorkItemId, createSessionId } from "./ids.js";
 
-export type { WorkItemLevel, WorkItemStatus, CapabilityLevel } from "./enums.js";
+export type { AttemptTerminal, WorkItemLevel, WorkItemStatus, CapabilityLevel } from "./enums.js";
 export {
+  ATTEMPT_TERMINALS,
   CapabilityLevelSchema,
   TERMINAL_SESSION_PHASES,
   parseCapabilityLevel,

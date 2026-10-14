@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
+import { ATTEMPT_TERMINALS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
 import { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
 
@@ -26,6 +26,7 @@ describe("lifecycle lists match the schema", () => {
     ["work_items", "work_items_status_check", WORK_ITEM_STATUSES],
     ["projects", "projects_status_known", PROJECT_STATUSES],
     ["project_blocks", "project_blocks_kind_check", PROJECT_BLOCK_KINDS],
+    ["dev_sessions", "dev_sessions_attempt_terminal_check", ATTEMPT_TERMINALS],
   ])("%s %s", async (table, constraint, list) => {
     expect([...(await checkedValues(table, constraint))].sort()).toEqual([...list].sort());
   });

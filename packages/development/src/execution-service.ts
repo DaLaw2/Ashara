@@ -3,10 +3,12 @@ import { join } from "node:path";
 import type { BaseCellReference, BuiltEnvironment, Cell, CellSpec, EnvironmentDefinition, SubstrateInfo } from "@ashara/execution-infra";
 import {
   CellTeardownFailed,
+  ENVIRONMENT_BUILD_TIMEOUT_MS,
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
   SubstrateUnavailable,
+  cellRunBoundMs,
   createCellBackend,
   buildContextPaths,
   environmentVersion,
@@ -47,6 +49,7 @@ import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
+import type { CheckoutLease } from "./checkout-lock.js";
 import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
@@ -1759,7 +1762,7 @@ export class DevelopmentService {
       finalizeDeps = {
         eventSink,
         postMergeOperation: "postMergeVerify",
-        postMergeVerify: (path) => this.postMergeEnvironmentTest(d, path, gate.tested),
+        postMergeVerify: (path, lease) => this.postMergeEnvironmentTest(d, path, gate.tested, lease),
       };
     } else if (d.work.kind === "scaffold") {
       // No gate ran the scaffold's build and test before its merge: their verdict there is its
@@ -1767,14 +1770,14 @@ export class DevelopmentService {
       finalizeDeps = {
         eventSink,
         postMergeOperation: "postMergeScaffold",
-        postMergeVerify: (path) => this.postMergeScaffold(d, path),
+        postMergeVerify: (path, lease) => this.postMergeScaffold(d, path, lease),
       };
     } else {
       const { stored } = d.work;
       finalizeDeps = {
         eventSink,
         postMergeOperation: "postMergeTaskChecks",
-        postMergeVerify: (path) => this.postMergeStoredChecks(d, path, stored),
+        postMergeVerify: (path, lease) => this.postMergeStoredChecks(d, path, stored, lease),
       };
     }
 
@@ -2276,15 +2279,17 @@ export class DevelopmentService {
    * them). Any other environment change lands on a product: after the probe, the product's `build`
    * then `test` run on the merge from the same image and must leave the checkout clean.
    */
-  private async postMergeEnvironmentTest(d: Dispatch, targetProjectPath: string, tested: TestedEnvironment): Promise<PostMergeVerdict> {
+  private async postMergeEnvironmentTest(d: Dispatch, targetProjectPath: string, tested: TestedEnvironment, lease: CheckoutLease): Promise<PostMergeVerdict> {
     const commit = await tentativeMergeCommit(targetProjectPath, d.task.id);
     const scope = this.environmentScope(d);
     const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+    lease.extend(cellRunBoundMs([timeoutSeconds]), "the post-merge probe cell");
     const probe = await runPostMergeProbe(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);
     let passed = environmentProbePassed(probe);
     let details = formatEnvironmentProbe(probe);
     const noProduct = d.task.taskSpec?.origin === "sprint0" || d.task.taskSpec?.product === "absent";
     if (passed && !noProduct) {
+      lease.extend(cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the post-merge build and test cell");
       const commands = await runPostMergeEnvironmentCommands(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);
       passed = environmentCommandsPassed(commands);
       details = `${details}\nThe product's build and test on the merge:\n${formatEnvironmentCommands(commands)}`;
@@ -2300,19 +2305,21 @@ export class DevelopmentService {
    * cell from that image, which must pass and leave the checkout clean. A rebuilt version passing
    * records the dispatch's statement for it. A substrate failure throws.
    */
-  private async postMergeScaffold(d: Dispatch, targetProjectPath: string): Promise<PostMergeVerdict> {
+  private async postMergeScaffold(d: Dispatch, targetProjectPath: string, lease: CheckoutLease): Promise<PostMergeVerdict> {
     const { task } = d;
     let verdict: PostMergeVerdict;
     let merged: MergedEnvironment;
     try {
       if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
       const commit = await tentativeMergeCommit(targetProjectPath, task.id);
-      merged = await this.mergedEnvironment(d, d.environment, commit);
+      merged = await this.mergedEnvironment(d, d.environment, commit, lease);
       if (merged.kind === "refused") {
         verdict = { passed: false, details: merged.details };
       } else if (merged.kind === "rebuilt") {
         verdict = { passed: true, details: merged.details };
       } else {
+        const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+        lease.extend(cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the post-merge build and test cell");
         const commands = await runPostMergeEnvironmentCommands(
           this.environmentScope(d),
           POST_MERGE_VERIFIER_ROLE,
@@ -2362,7 +2369,7 @@ export class DevelopmentService {
    * builder) and its build and test (2 x that timeout). A substrate failure throws, which finalize turns into an
    * environment block.
    */
-  private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks): Promise<PostMergeVerdict> {
+  private async postMergeStoredChecks(d: Dispatch, targetProjectPath: string, stored: TaskChecks, lease: CheckoutLease): Promise<PostMergeVerdict> {
     const { task } = d;
     let runs: readonly SuiteRun[];
     let suites: readonly CheckSuite[];
@@ -2374,7 +2381,7 @@ export class DevelopmentService {
         throw new PostMergeEnvironmentMissing(task.id);
       }
       const commit = await tentativeMergeCommit(targetProjectPath, task.id);
-      merged = await this.mergedEnvironment(d, d.environment, commit);
+      merged = await this.mergedEnvironment(d, d.environment, commit, lease);
       if (merged.kind === "refused") {
         this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: task.attempt, verdict: "failed", revision: stored.revision, details: merged.details });
         return { passed: false, details: merged.details };
@@ -2391,6 +2398,9 @@ export class DevelopmentService {
         })),
         { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files },
       ];
+      const checks = suites.reduce((sum, suite) => sum + suite.checks.length, 0);
+      const perCheck = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+      lease.extend(cellRunBoundMs(Array.from({ length: checks }, () => perCheck)), `the post-merge cell of ${checks} check(s)`);
       runs = await runSuitesOnCheckout(
         this.checkCells(d),
         POST_MERGE_VERIFIER_ROLE,
@@ -2450,7 +2460,7 @@ export class DevelopmentService {
    * be built and a failed build or test refuse the merge with what failed, the task's failure. A
    * substrate failure throws.
    */
-  private async mergedEnvironment(d: Dispatch, current: CurrentEnvironment, commit: string): Promise<MergedEnvironment> {
+  private async mergedEnvironment(d: Dispatch, current: CurrentEnvironment, commit: string, lease: CheckoutLease): Promise<MergedEnvironment> {
     const { task } = d;
     const gitDir = targetRepo(d.targetProjectPath).gitDir;
     const refused = (details: string): MergedEnvironment => ({ kind: "refused", details });
@@ -2470,6 +2480,8 @@ export class DevelopmentService {
     }
 
     const change = `The merge changes the environment's build context (its inputs): version ${current.version} becomes ${version}`;
+    const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+    lease.extend(ENVIRONMENT_BUILD_TIMEOUT_MS + cellRunBoundMs([timeoutSeconds, timeoutSeconds]), "the merge's environment rebuild and its build and test cell");
     let built: BuiltEnvironment;
     try {
       built = await this.deps.environment.images.build({ projectId: task.projectId, repoGitDir: gitDir, commit, definition });

@@ -49,6 +49,23 @@ const PODMAN_ADMIN_TIMEOUT_MS = 120_000;
  * SIGKILL; busybox's timeout (alpine:3.20) leaves the killed child's 143 (SIGTERM).
  */
 const TIMEOUT_EXITS: ReadonlySet<number> = new Set([124, 137, 143]);
+/** A shell reports a process a signal ended as 128 + the signal's number, so only an exit above this is one. */
+const SIGNAL_EXIT_FLOOR = 128;
+
+/** When the host kills a `podman exec` whose in-cell timeout is `timeoutSeconds`. */
+function execKillAfterMs(timeoutSeconds: number): number {
+  return (timeoutSeconds + KILL_GRACE_SECONDS + HOST_BACKSTOP_SECONDS) * 1000;
+}
+
+/**
+ * The longest one cell can take with every podman call ended at its own kill bound: its create,
+ * an exec at each of `execTimeoutsSeconds` with the fresh-exec sweep that can follow one, and its
+ * teardown. Host-side file work around them (the cell's state dir) is not counted.
+ */
+export function cellRunBoundMs(execTimeoutsSeconds: readonly number[]): number {
+  const execs = execTimeoutsSeconds.reduce((sum, seconds) => sum + execKillAfterMs(seconds) + PODMAN_ADMIN_TIMEOUT_MS, 0);
+  return 2 * PODMAN_ADMIN_TIMEOUT_MS + execs;
+}
 
 /**
  * Shell functions every exec wrapper and the standalone sweep share. They use only the POSIX
@@ -234,7 +251,8 @@ export interface ExecResult {
   readonly stderr: string;
   readonly timedOut: boolean;
   /**
-   * The wrapper died before it reported the command's status, and a sweep from a fresh exec then
+   * The wrapper died by a signal (podman exec exited above 128) before it reported the command's
+   * status, and a sweep from a fresh exec then
    * found the cell answering and left it clean: what killed the wrapper ran in the cell, where only
    * the command ran. The command's own result, its exit status unknown: exitCode is null.
    */
@@ -406,7 +424,7 @@ class PodmanCell implements Cell {
     try {
       result = await this.substrate.run(args, {
         stdin: options.stdin,
-        killAfterMs: (options.timeoutSeconds + KILL_GRACE_SECONDS + HOST_BACKSTOP_SECONDS) * 1000,
+        killAfterMs: execKillAfterMs(options.timeoutSeconds),
         statusChannel: true,
       });
     } catch (err) {
@@ -433,6 +451,18 @@ class PodmanCell implements Cell {
       // answers a fresh exec, whose sweep also ends what the command left that the dead wrapper
       // never swept. timeout(1) never ends the wrapper.
       const unreported = `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command`;
+      if (exitCode <= SIGNAL_EXIT_FLOOR) {
+        // A wrapper killed by a signal exits above 128 (the trial's was 137). Anything else is podman
+        // or the OCI runtime failing before the wrapper ran (125-127) or the wrapper's sh itself:
+        // the substrate's failure, which a cell that still answers a probe does not change.
+        throw new CellExecFailed(
+          this.id,
+          argv,
+          exitCode,
+          result.stderr,
+          `${unreported}; an exit of ${SIGNAL_EXIT_FLOOR} or below is not a wrapper killed by a signal: podman exec or the wrapper's sh failed`,
+        );
+      }
       try {
         await this.sweep(argv, unreported);
       } catch (probe) {

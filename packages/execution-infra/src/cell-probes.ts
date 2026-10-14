@@ -134,7 +134,9 @@ export async function probeOutboundHost(cell: Cell, host: string): Promise<Probe
   const interfaces = (line("interfaces:")?.slice("interfaces:".length).trim() ?? "").split(" ").filter((name) => name !== "");
   const routes = line("routes: ");
   const connect = line("connect: ");
-  const onlyLoopback = interfaces.every((name) => name === "lo");
+  // An empty list is no observation (/sys/class/net unreadable, or the line never printed), and
+  // every cell has at least lo: an empty list never shows the protection in place.
+  const onlyLoopback = interfaces.length > 0 && interfaces.every((name) => name === "lo");
   const noRoute = routes === "routes: 0";
   const refused = connect !== null && (connect === "connect: no client in the image" || !/ exit 0$/.test(connect));
   return {

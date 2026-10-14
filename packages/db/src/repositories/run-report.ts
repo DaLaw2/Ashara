@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { TERMINAL_SESSION_PHASES } from "@ashara/shared";
+import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
 
@@ -33,7 +33,7 @@ const ProjectRowSchema = z.object({ id: z.guid(), name: z.string(), status: z.st
 
 const AttemptSchema = z.object({
   promptDigest: z.string().regex(/^[0-9a-f]{64}$/),
-  terminal: z.string().min(1),
+  terminal: z.enum(ATTEMPT_TERMINALS),
   turns: count,
   provider: z.string().min(1),
   model: z.string().min(1),

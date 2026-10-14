@@ -236,7 +236,7 @@ describe("withSessionLifecycle — the session's terminal write cannot be skippe
   });
 
   test("the attempt body ran is written with the terminal phase, a throw included; none when it ran none", async () => {
-    const attempt = { promptDigest: "a".repeat(64), terminal: "turn_cap", turns: 4, provider: "p", model: "m", cell: "base-cell" as const };
+    const attempt = { promptDigest: "a".repeat(64), terminal: "turn_cap" as const, turns: 4, provider: "p", model: "m", cell: "base-cell" as const };
     const thrown = new RecordingSessionStore();
     await expect(
       withSessionLifecycle(thrown, session, async (slot) => {

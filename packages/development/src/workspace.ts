@@ -36,7 +36,7 @@ export async function createWorkdir(
 ): Promise<WorkdirInfo> {
   // A fresh target's first commit is staged in its main checkout: two first dispatches, or one
   // racing a finalize, must not share that index.
-  await withTargetCheckout(targetProjectPath, () => ensureTargetGitInit(targetProjectPath));
+  await withTargetCheckout(targetProjectPath, `the git init before ${taskBranch}'s worktree`, () => ensureTargetGitInit(targetProjectPath));
   await mkdir(base, { recursive: true });
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 

@@ -1,6 +1,6 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentBrief } from "@ashara/shared";
+import type { AgentBrief, AttemptTerminal } from "@ashara/shared";
 import { CONVERSATION_RECORDS_DIR } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { AttemptCellImage, AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
@@ -102,7 +102,7 @@ export function toAgentOutput(outcome: Outcome, modelId: string, tokens: TokenTa
 export interface SessionAttempt {
   readonly promptDigest: string;
   /** The Outcome kind, with a finished attempt's status: "finished:done", "finished:blocked", "turn_cap", ... */
-  readonly terminal: string;
+  readonly terminal: AttemptTerminal;
   readonly turns: number;
   readonly provider: string;
   readonly model: string;
@@ -116,10 +116,15 @@ export function toSessionAttempt(
 ): SessionAttempt {
   return {
     promptDigest: outcome.promptDigest,
-    terminal: outcome.kind === "finished" ? `finished:${outcome.status}` : outcome.kind,
+    terminal: attemptTerminal(outcome),
     turns: outcome.turnsUsed,
     provider: model.provider,
     model: model.modelId,
     cell: cellImage.kind,
   };
+}
+
+/** Typed against the one list the DB CHECK mirrors: an Outcome kind the list lacks fails the build. */
+function attemptTerminal(outcome: Outcome): AttemptTerminal {
+  return outcome.kind === "finished" ? `finished:${outcome.status}` : outcome.kind;
 }

@@ -24,6 +24,7 @@ import {
   latestRosterRevision,
   latestRosterRoles,
   assertMigrationsCurrent,
+  claimTargetCheckouts,
   MIGRATIONS_DIR,
   MigrationDriftError,
 } from "@ashara/db";
@@ -40,7 +41,7 @@ import {
   FirstPlanner,
   Replanner,
 } from "@ashara/planning";
-import { DevelopmentService, SuiteReviewer, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
+import { DevelopmentService, SuiteReviewer, canonicalizeAllowingMissing, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
@@ -53,7 +54,14 @@ import type {
   ProjectIntentSource,
   EnvironmentImages,
 } from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages, useGitRunner } from "@ashara/execution-infra";
+import {
+  ENVIRONMENT_BUILD_TIMEOUT_MS,
+  PodmanSubstrate,
+  buildEnvironmentImage,
+  loadBaseCell,
+  pruneEnvironmentImages,
+  useGitRunner,
+} from "@ashara/execution-infra";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import {
   buildGateway,
@@ -113,9 +121,6 @@ const ATTEMPT_POLICY = {
   perCommandTimeoutSeconds: 300,
   toolTimeoutSeconds: 60,
 };
-// Wall clock of one `podman build` of an environment version (build_environment and the
-// Sprint 0 gate); the podman client is killed after it.
-const ENVIRONMENT_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
 const CLIENT_LOGIN_THROTTLE = {
   windowSeconds: 15 * 60,
@@ -252,6 +257,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const failureRouter = new FailureRouter(3);
   // Aborted on SIGTERM/SIGINT: stops the runner and cancels any attempt in flight.
   const abortController = new AbortController();
+  // Taken by startup(), held until closeDatabase().
+  let targetClaims: Awaited<ReturnType<typeof claimTargetCheckouts>> | null = null;
 
   const sessionStore: SessionStore = {
     insert: (sid, tid, brief, environmentVersion) => devSessionRepo.insert(sid, tid, brief, environmentVersion),
@@ -481,6 +488,16 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     port: config.port,
     shutdownSignal: abortController.signal,
     async startup() {
+      // One process drives a target: the checkout lock that serialises its finalizes is
+      // in-process only, so the claim is taken in the database before anything touches a target,
+      // and a second process on the same targets refuses to start. Recorded targets are claimed
+      // by path; targets this process mints later live under workdirBase/projects, claimed whole.
+      const targets = [join(config.coreLoop.workdirBase, "projects"), ...(await projectRepo.listWithWorkspace()).map((p) => p.workspacePath)];
+      targetClaims = await claimTargetCheckouts(databaseUrl, await Promise.all(targets.map(canonicalizeAllowingMissing)), (lost) => {
+        console.error(`FATAL: ${lost.message}; stopping the runner, no target is driven unclaimed`);
+        abortController.abort(lost);
+      });
+
       // A prior process may have crashed mid-dispatch, leaving items InProgress with no owning
       // agent, or Failed with no recovery routed. Reset orphans to Pending and route parked Failed
       // items through the same FailureRouter policy so the gate (Pending-only) sees the recovered
@@ -510,7 +527,10 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     },
     abort: () => abortController.abort(),
     teardownCells: () => teardownCellsAtShutdown(cellSubstrate),
-    closeDatabase: () => db.$client.end(),
+    async closeDatabase() {
+      await targetClaims?.release();
+      await db.$client.end();
+    },
   };
 }
 

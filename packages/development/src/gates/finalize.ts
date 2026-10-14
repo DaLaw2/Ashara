@@ -1,7 +1,7 @@
 import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
-import { withTargetCheckout } from "../checkout-lock.js";
+import { CheckoutHolderOverran, withTargetCheckout, type CheckoutLease } from "../checkout-lock.js";
 import { environmentErrorOf } from "../environment-failure.js";
 import type { EnvironmentError } from "../environment-failure.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
@@ -11,6 +11,7 @@ import {
   buildMergeAgentBrief,
   captureMainHead,
   commitMerge,
+  mergeInProgress,
   recoverOrphanedMerge,
   resetCheckoutToHead,
   taskBranchName,
@@ -92,9 +93,88 @@ export interface FinalizeDeps {
    * gate's own run (the environment's build then test, from the image the gate built) on a
    * throwaway checkout of the merge, which must stay clean. The cell has
    * no network (execution-infra's podman run passes --network=none). Required, no
-   * fallback: there is no host runner.
+   * fallback: there is no host runner. It runs holding the target checkout, and extends `lease` by
+   * the bound of each phase it runs in cells before running it, so a finalize waiting behind it
+   * waits no longer than that (withTargetCheckout).
    */
-  readonly postMergeVerify: (targetProjectPath: string) => Promise<PostMergeVerdict>;
+  readonly postMergeVerify: (targetProjectPath: string, lease: CheckoutLease) => Promise<PostMergeVerdict>;
+}
+
+/**
+ * The tentative merge could not be undone, neither by `git merge --abort` nor by a reset to HEAD:
+ * the target checkout holds residue no later merge may be built on. The next finalize on the
+ * checkout restores it first and refuses to merge while it cannot (finalizeHeld).
+ */
+class TargetCheckoutUnrestored extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly targetPath: string,
+    /** What the merge was being undone after. */
+    readonly after: string,
+    /** Why the reset to HEAD did not restore it either. */
+    readonly restoreDetail: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(
+      `task ${taskId}: the tentative merge in ${targetPath} could not be aborted after ${after} ` +
+        `(${describeErrorChain(options.cause)}), and ${restoreDetail}; no merge runs on this checkout until it is restored`,
+      { cause: options.cause },
+    );
+    this.name = "TargetCheckoutUnrestored";
+  }
+}
+
+/** Why the checkout is not back at HEAD with no merge staged, or null when it is. */
+async function unrestoredReason(targetProjectPath: string): Promise<string | null> {
+  const reset = await resetCheckoutToHead(targetProjectPath);
+  if (reset.status === "error") return reset.message;
+  try {
+    return (await mergeInProgress(targetProjectPath)) ? "a merge is still staged (MERGE_HEAD) after the reset to HEAD" : null;
+  } catch (e) {
+    return `whether a merge is still staged could not be read: ${describeErrorChain(e)}`;
+  }
+}
+
+/**
+ * Undoes the tentative merge. `git merge --abort` failing (a merge that never staged has nothing
+ * for it to undo) falls back to a reset to HEAD; when neither restores the checkout the failure is
+ * returned typed for the caller to block on, never swallowed: a merge verdict built on top of the
+ * residue would be untrustworthy (Discipline A).
+ */
+async function undoTentativeMerge(taskId: string, targetProjectPath: string, after: string): Promise<VerificationInfrastructureFault | null> {
+  try {
+    await abortMerge(targetProjectPath);
+    return null;
+  } catch (abortError) {
+    const reason = await unrestoredReason(targetProjectPath);
+    if (reason === null) {
+      console.warn(`[${taskId}] git merge --abort failed after ${after} (${describeErrorChain(abortError)}); the checkout was reset to HEAD instead`);
+      return null;
+    }
+    const unrestored = new TargetCheckoutUnrestored(taskId, targetProjectPath, after, `the reset to HEAD did not restore it: ${reason}`, { cause: abortError });
+    console.warn(`[${taskId}] ${unrestored.message}`);
+    return new VerificationInfrastructureFault(taskId, `restoring the target checkout after ${after}`, { cause: unrestored });
+  }
+}
+
+/** The merge's own failure, unless undoing it failed: then the checkout is the operator's first, whatever the gate said. */
+function unrestoredFailure(
+  fault: VerificationInfrastructureFault,
+  gateFailureContext: string,
+  // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
+  gate: { operation: string; gateOutput: unknown; gateContext?: Record<string, unknown> },
+): FinalizeResult {
+  return {
+    success: false,
+    gateFailureContext: `${gateFailureContext}\n${fault.message}`,
+    errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
+      ...gate.gateContext,
+      gateOperation: gate.operation,
+      gateOutput: wrapError("development", gate.operation, gate.gateOutput),
+    }),
+    environmentFailure: null,
+    infrastructureFault: fault,
+  };
 }
 
 async function abortAndFail(
@@ -109,18 +189,11 @@ async function abortAndFail(
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
 
-  let abortError: ErrorLayer | undefined;
-  try {
-    await abortMerge(targetProjectPath);
-  } catch (e) {
-    abortError = wrapError("development", "abortMerge", e, { taskId });
-  }
+  const unrestored = await undoTentativeMerge(taskId, targetProjectPath, errorLayerInfo.operation);
+  if (unrestored !== null) return unrestoredFailure(unrestored, gateFailureContext, errorLayerInfo);
   console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
 
-  const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, {
-    ...errorLayerInfo.gateContext,
-    ...(abortError ? { abortError } : {}),
-  });
+  const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, errorLayerInfo.gateContext);
 
   return { success: false, gateFailureContext, errorLayer, environmentFailure, infrastructureFault };
 }
@@ -132,14 +205,29 @@ async function abortAndFail(
  * checkout's lock is held, so a batch's other task neither aborts this one's tentative merge nor
  * merges against a main this one is about to move; it waits and merges against the main it lands on.
  */
-export function finalizeSuccess(
+export async function finalizeSuccess(
   deps: FinalizeDeps,
   task: TaskDescriptor,
   targetProjectPath: string,
   attempt: number,
   contractInfo: FinalizeContractInfo = { entryPointPath: null },
 ): Promise<FinalizeResult> {
-  return withTargetCheckout(targetProjectPath, () => finalizeHeld(deps, task, targetProjectPath, attempt, contractInfo));
+  const holder = `finalize of task ${task.id} attempt ${attempt}`;
+  try {
+    return await withTargetCheckout(targetProjectPath, holder, (lease) => finalizeHeld(deps, task, targetProjectPath, attempt, contractInfo, lease));
+  } catch (e) {
+    if (!(e instanceof CheckoutHolderOverran) || e.waiter !== holder) throw e;
+    // Nothing was merged and no check ran: the stuck holder is the operator's, never the task's failure.
+    console.warn(`[${task.id}] ${e.message}`);
+    const fault = new VerificationInfrastructureFault(task.id, "waiting for the target checkout", { cause: e });
+    return {
+      success: false,
+      gateFailureContext: fault.message,
+      errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, { taskId: task.id, attempt, holder: e.holder, boundMs: e.boundMs, heldMs: e.heldMs }),
+      environmentFailure: null,
+      infrastructureFault: fault,
+    };
+  }
 }
 
 async function finalizeHeld(
@@ -148,26 +236,32 @@ async function finalizeHeld(
   targetProjectPath: string,
   attempt: number,
   contractInfo: FinalizeContractInfo,
+  lease: CheckoutLease,
 ): Promise<FinalizeResult> {
   await recoverOrphanedMerge(targetProjectPath);
   await ensureTargetGitInit(targetProjectPath);
 
   // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and
   // before captureMainHead so the entry-point gate diffs against a clean tree.
-  const reset = await resetCheckoutToHead(targetProjectPath);
-  if (reset.status === "error") {
+  // This is also where a checkout an earlier finalize could not restore (TargetCheckoutUnrestored)
+  // stays blocked: every finalize restores it first, and none merges until that succeeds.
+  const unrestored = await unrestoredReason(targetProjectPath);
+  if (unrestored !== null) {
     // Fail closed: an unrestorable checkout makes every merge verdict below
-    // untrustworthy, so refuse rather than merge onto unknown residue.
-    console.log(`[${task.id}] target checkout could not be restored — refusing to merge`);
+    // untrustworthy, so refuse rather than merge onto unknown residue. Nothing is known of the
+    // task's work, so it is blocked for the operator, never failed against the task.
+    const fault = new VerificationInfrastructureFault(task.id, "restoring the target checkout to HEAD before the merge", { cause: unrestored });
+    console.warn(`[${task.id}] target checkout could not be restored — refusing to merge: ${unrestored}`);
     return {
       success: false,
-      gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${reset.message}`,
-      errorLayer: wrapError("development", "resetCheckoutToHead", reset.message, {
+      gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${unrestored}`,
+      errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
         taskId: task.id,
         attempt,
+        step: "resetCheckoutToHead",
       }),
       environmentFailure: null,
-      infrastructureFault: null,
+      infrastructureFault: fault,
     };
   }
 
@@ -175,9 +269,16 @@ async function finalizeHeld(
   const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));
 
   if (mergeResult.status === "conflict") {
-    await abortMerge(targetProjectPath);
-    console.log(`[${task.id}] tentative merge CONFLICT — aborted, branch preserved for retry`);
     const mergeContext = buildMergeAgentBrief(task, mergeResult.files);
+    const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a merge conflict");
+    if (unrestored !== null) {
+      return unrestoredFailure(unrestored, mergeContext, {
+        operation: "tentativeMerge",
+        gateOutput: "merge conflict",
+        gateContext: { taskId: task.id, attempt, conflictFiles: mergeResult.files },
+      });
+    }
+    console.log(`[${task.id}] tentative merge CONFLICT — aborted, branch preserved for retry`);
     return {
       success: false,
       gateFailureContext: mergeContext,
@@ -192,7 +293,14 @@ async function finalizeHeld(
   }
 
   if (mergeResult.status === "error") {
-    await abortMerge(targetProjectPath).catch(() => {});
+    const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a failed tentative merge");
+    if (unrestored !== null) {
+      return unrestoredFailure(unrestored, `Tentative merge failed: ${mergeResult.message}`, {
+        operation: "tentativeMerge",
+        gateOutput: mergeResult.message,
+        gateContext: { taskId: task.id, attempt },
+      });
+    }
     console.log(`[${task.id}] tentative merge FAILED — aborted`);
     return {
       success: false,
@@ -208,7 +316,7 @@ async function finalizeHeld(
 
   let postMergeVerify: PostMergeVerdict;
   try {
-    postMergeVerify = await deps.postMergeVerify(targetProjectPath);
+    postMergeVerify = await deps.postMergeVerify(targetProjectPath, lease);
   } catch (e) {
     // The verifier cell could not be created or the checks could not run: the
     // merge is unverified, so it is aborted (Discipline A). No check ran, so a

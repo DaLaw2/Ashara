@@ -1,4 +1,4 @@
-export { PodmanSubstrate } from "./podman.js";
+export { PodmanSubstrate, cellRunBoundMs } from "./podman.js";
 export type { Cell, CellSpec, ExecResult, SubstrateInfo } from "./podman.js";
 export { CELL_LIMIT_VARIABLES, readCellLimits } from "./cell-limits.js";
 export type { CellResourceLimits } from "./cell-limits.js";
@@ -32,6 +32,6 @@ export {
 } from "./environment.js";
 export type { EnvironmentDefinition } from "./environment.js";
 export { environmentVersion } from "./environment.js";
-export { buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
+export { ENVIRONMENT_BUILD_TIMEOUT_MS, buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
 export type { BuiltEnvironment, EnvironmentBuildRequest, EnvironmentImagePrune } from "./environment-build.js";
 export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, PodmanCommandFailed } from "./errors.js";

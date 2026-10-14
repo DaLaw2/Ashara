@@ -1,5 +1,5 @@
 import { and, count, desc, eq, notInArray, sql } from "drizzle-orm";
-import { TERMINAL_SESSION_PHASES } from "@ashara/shared";
+import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "@ashara/shared";
 import type { Database } from "../connection.js";
 import { devSessions } from "../schema.js";
 
@@ -18,7 +18,7 @@ class DispatchEvidenceUnread extends Error {
  */
 interface SessionAttempt {
   readonly promptDigest: string;
-  readonly terminal: string;
+  readonly terminal: AttemptTerminal;
   readonly turns: number;
   readonly provider: string;
   readonly model: string;

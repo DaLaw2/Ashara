@@ -261,11 +261,11 @@ describe("PodmanSubstrate argv", () => {
     expect(early).toMatchObject({ exitCode: 124, timedOut: false });
   });
 
-  it("a command that exits 125 is the command's result; an exit with no status report in a cell that fails its probe is the substrate's failure", async () => {
+  it("a command that exits 125 is the command's result; a wrapper killed by a signal in a cell that fails its probe is the substrate's failure", async () => {
     const { requests, substrate } = recorder([
       ok(ID),
       ran("", 125),
-      unreported(125, "Error: no container with name or ID found"),
+      unreported(137, "partial err"),
       { ...ok("", 125), stderr: "Error: no container with name or ID found" },
       { ...ran("", 3), exitCode: 125 },
       { ...ok("", 0), statusReport: "zero\n" },
@@ -273,16 +273,30 @@ describe("PodmanSubstrate argv", () => {
     const cell = await substrate.createCell(spec);
     expect(await cell.exec(["sh", "-c", "exit 125"], { timeoutSeconds: 1 })).toMatchObject({ exitCode: 125, timedOut: false });
 
-    const podmanFailed = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
-    expect(podmanFailed).toBeInstanceOf(CellExecFailed);
-    if (!(podmanFailed instanceof CellExecFailed)) return;
-    expect(podmanFailed).toMatchObject({ exitCode: 125, stderr: "Error: no container with name or ID found", argv: ["true"] });
-    expect(podmanFailed.message).toMatch(/failed its probe/);
+    const cellLost = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
+    expect(cellLost).toBeInstanceOf(CellExecFailed);
+    if (!(cellLost instanceof CellExecFailed)) return;
+    expect(cellLost).toMatchObject({ exitCode: 137, stderr: "partial err", argv: ["true"] });
+    expect(cellLost.message).toMatch(/failed its probe/);
     expect(requests[3]?.args.slice(0, 4)).toEqual(["exec", ID, "sh", "-c"]);
     expect(requests[3]?.args[4]).toContain("ashara_sweep");
 
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/exited 3 in the cell but podman exec exited 125/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
+  });
+
+  it("podman exec failing before the wrapper ran (125-127) is the substrate's failure even in a cell that would pass its probe", async () => {
+    for (const exitCode of [125, 126, 127]) {
+      // No probe response is queued: the verdict does not consult the cell, so a healthy one cannot turn it into statusLost.
+      const { requests, substrate } = recorder([ok(ID), unreported(exitCode, "Error: OCI runtime error")]);
+      const cell = await substrate.createCell(spec);
+      const failed = await cell.exec(["true"], { timeoutSeconds: 1 }).catch((e: unknown) => e);
+      expect(failed).toBeInstanceOf(CellExecFailed);
+      if (!(failed instanceof CellExecFailed)) return;
+      expect(failed).toMatchObject({ exitCode, stderr: "Error: OCI runtime error", argv: ["true"] });
+      expect(failed.message).toMatch(/not a wrapper killed by a signal/);
+      expect(requests).toHaveLength(2);
+    }
   });
 
   // M2 trial M1: `kill -9 $(pgrep -f ...)` in the command killed the wrapper itself.
