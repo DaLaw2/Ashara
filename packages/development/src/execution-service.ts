@@ -24,6 +24,7 @@ import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRun
 import {
   checkPassed,
   checkVerdict,
+  describeProductChange,
   environmentCheckPassed,
   environmentCommandsPassed,
   environmentProbePassed,
@@ -54,6 +55,7 @@ import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
   StoredChecksStale,
+  checkAreaOf,
   checkBranchName,
   discardCheckWorkdir,
   dropCheckBranch,
@@ -64,6 +66,7 @@ import {
   headCommit,
   mainCommit,
   previewCheckFiles,
+  productChangeOf,
   redRunPreview,
   redRunProblem,
   redRunSetProblem,
@@ -325,6 +328,13 @@ function suitesVerdict(
       regressed ||= regression;
       return;
     }
+    // Callers turn a product change into CheckRunChangedProduct first (productChangeOf); stated
+    // here too, so this verdict never reads one as a pass.
+    if (run.report.kind === "product_changed") {
+      failures.push(`${suite.label}: no verdict: ${describeProductChange(run.report)}`);
+      sections.push(`${suite.label}: no verdict: ${describeProductChange(run.report)}`);
+      return;
+    }
     const ran = run.report.runs;
     if (ran.length !== suite.checks.length || ran.length === 0) {
       failures.push(`${prefix}${suite.label}: ${ran.length} of ${suite.checks.length} checks ran`);
@@ -385,7 +395,7 @@ function attemptCellImage(environment: DispatchEnvironment): AttemptCellImage {
 
 function briefEnvironment(environment: DispatchEnvironment): AgentBrief["projectEnvironment"] {
   if (environment.kind === "base-cell") return { kind: "to-define" };
-  return { kind: "defined", version: environment.version, commit: environment.commit, statement: environment.statement };
+  return { kind: "defined", version: environment.version, statement: environment.statement };
 }
 
 /**
@@ -1553,7 +1563,7 @@ export class DevelopmentService {
     if (plan.kind === "stored-checks") taskContext = `${specContext}\n\n${formatChecksForBrief(plan.stored)}`;
     if (plan.kind === "check-authoring") {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
-      taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation)}`;
+      taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation, checkAreaOf(plan.checkedTaskId))}`;
     }
     const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
     // Named before work starts (ADR-074 addendum 2 d66 c, d72): what the ownership gate refuses,
@@ -1878,7 +1888,7 @@ export class DevelopmentService {
     if (onMain.kind === "blocked") return onMain.result;
     if (onMain.verdict.passed) return this.alreadyDelivered(d, onMain.main, stored, agent);
 
-    const reason = `${NO_CHANGE_REASON}, and its checks do not all pass on main (${onMain.main}), so its work is not already delivered:\n${onMain.verdict.details}`;
+    const reason = `${NO_CHANGE_REASON}, and its checks do not all pass on main, so its work is not already delivered:\n${onMain.verdict.details}`;
     eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
     await cleanupWorkdir(workDir, targetProjectPath);
     const { output } = agent;
@@ -1921,8 +1931,8 @@ export class DevelopmentService {
     }
 
     const reason =
-      `its stored checks pass on main before any implementer ran, but not on the run of every suite there ` +
-      `(${onMain.main}), so its work is not already delivered:\n${onMain.verdict.details}`;
+      `its stored checks pass on main before any implementer ran, but not on the run of every suite there, ` +
+      `so its work is not already delivered:\n${onMain.verdict.details}`;
     eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
     await cleanupWorkdir(workDir, targetProjectPath);
     return {
@@ -1934,7 +1944,7 @@ export class DevelopmentService {
       errorEnvelope: {
         outcome: "failed",
         summary: reason,
-        chain: wrapError("development", "revalidateTaskChecks", reason, { taskId: task.id, mainCommit: onMain.main }),
+        chain: wrapError("development", "revalidateTaskChecks", reason, { taskId: task.id }),
       },
     };
   }
@@ -1984,6 +1994,12 @@ export class DevelopmentService {
         own,
       ];
       runs = await runSuitesOnCheckout(this.checkCells(d), RED_RUN_ROLE, environment.imageId, main, this.checkoutDir(d, "delivered-on-main"), suites);
+      // A run that changed main's tracked files decided nothing about main: unrunnable, never a verdict.
+      const changed = productChangeOf(task.id, runs);
+      if (changed !== null) {
+        eventSink?.emit({ event: "check_run_product_changed", taskId: task.id, attempt: task.attempt, commit: main, suite: changed.suite, check: changed.check, paths: changed.paths });
+        throw changed;
+      }
     } catch (e) {
       if (subject.cleanWorkdir) await cleanupWorkdir(workDir, targetProjectPath);
       return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main") };
@@ -2408,6 +2424,13 @@ export class DevelopmentService {
         this.checkoutDir(d, "post-merge-checks"),
         suites,
       );
+      // A run that changed the merge's tracked files is no verdict on the merge (L9): unrunnable,
+      // carried out typed in the fault's cause, neither a pass nor the task's failure.
+      const changed = productChangeOf(task.id, runs);
+      if (changed !== null) {
+        this.deps.eventSink?.emit({ event: "check_run_product_changed", taskId: task.id, attempt: task.attempt, commit, suite: changed.suite, check: changed.check, paths: changed.paths });
+        throw changed;
+      }
     } catch (e) {
       if (environmentErrorOf(e) !== null) throw e;
       throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
@@ -2565,7 +2588,11 @@ export class DevelopmentService {
           attempt: d.task.attempt,
           run: runs,
           revision: stored.revision,
-          ...(report.kind === "ran" ? { passed: report.runs.filter(checkPassed).map((run) => run.name) } : { refused: report.detail }),
+          ...(report.kind === "ran"
+            ? { passed: report.runs.filter(checkPassed).map((run) => run.name) }
+            : report.kind === "files_refused"
+              ? { refused: report.detail }
+              : { productChanged: describeProductChange(report) }),
         });
         return report;
       },
@@ -2591,11 +2618,20 @@ export class DevelopmentService {
         if (recording.kind === "refused") return recording;
         runs += 1;
         let redRun: CheckRedRunPreview;
+        let discarded: readonly string[] = [];
         try {
-          const harvest = await previewCheckFiles(d.repo, d.task.id, work.startCommit, buildContextPaths(work.environment.definition), work.recorder.writtenFiles());
+          const harvest = await previewCheckFiles(
+            d.repo,
+            d.task.id,
+            work.startCommit,
+            buildContextPaths(work.environment.definition),
+            work.recorder.writtenFiles(),
+            checkAreaOf(work.checkedTaskId),
+          );
           if (harvest.kind === "rejected") {
             redRun = { kind: "files_refused", detail: harvest.reason };
           } else {
+            discarded = harvest.discarded;
             const dir = this.checkoutDir(d, `define-check-${runs}`);
             const report = await runChecksOnCheckout(
               { ...this.checkCells(d), timeoutSeconds },
@@ -2622,9 +2658,12 @@ export class DevelopmentService {
           defined: recording.defined,
           ...(redRun.kind === "ran"
             ? { exitCode: redRun.run.exitCode, timedOut: redRun.run.timedOut, rejection: redRun.rejection }
-            : { filesRefused: redRun.detail }),
+            : redRun.kind === "files_refused"
+              ? { filesRefused: redRun.detail }
+              : { productChanged: redRun.detail }),
+          ...(discarded.length > 0 ? { discarded } : {}),
         });
-        return { ...recording, redRun };
+        return { ...recording, redRun, discarded };
       },
     };
   }
@@ -2668,7 +2707,11 @@ export class DevelopmentService {
       passed,
       allPass,
       ...(onMain.kind === "files_refused" ? { filesRefused: onMain.detail } : {}),
+      ...(onMain.kind === "product_changed" ? { productChanged: describeProductChange(onMain) } : {}),
     });
+    if (onMain.kind === "product_changed") {
+      console.warn(`[${task.id}] the delivered sweep on main ${main} reached no verdict: ${describeProductChange(onMain)}`);
+    }
     return allPass ? this.deliveredBeforeModel(d, stored) : null;
   }
 
@@ -2708,6 +2751,8 @@ export class DevelopmentService {
       }
       if (redRun.kind === "files_refused") {
         problem = `the check files cannot be placed on the baseline: ${redRun.detail}`;
+      } else if (redRun.kind === "product_changed") {
+        problem = `on the baseline, ${describeProductChange(redRun)}`;
       } else {
         const setProblem = redRunSetProblem(redRun.runs);
         problem =
@@ -2756,10 +2801,19 @@ export class DevelopmentService {
   }
 
   /** A check task's work that cannot be kept: failed with the reason, nothing stored, nothing merged. */
-  private checksRejected(d: Dispatch, output: AgentOutputJson, reason: string): ExecutionResult {
+  private checksRejected(
+    d: Dispatch,
+    output: AgentOutputJson,
+    reason: string,
+    // open-by-design: what the operator needs beyond the author's reason, per rejection
+    operator: Record<string, unknown>,
+  ): ExecutionResult {
     const { task, sessionId } = d;
+    // The summary and the chain, its context included, become the next check attempt's brief
+    // (formatPriorAttemptFailure renders the chain verbatim), so neither names a commit the cell
+    // cannot reach (eighth run E5); `operator`, the foundation's commit among it, goes only to the event.
     const summary = `the checks of check task ${task.id} were rejected: ${reason}`;
-    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary });
+    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary, ...operator });
     const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });
     return {
       status: "failed",
@@ -2787,9 +2841,19 @@ export class DevelopmentService {
     const { foundation } = work;
     try {
       const defined = work.recorder.checks();
-      if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check");
-      const harvest = await harvestCheckFiles(d.repo, task.id, work.startCommit, buildContextPaths(work.environment.definition), work.recorder.writtenFiles());
-      if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason);
+      if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check", {});
+      const harvest = await harvestCheckFiles(
+        d.repo,
+        task.id,
+        work.startCommit,
+        buildContextPaths(work.environment.definition),
+        work.recorder.writtenFiles(),
+        checkAreaOf(work.checkedTaskId),
+      );
+      if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason, {});
+      if (harvest.discarded.length > 0) {
+        eventSink?.emit({ event: "check_files_discarded", taskId: task.id, attempt: task.attempt, area: checkAreaOf(work.checkedTaskId), paths: harvest.discarded });
+      }
 
       let redRun: CheckRunReport;
       try {
@@ -2805,8 +2869,22 @@ export class DevelopmentService {
       } catch (e) {
         return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on the foundation");
       }
+      const atFoundation = { baselineCommit: foundation.commit, foundationTaskId: foundation.taskId };
       if (redRun.kind === "files_refused") {
-        return this.checksRejected(d, output, `the check files cannot be placed on the foundation ${foundation.commit}: ${redRun.detail}`);
+        return this.checksRejected(
+          d,
+          output,
+          `the check files cannot be placed on the foundation (the merge of task ${foundation.taskId}): ${redRun.detail}`,
+          atFoundation,
+        );
+      }
+      if (redRun.kind === "product_changed") {
+        return this.checksRejected(
+          d,
+          output,
+          `red run on the foundation (the merge of task ${foundation.taskId}): ${describeProductChange(redRun)}`,
+          atFoundation,
+        );
       }
       const runsReport = formatCheckRuns(redRun.runs, redRunVerdict);
       const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
@@ -2824,7 +2902,7 @@ export class DevelopmentService {
         report,
       });
       if (problems.length > 0 || setProblem !== null) {
-        return this.checksRejected(d, output, `red run on the foundation ${foundation.commit} (the merge of task ${foundation.taskId}):\n${report}`);
+        return this.checksRejected(d, output, `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`, atFoundation);
       }
 
       const revision = await this.deps.checks.append({
@@ -2881,7 +2959,7 @@ export class DevelopmentService {
     if (!onMain.verdict.passed) {
       return {
         kind: "not-delivered",
-        why: `task ${work.checkedTaskId}'s checks revision ${work.prior.revision} and every suite do not all pass on main ${onMain.main}:\n${onMain.verdict.details}`,
+        why: `task ${work.checkedTaskId}'s checks revision ${work.prior.revision} and every suite do not all pass on main:\n${onMain.verdict.details}`,
       };
     }
     console.log(`[${task.id}] the check author finished blocked and task ${work.checkedTaskId} is delivered on main ${onMain.main}: its checks and every suite pass there`);

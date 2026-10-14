@@ -185,12 +185,13 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
   description:
     "Define one check of the task. " +
     CHECK_RUNNER +
-    " The check passes when the command exits 0 and prints output. Every check must FAIL on the project as it is " +
-    "now, by a non-zero exit within its time limit, for the reason the task's work is missing. Any file a check needs " +
-    "must be one you add or change in this workspace: only those are kept with the checks and written over the " +
-    "project whenever they run. The check is red-run at once on the project as it is now, with your files so far " +
-    "written over it; the result shows its exit code and output and whether it would be rejected. Defining a check " +
-    "with the name of one already defined replaces it.",
+    " The check passes when the command exits 0 and prints output. At least one check must FAIL on the plan's " +
+    "foundation, by a non-zero exit within its time limit, for the reason the task's work is missing. Any file a " +
+    "check needs must be one you write in your checks directory (the Context names it): only those are kept with " +
+    "the checks and written over the project whenever they run; a file you write anywhere else is discarded. A check " +
+    "that changes a file the project tracks is rejected. The check is red-run at once on the foundation, with your " +
+    "check files so far written over it; the result shows its exit code and output and whether it would be " +
+    "rejected. Defining a check with the name of one already defined replaces it.",
   inputSchema: {
     type: "object",
     properties: {
@@ -329,9 +330,15 @@ function formatRun(result: ExecResult, timeoutSeconds: number): ToolExecution {
 
 /** define_check's answer: what was recorded and how its immediate red run on main went. */
 function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult, { readonly kind: "recorded" }>): ToolExecution {
-  const recorded = `${result.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${result.defined} defined so far).`;
+  const discarded =
+    result.discarded.length === 0
+      ? []
+      : [
+          `Discarded, outside your checks directory (not kept, not placed on the foundation): ${result.discarded.join(", ")}.`,
+        ];
+  const recorded = [`${result.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${result.defined} defined so far).`, ...discarded].join("\n");
   const { redRun } = result;
-  if (redRun.kind === "files_refused") {
+  if (redRun.kind === "files_refused" || redRun.kind === "product_changed") {
     return toolError(`${recorded}\nIt could not be red-run: ${redRun.detail}\nAt finish this rejects every check of the task.`);
   }
   const { run } = redRun;

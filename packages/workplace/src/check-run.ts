@@ -13,7 +13,32 @@ export interface CheckRun {
 export type CheckRunReport =
   | { readonly kind: "ran"; readonly runs: readonly CheckRun[] }
   /** A stored check file could not be written into the checkout: the checks cannot run there. */
-  | { readonly kind: "files_refused"; readonly detail: string };
+  | { readonly kind: "files_refused"; readonly detail: string }
+  /**
+   * The check files, or a check's command, left files the checkout's commit tracks changed: the
+   * product the checks judge is no longer the one checked out, so the run reached no verdict on it
+   * (a check defect, eighth run E1). Nothing after that runs on the checkout.
+   */
+  | ProductChangedReport;
+
+export interface ProductChangedReport {
+  readonly kind: "product_changed";
+  /** The check whose command changed them; null when writing the check files over the checkout did. */
+  readonly check: string | null;
+  /** The tracked paths changed, deleted or changed in kind, repository-relative. */
+  readonly paths: readonly string[];
+  /** The checks that ran before the change was found, the changing one last. */
+  readonly runs: readonly CheckRun[];
+}
+
+/** Why a run that changed the project's tracked files has no verdict, naming the files. */
+export function describeProductChange(report: ProductChangedReport): string {
+  const by = report.check === null ? "writing the check files over it" : `check ${JSON.stringify(report.check)}`;
+  return (
+    `${by} changed files the project tracks: ${report.paths.join(", ")}. A check must not change the project's own ` +
+    `files, so this run reached no verdict on the project`
+  );
+}
 
 /**
  * Z0's side of run_checks, supplied by the execution service for a task decided by stored checks:
@@ -61,6 +86,12 @@ export function formatCheckRuns(runs: readonly CheckRun[], verdictOf: (run: Chec
 /** run_checks' report: each check's verdict, exactly as verification would read it. */
 export function formatCheckRunReport(report: CheckRunReport): string {
   if (report.kind === "files_refused") return `The checks could not be placed on your work: ${report.detail}`;
+  if (report.kind === "product_changed") {
+    return (
+      `The checks could not be run on your work: ${describeProductChange(report)}. This is a defect of the checks, ` +
+      `not of your work${report.check === null ? "" : `: dispute check ${JSON.stringify(report.check)} with dispute_check`}.`
+    );
+  }
   const passed = report.runs.filter(checkPassed).length;
   return `${passed} of ${report.runs.length} check(s) pass on your current work.\n${formatCheckRuns(report.runs, checkVerdict)}`;
 }

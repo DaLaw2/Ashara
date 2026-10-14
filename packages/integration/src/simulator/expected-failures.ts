@@ -24,16 +24,11 @@ interface ExpectedFailure {
  * by a two-decision tape in simulator.test.ts instead of seed 89. B3 was seed 119 until the rebase
  * onto 4d40d185: model fault keys carry the model id, migration 047 replaced the catalog's models
  * (gpt-4-1, which the stand-ins were routed to, is deleted), and seed 119 lost its orphan. A seed whose failure needs a crash and then a fault on one reconciler query is re-rolled
- * by any such change, so B3 is pinned by its minimized three-decision tape there too.
+ * by any such change, so B3 is pinned by its minimized three-decision tape there too. B1 (seed 4)
+ * is removed: a check set keeps only the files under checks/<checked task id>/ (MVP W4), and seed 4
+ * then fails none of its I3 product-file keys (observed: its listed keys were reported missing).
  */
 const EXPECTED_FAILURES: ReadonlyMap<number, ExpectedFailure> = new Map<number, ExpectedFailure>([
-  [
-    4,
-    {
-      keys: ["I3:product-file:Deliver b1, b2 [sim t1]:product/behaviours/b1", "I3:product-file:Deliver b1, b2 [sim t1]:product/behaviours/b2"],
-      baseline: "B1: a check author's product files are stored in its check set (run 8 E1)",
-    },
-  ],
   [
     14,
     {

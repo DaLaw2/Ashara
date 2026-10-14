@@ -2,8 +2,8 @@ export { runAttempt } from "./attempt.js";
 export type { AssignmentRole } from "./assignment.js";
 export { CHECK_RUNNER } from "./check-definition.js";
 export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
-export { checkPassed, checkVerdict, formatCheckRuns } from "./check-run.js";
-export type { CheckRun, CheckRunReport, TaskCheckRunPort } from "./check-run.js";
+export { checkPassed, checkVerdict, describeProductChange, formatCheckRuns } from "./check-run.js";
+export type { CheckRun, CheckRunReport, ProductChangedReport, TaskCheckRunPort } from "./check-run.js";
 export {
   environmentBuildPassed,
   environmentCheckPassed,

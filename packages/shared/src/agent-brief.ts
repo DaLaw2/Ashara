@@ -12,8 +12,6 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("defined"),
     /** sha256 (hex) over the environment's build context (its recipe and the inputs it reads) at the target's main. */
     version: z.string().regex(/^[0-9a-f]{64}$/),
-    /** The last commit that touched a build context path. */
-    commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
     /** The environment role's statement of the stack it chose and why, verbatim. */
     statement: z.string().min(1),
   }),

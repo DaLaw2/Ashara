@@ -566,7 +566,7 @@ describe("define_check", () => {
     timeoutSeconds: 60,
     rejection: null,
     holdsAlready: false,
-  })) {
+  }), discarded: readonly string[] = []) {
     const defined: CheckDefinition[] = [];
     const timeouts: number[] = [];
     const written: string[] = [];
@@ -579,7 +579,7 @@ describe("define_check", () => {
         const earlier = defined.findIndex((d) => d.name === check.name);
         if (earlier !== -1) defined[earlier] = check;
         else defined.push(check);
-        return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check) };
+        return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check), discarded };
       },
     };
     return { checks, defined, timeouts, written };
@@ -680,11 +680,33 @@ describe("define_check", () => {
     });
   });
 
+  // Eighth run E1: authors wrote the product beside their checks; Z0 discards it and says so, and a
+  // check that changes a tracked file reaches no verdict.
+  it("names the files it discarded outside the checks directory, and a run that changed the project as unrunnable", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "builds", command: "cp checks/t/main.src src/main.src && make" } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "One check." } }]),
+    ]);
+    const { checks } = recorder(
+      () => ({ kind: "product_changed", detail: 'on the foundation, check "builds" changed files the project tracks: src/main.src' }),
+      ["src/main.src"],
+    );
+
+    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+
+    const [answer] = toolResultsOf(requests[1]?.messages.at(-1));
+    expect(answer).toMatchObject({ type: "error-text", value: expect.stringContaining("Discarded, outside your checks directory (not kept, not placed on the foundation): src/main.src") });
+    expect(answer).toMatchObject({ value: expect.stringContaining('It could not be red-run: on the foundation, check "builds" changed files the project tracks: src/main.src') });
+  });
+
   it("states the runner exactly to the check author: sh -c from the repository root, in the environment image", () => {
     const prompt = buildSystemPrompt(assignment().brief, "check");
     expect(prompt).toContain("`sh -c '<command>'`: POSIX sh, not bash");
     expect(prompt).toContain("from the repository root of a fresh copy of the project, inside the project environment's image, with no network");
-    expect(prompt).toContain("A check's files must be");
+    expect(prompt).toContain("in your checks directory");
+    expect(prompt).toContain("A check must not change any file the project tracks");
+    // Eighth run E5: the cell's repository never holds the foundation's commit, so nothing names it.
+    expect(prompt).not.toContain("names its commit");
     expect(prompt).toContain("define it again under the same name");
   });
 

@@ -1114,6 +1114,9 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.detail).toContain(`environment version ${"e".repeat(64)}`);
     expect(result.detail).toContain(`environment version ${String(probe.version)}`);
     expect(result.detail).toContain("no check of the set fails on the foundation");
+    // The detail reopens the check task as its brief: the baseline commit stays in the chain, for the operator.
+    expect(result.detail).not.toContain(mainBefore);
+    expect(result.errorEnvelope.chain.context).toMatchObject({ baselineCommit: mainBefore });
     expect(probe.modelCalls).toBe(0);
     expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: false });
     expect(events.some((e) => e.event === "agent_launched")).toBe(false);
@@ -1224,7 +1227,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
     expect(result.status, result.detail).toBe("failed");
     expect(result.detail).toContain("the task branch holds no change against main");
-    expect(result.detail).toContain(`do not all pass on main (${mainBefore})`);
+    expect(result.detail).toContain("do not all pass on main, so its work is not already delivered");
+    expect(result.detail).not.toContain(mainBefore);
     expect(result.detail).toContain("FAILED");
     expect(result.errorEnvelope?.chain.operation).toBe("agentExecution");
     expect(started.map((s) => s.role)).toEqual(["developer", "ci"]);

@@ -391,7 +391,8 @@ export class StandIns {
     const kept = allGuard ? checks.map((check) => ({ name: check.name, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
     const steps: ToolStep[] = [];
     for (const check of kept) {
-      const path = `checks/${checked.ref}/${check.name}.json`;
+      // The checks directory the brief names (checkAreaOf): the checked task's id, not the simulator's ref.
+      const path = `checks/${checksFor}/${check.name}.json`;
       steps.push(["write_file", { path, content: `${JSON.stringify(check.spec)}\n` }]);
       steps.push(["define_check", { name: check.name, command: `sim check ${path}` }]);
     }

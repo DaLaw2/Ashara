@@ -36,7 +36,9 @@ export type CheckRedRunPreview =
       readonly holdsAlready: boolean;
     }
   /** The attempt's files could not be kept or placed on the foundation, so the check could not run. */
-  | { readonly kind: "files_refused"; readonly detail: string };
+  | { readonly kind: "files_refused"; readonly detail: string }
+  /** The check files or the check changed files the foundation tracks: the run reached no verdict there. */
+  | { readonly kind: "product_changed"; readonly detail: string };
 
 export type CheckDefinitionResult =
   | {
@@ -45,6 +47,11 @@ export type CheckDefinitionResult =
       /** A check of the same name was defined before; this definition replaced it. */
       readonly replaced: boolean;
       readonly redRun: CheckRedRunPreview;
+      /**
+       * Files the author wrote outside its checks directory: never kept, never placed on the
+       * foundation (eighth run E1). Empty when there are none.
+       */
+      readonly discarded: readonly string[];
     }
   /** The model can fix it: the reason is told to it as the tool's error. */
   | { readonly kind: "refused"; readonly reason: string };

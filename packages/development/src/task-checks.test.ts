@@ -4,18 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
+import type { Cell } from "@ashara/execution-infra";
 import type { CheckRun } from "@ashara/workplace";
 import { targetRepo } from "./host-git.js";
 import {
   CheckRecorder,
+  checkAreaOf,
   harvestCheckFiles,
   formatChecksForBrief,
+  formatFoundationForCheckAuthor,
   formatProjectChecksForCheckAuthor,
+  productChangeOf,
   redRunPreview,
   redRunProblem,
   redRunSetProblem,
+  runSuitesOnCheckout,
 } from "./task-checks.js";
-import type { TaskChecks } from "./task-checks.js";
+import type { CheckCells, TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
 
@@ -98,26 +103,150 @@ describe("the harvest of a check attempt's files", () => {
     return { dir, start: (await git("rev-parse", "HEAD")).stdout.trim() };
   }
 
+  const AREA = checkAreaOf("impl-1");
+
   test("keeps only the files the author wrote with its file tools; what a command it ran left behind is no check file", async () => {
     const { dir, start } = await repoWithStart();
-    await mkdir(join(dir, "checks", "__pycache__"), { recursive: true });
-    await writeFile(join(dir, "checks", "run.py"), "print('hi')\n");
-    await writeFile(join(dir, "checks", "__pycache__", "run.cpython-311.pyc"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
+    await mkdir(join(dir, AREA, "__pycache__"), { recursive: true });
+    await writeFile(join(dir, AREA, "run.py"), "print('hi')\n");
+    await writeFile(join(dir, AREA, "__pycache__", "run.cpython-311.pyc"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
     const recorder = new CheckRecorder();
-    recorder.fileWritten("./checks/run.py");
+    recorder.fileWritten(`./${AREA}run.py`);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles());
-    expect(harvest).toEqual({ kind: "harvested", files: [{ path: "checks/run.py", content: "print('hi')\n" }] });
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
+    expect(harvest).toEqual({ kind: "harvested", files: [{ path: `${AREA}run.py`, content: "print('hi')\n" }], discarded: [] });
   });
 
-  test("a written file of the environment's build context still rejects the whole harvest", async () => {
+  // Eighth run E1, simulator B1: the author wrote the product beside its checks, and the stored set held it.
+  test("stores only the files under the author's checks area; product files it wrote beside them are discarded", async () => {
+    const { dir, start } = await repoWithStart();
+    await mkdir(join(dir, AREA), { recursive: true });
+    await mkdir(join(dir, "src"), { recursive: true });
+    await mkdir(join(dir, "checks", "impl-2"), { recursive: true });
+    await writeFile(join(dir, AREA, "run.sh"), "./tool | grep -q ok\n");
+    await writeFile(join(dir, "README"), "the author's own product\n");
+    await writeFile(join(dir, "src", "main.src"), "an implementation\n");
+    await writeFile(join(dir, "checks", "impl-2", "other.sh"), "another task's area\n");
+    const recorder = new CheckRecorder();
+    for (const path of [`${AREA}run.sh`, "README", "src/main.src", "checks/impl-2/other.sh"]) recorder.fileWritten(path);
+
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
+    expect(harvest).toEqual({
+      kind: "harvested",
+      files: [{ path: `${AREA}run.sh`, content: "./tool | grep -q ok\n" }],
+      discarded: ["README", "checks/impl-2/other.sh", "src/main.src"],
+    });
+  });
+
+  test("a product file of the environment's build context written outside the area is discarded, not kept", async () => {
     const { dir, start } = await repoWithStart();
     await writeFile(join(dir, "manifest.txt"), "dependencies: none\n");
     const recorder = new CheckRecorder();
     recorder.fileWritten("manifest.txt");
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles());
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles(), AREA);
+    expect(harvest).toEqual({ kind: "harvested", files: [], discarded: ["manifest.txt"] });
+  });
+
+  test("a file in the area that is also of the environment's build context still rejects the whole harvest", async () => {
+    const { dir, start } = await repoWithStart();
+    await mkdir(join(dir, AREA), { recursive: true });
+    await writeFile(join(dir, AREA, "input.txt"), "read by the image build\n");
+    const recorder = new CheckRecorder();
+    recorder.fileWritten(`${AREA}input.txt`);
+
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", `${AREA}input.txt`], recorder.writtenFiles(), AREA);
     expect(harvest).toMatchObject({ kind: "rejected", reason: expect.stringContaining("overlap the environment's recipe and inputs") });
+  });
+});
+
+// L9's tracked-file refusal (eighth run E1): a check run on a tree whose product files it replaced
+// is no verdict on that product. The cell is a stand-in that runs the command on the host checkout.
+describe("a check run that changes a tracked file of the checkout", () => {
+  const scratch: string[] = [];
+  afterAll(async () => {
+    for (const dir of scratch) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function target(): Promise<{ readonly root: string; readonly commit: string; readonly cells: CheckCells }> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-tracked-")));
+    scratch.push(root);
+    const project = join(root, "target");
+    await mkdir(join(project, "src"), { recursive: true });
+    const git = (...args: string[]) => promisify(execFile)("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    await git("init", "-q", "-b", "main");
+    await writeFile(join(project, "src", "main.src"), "foundation\n");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "foundation");
+    const commit = (await git("rev-parse", "HEAD")).stdout.trim();
+    const hostCell = (hostPath: string): Cell => ({
+      id: "host-stand-in",
+      spec: { image: "none", project: "p", task: "t", role: "ci", instance: "test", mount: { hostPath } },
+      exec: async (argv) => {
+        try {
+          const { stdout, stderr } = await promisify(execFile)(argv[0] ?? "sh", argv.slice(1), { cwd: hostPath });
+          return { exitCode: 0, stdout, stderr, timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false };
+        } catch (err) {
+          const code = typeof err === "object" && err !== null && "code" in err && typeof err.code === "number" ? err.code : 1;
+          return { exitCode: code, stdout: "", stderr: String(err), timedOut: false, statusLost: false, stdoutTruncated: false, stderrTruncated: false };
+        }
+      },
+      teardown: async () => {},
+    });
+    const cells: CheckCells = {
+      targetProjectPath: project,
+      createCell: async (spec) => hostCell(spec.hostPath),
+      teardownCell: async () => {},
+      timeoutSeconds: 30,
+    };
+    return { root, commit, cells };
+  }
+
+  test("a check that rewrites a product file is unrunnable, naming it and the check; nothing after it runs", async () => {
+    const { root, commit, cells } = await target();
+    const suites = [
+      { label: "the author's checks", checks: [
+        { name: "replaces the product", command: "cp checks/x/impl.src src/main.src && echo ok" },
+        { name: "never runs", command: "echo late" },
+      ], files: [{ path: "checks/x/impl.src", content: "the author's implementation\n" }] },
+      { label: "a later suite", checks: [{ name: "later", command: "echo later" }], files: [] },
+    ];
+
+    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "a"), suites);
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.report).toMatchObject({ kind: "product_changed", check: "replaces the product", paths: ["src/main.src"] });
+    const error = productChangeOf("task-1", runs);
+    expect(error?.name).toBe("CheckRunChangedProduct");
+    expect(error?.message).toContain('the author\'s checks: check "replaces the product" changed files the project tracks: src/main.src');
+    expect(redRunPreview(runs[0]?.report ?? { kind: "ran", runs: [] }, 30, "/d")).toMatchObject({ kind: "product_changed", detail: expect.stringContaining("src/main.src") });
+  });
+
+  test("check files that would replace a tracked product file are unrunnable before any check runs", async () => {
+    const { root, commit, cells } = await target();
+    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "b"), [
+      { label: "an old set", checks: [{ name: "c", command: "echo ran" }], files: [{ path: "src/main.src", content: "replaced\n" }] },
+    ]);
+    expect(runs[0]?.report).toEqual({ kind: "product_changed", check: null, paths: ["src/main.src"], runs: [] });
+  });
+
+  test("a check that writes only untracked files and its own check files runs to a verdict", async () => {
+    const { root, commit, cells } = await target();
+    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "c"), [
+      { label: "clean", checks: [{ name: "c", command: "mkdir -p build && echo out > build/o && echo out > checks/x/log && echo ran" }], files: [{ path: "checks/x/run.sh", content: "true\n" }] },
+    ]);
+    expect(runs[0]?.report).toMatchObject({ kind: "ran", runs: [{ name: "c", exitCode: 0 }] });
+    expect(productChangeOf("task-1", runs)).toBeNull();
+  });
+});
+
+// Eighth run E5: the brief named the foundation's commit, which the cell's one-commit repository never holds.
+describe("the check author's foundation and checks directory", () => {
+  test("names the foundation by its task and the author's checks directory, never a commit", () => {
+    const text = formatFoundationForCheckAuthor({ taskId: "env-task" }, checkAreaOf("impl-1"));
+    expect(text).toContain("the merge of task env-task");
+    expect(text).toContain("under checks/impl-1/ and nowhere else");
+    expect(text).not.toMatch(/commit [0-9a-f]{7,}/);
   });
 });
 

@@ -278,10 +278,14 @@ describe("independent verification", () => {
   it("a check task's check that fails on the foundation is stored with it as baseline; nothing of the check task reaches main", async () => {
     hello = await plannedPair("Write hello.txt");
     const mainBefore = await git("rev-parse", "main");
+    const helloSh = `checks/${hello.implementation.id}/hello.sh`;
 
+    // Eighth run E1: the author also writes the product beside its checks; it is discarded, so the
+    // red run still fails on the foundation and the stored set holds the check file only.
     const { result, mock, events } = await runTask(hello.check, [
-      toolCallTurn("write_file", { path: "checks/hello.sh", content: HELLO_CHECK }),
-      toolCallTurn("define_check", { name: "says hello", command: "sh checks/hello.sh" }),
+      toolCallTurn("write_file", { path: helloSh, content: HELLO_CHECK }),
+      toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" }),
+      toolCallTurn("define_check", { name: "says hello", command: `sh ${helloSh}` }),
       toolCallTurn("finish", { status: "done", summary: "One check: hello.txt says hello." }),
     ]);
 
@@ -289,14 +293,19 @@ describe("independent verification", () => {
     expect(toolNames(mock)).toContain("define_check");
     expect(toolNames(mock)).not.toContain("build_environment");
     expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [], baselineCommit: foundation, foundationTaskId });
-    expect(promptText(mock)).toContain(`commit ${foundation}, the merge of task`);
+    expect(events.find((e) => e.event === "check_files_discarded")).toMatchObject({ paths: ["hello.txt"] });
+    expect(JSON.stringify(mock.doGenerateCalls[3]?.prompt ?? null)).toContain("Discarded, outside your checks directory");
+    // Eighth run E5: the foundation is named by its task, never by a commit the cell cannot reach.
+    expect(promptText(mock)).toContain(`the merge of task ${foundationTaskId}`);
+    expect(promptText(mock)).toContain(`under checks/${hello.implementation.id}/ and nowhere else`);
+    expect(promptText(mock)).not.toContain(foundation);
     const rows = await checkRowsOf(hello.implementation.id);
     expect(rows).toEqual([
       {
         revision: 1,
         name: "says hello",
-        command: "sh checks/hello.sh",
-        files: [{ path: "checks/hello.sh", content: HELLO_CHECK }],
+        command: `sh ${helloSh}`,
+        files: [{ path: helloSh, content: HELLO_CHECK }],
         environmentVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
         baselineCommit: foundation,
         checkTaskId: hello.check.id,
@@ -313,11 +322,13 @@ describe("independent verification", () => {
   // red run accepts, and the author could not replace them.
   it("define_check red-runs the check at once and shows why it fails; a redefinition replaces it", async () => {
     const greeting = await plannedPair("Write hi.txt");
+    const hiSh = `checks/${greeting.implementation.id}/hi.sh`;
+    const helloSh = `checks/${hello.implementation.id}/hello.sh`;
 
     const { result, mock, events } = await runTask(greeting.check, [
       toolCallTurn("define_check", { name: "says hi", command: "words=(hi); grep -q hi hi.txt && cat hi.txt" }),
-      toolCallTurn("write_file", { path: "checks/hi.sh", content: "grep hi hi.txt\n" }),
-      toolCallTurn("define_check", { name: "says hi", command: "sh checks/hi.sh" }),
+      toolCallTurn("write_file", { path: hiSh, content: "grep hi hi.txt\n" }),
+      toolCallTurn("define_check", { name: "says hi", command: `sh ${hiSh}` }),
       toolCallTurn("finish", { status: "done", summary: "One check: hi.txt says hi." }),
     ]);
 
@@ -325,8 +336,8 @@ describe("independent verification", () => {
     // Third run N8: the author sees the project's stored checks, the earlier task's included.
     expect(promptText(mock)).toContain("Checks already stored in this project");
     expect(promptText(mock)).toContain('### Task \\"Write hello.txt\\"');
-    expect(promptText(mock)).toContain("- says hello: `sh checks/hello.sh`");
-    expect(promptText(mock)).toContain("#### checks/hello.sh");
+    expect(promptText(mock)).toContain(`- says hello: \`sh ${helloSh}\``);
+    expect(promptText(mock)).toContain(`#### ${helloSh}`);
     const afterFirst = JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null);
     expect(afterFirst).toContain('Defined check \\"says hi\\"');
     expect(afterFirst).toContain("exit code: 2");
@@ -339,7 +350,7 @@ describe("independent verification", () => {
       { name: "says hi", replaced: true, exitCode: 2, rejection: null },
     ]);
     expect(await checkRowsOf(greeting.implementation.id)).toEqual([
-      expect.objectContaining({ name: "says hi", command: "sh checks/hi.sh", files: [{ path: "checks/hi.sh", content: "grep hi hi.txt\n" }] }),
+      expect.objectContaining({ name: "says hi", command: `sh ${hiSh}`, files: [{ path: hiSh, content: "grep hi hi.txt\n" }] }),
     ]);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
@@ -347,15 +358,40 @@ describe("independent verification", () => {
   it("a vacuous set, none of whose checks fails on the foundation, is rejected and nothing is stored", async () => {
     const vacuous = await plannedPair("Write a page");
 
-    const { result } = await runTask(vacuous.check, [
+    const { result, events } = await runTask(vacuous.check, [
       toolCallTurn("define_check", { name: "always", command: "echo fine" }),
       toolCallTurn("finish", { status: "done", summary: "One check." }),
     ]);
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("no check of the set fails on the foundation");
+    // The detail and the chain are the next check attempt's brief: no commit the cell cannot reach
+    // (eighth run E5); the operator's copy is in the task_failed event alone.
+    expect(result.detail).not.toContain(foundation);
+    expect(JSON.stringify(result.errorEnvelope)).not.toContain(foundation);
+    expect(events.find((e) => e.event === "task_failed")).toMatchObject({ baselineCommit: foundation, foundationTaskId });
     expect(await checkRowsOf(vacuous.implementation.id)).toEqual([]);
     expect(await git("branch", "--list", `check/${vacuous.check.id}`)).toBe("");
+
+    // The retry's actual brief, from the envelope as the orchestrator stores it for a replan
+    // (execution.ts raw, failure-recovery.ts replanContext): it renders the chain, and names no commit.
+    const retry = await runTask(
+      {
+        ...vacuous.check,
+        attempt: 2,
+        dispatchCount: 1,
+        blockedReason: { source: "replan", replanContext: { attempt: 1, detail: result.detail, raw: { ...result.errorEnvelope } } },
+      },
+      [toolCallTurn("finish", { status: "done", summary: "No check." })],
+    );
+    const brief = promptText(retry.mock);
+    expect(brief).toContain("Previous attempt FAILED");
+    expect(brief).toContain("# Error Chain");
+    expect(brief).toContain("no check of the set fails on the foundation");
+    expect(brief.match(/(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/g)).toBeNull();
+    // The only 64-hex string a brief may hold is the environment's version, a content hash, never a commit.
+    const withoutVersion = brief.replace(/environment, version [0-9a-f]{64}\b/g, "environment, version <v>");
+    expect(withoutVersion.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g)).toBeNull();
   }, 300_000);
 
   it("a check whose command the environment cannot run is rejected, though it fails on main", async () => {
@@ -398,8 +434,8 @@ describe("independent verification", () => {
     expect(result.status, result.detail).toBe("completed");
     expect(toolNames(mock)).not.toContain("define_check");
     expect(promptText(mock)).toContain("Checks that decide this task");
-    expect(promptText(mock)).toContain("sh checks/hello.sh");
-    expect(promptText(mock)).toContain("#### checks/hello.sh");
+    expect(promptText(mock)).toContain(`sh checks/${hello.implementation.id}/hello.sh`);
+    expect(promptText(mock)).toContain(`#### checks/${hello.implementation.id}/hello.sh`);
     expect(promptText(mock)).toContain(HELLO_CHECK.trim());
     expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({
       verdict: "passed",
@@ -718,7 +754,7 @@ describe("post-merge regression suite", () => {
       checksOf: hello.implementation.id,
       checkTaskId: hello.check.id,
       revision: 1,
-      check: { name: "says hello", command: "sh checks/hello.sh" },
+      check: { name: "says hello", command: `sh checks/${hello.implementation.id}/hello.sh` },
     });
   }, 300_000);
 

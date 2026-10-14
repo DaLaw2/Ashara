@@ -3,9 +3,9 @@ import { dirname, posix } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
 import { runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import { CHECK_RUNNER } from "@ashara/workplace";
-import type { CheckDefinition, CheckRedRunPreview, CheckRun, CheckRunReport } from "@ashara/workplace";
-import { targetRepo } from "./host-git.js";
+import { CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
+import type { CheckDefinition, CheckRedRunPreview, CheckRun, CheckRunReport, ProductChangedReport } from "@ashara/workplace";
+import { freshWorktreeRepo, targetRepo } from "./host-git.js";
 import { TreePathRefused, readTreeFile, writeTreeFile } from "./tree-read.js";
 import { cleanupWorkdir } from "./workspace.js";
 
@@ -163,6 +163,8 @@ export class StoredChecksStale extends Error {
   readonly checkTaskId: string;
   readonly revision: number;
   readonly storedVersion: string;
+  /** For the operator: the message names no commit, since it becomes the reopened check attempt's brief. */
+  readonly baselineCommit: string | null;
 
   constructor(
     readonly taskId: string,
@@ -176,13 +178,14 @@ export class StoredChecksStale extends Error {
       `the checks of task ${taskId} (revision ${stored.revision}, check task ${stored.checkTaskId}) were red-run on ` +
         `environment version ${stored.environmentVersion}, but this dispatch runs on ` +
         `${currentVersion === null ? "the BaseCell" : `environment version ${currentVersion}`}, where they no longer ` +
-        `hold the red-run rule on their baseline ${stored.baselineCommit ?? "(none recorded)"}; the check task must ` +
+        `hold the red-run rule on the plan's foundation they were red-run on; the check task must ` +
         `write them again on the current environment:\n${redRun}`,
     );
     this.name = "StoredChecksStale";
     this.checkTaskId = stored.checkTaskId;
     this.revision = stored.revision;
     this.storedVersion = stored.environmentVersion;
+    this.baselineCommit = stored.baselineCommit;
   }
 }
 
@@ -211,6 +214,16 @@ async function commitOf(repo: HostRepo, taskId: string, step: string, args: read
   const line = stdout.trim();
   if (!COMMIT_HASH.test(line)) throw new CheckGitStepFailed(taskId, step, `printed ${JSON.stringify(stdout)}`);
   return line;
+}
+
+/**
+ * The directory a check author writes its check files in: `checks/<id>/`, the id of the task its
+ * checks decide. Only paths under it are a check set's files (eighth run E1, simulator B1): any
+ * other file the author writes, the product's source included, is never kept nor placed under a
+ * check run. It names a directory, never a language's file.
+ */
+export function checkAreaOf(checkedTaskId: string): string {
+  return `checks/${checkedTaskId}/`;
 }
 
 /** The throwaway branch a check task's attempt works on; it is never merged. */
@@ -275,7 +288,12 @@ export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string, pur
 }
 
 export type CheckHarvest =
-  | { readonly kind: "harvested"; readonly files: readonly CheckFile[] }
+  | {
+      readonly kind: "harvested";
+      readonly files: readonly CheckFile[];
+      /** Paths the author wrote outside its checks area: discarded, never stored nor run on. */
+      readonly discarded: readonly string[];
+    }
   /** The check task's work cannot be kept; `reason` is told to the task's failure record. */
   | { readonly kind: "rejected"; readonly reason: string };
 
@@ -283,9 +301,11 @@ export type CheckHarvest =
  * The files a check attempt wrote: everything in its worktree is committed to the throwaway branch,
  * the branch is diffed against the commit it started from (hardened git), and of the paths it
  * changed only those the author wrote with its file tools (`written`) are its submission; whatever
- * else changed was left by a command it ran and is no check file (fifth run N22). Each file is read
- * through the safe tree reader. A deletion, a link, a file of the environment's build context
- * (`buildContext`), a file too large or not UTF-8 text rejects the whole harvest.
+ * else changed was left by a command it ran and is no check file (fifth run N22). Of the submission
+ * only the paths under `area` (checkAreaOf) are check files; the rest are discarded, logged and
+ * returned, never kept (eighth run E1). Each file is read through the safe tree reader. A deletion,
+ * a link, a file of the environment's build context (`buildContext`), a file too large or not UTF-8
+ * text, all within the area, rejects the whole harvest.
  */
 export async function harvestCheckFiles(
   repo: HostRepo,
@@ -293,10 +313,11 @@ export async function harvestCheckFiles(
   startCommit: string,
   buildContext: readonly string[],
   written: ReadonlySet<string>,
+  area: string,
 ): Promise<CheckHarvest> {
   await runHostGit(repo, ["add", "-A"]);
   await runHostGit(repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${taskId}`]);
-  return collectCheckFiles(repo, startCommit, "HEAD", buildContext, written);
+  return collectCheckFiles(repo, taskId, startCommit, "HEAD", buildContext, written, area);
 }
 
 /**
@@ -310,26 +331,35 @@ export async function previewCheckFiles(
   startCommit: string,
   buildContext: readonly string[],
   written: ReadonlySet<string>,
+  area: string,
 ): Promise<CheckHarvest> {
   const snapshot = await worktreeSnapshotCommit(repo, taskId, "define_check");
-  return collectCheckFiles(repo, startCommit, snapshot, buildContext, written);
+  return collectCheckFiles(repo, taskId, startCommit, snapshot, buildContext, written, area);
 }
 
 /** The harvest's rules on the diff from `startCommit` to `endCommit`, each file read from the worktree. */
 async function collectCheckFiles(
   repo: HostRepo,
+  taskId: string,
   startCommit: string,
   endCommit: string,
   buildContext: readonly string[],
   written: ReadonlySet<string>,
+  area: string,
 ): Promise<CheckHarvest> {
   const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
   const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, endCommit]);
   const fields = stdout.split("\0").filter((field) => field !== "");
   const changed: Array<{ readonly status: string; readonly path: string }> = [];
+  const discarded: string[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const path = fields[i + 1] ?? "";
-    if (written.has(path)) changed.push({ status: fields[i] ?? "", path });
+    if (!written.has(path)) continue;
+    if (path.startsWith(area)) changed.push({ status: fields[i] ?? "", path });
+    else discarded.push(path);
+  }
+  if (discarded.length > 0) {
+    console.warn(`[checks] check task ${taskId}: discarded ${discarded.length} file(s) written outside its checks area ${area}: ${discarded.join(", ")}`);
   }
 
   const deleted = changed.filter((c) => c.status !== "A" && c.status !== "M");
@@ -361,7 +391,7 @@ async function collectCheckFiles(
     if (total > MAX_CHECK_FILES_BYTES) return rejected(`the check files exceed ${MAX_CHECK_FILES_BYTES} bytes together`);
     files.push({ path, content: read.text });
   }
-  return { kind: "harvested", files };
+  return { kind: "harvested", files, discarded };
 }
 
 function tailOf(text: string): string {
@@ -394,7 +424,11 @@ export interface SuiteRun {
  * runs the suites in order, sequentially, in one cell from `image` that mounts it, started when the
  * first suite's files are in place. Before each suite its files are written over the checkout; a
  * suite whose files cannot be written is reported `files_refused` and the next one still runs. An
- * earlier suite's files and whatever its commands wrote stay in the checkout. Each check is bounded
+ * earlier suite's files and whatever its commands wrote stay in the checkout. A file `commit`
+ * tracks may never change (L9's tracked-file refusal, eighth run E1): after the files are written
+ * and after each check, hardened host git compares the checkout with `commit`, and the first
+ * suite that changed one is reported `product_changed`, naming the files and the check; no later
+ * check or suite runs on that tree, so the returned list then ends early. Each check is bounded
  * by `cells.timeoutSeconds`, so the run is bounded by that times the number of checks, plus the
  * cell's start and teardown. The checkout and the cell are removed afterwards. A substrate failure throws.
  */
@@ -410,12 +444,21 @@ export async function runSuitesOnCheckout(
   await runHostGit(targetRepo(cells.targetProjectPath), ["worktree", "add", "--detach", dir, commit]);
   let cell: Cell | null = null;
   try {
+    // Read before any cell mounts the checkout: its gitlink is then never re-read.
+    const repo = await freshWorktreeRepo(cells.targetProjectPath, dir);
+    const unchanged = new Set(await changedTrackedPaths(repo));
+    const changedSinceCheckout = async (): Promise<string[]> => (await changedTrackedPaths(repo)).filter((path) => !unchanged.has(path));
     const reports: SuiteRun[] = [];
     for (const suite of suites) {
       const refused = await writeCheckFiles(dir, suite.files);
       if (refused !== null) {
         reports.push({ suite, report: { kind: "files_refused", detail: refused } });
         continue;
+      }
+      const replaced = await changedSinceCheckout();
+      if (replaced.length > 0) {
+        reports.push({ suite, report: { kind: "product_changed", check: null, paths: replaced, runs: [] } });
+        return reports;
       }
       cell ??= await cells.createCell({ image, role, hostPath: dir });
       const runs: CheckRun[] = [];
@@ -428,6 +471,11 @@ export async function runSuitesOnCheckout(
           timedOut: result.timedOut,
           output: tailOf(`${result.stdout}${result.stderr}`.trim()),
         });
+        const changed = await changedSinceCheckout();
+        if (changed.length > 0) {
+          reports.push({ suite, report: { kind: "product_changed", check: check.name, paths: changed, runs } });
+          return reports;
+        }
       }
       reports.push({ suite, report: { kind: "ran", runs } });
     }
@@ -439,6 +487,45 @@ export async function runSuitesOnCheckout(
       await cleanupWorkdir(dir, cells.targetProjectPath);
     }
   }
+}
+
+/** The paths the checkout's commit tracks that are now modified, deleted or changed in kind. */
+async function changedTrackedPaths(repo: HostRepo): Promise<string[]> {
+  const { stdout } = await runHostGit(repo, ["status", "--porcelain", "-z", "--untracked-files=no", "--no-renames"]);
+  // Each record is "XY <path>"; --no-renames keeps every record to one path.
+  return stdout.split("\0").filter((record) => record !== "").map((record) => record.slice(3));
+}
+
+/**
+ * A run of the checks on Z0's own checkout (the post-merge run, the run on main) changed files the
+ * checked-out commit tracks: the product they judge is no longer the one checked out, so the run
+ * is no verdict on it, neither a pass nor a failure of the task's work (eighth run E1, L9).
+ */
+class CheckRunChangedProduct extends Error {
+  readonly check: string | null;
+  readonly paths: readonly string[];
+
+  constructor(
+    readonly taskId: string,
+    /** The suite whose files or check changed them, as the run labels it. */
+    readonly suite: string,
+    report: ProductChangedReport,
+  ) {
+    // Names no commit: its message reaches a later brief through the block's reason, and a cell's
+    // repository holds no commit of the target (eighth run E5); the caller's event carries it.
+    super(`checks of task ${taskId}: ${suite}: ${describeProductChange(report)}`);
+    this.name = "CheckRunChangedProduct";
+    this.check = report.check;
+    this.paths = report.paths;
+  }
+}
+
+/** The first suite run that changed the checkout's tracked files, as a typed error; null when none did. */
+export function productChangeOf(taskId: string, runs: readonly SuiteRun[]): CheckRunChangedProduct | null {
+  for (const run of runs) {
+    if (run.report.kind === "product_changed") return new CheckRunChangedProduct(taskId, run.suite.label, run.report);
+  }
+  return null;
 }
 
 /** Writes the files over the checkout; the refusal's message when one cannot be placed, else null. */
@@ -513,19 +600,31 @@ export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, ch
   if (report.kind === "files_refused") {
     return { kind: "files_refused", detail: `the check files cannot be placed on the foundation: ${report.detail}` };
   }
+  if (report.kind === "product_changed") return { kind: "product_changed", detail: `on the foundation, ${describeProductChange(report)}` };
   const [run] = report.runs;
   if (run === undefined) throw new SuiteRunMissing(checkoutDir);
   const rejection = redRunProblem(run);
   return { kind: "ran", run, timeoutSeconds, rejection, holdsAlready: rejection === null && !failsDecisively(run) };
 }
 
-/** Where a check task's checks are red-run, as its brief states it: the foundation, never today's main. */
-export function formatFoundationForCheckAuthor(foundation: { readonly taskId: string; readonly commit: string }): string {
+/**
+ * Where a check task's checks are red-run and where its files go, as its brief states it: the
+ * foundation, never today's main, named by the task whose merge it is. Its commit is not named: the
+ * cell's repository is a throwaway one of a single commit, which never holds it (eighth run E5).
+ */
+export function formatFoundationForCheckAuthor(foundation: { readonly taskId: string }, area: string): string {
   return [
     `## Red run on the foundation`,
-    `Your checks are red-run on the foundation of this plan: commit ${foundation.commit}, the merge of task`,
-    `${foundation.taskId}, which every task of the plan builds on, before any of them did its work. Your workspace`,
-    `shows the project as it is now, which other tasks may already have changed; the red run does not use it.`,
+    `Your checks are red-run on the foundation of this plan: the project as the merge of task ${foundation.taskId} left`,
+    `it, which every task of the plan builds on, before any of them did its work. It is not in your workspace, and the`,
+    `workspace's own repository holds no other version of the project: only define_check's red run shows how a check`,
+    `does there. Your workspace shows the project as it is now, which other tasks may already have changed; the red`,
+    `run does not use it.`,
+    ``,
+    `## Your checks directory`,
+    `Write every file your checks need under ${area} and nowhere else. Only files you write there are kept and`,
+    `written over the foundation for the red run; any other file you write, the product's source included, is`,
+    `discarded. A check must not change a file the project tracks when it runs.`,
   ].join("\n");
 }
 
