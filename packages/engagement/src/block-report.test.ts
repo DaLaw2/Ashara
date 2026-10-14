@@ -30,7 +30,10 @@ describe("project block reports", () => {
 
       expect(posted).toHaveLength(1);
       expect(posted[0].key).toBe("e1:blocked");
-      expect(posted[0].body).toContain(`SomethingFailed: the ${kind} cause as recorded`);
+      expect(posted[0].body).toContain("Ashara recorded the cause as this: ");
+      expect(posted[0].body).toContain("its own record of this pause, record e1.");
+      expect(posted[0].body).not.toContain("SomethingFailed");
+      expect(posted[0].body).not.toContain(`the ${kind} cause as recorded`);
       expect(posted[0].body).toContain("waiting on its operator");
     },
   );
@@ -41,6 +44,24 @@ describe("project block reports", () => {
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain("No cause was recorded for this pause.");
+  });
+
+  // W11b D3: the client read "PlanReportUnfounded: project ... 13 decomposed task(s) ...".
+  test("a fault's report keeps the error class and chain with the operator, and names the record that holds them", async () => {
+    const reason =
+      "PlanReportUnfounded: project 00000000-0000-4000-8000-000000000020 is recorded as planned with 2 epic(s), 13 decomposed task(s); " +
+      "no report is posted\n    at PlanReports.compose (packages/engagement/src/plan-report.ts:289:13)";
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "ep-7", projectId, kind: "fault", cause: { errorClass: "PlanReportUnfounded", reason } },
+    ]);
+    await reports.runPending();
+    const body = posted[0].body;
+    expect(body).not.toMatch(/PlanReportUnfounded|Error\b|decomposed task\(s\)|\n\s+at |\.ts:\d+/);
+    expect(body).toContain(
+      "Ashara recorded the cause as this: a step of Ashara's own work on this project failed, or Ashara's own record of the project did not hold together.",
+    );
+    expect(body).toContain("Ashara keeps the technical detail in its own record of this pause, record ep-7.");
+    expect(body).toContain("The team has to repair it.");
   });
 
   test("a resumption after an unblock is told once, on its own episode", async () => {
@@ -62,7 +83,9 @@ describe("halt reports state the observed cause", () => {
     ]);
     await reports.runPending();
     expect(posted).toHaveLength(1);
-    expect(posted[0].body).toContain(`InfrastructureFaultBudgetSpent: ${reason}`);
+    expect(posted[0].body).toContain("Ashara recorded the cause as this: the machines Ashara runs the work on kept failing");
+    expect(posted[0].body).not.toContain("InfrastructureFaultBudgetSpent");
+    expect(posted[0].body).not.toContain("kill -9");
     expect(posted[0].body).toContain("not charged");
     expect(posted[0].body).toContain("resumes this project by itself");
     expect(posted[0].body).not.toContain("operator");

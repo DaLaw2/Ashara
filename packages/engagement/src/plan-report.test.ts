@@ -8,35 +8,57 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000010", "test")
 
 type Dropped = { kind: "recorded"; count: number } | { kind: "unrecorded" };
 
+type Counts = { decomposition: number; sprint0: number; scaffolds: number; checks: number; reviews: number; unrecorded: number; started: number };
+type Revision = { revisionId: string; revision: number; summary: unknown };
+
+const CHANGE_SUMMARY = {
+  answer: "Keys contain no whitespace.",
+  decision: "Keys are non-empty and contain no whitespace.",
+  newTasks: ["Store text keys"],
+  newCheckTasks: 1,
+  newEnvironmentTask: true,
+  supersededTasks: ["Store keys without newlines"],
+  supersededOther: 4,
+  keptCompleted: 0,
+};
+
 function reportsFor(
-  tasks: { decomposition: number; sprint0: number; scaffolds: number; checks: number; reviews: number; unrecorded: number },
+  tasks: Counts,
   droppedOrderingHints: Dropped = { kind: "recorded", count: 0 },
+  revisions: readonly Revision[] = [],
+  dueRevisions: readonly Revision[] = [],
 ) {
   const posted: string[] = [];
+  const folded: string[][] = [];
+  const revisionPosts: string[] = [];
   const blocked: ProjectBlockCause[] = [];
   const store: PlanReportStore = {
     dueReports: async () => [
-      { subject: "first-plan", projectId, epicTitles: ["Studio sign-up merge"], tasks, droppedOrderingHints },
+      { subject: "first-plan", projectId, epicTitles: ["Studio sign-up merge"], tasks, droppedOrderingHints, revisions },
     ],
-    postReport: async (_projectId, _subject, body) => {
+    postReport: async (_projectId, _subject, body, revisionIds) => {
       posted.push(body);
+      folded.push([...revisionIds]);
       return "posted";
     },
-    dueRevisionReports: async () => [],
-    postRevisionReport: async () => {
-      throw new Error("no revision is due");
+    dueRevisionReports: async () => dueRevisions.map((r) => ({ ...r, projectId })),
+    postRevisionReport: async (_revisionId, body) => {
+      revisionPosts.push(body);
+      return "posted";
     },
     blockProject: async (_projectId, cause) => {
       blocked.push(cause);
       return "blocked";
     },
   };
-  return { reports: new PlanReports(store), posted, blocked };
+  return { reports: new PlanReports(store), posted, folded, revisionPosts, blocked };
 }
+
+const FOUNDED: Counts = { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 };
 
 describe("first-plan report", () => {
   test("counts only the tasks toward the client's goal and states the environment setup and the checks apart", async () => {
-    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0 });
+    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 });
 
     await reports.runPending();
 
@@ -49,7 +71,7 @@ describe("first-plan report", () => {
   });
 
   test("states the ordering hints the plan dropped", async () => {
-    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 2 });
+    const { reports, posted } = reportsFor({ decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 }, { kind: "recorded", count: 2 });
 
     await reports.runPending();
 
@@ -57,12 +79,12 @@ describe("first-plan report", () => {
   });
 
   test.each([
-    ["a task of unrecorded origin", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 1 }, { kind: "recorded", count: 0 }],
-    ["no Sprint 0 task", { decomposition: 6, sprint0: 0, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 0 }],
-    ["a decomposed task without its check task", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 5, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 0 }],
-    ["no record of dropped ordering hints", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "unrecorded" }],
-    ["no review of its checks", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 0, unrecorded: 0 }, { kind: "recorded", count: 0 }],
-    ["no product scaffold", { decomposition: 6, sprint0: 1, scaffolds: 0, checks: 6, reviews: 1, unrecorded: 0 }, { kind: "recorded", count: 0 }],
+    ["a task of unrecorded origin", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 1, started: 0 }, { kind: "recorded", count: 0 }],
+    ["no Sprint 0 task", { decomposition: 6, sprint0: 0, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 }, { kind: "recorded", count: 0 }],
+    ["a decomposed task without its check task", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 5, reviews: 1, unrecorded: 0, started: 0 }, { kind: "recorded", count: 0 }],
+    ["no record of dropped ordering hints", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 }, { kind: "unrecorded" }],
+    ["no review of its checks", { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 0, unrecorded: 0, started: 0 }, { kind: "recorded", count: 0 }],
+    ["no product scaffold", { decomposition: 6, sprint0: 1, scaffolds: 0, checks: 6, reviews: 1, unrecorded: 0, started: 0 }, { kind: "recorded", count: 0 }],
   ] as const)("a plan with %s is not reported and its project is blocked", async (_case, tasks, dropped) => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { reports, posted, blocked } = reportsFor({ ...tasks }, { ...dropped });
@@ -72,6 +94,61 @@ describe("first-plan report", () => {
     expect(blocked).toEqual([{ category: "fault", errorClass: "PlanReportUnfounded", reason: expect.stringMatching(/^PlanReportUnfounded: /) }]);
     expect(outcomes).toEqual([{ kind: "project-blocked", projectId, cause: blocked[0] }]);
     expect(posted).toHaveLength(0);
+  });
+
+  test("a plan with a task already started is not reported as one none of whose tasks had started", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, blocked } = reportsFor({ ...FOUNDED, started: 1 });
+
+    await reports.runPending();
+
+    expect(posted).toHaveLength(0);
+    expect(blocked.map((cause) => cause.errorClass)).toEqual(["PlanReportUnfounded"]);
+  });
+
+  test("a plan revised before it was reported is one report of the plan that stands, which also tells the revision", async () => {
+    const { reports, posted, folded, revisionPosts, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [
+      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY },
+    ]);
+
+    expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
+
+    expect(blocked).toEqual([]);
+    expect(posted).toHaveLength(1);
+    expect(folded).toEqual([["rev-2"]]);
+    expect(revisionPosts).toEqual([]);
+    expect(posted[0]).toContain("split into 6 tasks for what you asked for.");
+    expect(posted[0]).toContain(
+      `This plan already takes in your answer. Because you said "Keys contain no whitespace.", the team revised the plan`,
+    );
+    expect(posted[0]).toContain("Work proceeds on: Keys are non-empty and contain no whitespace.");
+    // Nothing of the replaced plan is described: the client never saw it.
+    expect(posted[0]).not.toMatch(/Store keys without newlines|set aside/);
+  });
+
+  test("a repair recorded before the first plan was reported cannot be described, and blocks the project", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { newTasks, newCheckTasks, newEnvironmentTask, supersededTasks, supersededOther, keptCompleted } = CHANGE_SUMMARY;
+    const repair = { repaired: ["Store keys"], newTasks, newCheckTasks, newEnvironmentTask, supersededTasks, supersededOther, keptCompleted };
+    const { reports, posted, blocked } = reportsFor(FOUNDED, { kind: "recorded", count: 0 }, [{ revisionId: "rev-2", revision: 2, summary: repair }]);
+
+    await reports.runPending();
+
+    expect(posted).toHaveLength(0);
+    expect(blocked.map((cause) => cause.errorClass)).toEqual(["RepairBeforeFirstPlanReport"]);
+  });
+
+  test("a project blocked by its first-plan report is not told what the team will now do", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { reports, posted, revisionPosts, blocked } = reportsFor({ ...FOUNDED, sprint0: 2 }, { kind: "recorded", count: 0 }, [], [
+      { revisionId: "rev-2", revision: 2, summary: CHANGE_SUMMARY },
+    ]);
+
+    await reports.runPending();
+
+    expect(blocked).toHaveLength(1);
+    expect(posted).toEqual([]);
+    expect(revisionPosts).toEqual([]);
   });
 });
 

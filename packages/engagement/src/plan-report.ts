@@ -23,6 +23,15 @@ interface PlanTaskCounts {
   /** The review that reads every check of the plan together before any of its work starts. */
   readonly reviews: number;
   readonly unrecorded: number;
+  /** Tasks already dispatched: the report says none of the plan's tasks has started. */
+  readonly started: number;
+}
+
+/** A revision written before the first plan was reported; `summary` as Delivery recorded it, parsed here. */
+interface RevisionBeforeReport {
+  readonly revisionId: string;
+  readonly revision: number;
+  readonly summary: unknown;
 }
 
 /** Ordering hints between tasks that decomposition dropped; unrecorded for a plan written before they were recorded. */
@@ -36,6 +45,11 @@ type DuePlanReport =
       readonly epicTitles: readonly string[];
       readonly tasks: PlanTaskCounts;
       readonly droppedOrderingHints: DroppedOrderingHints;
+      /**
+       * Revisions written before this report, oldest first. The epics and counts above are the plan
+       * they left standing, never the work they replaced (W11b D1).
+       */
+      readonly revisions: readonly RevisionBeforeReport[];
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
   /** A first plan the store could not read back (a work item that does not parse). */
@@ -54,8 +68,11 @@ type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unre
 /** Engagement's persistence port for planning reports. */
 export interface PlanReportStore {
   dueReports(): Promise<readonly DuePlanReport[]>;
-  /** Posts the report unless one on this subject already exists for the project. */
-  postReport(projectId: ProjectId, subject: PlanReportSubject, body: string): Promise<"posted" | "already-posted">;
+  /**
+   * Posts the report unless one on this subject already exists for the project, recording each of
+   * `revisionIds` as reported by it in the same write.
+   */
+  postReport(projectId: ProjectId, subject: PlanReportSubject, body: string, revisionIds: readonly string[]): Promise<"posted" | "already-posted">;
   dueRevisionReports(): Promise<readonly DuePlanRevisionReport[]>;
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
   postRevisionReport(revisionId: string, body: string): Promise<"posted" | "already-posted">;
@@ -84,8 +101,9 @@ export interface LiaisonPlanReports {
  * A first plan that cannot be reported truthfully: no epic, no task decomposed
  * from the client's goal, not exactly one environment setup task, not exactly one
  * product scaffold task, not exactly one check task per decomposed task, a task whose producer is not recorded (so it can
- * be neither counted toward the goal nor described as setup), or no record of the
- * ordering hints the plan dropped.
+ * be neither counted toward the goal nor described as setup), a task already started (the report says none
+ * is), or no record of the ordering hints the plan dropped. The counts are of the plan that stands:
+ * superseded work is not in them.
  */
 class PlanReportUnfounded extends Error {
   constructor(
@@ -99,7 +117,7 @@ class PlanReportUnfounded extends Error {
       `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
         `${tasks.sprint0} Sprint 0 task(s), ${tasks.scaffolds} product scaffold task(s), ${tasks.checks} check task(s), ` +
         `${tasks.reviews} check review task(s), ` +
-        `${tasks.unrecorded} task(s) of unrecorded origin ` +
+        `${tasks.unrecorded} task(s) of unrecorded origin, ${tasks.started} task(s) already started ` +
         `and ${droppedText}; ` +
         `no report is posted`,
     );
@@ -125,6 +143,27 @@ const PlanRevisionSummarySchema = z.union([
 ]);
 
 type PlanRevisionSummary = z.infer<typeof PlanRevisionSummarySchema>;
+
+/** A client change taken in before the first plan was reported: what the client said and what was decided. */
+interface ChangeBeforeReport {
+  readonly answer: string;
+  readonly decision: string;
+}
+
+/**
+ * A plan repair recorded before the first plan was reported. A repair revises around tasks the team
+ * gave up, and no task runs before the first plan is reported, so this record cannot be described truthfully.
+ */
+class RepairBeforeFirstPlanReport extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly revisionId: string,
+    readonly revision: number,
+  ) {
+    super(`project ${projectId}: plan revision ${revision} (${revisionId}) is a repair written before the first plan was reported; no report is posted`);
+    this.name = "RepairBeforeFirstPlanReport";
+  }
+}
 
 /** A revision's recorded summary does not say what it did, so it cannot be reported truthfully. */
 class PlanRevisionSummaryUnreadable extends Error {
@@ -152,11 +191,23 @@ function plural(count: number, noun: string): string {
  * client asked for, the environment setup and the checks stated apart from them,
  * and any ordering between tasks the plan could not keep.
  */
-function firstPlanReport(epicTitles: readonly string[], goalTasks: number, checkTasks: number, droppedHints: number): string {
+function firstPlanReport(
+  epicTitles: readonly string[],
+  goalTasks: number,
+  checkTasks: number,
+  droppedHints: number,
+  changes: readonly ChangeBeforeReport[],
+): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
+    // The client was told their answer changes the plan (answers.ts); this is where they read what it changed.
+    ...changes.map(
+      (change) =>
+        `This plan already takes in your answer. Because you said "${change.answer}", the team revised the plan it had ` +
+        `made before your answer arrived, before any of that plan's work started. Work proceeds on: ${change.decision}`,
+    ),
     `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
       `before any of those tasks starts. Then a developer sets up the product's layout, which every later task builds on.`,
     `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
@@ -245,14 +296,21 @@ export class PlanReports implements LiaisonPlanReports {
       try {
         body = this.compose(due);
       } catch (err) {
-        if (!(err instanceof PlanReportUnfounded)) throw err;
+        if (!(err instanceof PlanReportUnfounded) && !(err instanceof PlanRevisionSummaryUnreadable) && !(err instanceof RepairBeforeFirstPlanReport)) {
+          throw err;
+        }
         outcomes.push(await this.block(due.projectId, projectBlockCause(err)));
         continue;
       }
-      const kind = await this.store.postReport(due.projectId, due.subject, body);
+      const revisionIds = due.subject === "first-plan" ? due.revisions.map((r) => r.revisionId) : [];
+      const kind = await this.store.postReport(due.projectId, due.subject, body, revisionIds);
       outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
     }
+    // A project blocked above is not told what the team will now do (W11b D2). The store lists only
+    // active projects' revisions; this keeps that so within the pass that blocked it.
+    const blocked = new Set(outcomes.filter((o) => o.kind === "project-blocked").map((o) => o.projectId));
     for (const due of await this.store.dueRevisionReports()) {
+      if (blocked.has(due.projectId)) continue;
       const parsed = PlanRevisionSummarySchema.safeParse(due.summary);
       if (!parsed.success) {
         const err = new PlanRevisionSummaryUnreadable(due.projectId, due.revisionId, z.prettifyError(parsed.error));
@@ -284,10 +342,17 @@ export class PlanReports implements LiaisonPlanReports {
       tasks.checks !== tasks.decomposition ||
       tasks.reviews !== 1 ||
       tasks.unrecorded > 0 ||
+      tasks.started > 0 ||
       dropped.kind === "unrecorded"
     ) {
       throw new PlanReportUnfounded(due.projectId, due.epicTitles.length, tasks, dropped);
     }
-    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count);
+    const changes = due.revisions.map((revision): ChangeBeforeReport => {
+      const parsed = PlanRevisionSummarySchema.safeParse(revision.summary);
+      if (!parsed.success) throw new PlanRevisionSummaryUnreadable(due.projectId, revision.revisionId, z.prettifyError(parsed.error));
+      if (!("answer" in parsed.data)) throw new RepairBeforeFirstPlanReport(due.projectId, revision.revisionId, revision.revision);
+      return { answer: parsed.data.answer, decision: parsed.data.decision };
+    });
+    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count, changes);
   }
 }

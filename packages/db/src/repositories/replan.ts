@@ -306,15 +306,26 @@ interface DuePlanRevisionRow {
 }
 
 /**
- * Plan revisions the client has not been told about, oldest first. A project the client
- * stopped, or that has a stop awaiting the Liaison, is not reported on.
+ * Plan revisions the client has not been told about, oldest first. Only an active project's: a
+ * report saying what the team will now do is not posted while the project is halted or stopped,
+ * nor while a stop awaits the Liaison (W11b D2); a halted project's revision is reported once it
+ * resumes. A revision written before the project's first plan was reported is not listed here:
+ * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
+ * was not told about.
  */
 export async function listDuePlanRevisionReports(db: DbHandle): Promise<DuePlanRevisionRow[]> {
   const rows = await db
     .select({ id: planRevisions.id, projectId: planRevisions.projectId, revision: planRevisions.revision, summary: planRevisions.summary })
     .from(planRevisions)
     .innerJoin(projects, eq(projects.id, planRevisions.projectId))
-    .where(and(isNull(planRevisions.reportId), sql`${projects.status} <> 'stopped'`, noOpenStop(projects.id)))
+    .where(
+      and(
+        isNull(planRevisions.reportId),
+        eq(projects.status, "active"),
+        noOpenStop(projects.id),
+        sql`EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = ${projects.id} AND m.reports_on = 'first-plan')`,
+      ),
+    )
     .orderBy(asc(planRevisions.createdAt), asc(planRevisions.id));
   return rows.map((row) => ({
     revisionId: row.id,

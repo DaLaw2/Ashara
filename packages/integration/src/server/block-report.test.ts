@@ -100,8 +100,9 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await reports().runPending();
     await reports().runPending();
 
-    // The cause told is the recorded one (story s-independent-verify-m1 W7), not a sentence per kind.
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("The cause, as Ashara recorded it: BudgetExceeded: project cap $5 reached")]);
+    // The cause told is the recorded kind in the client's words; the chain stays in the record (W11b D3).
+    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("Ashara recorded the cause as this: a spending limit set for this work was reached")]);
+    expect((await messagesOf(projectId))[0]).not.toMatch(/BudgetExceeded|project cap \$5 reached/);
     expect((await messagesOf(projectId))[0]).toContain("The budget set for this project has to be raised");
 
     await projects.unblock(projectId, "operator-a", "raised the project cap to $10");
@@ -157,7 +158,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await stop();
     await reports().runPending();
     expect(await messagesOf(projectId)).toEqual([]);
-    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped")).toBe("posted");
+    expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [])).toBe("posted");
 
     await new ProjectRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
     const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM projects WHERE id = ${projectId}`);
@@ -172,8 +173,8 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     expect(bodies).toHaveLength(3);
     expect(bodies[1]).toContain("has resumed");
     expect(bodies[2]).toContain("could not turn this project's vision into a plan");
-    // first planning's last error is what the episode recorded (migration 040's trigger).
-    expect(bodies[2]).toContain("The cause, as Ashara recorded it: x");
+    // first planning's last error is what the episode recorded (migration 040's trigger): told by its kind.
+    expect(bodies[2]).toContain("Ashara recorded the cause as this: every attempt to make the plan failed.");
   });
 });
 
@@ -200,8 +201,9 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
     expect(await projects.listInfrastructureHalted()).toContain(projectId);
 
     const [halted] = await messagesOf(projectId);
-    // The recorded cause, not a sentence fixed for every infrastructure halt (M2 trial M3).
-    expect(halted).toContain("The cause, as Ashara recorded it: InfrastructureFaultBudgetSpent: task cell unavailable");
+    // The recorded kind as Ashara's record, the chain kept for the operator (M2 trial M3, W11b D3).
+    expect(halted).toContain("Ashara recorded the cause as this: the machines Ashara runs the work on kept failing");
+    expect(halted).not.toMatch(/InfrastructureFaultBudgetSpent|task cell unavailable/);
     expect(halted).toContain("resumes this project by itself");
 
     expect(await projects.resumeFromInfrastructureHalt(projectId, "substrate answered: version 5.4")).toBe("resumed");
@@ -239,7 +241,8 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
 
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(2);
-    expect(bodies[0]).toContain("InfrastructureFaultBudgetSpent: task cell unavailable");
+    expect(bodies[0]).toContain("Ashara recorded the cause as this: the machines Ashara runs the work on kept failing");
+    expect(bodies[0]).not.toContain("InfrastructureFaultBudgetSpent");
     expect(bodies[1]).toContain("the machines Ashara runs the work on work again");
   });
 

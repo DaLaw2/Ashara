@@ -2,10 +2,12 @@ import type { ProjectId, StoredBlockedReason } from "@ashara/shared";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
 // s-independent-verify-m1 W7): the client hears, once, that a project is paused, the cause as it
-// was observed and recorded, and what happens next; and that it resumed. The cause is never a
-// sentence chosen by the kind of halt (M2 trial M3: a fixed sentence told the client a false
-// cause): it is the record's own text, the error chain or the reason written when the halt or the
-// give-up happened, and a halt with none recorded says so. Reports are read from recorded block
+// was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
+// as observed fact (M2 trial M3: a fixed sentence told the client a false cause): a halt recorded
+// with an error chain is told as Ashara's record of its kind, in the client's words, naming the
+// record that holds the chain, which stays with the operator (W11b D3: the raw chain told the
+// client internal class names); a bound halt quotes what its review, dispute or given-up tasks
+// recorded; and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
 // each at most once. No task is reported on its own: no task waits on a person (W6).
 
@@ -102,12 +104,39 @@ function cut(text: string): string {
   return text.length <= MAX_CAUSE_CHARS ? text : `${text.slice(0, MAX_CAUSE_CHARS)} [${text.length - MAX_CAUSE_CHARS} more characters not shown]`;
 }
 
-/** The recorded cause, quoted as it was written; a halt with none recorded says so. */
-function recordedCause(cause: RecordedCause): string {
+/**
+ * What the episode's recorded kind says paused the project, in the client's words: only what every
+ * halt recorded with that kind is by definition (ProjectBlockCategory), stated as Ashara's own
+ * record, so a misrecorded kind reads as Ashara's record and not as an observed fact (M2 trial M3).
+ */
+function recordedKind(kind: ProjectBlockKind): string {
+  switch (kind) {
+    case "budget_cap":
+      return "a spending limit set for this work was reached, so the next step of the work was not paid for";
+    case "configuration":
+      return "a step of the work needed something Ashara's own setup does not provide, for a reason other than a spending limit";
+    case "fault":
+      return "a step of Ashara's own work on this project failed, or Ashara's own record of the project did not hold together";
+    case "planning_stopped":
+      return "every attempt to make the plan failed";
+    case "replan_bound":
+      return "the plan has been revised for your changes as many times as the team revises it before its operator looks the project over";
+    case "infrastructure":
+      return "the machines Ashara runs the work on kept failing while they ran this project's work";
+  }
+}
+
+/**
+ * The cause in the client's words, from the episode's recorded kind; the record's own text (the error
+ * class and its chain) stays in project_blocks for the operator, and the report names that record
+ * (W11b D3). A halt with no cause recorded says so.
+ */
+function recordedCause(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause): string {
   if (cause.reason === null && cause.errorClass === null) return "No cause was recorded for this pause.";
-  // A described chain already opens with its class (describeErrorChain); it is not named twice.
-  const head = cause.errorClass === null || (cause.reason ?? "").startsWith(cause.errorClass) ? "" : `${cause.errorClass}: `;
-  return `The cause, as Ashara recorded it: ${head}${cut(cause.reason ?? "(no description recorded)")}`;
+  return (
+    `Ashara recorded the cause as this: ${recordedKind(kind)}. ` +
+    `Ashara keeps the technical detail in its own record of this pause, record ${episodeId}.`
+  );
 }
 
 const WAITS_ON_OPERATOR = "Until then nothing more is done on this project. The team is waiting on its operator for this, and you will be told when work resumes.";
@@ -136,9 +165,9 @@ function nextStep(kind: ProjectBlockKind): string {
 }
 
 /** What the client reads when a project is paused: that it is, the recorded cause, and what happens next. */
-function projectBlockedReport(kind: ProjectBlockKind, cause: RecordedCause): string {
+function projectBlockedReport(episodeId: string, kind: ProjectBlockKind, cause: RecordedCause): string {
   const opening = kind === "planning_stopped" ? "Ashara could not turn this project's vision into a plan, so work on this project has stopped." : "Work on this project is paused.";
-  return [opening, recordedCause(cause), nextStep(kind)].join("\n\n");
+  return [opening, recordedCause(episodeId, kind, cause), nextStep(kind)].join("\n\n");
 }
 
 /** Plain words: what stopped, why, and what the client can do (a halt recorded before migration 048). */
@@ -233,7 +262,7 @@ function blockedBody(due: Extract<DueBlockReport, { readonly subject: "project-b
     case "plan_repair":
       return planRepairBoundReport(due.abandoned);
     default:
-      return projectBlockedReport(due.kind, due.cause);
+      return projectBlockedReport(due.episodeId, due.kind, due.cause);
   }
 }
 

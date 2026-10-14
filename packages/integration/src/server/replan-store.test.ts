@@ -181,7 +181,7 @@ function blockReports(): BlockReports {
 }
 
 /** A tender taken in, its roster derived and its first plan written: Sprint 0, a check task and one task. */
-async function plannedProject(): Promise<{ projectId: ProjectId; questionId: string }> {
+async function plannedProject(options: { readonly reported: boolean } = { reported: true }): Promise<{ projectId: ProjectId; questionId: string }> {
   const created = await createProjectWithTender(db, clientId, `${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, "Booking page for my two pottery studios.");
   const projectId = created.project.id;
   ourProjects.add(projectId);
@@ -195,7 +195,7 @@ async function plannedProject(): Promise<{ projectId: ProjectId; questionId: str
   const planStore = createFirstPlanStore(db);
   const plan: FirstPlanStore = { ...planStore, projectsAwaitingPlan: ours(() => planStore.projectsAwaitingPlan()) };
   expect((await new FirstPlanner({ llm: gateway, store: plan }).runPending()).map((o) => o.kind)).toEqual(["planned"]);
-  expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
+  if (options.reported) expect((await planReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
   const question = (await new ClientMessageRepository(db).listByProject(projectId)).find((m) => m.kind === "question");
   if (question === undefined) throw new Error("intake posted no question");
   return { projectId, questionId: question.id };
@@ -320,6 +320,65 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM projects WHERE name LIKE ${pattern}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
   await db.$client.end();
+});
+
+// W11b D1, D2: answers read after the first plan was written and before it was reported (W11 D5).
+describe("the client is told one plan, and never what the team will now do on a halted project", () => {
+  test("a change read between the first plan and its report gives one founded report of the revised plan, and no halt", async () => {
+    const { projectId, questionId } = await plannedProject({ reported: false });
+    const answerId = await contradict(projectId, questionId);
+
+    // The plan the client was just told must change is not reported meanwhile.
+    expect(await planReports().runPending()).toEqual([]);
+    pipelineModel({ environmentChange: false });
+    expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
+
+    // Before the fix: every item counted, two Sprint 0 tasks, two scaffolds, two reviews: PlanReportUnfounded.
+    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "first-plan" }]);
+    expect(await planReports().runPending()).toEqual([]);
+    expect(await projectRow(projectId)).toEqual({ status: "active", flag: null, category: null });
+
+    const reports = await reportsOf(projectId);
+    const plans = reports.filter((m) => m.body.startsWith("Ashara has made the first plan"));
+    expect(plans).toHaveLength(1);
+    const plan = plans[0];
+    if (plan === undefined) throw new Error("no first-plan report");
+    expect(plan.body).toContain("1 epic (");
+    expect(plan.body).toContain("split into 1 task for what you asked for.");
+    expect(plan.body).toContain("(1 check task)");
+    expect(plan.body).toContain(`Because you said "No, the hill studio opens first."`);
+    expect(plan.body).toContain("Work proceeds on: The hill studio opens first.");
+    expect(reports.some((m) => m.body.includes("The team will now do") || m.body.includes("set aside"))).toBe(false);
+    // The revision is recorded as told by that one report, so it is never told again on its own.
+    const revisions = await db.execute(sql`SELECT requested_by AS "requestedBy", report_id AS "reportId" FROM plan_revisions WHERE project_id = ${projectId}`);
+    expect(revisions.rows).toEqual([{ requestedBy: answerId, reportId: plan.id }]);
+  });
+
+  test("a revision of a halted project is told only after it resumes, after the pause and the resumption", async () => {
+    const { projectId, questionId } = await plannedProject();
+    await contradict(projectId, questionId);
+    pipelineModel({ environmentChange: false });
+    expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
+    const projects = new ProjectRepository(db);
+    await projects.block(projectId, { category: "fault", errorClass: "TestFault", reason: "TestFault: a halt written by the test" });
+
+    expect(await planReports().runPending()).toEqual([]);
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect((await reportsOf(projectId)).some((m) => m.body.includes("The team will now do"))).toBe(false);
+
+    await projects.unblock(projectId, "operator-a", "checked the halt");
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
+
+    const bodies = (await reportsOf(projectId)).map((m) => m.body);
+    const paused = bodies.findIndex((b) => b.startsWith("Work on this project is paused."));
+    const resumed = bodies.findIndex((b) => b.startsWith("Work on this project has resumed"));
+    const willDo = bodies.findIndex((b) => b.includes("The team will now do"));
+    expect(paused).toBeGreaterThan(-1);
+    expect(paused).toBeLessThan(resumed);
+    expect(resumed).toBeLessThan(willDo);
+    expect(bodies[paused]).not.toContain("TestFault");
+  });
 });
 
 describe("a late client change is planned", () => {
@@ -500,9 +559,9 @@ describe("a late client change is planned", () => {
     expect(await blockReports().runPending()).toEqual([]);
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(before + 1);
-    // The recorded cause (story s-independent-verify-m1 W7): the replanner's own ReplanBoundReached chain.
-    expect(reports[reports.length - 1]?.body).toContain("The cause, as Ashara recorded it: ReplanBoundReached: project ");
-    expect(reports[reports.length - 1]?.body).toContain("for client changes since the operator last reviewed it");
+    // The recorded kind in the client's words; the replanner's ReplanBoundReached chain stays in the record (W11b D3).
+    expect(reports[reports.length - 1]?.body).toContain("Ashara recorded the cause as this: the plan has been revised for your changes");
+    expect(reports[reports.length - 1]?.body).not.toContain("ReplanBoundReached");
   });
 });
 

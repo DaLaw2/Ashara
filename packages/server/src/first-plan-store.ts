@@ -90,7 +90,7 @@ export function createPlanReportStore(db: ReturnType<typeof createDb> | DbTransa
   const projects = new ProjectRepository(db);
   return {
     dueReports: () => listDuePlanReports(db),
-    postReport: (projectId, subject, body) => postPlanReport(db, projectId, subject, body),
+    postReport: (projectId, subject, body, revisionIds) => postPlanReport(db, projectId, subject, body, revisionIds),
     dueRevisionReports: () => listDuePlanRevisionReports(db),
     postRevisionReport: (revisionId, body) => postPlanRevisionReport(db, revisionId, body),
     blockProject: (projectId, cause) => projects.block(projectId, cause),

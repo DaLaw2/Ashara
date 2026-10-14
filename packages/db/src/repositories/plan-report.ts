@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   parseProjectId,
@@ -9,7 +9,7 @@ import {
   type ProjectId,
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { clientMessages, projects, workItems } from "../schema.js";
+import { clientMessages, planRevisions, projects, workItems } from "../schema.js";
 import type { DroppedPlanDependency } from "./first-plan.js";
 import { noOpenStop } from "./project.js";
 
@@ -32,6 +32,15 @@ interface TaskCounts {
   readonly reviews: number;
   /** Tasks whose task_spec records no origin (written before origin was recorded). */
   readonly unrecorded: number;
+  /** Tasks already dispatched at least once. */
+  readonly started: number;
+}
+
+/** A revision of the plan written before the first plan was reported (migration 042); `summary` as stored. */
+interface RevisionBeforeReport {
+  readonly revisionId: string;
+  readonly revision: number;
+  readonly summary: unknown;
 }
 
 /** How many ordering hints the plan dropped; unrecorded on a project planned before migration 033. */
@@ -66,6 +75,8 @@ type DuePlanReportRow =
       readonly epicTitles: readonly string[];
       readonly tasks: TaskCounts;
       readonly droppedOrderingHints: DroppedOrderingHints;
+      /** Revisions written before this report, oldest first: the report describes the plan they left. */
+      readonly revisions: readonly RevisionBeforeReport[];
     }
   | { readonly subject: "planning-stopped"; readonly projectId: ProjectId; readonly attempts: number }
   /**
@@ -79,9 +90,15 @@ const unreported = (subject: PlanReportSubject) =>
 
 /**
  * Planning outcomes the client has not been told about, oldest project first.
- * A first plan is summarised from the project's work items as they are now; the
- * report is normally posted in the cycle that wrote the plan. Only an active
- * project's first plan is due: a blocked one is not reported on. Planning that
+ * A first plan is reported as the plan that stands when the report is written:
+ * its epics and tasks are the project's work items that no revision superseded
+ * (a superseded item belongs to the revision that replaced it, whose
+ * blocked_reason names it). A revision written before the first plan was
+ * reported (answers read in the cycle that wrote the plan, W11 D5) is returned
+ * with it, so the client gets one report of the plan that stands, not one of a
+ * plan already replaced followed by its revision. Only an active project's first
+ * plan is due, and none while the project awaits a revision: the client is
+ * not told of a plan already known to be changing. Planning that
  * stopped is due only while the project is blocked: a project the client has
  * stopped (migration 028), or has a stop awaiting the Liaison, gets the stop
  * report and nothing more. A work item
@@ -95,7 +112,15 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   const planned = await db
     .select({ id: projects.id, droppedDependencies: projects.planDroppedDependencies })
     .from(projects)
-    .where(and(eq(projects.status, "active"), isNotNull(projects.firstPlannedAt), unreported("first-plan"), noOpenStop(projects.id)))
+    .where(
+      and(
+        eq(projects.status, "active"),
+        isNotNull(projects.firstPlannedAt),
+        isNull(projects.replanRequestedBy),
+        unreported("first-plan"),
+        noOpenStop(projects.id),
+      ),
+    )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of planned) {
     const items = await db
@@ -107,27 +132,37 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
         taskSpec: workItems.taskSpec,
         successCriteria: workItems.successCriteria,
         blockedReason: workItems.blockedReason,
+        dispatchCount: workItems.dispatchCount,
       })
       .from(workItems)
       .where(eq(workItems.projectId, row.id))
       .orderBy(asc(workItems.createdAt), asc(workItems.id));
     const projectId = parseProjectId(row.id, "projects.id");
-    let origins: Array<string | undefined>;
+    let standing: Array<{ readonly level: string; readonly title: string; readonly origin: string | undefined; readonly dispatchCount: number }>;
     let dropped: DroppedOrderingHints;
     try {
-      origins = items.map((i) => ({ level: i.level, spec: parseWorkItemJsonb(i).taskSpec }))
-        .filter((i) => i.level === "Task")
-        .map((i) => i.spec?.origin);
+      standing = items
+        .map((i) => ({ item: i, parsed: parseWorkItemJsonb(i) }))
+        .filter(({ parsed }) => parsed.blockedReason?.source !== "superseded")
+        .map(({ item, parsed }) => ({ level: item.level, title: item.title, origin: parsed.taskSpec?.origin, dispatchCount: item.dispatchCount }));
       dropped = droppedOrderingHints(projectId, row.droppedDependencies);
     } catch (err) {
       if (!(err instanceof WorkItemRowCorrupt) && !(err instanceof PlanDroppedDependenciesCorrupt)) throw err;
       due.push({ subject: "first-plan-unreadable", projectId, cause: projectBlockCause(err) });
       continue;
     }
+    const tasks = standing.filter((i) => i.level === "Task");
+    const origins = tasks.map((i) => i.origin);
+    const revisions = await db
+      .select({ revisionId: planRevisions.id, revision: planRevisions.revision, summary: planRevisions.summary })
+      .from(planRevisions)
+      .where(and(eq(planRevisions.projectId, row.id), isNull(planRevisions.reportId)))
+      .orderBy(asc(planRevisions.revision));
     due.push({
       subject: "first-plan",
       projectId,
-      epicTitles: items.filter((i) => i.level === "Epic").map((i) => i.title),
+      epicTitles: standing.filter((i) => i.level === "Epic").map((i) => i.title),
+      revisions,
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,
         sprint0: origins.filter((o) => o === "sprint0").length,
@@ -135,6 +170,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
         checks: origins.filter((o) => o === "check").length,
         reviews: origins.filter((o) => o === "review").length,
         unrecorded: origins.filter((o) => o === undefined).length,
+        started: tasks.filter((i) => i.dispatchCount > 0).length,
       },
       droppedOrderingHints: dropped,
     });
@@ -153,24 +189,53 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
   return due;
 }
 
+/** A revision the first-plan report was to describe is gone or already reported: nothing of the report is recorded. */
+class RevisionsNotFoldable extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly expected: readonly string[],
+    readonly marked: number,
+  ) {
+    super(
+      `project ${projectId}: the first-plan report describes plan revision(s) ${expected.join(", ")}, ` +
+        `but ${marked} of ${expected.length} were unreported revisions of the project; no report is posted`,
+    );
+    this.name = "RevisionsNotFoldable";
+  }
+}
+
 /**
  * Posts an outbound report on a planning outcome. The partial unique index on
  * (project_id, reports_on) admits one per outcome: a second post inserts nothing
- * and returns "already-posted".
+ * and returns "already-posted". `revisionIds` are the revisions a first-plan report
+ * describes (listDuePlanReports): each is recorded as reported by it in the same
+ * transaction, so none of them is reported again on its own.
  */
 export async function postPlanReport(
   db: DbHandle,
   projectId: ProjectId,
   subject: PlanReportSubject,
   body: string,
+  revisionIds: readonly string[],
 ): Promise<"posted" | "already-posted"> {
-  const inserted = await db
-    .insert(clientMessages)
-    .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null, reportsOn: subject })
-    .onConflictDoNothing({
-      target: [clientMessages.projectId, clientMessages.reportsOn],
-      where: isNotNull(clientMessages.reportsOn),
-    })
-    .returning({ id: clientMessages.id });
-  return inserted.length === 1 ? "posted" : "already-posted";
+  return db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(clientMessages)
+      .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null, reportsOn: subject })
+      .onConflictDoNothing({
+        target: [clientMessages.projectId, clientMessages.reportsOn],
+        where: isNotNull(clientMessages.reportsOn),
+      })
+      .returning({ id: clientMessages.id });
+    if (inserted === undefined) return "already-posted";
+    if (revisionIds.length > 0) {
+      const marked = await tx
+        .update(planRevisions)
+        .set({ reportId: inserted.id })
+        .where(and(eq(planRevisions.projectId, projectId), isNull(planRevisions.reportId), inArray(planRevisions.id, [...revisionIds])))
+        .returning({ id: planRevisions.id });
+      if (marked.length !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, marked.length);
+    }
+    return "posted";
+  });
 }
