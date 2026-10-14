@@ -1,14 +1,16 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { loadBaseCell } from "./base-cell.js";
 import { createCellBackend } from "./cell-backend.js";
 import { BaseCellConfigInvalid, CellExecFailed, SubstrateUnavailable } from "./errors.js";
+import { runHostGit } from "./host-git.js";
 import { PodmanSubstrate } from "./podman.js";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
@@ -23,6 +25,8 @@ async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
 
 /** A busybox image, pinned like the BaseCell; .github/workflows/ci.yml pulls it by this reference. */
 const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
+/** An image with a git client and no entrypoint, pinned; .github/workflows/ci.yml pulls it by this reference. */
+const GIT_IMAGE = "docker.io/library/buildpack-deps:bookworm-scm@sha256:17923645546d74acef88727bce62c23bbaed953fc7097c41a8b777bba3ca98de";
 const instance = `test-${randomUUID()}`;
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];
@@ -115,38 +119,102 @@ describe("cell on real podman", () => {
     expect(await ps(`label=ashara.task=${task}`)).toHaveLength(0);
   });
 
-  // sprint0-run-2026-10-14 D13: a worktree's gitlink names its git dir's host path.
-  it("a masked gitlink is empty and unwritable in the cell; the host path it names is not readable there", async () => {
-    const tree = await mkdtemp(join(mountRoot, "masked-"));
-    const hostGitDir = join(mountRoot, "projects", "p", ".git", "worktrees", "task-x");
-    await writeFile(join(tree, ".git"), `gitdir: ${hostGitDir}\n`);
-    const base = await loadBaseCell();
+  // sprint0-run-2026-10-14 D13: a worktree's gitlink names its git dir's host path. go-run-2026-10-14 G4: a
+  // toolchain that reads the repository failed on an unusable stand-in (ADR-074 addendum 2 d73).
+  it("a cell sees a throwaway repository of its own: one commit, no remote, nothing of the host's; what it does there never reaches Z0's diff", async () => {
+    const git = async (cwd: string, ...args: string[]): Promise<string> =>
+      (await run("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args])).stdout.trim();
+    const host = join(mountRoot, "projects", `host-${randomUUID()}`);
+    await mkdir(host, { recursive: true });
+    await git(host, "init", "-q", "-b", "main");
+    for (const file of ["a.txt", "b.txt"]) {
+      await writeFile(join(host, file), `${file}\n`);
+      await git(host, "add", file);
+      await git(host, "commit", "-q", "-m", file);
+    }
+    const tree = join(mountRoot, `worktree-${randomUUID()}`);
+    await git(host, "worktree", "add", "-q", "-b", "task", tree);
+    // Created on the host before the cell starts: the cell must not see it.
+    await git(host, "branch", "host-only-ref");
+    const hostHead = await git(host, "rev-parse", "HEAD");
+    const gitlink = await readFile(join(tree, ".git"), "utf8");
+
     const cell = await substrate.createCell({
-      image: base.image,
+      image: GIT_IMAGE,
       project: "proj-cell-test",
-      task: `${task}-mask`,
-      role: "verifier",
+      task: `${task}-repo`,
+      role: "worker",
       instance,
-      mount: { hostPath: tree, shared: true, maskedEntries: [".git"] },
+      mount: { hostPath: tree },
     });
+    const sh = (script: string) => cell.exec(["sh", "-c", script], { timeoutSeconds: 30 });
     try {
-      const read = await cell.exec(["cat", ".git"], { timeoutSeconds: 10 });
-      expect(read.exitCode).toBe(0);
-      expect(read.stdout).toBe("");
-      const search = await cell.exec(["sh", "-c", `grep -rs -- '${mountRoot}' /workspace; echo "exit $?"`], { timeoutSeconds: 10 });
-      expect(search.stdout).toBe("exit 1\n");
-      const rewrite = await cell.exec(["sh", "-c", "echo 'gitdir: planted' > .git"], { timeoutSeconds: 10 });
-      expect(rewrite.exitCode).not.toBe(0);
-      const replace = await cell.exec(["sh", "-c", "rm -f .git"], { timeoutSeconds: 10 });
-      expect(replace.exitCode).not.toBe(0);
-      const work = await cell.exec(["sh", "-c", "echo ok > work.txt"], { timeoutSeconds: 10 });
-      expect(work.exitCode).toBe(0);
+      const head = await sh("git rev-parse HEAD");
+      expect(head.exitCode, head.stderr).toBe(0);
+      expect(head.stdout).toMatch(/^[0-9a-f]{40}\n$/);
+      expect(head.stdout.trim()).not.toBe(hostHead);
+      expect(await sh("git status --porcelain")).toMatchObject({ exitCode: 0, stdout: "" });
+      expect((await sh("git rev-list --all --count")).stdout).toBe("1\n");
+      expect(await sh("git remote")).toMatchObject({ exitCode: 0, stdout: "" });
+      expect((await sh("git for-each-ref --format='%(refname)'")).stdout).toBe("refs/heads/main\n");
+      expect((await sh(`git cat-file -e ${hostHead}`)).exitCode).not.toBe(0);
+      expect((await sh("git ls-files")).stdout).toBe("a.txt\nb.txt\n");
+      expect((await sh("git log --format='%an %ae %ad' --date=unix")).stdout).toBe("workspace workspace@cell.invalid 946684800\n");
+      const hostPaths = await sh(`grep -rsF -- '${mountRoot}' /workspace /ashara-cell; echo "exit $?"`);
+      expect(hostPaths.stdout).toBe("exit 1\n");
+      // Writing to its repository is the cell's own business: commits, branches, a tag, and config
+      // that would run a program wherever git read it.
+      const wrote = await sh(
+        "echo c > c.txt && git add -A && git -c user.name=x -c user.email=x@x commit -qm x && " +
+          `git checkout -qb other && git tag t && git config core.fsmonitor 'touch ${tree}/fsmonitor-ran'`,
+      );
+      expect(wrote.exitCode, wrote.stderr).toBe(0);
+      // The gitlink stand-in itself cannot be rewritten or removed.
+      expect((await sh("echo 'gitdir: /tmp' > .git")).exitCode).not.toBe(0);
+      expect((await sh("rm -f .git")).exitCode).not.toBe(0);
     } finally {
       await cell.teardown();
     }
-    // The host's gitlink is untouched: Z0's git still finds its git dir through it.
-    expect(await readFile(join(tree, ".git"), "utf8")).toBe(`gitdir: ${hostGitDir}\n`);
-    expect(await readFile(join(tree, "work.txt"), "utf8")).toBe("ok\n");
+    // Z0's diff reads the host's git dir, never the cell's: it sees the file and nothing else.
+    expect(await readFile(join(tree, ".git"), "utf8")).toBe(gitlink);
+    const repo = { gitDir: join(host, ".git", "worktrees", basename(tree)), workTree: tree };
+    expect((await runHostGit(repo, ["status", "--porcelain"])).stdout).toBe("?? c.txt\n");
+    expect(await git(host, "rev-parse", "task")).toBe(hostHead);
+    expect((await git(host, "for-each-ref", "--format=%(refname)")).split("\n")).toEqual([
+      "refs/heads/host-only-ref",
+      "refs/heads/main",
+      "refs/heads/task",
+    ]);
+    expect(existsSync(join(tree, "fsmonitor-ran"))).toBe(false);
+    // The repository went with the cell.
+    expect(await readdir(join(mountRoot, ".ashara-cell-state", instance))).toEqual([]);
+  }, 60_000);
+
+  // go-run-2026-10-14 G2: a recipe made a root-owned cache the cell's user could not write.
+  it("every cell runs as the host's uid with a writable HOME of its own, the probe's as the task's", async () => {
+    const base = await loadBaseCell();
+    const worktree = await mkdtemp(join(mountRoot, "user-task-"));
+    const checkout = await mkdtemp(join(mountRoot, "user-probe-"));
+    // As execution-service makes them: the task cell's private tree, the probe cell's shared checkout.
+    const taskCell = await substrate.createCell({ image: base.image, project: "proj-cell-test", task: `${task}-user`, role: "worker", instance, mount: { hostPath: worktree } });
+    const probeCell = await substrate.createCell({
+      image: base.image,
+      project: "proj-cell-test",
+      task: `${task}-user`,
+      role: "platform",
+      instance,
+      mount: { hostPath: checkout, shared: true },
+    });
+    try {
+      const whoami = 'id -u; id -g; echo "$HOME"; touch "$HOME/mine" && echo writable; ls "$HOME"';
+      const expected = `${process.getuid?.() ?? -1}\n${process.getgid?.() ?? -1}\n/ashara-cell/home\nwritable\nmine\n`;
+      expect((await taskCell.exec(["sh", "-c", whoami], { timeoutSeconds: 10 })).stdout).toBe(expected);
+      expect((await probeCell.exec(["sh", "-c", whoami], { timeoutSeconds: 10 })).stdout).toBe(expected);
+      expect((await probeCell.exec(["id", "-u"], { timeoutSeconds: 10 })).stdout).not.toBe("0\n");
+    } finally {
+      await taskCell.teardown();
+      await probeCell.teardown();
+    }
   });
 
   it("a command's own exit 125 is its result; a cell removed under a running exec is CellExecFailed", async () => {

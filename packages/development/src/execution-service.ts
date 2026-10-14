@@ -1175,10 +1175,10 @@ export class DevelopmentService {
     }
     const { workDir, repo } = workdir;
 
-    // The task's cell mounts only its worktree, labelled with the owner role's id; the gitlink is
-    // masked, since it names the git dir's host path and Z0 alone uses that git dir. A substrate
-    // that vanished since the probe, or a cell that cannot start, still blocks: never a
-    // host fallback.
+    // The task's cell mounts only its worktree, labelled with the owner role's id. Its `.git` is a
+    // throwaway repository of the cell's own (PodmanSubstrate): the gitlink names the git dir's host
+    // path, and Z0 alone uses that git dir. A substrate that vanished since the probe, or a cell that
+    // cannot start, still blocks: never a host fallback.
     let cell: Cell;
     try {
       cell = await cells.substrate.createCell({
@@ -1187,7 +1187,7 @@ export class DevelopmentService {
         task: task.id,
         role: staff.role.id,
         instance: cells.instance,
-        mount: { hostPath: workDir, maskedEntries: [".git"] },
+        mount: { hostPath: workDir },
       });
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
@@ -1946,8 +1946,9 @@ export class DevelopmentService {
       targetProjectPath: d.targetProjectPath,
       checkoutDir: (purpose) => this.checkoutDir(d, purpose),
       images: this.deps.environment.images,
-      // Shared label (`:z`): the task cell may still mount the same tree. `.git` masked: it names
-      // host paths, and Z0's git reads that repository after the cell ran.
+      // Shared label (`:z`): the task cell may still mount the same tree. Its `.git` is a throwaway
+      // repository of the cell's own: the checkout's names host paths, and Z0's git reads that
+      // repository after the cell ran.
       createCell: ({ image, role, hostPath }) =>
         cells.substrate.createCell({
           image,
@@ -1955,7 +1956,7 @@ export class DevelopmentService {
           task: task.id,
           role,
           instance: cells.instance,
-          mount: { hostPath, shared: true, maskedEntries: [".git"] },
+          mount: { hostPath, shared: true },
         }),
       teardownCell: (cell) => this.teardownCell(task.id, cell),
     };

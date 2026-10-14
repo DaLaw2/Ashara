@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, sep } from "node:path";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
@@ -14,6 +14,7 @@ import {
   SubstrateUnavailable,
   TeardownIncomplete,
 } from "./errors.js";
+import { snapshotRepository } from "./host-git.js";
 import { spawnProcess, type ProcessRequest, type ProcessResult, type ProcessRunner } from "./process-runner.js";
 import { WORKSPACE_ROOT, toWorkspaceAbsolute } from "./workspace-path.js";
 
@@ -23,9 +24,18 @@ const LABEL_PROJECT = "ashara.project";
 const LABEL_TASK = "ashara.task";
 const LABEL_ROLE = "ashara.role";
 
-/** Under the mount root: the empty stand-ins masked entries are covered with. No cell may mount it. */
-const MASK_DIR = ".ashara-cell-masks";
-type MaskKind = "file" | "directory";
+/**
+ * Under the mount root, by instance and cell name: each cell's own state (its home, its throwaway
+ * repository), made before the cell starts and removed with it. No cell may mount it as its tree.
+ */
+const STATE_DIR = ".ashara-cell-state";
+/** Under the mount root: the read-only gitlink every cell whose tree's `.git` is a file sees there. No cell may mount it as its tree. */
+const GITLINK_STAND_IN = ".ashara-cell-gitlink";
+/** In the cell: its writable home, and its throwaway repository when the tree's `.git` is a gitlink file. */
+const CELL_HOME = "/ashara-cell/home";
+const CELL_GIT_DIR = "/ashara-cell/git";
+const GITLINK_TEXT = `gitdir: ${CELL_GIT_DIR}\n`;
+type GitEntryKind = "file" | "directory";
 
 /** Seconds `timeout` waits after its signal before SIGKILL. */
 const KILL_GRACE_SECONDS = 5;
@@ -134,6 +144,11 @@ const labelValue = z
   .max(128)
   .regex(/^[A-Za-z0-9._:@+-]+$/, "label values are limited to [A-Za-z0-9._:@+-]");
 
+/** The instance also names a directory under the state dir, which is a volume source: no ':', and not '.' or '..'. */
+const instanceValue = labelValue
+  .refine((value) => !value.includes(":"), "the instance may not contain ':'")
+  .refine((value) => value !== "." && value !== "..", "the instance may not be '.' or '..'");
+
 const cellSpecSchema = z
   .object({
     image: z
@@ -143,7 +158,7 @@ const cellSpecSchema = z
     project: labelValue,
     task: labelValue,
     role: labelValue,
-    instance: labelValue,
+    instance: instanceValue,
     mount: z
       .object({
         hostPath: z
@@ -151,14 +166,6 @@ const cellSpecSchema = z
           .regex(/^\/[^:,\0\n]*$/, "hostPath must be absolute and free of ':', ',', NUL and newline"),
         readOnly: z.boolean().optional(),
         shared: z.boolean().optional(),
-        maskedEntries: z
-          .array(
-            z
-              .string()
-              .regex(/^[^/:,\0\n]+$/, "an entry is one name directly under the mount, free of '/', ':', ',', NUL and newline")
-              .refine((name) => name !== "." && name !== "..", "an entry may not be '.' or '..'"),
-          )
-          .optional(),
       })
       .strict(),
   })
@@ -178,15 +185,22 @@ export interface CellSpec {
     readonly readOnly?: boolean;
     /** Policy default false (private `:Z` label); true for a path two cells share (`:z`). */
     readonly shared?: boolean;
-    /**
-     * Names directly under hostPath the cell never sees: each is covered, read-only, by an empty
-     * file or an empty directory of the same kind. For Z0's own metadata in a tree the cell
-     * writes: a worktree's `.git` gitlink names the host path of its git dir, so the cell can
-     * neither read it nor rewrite it. Each must exist and must not be a symlink. Policy default: none.
-     */
-    readonly maskedEntries?: readonly string[];
   };
 }
+
+/*
+ * What every cell sees besides its tree (ADR-074 addendum 2 d73), with no option to leave it out:
+ * - It runs as the host's uid (--userns=keep-id), not root, with HOME set to a writable, empty
+ *   directory of its own (CELL_HOME); the image's HOME, if any, is overridden.
+ * - When hostPath holds a `.git` (a worktree's gitlink file, or a checkout's git dir), the cell
+ *   never sees it: in its place is a throwaway repository of the cell's own, made by Z0 before the
+ *   cell starts, whose one commit holds the tree's content (snapshotRepository). It has no remote,
+ *   no host ref, object, config, hook or history, and names no host path. A gitlink file is covered
+ *   by a read-only gitlink naming CELL_GIT_DIR, where the repository is mounted; a git dir is
+ *   covered by the repository itself. Z0 never reads that repository once the cell started, and
+ *   removes it with the cell, so whatever the cell writes there stays there. A `.git` that is a
+ *   symlink, or neither a file nor a directory, refuses the cell.
+ */
 
 interface ExecOptions {
   readonly stdin?: string | Buffer;
@@ -266,17 +280,28 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false; er
   }
 }
 
-/** A masked entry and the empty stand-in of its kind mounted over it. */
-interface Mask {
-  readonly entry: string;
-  readonly source: string;
+/** A cell's own state on the host, as the run mounts it. */
+interface CellState {
+  readonly dir: string;
+  readonly home: string;
+  /** Null when the tree holds no `.git`; `gitlink` is the stand-in covering a gitlink file. */
+  readonly repository:
+    | { readonly covers: "directory"; readonly gitDir: string }
+    | { readonly covers: "file"; readonly gitDir: string; readonly gitlink: string }
+    | null;
 }
 
-function buildRunArgs(spec: CellSpec, name: string, hostPath: string, masks: readonly Mask[]): string[] {
+function buildRunArgs(spec: CellSpec, name: string, hostPath: string, state: CellState): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
-  // Shared label: every cell mounts the same stand-ins.
-  const maskMounts = masks.flatMap(({ entry, source }) => ["-v", `${source}:${WORKSPACE_ROOT}/${entry}:ro,z`]);
+  // The state is the cell's alone (private label); the gitlink stand-in is every cell's (shared label).
+  const repository = state.repository;
+  const repositoryMounts =
+    repository === null
+      ? []
+      : repository.covers === "directory"
+        ? ["-v", `${repository.gitDir}:${WORKSPACE_ROOT}/.git:Z`]
+        : ["-v", `${repository.gitlink}:${WORKSPACE_ROOT}/.git:ro,z`, "-v", `${repository.gitDir}:${CELL_GIT_DIR}:Z`];
   return [
     "run",
     "-d",
@@ -292,8 +317,10 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, masks: rea
     "--label", `${LABEL_PROJECT}=${spec.project}`,
     "--label", `${LABEL_TASK}=${spec.task}`,
     "--label", `${LABEL_ROLE}=${spec.role}`,
+    "-e", `HOME=${CELL_HOME}`,
     "-v", `${hostPath}:${WORKSPACE_ROOT}:${options}`,
-    ...maskMounts,
+    "-v", `${state.home}:${CELL_HOME}:Z`,
+    ...repositoryMounts,
     spec.image,
     "sleep", "infinity",
   ];
@@ -301,11 +328,15 @@ function buildRunArgs(spec: CellSpec, name: string, hostPath: string, masks: rea
 
 class PodmanCell implements Cell {
   private tornDown = false;
+  private containerRemoved = false;
   private lane: Promise<void> = Promise.resolve();
 
   constructor(
     readonly id: string,
     readonly spec: CellSpec,
+    /** The container name, which also names the cell's state dir. */
+    readonly name: string,
+    private readonly stateDir: string,
     private readonly substrate: PodmanSubstrate,
   ) {}
 
@@ -329,7 +360,7 @@ class PodmanCell implements Cell {
   }
 
   private async execAlone(argv: readonly string[], options: ExecOptions): Promise<ExecResult> {
-    if (this.tornDown) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
+    if (this.tornDown || this.containerRemoved) throw new CellExecFailed(this.id, argv, null, "", "the cell has been torn down");
 
     const workdir = toWorkspaceAbsolute(options.cwd ?? ".");
     const args = [
@@ -438,9 +469,20 @@ class PodmanCell implements Cell {
     }
   }
 
+  /** The container first, then the state it mounted; a cell stays held until both are gone. */
   async teardown(): Promise<void> {
     if (this.tornDown) return;
-    await this.substrate.removeContainer(this.id);
+    if (!this.containerRemoved) {
+      await this.substrate.removeContainer(this.id);
+      this.containerRemoved = true;
+    }
+    try {
+      await removeTree(this.stateDir);
+    } catch (err) {
+      throw new CellTeardownFailed(this.id, null, `the cell's state dir ${JSON.stringify(this.stateDir)} could not be removed: ${describeErrorChain(err)}`, {
+        cause: err,
+      });
+    }
     this.tornDown = true;
     this.substrate.forget(this.id);
   }
@@ -455,6 +497,40 @@ function streams(result: ProcessResult): Pick<ExecResult, "stdout" | "stderr" | 
   };
 }
 
+function errorCode(err: unknown): unknown {
+  return err instanceof Error && "code" in err ? err.code : undefined;
+}
+
+/**
+ * rm -rf that also removes what a cell left unwritable (a read-only directory, as some caches make
+ * theirs): on EACCES/EPERM every directory under `path` is made writable, never following a symlink,
+ * and the removal runs once more. Every file is the host uid's (--userns=keep-id).
+ */
+async function removeTree(path: string): Promise<void> {
+  try {
+    await rm(path, { recursive: true, force: true });
+    return;
+  } catch (err) {
+    const code = errorCode(err);
+    if (code !== "EACCES" && code !== "EPERM") throw err;
+  }
+  await makeDirectoriesWritable(path);
+  await rm(path, { recursive: true, force: true });
+}
+
+async function makeDirectoriesWritable(path: string): Promise<void> {
+  let entry: Awaited<ReturnType<typeof lstat>>;
+  try {
+    entry = await lstat(path);
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return;
+    throw err;
+  }
+  if (!entry.isDirectory()) return;
+  await chmod(path, 0o700);
+  for (const child of await readdir(path)) await makeDirectoriesWritable(join(path, child));
+}
+
 export class PodmanSubstrate {
   private readonly podmanPath: string;
   private readonly runner: ProcessRunner;
@@ -463,6 +539,10 @@ export class PodmanSubstrate {
   private readonly cells = new Map<string, PodmanCell>();
   /** Containers a failed `podman run` may have left behind and that could not be removed yet, by name. */
   private readonly unconfirmed = new Set<string>();
+  /** Names of cells whose state is being made or whose start is in flight: no sweep removes their state. */
+  private readonly starting = new Set<string>();
+  /** Instances this process made cell state for: teardownAll sweeps their state dirs. */
+  private readonly instances = new Set<string>();
 
   constructor(options: PodmanSubstrateOptions) {
     const issues: string[] = [];
@@ -520,36 +600,117 @@ export class PodmanSubstrate {
     const parsed = cellSpecSchema.safeParse(spec);
     if (!parsed.success) throw new InvalidCellRequest("createCell", issuesOf(parsed.error));
     const hostPath = await this.canonicalMountPath(parsed.data.mount.hostPath);
-    const masks: Mask[] = [];
-    for (const entry of parsed.data.mount.maskedEntries ?? []) {
-      masks.push({ entry, source: await this.maskSource(await this.plainEntryKind(hostPath, entry)) });
-    }
+    const gitEntry = await this.gitEntryKind(hostPath);
     const name = `ashara-cell-${randomUUID()}`;
-    const args = buildRunArgs(parsed.data, name, hostPath, masks);
-    const result = await this.run(args);
-    const id = result.exitCode === 0 ? containerIdSchema.safeParse(result.stdout.trim()) : null;
-    if (id === null || !id.success) {
-      // podman run can create the container and then fail to start it (or print no id): the
-      // container may exist, so it is removed by the name this call gave it, or kept for teardownAll.
-      const cleanup = await this.removeFailedStart(name);
-      const stderr =
-        result.exitCode === 0 ? `podman run printed no container id: ${JSON.stringify(result.stdout)}; ${result.stderr}` : result.stderr;
-      throw new CellStartFailed(args, result.exitCode, stderr, cleanup);
+    this.starting.add(name);
+    try {
+      const state = await this.prepareState(parsed.data.instance, name, hostPath, gitEntry);
+      const args = buildRunArgs(parsed.data, name, hostPath, state);
+      let result: ProcessResult;
+      try {
+        result = await this.run(args);
+      } catch (err) {
+        // podman never ran, or its client failed: no container holds the state, which goes now or
+        // with the next sweep (teardownAll, reconcileOrphans), and the substrate's own error stands.
+        await this.discardState(state.dir);
+        throw err;
+      }
+      const id = result.exitCode === 0 ? containerIdSchema.safeParse(result.stdout.trim()) : null;
+      if (id === null || !id.success) {
+        // podman run can create the container and then fail to start it (or print no id): the
+        // container may exist, so it is removed by the name this call gave it, or kept for teardownAll.
+        const cleanup = `${await this.removeFailedStart(name)}; ${await this.discardState(state.dir)}`;
+        const stderr =
+          result.exitCode === 0 ? `podman run printed no container id: ${JSON.stringify(result.stdout)}; ${result.stderr}` : result.stderr;
+        throw new CellStartFailed(args, result.exitCode, stderr, cleanup);
+      }
+      const cell = new PodmanCell(id.data, parsed.data, name, state.dir, this);
+      this.cells.set(id.data, cell);
+      return cell;
+    } finally {
+      this.starting.delete(name);
     }
-    const cell = new PodmanCell(id.data, parsed.data, this);
-    this.cells.set(id.data, cell);
-    return cell;
+  }
+
+  private stateRoot(): string {
+    return join(this.mountRoot, STATE_DIR);
+  }
+
+  /**
+   * The cell's state dir with an empty home and, when the tree holds a `.git`, its throwaway
+   * repository. A snapshot that fails is a cell that could not start (CellStartFailed); its state
+   * is removed first.
+   */
+  private async prepareState(instance: string, name: string, hostPath: string, gitEntry: GitEntryKind | null): Promise<CellState> {
+    const dir = join(await this.canonicalRoot(hostPath), STATE_DIR, instance, name);
+    const home = join(dir, "home");
+    const gitDir = join(dir, "git");
+    this.instances.add(instance);
+    try {
+      await mkdir(home, { recursive: true, mode: 0o700 });
+      if (gitEntry === null) return { dir, home, repository: null };
+      await snapshotRepository(hostPath, gitDir);
+      if (gitEntry === "directory") return { dir, home, repository: { covers: "directory", gitDir } };
+      return { dir, home, repository: { covers: "file", gitDir, gitlink: await this.gitlinkStandIn() } };
+    } catch (err) {
+      const cleanup = await this.discardState(dir);
+      if (err instanceof MountPathRejected) throw err;
+      throw new CellStartFailed([], null, `the cell's state could not be prepared: ${describeErrorChain(err)}`, `no container was created; ${cleanup}`, {
+        cause: err,
+      });
+    }
+  }
+
+  /** Removes a cell's state; what cannot be removed now is left to the next sweep, and said so. */
+  private async discardState(dir: string): Promise<string> {
+    try {
+      await removeTree(dir);
+      return "its state dir was removed";
+    } catch (err) {
+      return `its state dir ${JSON.stringify(dir)} could not be removed (${describeErrorChain(err)}); teardownAll and reconcileOrphans remove it`;
+    }
+  }
+
+  /**
+   * Removes every state dir of `instance` that no held or starting cell owns. Each failure is
+   * returned as a CellTeardownFailed named by the cell's name.
+   */
+  private async sweepState(instance: string): Promise<{ removed: string[]; failures: CellTeardownFailed[] }> {
+    const owned = new Set([...this.starting, ...[...this.cells.values()].map((cell) => cell.name)]);
+    const instanceDir = join(this.stateRoot(), instance);
+    let names: string[];
+    try {
+      names = await readdir(instanceDir);
+    } catch (err) {
+      if (errorCode(err) === "ENOENT") return { removed: [], failures: [] };
+      return { removed: [], failures: [new CellTeardownFailed(instanceDir, null, `the state dir cannot be listed: ${describeErrorChain(err)}`, { cause: err })] };
+    }
+    const removed: string[] = [];
+    const failures: CellTeardownFailed[] = [];
+    for (const name of names.filter((entry) => !owned.has(entry))) {
+      try {
+        await removeTree(join(instanceDir, name));
+        removed.push(name);
+      } catch (err) {
+        failures.push(new CellTeardownFailed(name, null, `its state dir could not be removed: ${describeErrorChain(err)}`, { cause: err }));
+      }
+    }
+    return { removed, failures };
+  }
+
+  /** The realpath of mountRoot; one that cannot be resolved refuses `forPath`. */
+  private async canonicalRoot(forPath: string): Promise<string> {
+    try {
+      return await realpath(this.mountRoot);
+    } catch (err) {
+      throw new MountPathRejected(forPath, null, this.mountRoot, `the mount root cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
+    }
   }
 
   /** realpath, then a prefix check against the realpath of mountRoot; the result must still be a valid volume source. */
   private async canonicalMountPath(hostPath: string): Promise<string> {
-    let root: string;
+    const root = await this.canonicalRoot(hostPath);
     let canonical: string;
-    try {
-      root = await realpath(this.mountRoot);
-    } catch (err) {
-      throw new MountPathRejected(hostPath, null, this.mountRoot, `the mount root cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
-    }
     try {
       canonical = await realpath(hostPath);
     } catch (err) {
@@ -558,9 +719,11 @@ export class PodmanSubstrate {
     if (canonical === root || !canonical.startsWith(`${root}${sep}`)) {
       throw new MountPathRejected(hostPath, canonical, root, "it is not strictly inside the mount root");
     }
-    const masks = join(root, MASK_DIR);
-    if (canonical === masks || canonical.startsWith(`${masks}${sep}`)) {
-      throw new MountPathRejected(hostPath, canonical, root, "it is the substrate's own mask stand-ins");
+    for (const own of [STATE_DIR, GITLINK_STAND_IN]) {
+      const ownPath = join(root, own);
+      if (canonical === ownPath || canonical.startsWith(`${ownPath}${sep}`)) {
+        throw new MountPathRejected(hostPath, canonical, root, `it is the substrate's own cell state (${own})`);
+      }
     }
     const source = cellSpecSchema.shape.mount.shape.hostPath.safeParse(canonical);
     if (!source.success) {
@@ -570,51 +733,43 @@ export class PodmanSubstrate {
   }
 
   /**
-   * A masked entry is covered at its own in-cell path, so a symlink there would have the stand-in
-   * mounted wherever it points; only a plain file or directory is masked.
+   * The kind of the tree's `.git`, or null when it has none. It is covered at its own in-cell path,
+   * so a symlink there would have the cover mounted wherever it points: only a plain file or
+   * directory is covered, anything else refuses the cell.
    */
-  private async plainEntryKind(canonicalHostPath: string, entry: string): Promise<MaskKind> {
-    const path = `${canonicalHostPath}${sep}${entry}`;
-    let canonical: string;
+  private async gitEntryKind(canonicalHostPath: string): Promise<GitEntryKind | null> {
+    const path = `${canonicalHostPath}${sep}.git`;
+    let entry: Awaited<ReturnType<typeof lstat>>;
     try {
-      canonical = await realpath(path);
+      entry = await lstat(path);
     } catch (err) {
-      throw new MountPathRejected(path, null, canonicalHostPath, `the masked entry cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
+      if (errorCode(err) === "ENOENT") return null;
+      throw new MountPathRejected(path, null, canonicalHostPath, `the tree's .git cannot be read: ${describeErrorChain(err)}`, { cause: err });
     }
-    if (canonical !== path) {
-      throw new MountPathRejected(path, canonical, canonicalHostPath, "the masked entry is a symlink or resolves elsewhere");
-    }
-    const entryStat = await lstat(path);
-    if (entryStat.isFile()) return "file";
-    if (entryStat.isDirectory()) return "directory";
-    throw new MountPathRejected(path, canonical, canonicalHostPath, "the masked entry is neither a regular file nor a directory");
+    if (entry.isSymbolicLink()) throw new MountPathRejected(path, null, canonicalHostPath, "the tree's .git is a symlink");
+    if (entry.isFile()) return "file";
+    if (entry.isDirectory()) return "directory";
+    throw new MountPathRejected(path, null, canonicalHostPath, "the tree's .git is neither a regular file nor a directory");
   }
 
   /**
-   * The empty, read-only stand-in of `kind` under the mount root (made once, shared by every
-   * cell). One that exists but is not empty, or not of its kind, is refused rather than mounted.
+   * The read-only gitlink naming CELL_GIT_DIR, under the mount root (made once, shared by every
+   * cell). One that exists with other content, or is not a regular file, is refused rather than mounted.
    */
-  private async maskSource(kind: MaskKind): Promise<string> {
-    let root: string;
+  private async gitlinkStandIn(): Promise<string> {
+    const root = await this.canonicalRoot(GITLINK_STAND_IN);
+    const source = join(root, GITLINK_STAND_IN);
     try {
-      root = await realpath(this.mountRoot);
+      await writeFile(source, GITLINK_TEXT, { flag: "wx", mode: 0o444 });
     } catch (err) {
-      throw new MountPathRejected(this.mountRoot, null, this.mountRoot, `the mount root cannot be resolved: ${describeErrorChain(err)}`, { cause: err });
-    }
-    const dir = join(root, MASK_DIR);
-    const source = join(dir, kind === "file" ? "empty-file" : "empty-directory");
-    try {
-      await mkdir(dir, { recursive: true });
-      if (kind === "file") await writeFile(source, "", { flag: "wx", mode: 0o444 });
-      else await mkdir(source, { mode: 0o555 });
-    } catch (err) {
-      if (!(err instanceof Error && "code" in err && err.code === "EEXIST")) {
-        throw new MountPathRejected(source, null, root, `the mask stand-in cannot be created: ${describeErrorChain(err)}`, { cause: err });
+      if (errorCode(err) !== "EEXIST") {
+        throw new MountPathRejected(source, null, root, `the gitlink stand-in cannot be created: ${describeErrorChain(err)}`, { cause: err });
       }
     }
     const made = await lstat(source);
-    const empty = kind === "file" ? made.isFile() && made.size === 0 : made.isDirectory() && (await readdir(source)).length === 0;
-    if (!empty) throw new MountPathRejected(source, null, root, `the mask stand-in is not an empty ${kind}`);
+    if (!made.isFile() || (await readFile(source, "utf8")) !== GITLINK_TEXT) {
+      throw new MountPathRejected(source, null, root, `the gitlink stand-in is not a regular file holding ${JSON.stringify(GITLINK_TEXT)}`);
+    }
     return source;
   }
 
@@ -648,10 +803,11 @@ export class PodmanSubstrate {
 
   /**
    * Removes every container labelled ashara.managed=1 AND ashara.instance=<instance>, except the
-   * cells this process still holds. Never selects by name: other services share this podman.
+   * cells this process still holds, then every state dir of that instance no held or starting cell
+   * owns. Never selects a container by name: other services share this podman.
    */
   async reconcileOrphans(instance: string): Promise<string[]> {
-    const parsedInstance = labelValue.safeParse(instance);
+    const parsedInstance = instanceValue.safeParse(instance);
     if (!parsedInstance.success) throw new InvalidCellRequest("reconcileOrphans", issuesOf(parsedInstance.error));
     const args = [
       "ps", "-a",
@@ -683,10 +839,18 @@ export class PodmanSubstrate {
       );
     }
     const orphans = entries.data.map((entry) => entry.Id).filter((id) => !this.cells.has(id));
-    return this.removeAll("reconcileOrphans", orphans);
+    const containers = await this.removeAll(orphans);
+    // Only once their containers are gone: a state dir is removed only when nothing mounts it.
+    const state = await this.sweepState(instance);
+    const failures = [...containers.failures, ...state.failures];
+    if (failures.length > 0) throw new TeardownIncomplete("reconcileOrphans", containers.removed, failures);
+    return containers.removed;
   }
 
-  /** Removes every cell this process created and still holds, and any container a failed start left. */
+  /**
+   * Removes every cell this process created and still holds, any container a failed start left,
+   * and every state dir of this process's instances that no cell owns any more.
+   */
   async teardownAll(): Promise<string[]> {
     const removed: string[] = [];
     const failures: CellTeardownFailed[] = [];
@@ -709,11 +873,13 @@ export class PodmanSubstrate {
         failures.push(err instanceof CellTeardownFailed ? err : new CellTeardownFailed(name, null, "", { cause: err }));
       }
     }
+    // A cell whose teardown failed is still held, so its state is not swept.
+    for (const instance of this.instances) failures.push(...(await this.sweepState(instance)).failures);
     if (failures.length > 0) throw new TeardownIncomplete("teardownAll", removed, failures);
     return removed;
   }
 
-  private async removeAll(operation: string, ids: readonly string[]): Promise<string[]> {
+  private async removeAll(ids: readonly string[]): Promise<{ removed: string[]; failures: CellTeardownFailed[] }> {
     const removed: string[] = [];
     const failures: CellTeardownFailed[] = [];
     for (const id of ids) {
@@ -725,7 +891,6 @@ export class PodmanSubstrate {
         failures.push(err);
       }
     }
-    if (failures.length > 0) throw new TeardownIncomplete(operation, removed, failures);
-    return removed;
+    return { removed, failures };
   }
 }

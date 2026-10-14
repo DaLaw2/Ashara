@@ -849,10 +849,18 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(first).toMatchObject({ role: OWNER_ROLE });
     expect(runs[0]).toContain(`ashara.role=${OWNER_ROLE.id}`);
     expect(events.find((e) => e.event === "agent_launched")).toMatchObject({ roleId: OWNER_ROLE.id, role: OWNER_ROLE.name });
-    // The task cell sees the gitlink masked: no volume source is the worktree's .git, which names host paths.
-    const taskVolumes = (runs[0] ?? []).filter((_, i, all) => all[i - 1] === "-v");
-    expect(taskVolumes.some((v) => v.endsWith(":/workspace/.git:ro,Z") || v.endsWith(":/workspace/.git:ro,z"))).toBe(true);
-    expect(taskVolumes.some((v) => v.split(":")[0]?.endsWith("/.git"))).toBe(false);
+    // ADR-074 addendum 2 d73: every cell (the task's, and the verifier's, made like the probe's
+    // and every check's) sees a throwaway repository of its own in place of the worktree's gitlink,
+    // and runs as the same non-root user with the same writable home. No volume source is a .git.
+    expect(runs).toHaveLength(2);
+    for (const run of runs) {
+      const volumes = run.filter((_, i, all) => all[i - 1] === "-v");
+      expect(volumes.some((v) => v.endsWith("/.ashara-cell-gitlink:/workspace/.git:ro,z"))).toBe(true);
+      expect(volumes.some((v) => v.endsWith("/git:/ashara-cell/git:Z"))).toBe(true);
+      expect(volumes.some((v) => v.split(":")[0]?.endsWith("/.git"))).toBe(false);
+      expect(run).toContain("--userns=keep-id");
+      expect(run[run.indexOf("-e") + 1]).toBe("HOME=/ashara-cell/home");
+    }
     // sprint0-run-2026-10-14 D9: the brief carries the vision's assumptions, not only its text.
     expect(system).toContain("vision version 2");
     expect(system).toContain("- A1 (Inferred): Greetings are written in lower case.");

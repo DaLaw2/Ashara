@@ -5,8 +5,8 @@ import { CHECK_RUNNER } from "./check-definition.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
- * instruction uses git (the cell sees the worktree's .git as an empty read-only file; Z0
- * commits), no stack literal, the cell's isolation is stated, and the attempt ends only through
+ * instruction uses git (the cell's .git is a throwaway repository of its own; Z0 commits), no stack
+ * literal, the cell's isolation and its non-root user are stated, and the attempt ends only through
  * the finish tool.
  */
 export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | null): string {
@@ -32,7 +32,11 @@ const STATIC_PROMPT = [
     `# Your workspace`,
     `Every tool runs inside an isolated workspace that holds the project's files. Paths are relative to the`,
     `workspace root. The workspace has no network access: nothing can be downloaded or installed from outside.`,
-    `Version control is handled outside the workspace: do not run version control commands, they do not work here.`,
+    `Commands run as a non-root user, never as root. HOME is a writable, empty directory of the workspace's own;`,
+    `a path the image made for root is not writable here.`,
+    `Version control is handled outside the workspace. The workspace holds a throwaway repository of its own, one`,
+    `commit of the files as they were when it started, so tools that read the repository work; nothing done to it is`,
+    `kept. Your work is the files you leave: do not run version control commands to record it.`,
   ].join("\n"),
   [
     `# Using your tools`,

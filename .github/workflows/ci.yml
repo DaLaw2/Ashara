@@ -107,6 +107,10 @@ jobs:
           alpine="$(sed -n 's/^const ALPINE_IMAGE = "\(.*\)";$/\1/p' packages/execution-infra/src/cell.podman.test.ts)"
           test -n "$alpine"
           podman pull "$alpine"
+          # The cell with a git client cell.podman.test.ts runs to read a cell's own repository, by the reference it names.
+          gitimage="$(sed -n 's/^const GIT_IMAGE = "\(.*\)";$/\1/p' packages/execution-infra/src/cell.podman.test.ts)"
+          test -n "$gitimage"
+          podman pull "$gitimage"
 
       - name: Run migrations
         run: npx tsx scripts/migrate.ts

@@ -14,7 +14,7 @@ class HostRepoUnresolved extends Error {
   }
 }
 
-/** The target checkout. The verifier cell that mounts it sees its `.git` masked, never the repository. */
+/** The target checkout. A cell that mounts it sees a throwaway repository of its own as `.git`, never this one. */
 export function targetRepo(targetProjectPath: string): HostRepo {
   return { gitDir: join(targetProjectPath, ".git"), workTree: targetProjectPath };
 }

@@ -64,9 +64,8 @@ export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
 /**
  * Persists agent output as knowledge entries. `filesChanged` is the
  * host-computed list from `getChangedFiles(workDir)` (execution-service),
- * not the agent's own observation — the agent cannot observe this inside its
- * cell (the worktree's .git points at a host path the cell does not mount), so
- * Z0 is the single source.
+ * not the agent's own observation — the cell's `.git` is a throwaway repository
+ * of its own, never the task branch, so Z0 is the single source.
  */
 export async function storeKnowledge(
   knowledgeSink: KnowledgeSink,

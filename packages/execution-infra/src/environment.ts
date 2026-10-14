@@ -109,6 +109,10 @@ export function environmentDefinitionRules(): string {
     `- The image is built from the recipe and the inputs that exist. Then probe runs in a cell from that image on a`,
     `  fresh checkout of the committed work. The gate passes only when the image builds and probe exits 0 within its`,
     `  time limit with non-empty output: stdout and stderr together must hold more than whitespace.`,
+    `- The image build runs as root, but every cell from the image (the probe's, every task's, every check's) runs`,
+    `  as a non-root user with HOME set to a writable, empty directory of the cell's own; the image's HOME is not`,
+    `  used. So the recipe must not create, as root, a path the build, the tests or the tools later write (a cache, a`,
+    `  temporary or output directory): leave it to the tools' defaults under HOME, or make it writable by any user.`,
   ].join("\n");
 }
 

@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createCellBackend } from "./cell-backend.js";
 import {
@@ -17,6 +19,7 @@ import {
 import { PodmanSubstrate, type CellSpec } from "./podman.js";
 import type { ProcessRequest, ProcessResult } from "./process-runner.js";
 
+const run = promisify(execFile);
 const ID = "a".repeat(64);
 const OTHER_ID = "b".repeat(64);
 const IMAGE = "docker.io/library/debian:12-slim@sha256:" + "c".repeat(64);
@@ -70,11 +73,12 @@ describe("PodmanSubstrate argv", () => {
 
   it("creates a labelled, network-less cell and passes podman a minimal env", async () => {
     process.env.ASHARA_PROBE_SECRET = "must-not-leak";
-    const { requests, substrate } = recorder([ok(`${ID}\n`)]);
+    const { requests, substrate } = recorder([ok(`${ID}\n`), ok()]);
     const cell = await substrate.createCell(spec);
 
     expect(cell.id).toBe(ID);
     expect(requests[0]?.file).toBe("/opt/podman");
+    const name = requests[0]?.args[3] ?? "";
     expect(requests[0]?.args).toEqual([
       "run", "-d", "--name", expect.stringMatching(/^ashara-cell-[0-9a-f-]{36}$/), "--init", "--pull=never", "--network=none", "--cap-drop=all",
       "--security-opt=no-new-privileges", "--userns=keep-id",
@@ -83,10 +87,16 @@ describe("PodmanSubstrate argv", () => {
       "--label", "ashara.project=proj-1",
       "--label", "ashara.task=task-1",
       "--label", "ashara.role=worker",
+      "-e", "HOME=/ashara-cell/home",
       "-v", `${tree}:/workspace:Z`,
+      "-v", `${root}/.ashara-cell-state/inst-1/${name}/home:/ashara-cell/home:Z`,
       IMAGE, "sleep", "infinity",
     ]);
     expect(Object.keys(requests[0]?.env ?? {}).every((k) => ["PATH", "HOME", "XDG_RUNTIME_DIR"].includes(k))).toBe(true);
+    // The cell's state goes with it.
+    await cell.teardown();
+    expect(requests[1]?.args).toEqual(["rm", "-f", ID]);
+    expect(await readdir(join(root, ".ashara-cell-state", "inst-1"))).toEqual([]);
   });
 
   it("uses a shared read-only label when asked", async () => {
@@ -95,31 +105,70 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[0]?.args).toContain(`${tree}:/workspace:ro,z`);
   });
 
-  it("covers each masked entry with an empty stand-in of its kind, and refuses one that is missing or a symlink", async () => {
-    await mkdir(join(tree, ".git"), { recursive: true });
-    await writeFile(join(tree, "gitlink"), `gitdir: ${root}/host/.git/worktrees/t\n`);
-    const { requests, substrate } = recorder([ok(ID)]);
-    await substrate.createCell({ ...spec, mount: { hostPath: tree, shared: true, maskedEntries: [".git", "gitlink"] } });
-    const args = requests[0]?.args ?? [];
-    expect(args.slice(args.indexOf(`${tree}:/workspace:z`) - 1, args.indexOf(IMAGE))).toEqual([
-      "-v", `${tree}:/workspace:z`,
-      "-v", `${root}/.ashara-cell-masks/empty-directory:/workspace/.git:ro,z`,
-      "-v", `${root}/.ashara-cell-masks/empty-file:/workspace/gitlink:ro,z`,
-    ]);
-    // No volume source names the masked entries themselves: the host path in the gitlink never reaches the cell.
-    expect(args.some((arg) => arg.startsWith(`${tree}/.git`) || arg.startsWith(`${tree}/gitlink`))).toBe(false);
-    expect(await readFile(join(root, ".ashara-cell-masks", "empty-file"), "utf8")).toBe("");
-    expect(await readdir(join(root, ".ashara-cell-masks", "empty-directory"))).toEqual([]);
+  it("covers a tree's .git with a throwaway repository of the cell's own, and refuses a symlinked .git", async () => {
+    const own = { ...spec, instance: "inst-repo" };
+    const states = join(root, ".ashara-cell-state", "inst-repo");
+    const worktree = await mkdtemp(join(root, "worktree-"));
+    await writeFile(join(worktree, ".git"), `gitdir: ${root}/host/.git/worktrees/t\n`);
+    await writeFile(join(worktree, "a.txt"), "a\n");
+    const checkout = await mkdtemp(join(root, "checkout-"));
+    await mkdir(join(checkout, ".git"));
+    const { requests, substrate } = recorder([ok(ID), ok(OTHER_ID), ok(), ok()]);
 
-    await symlink(join(tree, ".git"), join(tree, "linked"));
-    for (const entry of ["linked", "absent", "..", "a/b"]) {
-      await expect(substrate.createCell({ ...spec, mount: { hostPath: tree, maskedEntries: [entry] } })).rejects.toBeInstanceOf(
-        entry === ".." || entry === "a/b" ? InvalidCellRequest : MountPathRejected,
-      );
+    const linked = await substrate.createCell({ ...own, mount: { hostPath: worktree, shared: true } });
+    const args = requests[0]?.args ?? [];
+    const state = join(states, args[3] ?? "");
+    expect(args.slice(args.indexOf(`${worktree}:/workspace:z`) - 1, args.indexOf(IMAGE))).toEqual([
+      "-v", `${worktree}:/workspace:z`,
+      "-v", `${state}/home:/ashara-cell/home:Z`,
+      "-v", `${root}/.ashara-cell-gitlink:/workspace/.git:ro,z`,
+      "-v", `${state}/git:/ashara-cell/git:Z`,
+    ]);
+    expect(await readFile(join(root, ".ashara-cell-gitlink"), "utf8")).toBe("gitdir: /ashara-cell/git\n");
+    // No volume source is the tree's own .git, and nothing in the repository names a host path.
+    expect(args.some((arg) => arg.startsWith(`${worktree}/.git`))).toBe(false);
+    const hostPaths = await run("grep", ["-rlF", root, join(state, "git")]).catch((e: unknown) => e);
+    expect(hostPaths).toMatchObject({ code: 1 });
+    expect(await readdir(join(state, "git"))).not.toContain("hooks");
+
+    const dir = await substrate.createCell({ ...own, mount: { hostPath: checkout } });
+    const dirArgs = requests[1]?.args ?? [];
+    expect(dirArgs).toContain(`${join(states, dirArgs[3] ?? "")}/git:/workspace/.git:Z`);
+    expect(dirArgs.some((arg) => arg.includes(".ashara-cell-gitlink"))).toBe(false);
+
+    await linked.teardown();
+    await dir.teardown();
+    expect(await readdir(states)).toEqual([]);
+
+    const symlinked = await mkdtemp(join(root, "symlinked-"));
+    await symlink(join(checkout, ".git"), join(symlinked, ".git"));
+    await expect(substrate.createCell({ ...own, mount: { hostPath: symlinked } })).rejects.toBeInstanceOf(MountPathRejected);
+    // The state and the gitlink stand-in are the substrate's own: no cell mounts them as its tree.
+    await mkdir(join(states, "x"));
+    for (const hostPath of [join(states, "x"), join(root, ".ashara-cell-gitlink")]) {
+      await expect(substrate.createCell({ ...own, mount: { hostPath } })).rejects.toBeInstanceOf(MountPathRejected);
     }
-    // The stand-ins are the substrate's own: no cell mounts them as its tree.
-    await expect(substrate.createCell({ ...spec, mount: { hostPath: join(root, ".ashara-cell-masks") } })).rejects.toBeInstanceOf(MountPathRejected);
-    expect(requests).toHaveLength(1);
+    await rm(join(states, "x"), { recursive: true });
+    expect(requests).toHaveLength(4);
+    await expect(substrate.createCell({ ...own, instance: ".." })).rejects.toBeInstanceOf(InvalidCellRequest);
+  });
+
+  it("removes a read-only directory a cell left in its state, and sweeps state no cell owns", async () => {
+    const own = { ...spec, instance: "inst-sweep" };
+    const states = join(root, ".ashara-cell-state", "inst-sweep");
+    const { requests, substrate } = recorder([ok(ID), ok(), ok("[]")]);
+    const cell = await substrate.createCell(own);
+    const home = join(states, requests[0]?.args[3] ?? "", "home");
+    await mkdir(join(home, "cache", "deep"), { recursive: true });
+    await writeFile(join(home, "cache", "deep", "f"), "x");
+    await chmod(join(home, "cache", "deep"), 0o500);
+    await chmod(join(home, "cache"), 0o500);
+    await cell.teardown();
+    expect(await readdir(states)).toEqual([]);
+
+    await mkdir(join(states, "ashara-cell-stray", "home"), { recursive: true });
+    expect(await substrate.reconcileOrphans("inst-sweep")).toEqual([]);
+    expect(await readdir(states)).toEqual([]);
   });
 
   it("rejects specs that could become options or break the volume syntax", async () => {

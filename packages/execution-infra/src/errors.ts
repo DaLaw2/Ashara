@@ -1,6 +1,7 @@
 /**
  * Every error names the operation, the exact argv sent to the substrate (argv never carries a
- * secret: cells get no -e, --env-host or --secret), the exit code and stderr where one exists.
+ * secret: cells get no --env-host or --secret, and their one -e is HOME, a fixed in-cell path), the exit
+ * code and stderr where one exists.
  */
 
 class ExecutionInfraError extends Error {
@@ -94,6 +95,32 @@ export class CellExecFailed extends ExecutionInfraError {
     this.exitCode = exitCode;
     this.stderr = stderr;
     this.detail = detail;
+  }
+}
+
+/**
+ * Z0's git could not make the throwaway repository a cell mounts as its own, so no cell was
+ * started. `step` is the snapshot step that failed, `argv` its exact git argv.
+ */
+export class WorkspaceSnapshotFailed extends ExecutionInfraError {
+  readonly workTree: string;
+  readonly step: string;
+  readonly argv: readonly string[];
+  readonly exitCode: number | null;
+  readonly stderr: string;
+
+  constructor(workTree: string, step: string, argv: readonly string[], exitCode: number | null, stderr: string, options?: ErrorOptions) {
+    super(
+      `Snapshot of ${JSON.stringify(workTree)} into a cell repository failed at ${step} (exit ${exitCode ?? "none"}): ` +
+        `${stderr.trim() || "(no stderr)"}; argv: ${JSON.stringify(argv)}`,
+      options,
+    );
+    this.name = "WorkspaceSnapshotFailed";
+    this.workTree = workTree;
+    this.step = step;
+    this.argv = argv;
+    this.exitCode = exitCode;
+    this.stderr = stderr;
   }
 }
 

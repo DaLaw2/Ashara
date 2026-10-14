@@ -800,4 +800,11 @@ describe("workplace boundaries", () => {
     expect(prompt).not.toMatch(/\bgit\b/i);
     expect(prompt).toContain("A greeting file");
   });
+
+  // ADR-074 addendum 2 d73 (go-run G2): the recipe's author and the implementer both learn the run-as user.
+  it.each(["implementation", "environment"] as const)("the %s brief states that cells run as a non-root user with a writable HOME", (kind) => {
+    const prompt = buildSystemPrompt(assignment().brief, kind);
+    expect(prompt).toContain("non-root user");
+    expect(prompt).toMatch(/HOME[^\n]* writable|writable[^\n]*HOME/);
+  });
 });
