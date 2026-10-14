@@ -21,9 +21,10 @@ export class GateKeeper {
    * the gate for every project. A dependency on an item outside the project waits.
    *
    * A Pending task whose dependencies can never be met (an Abandoned item, directly or
-   * transitively, or a cycle) is parked at Blocked with a dependency_unsatisfiable reason here,
-   * and its work_item.blocked event published: nothing else ever moves it, and left Pending it
-   * would stall with no record. Its exit is the operator's.
+   * transitively, or a cycle; an Abandoned check task only for the task it checks) is parked at
+   * Blocked with a dependency_unsatisfiable reason here, and its work_item.blocked event published:
+   * nothing else ever moves it, and left Pending it would stall with no record. Its exit is the
+   * operator's.
    */
   static async filterAvailable(
     repo: WorkItemRepository,
@@ -129,6 +130,7 @@ function buildDependencyContext(items: WorkItem[]): DependencyContext {
       status: item.status,
       title: item.title,
       parentId: item.parentId,
+      checksFor: item.workKind === "check" ? (item.taskSpec?.checksFor ?? null) : null,
     });
     if (item.status === "Completed") {
       const key = equivalenceKey(item.parentId, item.title);

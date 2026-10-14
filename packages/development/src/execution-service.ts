@@ -14,7 +14,7 @@ import {
 } from "@ashara/execution-infra";
 import type { ContextualTurnLlm, PreCallRefusal, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
-import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { AssignmentRole, AttemptCellImage, CheckDefinitionPort, CheckRedRunPreview, CheckRunReport, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import {
@@ -51,18 +51,22 @@ import {
   dropCheckBranch,
   formatChecksForBrief,
   formatProjectChecksForCheckAuthor,
+  formatReauthoringRuleForCheckAuthor,
   harvestCheckFiles,
   headCommit,
   mainCommit,
   previewCheckFiles,
   redRunPreview,
   redRunProblem,
+  redRunRuleFor,
+  redRunSetProblem,
+  redRunVerdict,
   runChecksOnCheckout,
   runSuitesOnCheckout,
   tentativeMergeCommit,
   worktreeSnapshotCommit,
 } from "./task-checks.js";
-import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
+import type { CheckCells, CheckSuite, CompletedTaskChecks, RedRunRule, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
   commitAllChanges,
@@ -366,13 +370,22 @@ function briefEnvironment(environment: DispatchEnvironment): AgentBrief["project
 type WorkPlan =
   | { readonly kind: "substrate" }
   | { readonly kind: "stored-checks"; readonly stored: TaskChecks }
-  | { readonly kind: "check-authoring"; readonly checkedTaskId: string; readonly environment: CurrentEnvironment };
+  | {
+      readonly kind: "check-authoring";
+      readonly checkedTaskId: string;
+      readonly environment: CurrentEnvironment;
+      /** The checked task's latest stored revision, when its checks are being written again. */
+      readonly prior: TaskChecks | null;
+      readonly redRunRule: RedRunRule;
+    };
 
 /** A check task's plan once its throwaway worktree exists. */
 interface CheckAuthoring {
   readonly kind: "check-authoring";
   readonly checkedTaskId: string;
   readonly environment: CurrentEnvironment;
+  readonly prior: TaskChecks | null;
+  readonly redRunRule: RedRunRule;
   readonly branch: string;
   /** The main commit the worktree started from: the attempt's files are its diff against it. */
   readonly startCommit: string;
@@ -1229,10 +1242,13 @@ export class DevelopmentService {
         return {
           kind: "unplannable",
           operation: "resolveCheckedTask",
-          reason: `check task ${task.id} must decide exactly one implementation task, but ${checked.length} depend on it [${checked.join(", ")}]`,
+          reason:
+            `check task ${task.id} must decide exactly one implementation task, but its task_spec.checksFor names ` +
+            `${checked.length} implementation task(s) on record [${checked.join(", ")}]`,
         };
       }
-      return { kind: "check-authoring", checkedTaskId: only, environment };
+      const prior = await this.deps.checks.latest(parseWorkItemId(only, "TaskCheckStore.checkedTasksOf"));
+      return { kind: "check-authoring", checkedTaskId: only, environment, prior, redRunRule: redRunRuleFor(prior, environment.version) };
     }
     const stored = await this.deps.checks.latest(task.id);
     if (stored === null || stored.checks.length === 0) {
@@ -1301,6 +1317,9 @@ export class DevelopmentService {
     if (plan.kind === "check-authoring") {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
       taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}`;
+      if (plan.redRunRule === "one-check-fails" && plan.prior !== null) {
+        taskContext = `${taskContext}\n\n${formatReauthoringRuleForCheckAuthor(plan.prior, plan.environment.version)}`;
+      }
     }
     const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
     // Named before work starts (ADR-074 addendum 2 d66 c): what the ownership gate refuses, and
@@ -1599,20 +1618,99 @@ export class DevelopmentService {
   /**
    * An implementer that finished done with no change against main (ADR-074 addendum 2 d67 b): an
    * earlier task may have delivered this one's work already. Z0 decides that by the checks, never by
-   * the implementer's word: on a throwaway checkout of main itself, in a CI cell from the dispatch's
-   * environment image, it runs the environment's test, the latest checks of every Completed
-   * implementation task of the project (the regression suite) and this task's own checks, each with
-   * its files written over the checkout. All pass: completed as already delivered, with main's commit
-   * at that time as the delivering commit, the task branch deleted and nothing merged. Any fails:
-   * failed as "no changes" with the run's output, the branch kept as today. A run that could not run
-   * at all blocks for the operator. Reached also before any model is called, when revalidateChecks
-   * finds every stored check passing on main: `agent` is then NO_AGENT and `turnCount` null.
+   * the implementer's word: it runs them on main (mainSuitesRun). All pass: completed as already
+   * delivered, with main's commit at that time as the delivering commit, the task branch deleted and
+   * nothing merged. Any fails: failed as "no changes" with the run's output, the branch kept as
+   * today. A run that could not run at all blocks for the operator.
    */
-  private async deliveredOnMain(d: Dispatch, stored: TaskChecks, agent: AgentPart, turnCount: number | null): Promise<ExecutionResult> {
+  private async deliveredOnMain(d: Dispatch, stored: TaskChecks, agent: AgentPart, turnCount: number): Promise<ExecutionResult> {
+    const { eventSink } = this.deps;
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    const onMain = await this.mainSuitesRun(d, stored, agent);
+    if (onMain.kind === "blocked") return onMain.result;
+    if (onMain.verdict.passed) return this.alreadyDelivered(d, onMain.main, stored, agent);
+
+    const reason = `${NO_CHANGE_REASON}, and its checks do not all pass on main (${onMain.main}), so its work is not already delivered:\n${onMain.verdict.details}`;
+    eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
+    await cleanupWorkdir(workDir, targetProjectPath);
+    const { output } = agent;
+    return {
+      status: "failed",
+      detail: reason,
+      output,
+      sessionId,
+      attempt: task.attempt,
+      errorEnvelope: {
+        outcome: "failed",
+        summary: reason,
+        chain: wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount }),
+        ...(output === null ? {} : { agentOutput: output }),
+      },
+    };
+  }
+
+  /**
+   * Before any model is called, revalidateChecks found every stored check passing on main: an
+   * earlier task may have delivered this one's work. All suites pass on main: completed as already
+   * delivered. The task's own checks pass but main's environment test or an earlier task's check
+   * fails there (ADR-074 addendum 2 d68 a): nothing was delivered and no model ran, so this is not
+   * the task's failure: null, and the task goes to its implementer as usual, the post-merge
+   * regression suite judging the result. Its own checks failing in this run, after passing in the
+   * red run just before, fails the task as before: they do not decide its work either way.
+   */
+  private async deliveredBeforeModel(d: Dispatch, stored: TaskChecks): Promise<ExecutionResult | null> {
+    const { eventSink } = this.deps;
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    const onMain = await this.mainSuitesRun(d, stored, NO_AGENT);
+    if (onMain.kind === "blocked") return onMain.result;
+    if (onMain.verdict.passed) return this.alreadyDelivered(d, onMain.main, stored, NO_AGENT);
+    if (onMain.ownPassed) {
+      console.log(
+        `[${task.id}] its stored checks pass on main ${onMain.main}, but main's environment test or an earlier task's ` +
+          `check fails there, so nothing is already delivered: dispatched to its implementer as usual\n${onMain.verdict.details}`,
+      );
+      return null;
+    }
+
+    const reason =
+      `its stored checks pass on main before any implementer ran, but not on the run of every suite there ` +
+      `(${onMain.main}), so its work is not already delivered:\n${onMain.verdict.details}`;
+    eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
+    await cleanupWorkdir(workDir, targetProjectPath);
+    return {
+      status: "failed",
+      detail: reason,
+      output: null,
+      sessionId,
+      attempt: task.attempt,
+      errorEnvelope: {
+        outcome: "failed",
+        summary: reason,
+        chain: wrapError("development", "revalidateTaskChecks", reason, { taskId: task.id, mainCommit: onMain.main }),
+      },
+    };
+  }
+
+  /**
+   * On a throwaway checkout of main itself, in a CI cell from the dispatch's environment image: the
+   * environment's test, the latest checks of every Completed implementation task of the project (the
+   * regression suite) and this task's own checks, each with its files written over the checkout.
+   * `ownPassed` when every one of this task's own checks ran and passed, whatever the other suites
+   * did. A run that could not run at all is environment-blocked, the workdir cleaned.
+   */
+  private async mainSuitesRun(
+    d: Dispatch,
+    stored: TaskChecks,
+    agent: AgentPart,
+  ): Promise<
+    | { readonly kind: "blocked"; readonly result: ExecutionResult }
+    | { readonly kind: "ran"; readonly main: string; readonly verdict: PostMergeVerdict; readonly ownPassed: boolean }
+  > {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
     let main: string;
     let suites: readonly CheckSuite[];
+    let own: CheckSuite;
     let runs: readonly SuiteRun[];
     let earlier: readonly CompletedTaskChecks[];
     let unchecked: readonly string[];
@@ -1623,6 +1721,7 @@ export class DevelopmentService {
       const completed = await this.deps.checks.completedOf(task.projectId, task.id);
       earlier = completed.checked;
       unchecked = completed.unchecked;
+      own = { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files };
       suites = [
         { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.test }], files: [] },
         ...earlier.map((prior) => ({
@@ -1630,12 +1729,12 @@ export class DevelopmentService {
           checks: prior.checks,
           files: prior.files,
         })),
-        { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files },
+        own,
       ];
       runs = await runSuitesOnCheckout(this.checkCells(d), RED_RUN_ROLE, environment.imageId, main, this.checkoutDir(d, "delivered-on-main"), suites);
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main");
+      return { kind: "blocked", result: mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main") };
     }
     const ran = suitesVerdict(suites, runs, earlier.length, "main");
     const verdict: PostMergeVerdict =
@@ -1653,30 +1752,20 @@ export class DevelopmentService {
       uncheckedTasks: unchecked,
       details: verdict.details,
     });
+    const ownRun = runs.find((run) => run.suite === own);
+    const ownPassed =
+      ownRun !== undefined &&
+      ownRun.report.kind === "ran" &&
+      ownRun.report.runs.length === own.checks.length &&
+      ownRun.report.runs.length > 0 &&
+      ownRun.report.runs.every(checkPassed);
+    return { kind: "ran", main, verdict, ownPassed };
+  }
 
-    if (!verdict.passed) {
-      const why =
-        turnCount === null
-          ? "its stored checks pass on main before any implementer ran, but not every suite does"
-          : `${NO_CHANGE_REASON}, and its checks do not all pass on main`;
-      const reason = `${why} (${main}), so its work is not already delivered:\n${verdict.details}`;
-      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
-      await cleanupWorkdir(workDir, targetProjectPath);
-      const chain =
-        turnCount === null
-          ? wrapError("development", "revalidateTaskChecks", reason, { taskId: task.id, mainCommit: main })
-          : wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount });
-      const { output } = agent;
-      return {
-        status: "failed",
-        detail: reason,
-        output,
-        sessionId,
-        attempt: task.attempt,
-        errorEnvelope: { outcome: "failed", summary: reason, chain, ...(output === null ? {} : { agentOutput: output }) },
-      };
-    }
-
+  /** Every suite passed on main: completed as already delivered at `main`, the task branch deleted, nothing merged. */
+  private async alreadyDelivered(d: Dispatch, main: string, stored: TaskChecks, agent: AgentPart): Promise<ExecutionResult> {
+    const { eventSink } = this.deps;
+    const { task, workDir, targetProjectPath, sessionId } = d;
     await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
     console.log(`[${task.id}] already delivered: its checks, the environment's test and the regression suite pass on main ${main}; nothing merged`);
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "already_delivered" });
@@ -2190,7 +2279,7 @@ export class DevelopmentService {
               [check],
               harvest.files,
             );
-            redRun = redRunPreview(report, timeoutSeconds, dir);
+            redRun = redRunPreview(report, timeoutSeconds, dir, work.redRunRule);
           }
         } catch (e) {
           if (environmentErrorOf(e) !== null) throw e;
@@ -2217,8 +2306,9 @@ export class DevelopmentService {
    * Stored checks were red-run on their check task's environment version. On a dispatch from another
    * version they are red-run again on main in a CI cell from this dispatch's image: if every check
    * still fails there decisively they are trusted; if every check passes there the task's work may
-   * already be on main, and deliveredOnMain decides it before any model is called (ADR-074
-   * addendum 2 d67 b); otherwise the task is checks_stale before the
+   * already be on main, and deliveredBeforeModel decides it before any model is called (ADR-074
+   * addendum 2 d67 b, d68 a: a failing environment test or earlier check on main sends the task
+   * to its implementer instead); otherwise the task is checks_stale before the
    * model is called, naming both versions and the check task, since a check that no longer fails on
    * main cannot tell the task's work from its absence, and the implementer could not answer for it.
    * A red run that could not run at all is environment-blocked. null when the checks may be trusted.
@@ -2259,13 +2349,13 @@ export class DevelopmentService {
         currentVersion: current,
         trusted: false,
       });
-      return this.deliveredOnMain(d, stored, NO_AGENT, null);
+      return this.deliveredBeforeModel(d, stored);
     }
     const problem =
       redRun.kind === "files_refused"
         ? `the check files cannot be placed on main: ${redRun.detail}`
-        : redRun.runs.some((run) => redRunProblem(run) !== null)
-          ? formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`)
+        : redRun.runs.some((run) => redRunProblem(run, "every-check-fails") !== null)
+          ? formatCheckRuns(redRun.runs, (run) => redRunVerdict(run, "every-check-fails"))
           : null;
     eventSink?.emit({
       event: "checks_revalidated",
@@ -2323,7 +2413,9 @@ export class DevelopmentService {
   /**
    * Harvests a finished check attempt: its defined checks and the files it added or changed, then
    * the red run on a fresh checkout of the current main in a CI cell from the environment image.
-   * A check that passes there, or whose command cannot run, rejects the whole set. The kept
+   * A command that cannot run rejects the whole set. A first authoring needs every check to fail
+   * there; a re-authoring after the environment moved needs at least one to (ADR-074 addendum 2
+   * d68 b). The kept
    * revision is appended to Quality's task_checks for the implementation task; the throwaway
    * branch is discarded either way.
    */
@@ -2352,10 +2444,13 @@ export class DevelopmentService {
         return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on main");
       }
       if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
-      const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);
-      const problems = redRun.runs.filter((run) => redRunProblem(run) !== null);
+      const rule = work.redRunRule;
+      const runsReport = formatCheckRuns(redRun.runs, (run) => redRunVerdict(run, rule));
+      const problems = redRun.runs.filter((run) => redRunProblem(run, rule) !== null);
+      const setProblem = redRunSetProblem(redRun.runs, rule);
+      const report = setProblem === null ? runsReport : `${runsReport}\nREJECTED, the set: ${setProblem}`;
       eventSink?.emit({ event: "check_red_run", taskId: task.id, attempt: task.attempt, rejected: problems.map((run) => run.name), report });
-      if (problems.length > 0) return this.checksRejected(d, output, `red run on main:\n${report}`);
+      if (problems.length > 0 || setProblem !== null) return this.checksRejected(d, output, `red run on main:\n${report}`);
 
       const revision = await this.deps.checks.append({
         projectId: task.projectId,

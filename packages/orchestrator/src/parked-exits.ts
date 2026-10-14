@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, ProjectId } from "@ashara/shared";
-import { blockedExitOf, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
+import { blockedExitOf, describeErrorChain, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService, takeEvents, unblockWorkItem } from "./acl/planning-acl.js";
 
@@ -82,7 +82,7 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
       blocked = await deps.workItemRepo.findByProjectAndStatus(projectId, "Blocked");
     } catch (err) {
       if (!(err instanceof WorkItemRowCorrupt)) throw err;
-      console.warn(`[parked-exits] project ${projectId}: ${err.message}; its Blocked tasks are not re-checked`);
+      console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
       continue;
     }
     const checks = new ProjectChecks(deps.checks, projectId);

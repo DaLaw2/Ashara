@@ -636,6 +636,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly storedFiles?: TaskChecks["files"];
     /** The exit code of every check run in a CI cell (a red run or run_checks); 0 when absent. */
     readonly ciExit?: number;
+    /** A CI-cell command that exits 1 whatever ciExit says: the environment's test is "true". */
+    readonly ciFailsCommand?: string;
     /** What every check run in a CI cell prints; "hello\n" when absent. */
     readonly ciStdout?: string;
     /** The first turn writes greet.txt and calls run_checks; the second finishes. */
@@ -720,6 +722,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             const role = roleOf(args[5]);
             // No status report: podman exec itself failed, the command never ran.
             if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
+            if (role === "ci" && faults.ciFailsCommand !== undefined && args.at(-1) === faults.ciFailsCommand) return ran("broken\n", 1);
             return role === "ci" ? ran(faults.ciStdout ?? "hello\n", faults.ciExit ?? 0) : ran("hello\n");
           }
           case "rm":
@@ -940,6 +943,17 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(started.map((s) => s.role)).toEqual(["developer", "ci", "ci"]);
     expect(mainAfter).toBe(mainBefore);
     expect(branchKept).toBe(false);
+  });
+
+  // t-delivered-paths-exits (ADR-074 addendum 2 d68 a): main's own regression failed the task before any model ran.
+  test("checks from another environment version that all pass on main while main's environment test fails: dispatched to the implementer, never failed before the model", async () => {
+    const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0, ciFailsCommand: "true" });
+
+    expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "failed" });
+    expect(events.some((e) => e.event === "agent_launched")).toBe(true);
+    expect(probe.modelCalls).toBeGreaterThan(0);
+    expect(result.errorEnvelope?.chain.operation).not.toBe("revalidateTaskChecks");
+    expect(result.status === "completed" && result.delivered.kind === "already-delivered").toBe(false);
   });
 
   // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.

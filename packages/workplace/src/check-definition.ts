@@ -27,6 +27,11 @@ export type CheckRedRunPreview =
       readonly timeoutSeconds: number;
       /** Why the red run at finish would reject this check as it ran here; null when it would keep it. */
       readonly rejection: string | null;
+      /**
+       * It does not fail on main and the red run at finish would still keep it: a re-authoring's rule
+       * lets a check pass there as long as one of the set fails (ADR-074 addendum 2 d68 b).
+       */
+      readonly passesAllowed: boolean;
     }
   /** The attempt's files could not be kept or placed on main, so the check could not run. */
   | { readonly kind: "files_refused"; readonly detail: string };

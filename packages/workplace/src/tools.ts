@@ -321,10 +321,13 @@ function formatDefinedCheck(name: string, result: Extract<CheckDefinitionResult,
     `Red run on the project as it is now (limit ${redRun.timeoutSeconds}s):`,
     `  exit code: ${run.exitCode ?? "none (killed)"}${run.timedOut ? " (timed out)" : ""}`,
     `  output: ${run.output === "" ? "(empty)" : run.output}`,
-    redRun.rejection === null
-      ? `It fails now, as it must. Make sure it fails for the reason the task's work is missing, not because of a ` +
-        `syntax error or a file that does not exist: such a check can never pass.`
-      : `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`,
+    redRun.rejection !== null
+      ? `WOULD BE REJECTED at finish: ${redRun.rejection}. Fix it and define it again under the same name.`
+      : redRun.passesAllowed
+        ? `It does not fail now. On this re-authoring that is allowed, but at finish at least one check of the set ` +
+          `must fail now for the reason the task's work is missing.`
+        : `It fails now, as it must. Make sure it fails for the reason the task's work is missing, not because of a ` +
+          `syntax error or a file that does not exist: such a check can never pass.`,
   ];
   return { kind: "result", output: lines.join("\n"), isError: redRun.rejection !== null };
 }

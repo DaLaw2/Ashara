@@ -351,6 +351,55 @@ describe("independent verification", () => {
     expect(await checkRowsOf(unrunnable.implementation.id)).toEqual([]);
   }, 300_000);
 
+  // t-delivered-paths-exits (ADR-074 addendum 2 d68 b): a check task reopened after the environment
+  // moved rejected every check another task had already delivered, so it could never finish.
+  describe("a check task re-authoring checks stored on another environment version", () => {
+    async function reauthoring(title: string) {
+      const pair = await plannedPair(title);
+      await new TaskCheckRepository(db).append({
+        projectId,
+        taskId: pair.implementation.id,
+        checkTaskId: pair.check.id,
+        environmentVersion: "f".repeat(64),
+        checks: [{ name: "old", command: "false" }],
+        files: [],
+      });
+      return pair;
+    }
+
+    it("keeps a set where one check passes on main and another fails there, and its brief states that rule", async () => {
+      const pair = await reauthoring("Write bye.txt");
+
+      const { result, mock, events } = await runTask(pair.check, [
+        toolCallTurn("define_check", { name: "already there", command: "echo fine" }),
+        toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt" }),
+        toolCallTurn("finish", { status: "done", summary: "Two checks." }),
+      ]);
+
+      expect(result.status, result.detail).toBe("completed");
+      expect(promptText(mock)).toContain("Red run for this re-authoring");
+      expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null)).toContain("On this re-authoring that is allowed");
+      expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [] });
+      expect((await checkRowsOf(pair.implementation.id)).filter((row) => row.revision === 2).map((row) => row.name)).toEqual([
+        "already there",
+        "says bye",
+      ]);
+    }, 300_000);
+
+    it("rejects a set where every check passes on main, and stores nothing", async () => {
+      const pair = await reauthoring("Write ok.txt");
+
+      const { result } = await runTask(pair.check, [
+        toolCallTurn("define_check", { name: "always", command: "echo fine" }),
+        toolCallTurn("finish", { status: "done", summary: "One check." }),
+      ]);
+
+      expect(result.status).toBe("failed");
+      expect(result.detail).toContain("no check of the set fails on main");
+      expect((await checkRowsOf(pair.implementation.id)).map((row) => row.revision)).toEqual([1]);
+    }, 300_000);
+  });
+
   it("an implementation task whose stored check passes on its merge completes, and the check files are not merged", async () => {
     const { result, mock, events } = await runTask(hello.implementation, [
       toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" }),

@@ -533,6 +533,7 @@ describe("define_check", () => {
     run: { name: check.name, command: check.command, exitCode: 1, timedOut: false, output: "no greeting" },
     timeoutSeconds: 60,
     rejection: null,
+    passesAllowed: false,
   })) {
     const defined: CheckDefinition[] = [];
     const timeouts: number[] = [];
@@ -575,12 +576,14 @@ describe("define_check", () => {
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: 'sh: 1: Syntax error: "(" unexpected' },
             timeoutSeconds: 60,
             rejection: null,
+            passesAllowed: false,
           }
         : {
             kind: "ran",
             run: { name: check.name, command: check.command, exitCode: 2, timedOut: false, output: "grep: greet.txt: No such file or directory" },
             timeoutSeconds: 60,
             rejection: null,
+            passesAllowed: false,
           },
     );
 
@@ -612,6 +615,7 @@ describe("define_check", () => {
             run: { name: check.name, command: check.command, exitCode: 0, timedOut: false, output: "fine" },
             timeoutSeconds: 60,
             rejection: "it already passes on main",
+            passesAllowed: false,
           }
         : { kind: "files_refused", detail: "check files overlap the environment's owned paths [environment]: environment/x" },
     );

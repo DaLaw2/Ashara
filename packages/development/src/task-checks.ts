@@ -433,24 +433,78 @@ export async function runChecksOnCheckout(
  * within its time limit, and its command must be one the environment can run. A timeout proves
  * nothing about main: the same check could time out on the task's work too. null when it holds.
  */
-export function redRunProblem(run: CheckRun): string | null {
+export function redRunProblem(run: CheckRun, rule: RedRunRule): string | null {
   if (run.timedOut) {
     return "it timed out on main instead of failing there; a check must fail on main by a non-zero exit within its time limit";
   }
   if (run.exitCode === null) return "it was killed on main without an exit code, so it did not fail there decisively";
-  if (run.exitCode === 0) return "it already passes on main, so it cannot tell the task's work from its absence";
+  if (run.exitCode === 0) {
+    return rule === "one-check-fails" ? null : "it already passes on main, so it cannot tell the task's work from its absence";
+  }
   if (COMMAND_UNRUNNABLE.has(run.exitCode)) {
     return `its command cannot be run in the project environment (exit ${run.exitCode})`;
   }
   return null;
 }
 
+/**
+ * Which red run a check task's set must pass on main (ADR-074 addendum 2 d68 b).
+ * "every-check-fails": a first authoring, every check fails there. "one-check-fails": a re-authoring
+ * after the environment moved under the stored revision, when another task may have delivered part
+ * of the checked task's behaviour already: a check may pass on main, but at least one of the set
+ * must fail there decisively, and none may time out or be unrunnable.
+ */
+export type RedRunRule = "every-check-fails" | "one-check-fails";
+
+/**
+ * The rule a check task's red run follows: "one-check-fails" only when the checked task already has
+ * a stored revision written on another environment version than the one the check task runs on, as
+ * a check task reopened for stale checks finds it; every first authoring is "every-check-fails".
+ */
+export function redRunRuleFor(prior: TaskChecks | null, environmentVersion: string): RedRunRule {
+  return prior !== null && prior.environmentVersion !== environmentVersion ? "one-check-fails" : "every-check-fails";
+}
+
+/** Whether a check's run on main is a decisive failure there, by the strict rule. */
+function failsDecisively(run: CheckRun): boolean {
+  return run.exitCode !== 0 && redRunProblem(run, "every-check-fails") === null;
+}
+
+/** The red run's verdict on the whole set, beyond each check's own: null when it holds. */
+export function redRunSetProblem(runs: readonly CheckRun[], rule: RedRunRule): string | null {
+  if (rule === "every-check-fails" || runs.some(failsDecisively)) return null;
+  return "no check of the set fails on main; on a re-authoring at least one must fail there, for the reason the task's work is missing";
+}
+
+/** One check's line in a red run's report, by the rule. */
+export function redRunVerdict(run: CheckRun, rule: RedRunRule): string {
+  const problem = redRunProblem(run, rule);
+  if (problem !== null) return `REJECTED: ${problem}`;
+  return failsDecisively(run) ? "fails on main, as it must" : "passes on main, allowed on this re-authoring";
+}
+
 /** define_check's red run of its one check, as the author is shown it, judged by the red-run rule. */
-export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string): CheckRedRunPreview {
+export function redRunPreview(report: CheckRunReport, timeoutSeconds: number, checkoutDir: string, rule: RedRunRule): CheckRedRunPreview {
   if (report.kind === "files_refused") return { kind: "files_refused", detail: `the check files cannot be placed on main: ${report.detail}` };
   const [run] = report.runs;
   if (run === undefined) throw new SuiteRunMissing(checkoutDir);
-  return { kind: "ran", run, timeoutSeconds, rejection: redRunProblem(run) };
+  const rejection = redRunProblem(run, rule);
+  return { kind: "ran", run, timeoutSeconds, rejection, passesAllowed: rejection === null && !failsDecisively(run) };
+}
+
+/**
+ * The relaxed red-run rule as a re-authoring check task's brief states it: the system prompt's
+ * "every check must fail" holds for a first authoring only.
+ */
+export function formatReauthoringRuleForCheckAuthor(prior: TaskChecks, environmentVersion: string): string {
+  return [
+    `## Red run for this re-authoring`,
+    `The checks of this task were written before (revision ${prior.revision}, on environment version ${prior.environmentVersion})`,
+    `and the environment has moved since (now version ${environmentVersion}). Another task may have delivered part of`,
+    `this task's behaviour already, so on this re-authoring a check MAY pass on the project as it is now: at finish at`,
+    `least one check of the set must fail there for the reason the task's work is missing, and none may time out or`,
+    `have a command that cannot be run. This replaces the rule that every check must fail now.`,
+  ].join("\n");
 }
 
 /** The checks as the implementation task's brief states them: what decides the task. */

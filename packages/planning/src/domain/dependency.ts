@@ -11,6 +11,8 @@ import { CycleDetected } from "./errors.js";
  *                item, directly or transitively, or a cycle), so the
  *                item can never become dispatchable and must be routed as
  *                blocked-with-reason rather than waiting forever.
+ * A check task orders every implementation of its plan revision but gates only the task it checks
+ * (ADR-074 addendum 2 d68 c): to any other dependent it is satisfied once terminal, Abandoned too.
  */
 type DependencyResolution = "met" | "waiting" | "blocked";
 
@@ -19,6 +21,11 @@ export interface DependencyItemView {
   readonly status: WorkItemStatus;
   readonly title: string;
   readonly parentId?: string;
+  /**
+   * A check task's `task_spec.checksFor`: the one task it gates. null for every other item, and for
+   * a check task that names none, which then gates every dependent as any other item does.
+   */
+  readonly checksFor: string | null;
 }
 
 /** Read model the graph consults to resolve dependency satisfaction. */
@@ -170,7 +177,7 @@ export class DependencyGraph {
     let hasPending = false;
     const blockedBy = new Set<string>();
     for (const dep of deps) {
-      const state = this.classifyDependency(dep, ctx, memo, active);
+      const state = this.classifyDependency(itemId, dep, ctx, memo, active);
       if (state.kind === "unsatisfiable") {
         for (const cause of state.blockedBy) blockedBy.add(cause);
       } else if (state.kind === "pending") {
@@ -186,6 +193,7 @@ export class DependencyGraph {
   }
 
   private classifyDependency(
+    dependent: string,
     dep: string,
     ctx: DependencyContext,
     memo: Map<string, DependencyResolutionResult>,
@@ -200,7 +208,10 @@ export class DependencyGraph {
       return { kind: "satisfied" };
     }
 
-    if (view.status === "Abandoned") return { kind: "unsatisfiable", blockedBy: [dep] };
+    if (view.status === "Abandoned") {
+      if (view.checksFor !== null && view.checksFor !== dependent) return { kind: "satisfied" };
+      return { kind: "unsatisfiable", blockedBy: [dep] };
+    }
 
     // Pending / InProgress / Failed / Blocked may still progress — unless the
     // dependency is itself transitively blocked by an Abandoned item.
