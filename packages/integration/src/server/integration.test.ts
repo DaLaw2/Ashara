@@ -35,8 +35,6 @@ const createdWorkItemIds: string[] = [];
 const createdVisionIds: string[] = [];
 const createdProjectIds: string[] = [];
 let suiteClientId: string;
-const discardedBranches: Array<{ projectId: string; taskId: string }> = [];
-let branchDiscardFails = false;
 
 /** A project owned by this suite; its rows are removed in afterAll. */
 async function newProject(): Promise<ProjectId> {
@@ -98,10 +96,6 @@ beforeAll(async () => {
       const created = await createProjectWithTender(db, clientId, projectName, body);
       createdProjectIds.push(created.project.id);
       return created;
-    },
-    async discardTaskBranch(projectId, taskId) {
-      discardedBranches.push({ projectId, taskId });
-      if (branchDiscardFails) throw new Error("git refused: a worktree still holds the branch");
     },
   };
 
@@ -216,77 +210,34 @@ describe("Work Items", () => {
     return { id, projectId };
   }
 
-  const ENVIRONMENT_EDITS = { source: "environment_change_needed", paths: ["environment/environment.toml"], reason: "edited" };
-  const UNBLOCK = { by: "operator-a", note: "the environment now builds the product" };
+  // Story s-loop-never-stop-m1 W6: no work item waits on a person, so nobody unblocks or blocks a task by hand.
+  test.each([
+    { source: "environment_change_needed", paths: ["environment/environment.toml"], reason: "edited" },
+    { source: "merge_unrecorded", mergeCommit: "0123456789abcdef0123456789abcdef01234567", reason: "connection reset" },
+    { source: "owner_unresolved", ownerRoleId: null, rosterRevision: 1, reason: "no owner" },
+  ])("a Blocked task ($source) is not unblocked by hand: refused, and it stays Blocked", async (blockedReason) => {
+    const task = await blockedTask(blockedReason);
 
-  test("unblocking a task refused for environment edits deletes its branch first, so it restarts from main", async () => {
-    const task = await blockedTask(ENVIRONMENT_EDITS);
-    discardedBranches.length = 0;
-
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
-
-    expect(res.status).toBe(200);
-    expect(discardedBranches).toEqual([{ projectId: task.projectId, taskId: task.id }]);
-    expect(await statusOf(task.id)).toBe("Pending");
-  });
-
-  test("a branch that cannot be deleted refuses the unblock: the task stays Blocked", async () => {
-    const task = await blockedTask(ENVIRONMENT_EDITS);
-    branchDiscardFails = true;
-    try {
-      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).toContain("stays Blocked");
-    } finally {
-      branchDiscardFails = false;
-    }
-    expect(await statusOf(task.id)).toBe("Blocked");
-  });
-
-  test("a merged task whose merge record is missing is never unblocked to Pending: that would re-dispatch merged work", async () => {
-    const mergeCommit = "0123456789abcdef0123456789abcdef01234567";
-    const task = await blockedTask({ source: "merge_unrecorded", mergeCommit, reason: "connection reset" });
-
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
+    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: { by: "operator-a", note: "x" } });
 
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain(mergeCommit);
+    expect((await res.json()).error).toContain("the loop takes a Blocked task's exit by itself");
     expect(await statusOf(task.id)).toBe("Blocked");
   });
 
-  test("an unblock with no who or why is refused, and the task stays Blocked (third run N11)", async () => {
-    const task = await blockedTask({ source: "api", note: "held by hand" });
-    for (const reason of [undefined, { by: "operator-a" }, { by: " ", note: "x" }]) {
-      const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason });
-      expect(res.status).toBe(400);
-      expect((await res.json()).error).toContain("reason.by");
-    }
-    expect(await statusOf(task.id)).toBe("Blocked");
-  });
+  test("a task is not blocked by hand", async () => {
+    const id = randomUUID();
+    const projectId = await newProject();
+    await pool.query(
+      `INSERT INTO work_items (id, level, status, title, run_scope, project_id) VALUES ($1, 'Task', 'Pending', 'Pending task', $2, $3)`,
+      [id, RUN_SCOPE_AD_HOC, projectId],
+    );
+    createdWorkItemIds.push(id);
 
-  test("an unblock records who, the note and the cleared block on the Pending task, for its next brief", async () => {
-    const task = await blockedTask(ENVIRONMENT_EDITS);
+    const res = await req("PATCH", `/work-items/${id}/status`, { status: "Blocked", reason: { note: "held" } });
 
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
-
-    expect(res.status).toBe(200);
-    const row = await pool.query("SELECT blocked_reason FROM work_items WHERE id = $1", [task.id]);
-    expect(row.rows[0]?.blocked_reason).toMatchObject({
-      source: "operator_unblock",
-      unblockedBy: "operator-a",
-      note: "the environment now builds the product",
-      previous: ENVIRONMENT_EDITS,
-    });
-  });
-
-  test("unblocking any other block keeps the task's branch", async () => {
-    const task = await blockedTask({ source: "api", note: "held by hand" });
-    discardedBranches.length = 0;
-
-    const res = await req("PATCH", `/work-items/${task.id}/status`, { status: "Pending", reason: UNBLOCK });
-
-    expect(res.status).toBe(200);
-    expect(discardedBranches).toEqual([]);
+    expect(res.status).toBe(409);
+    expect(await statusOf(id)).toBe("Pending");
   });
 });
 

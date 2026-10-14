@@ -29,7 +29,7 @@ export {
   withPlanRevisionTransaction,
 } from "./repositories/replan.js";
 export { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
-export { listDueBlockReports, postProjectBlockReport, postTaskBlockedReport } from "./repositories/block-report.js";
+export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";

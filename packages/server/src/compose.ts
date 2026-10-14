@@ -41,7 +41,7 @@ import {
   FirstPlanner,
   Replanner,
 } from "@ashara/planning";
-import { DevelopmentService, SuiteReviewer, canonicalizeAllowingMissing, discardTaskBranch, pruneStaleEnvironmentImages } from "@ashara/development";
+import { DevelopmentService, SuiteReviewer, canonicalizeAllowingMissing, pruneStaleEnvironmentImages } from "@ashara/development";
 import { BlockReports, ClientAnswers, ClientStops, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
@@ -82,7 +82,7 @@ import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
 import type { AppDeps } from "./routes.js";
-import { cellInstanceFor, reconcileCellsAtStartup, teardownCellsAtShutdown } from "./cells.js";
+import { cellInstanceFor, reconcileCellsAtStartup, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
 import {
   ServerStartupRefused,
   loadApiToken,
@@ -95,7 +95,7 @@ import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
 import { createReplanStore } from "./replan-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createBlockReportStore, createParkedExitChecks } from "./block-report-store.js";
+import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
@@ -429,10 +429,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     stackChoices: new StackChoiceReports(createStackChoiceStore(db)),
     checkDisputes: new CheckDisputeRepository(db),
     blockReports,
-    disputeReports: blockReports,
     suiteReviewFindings: new SuiteReviewFindingRepository(db),
-    suiteReviewReports: blockReports,
-    parkedExits: createParkedExitChecks(db),
+    infrastructureProbe: substrateProbe(cellSubstrate),
     // The environment task an implementation needs is owned by the role doing environment work.
     async environmentOwner(projectId) {
       const roster = parseStoredRoster(projectId, await latestRosterRoles(db, projectId));
@@ -460,13 +458,6 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     clientMessageRepo: new ClientMessageRepository(db),
     clientRepo: new ClientRepository(db),
     createTender: (clientId, projectName, body) => createProjectWithTender(db, clientId, projectName, body),
-    async discardTaskBranch(projectId, taskId) {
-      const project = await projectRepo.get(projectId);
-      if (project === null || project.workspacePath === null) return;
-      const workspacePath = project.workspacePath;
-      const result = await withGitRunner(ports.git, () => discardTaskBranch(workspacePath, taskId));
-      console.log(`[unblock] task ${taskId}: branch ${result === "deleted" ? "deleted" : "absent"}; it restarts from main`);
-    },
   };
 
   // The web client (ADR-076) authenticates with a session cookie, never the API token.

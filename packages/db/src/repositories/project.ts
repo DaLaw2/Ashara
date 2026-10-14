@@ -167,6 +167,84 @@ export class ProjectRepository {
   }
 
   /**
+   * Blocks every active project with no stop awaiting the Liaison, with one cause: the
+   * deployment's spend cap, which binds them all (migration 048). Each block opens its episode
+   * (the projects_block_episode trigger). Returns the projects blocked.
+   */
+  async blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]> {
+    const rows = await this.db
+      .update(projects)
+      .set({
+        status: "blocked",
+        blockedCategory: cause.category,
+        blockedErrorClass: cause.errorClass,
+        blockedReason: cause.reason,
+      })
+      .where(and(eq(projects.status, "active"), noOpenStop(projects.id)))
+      .returning({ id: projects.id });
+    return rows.map((row) => parseProjectId(row.id, "projects.id"));
+  }
+
+  /**
+   * The projects halted on infrastructure (migration 048) whose halt the client has been told,
+   * oldest first: what the substrate probe resumes. A halt not yet reported is not listed: the
+   * halt report is due only while its episode is open, so ending it first would leave the client
+   * told of a resumption it was never told the pause of.
+   */
+  async listInfrastructureHalted(): Promise<ProjectId[]> {
+    const rows = await this.db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.status, "blocked"),
+          eq(projects.blockedCategory, "infrastructure"),
+          noOpenStop(projects.id),
+          sql`EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = ${projects.id} AND b.ended_at IS NULL AND b.report_id IS NOT NULL)`,
+        ),
+      )
+      .orderBy(asc(projects.createdAt), asc(projects.id));
+    return rows.map((row) => parseProjectId(row.id, "projects.id"));
+  }
+
+  /**
+   * The automatic way out of an infrastructure halt (migration 048): in one transaction with the
+   * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
+   * and the project returns to 'active' with its cause cleared. The Liaison then tells the client,
+   * once, that work resumed. A project no longer halted on infrastructure is left as it is: "moved".
+   * A halt whose own report is not yet posted is left as it is too, "unreported": its report is
+   * due only while the episode is open, so it is told before it can end.
+   */
+  async resumeFromInfrastructureHalt(id: ProjectId, evidence: string): Promise<"resumed" | "moved" | "unreported"> {
+    return this.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ status: projects.status, category: projects.blockedCategory })
+        .from(projects)
+        .where(eq(projects.id, id))
+        .for("update");
+      if (!locked) throw new ProjectNotFound(id, "resume the project");
+      if (locked.status !== "blocked" || locked.category !== "infrastructure") return "moved";
+      const [open] = await tx
+        .select({ reportId: projectBlocks.reportId })
+        .from(projectBlocks)
+        .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
+      if (!open) throw new BlockEpisodeMissing(id);
+      if (open.reportId === null) return "unreported";
+      const [episode] = await tx
+        .update(projectBlocks)
+        .set({ endedAt: sql`now()`, endKind: "probe_passed", resumeEvidence: evidence })
+        .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)))
+        .returning({ id: projectBlocks.id });
+      if (!episode) throw new BlockEpisodeMissing(id);
+      await tx
+        .update(projects)
+        .set({ status: "active", blockedCategory: null, blockedErrorClass: null, blockedReason: null })
+        .where(eq(projects.id, id));
+      return "resumed";
+    });
+  }
+
+  /**
    * The operator's way out of 'blocked' (migration 040), after the cause is cleared: in one
    * transaction with the project row locked, the open block episode is ended with who and why,
    * and the project returns to 'active' with its cause cleared. A project whose first planning
@@ -225,7 +303,7 @@ class ProjectNotBlocked extends Error {
 /** A blocked project with no open block episode: migration 040's trigger or backfill did not run for it. */
 class BlockEpisodeMissing extends Error {
   constructor(readonly projectId: ProjectId) {
-    super(`cannot unblock project ${projectId}: it is blocked but has no open block episode to end`);
+    super(`cannot return project ${projectId} to work: it is blocked but has no open block episode to end`);
     this.name = "BlockEpisodeMissing";
   }
 }

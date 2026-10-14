@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { ProjectId, WorkItemId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
+import type { WorkItemId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
 import { InvalidId, InvalidStatusTransition, describeErrorChain, parseProjectId, parseWorkItemId, parseWorkItemStatus } from "@ashara/shared";
 import {
   WorkItemRepository,
@@ -13,8 +13,6 @@ import {
   startWorkItem,
   completeWorkItem,
   failWorkItem,
-  blockWorkItem,
-  unblockWorkItem,
   replanWorkItem,
   abandonWorkItem,
   takeEvents,
@@ -38,19 +36,11 @@ export interface AppDeps extends ClientChannelDeps {
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;
   readonly projectRepo: ProjectRepository;
-  /**
-   * Deletes a task's branch in its project's workspace, so its next attempt starts fresh from
-   * main; nothing to do when the project has no workspace or the task no branch.
-   */
-  readonly discardTaskBranch: (projectId: ProjectId, taskId: string) => Promise<void>;
 }
 
 type AppEnv = { Variables: { deps: AppDeps } };
 
 const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
-
-/** An operator's unblock: who, and what they changed. Other fields of `reason` are ignored. */
-const UnblockReasonSchema = z.object({ by: z.string().trim().min(1), note: z.string().trim().min(1) });
 
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -77,7 +67,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.patch("/work-items/:id/status", async (c) => {
-    const { workItemRepo, eventStore, discardTaskBranch } = c.get("deps");
+    const { workItemRepo, eventStore } = c.get("deps");
     let id: WorkItemId;
     try {
       id = parseWorkItemId(c.req.param("id"), "id route param");
@@ -118,67 +108,29 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
         case "Completed":
           completeWorkItem(item);
           break;
-        case "Blocked": {
-          const blockReason: StoredBlockedReason = { ...reason, source: "api" };
-          blockWorkItem(item, blockReason);
-          break;
-        }
+        case "Blocked":
+          // No work item waits on a person (story s-loop-never-stop-m1 W6): a task is Blocked only
+          // by the loop, with an exit the loop takes by itself, so nobody parks one by hand.
+          return c.json(
+            { error: `cannot block ${item.id} by hand: a task is blocked only by the loop, with an exit the loop takes by itself` },
+            409,
+          );
         case "Failed": {
           const failReason: StoredBlockedReason = { ...reason, source: "api" };
           failWorkItem(item, failReason);
           break;
         }
         case "Pending":
-          // Failed -> Pending and Blocked -> Pending are both legal per
-          // canTransitionTo, but they are different domain events
-          // (FailureRouter's "replan" decision vs. a plain unblock) --
-          // route by the CURRENT status so the emitted event label matches
-          // reality.
-          if (previousStatus === "Failed") {
-            replanWorkItem(item);
-          } else if (item.blockedReason?.source === "merge_unrecorded") {
+          // Failed -> Pending is the FailureRouter's "replan" decision taken by hand. A Blocked task
+          // is not unblocked by hand (story s-loop-never-stop-m1 W6): its exit is the loop's, each
+          // cycle (orchestrator parked-exits.ts).
+          if (previousStatus === "Blocked") {
             return c.json(
-              {
-                error:
-                  `cannot unblock ${item.id}: its work is merged on main as ${item.blockedReason.mergeCommit} and only the ` +
-                  "merge record is missing, so Pending would re-dispatch merged work. The loop writes the record each " +
-                  "cycle and then completes it; fix what fails that write (the stored reason names it)",
-              },
+              { error: `cannot unblock ${item.id} by hand: the loop takes a Blocked task's exit by itself each cycle` },
               409,
             );
-          } else {
-            // An operator's unblock is on the record: who, and what they changed (third run N11).
-            const unblock = UnblockReasonSchema.safeParse(body.reason);
-            if (!unblock.success) {
-              if (previousStatus !== "Blocked") throw new InvalidStatusTransition(item.id, previousStatus, "Pending");
-              return c.json(
-                {
-                  error:
-                    `cannot unblock ${item.id}: an unblock needs reason.by (who unblocks) and reason.note (what was ` +
-                    "changed so the block does not recur); both are recorded and the note is told to the next attempt",
-                  issues: unblock.error.issues,
-                },
-                400,
-              );
-            }
-            // An item refused for environment edits restarts from main, never on the branch that
-            // holds them (discardTaskBranch). The branch goes first: a failure leaves it Blocked.
-            if (item.blockedReason?.source === "environment_change_needed") {
-              try {
-                await discardTaskBranch(item.projectId, item.id);
-              } catch (e) {
-                return c.json(
-                  {
-                    error:
-                      `cannot unblock ${item.id}: its branch, which holds environment edits, could not be deleted ` +
-                      `(${describeErrorChain(e)}); it stays Blocked`,
-                  },
-                  409,
-                );
-              }
-            }
-            unblockWorkItem(item, { kind: "operator", by: unblock.data.by, note: unblock.data.note });
           }
+          replanWorkItem(item);
           break;
         case "Abandoned": {
           const callerReason =

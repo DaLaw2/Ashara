@@ -663,9 +663,10 @@ export interface TaskDescriptor {
  * executed), a cell failed under a running attempt (environment_failure), or
  * the substrate gate, a check task's red run or the post-merge verifier cell could not run.
  * It is not a task failure (re-dispatching cannot make the substrate appear),
- * so the orchestrator parks the item at Blocked with an
- * `environment_unavailable` reason instead of routing it through the
- * FailureRouter.
+ * so the orchestrator requeues the item uncharged within its infrastructure fault
+ * budget (past it the project halts on infrastructure, and a task whose faults outlast
+ * the halt is given up with an `environment_unavailable` reason) instead of routing it
+ * through the FailureRouter.
  */
 interface EnvironmentBlockedResult {
   readonly status: "environment_blocked";
@@ -682,7 +683,7 @@ interface EnvironmentBlockedResult {
 /**
  * The project has no environment the task's cells could be built from (none defined on the
  * target's main, its image could not be built, or no statement of it is on record). Nothing ran;
- * the orchestrator parks the item at Blocked with an `environment_undefined` reason.
+ * the orchestrator gives the item up with an `environment_undefined` reason, for a plan repair.
  */
 interface EnvironmentUndefinedResult {
   readonly status: "environment_undefined";
@@ -806,12 +807,12 @@ interface EnvironmentChangeRequestedResult {
 
 /**
  * The task has no owner role, or its owner is not in the project's latest roster. Nothing ran;
- * the orchestrator parks the item at Blocked with an `owner_unresolved` reason.
+ * the orchestrator gives the item up with an `owner_unresolved` reason, for a plan repair.
  */
 interface OwnerUnresolvedResult {
   readonly status: "owner_unresolved";
   readonly ownerRoleId: string | null;
-  /** The roster revision the decision was made against: a newer one is the block's exit. */
+  /** The roster revision the decision was made against, recorded as evidence; null when the project has none. */
   readonly rosterRevision: number | null;
   readonly reason: string;
   readonly detail: string;
@@ -1178,9 +1179,8 @@ export class DevelopmentService {
       // result is `blocked` with the lookup's own detail. The orchestrator
       // nevertheless routes a `blocked` result like `failed`: the item goes to
       // Failed and through the FailureRouter (executeTask in
-      // orchestrator/src/execution.ts). Only `environment_blocked`, `environment_undefined`,
-      // `owner_unresolved` and stale checks past their exit park an
-      // item at Blocked.
+      // orchestrator/src/execution.ts). `environment_blocked`, `environment_undefined`,
+      // `owner_unresolved` and stale checks are routed without Failed.
       if (!(e instanceof ProjectIntentUnavailable)) throw e;
       const chain = wrapError("development", "loadProjectIntent", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -1565,7 +1565,6 @@ export class DevelopmentService {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
       taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation, checkAreaOf(plan.checkedTaskId))}`;
     }
-    const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
     // Named before work starts (ADR-074 addendum 2 d66 c, d72): what the ownership gate refuses,
     // and the inputs whose change rebuilds the environment.
     const protectedPaths: AgentBrief["protectedPaths"] =
@@ -1587,7 +1586,6 @@ export class DevelopmentService {
         knowledgeContext,
         contextMap,
         ...(priorAttemptFailure !== undefined ? { priorAttemptFailure } : {}),
-        ...(operatorUnblock !== undefined ? { operatorUnblock } : {}),
         ...(protectedPaths !== undefined ? { protectedPaths } : {}),
       },
       "development:buildBrief",
@@ -3306,27 +3304,6 @@ function innermostLayer(layer: ErrorLayer): ErrorLayer {
     current = current.cause;
   }
   return current;
-}
-
-/** Longest part of a cleared block's stored reason the brief shows. */
-const MAX_UNBLOCKED_REASON_CHARS = 4000;
-
-/**
- * An operator's unblock, for the next attempt's brief (third run N11): without it the retry is
- * never told why it was refused, and repeats the same refusal. The cleared reason is shown as
- * stored (it came back from jsonb), cut with a marker past its bound.
- */
-function formatOperatorUnblock(unblock: Extract<StoredBlockedReason, { source: "operator_unblock" }>): string {
-  const lines = [`Unblocked by ${unblock.unblockedBy} at ${unblock.unblockedAt}.`, `Operator's note: ${unblock.note}`, ``];
-  if (unblock.previous === null) {
-    lines.push(`The block it cleared had no recorded reason.`);
-  } else {
-    const text = JSON.stringify(unblock.previous, null, 2);
-    const shown = text.length <= MAX_UNBLOCKED_REASON_CHARS ? text : text.slice(0, MAX_UNBLOCKED_REASON_CHARS);
-    lines.push(`The block it cleared, as recorded:`, "```json", shown, "```");
-    if (shown.length < text.length) lines.push(`[truncated: ${text.length - shown.length} of ${text.length} characters not shown]`);
-  }
-  return lines.join("\n");
 }
 
 function formatPriorAttemptFailure(ctx: ReplanContext): string {

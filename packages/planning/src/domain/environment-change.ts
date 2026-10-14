@@ -1,12 +1,12 @@
 import { InvalidStatusTransition, canTransitionTo, createDomainEvent } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
-import { blockWorkItem, createPendingWorkItem } from "./work-item.js";
+import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
 
 /**
  * How many environment tasks Z0 opens for one implementation task (ADR-074 addendum 2 d66 b;
- * design call, overrulable). A request past it parks the implementation at Blocked, which the
- * Liaison reports to the client: the implementer and the platform role have gone round that often
- * and nothing in the team settles it.
+ * design call, overrulable). A request past it gives the implementation up and its plan is
+ * repaired: the implementer and the platform role have gone round that often and nothing in the
+ * team settles it.
  */
 const ENVIRONMENT_CHANGE_BOUND = 2;
 
@@ -38,9 +38,9 @@ interface EnvironmentChangeContext {
 type EnvironmentChangeExit =
   /** `environment` is a new Pending environment task; the implementation waits on it at Pending. */
   | { readonly kind: "opened"; readonly environment: WorkItem }
-  /** The implementation is parked at Blocked with an environment_change_needed reason: past the bound. */
+  /** The implementation is given up with an environment_change_needed reason: past the bound. */
   | { readonly kind: "bound"; readonly bound: number }
-  /** The implementation is parked at Blocked with an environment_change_needed reason: no owner. */
+  /** The implementation is given up with an environment_change_needed reason: no owner. */
   | { readonly kind: "unowned"; readonly why: string };
 
 /** The environment task's goal and scope as the platform role's brief states them. */
@@ -81,7 +81,7 @@ function environmentTaskSpec(
  * environment task, owned by the role doing environment work, is opened with the implementer's
  * need and diff, and the implementation returns to Pending waiting on it; the caller persists the
  * new task, the implementation's dependency on it and the implementation in one transaction. Past
- * the bound, or with no role to own it, the implementation is parked at Blocked.
+ * the bound, or with no role to own it, the implementation is given up and its plan repaired.
  */
 export function requestEnvironmentChange(
   task: WorkItem,
@@ -90,7 +90,7 @@ export function requestEnvironmentChange(
 ): EnvironmentChangeExit {
   if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, "Pending");
   if (context.opened >= ENVIRONMENT_CHANGE_BOUND) {
-    blockWorkItem(task, {
+    giveUpWorkItem(task, {
       source: "environment_change_needed",
       paths: [...request.paths],
       reason:
@@ -101,7 +101,7 @@ export function requestEnvironmentChange(
     return { kind: "bound", bound: ENVIRONMENT_CHANGE_BOUND };
   }
   if (context.owner.kind === "none") {
-    blockWorkItem(task, {
+    giveUpWorkItem(task, {
       source: "environment_change_needed",
       paths: [...request.paths],
       reason: `the implementer needs a change to the environment recipe, but no environment task can be opened: ${context.owner.why}\n${request.detail}`,

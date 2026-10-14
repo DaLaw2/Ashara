@@ -10,6 +10,7 @@ export {
   abandonWorkItem,
   requeueWorkItem,
   supersedeWorkItem,
+  giveUpWorkItem,
   takeEvents,
 } from "./work-item.js";
 

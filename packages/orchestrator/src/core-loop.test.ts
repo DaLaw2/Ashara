@@ -94,6 +94,7 @@ function buildDeps(
     projectIdsWithStatus: notExercised("projectIdsWithStatus"),
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
+    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     refundDispatchCount: notExercised("refundDispatchCount"),
     recordMergeCommit: notExercised("recordMergeCommit"),
     addDependency: notExercised("addDependency"),
@@ -115,6 +116,9 @@ function buildDeps(
       recordWorkspacePath: notExercised("recordWorkspacePath"),
       listActiveIds: async () => [],
       block: notExercised("block"),
+      listInfrastructureHalted: async () => [],
+      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+      blockAllActive: async () => [],
     },
     developmentService: { execute: notExercised("execute") },
     spendCap,
@@ -128,11 +132,9 @@ function buildDeps(
     planReports,
     stackChoices,
     checkDisputes: { record: notExercised("checkDisputes") },
-    disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
     blockReports: { runPending: async () => [] },
-    parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
   };
 }
@@ -324,6 +326,34 @@ describe("CoreLoop spend cap", () => {
     expect(order).toEqual(["stop"]);
     expect(result.stop?.reason).toMatch(/budget_cap/);
     expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
+  // Story s-loop-never-stop-m1 W6 (design P14): the cap halts every active project with one report each.
+  test("at the deployment cap every active project halts at the cap and its report is posted before the loop stops", async () => {
+    const order: string[] = [];
+    const halted: unknown[] = [];
+    const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => true));
+    const result = await new CoreLoop({
+      ...deps,
+      projectRepo: {
+        ...deps.projectRepo,
+        blockAllActive: async (cause) => {
+          order.push("halt");
+          halted.push(cause);
+          return [TEST_PROJECT_ID];
+        },
+      },
+      blockReports: {
+        runPending: async () => {
+          order.push("reports");
+          return [];
+        },
+      },
+    }).runCycle();
+
+    expect(order).toEqual(["reports", "halt", "reports"]);
+    expect(halted).toEqual([{ category: "budget_cap", errorClass: "DeploymentSpendCapReached", reason: "budget_cap: stub deployment cap" }]);
+    expect(result.stop?.reason).toBe("budget_cap: stub deployment cap");
   });
 
   test("a project refusal out of a step ends that step only; the cycle goes on to dispatch", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
-import type { StoredBlockedReason, WorkItemId } from "@ashara/shared";
+import type { ProjectBlockCause, StoredBlockedReason, WorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
@@ -77,6 +77,9 @@ function coreLoopDeps(
       recordWorkspacePath: notExercised("recordWorkspacePath"),
       listActiveIds: notExercised("listActiveIds"),
       block: notExercised("block"),
+      listInfrastructureHalted: notExercised("listInfrastructureHalted"),
+      resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+      blockAllActive: notExercised("blockAllActive"),
     },
     failureRouter: { route: notExercised("route") },
     spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
@@ -89,11 +92,9 @@ function coreLoopDeps(
     planReports: { runPending: notExercised("planReports") },
     stackChoices: { runPending: notExercised("stackChoices") },
     checkDisputes: { record: notExercised("checkDisputes") },
-    disputeReports: { blockOnDisputes: notExercised("disputeReports") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-    suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
     blockReports: { runPending: notExercised("blockReports") },
-    parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+    infrastructureProbe: { probe: notExercised("infrastructureProbe") },
     environmentOwner: notExercised("environmentOwner"),
     ...parts,
   };
@@ -148,6 +149,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     projectIdsWithStatus: notExercised("projectIdsWithStatus"),
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
+    recordInfrastructureFault: notExercised("recordInfrastructureFault"),
     refundDispatchCount: notExercised("refundDispatchCount"),
     recordMergeCommit: async (id, commit) => {
       mergeRecords.push({ id, commit });
@@ -297,7 +299,7 @@ describe("processTask post-agent status ladder", () => {
   });
 });
 
-describe("an environment-blocked dispatch parks the item at Blocked", () => {
+describe("an environment-blocked dispatch: an infrastructure fault requeues uncharged, other environment outcomes park", () => {
   type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["developmentService"]["execute"]>>;
 
   const probeBlocked: ExecutionResult = {
@@ -310,18 +312,26 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
   };
 
-  function buildEnvironmentBlockedDeps(execResult: ExecutionResult = probeBlocked): {
+  function buildEnvironmentBlockedDeps(
+    execResult: ExecutionResult = probeBlocked,
+    faultsBefore = 0,
+  ): {
     deps: CoreLoopDeps;
     stored: () => WorkItem;
     statusesWritten: string[];
     failureRoutes: () => number;
     failedApproaches: () => number;
+    refunds: () => number;
+    halts: ProjectBlockCause[];
   } {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     let row = freshPendingItem();
     const statusesWritten: string[] = [];
     let routed = 0;
     let approaches = 0;
+    let faults = faultsBefore;
+    let refunded = 0;
+    const halts: ProjectBlockCause[] = [];
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
 
     const workItemRepo: WorkItemRepository = {
@@ -339,7 +349,11 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       projectIdsWithStatus: notExercised("projectIdsWithStatus"),
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
-      refundDispatchCount: notExercised("refundDispatchCount"),
+      recordInfrastructureFault: async () => ++faults,
+      refundDispatchCount: async () => {
+        refunded++;
+        return 0;
+      },
       recordMergeCommit: notExercised("recordMergeCommit"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
@@ -348,33 +362,64 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
       withTransaction: notExercised("withTransaction"),
     };
 
+    const base = coreLoopDeps({ workItemRepo, developmentService: { execute: async () => execResult } });
     const deps = coreLoopDeps({
       workItemRepo,
       developmentService: { execute: async () => execResult },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
+      projectRepo: {
+        ...base.projectRepo,
+        block: async (_projectId, cause) => {
+          halts.push(cause);
+          return "blocked";
+        },
+      },
     });
 
-    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches };
+    return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts };
   }
 
-  test("the item becomes Blocked with an environment_unavailable reason, never Failed, and the failure router is not called", async () => {
-    const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps();
+  // Story s-loop-never-stop-m1 W6; simulator B4: one transient fault must not park a task for a person.
+  test("an infrastructure fault within the budget: back to Pending, the dispatch refunded, never Failed, no failure router, no halt", async () => {
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps();
 
     const result = await processTask(deps, freshPendingItem());
 
-    expect(result.status).toBe("blocked");
-    expect(stored().status).toBe("Blocked");
-    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
-    expect(statusesWritten).not.toContain("Failed");
+    expect(result.status).toBe("interrupted");
+    expect(stored().status).toBe("Pending");
+    expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+    expect(refunds()).toBe(1);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
+    expect(halts).toEqual([]);
+  });
 
+  test("the fault past the budget of 3 halts the project on infrastructure once and requeues the item uncharged", async () => {
+    const { deps, stored, refunds, halts } = buildEnvironmentBlockedDeps(probeBlocked, 3);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored().status).toBe("Pending");
+    expect(refunds()).toBe(1);
+    expect(halts).toHaveLength(1);
+    expect(halts[0]).toMatchObject({ category: "infrastructure", errorClass: "InfrastructureFaultBudgetSpent" });
+    expect(halts[0]?.reason).toContain("podman binary not found");
+  });
+
+  test("a fault after the halt resumed gives the item up for a plan repair, with the fault as its cause", async () => {
+    const { deps, stored, statusesWritten, failureRoutes, halts } = buildEnvironmentBlockedDeps(probeBlocked, 4);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
+    expect(failureRoutes()).toBe(0);
+    expect(halts).toEqual([]);
     const reason = stored().blockedReason;
     expect(reason?.source).toBe("environment_unavailable");
     if (reason?.source !== "environment_unavailable") return;
     expect(reason.unavailable).toBe("podman");
-    expect(reason.reason).toContain("podman binary not found");
+    expect(reason.reason).toContain("infrastructure fault 5");
     // The persisted reason must survive the jsonb read-back schema.
     expect(() =>
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
@@ -383,7 +428,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
 
   // The isolated-worker run's finding 1: the verifier cell refused after the agent's work passed.
   // Before, operation postMergeVerify reached the classifier as TREE_REGRESSION and was abandoned.
-  test("a verifier cell refused after the agent ran: Blocked naming the stage, never the failure router", async () => {
+  test("a verifier cell refused after the agent ran: an infrastructure fault, never the failure router", async () => {
     const output: AgentOutputJson = {
       status: "done",
       summary: "wrote greet.sh",
@@ -416,19 +461,16 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
 
     const result = await processTask(deps, freshPendingItem());
 
-    expect(result.status).toBe("blocked");
-    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(result).toMatchObject({ status: "interrupted", detail: expect.stringContaining("stage postMergeVerify (MountPathRejected)") });
+    expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+    expect(stored().status).toBe("Pending");
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
-    const reason = stored().blockedReason;
-    expect(reason?.source).toBe("environment_unavailable");
-    if (reason?.source !== "environment_unavailable") return;
-    expect(reason.unavailable).toBe("verifier cell mount (/x/target)");
-    expect(reason.reason).toContain("stage postMergeVerify (MountPathRejected)");
   });
 
-  // s-platform-role-m1 C2: a project with no environment blocks its task; it never runs on the BaseCell.
-  test("no environment defined: Blocked with an environment_undefined reason, never Failed, no failure router", async () => {
+  // s-platform-role-m1 C2: a project with no environment never runs the task on the BaseCell. W6: nothing
+  // re-defines main's environment while every environment task is done, so the task is given up for a repair.
+  test("no environment defined: given up with an environment_undefined reason, never Failed, no failure router", async () => {
     const detail = "no environment for task t: no environment is defined on main at abc; no agent ran and nothing executed";
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
       status: "environment_undefined",
@@ -447,7 +489,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     const result = await processTask(deps, freshPendingItem());
 
     expect(result.status).toBe("blocked");
-    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     const reason = stored().blockedReason;
@@ -458,8 +500,9 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
   });
 
 
-  // s-team-roster-m1: an item no roster role owns blocks; no default role works it.
-  test("no owner role: Blocked with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
+  // s-team-roster-m1: no default role works an item no roster role owns. W6: no production path appends
+  // a roster revision after the first, so the task is given up and its repair staffs new tasks.
+  test("no owner role: given up with a typed owner_unresolved reason, never Failed, no failed approach, no failure router", async () => {
     const detail = "no roster role can work task t: the work item has no owner role; no agent ran and nothing executed";
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
       status: "owner_unresolved",
@@ -480,7 +523,7 @@ describe("an environment-blocked dispatch parks the item at Blocked", () => {
     const result = await processTask(deps, freshPendingItem());
 
     expect(result.status).toBe("blocked");
-    expect(statusesWritten).toEqual(["InProgress", "Blocked"]);
+    expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     const reason = stored().blockedReason;
@@ -531,6 +574,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: async (id) => {
         const row = rowOf(id);
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
@@ -598,12 +642,13 @@ describe("stored checks stale: the check task is reopened and the item waits on 
     expect(approaches()).toBe(0);
   });
 
-  test("past the bound: the item parked with checks_rewrite_bound stating it; the check task left Completed", async () => {
-    const { deps, item, check } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 3 });
+  test("past the bound: the item given up with checks_rewrite_bound stating it; the check task left Completed", async () => {
+    const { deps, item, check, events } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 3 });
 
     await processTask(deps, freshPendingItem());
 
-    expect(item()).toMatchObject({ status: "Blocked", dispatchCount: 1 });
+    expect(item()).toMatchObject({ status: "Abandoned", dispatchCount: 1 });
+    expect(events).toContain("work_item.given_up");
     const reason = item().blockedReason;
     expect(reason).toMatchObject({ source: "checks_rewrite_bound", checkTaskId: CHECK_ID, revision: 3, bound: 2 });
     expect(reason?.source === "checks_rewrite_bound" ? reason.reason : "").toContain("written again 2 time(s), the bound of 2");
@@ -615,24 +660,24 @@ describe("stored checks stale: the check task is reopened and the item waits on 
     ["the check task is not Completed", completedCheckTask({ status: "Abandoned" }), "is Abandoned, not Completed"],
     ["the named item is not a check task", completedCheckTask({ workKind: "implementation" }), "of work kind implementation, not check"],
     ["the check task is not on record", null, "is not on record"],
-  ])("%s: the item parked with checks_stale naming why it cannot be reopened", async (_label, checkTask, why) => {
+  ])("%s: the item given up with checks_stale naming why it cannot be reopened", async (_label, checkTask, why) => {
     const { deps, item } = buildStaleDeps({ checkTask, revision: 1 });
 
     await processTask(deps, freshPendingItem());
 
-    expect(item().status).toBe("Blocked");
+    expect(item().status).toBe("Abandoned");
     const reason = item().blockedReason;
     expect(reason).toMatchObject({ source: "checks_stale", checkTaskId: CHECK_ID });
     expect(reason?.source === "checks_stale" ? reason.reason : "").toContain(why);
     expect(parses(reason)).not.toThrow();
   });
 
-  test("the check task moves before its reopen is saved: the item parked with checks_stale, never left waiting", async () => {
+  test("the check task moves before its reopen is saved: the item given up with checks_stale, never left waiting", async () => {
     const { deps, item, written } = buildStaleDeps({ checkTask: completedCheckTask(), revision: 1, checkTaskSaveLoses: true });
 
     await processTask(deps, freshPendingItem());
 
-    expect(written).toEqual([["item", "InProgress"], ["item", "Blocked"]]);
+    expect(written).toEqual([["item", "InProgress"], ["item", "Abandoned"]]);
     expect(item().blockedReason).toMatchObject({ source: "checks_stale", reason: expect.stringContaining("moved to Abandoned") });
   });
 
@@ -655,7 +700,6 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       [CHECK_ID, { ...freshPendingItem(), id: CHECK_ID, title: "write the checks", workKind: "check", status: "Completed", dispatchCount: 1 }],
     ]);
     const disputes: Array<{ readonly checkTaskId: string; readonly checkName: string; readonly evidence: string | null }> = [];
-    const reports: Array<{ readonly disputes: number; readonly bound: number; readonly checkName: string }> = [];
     let routed = 0;
     let approaches = 0;
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
@@ -679,6 +723,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: async (id) => {
         const row = rowOf(id);
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
@@ -727,16 +772,10 @@ describe("a disputed check: the check task is reopened with the dispute and the 
           return priorDisputes + disputes.filter((entry) => entry.checkTaskId === dispute.checkTaskId).length;
         },
       },
-      disputeReports: {
-        blockOnDisputes: async (bound) => {
-          reports.push(bound);
-          return "blocked";
-        },
-      },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
     });
-    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, reports, edges, routed: () => routed, approaches: () => approaches };
+    return { deps, item: () => rowOf(ITEM_ID), check: () => rowOf(CHECK_ID), disputes, edges, routed: () => routed, approaches: () => approaches };
   }
 
   // ADR-074 addendum 2 d74 D: a merged task's check that blocks the item's merge may be disputed.
@@ -759,7 +798,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
   });
 
   test("a dispute: the check task back at Pending with the dispute and the current check in its brief, the item waiting, no failure counted", async () => {
-    const { deps, item, check, disputes, reports, routed, approaches } = buildDisputeDeps(0);
+    const { deps, item, check, disputes, routed, approaches } = buildDisputeDeps(0);
 
     const result = await processTask(deps, freshPendingItem());
 
@@ -775,16 +814,16 @@ describe("a disputed check: the check task is reopened with the dispute and the 
     expect(context.replanContext.detail).toContain("sh: [[: not found");
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
-    expect(reports).toEqual([]);
   });
 
-  test("the third dispute of a check task: the project blocked with one report, the item back at Pending, the check task left Completed", async () => {
-    const { deps, item, check, reports, routed, approaches } = buildDisputeDeps(2);
+  // Story s-loop-never-stop-m1 W6 (d76 K = 2): past the bound the item is given up for a plan repair.
+  test("the third dispute of a check task: the item given up with check_disputed for a plan repair, the check task left Completed", async () => {
+    const { deps, item, check, routed, approaches } = buildDisputeDeps(2);
 
     await processTask(deps, freshPendingItem());
 
-    expect(reports).toEqual([expect.objectContaining({ disputes: 3, bound: 2, checkName: "lists" })]);
-    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(item()).toMatchObject({ status: "Abandoned", dispatchCount: 1, blockedReason: { source: "check_disputed", checkTaskId: CHECK_ID, checkName: "lists" } });
+    expect(item().blockedReason?.source === "check_disputed" ? item().blockedReason : undefined).toMatchObject({ reason: expect.stringContaining("disputed 3 time(s), past the bound of 2") });
     expect(check().status).toBe("Completed");
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
@@ -848,6 +887,7 @@ describe("an environment change requested: an environment task is opened and the
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: async (id) => {
         const row = rowOf(id);
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
@@ -939,13 +979,13 @@ describe("an environment change requested: an environment task is opened and the
     expect(opened()[0]?.taskSpec?.product).toBe("present");
   });
 
-  test("past the bound of two: Blocked with environment_change_needed naming the paths; no third environment task", async () => {
+  test("past the bound of two: given up with environment_change_needed naming the paths; no third environment task", async () => {
     const { deps, item, opened, routed, approaches } = buildEnvironmentChangeDeps(2, { kind: "role", roleId: ROLE_ID });
 
     await processTask(deps, freshPendingItem());
 
     expect(opened()).toEqual([]);
-    expect(item().status).toBe("Blocked");
+    expect(item().status).toBe("Abandoned");
     const reason = item().blockedReason;
     expect(reason).toMatchObject({ source: "environment_change_needed", paths: ["environment/Containerfile"] });
     if (reason?.source !== "environment_change_needed") return;
@@ -956,13 +996,13 @@ describe("an environment change requested: an environment task is opened and the
     expect(approaches()).toBe(0);
   });
 
-  test("no role does environment work: Blocked with environment_change_needed saying why; nothing opened", async () => {
+  test("no role does environment work: given up with environment_change_needed saying why; nothing opened", async () => {
     const { deps, item, opened } = buildEnvironmentChangeDeps(0, { kind: "none", why: "no role holds write-environment" });
 
     await processTask(deps, freshPendingItem());
 
     expect(opened()).toEqual([]);
-    expect(item()).toMatchObject({ status: "Blocked", blockedReason: { source: "environment_change_needed" } });
+    expect(item()).toMatchObject({ status: "Abandoned", blockedReason: { source: "environment_change_needed" } });
     expect(JSON.stringify(item().blockedReason)).toContain("no role holds write-environment");
   });
 });
@@ -1028,6 +1068,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         row = { ...row, dispatchCount: row.dispatchCount + 1 };
         return row.dispatchCount;
       },
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: async () => {
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
         return row.dispatchCount;
@@ -1065,6 +1106,9 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
           blocks.push({ projectId, ...cause });
           return "blocked";
         },
+        listInfrastructureHalted: notExercised("listInfrastructureHalted"),
+        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+        blockAllActive: notExercised("blockAllActive"),
       },
       spendCap: {
         deploymentStop: notExercised("deploymentStop"),
@@ -1162,6 +1206,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       projectIdsWithStatus: notExercised("projectIdsWithStatus"),
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: notExercised("refundDispatchCount"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
@@ -1298,7 +1343,6 @@ describe("a review of the plan's suites with problems: the named check tasks are
     ]);
     const recorded: Array<{ readonly reviewTaskId: string; readonly problems: readonly unknown[] }> = [];
     const named = new Map<string, number>();
-    const reports: Array<{ readonly checkTaskId: string; readonly times: number; readonly bound: number; readonly problems: readonly string[] }> = [];
     let routed = 0;
     let approaches = 0;
     const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
@@ -1322,6 +1366,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
         rows.set(id, { ...row, dispatchCount: row.dispatchCount + 1 });
         return row.dispatchCount + 1;
       },
+      recordInfrastructureFault: notExercised("recordInfrastructureFault"),
       refundDispatchCount: async (id) => {
         const row = rowOf(id);
         rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
@@ -1364,20 +1409,14 @@ describe("a review of the plan's suites with problems: the named check tasks are
           return new Map(ids.map((id) => [id, named.get(id) ?? 0]));
         },
       },
-      suiteReviewReports: {
-        blockOnSuiteReview: async (bound) => {
-          reports.push(bound);
-          return "blocked";
-        },
-      },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
     });
-    return { deps, rowOf, recorded, reports, routed: () => routed, approaches: () => approaches };
+    return { deps, rowOf, recorded, routed: () => routed, approaches: () => approaches };
   }
 
   test("each named check task is reopened with the problem; the review is back at Pending to run again after them", async () => {
-    const { deps, rowOf, recorded, reports, routed, approaches } = buildReviewDeps(0);
+    const { deps, rowOf, recorded, routed, approaches } = buildReviewDeps(0);
 
     const result = await processTask(deps, rowOf(ITEM_ID));
 
@@ -1390,18 +1429,19 @@ describe("a review of the plan's suites with problems: the named check tasks are
     if (context?.source !== "replan") return;
     expect(context.replanContext.detail).toContain(problem);
     expect(context.replanContext.detail).toContain(`It also involves the checks of check task(s) ${CHECK_B}.`);
-    expect(reports).toEqual([]);
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
   });
 
-  test("a check task named past the bound: the project is blocked with a report, the review back at Pending, nothing reopened", async () => {
-    const { deps, rowOf, reports, routed, approaches } = buildReviewDeps(2);
+  // Story s-loop-never-stop-m1 W6: past the bound the review is given up and the plan repaired.
+  test("a check task named past the bound: the review given up with suite_review_unresolved, nothing reopened", async () => {
+    const { deps, rowOf, routed, approaches } = buildReviewDeps(2);
 
     await processTask(deps, rowOf(ITEM_ID));
 
-    expect(reports).toEqual([expect.objectContaining({ checkTaskId: CHECK_A, times: 3, bound: 2, problems: [problem] })]);
-    expect(rowOf(ITEM_ID)).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(rowOf(ITEM_ID)).toMatchObject({ status: "Abandoned", blockedReason: { source: "suite_review_unresolved", checkTaskIds: [CHECK_A, CHECK_B] } });
+    const reason = rowOf(ITEM_ID).blockedReason;
+    expect(reason?.source === "suite_review_unresolved" ? reason.reason : "").toContain(problem);
     expect([rowOf(CHECK_A).status, rowOf(CHECK_B).status]).toEqual(["Completed", "Completed"]);
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);

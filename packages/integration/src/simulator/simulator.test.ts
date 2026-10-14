@@ -111,6 +111,34 @@ describe("lifecycle simulator, fast tier", () => {
     expect(result.violations.map((v) => v.key).sort()).toEqual(["I1:open", "I7:orphan:Define and commit the project environment:2", "I8:InProgress", "I8:Pending"]);
   }, 90_000);
 
+  // B4 (baseline §3), seed 14's tape minimized on a9f781ce: two simulated git index.lock failures
+  // fail the substrate gate's cell start. Before W6 the environment task was parked at Blocked
+  // (environment_unavailable) for an operator: I1, I2 and I8. Now the fault is requeued uncharged
+  // and the next dispatch completes it.
+  it("requeues a task whose cell could not start, never parks it for a person", async () => {
+    const result = await runSeed({
+      seed: 14,
+      profile: "typical",
+      tape: {
+        kind: "replay",
+        decisions: [
+          { key: "fault.git:add#6", value: 1 },
+          { key: "fault.git:add.kind#1", value: 2 },
+          { key: "fault.git:commit-tree#4", value: 1 },
+          { key: "fault.git:commit-tree.kind#1", value: 2 },
+        ],
+      },
+      databaseUrl,
+      template,
+      maxCycles: MAX_CYCLES,
+      timeoutMs: SEED_TIMEOUT_MS,
+    });
+    expect(result.faults.length).toBe(2);
+    expect(result.trace).toContain("cycle 1: 1 task(s) [interrupted]");
+    expect(result.violations.map((v) => v.key)).toEqual([]);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
   it("catches a merge recorded under a commit main does not hold", async () => {
     const clean = await seeded(10);
     expect(failed(clean)).toEqual([]);

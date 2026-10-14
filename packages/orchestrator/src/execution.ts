@@ -17,6 +17,7 @@ import {
   PlanningService,
   failWorkItem,
   blockWorkItem,
+  giveUpWorkItem,
   requeueWorkItem,
   takeEvents,
   startWorkItem,
@@ -31,19 +32,32 @@ import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
 
-type ParkedReason = Extract<
+/** The block a dispatch parks a task with: the loop takes its exit by itself (parked-exits.ts). */
+type ParkedReason = Extract<StoredBlockedReason, { source: "merge_unrecorded" }>;
+
+/** The causes a dispatch gives a task up for, after which its plan is repaired. */
+type GiveUpCause = Extract<
   StoredBlockedReason,
   {
     source:
-      | "environment_unavailable"
-      | "environment_undefined"
       | "checks_stale"
       | "check_disputed"
       | "suite_review_unresolved"
-      | "owner_unresolved"
-      | "merge_unrecorded";
+      | "environment_unavailable"
+      | "environment_undefined"
+      | "owner_unresolved";
   }
 >;
+
+/**
+ * Infrastructure faults a task's dispatches meet, each requeued uncharged, before its project halts
+ * as infrastructure (story s-loop-never-stop-m1 W6). Why 3: it is A, the attempts a task's own work
+ * gets (ADR-074 addendum 2 d76), so a fault that is not the task's is retried as often as one that
+ * is. The fault past it halts the project once with its report; the substrate probe resumes the
+ * project, and one more fault on the same task after that gives the task up: the probe passes but
+ * this task's machines keep failing, so the fault is not one the halt can wait out.
+ */
+const INFRASTRUCTURE_FAULT_BUDGET = 3;
 
 /** Policy: the waits between attempts at the merge record; three attempts in all. */
 const MERGE_RECORD_BACKOFF_MS: readonly number[] = [250, 1000];
@@ -114,12 +128,10 @@ interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly spendCap: CoreLoopDeps["spendCap"];
-  /** Blocks a project whose configuration refused a model call. */
+  /** Blocks a project whose configuration refused a model call, or halts it on infrastructure. */
   readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
   readonly checkDisputes: CoreLoopDeps["checkDisputes"];
-  readonly disputeReports: CoreLoopDeps["disputeReports"];
   readonly suiteReviewFindings: CoreLoopDeps["suiteReviewFindings"];
-  readonly suiteReviewReports: CoreLoopDeps["suiteReviewReports"];
   readonly environmentOwner: CoreLoopDeps["environmentOwner"];
 }
 
@@ -134,10 +146,10 @@ async function executeTask(
   output: AgentOutputJson | null;
   errorEnvelope?: ErrorEnvelope;
   /**
-   * The item was routed here, parked at Blocked (environment unavailable or undefined, checks stale
-   * past their exit) or returned to Pending (a refusal, a shutdown, stale checks being rewritten),
-   * so processTask must not run the
-   * failed/blocked recovery ladder on it.
+   * The item was routed here: parked at Blocked (a merge unrecorded), given up (an environment
+   * undefined, an owner unresolved, a bound past, a check task that cannot be reopened), or returned
+   * to Pending (a refusal, a shutdown, an infrastructure fault, stale checks being rewritten), so
+   * processTask must not run the failed/blocked recovery ladder on it.
    */
   routedHere: boolean;
 }> {
@@ -196,7 +208,7 @@ async function executeTask(
   if (execResult.status === "disputed") {
     // Not a task failure and no lesson (ADR-074 addendum 2 d65 c): the check is its author's to
     // answer, so the check task is reopened with the dispute and the item waits on it, within a
-    // bound of disputes per check task; past it the project is blocked for its owner.
+    // bound of disputes per check task; past it the item is given up and its plan repaired.
     await routeAsDisputed(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -209,7 +221,8 @@ async function executeTask(
   if (execResult.status === "suite_review_problems") {
     // Not the review's failure and no lesson (ADR-074 addendum 2 d71 c): the checks are their
     // authors' to fix, so each named check task is reopened with the findings and the review waits
-    // on them to read the new suites, within a bound per check task; past it the project is blocked.
+    // on them to read the new suites, within a bound per check task; past it the review is given up
+    // and its plan repaired.
     await routeAsSuiteReview(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -219,19 +232,24 @@ async function executeTask(
     };
   }
 
-  if (execResult.status === "environment_blocked" || execResult.status === "environment_undefined") {
-    // Not a task failure: re-dispatching cannot make the substrate or the
-    // project's environment appear, so the item is parked at Blocked, never
-    // routed to Failed. An unavailable substrate waits on the operator; an
-    // undefined environment leaves Blocked by itself once the current version
-    // has a statement and a succeeded build (parked-exits.ts).
-    await routeAsParked(
-      deps,
-      task.id,
-      execResult.status === "environment_blocked"
-        ? { source: "environment_unavailable", unavailable: execResult.unavailable, reason: execResult.detail }
-        : { source: "environment_undefined", reason: execResult.detail },
-    );
+  if (execResult.status === "environment_blocked") {
+    // Not a task failure: the machines the task runs on failed, so the attempt is not charged and
+    // the item goes back to Pending, within its fault budget; past it the project halts on
+    // infrastructure until the substrate probe passes (infrastructure-halts.ts).
+    await routeAsInfrastructureFault(deps, task, { unavailable: execResult.unavailable, reason: execResult.detail }, "counted");
+    return {
+      result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
+      output: execResult.output,
+      errorEnvelope: execResult.errorEnvelope,
+      routedHere: true,
+    };
+  }
+
+  if (execResult.status === "environment_undefined") {
+    // Not a task failure, so never Failed: a re-dispatch meets the same main. Nothing re-defines or
+    // rebuilds main's environment while every environment task is done, so the task is given up
+    // and its plan repaired, which can plan a new environment (W6: no item waits on a person).
+    await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail });
     return {
       result: blockedResult(task.id, execResult.detail),
       output: execResult.output,
@@ -242,9 +260,9 @@ async function executeTask(
 
   if (execResult.status === "owner_unresolved") {
     // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
-    // so the item is parked at Blocked, never routed to Failed. Its exit (parked-exits.ts): the
-    // project stores a roster revision newer than `rosterRevision`, or the operator unblocks it.
-    await routeAsParked(deps, task.id, {
+    // and no production path appends a roster revision after the first, so the task is given up,
+    // never Failed, and its plan repaired: the repair staffs its new tasks from the latest roster.
+    await routeAsGivenUp(deps, task.id, {
       source: "owner_unresolved",
       ownerRoleId: execResult.ownerRoleId,
       rosterRevision: execResult.rosterRevision,
@@ -412,22 +430,108 @@ async function routeAsParked(
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  const what =
-    reason.source === "environment_unavailable"
-      ? `${reason.unavailable} unavailable`
-      : reason.source === "checks_stale"
-        ? `stored checks stale, check task ${reason.checkTaskId} must write them again`
-        : reason.source === "check_disputed"
-        ? `check ${JSON.stringify(reason.checkName)} disputed and check task ${reason.checkTaskId} cannot be reopened`
-        : reason.source === "suite_review_unresolved"
-        ? `the suite review found problems and check task(s) ${reason.checkTaskIds.join(", ")} cannot be reopened`
-        : reason.source === "owner_unresolved"
-          ? `no roster role can work it (owner ${reason.ownerRoleId ?? "none"})`
-          : reason.source === "merge_unrecorded"
-            ? `merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle`
-            : "no environment defined";
-  console.warn(`[${taskId}] blocked, ${what}: ${reason.reason}`);
+  console.warn(`[${taskId}] blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
+}
+
+/**
+ * Gives the item up with the stated cause; its abandonment opens a plan repair (migration 048).
+ * An item that is no longer open (moved during the dispatch) is left where it is.
+ */
+async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: GiveUpCause): Promise<void> {
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
+  if (!item) {
+    console.warn(`[${taskId}] work item vanished before it could be given up (${reason.reason})`);
+    return;
+  }
+  const previousStatus = item.status;
+  try {
+    giveUpWorkItem(item, reason);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${taskId}] ${reason.source} give-up rejected (${e.from} -> Abandoned); item left at ${e.from} (${reason.reason})`);
+    return;
+  }
+  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  console.warn(`[${taskId}] given up (${reason.source}); its plan is repaired: ${reason.reason}`);
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsGivenUp");
+}
+
+/** Why the machines a task runs on failed: what was unavailable, and the substrate's own diagnostic. */
+interface InfrastructureFault {
+  readonly unavailable: string;
+  readonly reason: string;
+}
+
+/** The project's cause on record when a task's infrastructure faults spent their budget. */
+class InfrastructureFaultBudgetSpent extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly faults: number,
+    readonly fault: InfrastructureFault,
+  ) {
+    super(
+      `task ${taskId} met ${faults} infrastructure fault(s), past the budget of ${INFRASTRUCTURE_FAULT_BUDGET} uncharged ` +
+        `requeues; the project halts until the substrate probe passes. The last fault: ${fault.unavailable} ` +
+        `unavailable: ${fault.reason}`,
+    );
+    this.name = "InfrastructureFaultBudgetSpent";
+  }
+}
+
+/**
+ * An infrastructure fault under a dispatch (story s-loop-never-stop-m1 W6): not the task's, so it
+ * is counted on the task, durably, and the attempt is not charged. Within the budget the item goes
+ * back to Pending (its dispatch refunded when the seam `counted` it). The fault past the budget
+ * halts the project on infrastructure, with one report, and requeues the item the same way: the
+ * gate skips it until the substrate probe resumes the project. A fault after that gives the item
+ * up: the halt could not wait it out.
+ */
+async function routeAsInfrastructureFault(
+  deps: ExecutionRoutingDeps,
+  task: WorkItem,
+  fault: InfrastructureFault,
+  dispatch: "counted" | "not-counted",
+): Promise<void> {
+  const faults = await deps.workItemRepo.recordInfrastructureFault(task.id);
+  if (faults > INFRASTRUCTURE_FAULT_BUDGET + 1) {
+    await routeAsGivenUp(deps, task.id, {
+      source: "environment_unavailable",
+      unavailable: fault.unavailable,
+      reason:
+        `infrastructure fault ${faults} on this task, after its project halted on infrastructure at fault ` +
+        `${INFRASTRUCTURE_FAULT_BUDGET + 1} and the substrate probe resumed it: ${fault.reason}`,
+    });
+    return;
+  }
+  const why = `infrastructure fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET} (${fault.unavailable} unavailable)`;
+  if (dispatch === "counted") await requeueAndRefund(deps, task.id, why, "execution.routeAsInfrastructureFault");
+  else await requeueUncounted(deps, task.id, why);
+  if (faults > INFRASTRUCTURE_FAULT_BUDGET) {
+    const err = new InfrastructureFaultBudgetSpent(task.id, faults, fault);
+    const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
+    console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
+  }
+}
+
+/** Requeues an item whose dispatch was never counted (the seam was not reached): nothing to refund. */
+async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string): Promise<void> {
+  const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
+  if (!item) {
+    console.warn(`[${taskId}] work item vanished before it could be returned to Pending after ${why}`);
+    return;
+  }
+  const previousStatus = item.status;
+  try {
+    requeueWorkItem(item);
+  } catch (e) {
+    if (!(e instanceof InvalidStatusTransition)) throw e;
+    console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
+    return;
+  }
+  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+  console.warn(`[${taskId}] back to Pending after ${why}, no dispatch counted`);
+  await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.requeueUncounted");
 }
 
 /**
@@ -446,9 +550,9 @@ async function refundBestEffort(deps: ExecutionRoutingDeps, taskId: WorkItem["id
 /**
  * The exit of an item whose stored checks went stale (planning's exitStaleChecks): its check task
  * reopened and the item back at Pending waiting on it, with the dispatch given back (no model
- * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item parked
- * at Blocked for the operator. The check task is saved first: if that save loses a race the item
- * is parked with checks_stale instead, never left waiting on a check task that stayed Completed.
+ * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item given up
+ * and its plan repaired. The check task is saved first: if that save loses a race the item is given
+ * up with checks_stale instead, never left waiting on a check task that stayed Completed.
  */
 async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], stale: StaleChecksResult): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
@@ -473,7 +577,7 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       await PlanningService.saveWorkItem(deps.workItemRepo, checkTask, checkTaskPrevious);
     } catch (e) {
       if (!(e instanceof InvalidStatusTransition)) throw e;
-      await routeAsParked(deps, taskId, {
+      await routeAsGivenUp(deps, taskId, {
         source: "checks_stale",
         checkTaskId: stale.checkTaskId,
         reason: `${stale.detail}\nThe check task cannot be reopened: it moved to ${e.from} while it was being reopened`,
@@ -504,10 +608,10 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
       return;
     }
     case "bound":
-      console.warn(`[${taskId}] blocked, stored checks revision ${stale.revision} stale past the rewrite bound; check task ${stale.checkTaskId} is not reopened`);
+      console.warn(`[${taskId}] given up, stored checks revision ${stale.revision} stale past the rewrite bound; check task ${stale.checkTaskId} is not reopened`);
       return;
     case "unreopenable":
-      console.warn(`[${taskId}] blocked, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`);
+      console.warn(`[${taskId}] given up, stored checks stale and check task ${stale.checkTaskId} cannot be reopened: ${exit.why}`);
       return;
   }
 }
@@ -516,10 +620,8 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
  * The exit of an item whose implementer disputed one of its stored checks (planning's
  * exitDisputedCheck). The dispute is recorded first, durably: its count per check task is the
  * bound. Within it the check task is reopened with the dispute in its brief and saved first, then
- * the item is back at Pending waiting on it, its dispatch given back; past it the Liaison blocks the
- * project with one report and the item returns to Pending, its dispatch given back, where the gate
- * skips it until the owner returns the project to work; a check task that cannot be reopened parks
- * the item at Blocked with a check_disputed reason.
+ * the item is back at Pending waiting on it, its dispatch given back; past it, or with a check task
+ * that cannot be reopened, the item is given up with a check_disputed reason and its plan repaired.
  */
 async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispute: DisputedCheckResult): Promise<void> {
   const disputes = await deps.checkDisputes.record({
@@ -548,31 +650,12 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     return;
   }
 
-  if (exit.kind === "bound") {
-    const blocked = await deps.disputeReports.blockOnDisputes({
-      projectId: task.projectId,
-      taskTitle: task.title,
-      checkTaskId: dispute.checkTaskId,
-      checkName: dispute.check.name,
-      reason: dispute.reason,
-      disputes,
-      bound: exit.bound,
-    });
-    await requeueAndRefund(
-      deps,
-      task.id,
-      `dispute ${disputes} of check task ${dispute.checkTaskId}, past the bound of ${exit.bound} (project ${task.projectId} ${blocked})`,
-      "execution.routeAsDisputed",
-    );
-    return;
-  }
-
   if (exit.kind === "rewrite" && checkTask !== null && checkTaskPrevious !== undefined) {
     try {
       await PlanningService.saveWorkItem(deps.workItemRepo, checkTask, checkTaskPrevious);
     } catch (e) {
       if (!(e instanceof InvalidStatusTransition)) throw e;
-      await routeAsParked(deps, task.id, {
+      await routeAsGivenUp(deps, task.id, {
         source: "check_disputed",
         checkTaskId: dispute.checkTaskId,
         checkName: dispute.check.name,
@@ -607,7 +690,8 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     );
     return;
   }
-  console.warn(`[${task.id}] blocked, check ${JSON.stringify(dispute.check.name)} disputed and check task ${dispute.checkTaskId} cannot be reopened: ${exit.why}`);
+  const why = exit.kind === "bound" ? `dispute ${disputes} is past the bound of ${exit.bound}` : `the check task cannot be reopened: ${exit.why}`;
+  console.warn(`[${task.id}] given up, check ${JSON.stringify(dispute.check.name)} of check task ${dispute.checkTaskId} disputed and ${why}`);
 }
 
 /**
@@ -616,11 +700,10 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
  * task is the bound. Within it every named check task is reopened with the problems in its brief and
  * the review returns to Pending, all in one transaction, its dispatch given back; the review's
  * dependencies on those check tasks hold it until they complete again, and the plan's
- * implementations stay held by their dependency on the review. Past the bound the Liaison blocks the
- * project with one report and the review returns to Pending, its dispatch given back, where the gate
- * skips it until the owner returns the project to work. A named check task that cannot be reopened,
- * or one that moves while it is reopened, parks the review at Blocked with a suite_review_unresolved
- * reason, so no implementation is released on problems nobody answered.
+ * implementations stay held by their dependency on the review. Past the bound, or with a named
+ * check task that cannot be reopened or that moves while it is reopened, the review is given up
+ * with a suite_review_unresolved reason and its plan repaired, so no implementation is released on
+ * problems nobody answered.
  */
 async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
   const timesNamed = await deps.suiteReviewFindings.record({ projectId: task.projectId, reviewTaskId: task.id, problems: review.problems });
@@ -643,32 +726,20 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
   }
 
   switch (exit.kind) {
-    case "bound": {
-      const blocked = await deps.suiteReviewReports.blockOnSuiteReview({
-        projectId: task.projectId,
-        reviewTaskId: task.id,
-        checkTaskId: exit.checkTaskId,
-        times: exit.times,
-        bound: exit.bound,
-        problems: review.problems.map((problem) => problem.problem),
-      });
-      await requeueAndRefund(
-        deps,
-        task.id,
-        `review ${exit.times} naming check task ${exit.checkTaskId}, past the bound of ${exit.bound} (project ${task.projectId} ${blocked})`,
-        "execution.routeAsSuiteReview",
-      );
-      return;
-    }
+    case "bound":
     case "unreopenable": {
       try {
         await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
       } catch (e) {
         if (!(e instanceof InvalidStatusTransition)) throw e;
-        console.warn(`[${task.id}] suite-review park rejected (${e.from} -> Blocked); review left at ${e.from}`);
+        console.warn(`[${task.id}] suite-review give-up rejected (${e.from} -> Abandoned); review left at ${e.from}`);
         return;
       }
-      console.warn(`[${task.id}] blocked, the suite review found problems no check task can be reopened for: ${exit.why}`);
+      const why =
+        exit.kind === "bound"
+          ? `review ${exit.times} naming check task ${exit.checkTaskId} is past the bound of ${exit.bound}`
+          : `no check task can be reopened for its problems: ${exit.why}`;
+      console.warn(`[${task.id}] given up, the suite review found problems and ${why}; its plan is repaired`);
       await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
       return;
     }
@@ -681,7 +752,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
       } catch (e) {
         if (!(e instanceof InvalidStatusTransition)) throw e;
         // Nothing was written: a check task or the review moved while they were being reopened.
-        await routeAsParked(deps, task.id, {
+        await routeAsGivenUp(deps, task.id, {
           source: "suite_review_unresolved",
           checkTaskIds: named,
           reason: `${review.detail}\nThe check tasks cannot be reopened: ${e.message}`,
@@ -708,8 +779,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
  * its dependencies, a durable count; the owner is the role doing the project's environment work.
  * Within the bound the new environment task, the item's dependency on it and the item back at
  * Pending are written in one transaction, and the dispatch is given back (the work was not tried
- * and found wanting); past the bound, or with no owner, the item is parked at Blocked, which the
- * Liaison reports.
+ * and found wanting); past the bound, or with no owner, the item is given up and its plan repaired.
  */
 async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkItem, request: EnvironmentChangeResult): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
@@ -751,11 +821,11 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
       await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
     } catch (e) {
       if (!(e instanceof InvalidStatusTransition)) throw e;
-      console.warn(`[${task.id}] environment-change park rejected (${e.from} -> Blocked); item left at ${e.from}`);
+      console.warn(`[${task.id}] environment-change give-up rejected (${e.from} -> Abandoned); item left at ${e.from}`);
       return;
     }
     console.warn(
-      `[${task.id}] blocked, environment change needed for ${request.paths.join(", ")}: ` +
+      `[${task.id}] given up, environment change needed for ${request.paths.join(", ")}: ` +
         (exit.kind === "bound" ? `past the bound of ${exit.bound} environment task(s)` : `no environment task can be opened: ${exit.why}`),
     );
     await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
@@ -932,21 +1002,16 @@ export async function processTask(
     spendCap: deps.spendCap,
     projects: deps.projectRepo,
     checkDisputes: deps.checkDisputes,
-    disputeReports: deps.disputeReports,
     suiteReviewFindings: deps.suiteReviewFindings,
-    suiteReviewReports: deps.suiteReviewReports,
     environmentOwner: deps.environmentOwner,
   };
   const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
   if (workspace.kind === "rejected") {
     // Before the dispatch is counted, any model call or any cell: without a valid target checkout
-    // the work has nowhere to be done or merged, and a re-dispatch meets the same project record.
-    await routeAsParked(routingDeps, task.id, {
-      source: "environment_unavailable",
-      unavailable: "target workspace",
-      reason: workspace.reason,
-    });
-    return blockedResult(task.id, workspace.reason);
+    // the work has nowhere to be done or merged. The host's, not the task's: an uncharged
+    // infrastructure fault, within the task's budget.
+    await routeAsInfrastructureFault(routingDeps, workItem, { unavailable: "target workspace", reason: workspace.reason }, "not-counted");
+    return { taskId: task.id, status: "interrupted", detail: workspace.reason };
   }
   const targetProjectPath = workspace.path;
 
@@ -989,8 +1054,8 @@ export async function processTask(
     }
   }
 
-  // An environment-blocked item is already parked at Blocked, a refused or interrupted one
-  // back at Pending (or any was left where an owner moved it): nothing to route or salvage.
+  // An item routed here is parked at Blocked, given up, or back at Pending (or was left where an
+  // owner moved it): nothing to route or salvage.
   if (routedHere) {
     return result;
   }
@@ -1006,9 +1071,8 @@ export async function processTask(
     // WorkItem to Failed for BOTH failed and blocked TaskResults from an agent
     // dispatch (a "blocked" result is a routine agent outcome — a BLOCKED:
     // marker or turn-limit — not a dependency wait). Blocked status is reached
-    // via the HTTP PATCH path, the gate's dependency_unsatisfiable park, and the
-    // parked dispatch outcomes (routeAsParked, routeAsStaleChecks), which
-    // returned above. Any item that landed at Failed is routed through
+    // only by the parked dispatch outcomes (routeAsParked), which returned
+    // above. Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates
     // (abandon) rather than sitting in Failed and deadlocking its
     // dependents (Run-8 C2, migration Phase 6).

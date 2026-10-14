@@ -26,7 +26,7 @@ function row(overrides: Partial<Row>): Row {
     ownerRoleId: null,
     environmentStatement: null,
     environmentStatementVersion: null,
-    blockedAt: null,
+    infrastructureFaults: 0,
     mergeCommit: null,
     createdAt: now,
     updatedAt: now,

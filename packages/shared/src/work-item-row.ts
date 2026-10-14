@@ -71,11 +71,22 @@ export function parseWorkItemJsonb(row: WorkItemJsonbRow): ParsedWorkItemJsonb {
  * (migration 039), which nothing in the team settles. `replan_bound`: the client's changes revised the
  * plan as many times as Delivery revises it before the operator reviews the project (migration 042).
  * `suite_review`: the review of a plan revision's check suites kept naming one check task past the
- * bound of reopens (migration 044), which nothing in the team settles. `plan_repair`: tasks were
- * given up and the remaining work re-planned around them as many times as Delivery repairs the plan
- * before the operator reviews the project (migration 045).
+ * bound of reopens (migration 044), which nothing in the team settles; written before migration 048,
+ * which gives the review up instead. `check_dispute` likewise. `plan_repair`: tasks were given up and
+ * the remaining work re-planned around them as many times as Delivery repairs the plan (migration
+ * 045): the project halts as undeliverable. `infrastructure`: the machines a task runs on kept
+ * failing past its fault budget (migration 048); the project resumes by itself once the substrate
+ * probe passes.
  */
-type ProjectBlockCategory = "budget_cap" | "configuration" | "fault" | "check_dispute" | "replan_bound" | "suite_review" | "plan_repair";
+type ProjectBlockCategory =
+  | "budget_cap"
+  | "configuration"
+  | "fault"
+  | "check_dispute"
+  | "replan_bound"
+  | "suite_review"
+  | "plan_repair"
+  | "infrastructure";
 
 /** Why a project was blocked (migration 025): the cause's category, the error's class and its full chain. */
 export interface ProjectBlockCause {

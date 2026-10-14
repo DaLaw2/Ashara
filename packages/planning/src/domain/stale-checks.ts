@@ -1,12 +1,13 @@
 import { InvalidStatusTransition, canTransitionTo, createDomainEvent } from "@ashara/shared";
 import type { WorkItem } from "./work-item.js";
-import { blockWorkItem } from "./work-item.js";
+import { giveUpWorkItem } from "./work-item.js";
 
 /**
  * How many times a check task writes a task's checks again, after its first write, before a task
- * whose checks went stale once more is parked for the operator. Each rewrite is a new revision of
- * the task's checks: a stale revision up to `CHECK_REWRITE_BOUND` reopens the check task, and the
- * revision its last rewrite stores, `CHECK_REWRITE_BOUND + 1`, parks the task when it goes stale.
+ * whose checks went stale once more is given up and its plan repaired. Each rewrite is a new
+ * revision of the task's checks: a stale revision up to `CHECK_REWRITE_BOUND` reopens the check
+ * task, and the revision its last rewrite stores, `CHECK_REWRITE_BOUND + 1`, gives the task up when
+ * it goes stale.
  */
 const CHECK_REWRITE_BOUND = 2;
 
@@ -15,16 +16,16 @@ interface StaleChecks {
   readonly checkTaskId: string;
   /** The stale revision: 1 is the check task's first write, each rewrite adds one. */
   readonly revision: number;
-  /** The red run on the current environment, for the check author and the operator. */
+  /** The red run on the current environment, for the check author and the repair's planner. */
   readonly detail: string;
 }
 
 type StaleChecksExit =
   /** The check task is reopened (Completed -> Pending) and the task waits on it at Pending. */
   | { readonly kind: "rewrite" }
-  /** The task is parked at Blocked with a checks_rewrite_bound reason. */
+  /** The task is given up with a checks_rewrite_bound reason. */
   | { readonly kind: "bound" }
-  /** The named check task cannot be reopened; the task is parked at Blocked with a checks_stale reason. */
+  /** The named check task cannot be reopened; the task is given up with a checks_stale reason. */
   | { readonly kind: "unreopenable"; readonly why: string };
 
 /**
@@ -62,8 +63,8 @@ function reopenCheckTask(
 /**
  * Returns an InProgress implementation task to Pending to wait on its reopened check task: its
  * dependency on that task keeps it from the gate until the check task is Completed again, which
- * is only after the new revision is stored. If the check task is Abandoned instead, the gate parks
- * this task at Blocked with a dependency_unsatisfiable reason naming it. Not a requeue (nothing crashed) and not a replan
+ * is only after the new revision is stored. If the check task is Abandoned instead, its project
+ * awaits a plan repair, which supersedes this task. Not a requeue (nothing crashed) and not a replan
  * (nothing failed): it has its own event.
  */
 function awaitRewrittenChecks(
@@ -91,14 +92,14 @@ function awaitRewrittenChecks(
 /**
  * The exit of an InProgress implementation task whose stored checks went stale. Within the bound
  * the check task it names is reopened and the task waits on it; past the bound, or when that
- * check task cannot be reopened (missing, not a check task, not Completed), the task is parked at
- * Blocked with a reason naming why. Mutates `task` and, on "rewrite", `checkTask`; the caller
- * saves the check task first, so a task is never left waiting on a check task that stayed Completed.
+ * check task cannot be reopened (missing, not a check task, not Completed), the task is given up
+ * with a reason naming why. Mutates `task` and, on "rewrite", `checkTask`; the caller saves the
+ * check task first, so a task is never left waiting on a check task that stayed Completed.
  */
 export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stale: StaleChecks): StaleChecksExit {
   const rewrites = stale.revision - 1;
   if (rewrites >= CHECK_REWRITE_BOUND) {
-    blockWorkItem(task, {
+    giveUpWorkItem(task, {
       source: "checks_rewrite_bound",
       checkTaskId: stale.checkTaskId,
       revision: stale.revision,
@@ -111,7 +112,7 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
   }
   const reopenable = reopenableCheckTask(checkTask, stale.checkTaskId);
   if (reopenable.kind === "refused") {
-    blockWorkItem(task, {
+    giveUpWorkItem(task, {
       source: "checks_stale",
       checkTaskId: stale.checkTaskId,
       reason: `${stale.detail}\nThe check task cannot be reopened: ${reopenable.why}`,
@@ -134,8 +135,8 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
 
 /**
  * How many times an implementer may dispute the checks of one check task (ADR-074 addendum 2 d65
- * c). A dispute past it blocks the project for its owner: the implementer and the check author
- * have disagreed that often and nothing in the team settles it.
+ * c; K = 2, d76). A dispute past it gives the disputing task up and its plan is repaired: the
+ * implementer and the check author have disagreed that often and nothing in the team settles it.
  */
 const CHECK_DISPUTE_BOUND = 2;
 
@@ -156,9 +157,9 @@ interface CheckDispute {
 type DisputeExit =
   /** The check task is reopened (Completed -> Pending) with the dispute; the task waits on it at Pending. */
   | { readonly kind: "rewrite" }
-  /** Past the bound: nothing is mutated; the caller blocks the project and returns the task to Pending. */
+  /** Past the bound: the task is given up with a check_disputed reason. */
   | { readonly kind: "bound"; readonly bound: number }
-  /** The named check task cannot be reopened; the task is parked at Blocked with a check_disputed reason. */
+  /** The named check task cannot be reopened; the task is given up with a check_disputed reason. */
   | { readonly kind: "unreopenable"; readonly why: string };
 
 /** The dispute as the check author reads it in the reopened task's brief. */
@@ -179,15 +180,25 @@ function disputeBrief(taskId: string, dispute: CheckDispute): string {
 /**
  * The exit of an InProgress implementation task whose implementer disputed one of its stored
  * checks. Not the task's failure: within the bound the check task that wrote the check is reopened
- * with the dispute in its brief and the task waits on it, as for stale checks; past the bound the
- * caller blocks the project; a check task that cannot be reopened parks the task at Blocked. Mutates
+ * with the dispute in its brief and the task waits on it, as for stale checks; past the bound, or
+ * with a check task that cannot be reopened, the task is given up and its plan repaired. Mutates
  * `task` and, on "rewrite", `checkTask`; the caller saves the check task first.
  */
 export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, dispute: CheckDispute): DisputeExit {
-  if (dispute.disputes > CHECK_DISPUTE_BOUND) return { kind: "bound", bound: CHECK_DISPUTE_BOUND };
+  if (dispute.disputes > CHECK_DISPUTE_BOUND) {
+    giveUpWorkItem(task, {
+      source: "check_disputed",
+      checkTaskId: dispute.checkTaskId,
+      checkName: dispute.check.name,
+      reason:
+        `${dispute.reason}\nThe check task's checks were disputed ${dispute.disputes} time(s), past the bound of ` +
+        `${CHECK_DISPUTE_BOUND}; it is not reopened again`,
+    });
+    return { kind: "bound", bound: CHECK_DISPUTE_BOUND };
+  }
   const reopenable = reopenableCheckTask(checkTask, dispute.checkTaskId);
   if (reopenable.kind === "refused") {
-    blockWorkItem(task, {
+    giveUpWorkItem(task, {
       source: "check_disputed",
       checkTaskId: dispute.checkTaskId,
       checkName: dispute.check.name,
@@ -224,7 +235,8 @@ function reopenableCheckTask(
 /**
  * How many times the review of a plan revision's suites may name one check task and have it
  * reopened (ADR-074 addendum 2 d71 c), as disputes are bounded (d65 c). A review that names it once
- * more blocks the project for its owner: the check author has not settled the problem that often.
+ * more gives the review up and its plan is repaired: the check author has not settled the problem
+ * that often.
  */
 const SUITE_REVIEW_BOUND = 2;
 
@@ -249,9 +261,9 @@ interface SuiteReviewFindings {
 type SuiteReviewExit =
   /** Each named check task is reopened (Completed -> Pending) with its problems; the review waits on them at Pending. */
   | { readonly kind: "reopened"; readonly checkTasks: readonly WorkItem[] }
-  /** A named check task is past the bound: nothing is mutated; the caller blocks the project and returns the review to Pending. */
+  /** A named check task is past the bound: the review is given up with a suite_review_unresolved reason. */
   | { readonly kind: "bound"; readonly bound: number; readonly checkTaskId: string; readonly times: number }
-  /** A named check task cannot be reopened: the review is parked at Blocked with a suite_review_unresolved reason. */
+  /** A named check task cannot be reopened: the review is given up with a suite_review_unresolved reason. */
   | { readonly kind: "unreopenable"; readonly why: string };
 
 /** The review's record names a check task without its count: the record the bound is read from lies. */
@@ -304,9 +316,9 @@ function reviewBrief(checkTaskId: string, problems: readonly SuiteReviewProblem[
 
 /**
  * The exit of an InProgress review task whose review found problems. Past the bound for any named
- * check task, nothing is mutated and the caller blocks the project; when a named check task cannot
- * be reopened (missing, not a Completed check task, deciding no task) the review is parked at
- * Blocked; otherwise every named check task is reopened with its problems in its brief and the
+ * check task, or when a named check task cannot be reopened (missing, not a Completed check task,
+ * deciding no task), the review is given up and its plan repaired; otherwise every named check
+ * task is reopened with its problems in its brief and the
  * review returns to Pending, where its dependencies on them hold it until they complete again and
  * it reviews the new suites. Mutates `review` and, on "reopened", each check task; the caller saves
  * the check tasks first, so the review is never left waiting on a check task that stayed Completed.
@@ -321,10 +333,20 @@ export function exitSuiteReview(
   }
   const named = namedCheckTasks(findings.problems);
   if (named.length === 0) throw new SuiteReviewNamesNoCheckTask(review.id, findings.problems.length);
+  const problemsText = findings.problems.map((p) => `- [${p.checkTaskIds.join(", ")}] ${p.problem} (evidence: ${p.evidence})`).join("\n");
   for (const checkTaskId of named) {
     const times = findings.timesNamed.get(checkTaskId);
     if (times === undefined) throw new SuiteReviewCountMissing(review.id, checkTaskId);
-    if (times > SUITE_REVIEW_BOUND) return { kind: "bound", bound: SUITE_REVIEW_BOUND, checkTaskId, times };
+    if (times > SUITE_REVIEW_BOUND) {
+      giveUpWorkItem(review, {
+        source: "suite_review_unresolved",
+        checkTaskIds: named,
+        reason:
+          `the review of the plan's checks found problems:\n${problemsText}\nReviews have named check task ${checkTaskId} ` +
+          `${times} time(s), past the bound of ${SUITE_REVIEW_BOUND}; it is not reopened again`,
+      });
+      return { kind: "bound", bound: SUITE_REVIEW_BOUND, checkTaskId, times };
+    }
   }
   const reopenable: Array<{ readonly item: WorkItem; readonly checkedTaskId: string }> = [];
   const refused: string[] = [];
@@ -334,10 +356,9 @@ export function exitSuiteReview(
     else if (found.item.taskSpec?.checksFor === undefined) refused.push(`check task ${checkTaskId} decides no implementation task (task_spec.checksFor)`);
     else reopenable.push({ item: found.item, checkedTaskId: found.item.taskSpec.checksFor });
   }
-  const problemsText = findings.problems.map((p) => `- [${p.checkTaskIds.join(", ")}] ${p.problem} (evidence: ${p.evidence})`).join("\n");
   if (refused.length > 0) {
     const why = refused.join("; ");
-    blockWorkItem(review, {
+    giveUpWorkItem(review, {
       source: "suite_review_unresolved",
       checkTaskIds: named,
       reason: `the review of the plan's checks found problems:\n${problemsText}\nThey cannot be sent back to their check tasks: ${why}`,

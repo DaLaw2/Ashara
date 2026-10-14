@@ -9,6 +9,8 @@ import {
   createDb,
   createProjectWithTender,
   DEFAULT_DATABASE_URL,
+  latestRosterRevision,
+  latestRosterRoles,
   LlmCallRepository,
   ProjectRepository,
   TaskCheckRepository,
@@ -19,17 +21,19 @@ import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { releaseClearedBlocks } from "@ashara/orchestrator";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner, PlanningService, Replanner, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
+import { FirstPlanner, PlanningService, Replanner, failWorkItem, giveUpWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
 import type { FirstPlanStore, ReplanStore } from "@ashara/planning";
-import { parseWorkItemId, type ProjectId } from "@ashara/shared";
+import { parseWorkItemId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createFirstPlanStore, createPlanReportStore } from "@ashara/server/first-plan-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createReplanStore } from "@ashara/server/replan-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { createAgentStaffing } from "@ashara/server/staffing";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // A late client change is planned (t-replan-on-change). Every row here belongs to a project
@@ -541,6 +545,33 @@ describe("a task the team gives up is planned around", () => {
     expect(await replanner().runPending()).toEqual([]);
   });
 
+  // Story s-loop-never-stop-m1 W6, the second run's M2 shape: a check task given up for a cause the
+  // failure router never saw (here a dispute past its bound) is repaired, never left for a person.
+  test("a check task given up past its dispute bound is repaired like any give-up, with the dispute as its evidence", async () => {
+    const { projectId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const sprint0 = first.find((i) => i.origin === "sprint0");
+    const check = first.find((i) => i.origin === "check");
+    if (sprint0 === undefined || check === undefined) throw new Error("the first plan is not Sprint 0 and a check task");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
+
+    await startTask(check.id);
+    const repo = adaptWorkItemRepo(new WorkItemRepository(db));
+    const task = await PlanningService.findWorkItem(repo, parseWorkItemId(check.id, "test"));
+    if (task === null) throw new Error(`task ${check.id} not found`);
+    giveUpWorkItem(task, { source: "check_disputed", checkTaskId: check.id, checkName: "books", reason: "disputed 3 time(s), past the bound of 2: the check reads a file no task writes" });
+    await PlanningService.saveWorkItem(repo, task, "InProgress");
+
+    expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
+    const mock = pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
+    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    expect(prompts.some((p) => p.includes("the check reads a file no task writes"))).toBe(true);
+    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+  });
+
   test("past the bound of repairs the next abandonment blocks the project with one report naming the task given up", async () => {
     const { projectId } = await plannedProject();
     const sprint0 = (await itemsOf(projectId)).find((i) => i.origin === "sprint0");
@@ -576,5 +607,65 @@ describe("a task the team gives up is planned around", () => {
     const body = reports[reports.length - 1]?.body ?? "";
     expect(body).toContain(`"${givenUp[2] ?? ""}" (after`);
     expect(body).not.toContain(givenUp[0] ?? "");
+  });
+});
+
+// Story s-loop-never-stop-m1 W6, the verifier's finding: a task no roster role can work was parked
+// at Blocked until a newer roster revision, which no production path writes (recordFirstRoster
+// refuses any revision but 1). It is given up instead, and the repair staffs its new tasks.
+describe("a task no roster role can work is planned around, never left waiting", () => {
+  test("staffing finds no owner; the sweep gives the Blocked task up; the repair re-plans it with an owner the staffing resolves", async () => {
+    const { projectId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const sprint0 = first.find((i) => i.origin === "sprint0");
+    const harbour = first.find((i) => i.origin === "decomposition");
+    if (sprint0 === undefined || harbour === undefined) throw new Error("the first plan is not Sprint 0 and a task");
+    await startTask(sprint0.id);
+    await completeTask(sprint0.id);
+    await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
+    // A task planned before owners were assigned (migration 031): no work kind and no owner.
+    await db.execute(sql`UPDATE work_items SET owner_role_id = NULL, work_kind = NULL WHERE id = ${harbour.id}`);
+
+    const workItems = new WorkItemRepository(db);
+    const staffing = createAgentStaffing({
+      async ownerOf(taskId) {
+        const row = await workItems.findById(taskId);
+        return row === null ? { kind: "absent" } : { kind: "found", ownerRoleId: row.ownerRoleId };
+      },
+      latestRosterRows: (id) => latestRosterRoles(db, id),
+      latestRosterRevision: (id) => latestRosterRevision(db, id),
+      resolveModel: () => gateway.resolveModel("Strong", "agent-runner"),
+    });
+    const staffOf = (id: string) =>
+      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
+    const unresolved = await staffOf(harbour.id);
+    if (unresolved.kind !== "owner-unresolved") throw new Error(`expected owner-unresolved, got ${unresolved.kind}`);
+
+    // A Blocked owner_unresolved row as the dispatch wrote it before this change.
+    await startTask(harbour.id);
+    const reason = { source: "owner_unresolved", ownerRoleId: unresolved.ownerRoleId, rosterRevision: unresolved.rosterRevision, reason: unresolved.reason };
+    await db.execute(sql`UPDATE work_items SET status = 'Blocked', blocked_reason = ${JSON.stringify(reason)}::jsonb WHERE id = ${harbour.id}`);
+    expect(await latestRosterRevision(db, projectId)).toBe(1);
+
+    const published: DomainEvent[] = [];
+    const left = await releaseClearedBlocks({
+      workItemRepo: adaptWorkItemRepo(workItems),
+      eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
+      projects: { listActiveIds: async () => [projectId] },
+    });
+
+    expect(left).toBe(1);
+    expect(published.map((e) => e.eventType)).toEqual(["work_item.given_up"]);
+    const givenUp = await PlanningService.findWorkItem(adaptWorkItemRepo(workItems), parseWorkItemId(harbour.id, "test"));
+    expect(givenUp).toMatchObject({ status: "Abandoned", blockedReason: reason });
+
+    const mock = pipelineModel();
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
+    const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
+    expect(prompts.some((p) => p.includes("No role of the team's roster could be assigned it"))).toBe(true);
+    const repaired = (await itemsOf(projectId)).find((i) => i.title === "Book a harbour class by its date" && i.status === "Pending");
+    if (repaired === undefined) throw new Error("the repair planned no new task");
+    expect((await staffOf(repaired.id)).kind).toBe("staffed");
+    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
   });
 });

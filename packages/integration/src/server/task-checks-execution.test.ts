@@ -21,7 +21,6 @@ import {
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import type { TaskDescriptor } from "@ashara/development";
-import { BlockReports } from "@ashara/engagement";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -30,7 +29,6 @@ import type { ModelConfig } from "@ashara/llm-gateway";
 import { FailureRouter, classifyFailure } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
-import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
@@ -790,10 +788,10 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 });
 
-// Quality's dispute record and the Liaison's block (migrations 039, 040): the count survives in the
-// table, and a project is blocked with exactly one report, posted by the block reports from the record.
+// Quality's dispute record (migration 039): the count per check task survives in the table; past
+// the bound the disputing task is given up (story s-loop-never-stop-m1 W6).
 describe("check disputes on record", () => {
-  it("counts each check task's disputes, and blocks the project with one report however often it is asked", async () => {
+  it("counts each check task's disputes", async () => {
     const pair = await plannedPair("Write disputed.txt");
     const other = await plannedPair("Write undisputed.txt");
     const disputes = new CheckDisputeRepository(db);
@@ -803,24 +801,5 @@ describe("check disputes on record", () => {
     expect(await disputes.record({ ...dispute, evidence: "the last run" })).toBe(2);
     expect(await disputes.record({ ...dispute, taskId: other.implementation.id, checkTaskId: other.check.id })).toBe(1);
     expect(await disputes.record(dispute)).toBe(3);
-
-    const reports = new BlockReports(createBlockReportStore(db));
-    const bound = { projectId, taskTitle: "Write disputed.txt", checkTaskId: pair.check.id, checkName: "c", reason: "r", disputes: 3, bound: 2 };
-    expect(await reports.blockOnDisputes(bound)).toBe("blocked");
-    expect(await reports.blockOnDisputes(bound)).toBe("already-blocked");
-    // Other suites share the database: only this project's outcomes are this test's.
-    const ours = async () => (await reports.runPending()).filter((o) => o.projectId === projectId);
-    expect(await ours()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
-    expect(await ours()).toEqual([]);
-
-    const project = await db.execute(
-      sql`SELECT status, blocked_error_class AS "errorClass", blocked_category AS "category" FROM projects WHERE id = ${projectId}`,
-    );
-    expect(project.rows).toEqual([{ status: "blocked", errorClass: "CheckDisputeBoundReached", category: "check_dispute" }]);
-    const posted = await db.execute(sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND kind = 'report'`);
-    expect(posted.rows).toHaveLength(1);
-    const body = JSON.stringify(posted.rows[0]);
-    expect(body).toContain('While building \\"Write disputed.txt\\"');
-    expect(body).toContain("after 3 attempts");
   });
 });

@@ -1,6 +1,5 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import type { ProjectBlockCause, StoredBlockedReason } from "@ashara/shared";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 
@@ -10,23 +9,14 @@ type Due = Awaited<ReturnType<BlockReportStore["dueReports"]>>[number];
 
 function reportsFor(due: readonly Due[]) {
   const posted: Array<{ key: string; body: string }> = [];
-  const blocked: ProjectBlockCause[] = [];
   const store: BlockReportStore = {
     dueReports: async () => due,
     postProjectReport: async (episodeId, on, body) => {
       posted.push({ key: `${episodeId}:${on}`, body });
       return "posted";
     },
-    postTaskReport: async (taskId, body) => {
-      posted.push({ key: taskId, body });
-      return "posted";
-    },
-    blockProject: async (_projectId, cause) => {
-      blocked.push(cause);
-      return "blocked";
-    },
   };
-  return { reports: new BlockReports(store), posted, blocked };
+  return { reports: new BlockReports(store), posted };
 }
 
 /** Words that would leak Ashara's internals into the client channel. */
@@ -53,66 +43,55 @@ describe("project block reports", () => {
     expect(posted[0].body).toContain("the budget set for it has been reached");
   });
 
-  test("a resumption is told once, on its own episode", async () => {
-    const { reports, posted } = reportsFor([{ subject: "project-resumed", episodeId: "e1", projectId }]);
+  test("a resumption after an unblock is told once, on its own episode", async () => {
+    const { reports, posted } = reportsFor([{ subject: "project-resumed", episodeId: "e1", projectId, how: "unblocked" }]);
     await reports.runPending();
-    expect(posted).toEqual([{ key: "e1:resumed", body: expect.stringContaining("has resumed") }]);
+    expect(posted).toEqual([{ key: "e1:resumed", body: expect.stringContaining("the team cleared what paused it") }]);
   });
 });
 
-describe("task block reports name the task's exit", () => {
-  const cases: Array<{ reason: StoredBlockedReason; exit: string }> = [
-    { reason: { source: "owner_unresolved", ownerRoleId: null, rosterRevision: 1, reason: "x" }, exit: "resumes by itself once the project team is changed" },
-    { reason: { source: "environment_undefined", reason: "x" }, exit: "resumes by itself once the project's build and test environment is ready" },
-    { reason: { source: "environment_unavailable", unavailable: "podman", reason: "x" }, exit: "waiting on its operator" },
-    { reason: { source: "environment_change_needed", paths: ["environment/x"], reason: "x" }, exit: "waiting on its operator" },
-    { reason: { source: "checks_stale", checkTaskId: "c", reason: "x" }, exit: "waiting on its operator" },
-    { reason: { source: "checks_rewrite_bound", checkTaskId: "c", revision: 2, bound: 2, reason: "x" }, exit: "waiting on its operator" },
-    { reason: { source: "dependency_unsatisfiable", blockedBy: ["a"], reason: "x" }, exit: "waiting on its operator" },
-    { reason: { source: "api" }, exit: "waiting on its operator" },
-  ];
-
-  test.each(cases)("$reason.source", async ({ reason, exit }) => {
-    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Add the export button", reason, waiting: 0 }]);
-
+// Story s-loop-never-stop-m1 W6: each halt's one report states its observed cause.
+describe("halt reports state the observed cause", () => {
+  test("an infrastructure halt names the task and its failures, says it is not charged and resumes by itself", async () => {
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", fault: { taskTitle: "Write the lock checks", faults: 4 } },
+    ]);
     await reports.runPending();
-
     expect(posted).toHaveLength(1);
-    expect(posted[0].body).toContain(`The task "Add the export button" is paused`);
-    expect(posted[0].body).toContain(exit);
+    expect(posted[0].body).toContain(`failed 4 times while working on "Write the lock checks"`);
+    expect(posted[0].body).toContain("not charged");
+    expect(posted[0].body).toContain("resumes this project by itself");
+    expect(posted[0].body).not.toContain("operator");
     expect(posted[0].body).not.toMatch(INTERNAL);
   });
-});
 
-describe("a task block report says what waits on the task (third run N10)", () => {
-  const reason: StoredBlockedReason = { source: "environment_change_needed", paths: ["main.go"], reason: "x" };
-
-  test("with no open dependent, the rest of the project goes on", async () => {
-    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 0 }]);
+  test("its resumption says the machines work again", async () => {
+    const { reports, posted } = reportsFor([{ subject: "project-resumed", episodeId: "e1", projectId, how: "probe_passed" }]);
     await reports.runPending();
-    expect(posted[0].body).toContain("The rest of the project goes on.");
+    expect(posted).toEqual([{ key: "e1:resumed", body: expect.stringContaining("the machines Ashara runs the work on work again") }]);
   });
 
-  test("with open dependents, it says how many wait and never that the rest goes on", async () => {
-    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 6 }]);
+  test("an undeliverable halt names each task given up and why, in plain words", async () => {
+    const { reports, posted } = reportsFor([
+      {
+        subject: "project-blocked",
+        episodeId: "e1",
+        projectId,
+        kind: "plan_repair",
+        abandoned: [
+          { title: "Lock the data directory", attempts: 3, cause: "failure_router" },
+          { title: "Review the checks", attempts: 1, cause: "suite_review_unresolved" },
+          { title: "Compact the log", attempts: 2, cause: "check_disputed" },
+        ],
+      },
+    ]);
     await reports.runPending();
-    expect(posted[0].body).toContain("6 other tasks depend on it, directly or through other tasks, and wait until it goes on.");
-    expect(posted[0].body).not.toContain("The rest of the project goes on");
+    expect(posted).toHaveLength(1);
+    const body = posted[0].body;
+    expect(body).toContain("cannot deliver it as planned");
+    expect(body).toContain(`"Lock the data directory" (after 3 attempts: every attempt at it failed)`);
+    expect(body).toContain(`"Review the checks" (after 1 attempt: the review of the checks written for the plan kept finding problems in them)`);
+    expect(body).toContain(`"Compact the log" (after 2 attempts: its developer and the team could not settle whether a check`);
+    expect(body).not.toMatch(INTERNAL);
   });
-
-  test("one dependent is named in the singular", async () => {
-    const { reports, posted } = reportsFor([{ subject: "task-blocked", projectId, taskId: "t1", title: "Read the file", reason, waiting: 1 }]);
-    await reports.runPending();
-    expect(posted[0].body).toContain("1 other task depends on it, directly or through other tasks, and waits until it goes on.");
-  });
-});
-
-test("an unreadable blocked task blocks its project and posts nothing", async () => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  const cause: ProjectBlockCause = { category: "fault", errorClass: "WorkItemRowCorrupt", reason: "bad jsonb" };
-  const { reports, posted, blocked } = reportsFor([{ subject: "task-blocked-unreadable", projectId, cause }]);
-
-  expect(await reports.runPending()).toEqual([{ kind: "project-blocked", projectId, cause }]);
-  expect(posted).toEqual([]);
-  expect(blocked).toEqual([cause]);
 });

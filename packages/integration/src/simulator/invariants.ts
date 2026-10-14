@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, blockedExitOf, parseStoredBlockedReason } from "@ashara/shared";
+import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/shared";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
@@ -39,7 +39,6 @@ const itemRow = z.object({
   mergeCommit: z.string().nullable(),
   ownerRoleId: z.string().nullable(),
   dispatchCount: z.number(),
-  blockedAt: z.string().nullable(),
 });
 type ItemRow = z.infer<typeof itemRow>;
 
@@ -53,7 +52,6 @@ const projectRow = z.object({
 type ProjectRow = z.infer<typeof projectRow>;
 
 const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
-const taskReportRow = z.object({ workItemId: z.string(), blockedAt: z.string(), reportId: z.string() });
 const checkRow = z.object({
   taskId: z.string(),
   checkTaskId: z.string(),
@@ -72,7 +70,6 @@ export interface Snapshot {
   readonly project: ProjectRow;
   readonly items: readonly ItemRow[];
   readonly episodes: ReadonlyArray<z.infer<typeof episodeRow>>;
-  readonly taskReports: ReadonlyArray<z.infer<typeof taskReportRow>>;
   readonly checks: ReadonlyArray<z.infer<typeof checkRow>>;
   readonly spendUsd: number;
   readonly unrecordedCalls: number;
@@ -108,7 +105,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
                task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
-               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount", blocked_at::text AS "blockedAt"
+               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount"
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
     ).rows,
   );
@@ -117,14 +114,6 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
       await db.execute(sql`
         SELECT id, kind, report_id AS "reportId", ended_at IS NOT NULL AS ended
         FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`)
-    ).rows,
-  );
-  const taskReports = z.array(taskReportRow).parse(
-    (
-      await db.execute(sql`
-        SELECT r.work_item_id AS "workItemId", r.blocked_at::text AS "blockedAt", r.report_id AS "reportId"
-        FROM blocked_task_reports r JOIN work_items w ON w.id = r.work_item_id
-        WHERE w.project_id = ${projectId}`)
     ).rows,
   );
   const checks = z.array(checkRow).parse(
@@ -158,7 +147,6 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     project,
     items,
     episodes,
-    taskReports,
     checks,
     spendUsd: spend.spend,
     unrecordedCalls: spend.unrecorded,
@@ -212,7 +200,7 @@ export type Outcome =
   | { readonly kind: "open" };
 
 const SPEND = new Set(["budget_cap"]);
-const INFRASTRUCTURE = new Set(["configuration", "fault"]);
+const INFRASTRUCTURE = new Set(["configuration", "fault", "infrastructure"]);
 
 export function outcomeOf(snapshot: Snapshot): Outcome {
   const { project, items } = snapshot;
@@ -238,13 +226,15 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   };
   const byId = new Map(snapshot.items.map((item) => [item.id, item]));
 
-  // I2: no work item waits on a person; every halt episode has exactly one report.
+  // I2: no work item waits on a person; every halt episode has exactly one report. Every exit
+  // blockedExitOf names is taken by the loop's own sweep (orchestrator parked-exits.ts, whose test
+  // names each exit's writer); a reason production cannot parse has no exit at all.
   for (const item of snapshot.items) {
     if (item.status !== "Blocked") continue;
     const source = sourceOf(item.blockedReason);
-    const parsed = blockedReasonOf(item.blockedReason);
-    const exit = parsed === null ? "operator" : blockedExitOf(parsed).kind;
-    if (exit === "operator") add("I2", `${item.title}:${source ?? "none"}`, `task "${item.title}" is Blocked (${source ?? "no reason"}) and only an operator can release it`);
+    if (blockedReasonOf(item.blockedReason) === null) {
+      add("I2", `${item.title}:${source ?? "none"}`, `task "${item.title}" is Blocked (${source ?? "no reason"}) with no exit the loop takes`);
+    }
   }
   for (const episode of context.final ? snapshot.episodes : []) {
     if (!episode.ended && episode.reportId === null && snapshot.project.status === "blocked") {
@@ -274,13 +264,10 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
     }
   }
 
-  // I4: a client report on a task's current block episode is true when the snapshot is read.
-  for (const report of snapshot.taskReports) {
-    const item = byId.get(report.workItemId);
-    if (item !== undefined && item.blockedAt === report.blockedAt && item.status !== "Blocked") {
-      add("I4", `task-report:${item.title}:${item.status}`, `the report on "${item.title}"'s block stands while the task is ${item.status}`);
-    }
-  }
+  // I4: its one judged subject, the per-task block report, is gone with migration 048 (W6): the
+  // client hears about the project, whose halt episodes the database keeps whole (040's trigger)
+  // and I2 checks for their one report. A report's claims against the snapshot are story
+  // s-independent-verify-m1 L8.
 
   // I5: spend within the cap; every call has a recorded cost.
   if (snapshot.spendUsd > context.spendCapUsd + 1e-9) {
@@ -345,13 +332,13 @@ export function checkTotality(step: number, stalled: Snapshot): Violation[] {
   }));
 }
 
-/** The stored reason as production parses it; an unreadable one has no exit but the operator's. */
+/** The stored reason as production parses it; an unreadable one has no exit. */
 function blockedReasonOf(raw: unknown): StoredBlockedReason | null {
   try {
     return parseStoredBlockedReason(raw) ?? null;
   } catch (err) {
     if (!(err instanceof BlockedReasonCorrupt)) throw err;
-    console.warn(`[simulator] an unreadable blocked reason is judged as operator-only: ${err.message}`);
+    console.warn(`[simulator] an unreadable blocked reason is judged as having no exit: ${err.message}`);
     return null;
   }
 }

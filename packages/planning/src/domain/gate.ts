@@ -2,7 +2,7 @@ import type { ProjectId, WorkItemStatus } from "@ashara/shared";
 import { InvalidStatusTransition, projectBlockCause, WorkItemRowCorrupt } from "@ashara/shared";
 import type { EventPublisher } from "../lifecycle/ports.js";
 import type { WorkItem } from "./work-item.js";
-import { blockWorkItem, takeEvents } from "./work-item.js";
+import { giveUpWorkItem, takeEvents } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import {
   DependencyGraph,
@@ -17,16 +17,16 @@ export class GateKeeper {
    * active project is gated on its own: its items and its dependency edges are
    * read per project, so a blocked project's tasks are never admitted, an active
    * project with a row that does not parse is blocked and skipped, and one
-   * project's dependency cycle parks that project's tasks on it, never failing
+   * project's dependency cycle gives that project's tasks on it up, never failing
    * the gate for every project. A dependency on an item outside the project waits.
    *
    * A Pending task whose dependencies can never be met (an Abandoned item, directly or
-   * transitively, or a cycle; an Abandoned check task only for the task it checks) is parked at
-   * Blocked with a dependency_unsatisfiable reason here, and its work_item.blocked event published:
-   * nothing else ever moves it, and left Pending it would stall with no record. Its exit is the
-   * operator's. A task the failure router gives up never reaches this park: its project awaits a
-   * plan repair (migration 045), listActiveIds omits it until the repair is written, and the repair
-   * supersedes the task's dependents (Replanner, ADR-074 addendum 2 d74 D).
+   * transitively, or a cycle; an Abandoned check task only for the task it checks) is given up here
+   * with a dependency_unsatisfiable reason, and its work_item.given_up event published: left Pending
+   * it would stall with no record, and no person releases it (story s-loop-never-stop-m1 W6). Its
+   * abandonment opens a plan repair (migrations 045, 048). A task given up elsewhere rarely leads
+   * here: its project awaits a plan repair, listActiveIds omits it until the repair is written, and
+   * the repair supersedes the task's dependents (Replanner, ADR-074 addendum 2 d74 D).
    */
   static async filterAvailable(
     repo: WorkItemRepository,
@@ -62,7 +62,7 @@ async function admitProject(
 ): Promise<WorkItem[]> {
   const graph = await DependencyGraph.load(repo, projectId);
   for (const cycle of graph.cycles) {
-    console.warn(`[gate] project ${projectId}: ${cycle.message}; the tasks on it and waiting on it are parked`);
+    console.warn(`[gate] project ${projectId}: ${cycle.message}; the tasks on it and waiting on it are given up`);
   }
   const resolution = graph.resolveDependencies(buildDependencyContext(items));
 
@@ -70,17 +70,17 @@ async function admitProject(
   const statusById = new Map(items.map((item) => [item.id, item.status] as const));
   for (const item of pending) {
     const result = resolution.get(item.id);
-    if (result?.resolution === "blocked") await parkUnsatisfiable(repo, events, item, result.blockedBy, statusById);
+    if (result?.resolution === "blocked") await giveUpUnsatisfiable(repo, events, item, result.blockedBy, statusById);
   }
   return pending.filter((item) => isMet(resolution, item.id));
 }
 
 /**
- * Parks a Pending task that depends on work that can never complete. A concurrent change to the
+ * Gives up a Pending task that depends on work that can never complete. A concurrent change to the
  * task (it left Pending since it was read) refuses the save; the next cycle's gate reads it again.
  * The event is published after the save commits, best-effort, like every routing site's.
  */
-async function parkUnsatisfiable(
+async function giveUpUnsatisfiable(
   repo: WorkItemRepository,
   events: EventPublisher,
   item: WorkItem,
@@ -93,26 +93,24 @@ async function parkUnsatisfiable(
       return status === "Abandoned" ? `${id} (Abandoned)` : `${id} (on a dependency cycle)`;
     })
     .join(", ");
-  blockWorkItem(item, {
+  giveUpWorkItem(item, {
     source: "dependency_unsatisfiable",
     blockedBy: [...blockedBy],
-    reason:
-      `this task can never be dispatched: it waits on ${causes}. Re-plan or replace that work, ` +
-      "then unblock this task, or abandon it.",
+    reason: `this task can never be dispatched: it waits on ${causes}; the plan is repaired around it`,
   });
   try {
     await repo.save(item, "Pending");
   } catch (err) {
     if (!(err instanceof InvalidStatusTransition)) throw err;
-    console.warn(`[gate] task ${item.id}: not parked for unsatisfiable dependencies, it changed concurrently:`, err);
+    console.warn(`[gate] task ${item.id}: not given up for unsatisfiable dependencies, it changed concurrently:`, err);
     return;
   }
-  console.warn(`[gate] task ${item.id}: parked at Blocked, it waits on ${causes}`);
+  console.warn(`[gate] task ${item.id}: given up, it waits on ${causes}; its plan is repaired`);
   for (const event of takeEvents(item)) {
     try {
       await events.publish(event);
     } catch (err) {
-      console.warn(`[gate] task ${item.id}: failed to publish ${event.eventType} (the park is committed):`, err);
+      console.warn(`[gate] task ${item.id}: failed to publish ${event.eventType} (the give-up is committed):`, err);
     }
   }
 }

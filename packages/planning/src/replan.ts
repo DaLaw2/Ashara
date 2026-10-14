@@ -2,8 +2,8 @@ import { z } from "zod";
 import { PreCallRefusal, withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "@ashara/organization";
-import { describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { DomainEvent, ProjectBlockCause, ProjectId, WorkItemStatus } from "@ashara/shared";
+import { blockedReasonToRecord, describeErrorChain, projectBlockCause } from "@ashara/shared";
+import type { DomainEvent, ProjectBlockCause, ProjectId, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import type { BulkPlanEdge } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
@@ -15,9 +15,10 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
 // t-replan-on-change, migration 042), asked for in one of two ways. A client answer that changed an
-// assumption the plan was built on flags the project (migration 038). A task the failure router gave
-// up opens a plan repair (ADR-074 addendum 2 d74 D, migration 045): its dependents are not parked for
-// the operator one by one; the remaining work is planned again around it. Either stops the project's
+// assumption the plan was built on flags the project (migration 038). A task given up, for any cause
+// (the failure router's attempt bound, a dispute or review bound, the environment-change bound, an
+// unsatisfiable dependency: ADR-074 addendum 2 d74 D, d76; migrations 045, 048), opens a plan repair:
+// no person releases its dependents; the remaining work is planned again around it. Either stops the project's
 // dispatch. Once no task of the project is in progress, the current vision is decomposed again with
 // the completed work, and for a repair the given-up work and its evidence, as context: completed work
 // stays Completed, open work (not started, Blocked or Failed, and the Epic that held it) is
@@ -32,9 +33,10 @@ const MAX_REPLAN_ATTEMPTS = 3;
 const MAX_REVISIONS_PER_REVIEW = 3;
 
 /**
- * Plan repairs Delivery writes before the operator reviews the project (ADR-074 addendum 2 d74 D):
- * past it the same work is being given up again, and the next abandonment blocks the project with
- * one report naming it.
+ * Plan repairs Delivery writes before the project halts as undeliverable (R = 2, ADR-074 addendum 2
+ * d74 D, d76): past it the same work is being given up again, and the next give-up halts the
+ * project (a plan_repair block) with one report naming the work given up and why. Counted since the
+ * owner last reviewed such a halt (exit X3).
  */
 const MAX_REPAIRS_PER_REVIEW = 2;
 
@@ -50,7 +52,7 @@ interface PlannedItem {
   readonly environmentStatement: string | null;
 }
 
-/** A task the failure router gave up whose repair the project awaits (plan_repairs, migration 045). */
+/** A task given up whose repair the project awaits (plan_repairs, migrations 045, 048). */
 interface AbandonedTask {
   readonly id: string;
   readonly title: string;
@@ -59,6 +61,9 @@ interface AbandonedTask {
   /** Why it was given up and its last failure, as its blocked_reason recorded them. */
   readonly evidence: string;
 }
+
+/** The cause a given-up task records: any but a plan revision's supersession. */
+type GivenUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
 
 /** A project awaiting a revision with no task in progress and no unread answer, as the store reads it. */
 interface ProjectAwaitingReplan {
@@ -86,7 +91,7 @@ interface ProjectAwaitingReplan {
   readonly items: readonly PlannedItem[];
 }
 
-/** What asked for a revision: a client's answer, or tasks the failure router gave up. */
+/** What asked for a revision: a client's answer, or tasks given up. */
 type RevisionCause =
   | { readonly kind: "client-change"; readonly requestedBy: string; readonly change: ChangeRequest }
   | { readonly kind: "repair"; readonly abandoned: readonly AbandonedTask[] };
@@ -206,7 +211,8 @@ class PlanRepairBoundReached extends Error {
       `project ${projectId}: the plan was repaired ${repairs} time(s) since the operator last reviewed it, the bound of ` +
         `${MAX_REPAIRS_PER_REVIEW}, and the team gave up again: ` +
         abandoned.map((task) => `"${task.title}" (${task.id}) after ${task.attempts} attempt(s): ${firstLine(task.evidence)}`).join("; ") +
-        `; the remaining work is not planned again until the operator reviews the project and unblocks it`,
+        `; the project halts as undeliverable: the remaining work is not planned again until the client changes ` +
+        `the scope or the owner reviews the project and unblocks it`,
     );
     this.name = "PlanRepairBoundReached";
   }
@@ -275,7 +281,7 @@ function changeOf(project: ProjectAwaitingReplan, requestedBy: string): ChangeRe
   return { question: stated.clientAnswer.question, answer: stated.clientAnswer.answer, decision: stated.statement };
 }
 
-/** An awaited repair names a task that is not an Abandoned task of the project given up by the failure router. */
+/** An awaited repair names a task that is not an Abandoned task of the project given up for a recorded cause. */
 class RepairSubjectUnreadable extends Error {
   constructor(
     readonly projectId: ProjectId,
@@ -287,6 +293,42 @@ class RepairSubjectUnreadable extends Error {
   }
 }
 
+/** What a given-up task's blocked_reason recorded of why, for the planner; prefixed by the cause. */
+function givenUpEvidence(reason: GivenUpReason): string {
+  switch (reason.source) {
+    case "failure_router": {
+      const lastFailure = reason.lastFailure === undefined ? [] : [`Last failure: ${JSON.stringify(reason.lastFailure)}`];
+      const detail = reason.detail === undefined ? [] : [reason.detail];
+      return [`Its attempts were spent: ${reason.reason}`, ...detail, ...lastFailure].join("\n");
+    }
+    case "replan":
+      return `Given up after a failed attempt: ${reason.replanContext.detail}`;
+    case "api":
+      return `Given up by an operator: ${JSON.stringify(blockedReasonToRecord(reason))}`;
+    case "environment_unavailable":
+      return `The machines it ran on kept failing (${reason.unavailable}): ${reason.reason}`;
+    case "checks_stale":
+    case "checks_rewrite_bound":
+      return `Its checks no longer hold on the project's environment: ${reason.reason}`;
+    case "check_disputed":
+      return `Its implementer disputed check ${JSON.stringify(reason.checkName)} past what the team settles: ${reason.reason}`;
+    case "suite_review_unresolved":
+      return `The review of the plan's checks kept finding problems: ${reason.reason}`;
+    case "environment_change_needed":
+      return `It needs an environment change (${reason.paths.join(", ")}) the team could not make for it: ${reason.reason}`;
+    case "dependency_unsatisfiable":
+      return `It depends on work that can never complete: ${reason.reason}`;
+    case "environment_undefined":
+      return `The project's environment on main is not one its cells can be built from: ${reason.reason}`;
+    case "owner_unresolved":
+      return `No role of the team's roster could be assigned it (owner ${reason.ownerRoleId ?? "none"}): ${reason.reason}`;
+    case "task_failed":
+    case "orchestrator_error":
+    case "merge_unrecorded":
+      return reason.reason;
+  }
+}
+
 /** The given-up tasks a repair answers, with what their blocked_reason recorded of why. */
 function abandonedOf(project: ProjectAwaitingReplan): AbandonedTask[] {
   return project.repairsAwaited.map((id) => {
@@ -294,16 +336,14 @@ function abandonedOf(project: ProjectAwaitingReplan): AbandonedTask[] {
     if (planned === undefined) throw new RepairSubjectUnreadable(project.projectId, id, "it is not a work item of the project");
     const { item } = planned;
     const reason = item.blockedReason;
-    if (item.status !== "Abandoned" || reason?.source !== "failure_router") {
-      throw new RepairSubjectUnreadable(project.projectId, id, `it is ${item.status} with ${reason?.source ?? "no"} blocked reason, not given up by the failure router`);
+    if (item.status !== "Abandoned" || reason === undefined || reason.source === "superseded") {
+      throw new RepairSubjectUnreadable(project.projectId, id, `it is ${item.status} with ${reason?.source ?? "no"} blocked reason, not given up`);
     }
-    const lastFailure = reason.lastFailure === undefined ? [] : [`Last failure: ${JSON.stringify(reason.lastFailure)}`];
-    const detail = reason.detail === undefined ? [] : [reason.detail];
     return {
       id,
       title: item.title,
-      attempts: reason.attempts ?? item.dispatchCount,
-      evidence: [reason.reason, ...detail, ...lastFailure].join("\n"),
+      attempts: reason.source === "failure_router" ? (reason.attempts ?? item.dispatchCount) : item.dispatchCount,
+      evidence: givenUpEvidence(reason),
     };
   });
 }

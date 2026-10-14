@@ -27,16 +27,14 @@ interface ExpectedFailure {
  * by any such change, so B3 is pinned by its minimized three-decision tape there too. B1 (seed 4)
  * is removed: a check set keeps only the files under checks/<checked task id>/ (MVP W4), and seed 4
  * then fails none of its I3 product-file keys (observed: its listed keys were reported missing).
+ * B4 (seed 14) is removed: no work item waits on a person (MVP W6), and an infrastructure fault is
+ * requeued uncharged instead of parked at Blocked(environment_unavailable). Observed: seed 14's
+ * decisions recorded on a9f781ce (simulate.ts --seeds 1 --start 14 --minimize: four git fault
+ * decisions) fail I1:open, I2 environment_unavailable, I8:Blocked(environment_unavailable) and
+ * I8:Pending there, and replayed on W6 end accepted with no violation, cycle 1 "interrupted". That
+ * tape pins it in simulator.test.ts.
  */
-const EXPECTED_FAILURES: ReadonlyMap<number, ExpectedFailure> = new Map<number, ExpectedFailure>([
-  [
-    14,
-    {
-      keys: ["I1:open", "I2:Define and commit the project environment:environment_unavailable", "I8:Blocked(environment_unavailable)", "I8:Pending"],
-      baseline: "B4: a transient substrate fault parks a task at environment_unavailable, operator-only, unreported",
-    },
-  ],
-]);
+const EXPECTED_FAILURES: ReadonlyMap<number, ExpectedFailure> = new Map<number, ExpectedFailure>([]);
 
 /** How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer fails. */
 export interface ExpectedFailureDiff {

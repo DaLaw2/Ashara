@@ -20,7 +20,6 @@ export type AssignmentBrief = Pick<
   | "knowledgeContext"
   | "contextMap"
   | "priorAttemptFailure"
-  | "operatorUnblock"
   | "protectedPaths"
 >;
 

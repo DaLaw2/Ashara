@@ -275,6 +275,17 @@ export class WorkItemRepository {
     throw new DispatchRefundWithoutDispatch(id);
   }
 
+  /** Counts one infrastructure fault on the item (migration 048); returns the count after it. */
+  async recordInfrastructureFault(id: string): Promise<number> {
+    const [row] = await this.db
+      .update(workItems)
+      .set({ infrastructureFaults: sql`${workItems.infrastructureFaults} + 1` })
+      .where(eq(workItems.id, id))
+      .returning({ infrastructureFaults: workItems.infrastructureFaults });
+    if (!row) throw new WorkItemNotFound(id);
+    return row.infrastructureFaults;
+  }
+
   async listAll() {
     const rows = await this.db
       .select()

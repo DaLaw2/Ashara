@@ -52,6 +52,12 @@ export interface WorkItemRepository {
    */
   refundDispatchCount(id: WorkItemId): Promise<number>;
   /**
+   * Counts one infrastructure fault on the item's dispatches (migration 048) in a single UPDATE and
+   * returns the count after it: the durable bound of its uncharged requeues. Throws when the item
+   * does not exist.
+   */
+  recordInfrastructureFault(id: WorkItemId): Promise<number>;
+  /**
    * Records the merge commit Z0's merge step made on the target's main for the task (migration
    * 041): the one record of what was merged, which reports to the client read. Throws when the
    * item does not exist; the caller writes it before completing the task, so a failed write

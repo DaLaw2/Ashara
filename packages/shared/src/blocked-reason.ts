@@ -63,7 +63,10 @@ const failureRouterSchema = z.object({
  * (no agent ran, nothing executed) or under it (a cell failed mid-attempt).
  * `unavailable` names what was missing (e.g. "container substrate (podman)",
  * "task cell"); `reason` carries the substrate's own diagnostic text for the
- * operator.
+ * operator. An infrastructure fault is not the task's (story s-loop-never-stop-m1 W6): the task
+ * goes back to Pending uncharged, within a fault budget, and this reason is written only on a task
+ * given up because its faults went on after the project's infrastructure halt resumed (Abandoned),
+ * or on a Blocked row written before migration 048.
  */
 const environmentUnavailableSchema = z.object({
   source: z.literal("environment_unavailable"),
@@ -75,7 +78,9 @@ const environmentUnavailableSchema = z.object({
 /**
  * The project has no environment a task's cells can be built from: none is defined on the
  * target's main, or the current version's image could not be built. No agent ran, and the task is
- * never run on the BaseCell instead (s-platform-role-m1). `reason` names which, for the operator.
+ * never run on the BaseCell instead (s-platform-role-m1). `reason` names which. Nothing re-defines
+ * or rebuilds main's environment while every environment task is done, so the task is given up
+ * (Abandoned) and its plan repaired, which can plan a new environment (migration 048).
  */
 const environmentUndefinedSchema = z.object({
   source: z.literal("environment_undefined"),
@@ -87,9 +92,10 @@ const environmentUndefinedSchema = z.object({
  * The checks stored for a task were red-run on another environment version than the dispatch's,
  * and no longer all fail on main there: they cannot decide the task's work. Not the task's
  * failure: the check task named by `checkTaskId` must write them again on the current
- * environment. No model was called. `reason` carries the red run, for the operator. Written only
- * when that check task could not be reopened (it is not a Completed check task any more); a
- * reopenable one is reopened instead and the task waits on it at Pending.
+ * environment. No model was called. `reason` carries the red run. Written only when that check
+ * task could not be reopened (it is not a Completed check task any more), on the task given up for
+ * it (Abandoned), whose plan is then repaired; a reopenable one is reopened instead and the task
+ * waits on it at Pending.
  */
 const checksStaleSchema = z.object({
   source: z.literal("checks_stale"),
@@ -102,9 +108,9 @@ const checksStaleSchema = z.object({
  * An implementation task's finished work changed environment recipe files, the platform role's,
  * and no environment task was opened for it (ADR-074 addendum 2 d66 b, d72 B1): the task already had the
  * bound of environment tasks opened for it, or none could be opened (no role of the roster does
- * environment work). Below the bound, the environment task is opened and the task waits on it at
- * Pending instead. `paths` names the recipe files its branch changed; nothing was
- * merged and the branch was deleted.
+ * environment work). The task is given up (Abandoned) and its plan repaired. Below the bound, the
+ * environment task is opened and the task waits on it at Pending instead. `paths` names the recipe
+ * files its branch changed; nothing was merged and the branch was deleted.
  */
 const environmentChangeNeededSchema = z.object({
   source: z.literal("environment_change_needed"),
@@ -116,8 +122,8 @@ const environmentChangeNeededSchema = z.object({
 /**
  * The task's checks went stale again after its check task had already written them again
  * `bound` times (the stored checks are `revision`): the environment keeps moving under them, or
- * the check author cannot write checks that hold on it. Parked for the operator; nothing reopens
- * the check task again on its own. `reason` carries the latest red run.
+ * the check author cannot write checks that hold on it. The task is given up (Abandoned) and its
+ * plan repaired; nothing reopens the check task again. `reason` carries the latest red run.
  */
 const checksRewriteBoundSchema = z.object({
   source: z.literal("checks_rewrite_bound"),
@@ -131,8 +137,10 @@ const checksRewriteBoundSchema = z.object({
 /**
  * The task's implementer disputed one of its stored checks (dispute_check, ADR-074 addendum 2 d65
  * c), and the check task named by `checkTaskId` cannot be reopened to answer the dispute (it is no
- * longer a Completed check task). Written only then; a reopenable check task is reopened instead and
- * the task waits on it at Pending. `reason` carries the dispute and why no reopen was possible.
+ * longer a Completed check task), or the dispute is past the bound of disputes per check task.
+ * Written only then, on the task given up for it (Abandoned), whose plan is then repaired; a
+ * reopenable check task within the bound is reopened instead and the task waits on it at Pending.
+ * `reason` carries the dispute and why no reopen was made.
  */
 const checkDisputedSchema = z.object({
   source: z.literal("check_disputed"),
@@ -145,9 +153,11 @@ const checkDisputedSchema = z.object({
 /**
  * The review of a plan revision's check suites (ADR-074 addendum 2 d71 c) found problems, and a
  * check task it named cannot be reopened to answer them (it is not a Completed check task deciding
- * one implementation task). Written only on the review task, then; reopenable check tasks are
- * reopened instead and the review waits on them at Pending. `checkTaskIds` names every check task
- * the review named; `reason` carries the problems and why no reopen was possible.
+ * one implementation task), or the review named one past the bound of reviews per check task.
+ * Written only on the review task given up for it (Abandoned), whose plan is then repaired;
+ * reopenable check tasks within the bound are reopened instead and the review waits on them at
+ * Pending. `checkTaskIds` names every check task the review named; `reason` carries the problems
+ * and why no reopen was made.
  */
 const suiteReviewUnresolvedSchema = z.object({
   source: z.literal("suite_review_unresolved"),
@@ -161,8 +171,9 @@ const suiteReviewUnresolvedSchema = z.object({
  * latest roster (or that roster cannot be read). No agent ran, and no default role stands in for
  * the owner (s-team-roster-m1). `ownerRoleId` is the stored owner, null when there is none.
  * `rosterRevision` is the latest roster revision the decision was made against, null when the
- * project had none (or, written before migration 040, when it was not recorded): a newer
- * revision is this block's exit.
+ * project had none (or, written before migration 040, when it was not recorded). No production
+ * path appends a roster revision after the first (db roster.ts recordFirstRoster), so the task is
+ * given up (Abandoned) and its plan repaired, which staffs the new tasks from the latest roster.
  */
 const ownerUnresolvedSchema = z.object({
   source: z.literal("owner_unresolved"),
@@ -174,9 +185,9 @@ const ownerUnresolvedSchema = z.object({
 
 /**
  * A Pending task depends, directly or transitively, on work that can never complete: an
- * Abandoned item, or a dependency cycle. The gate parks it here instead of leaving it Pending
- * with nothing that would ever admit it. `blockedBy` names the root causes (the Abandoned items,
- * or the task itself for a cycle); `reason` says so, for the operator.
+ * Abandoned item, or a dependency cycle. The gate gives it up (Abandoned) instead of leaving it
+ * Pending with nothing that would ever admit it, and its plan is repaired. `blockedBy` names the
+ * root causes (the Abandoned items, or the task itself for a cycle); `reason` says so.
  */
 const dependencyUnsatisfiableSchema = z.object({
   source: z.literal("dependency_unsatisfiable"),
@@ -216,23 +227,9 @@ const supersededSchema = z.object({
 });
 
 /**
- * An operator returned a Blocked task to Pending (PATCH /work-items/:id/status): who, why, and
- * the block they cleared. Written only on the Pending item, like `replan`, so the next attempt's
- * brief says what was refused before and what the operator changed (third run N11). `previous`
- * is the cleared reason as stored, null when the item was Blocked with none.
- */
-const operatorUnblockSchema = z.object({
-  source: z.literal("operator_unblock"),
-  unblockedBy: z.string().min(1),
-  note: z.string().min(1),
-  unblockedAt: z.string().min(1),
-  previous: z.record(z.string(), z.unknown()).nullable(),
-  ...augmentationFields,
-});
-
-/**
- * HTTP API (PATCH /work-items/:id/status). Passthrough preserves
- * caller-supplied fields — the user content is open-world.
+ * HTTP API (PATCH /work-items/:id/status): a Failed or Abandoned item an operator moved, or a
+ * Blocked row written before migration 048 (the route no longer blocks a task). Passthrough
+ * preserves caller-supplied fields — the user content is open-world.
  */
 const apiSchema = z
   .object({
@@ -257,7 +254,6 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   supersededSchema,
-  operatorUnblockSchema,
   apiSchema,
 ]);
 
@@ -265,7 +261,8 @@ export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
 /**
  * Every `source` a stored blocked reason can carry. `satisfies` keeps each member a real source;
- * blocked-reason.test.ts checks the converse, that no source is missing.
+ * blocked-reason.test.ts checks the converse, that no source is missing. The block report reads a
+ * given-up task's cause by it (db block-report.ts).
  */
 export const BLOCKED_REASON_SOURCES = [
   "task_failed",
@@ -283,7 +280,6 @@ export const BLOCKED_REASON_SOURCES = [
   "dependency_unsatisfiable",
   "merge_unrecorded",
   "superseded",
-  "operator_unblock",
   "api",
 ] as const satisfies readonly StoredBlockedReason["source"][];
 
@@ -346,7 +342,6 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "superseded":
-    case "operator_unblock":
     case "api":
       return { ...reason };
   }
@@ -355,34 +350,35 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
 }
 
 /**
- * How a Blocked work item leaves Blocked (Discipline B: every state has a way out).
- * `roster-revision`: by itself, once the project stores a roster revision newer than the one the
- * block was decided against. `environment-built`: by itself, once the project's current
- * environment version (on the target's main) has a recorded statement and a succeeded build.
- * `merge-recorded`: by itself, to Completed (not Pending), once the record of `mergeCommit` is written.
- * `operator`: only an operator's unblock (PATCH /work-items/:id/status to Pending) moves it.
+ * How a Blocked work item leaves Blocked (Discipline B: every state has a way out, and no work item
+ * waits on a person: story s-loop-never-stop-m1 W6, ADR-074 addendum 2 d76). Every exit is taken by
+ * the loop itself, each cycle (orchestrator parked-exits.ts), and each has a production writer.
+ * `merge-recorded`: to Completed (not Pending), once the record of `mergeCommit` is written; the
+ * loop itself writes it again each cycle. `requeue`: back to Pending at once, uncharged: an
+ * infrastructure fault is not the task's. `give-up`: the cause cannot clear by itself, so the task
+ * is given up (Abandoned) and its plan repaired (migration 045, widened by 048).
  */
 export type BlockedExit =
-  | { readonly kind: "roster-revision"; readonly decidedAgainst: number | null }
-  | { readonly kind: "environment-built" }
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string }
-  | { readonly kind: "operator" };
+  | { readonly kind: "requeue" }
+  | { readonly kind: "give-up" };
 
 /**
- * The exit of a Blocked item's stored reason. The sources written only on Failed, Abandoned or
- * Pending items (task_failed, orchestrator_error, replan, failure_router, superseded, operator_unblock) and a Blocked item with
- * no reason have no cause that clears by itself: the operator decides.
+ * The exit of a Blocked item's stored reason. Only merge_unrecorded is written on Blocked items
+ * now; every other source on a Blocked row was written before migration 048 (or is no Blocked
+ * reason at all: task_failed, orchestrator_error, replan, failure_router, superseded), as is a
+ * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
+ * else is given up.
  */
 export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedExit {
-  if (reason === undefined) return { kind: "operator" };
+  if (reason === undefined) return { kind: "give-up" };
   switch (reason.source) {
-    case "owner_unresolved":
-      return { kind: "roster-revision", decidedAgainst: reason.rosterRevision };
-    case "environment_undefined":
-      return { kind: "environment-built" };
     case "merge_unrecorded":
       return { kind: "merge-recorded", mergeCommit: reason.mergeCommit };
     case "environment_unavailable":
+      return { kind: "requeue" };
+    case "owner_unresolved":
+    case "environment_undefined":
     case "checks_stale":
     case "environment_change_needed":
     case "checks_rewrite_bound":
@@ -395,8 +391,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "replan":
     case "failure_router":
     case "superseded":
-    case "operator_unblock":
-      return { kind: "operator" };
+      return { kind: "give-up" };
   }
   const _: never = reason;
   return _;

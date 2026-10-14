@@ -39,6 +39,7 @@ export {
   blockWorkItem,
   requeueWorkItem,
   unblockWorkItem,
+  giveUpWorkItem,
   takeEvents,
   exitStaleChecks,
   exitDisputedCheck,

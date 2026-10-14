@@ -1,19 +1,17 @@
 import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db";
-import type { ProjectId } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService, Replanning } from "./acl/planning-acl.js";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type {
   LiaisonAnswers,
   LiaisonBlockReports,
-  LiaisonCheckDisputes,
   LiaisonClientStops,
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
-  LiaisonSuiteReviews,
 } from "./acl/engagement-acl.js";
-import type { ParkedExitChecks } from "./parked-exits.js";
+import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { EventLogger } from "./event-logger.js";
 
@@ -59,7 +57,7 @@ type SpendRefusal =
 /**
  * Finance's spend cap, as the loop reads it. A project refusal has already
  * blocked its project; a deployment refusal, or recorded spend at the
- * deployment cap, stops the loop.
+ * deployment cap, halts every active project at the cap and stops the loop.
  */
 interface SpendCapPort {
   deploymentStop(): Promise<LoopStop | null>;
@@ -103,6 +101,14 @@ export function blockedResult(taskId: string, detail: string): TaskResult {
   return { taskId, status: "blocked", detail };
 }
 
+/**
+ * Halts every active project at once: the deployment's spend cap, which binds them all, was
+ * reached (design P14). Returns the projects it halted.
+ */
+interface SpendCapHalts {
+  blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]>;
+}
+
 export interface CoreLoopDeps {
   readonly config: CoreLoopConfig;
   readonly workItemRepo: WorkItemRepository;
@@ -111,9 +117,10 @@ export interface CoreLoopDeps {
   /**
    * Holds each project's target workspace path (migration 024) and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
-   * row (migration 025). ProjectRepository satisfies it.
+   * row (migration 025); the infrastructure halts and the deployment cap's halt
+   * (migration 048). ProjectRepository satisfies it.
    */
-  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1];
+  readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts;
   readonly developmentService: Pick<DevelopmentService, "execute">;
   readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRecoveryDeps["failureRouter"];
@@ -149,22 +156,18 @@ export interface CoreLoopDeps {
   readonly stackChoices: LiaisonStackChoices;
   /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
   readonly checkDisputes: CheckDisputeRecord;
-  /** The Liaison's block of a project whose check disputes passed their bound; blockReports posts its one report. */
-  readonly disputeReports: LiaisonCheckDisputes;
   /**
    * Quality's durable record of the reviews of plan revisions' suites (ADR-074 addendum 2 d71 c):
    * how many reviews named each check task bounds its reopens.
    */
   readonly suiteReviewFindings: SuiteReviewFindingRecord;
-  /** The Liaison's block of a project whose suite review named a check task past its bound; blockReports posts its one report. */
-  readonly suiteReviewReports: LiaisonSuiteReviews;
   /**
-   * The Liaison's one report per project block, per resumption after an operator's unblock and
-   * per task block; run every cycle, at the budget cap too (no LLM call).
+   * The Liaison's one report per project halt and per resumption; run every cycle, at the budget
+   * cap too (no LLM call), and once more when the deployment cap stops the loop.
    */
   readonly blockReports: LiaisonBlockReports;
-  /** What the automatic exits of Blocked tasks read; re-checked every cycle before the gate. */
-  readonly parkedExits: ParkedExitChecks;
+  /** The substrate probe an infrastructure halt waits on; run each cycle while a project is so halted. */
+  readonly infrastructureProbe: InfrastructureProbe;
   /**
    * The roster role doing a project's environment work, from its latest roster: the owner of the
    * environment task an implementation's request opens (ADR-074 addendum 2 d66 b). `none`, with

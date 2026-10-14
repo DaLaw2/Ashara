@@ -41,7 +41,7 @@ const VisionAssumptionSchema = z.strictObject({
  *    vision version (`visionVersion`) work proceeds on, and `projectEnvironment`, the environment
  *    the task works in. Rendered first: what the project is and what it is built with are the things
  *    the agent cannot discover for itself and would otherwise fill in from its training prior.
- *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`, `operatorUnblock`,
+ *  - BINDING: `taskId`, `goal`, `context`, `deliverables`, `priorAttemptFailure`,
  *    `knowledgeContext`: the instruction, its requirements and prior lessons.
  *  - SUPPLEMENTARY: `contextMap`, reference rendered after the binding sections.
  */
@@ -59,8 +59,6 @@ const AgentBriefSchema = z
     contextMap: z.string().optional(),
     // Non-empty when present: the producer only emits it when it has real content.
     priorAttemptFailure: z.string().min(1).optional(),
-    // An operator returned the task from Blocked: the block they cleared and their note (third run N11).
-    operatorUnblock: z.string().min(1).optional(),
     // The paths Z0 refuses a task's work for changing, stated before work starts (ADR-074
     // addendum 2 d66 c, d72): `recipe`, the platform role's files, and every stored check file of
     // the project; `inputs` are product files the image build reads, which work may change but

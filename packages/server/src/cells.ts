@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { SubstrateUnavailable } from "@ashara/execution-infra";
 import type { PodmanSubstrate } from "@ashara/execution-infra";
+import type { InfrastructureProbe } from "@ashara/orchestrator";
+import { describeErrorChain } from "@ashara/shared";
 
 /**
  * The ashara.instance label of this deployment's cells: a stable digest of workdirBase, so a
@@ -25,6 +27,23 @@ export async function reconcileCellsAtStartup(substrate: Pick<PodmanSubstrate, "
     if (!(err instanceof SubstrateUnavailable)) throw err;
     console.warn(`Cells: orphan reconciliation skipped, the substrate is unavailable; tasks will block until it is: ${err.message}`);
   }
+}
+
+/**
+ * The probe an infrastructure halt waits on (story s-loop-never-stop-m1 W6): the substrate answers
+ * `info`. A probe that throws, for any reason, did not pass.
+ */
+export function substrateProbe(substrate: Pick<PodmanSubstrate, "probeSubstrate">): InfrastructureProbe {
+  return {
+    async probe() {
+      try {
+        const info = await substrate.probeSubstrate();
+        return { passed: true, evidence: `substrate answered: version ${info.version}, rootless ${String(info.rootless)}` };
+      } catch (err) {
+        return { passed: false, evidence: describeErrorChain(err) };
+      }
+    },
+  };
 }
 
 /** Shutdown drain: every cell this process still holds is removed; a failure is reported, never swallowed. */

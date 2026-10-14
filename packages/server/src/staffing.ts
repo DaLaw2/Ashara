@@ -26,8 +26,7 @@ interface StaffingDeps {
 export function createAgentStaffing(deps: StaffingDeps): AgentStaffing {
   return {
     async staff(task): Promise<Staffing> {
-      // Read before the rows: a revision appended between the two reads is newer than the one
-      // recorded, so the block's exit re-checks it rather than missing it.
+      // Read before the rows, so the revision recorded is never newer than the roster judged.
       const rosterRevision = await deps.latestRosterRevision(task.projectId);
       const owner = await deps.ownerOf(task.id);
       if (owner.kind === "absent") {

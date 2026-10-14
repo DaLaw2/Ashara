@@ -11,6 +11,7 @@ export {
   replanWorkItem,
   abandonWorkItem,
   requeueWorkItem,
+  giveUpWorkItem,
   takeEvents,
   exitStaleChecks,
   exitDisputedCheck,

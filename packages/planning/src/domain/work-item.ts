@@ -172,46 +172,64 @@ export function blockWorkItem(item: WorkItem, reason: StoredBlockedReason): void
 }
 
 /**
- * Returns an externally-Blocked item to Pending (the HTTP unblock path). Pins its
- * from-status to `Blocked` EXPLICITLY: several statuses now share the `-> Pending`
- * graph edge (Blocked, Failed, InProgress), but each is owned by a distinct method
- * with its own domain event and intent. canTransitionTo is only the edge-level
- * guard (enforced again at save()); the method adds the method-level invariant so a
- * caller cannot, say, drive an InProgress item (with a live agent) back to Pending
- * through unblock. See "Aggregates own their invariants" (CLAUDE.md DDD).
- *
- * An operator's unblock (third run N11) records who and why: the Pending item carries an
- * `operator_unblock` reason naming them, their note and the block they cleared, which the next
- * attempt's brief states, and the event carries the same. An automatic exit clears the reason.
+ * Returns a Blocked item to Pending once its automatic exit has cleared (orchestrator
+ * parked-exits.ts); no person unblocks a task (story s-loop-never-stop-m1 W6). Pins its
+ * from-status to `Blocked` EXPLICITLY: several statuses share the `-> Pending` graph edge
+ * (Blocked, Failed, InProgress), but each is owned by a distinct method with its own domain event
+ * and intent. canTransitionTo is only the edge-level guard (enforced again at save()); the method
+ * adds the method-level invariant so a caller cannot, say, drive an InProgress item (with a live
+ * agent) back to Pending through unblock. See "Aggregates own their invariants" (CLAUDE.md DDD).
+ * Clears the reason; the event carries the block it cleared.
  */
-export function unblockWorkItem(item: WorkItem, by: WorkItemUnblock): void {
+export function unblockWorkItem(item: WorkItem): void {
   // A merge_unrecorded item's work is merged: Pending would re-dispatch it (completeRecordedMerge is its exit).
   if (item.status !== "Blocked" || item.blockedReason?.source === "merge_unrecorded" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
   const previous = item.blockedReason === undefined ? null : blockedReasonToRecord(item.blockedReason);
-  const at = new Date();
   item.status = "Pending";
-  item.blockedReason =
-    by.kind === "operator"
-      ? { source: "operator_unblock", unblockedBy: by.by, note: by.note, unblockedAt: at.toISOString(), previous }
-      : undefined;
-  item.updatedAt = at;
+  item.blockedReason = undefined;
+  item.updatedAt = new Date();
   item.events.push(
     createDomainEvent("work_item.unblocked", "planning", {
       work_item_id: item.id,
       level: item.level,
-      unblocked_by: by.kind === "operator" ? by.by : "automatic exit",
-      note: by.kind === "operator" ? by.note : `the cause of its ${previous === null ? "unrecorded" : String(previous["source"])} block cleared`,
+      unblocked_by: "automatic exit",
+      note: `the cause of its ${previous === null ? "unrecorded" : String(previous["source"])} block cleared`,
       previous_blocked_reason: previous,
     }),
   );
 }
 
-/** Who returns a Blocked item to Pending: an operator, by name and with a note, or its automatic exit. */
-type WorkItemUnblock =
-  | { readonly kind: "operator"; readonly by: string; readonly note: string }
-  | { readonly kind: "exit-cleared" };
+/** Why a work item is given up: any recorded cause but a plan revision's supersession, which is supersedeWorkItem's. */
+type GiveUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
+
+/**
+ * Gives an item up (ADR-074 addendum 2 d76 b; story s-loop-never-stop-m1 W6): its work cannot be
+ * done as planned, and no person decides what happens next. The item goes to the terminal
+ * Abandoned with the cause, and the abandonment itself records the plan repair the project then
+ * awaits (migration 045's trigger, widened by 048): the remaining work is planned again around it,
+ * at most R times before the project halts as undeliverable (Replanner). Pinned to the open
+ * statuses a give-up is decided in: an InProgress item whose attempt ended with the cause, a
+ * Pending item the gate finds can never be dispatched, a Blocked item whose block has no exit that
+ * clears by itself. A Failed item is the FailureRouter's to abandon.
+ */
+export function giveUpWorkItem(item: WorkItem, reason: GiveUpReason): void {
+  const open = item.status === "InProgress" || item.status === "Pending" || item.status === "Blocked";
+  if (!open || !canTransitionTo(item.status, "Abandoned")) {
+    throw new InvalidStatusTransition(item.id, item.status, "Abandoned");
+  }
+  item.status = "Abandoned";
+  item.blockedReason = reason;
+  item.updatedAt = new Date();
+  item.events.push(
+    createDomainEvent("work_item.given_up", "planning", {
+      work_item_id: item.id,
+      level: item.level,
+      cause: reason.source,
+    }),
+  );
+}
 
 /**
  * Recovers a Failed item back to Pending so it re-enters planning (FailureRouter's

@@ -102,6 +102,9 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
     async refundDispatchCount(id) {
       return db.refundDispatchCount(id);
     },
+    async recordInfrastructureFault(id) {
+      return db.recordInfrastructureFault(id);
+    },
     async recordMergeCommit(id, commit) {
       await db.recordMergeCommit(id, commit);
     },

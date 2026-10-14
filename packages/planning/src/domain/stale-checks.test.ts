@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { InvalidStatusTransition, parseProjectId } from "@ashara/shared";
-import { exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
+import { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
 import { createPendingWorkItem, startWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";
 
@@ -29,13 +29,24 @@ describe("exitStaleChecks", () => {
     expect(task.events.map((e) => e.eventType)).toEqual(["work_item.awaiting_checks"]);
   });
 
-  test("a stale revision 3 is past the bound: the task is parked and the check task untouched", () => {
+  test("a stale revision 3 is past the bound: the task is given up and the check task untouched", () => {
     const task = implementation();
     const check = completedCheckTask();
 
     expect(exitStaleChecks(task, check, { checkTaskId: check.id, revision: 3, detail: "red run" })).toEqual({ kind: "bound" });
+    expect(task.status).toBe("Abandoned");
     expect(task.blockedReason).toMatchObject({ source: "checks_rewrite_bound", revision: 3, bound: 2 });
+    expect(task.events.map((e) => e.eventType)).toEqual(["work_item.given_up"]);
     expect(check.status).toBe("Completed");
+  });
+
+  test("a check task that cannot be reopened gives the task up with checks_stale", () => {
+    const task = implementation();
+    const gone = { ...completedCheckTask(), status: "Abandoned" as const };
+
+    expect(exitStaleChecks(task, gone, { checkTaskId: gone.id, revision: 1, detail: "red run" }).kind).toBe("unreopenable");
+    expect(task.status).toBe("Abandoned");
+    expect(task.blockedReason).toMatchObject({ source: "checks_stale", checkTaskId: gone.id });
   });
 
   test("a task no longer InProgress: rejected before the check task is reopened", () => {
@@ -86,7 +97,7 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     expect(a.blockedReason).toMatchObject({ source: "replan", replanContext: { raw: { checkedTaskId: "impl-a", reviewTaskId: review.id } } });
   });
 
-  test("a check task named a third time is past the bound: nothing is mutated and the caller blocks the project", () => {
+  test("a check task named a third time is past the bound: the review is given up and no check task is reopened", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
     const b = checkTaskFor("impl-b");
@@ -97,10 +108,11 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     });
 
     expect(exit).toEqual({ kind: "bound", bound: 2, checkTaskId: b.id, times: 3 });
-    expect([review.status, a.status, b.status]).toEqual(["InProgress", "Completed", "Completed"]);
+    expect([review.status, a.status, b.status]).toEqual(["Abandoned", "Completed", "Completed"]);
+    expect(review.blockedReason).toMatchObject({ source: "suite_review_unresolved", checkTaskIds: [a.id, b.id] });
   });
 
-  test("a named check task that cannot be reopened parks the review, and no check task is reopened", () => {
+  test("a named check task that cannot be reopened gives the review up, and no check task is reopened", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");
     const gone = { ...checkTaskFor("impl-b"), status: "Abandoned" as const };
@@ -111,9 +123,36 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     });
 
     expect(exit.kind).toBe("unreopenable");
-    expect(review.status).toBe("Blocked");
+    expect(review.status).toBe("Abandoned");
     expect(review.blockedReason).toMatchObject({ source: "suite_review_unresolved", checkTaskIds: [a.id, gone.id] });
     expect(a.status).toBe("Completed");
   });
 });
 
+
+describe("exitDisputedCheck (ADR-074 addendum 2 d65 c, d76 K = 2)", () => {
+  const dispute = (checkTaskId: string, disputes: number) => ({
+    checkTaskId,
+    revision: 1,
+    check: { name: "put", command: "sh checks/put.sh" },
+    reason: "put cannot pass on correct work",
+    evidence: null,
+    disputes,
+  });
+
+  test("within the bound the check task is reopened with the dispute and the task waits on it", () => {
+    const task = implementation();
+    const check = completedCheckTask();
+    expect(exitDisputedCheck(task, check, dispute(check.id, 2))).toEqual({ kind: "rewrite" });
+    expect([task.status, check.status]).toEqual(["Pending", "Pending"]);
+  });
+
+  test("a dispute past the bound gives the task up for a plan repair, never waiting on a person", () => {
+    const task = implementation();
+    const check = completedCheckTask();
+    expect(exitDisputedCheck(task, check, dispute(check.id, 3))).toEqual({ kind: "bound", bound: 2 });
+    expect(task.status).toBe("Abandoned");
+    expect(task.blockedReason).toMatchObject({ source: "check_disputed", checkTaskId: check.id, checkName: "put" });
+    expect(check.status).toBe("Completed");
+  });
+});

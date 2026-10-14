@@ -4,6 +4,7 @@ import type { FirstPlanOutcome, ReplanOutcome, WorkItem } from "./acl/planning-a
 import { PlanningService } from "./acl/planning-acl.js";
 import type { CoreLoopDeps, CycleResult, LoopStop, TaskResult } from "./types.js";
 import { processTask, handleProcessingError } from "./execution.js";
+import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 
 /** Failures are logged at warn by the Liaison itself, with their attempt count. */
@@ -88,22 +89,24 @@ export class CoreLoop {
       }
     }
 
-    // Blocks recorded in an earlier cycle (or before a restart), a project's return to work, and
-    // each task's block: one plain report each to the client. No LLM call, so before the
-    // spend-cap check: a project the budget cap blocked is told so.
-    for (const report of await deps.blockReports.runPending()) {
-      if (report.kind !== "project-blocked") {
-        console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
-      }
-    }
+    // A project halted on infrastructure resumes by itself once the substrate probe passes (one
+    // probe per cycle while any is halted, no LLM call), before the reports, so its resumption is
+    // told this cycle. Only a halt already told is resumed: one written late in the previous cycle
+    // is reported below first, and resumes from the next cycle on.
+    await resumeInfrastructureHalts(deps.projectRepo, deps.infrastructureProbe);
+
+    // Halts recorded in an earlier cycle (or before a restart) and a project's return to work: one
+    // plain report each to the client. No LLM call, so before the spend-cap check: a project the
+    // budget cap halted is told so.
+    await this.postBlockReports();
 
     // Every step below makes LLM calls, each admitted by Finance's spend cap.
     const atCap = await deps.spendCap.deploymentStop();
-    if (atCap) return stopped(atCap);
+    if (atCap) return this.haltAtCap(atCap);
 
     // Tenders first: a project's intake comes before any work on it.
     const intake = await this.step("liaison-intake", () => deps.liaisonIntake.runPending());
-    if (intake.kind === "stop") return stopped(intake.stop);
+    if (intake.kind === "stop") return this.haltAtCap(intake.stop);
     for (const outcome of intake.outcomes) logIntake(outcome);
 
     // Then the client's answers, before planning: one read now appends the vision version
@@ -112,13 +115,13 @@ export class CoreLoop {
     // a flagged project's tasks (ProjectRepository.listActiveIds) until the replanning
     // step revises its plan.
     const answers = await this.step("liaison-answers", () => deps.liaisonAnswers.runPending());
-    if (answers.kind === "stop") return stopped(answers.stop);
+    if (answers.kind === "stop") return this.haltAtCap(answers.stop);
     for (const outcome of answers.outcomes) logAnswer(outcome);
 
     // Then a roster for each project with vision v1 and none: first planning
     // requires one, since every planned task gets its owning role.
     const rosters = await this.step("roster", () => deps.rosterDerivation.runPending());
-    if (rosters.kind === "stop") return stopped(rosters.stop);
+    if (rosters.kind === "stop") return this.haltAtCap(rosters.stop);
     for (const outcome of rosters.outcomes) logRoster(outcome);
 
     // Then a first plan for each project that has a vision, a roster and no work items,
@@ -127,16 +130,16 @@ export class CoreLoop {
     // A project whose own record is bad is blocked inside each step, logged at
     // warn there, and skipped; any other failure throws out of the cycle.
     const plans = await this.step("first-plan", () => deps.firstPlanning.runPending());
-    if (plans.kind === "stop") return stopped(plans.stop);
+    if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
     // Then a revision of each flagged plan, and a repair of each plan a given-up task stopped (ADR-074
-    // addendum 2 d74 D; the gate dispatches neither project's tasks meanwhile, so no dependent of a
-    // given-up task is parked for the operator), whose project has no task in progress: the previous
+    // addendum 2 d74 D, d76; the gate dispatches neither project's tasks meanwhile, so no dependent of a
+    // given-up task waits on anyone), whose project has no task in progress: the previous
     // cycle awaited every task it dispatched, so in-flight work has finished before its plan is
     // revised. Only Tasks count: the plan's Epic stays InProgress while any child is open, and the
     // revision supersedes it with the open tasks. The Liaison's report on the revision follows with the other planning reports.
     const replans = await this.step("replan", () => deps.replanning.runPending());
-    if (replans.kind === "stop") return stopped(replans.stop);
+    if (replans.kind === "stop") return this.haltAtCap(replans.stop);
     for (const outcome of replans.outcomes) logReplan(outcome);
     for (const report of await deps.planReports.runPending()) {
       if (report.kind !== "project-blocked") {
@@ -144,12 +147,11 @@ export class CoreLoop {
       }
     }
 
-    // Blocked tasks whose cause cleared by itself go back to Pending before the gate reads them.
+    // Every Blocked task takes its exit (Completed, Pending or given up) before the gate reads them.
     await releaseClearedBlocks({
       workItemRepo: deps.workItemRepo,
       eventStore: deps.eventStore,
       projects: deps.projectRepo,
-      checks: deps.parkedExits,
     });
 
     const eligible = await PlanningService.gate(deps.workItemRepo, deps.projectRepo, deps.eventStore);
@@ -181,7 +183,32 @@ export class CoreLoop {
     const interrupted = results.filter((r) => r.status === "interrupted").length;
     deps.eventLogger?.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused, interrupted });
 
-    return { tasksProcessed: batch.length, results, stop: refusedAtDeployment ?? (await deps.spendCap.deploymentStop()) };
+    const stop = refusedAtDeployment ?? (await deps.spendCap.deploymentStop());
+    if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };
+    return { tasksProcessed: batch.length, results, stop: null };
+  }
+
+  private async postBlockReports(): Promise<void> {
+    for (const report of await this.deps.blockReports.runPending()) {
+      console.log(`[liaison-block-report] project ${report.projectId}: ${report.subject} report ${report.kind}`);
+    }
+  }
+
+  /**
+   * The deployment's spend cap was reached (design P14): every active project halts at the cap,
+   * each with its one report posted now, before the loop stops, since no later cycle of this run
+   * posts it. A project's exit is the owner's raise of the cap (X1). The loop stops with the cap's
+   * own reason.
+   */
+  private async haltAtCap(stop: LoopStop): Promise<CycleResult> {
+    const halted = await this.deps.projectRepo.blockAllActive({
+      category: "budget_cap",
+      errorClass: "DeploymentSpendCapReached",
+      reason: stop.reason,
+    });
+    if (halted.length > 0) console.warn(`[budget_cap] ${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`);
+    await this.postBlockReports();
+    return stopped(stop);
   }
 
   /**

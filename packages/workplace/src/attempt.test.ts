@@ -735,14 +735,6 @@ describe("define_check", () => {
     expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("may test only the vision items");
   });
 
-  it("an operator's unblock note reaches the next attempt's prompt, and only when there is one (third run N11)", () => {
-    const brief = { ...assignment().brief, operatorUnblock: "Unblocked by operator-a.\nOperator's note: the environment owns main.go no more" };
-    const prompt = buildSystemPrompt(brief, "implementation");
-    expect(prompt).toContain("## Why this task was blocked, and what the operator changed");
-    expect(prompt).toContain("Operator's note: the environment owns main.go no more");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("what the operator changed");
-  });
-
   it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {
     const { llm } = scriptedLlm([]);
     const { checks } = recorder();

@@ -68,39 +68,6 @@ async function mainCommit(repo: HostRepo): Promise<{ readonly commit: string } |
   return COMMIT_HASH.test(hash) ? { commit: hash } : { problem: `rev-parse ${MAIN} printed ${JSON.stringify(stdout)}` };
 }
 
-/** Whether a succeeded image build of a project's environment version is recorded. */
-interface EnvironmentBuildLookup {
-  hasSucceeded(projectId: ProjectId, version: string): Promise<boolean>;
-}
-
-/**
- * The exit of a task Blocked with `environment_undefined`: true when the environment version on
- * the target's main now has the statement a merged task recorded for it and a succeeded
- * image build, so a dispatch would resolve it without building. Anything else is false, the task
- * stays Blocked: no main, no definition, no statement, no succeeded build. Reads committed objects
- * only, like resolveCurrentEnvironment; a git or store failure throws.
- */
-export async function currentEnvironmentBuilt(
-  projectId: ProjectId,
-  targetProjectPath: string,
-  statements: Pick<EnvironmentStatementStore, "forVersion">,
-  builds: EnvironmentBuildLookup,
-): Promise<boolean> {
-  const targetRepo = hostRepoOf(targetProjectPath);
-  const main = await mainCommit(targetRepo);
-  if ("problem" in main) return false;
-  let version: string;
-  try {
-    const definition = await readEnvironmentDefinition(targetRepo.gitDir, main.commit);
-    version = (await environmentVersion(targetRepo.gitDir, main.commit, definition)).version;
-  } catch (err) {
-    if (err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved) return false;
-    throw err;
-  }
-  if ((await statements.forVersion(projectId, version)) === null) return false;
-  return builds.hasSucceeded(projectId, version);
-}
-
 /**
  * Removes the project's environment images that main's current environment version does not use
  * and no container uses (third run N12), after an environment task ends and at startup. When main

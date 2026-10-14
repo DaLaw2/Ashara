@@ -10,7 +10,6 @@ import {
   doublePrecision,
   numeric,
   unique,
-  primaryKey,
   index,
   customType,
   type AnyPgColumn,
@@ -114,8 +113,9 @@ export const workItems = pgTable("work_items", {
   // Migration 037: the environment version the statement was tested on; a later task's
   // statement is chosen by it. NULL on a statement recorded before 037.
   environmentStatementVersion: text("environment_statement_version"),
-  // Migration 040: when the item last entered Blocked, kept by a trigger; NULL while not Blocked.
-  blockedAt: timestamptz("blocked_at"),
+  // Migration 048: infrastructure faults observed on the item's dispatches, none charged as an
+  // attempt; the bound of its uncharged requeues.
+  infrastructureFaults: integer("infrastructure_faults").notNull().default(0),
   // Migration 041: the merge commit Z0's merge step made on the target's main for this task;
   // the only record of what was merged. NULL when nothing of the task was merged.
   mergeCommit: text("merge_commit"),
@@ -637,6 +637,8 @@ export const projectBlocks = pgTable("project_blocks", {
   endKind: text("end_kind"),
   unblockedBy: text("unblocked_by"),
   unblockReason: text("unblock_reason"),
+  /** Migration 048: what the passing substrate probe observed, on an infrastructure halt it ended. */
+  resumeEvidence: text("resume_evidence"),
   resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
 });
 
@@ -682,24 +684,3 @@ export const planRepairs = pgTable("plan_repairs", {
   planRevisionId: uuid("plan_revision_id").references(() => planRevisions.id, { onDelete: "set null" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
-
-// ---------------------------------------------------------------------------
-// blocked_task_reports (migration 040): the Liaison's one report per time a task
-// entered Blocked, keyed by work_items.blocked_at.
-// ---------------------------------------------------------------------------
-
-export const blockedTaskReports = pgTable(
-  "blocked_task_reports",
-  {
-    workItemId: uuid("work_item_id")
-      .notNull()
-      .references(() => workItems.id, { onDelete: "cascade" }),
-    blockedAt: timestamptz("blocked_at").notNull(),
-    reportId: uuid("report_id")
-      .notNull()
-      .references(() => clientMessages.id, { onDelete: "cascade" }),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.workItemId, t.blockedAt] }),
-  }),
-);

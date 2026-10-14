@@ -160,6 +160,9 @@ describe("a project whose workspace path is refused", () => {
         recordWorkspacePath: (id, path) => projects.recordWorkspacePath(id, path),
         listActiveIds: async () => (await projects.listActiveIds()).filter((id) => id === projectId),
         block: (id, cause) => projects.block(id, cause),
+        listInfrastructureHalted: async () => [],
+        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
+        blockAllActive: async () => [],
       },
       developmentService,
       failureRouter: new FailureRouter(),
@@ -173,24 +176,20 @@ describe("a project whose workspace path is refused", () => {
       replanning: { runPending: async () => [] },
       planReports: { runPending: async () => [] },
       checkDisputes: { record: notExercised("checkDisputes") },
-      disputeReports: { blockOnDisputes: notExercised("disputeReports") },
       suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
-      suiteReviewReports: { blockOnSuiteReview: notExercised("suiteReviewReports") },
       blockReports: { runPending: async () => [] },
-      parkedExits: { latestRosterRevision: notExercised("latestRosterRevision"), environmentBuilt: notExercised("environmentBuilt") },
+      infrastructureProbe: { probe: notExercised("infrastructureProbe") },
       environmentOwner: notExercised("environmentOwner"),
     });
 
     const cycle = await loop.runCycle();
 
-    expect(cycle.results).toEqual([expect.objectContaining({ taskId: itemId, status: "blocked" })]);
+    // An uncharged infrastructure fault (story s-loop-never-stop-m1 W6): back to Pending, no dispatch counted.
+    expect(cycle.results).toEqual([
+      expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("Ashara repository root") }),
+    ]);
     const item = await workItems.findById(itemId);
-    expect(item).toMatchObject({ status: "Blocked", dispatchCount: 0 });
-    expect(item?.blockedReason).toMatchObject({
-      source: "environment_unavailable",
-      unavailable: "target workspace",
-      reason: expect.stringContaining("Ashara repository root"),
-    });
+    expect(item).toMatchObject({ status: "Pending", dispatchCount: 0, infrastructureFaults: 1 });
     const rows = await db.execute(sql`SELECT count(*)::int AS n FROM llm_calls WHERE project_id = ${projectId}`);
     expect(rows.rows).toEqual([{ n: 0 }]);
     expect(mock.doGenerateCalls).toHaveLength(0);

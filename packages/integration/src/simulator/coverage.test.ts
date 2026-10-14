@@ -7,7 +7,6 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     project: { status: "active", blockedCategory: null, blockedReason: null, planStopped: false, workspacePath: null },
     items: [],
     episodes: [],
-    taskReports: [],
     checks: [],
     spendUsd: 0,
     unrecordedCalls: 0,

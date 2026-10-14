@@ -240,13 +240,6 @@ function buildTaskPrompt(brief: AssignmentBrief): string {
     `# Task\n## Goal\n${brief.goal}`,
   ];
   if (brief.priorAttemptFailure !== undefined) sections.push(`## Prior Attempt Failure\n${brief.priorAttemptFailure}`);
-  if (brief.operatorUnblock !== undefined) {
-    sections.push(
-      `## Why this task was blocked, and what the operator changed\n` +
-        `This task was blocked and an operator has returned it to work. Read why it was blocked and the operator's ` +
-        `note before you start: work that repeats what was refused is refused again.\n\n${brief.operatorUnblock}`,
-    );
-  }
   if (brief.knowledgeContext !== undefined && brief.knowledgeContext.trim() !== "") {
     sections.push(`## Prior Knowledge & Lessons\n${brief.knowledgeContext}`);
   }

@@ -1,24 +1,16 @@
-import { and, asc, count, desc, eq, isNotNull, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  parseProjectId,
-  parseWorkItemJsonb,
-  projectBlockCause,
-  WorkItemRowCorrupt,
-  type ProjectBlockCause,
-  type ProjectId,
-  type StoredBlockedReason,
-} from "@ashara/shared";
+import { BLOCKED_REASON_SOURCES, parseProjectId, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { checkDisputes, clientMessages, planRepairs, projectBlocks, projects, workItems } from "../schema.js";
 import { noOpenStop } from "./project.js";
 import { blockingReview } from "./suite-review.js";
 
-// The Liaison's reports on blocks (migration 040): one when a project is blocked, one when an
-// operator returns it to work, and one each time a task is blocked. Each is due while its episode
-// (a project_blocks row, or a work item's blocked_at) has no report, and posting one records it
-// against that episode in the same transaction, so a retried or concurrent post tells the client
-// once.
+// The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
+// when it returns to work (an owner's unblock, or the substrate probe passing after an
+// infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
+// posting one records it against that episode in the same transaction, so a retried or concurrent
+// post tells the client once.
 
 /**
  * Every kind a project block episode can record.
@@ -32,15 +24,31 @@ export const PROJECT_BLOCK_KINDS = [
   "replan_bound",
   "suite_review",
   "plan_repair",
+  "infrastructure",
 ] as const;
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
-type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;
+type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair" | "infrastructure">;
 
-/** A task given up whose repair a plan_repair block left awaited. */
+/** A task given up whose repair a plan_repair block left awaited, with the cause it was given up for. */
 interface BlockingAbandonmentRow {
   readonly title: string;
   readonly attempts: number;
+  readonly cause: StoredBlockedReason["source"];
+}
+
+const GivenUpCauseSchema = z.enum(BLOCKED_REASON_SOURCES);
+
+/** A given-up task's stored blocked_reason names no known cause: the halt cannot be reported truthfully. */
+class GivenUpCauseUnreadable extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly workItemId: string,
+    readonly source: string | null,
+  ) {
+    super(`project_blocks row ${episodeId}: given-up task ${workItemId} records cause ${JSON.stringify(source)}, which is no blocked-reason source`);
+    this.name = "GivenUpCauseUnreadable";
+  }
 }
 
 /** A plan_repair block has no awaited repair of its project recorded at or before it: nothing to report it by. */
@@ -57,13 +65,46 @@ class BlockingRepairMissing extends Error {
 /** The given-up tasks whose awaited repair the plan_repair block stopped (migration 045), oldest first. */
 async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: string, blockedAt: Date): Promise<BlockingAbandonmentRow[]> {
   const rows = await db
-    .select({ title: workItems.title, attempts: workItems.dispatchCount })
+    .select({ id: workItems.id, title: workItems.title, attempts: workItems.dispatchCount, source: sql<string | null>`${workItems.blockedReason}->>'source'` })
     .from(planRepairs)
     .innerJoin(workItems, eq(workItems.id, planRepairs.workItemId))
     .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), lte(planRepairs.createdAt, blockedAt)))
     .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
   if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
-  return rows;
+  return rows.map((row) => {
+    const cause = GivenUpCauseSchema.safeParse(row.source);
+    if (!cause.success) throw new GivenUpCauseUnreadable(episodeId, row.id, row.source);
+    return { title: row.title, attempts: row.attempts, cause: cause.data };
+  });
+}
+
+/** The task whose infrastructure faults an infrastructure halt was written on. */
+interface BlockingFaultRow {
+  readonly taskTitle: string;
+  readonly faults: number;
+}
+
+/** An infrastructure block has no task of its project with a recorded fault: nothing to report it by. */
+class BlockingFaultMissing extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly projectId: string,
+  ) {
+    super(`project_blocks row ${episodeId} (project ${projectId}) is an infrastructure block, but no task of the project records an infrastructure fault`);
+    this.name = "BlockingFaultMissing";
+  }
+}
+
+/** The project's task with the most infrastructure faults (migration 048), the latest written on a tie. */
+async function blockingFault(db: DbHandle, episodeId: string, projectId: string): Promise<BlockingFaultRow> {
+  const [row] = await db
+    .select({ taskTitle: workItems.title, faults: workItems.infrastructureFaults })
+    .from(workItems)
+    .where(and(eq(workItems.projectId, projectId), eq(workItems.level, "Task"), gt(workItems.infrastructureFaults, 0)))
+    .orderBy(desc(workItems.infrastructureFaults), desc(workItems.updatedAt), asc(workItems.id))
+    .limit(1);
+  if (!row) throw new BlockingFaultMissing(episodeId, projectId);
+  return row;
 }
 
 /** The review a suite_review block was written on: the last one recorded before the block. */
@@ -114,18 +155,16 @@ type DueBlockReportRow =
       readonly kind: "plan_repair";
       readonly abandoned: readonly BlockingAbandonmentRow[];
     }
-  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId }
   | {
-      readonly subject: "task-blocked";
+      readonly subject: "project-blocked";
+      readonly episodeId: string;
       readonly projectId: ProjectId;
-      readonly taskId: string;
-      readonly title: string;
-      readonly reason: StoredBlockedReason | undefined;
-      /** Open tasks (neither Completed nor Abandoned) that depend on it, directly or through others. */
-      readonly waiting: number;
+      readonly kind: "infrastructure";
+      readonly fault: BlockingFaultRow;
     }
-  /** A blocked task whose blocked_reason does not parse: that project's bad record. */
-  | { readonly subject: "task-blocked-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly subject: "project-resumed"; readonly episodeId: string; readonly projectId: ProjectId; readonly how: "unblocked" | "probe_passed" };
+
+const ResumeKindSchema = z.enum(["unblocked", "probe_passed"]);
 
 /** A project_blocks row holds a kind outside migration 040's vocabulary. */
 class ProjectBlockKindUnknown extends Error {
@@ -185,19 +224,18 @@ const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'plannin
 
 /**
  * Every block report not yet posted, oldest first within each subject. A project the client
- * stopped, or has a stop awaiting the Liaison, is not reported on. A task is reported only while
- * its project is active: a blocked project's report already says nothing moves.
+ * stopped, or has a stop awaiting the Liaison, is not reported on.
  */
 export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportRow[]> {
   const due: DueBlockReportRow[] = [];
 
   const resumed = await db
-    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId })
+    .select({ id: projectBlocks.id, projectId: projectBlocks.projectId, endKind: projectBlocks.endKind })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
     .where(
       and(
-        eq(projectBlocks.endKind, "unblocked"),
+        inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]),
         isNull(projectBlocks.resumedReportId),
         ne(projects.status, "stopped"),
         noOpenStop(projects.id),
@@ -205,7 +243,8 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
     )
     .orderBy(asc(projectBlocks.endedAt), asc(projectBlocks.id));
   for (const row of resumed) {
-    due.push({ subject: "project-resumed", episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id") });
+    const how = ResumeKindSchema.parse(row.endKind);
+    due.push({ subject: "project-resumed", episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id"), how });
   }
 
   const blocked = await db
@@ -236,68 +275,15 @@ export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportR
     } else if (kind.data === "plan_repair") {
       const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned });
+    } else if (kind.data === "infrastructure") {
+      const fault = await blockingFault(db, row.id, row.projectId);
+      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, fault });
     } else {
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data });
     }
   }
 
-  const tasks = await db
-    .select({
-      id: workItems.id,
-      projectId: workItems.projectId,
-      title: workItems.title,
-      taskSpec: workItems.taskSpec,
-      successCriteria: workItems.successCriteria,
-      blockedReason: workItems.blockedReason,
-    })
-    .from(workItems)
-    .innerJoin(projects, eq(projects.id, workItems.projectId))
-    .where(
-      and(
-        eq(workItems.status, "Blocked"),
-        eq(workItems.level, "Task"),
-        isNotNull(workItems.blockedAt),
-        eq(projects.status, "active"),
-        noOpenStop(projects.id),
-        sql`NOT EXISTS (SELECT 1 FROM blocked_task_reports r
-          WHERE r.work_item_id = ${workItems.id} AND r.blocked_at = ${workItems.blockedAt})`,
-      ),
-    )
-    .orderBy(asc(workItems.blockedAt), asc(workItems.id));
-  const unreadable = new Set<string>();
-  for (const row of tasks) {
-    if (unreadable.has(row.projectId)) continue;
-    const projectId = parseProjectId(row.projectId, "work_items.project_id");
-    let reason: StoredBlockedReason | undefined;
-    try {
-      reason = parseWorkItemJsonb(row).blockedReason;
-    } catch (err) {
-      if (!(err instanceof WorkItemRowCorrupt)) throw err;
-      unreadable.add(row.projectId);
-      due.push({ subject: "task-blocked-unreadable", projectId, cause: projectBlockCause(err) });
-      continue;
-    }
-    due.push({ subject: "task-blocked", projectId, taskId: row.id, title: row.title, reason, waiting: await openDependentsOf(db, row.id) });
-  }
   return due;
-}
-
-/**
- * The open tasks that depend on `taskId` through any chain of dependencies: the work its block
- * holds back. UNION, not UNION ALL, so a dependency cycle ends the recursion.
- */
-async function openDependentsOf(db: DbHandle, taskId: string): Promise<number> {
-  const result = await db.execute(sql`
-    WITH RECURSIVE dependents(id) AS (
-      SELECT d.from_id FROM dependencies d WHERE d.to_id = ${taskId}
-      UNION
-      SELECT d.from_id FROM dependencies d JOIN dependents ON d.to_id = dependents.id
-    )
-    SELECT count(*)::int AS "waiting" FROM work_items w
-    WHERE w.id IN (SELECT id FROM dependents) AND w.id <> ${taskId}
-      AND w.status NOT IN ('Completed', 'Abandoned')`);
-  const [row] = z.tuple([z.object({ waiting: z.number().int().nonnegative() })]).parse(result.rows);
-  return row.waiting;
 }
 
 async function insertReport(tx: DbHandle, projectId: string, body: string): Promise<string> {
@@ -333,40 +319,6 @@ export async function postProjectBlockReport(
       .update(projectBlocks)
       .set(on === "blocked" ? { reportId } : { resumedReportId: reportId })
       .where(eq(projectBlocks.id, episodeId));
-    return "posted";
-  });
-}
-
-/**
- * Posts the report on a task's current block and records it against the task's blocked_at, in one
- * transaction with the work item row locked. The key is read and written in SQL, never through a
- * JS Date, so its microseconds survive. A task no longer Blocked, or whose block is already
- * reported, gets nothing.
- */
-export async function postTaskBlockedReport(
-  db: Database,
-  taskId: string,
-  body: string,
-): Promise<"posted" | "already-posted" | "not-blocked"> {
-  return db.transaction(async (tx) => {
-    const [task] = await tx
-      .select({
-        projectId: workItems.projectId,
-        status: workItems.status,
-        // Spelled out: drizzle renders a column in the select list unqualified, which inside this
-        // subquery would name r's own blocked_at.
-        reported: sql<unknown>`EXISTS (SELECT 1 FROM blocked_task_reports r
-          WHERE r.work_item_id = work_items.id AND r.blocked_at = work_items.blocked_at)`,
-      })
-      .from(workItems)
-      .where(eq(workItems.id, taskId))
-      .for("update");
-    if (!task || task.status !== "Blocked") return "not-blocked";
-    if (z.boolean().parse(task.reported)) return "already-posted";
-    const reportId = await insertReport(tx, task.projectId, body);
-    await tx.execute(sql`
-      INSERT INTO blocked_task_reports (work_item_id, blocked_at, report_id)
-      SELECT id, blocked_at, ${reportId} FROM work_items WHERE id = ${taskId}`);
     return "posted";
   });
 }

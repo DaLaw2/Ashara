@@ -28,6 +28,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
     refundDispatchCount: async () => 0,
+    recordInfrastructureFault: async () => 1,
     recordMergeCommit: async () => {},
     addDependency: async () => {},
     getDependencies: async () => [],
@@ -69,7 +70,7 @@ beforeEach(() => {
 });
 
 describe("GateKeeper.filterAvailable", () => {
-  test("a Pending task waiting on an Abandoned check task is parked at Blocked naming it, and the park is published", async () => {
+  test("a Pending task waiting on an Abandoned check task is given up naming it, and the give-up is published (W6)", async () => {
     const check = { ...task("Abandoned", "write checks"), workKind: "check" as const };
     const impl = task("Pending", "implement");
     const { repo, store, saves } = repoOf([check, impl], [{ fromId: impl.id, toId: check.id }]);
@@ -77,16 +78,16 @@ describe("GateKeeper.filterAvailable", () => {
 
     expect(await GateKeeper.filterAvailable(repo, projects, events)).toEqual([]);
 
-    expect(saves).toEqual([{ id: impl.id, prev: "Pending", status: "Blocked" }]);
+    expect(saves).toEqual([{ id: impl.id, prev: "Pending", status: "Abandoned" }]);
     const parked = store.get(impl.id);
     expect(parked?.blockedReason).toMatchObject({ source: "dependency_unsatisfiable", blockedBy: [check.id] });
     expect(parked?.blockedReason?.source === "dependency_unsatisfiable" ? parked.blockedReason.reason : "").toContain(
       `${check.id} (Abandoned)`,
     );
-    expect(published.map((e) => [e.eventType, e.payload["work_item_id"]])).toEqual([["work_item.blocked", impl.id]]);
+    expect(published.map((e) => [e.eventType, e.payload["work_item_id"]])).toEqual([["work_item.given_up", impl.id]]);
   });
 
-  test("an Abandoned check task parks only the task it checks; its other dependents are released (d68 c)", async () => {
+  test("an Abandoned check task gives up only the task it checks; its other dependents are released (d68 c)", async () => {
     const own = task("Pending", "implement the checked task");
     const other = task("Pending", "implement another task");
     const check = { ...task("Abandoned", "write checks"), workKind: "check" as const, taskSpec: { checksFor: own.id } };
@@ -102,7 +103,7 @@ describe("GateKeeper.filterAvailable", () => {
     const eligible = await GateKeeper.filterAvailable(repo, projects, events);
 
     expect(eligible.map((i) => i.id)).toEqual([other.id]);
-    expect(saves).toEqual([{ id: own.id, prev: "Pending", status: "Blocked" }]);
+    expect(saves).toEqual([{ id: own.id, prev: "Pending", status: "Abandoned" }]);
     expect(store.get(own.id)?.blockedReason).toMatchObject({ source: "dependency_unsatisfiable", blockedBy: [check.id] });
   });
 
@@ -137,7 +138,7 @@ describe("GateKeeper.filterAvailable", () => {
     expect((await GateKeeper.filterAvailable(repo, projects, events)).map((i) => i.id).sort()).toEqual([own.id, other.id].sort());
   });
 
-  test("an Abandoned check task does not hold the review, which reads the other suites; its own task is parked", async () => {
+  test("an Abandoned check task does not hold the review, which reads the other suites; its own task is given up", async () => {
     const own = task("Pending", "implement the checked task");
     const checkA = { ...task("Abandoned", "write checks a"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: own.id } };
     const checkB = { ...task("Completed", "write checks b"), workKind: "check" as const, taskSpec: { origin: "check" as const, checksFor: "other" } };
@@ -169,7 +170,7 @@ describe("GateKeeper.filterAvailable", () => {
     expect(published).toEqual([]);
   });
 
-  test("one project's dependency cycle parks its tasks on it; another project's tasks still dispatch", async () => {
+  test("one project's dependency cycle gives its tasks on it up; another project's tasks still dispatch", async () => {
     const a = task("Pending", "a");
     const b = task("Pending", "b");
     const waiting = task("Pending", "waits on the cycle");
@@ -191,7 +192,7 @@ describe("GateKeeper.filterAvailable", () => {
     expect(eligible.map((i) => i.id)).toEqual([free.id]);
     for (const parked of [a, b, waiting]) {
       const reason = store.get(parked.id)?.blockedReason;
-      expect(store.get(parked.id)?.status).toBe("Blocked");
+      expect(store.get(parked.id)?.status).toBe("Abandoned");
       expect(reason?.source === "dependency_unsatisfiable" ? reason.reason : "").toContain("(on a dependency cycle)");
     }
     expect(store.get(ordered.id)?.status).toBe("Pending");
@@ -212,7 +213,7 @@ describe("GateKeeper.filterAvailable", () => {
     expect(saves).toEqual([]);
   });
 
-  test("a publish failure leaves the park committed", async () => {
+  test("a publish failure leaves the give-up committed", async () => {
     const gone = task("Abandoned", "given up");
     const impl = task("Pending", "implement");
     const { repo, store } = repoOf([gone, impl], [{ fromId: impl.id, toId: gone.id }]);
@@ -223,6 +224,6 @@ describe("GateKeeper.filterAvailable", () => {
       },
     });
 
-    expect(store.get(impl.id)?.status).toBe("Blocked");
+    expect(store.get(impl.id)?.status).toBe("Abandoned");
   });
 });

@@ -9,8 +9,9 @@ import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 
-// Story s-loop-never-stop-m1, migration 040: every block is told to the client once, in plain
-// words, and an operator's unblock is recorded and told once. Every row belongs to a project this
+// Story s-loop-never-stop-m1, migrations 040 and 048: every project halt is told to the client
+// once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
+// probe passing after an infrastructure halt) is recorded and told once. Every row belongs to a project this
 // suite creates; the Liaison's due list is narrowed to them, and afterAll deletes them.
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -81,7 +82,6 @@ beforeEach(() => {
 afterAll(async () => {
   for (const id of ourProjects) {
     await db.execute(sql`DELETE FROM project_blocks WHERE project_id = ${id}`);
-    await db.execute(sql`DELETE FROM blocked_task_reports WHERE work_item_id IN (SELECT id FROM work_items WHERE project_id = ${id})`);
     await db.execute(sql`DELETE FROM client_messages WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM suite_review_findings WHERE project_id = ${id}`);
     await db.execute(sql`DELETE FROM work_items WHERE project_id = ${id}`);
@@ -174,88 +174,120 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
   });
 });
 
-describe("a blocked task is told once per time it is blocked", () => {
-  async function blockedTask(projectId: ProjectId, blockedReason: unknown): Promise<string> {
-    const id = randomUUID();
-    await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, blocked_reason, run_scope, project_id)
-      VALUES (${id}, 'Task', 'Blocked', 'Add the export button', ${JSON.stringify(blockedReason)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
-    return id;
-  }
+async function workItem(projectId: ProjectId, title: string, taskSpec: unknown = null): Promise<string> {
+  const id = randomUUID();
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id)
+    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify(taskSpec)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+  return id;
+}
 
-  test("reported once; unblocked and blocked again, reported again", async () => {
+// Story s-loop-never-stop-m1 W6 (design P15, P17): the halt is told once, and it ends by itself.
+describe("an infrastructure halt is told once with its cause, resumes by itself when the probe passes, and is told once again", () => {
+  test("halt, report naming the task, probe resume with evidence, resumed report", async () => {
     const projectId = await newProject();
-    const taskId = await blockedTask(projectId, { source: "environment_change_needed", paths: ["environment/x"], reason: "edited" });
+    const projects = new ProjectRepository(db);
+    const task = await workItem(projectId, "Write the lock checks");
+    await db.execute(sql`UPDATE work_items SET infrastructure_faults = 4 WHERE id = ${task}`);
+
+    await projects.block(projectId, { category: "infrastructure", errorClass: "InfrastructureFaultBudgetSpent", reason: "task cell unavailable" });
+    expect(await projects.listInfrastructureHalted()).not.toContain(projectId);
+    await reports().runPending();
+    await reports().runPending();
+    expect(await projects.listInfrastructureHalted()).toContain(projectId);
+
+    const [halted] = await messagesOf(projectId);
+    expect(halted).toContain(`failed 4 times while working on "Write the lock checks"`);
+    expect(halted).toContain("resumes this project by itself");
+    expect(halted).not.toContain("InfrastructureFaultBudgetSpent");
+
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "substrate answered: version 5.4")).toBe("resumed");
+    expect(await statusOf(projectId)).toBe("active");
+    expect(await projects.listInfrastructureHalted()).not.toContain(projectId);
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "again")).toBe("moved");
+    const evidence = await db.execute(sql`SELECT end_kind, resume_evidence FROM project_blocks WHERE project_id = ${projectId}`);
+    expect(evidence.rows).toEqual([{ end_kind: "probe_passed", resume_evidence: "substrate answered: version 5.4" }]);
 
     await reports().runPending();
     await reports().runPending();
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("The team is waiting on its operator")]);
+    const bodies = await messagesOf(projectId);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("the machines Ashara runs the work on work again");
+    expect(await episodesOf(projectId)).toEqual([expect.objectContaining({ kind: "infrastructure", endKind: "probe_passed", reported: true, resumedReported: true })]);
+  });
 
-    await db.execute(sql`UPDATE work_items SET status = 'Pending', blocked_reason = NULL WHERE id = ${taskId}`);
-    await db.execute(sql`UPDATE work_items SET status = 'Blocked',
-      blocked_reason = '{"source":"environment_undefined","reason":"no statement"}'::jsonb WHERE id = ${taskId}`);
+  test("in the core loop's order, a halt the probe could end at once is still told before it resumes", async () => {
+    const projectId = await newProject();
+    const projects = new ProjectRepository(db);
+    const task = await workItem(projectId, "Start the task cell");
+    await db.execute(sql`UPDATE work_items SET infrastructure_faults = 4 WHERE id = ${task}`);
+    await projects.block(projectId, { category: "infrastructure", errorClass: "InfrastructureFaultBudgetSpent", reason: "task cell unavailable" });
+
+    // Next cycle: the probe passes before the reports run.
+    expect(await projects.listInfrastructureHalted()).not.toContain(projectId);
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "substrate answered")).toBe("unreported");
+    expect(await statusOf(projectId)).toBe("blocked");
     await reports().runPending();
+
+    // The cycle after: the halt is told, so it resumes and that is told too.
+    expect(await projects.listInfrastructureHalted()).toContain(projectId);
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "substrate answered")).toBe("resumed");
     await reports().runPending();
 
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]).toContain("resumes by itself once the project's build and test environment is ready");
+    expect(bodies[0]).toContain(`failed 4 times while working on "Start the task cell"`);
+    expect(bodies[1]).toContain("the machines Ashara runs the work on work again");
   });
 
-  test("the report counts the open work that depends on the task, through any chain (third run N10)", async () => {
+  test("a probe never ends any other halt", async () => {
     const projectId = await newProject();
-    const blocked = await blockedTask(projectId, { source: "environment_change_needed", paths: ["main.go"], reason: "edited" });
-    const task = async (status: string): Promise<string> => {
-      const id = randomUUID();
-      await db.execute(sql`
-        INSERT INTO work_items (id, level, status, title, run_scope, project_id)
-        VALUES (${id}, 'Task', ${status}, 'Dependent', ${RUN_SCOPE_AD_HOC}, ${projectId})`);
-      return id;
-    };
-    const dependsOn = (from: string, to: string) => db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${from}, ${to})`);
-    const direct = await task("Pending");
-    const transitive = await task("Pending");
-    const done = await task("Completed");
-    await dependsOn(direct, blocked);
-    await dependsOn(transitive, direct);
-    await dependsOn(done, blocked);
-    // A cycle back to the blocked task ends the walk and is not counted twice.
-    await dependsOn(blocked, transitive);
-
-    await reports().runPending();
-
-    const [body] = await messagesOf(projectId);
-    expect(body).toContain("2 other tasks depend on it, directly or through other tasks, and wait until it goes on.");
-    expect(body).not.toContain("The rest of the project goes on");
-  });
-
-  test("a blocked project's tasks wait for its own report; an unreadable blocked task blocks its project", async () => {
-    const quiet = await newProject();
-    await blockedTask(quiet, { source: "api" });
-    await new ProjectRepository(db).block(quiet, budgetCap);
-    await reports().runPending();
-    expect(await messagesOf(quiet)).toEqual([expect.stringContaining("budget")]);
-
-    const corrupt = await newProject();
-    await blockedTask(corrupt, { source: "no-such-source" });
-    await reports().runPending();
-    expect(await statusOf(corrupt)).toBe("blocked");
-    await reports().runPending();
-    expect(await messagesOf(corrupt)).toEqual([expect.stringContaining("Ashara found a problem on its own side")]);
+    const projects = new ProjectRepository(db);
+    await projects.block(projectId, budgetCap);
+    expect(await projects.listInfrastructureHalted()).not.toContain(projectId);
+    expect(await projects.resumeFromInfrastructureHalt(projectId, "probe passed")).toBe("moved");
+    expect(await statusOf(projectId)).toBe("blocked");
+    await expect(db.execute(sql`UPDATE project_blocks SET ended_at = now(), end_kind = 'probe_passed', resume_evidence = 'x' WHERE project_id = ${projectId}`)).rejects.toThrow();
   });
 });
 
-// ADR-074 addendum 2 d71 c (fifth run N20): a review that keeps naming one check task blocks the
-// project for its owner, with one plain report of what it found.
-describe("a review of a plan's suites past its bound blocks the project with one report", () => {
-  async function workItem(projectId: ProjectId, title: string, taskSpec: unknown): Promise<string> {
-    const id = randomUUID();
-    await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id)
-      VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify(taskSpec)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
-    return id;
+// Story s-loop-never-stop-m1 W6 (migration 048): every give-up opens a plan repair; R = 2 then one undeliverable report.
+describe("every task given up opens a plan repair, and the undeliverable halt names each and why", () => {
+  async function giveUp(id: string, reason: unknown): Promise<void> {
+    await db.execute(sql`UPDATE work_items SET status = 'Abandoned', blocked_reason = ${JSON.stringify(reason)}::jsonb WHERE id = ${id}`);
   }
 
+  test("each cause but a supersession opens one repair row; the halt's report states each cause in plain words", async () => {
+    const projectId = await newProject();
+    const disputed = await workItem(projectId, "Compact the log");
+    const review = await workItem(projectId, "Review the plan's checks", { origin: "review" });
+    const attempts = await workItem(projectId, "Lock the data directory");
+    const superseded = await workItem(projectId, "Replaced work");
+    await giveUp(disputed, { source: "check_disputed", checkTaskId: randomUUID(), checkName: "compacts", reason: "past the bound" });
+    await giveUp(review, { source: "suite_review_unresolved", checkTaskIds: [randomUUID()], reason: "past the bound" });
+    await giveUp(attempts, { source: "failure_router", reason: "max_attempts" });
+    await giveUp(superseded, { source: "superseded", planRevision: 2, requestedBy: null, repairOf: [attempts], reason: "replaced" });
+
+    const repairs = await db.execute(sql`SELECT work_item_id FROM plan_repairs WHERE project_id = ${projectId} ORDER BY work_item_id`);
+    expect(repairs.rows.map((row) => row["work_item_id"]).sort()).toEqual([disputed, review, attempts].sort());
+
+    await new ProjectRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBoundReached", reason: "repaired twice" });
+    await reports().runPending();
+    await reports().runPending();
+
+    const bodies = await messagesOf(projectId);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("cannot deliver it as planned");
+    expect(bodies[0]).toContain(`"Compact the log" (after 0 attempts: its developer and the team could not settle`);
+    expect(bodies[0]).toContain(`"Review the plan's checks" (after 0 attempts: the review of the checks written for the plan kept finding problems in them)`);
+    expect(bodies[0]).toContain(`"Lock the data directory" (after 0 attempts: every attempt at it failed)`);
+    expect(bodies[0]).not.toContain("Replaced work");
+  });
+});
+
+// ADR-074 addendum 2 d71 c (fifth run N20): a suite_review halt recorded before migration 048 is
+// still told once, with the last review's problems.
+describe("a suite review halt recorded before migration 048 is told once", () => {
   test("the counts per check task survive in the record, and the block's report states the last review's problems", async () => {
     const projectId = await newProject();
     const review = await workItem(projectId, "Review the plan's checks", { origin: "review" });
@@ -275,9 +307,7 @@ describe("a review of a plan's suites past its bound blocks the project with one
     });
     expect(third).toEqual(new Map([[checkA, 3], [checkB, 1]]));
 
-    expect(
-      await reports().blockOnSuiteReview({ projectId, reviewTaskId: review, checkTaskId: checkA, times: 3, bound: 2, problems: [problem] }),
-    ).toBe("blocked");
+    await new ProjectRepository(db).block(projectId, { category: "suite_review", errorClass: "SuiteReviewBoundReached", reason: "named 3 times" });
     await reports().runPending();
     await reports().runPending();
 
@@ -289,18 +319,5 @@ describe("a review of a plan's suites past its bound blocks the project with one
     expect(bodies[0]).toContain(`- ${problem}`);
     expect(bodies[0]).not.toContain("first");
     expect(bodies[0]).not.toContain(checkA);
-  });
-
-  test("a review task parked because its check tasks cannot be reopened is told in plain words", async () => {
-    const projectId = await newProject();
-    const id = randomUUID();
-    const reason = { source: "suite_review_unresolved", checkTaskIds: [randomUUID()], reason: "abandoned" };
-    await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, blocked_reason, run_scope, project_id)
-      VALUES (${id}, 'Task', 'Blocked', 'Review the checks', ${JSON.stringify(reason)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
-
-    await reports().runPending();
-
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("the review of the checks written for the plan found problems in them")]);
   });
 });

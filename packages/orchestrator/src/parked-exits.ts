@@ -2,77 +2,26 @@ import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, ProjectId } from "@ashara/shared";
 import { blockedExitOf, describeErrorChain, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
-import { PlanningService, takeEvents, unblockWorkItem } from "./acl/planning-acl.js";
+import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./acl/planning-acl.js";
 
-// The automatic exits of Blocked work items (story s-loop-never-stop-m1, Discipline B): a block
-// whose cause can clear by itself is re-checked every cycle and released to Pending once it has;
-// a merged task whose merge record was not written has the record written again, then Completed.
-// Every other block waits on the operator's unblock (PATCH /work-items/:id/status), and the
-// Liaison's report on the task says so (shared blockedExitOf decides which is which).
-
-/** What the automatic exits read; the composition root supplies it. */
-export interface ParkedExitChecks {
-  /** The project's latest roster revision; null when it has none. */
-  latestRosterRevision(projectId: ProjectId): Promise<number | null>;
-  /**
-   * Whether the environment version on the project's main has its statement and a succeeded
-   * build; false when the project has no workspace yet.
-   */
-  environmentBuilt(projectId: ProjectId): Promise<boolean>;
-}
+// The exits of Blocked work items (story s-loop-never-stop-m1, Discipline B; W6: no work item waits
+// on a person), each taken by the loop every cycle: a merged task whose merge record was not written
+// has the record written again, then Completed; an infrastructure block (written before migration
+// 048) goes back to Pending at once; any other block (written before migration 048, or with no
+// reason) has no cause that clears by itself, so the task is given up and its plan repaired.
+// Shared blockedExitOf decides which is which.
 
 interface ParkedExitDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly projects: { listActiveIds(): Promise<ProjectId[]> };
-  readonly checks: ParkedExitChecks;
-}
-
-/** Each check is read at most once per project per cycle. */
-class ProjectChecks {
-  private revision: Promise<number | null> | undefined;
-  private built: Promise<boolean> | undefined;
-
-  constructor(
-    private readonly checks: ParkedExitChecks,
-    private readonly projectId: ProjectId,
-  ) {}
-
-  latestRosterRevision(): Promise<number | null> {
-    this.revision ??= this.checks.latestRosterRevision(this.projectId);
-    return this.revision;
-  }
-
-  environmentBuilt(): Promise<boolean> {
-    this.built ??= this.checks.environmentBuilt(this.projectId);
-    return this.built;
-  }
-}
-
-async function causeCleared(item: WorkItem, checks: ProjectChecks): Promise<boolean> {
-  const exit = blockedExitOf(item.blockedReason);
-  switch (exit.kind) {
-    case "operator":
-      return false;
-    case "merge-recorded":
-      // Its exit is to Completed, not Pending: releaseClearedBlocks takes it before this check.
-      return false;
-    case "roster-revision": {
-      const latest = await checks.latestRosterRevision();
-      return latest !== null && (exit.decidedAgainst === null || latest > exit.decidedAgainst);
-    }
-    case "environment-built":
-      return checks.environmentBuilt();
-  }
 }
 
 /**
- * Releases to Pending every Blocked task of an active project whose automatic exit has cleared,
- * publishing its work_item.unblocked event. A check that throws leaves the task Blocked
- * (fail-closed) and is logged at warn; the project's other tasks are still checked. A project
- * whose Blocked rows do not parse is skipped here: the gate blocks it this same cycle. A
- * merge_unrecorded task is Completed instead once its merge record is written. Returns how many
- * tasks were released or completed.
+ * Takes the exit of every Blocked task of an active project, publishing its events: a
+ * merge_unrecorded task is Completed once its merge record is written, an infrastructure block is
+ * released to Pending, and any other block is given up. A project whose Blocked rows do not parse
+ * is skipped here: the gate blocks it this same cycle. Returns how many tasks left Blocked.
  */
 export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number> {
   let released = 0;
@@ -85,21 +34,21 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
       console.warn(`[parked-exits] project ${projectId}: ${describeErrorChain(err)}; its Blocked tasks are not re-checked`);
       continue;
     }
-    const checks = new ProjectChecks(deps.checks, projectId);
     for (const item of blocked) {
       const exit = blockedExitOf(item.blockedReason);
-      if (exit.kind === "merge-recorded") {
-        if (await completeRecordedMerge(deps, item, exit.mergeCommit)) released++;
-        continue;
+      let left: boolean;
+      switch (exit.kind) {
+        case "merge-recorded":
+          left = await completeRecordedMerge(deps, item, exit.mergeCommit);
+          break;
+        case "give-up":
+          left = await giveUp(deps, item);
+          break;
+        case "requeue":
+          left = await release(deps, item);
+          break;
       }
-      let cleared: boolean;
-      try {
-        cleared = await causeCleared(item, checks);
-      } catch (err) {
-        console.warn(`[parked-exits] task ${item.id}: its exit could not be checked; it stays Blocked:`, err);
-        continue;
-      }
-      if (cleared && (await release(deps, item))) released++;
+      if (left) released++;
     }
   }
   return released;
@@ -140,9 +89,33 @@ async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: 
   }
 }
 
+/**
+ * A block with no exit that clears by itself: the task is given up with the cause it was blocked
+ * for (a Blocked item with none is recorded as an orchestrator error, the state no writer should
+ * have left), and its abandonment opens a plan repair (migration 048).
+ */
+async function giveUp(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
+  const reason = item.blockedReason;
+  const cause =
+    reason === undefined || reason.source === "superseded"
+      ? { source: "orchestrator_error" as const, reason: `Blocked with ${reason === undefined ? "no recorded reason" : "a superseded reason"}; given up` }
+      : reason;
+  giveUpWorkItem(item, cause);
+  try {
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
+  } catch (err) {
+    if (!(err instanceof InvalidStatusTransition)) throw err;
+    console.warn(`[parked-exits] task ${item.id}: not given up, it changed concurrently (${err.from} -> ${err.to})`);
+    return false;
+  }
+  console.warn(`[parked-exits] task ${item.id}: its ${cause.source} block has no exit that clears by itself; given up, its plan is repaired`);
+  await publishAll(deps, item.id, takeEvents(item));
+  return true;
+}
+
 async function release(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   const source = item.blockedReason?.source ?? "none";
-  unblockWorkItem(item, { kind: "exit-cleared" });
+  unblockWorkItem(item);
   try {
     await PlanningService.saveWorkItem(deps.workItemRepo, item, "Blocked");
   } catch (err) {
