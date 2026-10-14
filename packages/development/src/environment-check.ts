@@ -10,12 +10,13 @@ import type {
   HostRepo,
 } from "@ashara/execution-infra";
 import {
+  ENVIRONMENT_DEFINITION_PATH,
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
-  ownedPathsCover,
   parseEnvironmentDefinition,
   readEnvironmentDefinition,
+  recipePaths,
   runHostGit,
 } from "@ashara/execution-infra";
 import { describeErrorChain } from "@ashara/shared";
@@ -28,14 +29,13 @@ import type { TreeFileRead } from "./tree-read.js";
 import { cleanupWorkdir } from "./workspace.js";
 
 // Z0's half of the environment substrate (s-platform-role-m1): build_environment for the
-// environment role during its attempt, and the substrate gate that checks a Sprint 0 task
-// in place of per-task verify. Nothing here runs anything the agent wrote on the host: the
-// definition is read through the safe tree reader and from committed blobs, the image is
-// built by podman from committed owned files only, and `build` and `test` run in a cell on a
-// fresh checkout. ADR-074 addendum 2 d64 (a)-(c): the work may touch owned paths only, and
-// `build` then `test` must leave that checkout clean.
+// environment role during its attempt, and the substrate gate that checks environment work in
+// place of per-task verify. Nothing here runs anything the agent wrote on the host: the
+// definition is read through the safe tree reader and from committed blobs, the image is built by
+// podman from the committed build context only, and every command runs in a cell. ADR-074
+// addendum 2 d72: environment work may touch recipe files only, and its gate is the image build
+// and the toolchain probe, never the product's build or test on a tree that holds no product.
 
-const DEFINITION_PATH = "environment/environment.toml";
 const MAX_DEFINITION_BYTES = 64 * 1024;
 /** Longest end of a command's stdout or stderr kept for the model and the gate record. */
 const TEST_LOG_TAIL_CHARS = 4000;
@@ -58,8 +58,8 @@ export interface EnvironmentImages {
 /**
  * The team's statement of the stack (chosen and why), kept on a work item with the version it holds
  * for: an environment task's own statement with the version its gate tested, or, for an
- * implementation whose verified merge changed the environment's owned files, the statement of the
- * version it ran on with the version the merge produced (ADR-074 addendum 2 d66 a).
+ * implementation whose verified merge changed the environment's build context, the statement of the
+ * version it ran on with the version the merge produced (ADR-074 addendum 2 d72 B3).
  */
 export interface EnvironmentStatementStore {
   record(taskId: WorkItemId, statement: string, version: string): Promise<void>;
@@ -83,7 +83,7 @@ class EnvironmentCheckCommitFailed extends Error {
 }
 
 /** Which check a fresh checkout is for: each has its own directory. */
-type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify";
+type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify" | "verify-probe";
 
 /** Everything one environment check needs of its dispatch. */
 export interface EnvironmentCheckScope {
@@ -105,7 +105,7 @@ export interface EnvironmentCheckScope {
 
 /**
  * A tested environment: the image and the definition the gate passed, which the post-merge check
- * runs again, exactly as the gate ran them, on the merged tree.
+ * runs again on the merged tree.
  */
 export interface TestedEnvironment {
   readonly version: string;
@@ -117,7 +117,6 @@ function tailOf(text: string, alreadyTruncated: boolean): LogTail {
   if (text.length <= TEST_LOG_TAIL_CHARS) return { text, truncated: alreadyTruncated };
   return { text: text.slice(-TEST_LOG_TAIL_CHARS), truncated: true };
 }
-
 
 async function runCommand(cell: Cell, command: string, timeoutSeconds: number): Promise<EnvironmentTestRun> {
   const result = await cell.exec(["sh", "-c", command], { timeoutSeconds });
@@ -138,19 +137,18 @@ async function leftOverPaths(repo: HostRepo): Promise<string[]> {
 }
 
 /**
- * Checks `commit` out into a fresh detached worktree of the target, runs `build` then `test` in one
- * cell from `imageRef` mounting it, and lists what the checkout holds afterwards that the commit
- * does not. The checkout and the cell are removed afterwards; a substrate failure throws.
+ * Checks `commit` out into a fresh detached worktree of the target, runs `use` with one cell from
+ * `imageRef` mounting it and the checkout's repo, and removes the checkout and the cell afterwards;
+ * a substrate failure throws.
  */
-async function runCommandsOnCheckout(
+async function withCheckoutCell<T>(
   scope: EnvironmentCheckScope,
   purpose: EnvironmentCheckoutPurpose,
   role: string,
   imageRef: string,
   commit: string,
-  definition: EnvironmentDefinition,
-  timeoutSeconds: number,
-): Promise<EnvironmentCommandsRun> {
+  use: (cell: Cell, repo: HostRepo) => Promise<T>,
+): Promise<T> {
   const dir = scope.checkoutDir(purpose);
   await mkdir(dirname(dir), { recursive: true });
   await runHostGit(targetRepo(scope.targetProjectPath), ["worktree", "add", "--detach", dir, commit]);
@@ -158,27 +156,35 @@ async function runCommandsOnCheckout(
     // Read before the cell mounts the checkout: its gitlink is then never re-read.
     const repo = await freshWorktreeRepo(scope.targetProjectPath, dir);
     const cell = await scope.createCell({ image: imageRef, role, hostPath: dir });
-    let build: EnvironmentTestRun;
-    let test: EnvironmentTestRun;
     try {
-      build = await runCommand(cell, definition.build, timeoutSeconds);
-      if (!environmentBuildPassed(build)) return { kind: "build_failed", build };
-      test = await runCommand(cell, definition.test, timeoutSeconds);
+      return await use(cell, repo);
     } finally {
       await scope.teardownCell(cell);
     }
-    return { kind: "ran", build, test, leftOver: await leftOverPaths(repo) };
   } finally {
     await cleanupWorkdir(dir, scope.targetProjectPath);
   }
 }
 
+/** The definition's `probe` in one cell from `imageRef` on a fresh checkout of `commit`. */
+function runProbeOnCheckout(
+  scope: EnvironmentCheckScope,
+  purpose: EnvironmentCheckoutPurpose,
+  role: string,
+  imageRef: string,
+  commit: string,
+  definition: EnvironmentDefinition,
+  timeoutSeconds: number,
+): Promise<EnvironmentTestRun> {
+  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runCommand(cell, definition.probe, timeoutSeconds));
+}
+
 /**
- * Builds the image of `definition` as committed at `commit`, then runs `build` and `test` on a fresh
- * checkout of that commit. A definition, build or version the agent got wrong is a report; a
+ * Builds the image of `definition` as committed at `commit`, then runs `probe` on a fresh checkout
+ * of that commit. A definition, image build or version the agent got wrong is a report; a
  * substrate failure throws.
  */
-async function buildAndTest(
+async function buildAndProbe(
   scope: EnvironmentCheckScope,
   purpose: EnvironmentCheckoutPurpose,
   commit: string,
@@ -196,13 +202,13 @@ async function buildAndTest(
     if (err instanceof EnvironmentVersionUnresolved) return { kind: "definition_refused", detail: err.reason };
     throw err;
   }
-  const commands = await runCommandsOnCheckout(scope, purpose, role, built.imageRef, commit, definition, timeoutSeconds);
+  const probe = await runProbeOnCheckout(scope, purpose, role, built.imageRef, commit, definition, timeoutSeconds);
   return {
     kind: "tested",
     version: built.version,
     imageRef: built.imageRef,
     build: built.reused ? { kind: "reused" } : { kind: "built", log: built.log },
-    commands,
+    probe,
   };
 }
 
@@ -215,13 +221,22 @@ async function gitLine(scope: EnvironmentCheckScope, step: string, args: readonl
 
 /**
  * The paths the work up to `commit` added, changed or deleted since it left main (the merge base),
- * that no owned entry covers: environment work may touch owned paths only.
+ * that are no recipe file (ADR-074 addendum 2 d72 B1): environment work may touch the recipe only.
+ * The recipe is the one `definition` (the work's) names, and the one main's definition at the merge
+ * base names, so a recipe file the work stops naming may still be deleted. A merge base with no
+ * readable definition (Sprint 0) adds nothing.
  */
-async function outOfScope(scope: EnvironmentCheckScope, commit: string, owned: readonly string[]): Promise<EnvironmentCheckReport | null> {
+async function outOfScope(scope: EnvironmentCheckScope, commit: string, definition: EnvironmentDefinition): Promise<EnvironmentCheckReport | null> {
   const base = await gitLine(scope, "merge-base", ["merge-base", MAIN_BRANCH, commit]);
+  const recipe = new Set(recipePaths(definition));
+  try {
+    for (const path of recipePaths(await readEnvironmentDefinition(scope.repo.gitDir, base))) recipe.add(path);
+  } catch (err) {
+    if (!(err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved)) throw err;
+  }
   const { stdout } = await runHostGit(scope.repo, ["diff", "--name-only", "-z", "--no-renames", base, commit]);
-  const paths = stdout.split("\0").filter((path) => path !== "" && !ownedPathsCover(owned, path));
-  return paths.length === 0 ? null : { kind: "out_of_scope", owned, paths };
+  const paths = stdout.split("\0").filter((path) => path !== "" && !recipe.has(path));
+  return paths.length === 0 ? null : { kind: "out_of_scope", recipe: [...recipe], paths };
 }
 
 /**
@@ -246,25 +261,25 @@ async function commitForCheck(scope: EnvironmentCheckScope): Promise<string> {
 /**
  * build_environment's port: reads environment/environment.toml from the worktree through the safe
  * tree reader and validates it, commits the worktree to the check ref, refuses work outside the
- * owned paths, builds the image from that commit and runs `build` and `test` on a fresh checkout.
+ * recipe, builds the image from that commit and runs `probe` on a fresh checkout.
  */
 export function environmentCheckPort(scope: EnvironmentCheckScope): EnvironmentCheckPort {
   return {
     async check(testTimeoutSeconds: number): Promise<EnvironmentCheckReport> {
       let read: TreeFileRead;
       try {
-        read = await readTreeFile(scope.workDir, DEFINITION_PATH, MAX_DEFINITION_BYTES);
+        read = await readTreeFile(scope.workDir, ENVIRONMENT_DEFINITION_PATH, MAX_DEFINITION_BYTES);
       } catch (err) {
         if (err instanceof TreePathRefused) return { kind: "definition_refused", detail: err.message };
         throw err;
       }
-      if (read.kind === "absent") return { kind: "definition_refused", detail: `${DEFINITION_PATH} does not exist in the workspace` };
+      if (read.kind === "absent") return { kind: "definition_refused", detail: `${ENVIRONMENT_DEFINITION_PATH} does not exist in the workspace` };
       if (read.truncated) {
-        return { kind: "definition_refused", detail: `${DEFINITION_PATH} is larger than ${MAX_DEFINITION_BYTES} bytes` };
+        return { kind: "definition_refused", detail: `${ENVIRONMENT_DEFINITION_PATH} is larger than ${MAX_DEFINITION_BYTES} bytes` };
       }
       let definition: EnvironmentDefinition;
       try {
-        definition = parseEnvironmentDefinition(read.text, DEFINITION_PATH);
+        definition = parseEnvironmentDefinition(read.text, ENVIRONMENT_DEFINITION_PATH);
       } catch (err) {
         if (err instanceof EnvironmentDefinitionInvalid) return { kind: "definition_refused", detail: err.issues.join("; ") };
         throw err;
@@ -281,23 +296,23 @@ export function environmentCheckPort(scope: EnvironmentCheckScope): EnvironmentC
         throw err;
       }
       if (JSON.stringify(committed) !== JSON.stringify(definition)) {
-        return { kind: "definition_refused", detail: `${DEFINITION_PATH} changed while it was being read; call build_environment again` };
+        return { kind: "definition_refused", detail: `${ENVIRONMENT_DEFINITION_PATH} changed while it was being read; call build_environment again` };
       }
-      const refused = await outOfScope(scope, commit, definition.owned);
+      const refused = await outOfScope(scope, commit, definition);
       if (refused !== null) return refused;
-      return buildAndTest(scope, "environment-check", commit, definition, "environment-check", testTimeoutSeconds);
+      return buildAndProbe(scope, "environment-check", commit, definition, "environment-check", testTimeoutSeconds);
     },
   };
 }
 
-/** The substrate gate's verdict on a Sprint 0 task's committed work. */
+/** The substrate gate's verdict on environment work's committed work. */
 export type SubstrateGateRun = { readonly report: EnvironmentCheckReport; readonly tested: TestedEnvironment | null };
 
 /**
- * The Sprint 0 gate (checkedBy "substrate"), run by Z0 on the task branch's committed head in
- * place of per-task verify: the definition parses, the branch touches owned paths only, the image
- * builds (recorded in environment_builds), and `build` then `test` pass on a fresh checkout of the
- * head in a CI cell from that image and leave it clean.
+ * The environment gate (checkedBy "substrate"), run by Z0 on the task branch's committed head in
+ * place of per-task verify: the definition parses, the branch touches recipe files only, the image
+ * builds (recorded in environment_builds), and `probe` passes on a fresh checkout of the head in a
+ * CI cell from that image.
  */
 export async function runSubstrateGate(scope: EnvironmentCheckScope, testTimeoutSeconds: number): Promise<SubstrateGateRun> {
   const head = await gitLine(scope, "rev-parse HEAD", ["rev-parse", "--verify", "HEAD^{commit}"]);
@@ -310,19 +325,32 @@ export async function runSubstrateGate(scope: EnvironmentCheckScope, testTimeout
     }
     throw err;
   }
-  const refused = await outOfScope(scope, head, definition.owned);
+  const refused = await outOfScope(scope, head, definition);
   if (refused !== null) return { report: refused, tested: null };
-  const report = await buildAndTest(scope, "substrate-gate", head, definition, "ci", testTimeoutSeconds);
+  const report = await buildAndProbe(scope, "substrate-gate", head, definition, "ci", testTimeoutSeconds);
   return { report, tested: report.kind === "tested" ? { version: report.version, imageRef: report.imageRef, definition } : null };
 }
 
 /**
- * The post-merge run of an environment: `build` then `test` from `tested`'s image on a fresh
- * checkout of `commit` (the tentative merge), leaving it clean. For an environment task it is the
- * gate's own run again; for an implementation whose merge changed the environment's owned files,
- * the run of the environment rebuilt from the merge (ADR-074 addendum 2 d66 a). It must be the same run: a
- * `test` that reads what `build` produced passes the gate, so `test` alone here would fail every
- * such environment after the merge. The cell has no network; a substrate failure throws.
+ * The post-merge run of environment work's gate: `probe` from `tested`'s image on a fresh checkout of
+ * `commit` (the tentative merge). The cell has no network; a substrate failure throws.
+ */
+export function runPostMergeProbe(
+  scope: EnvironmentCheckScope,
+  role: string,
+  tested: TestedEnvironment,
+  commit: string,
+  timeoutSeconds: number,
+): Promise<EnvironmentTestRun> {
+  return runProbeOnCheckout(scope, "verify-probe", role, tested.imageRef, commit, tested.definition, timeoutSeconds);
+}
+
+/**
+ * The product's `build` then `test` from `tested`'s image on a fresh checkout of `commit` (the
+ * tentative merge), and what the checkout holds afterwards that the commit does not: the scaffold's
+ * gate, and the check of an environment rebuilt from a merge that changed its build context
+ * (ADR-074 addendum 2 d72 B2, B3). They are one run: a `test` that reads what `build` produced
+ * passes only after it. The cell has no network; a substrate failure throws.
  */
 export function runPostMergeEnvironmentCommands(
   scope: EnvironmentCheckScope,
@@ -331,5 +359,10 @@ export function runPostMergeEnvironmentCommands(
   commit: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentCommandsRun> {
-  return runCommandsOnCheckout(scope, "verify", role, tested.imageRef, commit, tested.definition, timeoutSeconds);
+  return withCheckoutCell(scope, "verify", role, tested.imageRef, commit, async (cell, repo): Promise<EnvironmentCommandsRun> => {
+    const build = await runCommand(cell, tested.definition.build, timeoutSeconds);
+    if (!environmentBuildPassed(build)) return { kind: "build_failed", build };
+    const test = await runCommand(cell, tested.definition.test, timeoutSeconds);
+    return { kind: "ran", build, test, leftOver: await leftOverPaths(repo) };
+  });
 }

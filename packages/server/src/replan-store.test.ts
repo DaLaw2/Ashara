@@ -334,7 +334,7 @@ describe("a late client change is planned", () => {
     const mock = pipelineModel({ environmentChange: false });
     const outcomes = await replanner().runPending();
 
-    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, tasks: 3, superseded: 2, newEnvironment: false }]);
+    expect(outcomes).toEqual([{ kind: "revised", projectId, revision: 2, tasks: 4, superseded: 3, newEnvironment: false }]);
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("Already done, and kept") && p.includes(`merged as ${MERGE_COMMIT}`))).toBe(true);
 
@@ -357,10 +357,18 @@ describe("a late client change is planned", () => {
       ["Epic", null, expect.any(String)],
       ["Task", "check", `Write the checks for "Open hill studio bookings"`],
       ["Task", "decomposition", "Open hill studio bookings"],
+      ["Task", "product-scaffold", "Set up the product's layout"],
       ["Task", "review", "Review the plan's checks together against the vision"],
     ]);
-    // No new environment task: the new work builds on the Sprint 0 already done.
-    for (const task of added.filter((i) => i.level === "Task")) expect(await dependenciesOf(task.id)).toContain(sprint0.id);
+    // No new environment task: the new work builds on the Sprint 0 already done. The first plan's
+    // scaffold was still open, so it is superseded and the revision sets up the layout again on that
+    // Sprint 0 (ADR-074 addendum 2 d72 B2); the check and review tasks wait on it.
+    const scaffold = added.find((i) => i.origin === "product-scaffold");
+    if (scaffold === undefined) throw new Error("the revision planned no product scaffold");
+    expect(await dependenciesOf(scaffold.id)).toEqual([sprint0.id]);
+    for (const task of added.filter((i) => i.level === "Task" && i.id !== scaffold.id)) {
+      expect(await dependenciesOf(task.id)).toContain(task.origin === "decomposition" ? sprint0.id : scaffold.id);
+    }
     // The revision's check task names the task it decides by its stored id, and that task waits on it.
     const newCheck = added.find((i) => i.origin === "check");
     const newTask = added.find((i) => i.origin === "decomposition");

@@ -12,6 +12,7 @@ const INPUT: DecompositionInput = {
     epicDescription: "Two studios merge their class schedules; members book seats in either.",
     conventions: [],
     environment: { kind: "new" },
+    layout: { kind: "new" },
     visionItems: [
         { id: "S1", text: "In: booking a seat in a class of either studio" },
         { id: "A1", text: "A class holds at most twenty members" },
@@ -55,6 +56,23 @@ function scriptedLlm(graph: unknown, tasks: unknown, seen: Seen): DecompositionL
     };
 }
 
+/** Whether `from` waits on `to`, directly or through other tasks. */
+function waitsOn(edges: ReadonlyArray<{ from: string; to: string }>, from: string, to: string): boolean {
+    const seenIds = new Set<string>();
+    const pending = [from];
+    while (pending.length > 0) {
+        const current = pending.pop() ?? "";
+        for (const edge of edges.filter((e) => e.from === current)) {
+            if (edge.to === to) return true;
+            if (!seenIds.has(edge.to)) {
+                seenIds.add(edge.to);
+                pending.push(edge.to);
+            }
+        }
+    }
+    return false;
+}
+
 describe("DecompositionEngine", () => {
     let seen: Seen;
 
@@ -68,8 +86,10 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.knowledge.nodes).toEqual([]);
-        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "check", "decomposition", "check", "review"]);
-        expect(result.tasks[3]?.taskSpec.endState).toBe("t2 is observable");
+        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual([
+            "sprint0", "product-scaffold", "decomposition", "check", "decomposition", "check", "review",
+        ]);
+        expect(result.tasks[4]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
         expect(result.droppedDependencies).toEqual([]);
@@ -85,16 +105,51 @@ describe("DecompositionEngine", () => {
         expect(sprint0[0]?.taskSpec).toMatchObject({ checkedBy: "substrate" });
         expect(sprint0[0]?.dependsOn).toEqual([]);
         for (const t of result.tasks.filter((t) => t.id !== sprint0Id)) {
-            expect(result.dependencyEdges).toContainEqual({ from: t.id, to: sprint0Id });
+            expect(waitsOn(result.dependencyEdges, t.id, sprint0Id ?? ""), t.title).toBe(true);
         }
         expect(result.tasks.every((t) => !("checks" in t.taskSpec))).toBe(true);
     });
 
-    test("every decomposed task gets one check task, after Sprint 0, naming it by checksFor; its text names no stack", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+    // ADR-074 addendum 2 d72 B2: the product's layout is set by an implementer before any check names it.
+    test("a first plan sets up the product's layout after Sprint 0 and before every check, traced to the items it enables", async () => {
+        const llm = scriptedLlm(
+            { nodes: [], edges: [] },
+            { tasks: [task("t1", { visionItems: ["S1"] }), task("t2", { dependsOn: ["t1"], visionItems: ["A1"] })] },
+            seen,
+        );
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const sprint0Id = result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id;
+        const scaffolds = result.tasks.filter((t) => t.taskSpec.origin === "product-scaffold");
+        expect(scaffolds).toHaveLength(1);
+        const scaffold = scaffolds[0];
+        expect(scaffold?.dependsOn).toEqual([sprint0Id]);
+        expect(result.dependencyEdges.filter((e) => e.from === scaffold?.id).map((e) => e.to)).toEqual([sprint0Id]);
+        expect(scaffold?.taskSpec).toMatchObject({
+            checkedBy: "substrate",
+            visionItems: ["In: booking a seat in a class of either studio", "A class holds at most twenty members"],
+        });
+        for (const t of result.tasks.filter((t) => t.taskSpec.origin !== "sprint0" && t.id !== scaffold?.id)) {
+            expect(waitsOn(result.dependencyEdges, t.id, scaffold?.id ?? ""), t.title).toBe(true);
+        }
+        // Stack-free: the layout is the implementer's to choose in the environment's own terms.
+        const text = `${scaffold?.title} ${scaffold?.description} ${JSON.stringify(scaffold?.taskSpec)}`;
+        for (const literal of [/\bnpm\b/i, /cargo/i, /package\.json/i, /go\.mod/i, /python/i, /\bsrc\//i, /Makefile/]) {
+            expect(text).not.toMatch(literal);
+        }
+        // A revision builds on the layout already merged: no second scaffold.
+        resetIdCounter();
+        const revision = await new DecompositionEngine(
+            scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+        ).decompose({ ...INPUT, environment: { kind: "existing", taskId: "env-done" }, layout: { kind: "existing", taskId: "layout-done" } });
+        expect(revision.tasks.filter((t) => t.taskSpec.origin === "product-scaffold")).toEqual([]);
+    });
+
+    test("every decomposed task gets one check task, after the product scaffold, naming it by checksFor; its text names no stack", async () => {
+        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const result = await new DecompositionEngine(llm).decompose(INPUT);
+
+        const sprint0Id = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id;
         const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
         const checks = result.tasks.filter((t) => t.taskSpec.origin === "check");
         expect(checks).toHaveLength(decomposed.length);
@@ -126,14 +181,15 @@ describe("DecompositionEngine", () => {
         ["a first plan", { kind: "new" } as const],
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
     ])("in %s every implementation task depends on every check task of the plan", async (_label, environment) => {
+        const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
         const llm = scriptedLlm(
             { nodes: [], edges: [] },
             { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] }), task("t3")] },
             seen,
         );
-        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment });
+        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
-        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id : environment.taskId;
+        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id : environment.taskId;
         const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
         const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
         expect(checkIds).toHaveLength(3);
@@ -263,14 +319,15 @@ describe("DecompositionEngine", () => {
         ["a first plan", { kind: "new" } as const],
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
     ])("in %s one review task waits on every check task and every implementation waits on it", async (_label, environment) => {
+        const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
-        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment });
+        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
         const reviews = result.tasks.filter((t) => t.taskSpec.origin === "review");
         expect(reviews).toHaveLength(1);
         const review = reviews[0];
         const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
-        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id : environment.taskId;
+        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id : environment.taskId;
         expect(review?.dependsOn).toEqual([environmentId, ...checkIds]);
         expect(result.dependencyEdges.filter((e) => e.from === review?.id).map((e) => e.to)).toEqual([environmentId, ...checkIds]);
         for (const implementation of result.tasks.filter((t) => t.taskSpec.origin === "decomposition")) {

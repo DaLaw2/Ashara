@@ -10,9 +10,9 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("to-define") }),
   z.strictObject({
     kind: z.literal("defined"),
-    /** sha256 (hex) over the owned files of environment/environment.toml at the target's main. */
+    /** sha256 (hex) over the environment's build context (its recipe and the inputs it reads) at the target's main. */
     version: z.string().regex(/^[0-9a-f]{64}$/),
-    /** The last commit that touched an owned path. */
+    /** The last commit that touched a build context path. */
     commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
     /** The environment role's statement of the stack it chose and why, verbatim. */
     statement: z.string().min(1),
@@ -64,15 +64,15 @@ const AgentBriefSchema = z
     // An operator returned the task from Blocked: the block they cleared and their note (third run N11).
     operatorUnblock: z.string().min(1).optional(),
     // The paths Z0 refuses a task's work for changing, stated before work starts (ADR-074
-    // addendum 2 d66 c): `environment`, the platform role's directory, and every stored check
-    // file of the project; `ownedFiles` are the environment's other owned files, which work may
-    // change but which rebuild the environment. Absent only on the BaseCell (Sprint 0), where no
-    // environment exists yet.
+    // addendum 2 d66 c, d72): `recipe`, the platform role's files, and every stored check file of
+    // the project; `inputs` are product files the image build reads, which work may change but
+    // which rebuild the environment. Absent only on the BaseCell (Sprint 0), where no environment
+    // exists yet.
     protectedPaths: z
       .strictObject({
-        environment: z.string().min(1),
+        recipe: z.array(z.string().min(1)).min(1),
         checkFiles: z.array(z.string().min(1)),
-        ownedFiles: z.array(z.string().min(1)),
+        inputs: z.array(z.string().min(1)),
       })
       .optional(),
   })

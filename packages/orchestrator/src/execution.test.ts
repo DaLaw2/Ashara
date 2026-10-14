@@ -773,9 +773,15 @@ describe("an environment change requested: an environment task is opened and the
   const need = "the greeter needs the jq package in the image";
   const diff = "--- a/environment/Containerfile\n+++ b/environment/Containerfile\n+RUN apk add jq\n";
 
-  function buildEnvironmentChangeDeps(priorChanges: number, owner: Awaited<ReturnType<CoreLoopDeps["environmentOwner"]>>) {
+  function buildEnvironmentChangeDeps(
+    priorChanges: number,
+    owner: Awaited<ReturnType<CoreLoopDeps["environmentOwner"]>>,
+    requester: Pick<WorkItem, "taskSpec"> = {},
+    completed: readonly WorkItem[] = [],
+  ) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const rows = new Map<string, WorkItem>([[ITEM_ID, freshPendingItem()]]);
+    const rows = new Map<string, WorkItem>([[ITEM_ID, { ...freshPendingItem(), ...requester }]]);
+    for (const done of completed) rows.set(done.id, done);
     const edges: Array<{ readonly from: string; readonly to: string }> = [];
     for (let n = 1; n <= priorChanges; n++) {
       const prior: WorkItem = {
@@ -823,7 +829,8 @@ describe("an environment change requested: an environment task is opened and the
       },
       recordMergeCommit: notExercised("recordMergeCommit"),
       listByProject: notExercised("listByProject"),
-      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      findByProjectAndStatus: async (projectId, status) =>
+        [...rows.values()].filter((row) => row.projectId === projectId && row.status === status).map(copy),
       projectIdsWithStatus: notExercised("projectIdsWithStatus"),
       listIdsByStatus: notExercised("listIdsByStatus"),
       addDependency: async (from, to) => void edges.push({ from, to }),
@@ -879,8 +886,31 @@ describe("an environment change requested: an environment task is opened and the
     expect(environment?.taskSpec?.scope).toContain(need);
     expect(environment?.taskSpec?.scope).toContain("+RUN apk add jq");
     expect(edges).toEqual([{ from: ITEM_ID, to: environment?.id }]);
+    expect(environment?.taskSpec?.product).toBe("present");
     expect(routed()).toBe(0);
     expect(approaches()).toBe(0);
+  });
+
+  // The t-env-recipe review: the scaffold's own environment change ran the product's build and test
+  // on a main with no product, failed, and stalled every task behind the scaffold.
+  test("asked by the product scaffold before any scaffold completed: the environment task records no product on main", async () => {
+    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
+    const { deps, opened } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID }, scaffold);
+
+    await processTask(deps, { ...freshPendingItem(), ...scaffold });
+
+    expect(opened()).toHaveLength(1);
+    expect(opened()[0]?.taskSpec).toMatchObject({ origin: "environment-change", product: "absent" });
+  });
+
+  test("asked by the product scaffold after an earlier scaffold completed: the product is on main", async () => {
+    const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
+    const earlier: WorkItem = { ...freshPendingItem(), id: createWorkItemId(), status: "Completed", ...scaffold };
+    const { deps, opened } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID }, scaffold, [earlier]);
+
+    await processTask(deps, { ...freshPendingItem(), ...scaffold });
+
+    expect(opened()[0]?.taskSpec?.product).toBe("present");
   });
 
   test("past the bound of two: Blocked with environment_change_needed naming the paths; no third environment task", async () => {

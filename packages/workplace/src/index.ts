@@ -8,8 +8,10 @@ export {
   environmentBuildPassed,
   environmentCheckPassed,
   environmentCommandsPassed,
+  environmentProbePassed,
   formatEnvironmentCheck,
   formatEnvironmentCommands,
+  formatEnvironmentProbe,
 } from "./environment-check.js";
 export type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun, LogTail } from "./environment-check.js";
 export type { Outcome } from "./outcome.js";

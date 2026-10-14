@@ -161,7 +161,7 @@ describe("a task runs on cells end to end", () => {
     await mkdir(join(target, "environment"));
     await writeFile(
       join(target, "environment", "environment.toml"),
-      'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "echo environment ok"\n',
+      'containerfile = "environment/Containerfile"\nrecipe = []\ninputs = []\nprobe = "echo toolchain ok"\nbuild = "true"\ntest = "echo environment ok"\n',
     );
     await writeFile(join(target, "environment", "Containerfile"), `FROM ${base.image}\n`);
     await run("git", ["init", "-q", "-b", "main"], { cwd: target });

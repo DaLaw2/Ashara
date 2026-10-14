@@ -89,8 +89,8 @@ export class WorkItemRepository {
   /**
    * Keeps a statement of the stack (migration 033) with the environment version it holds for
    * (migration 037): an environment task's own, with the version its substrate gate tested; or
-   * (migration 043) on an implementation whose verified merge changed the environment's owned
-   * files, the statement of the version it ran on, with the version its merge produced. Only
+   * (migration 043) on an implementation whose verified merge changed the environment's build
+   * context (an input, ADR-074 addendum 2 d72 B3), the statement of the version it ran on, with the version its merge produced. Only
    * environment and implementation work take one; a later attempt's statement replaces it.
    */
   async recordEnvironmentStatement(id: string, statement: string, version: string): Promise<void> {

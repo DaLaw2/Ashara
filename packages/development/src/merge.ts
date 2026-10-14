@@ -24,8 +24,8 @@ export function taskBranchName(taskId: string): string {
 
 /**
  * Deletes the task's branch, so its next attempt starts a fresh one from main (createWorkdir)
- * instead of resuming it. Taken when the ownership gate finds the branch changed `environment/`
- * (an environment task is requested for it, ADR-074 addendum 2 d66 b), and when an operator
+ * instead of resuming it. Taken when the ownership gate finds the branch changed the environment
+ * recipe (an environment task is requested for it, ADR-074 addendum 2 d66 b, d72 B1), and when an operator
  * unblocks a task Blocked with environment_change_needed: that branch holds edits made and checked
  * on an environment that changes before the task runs again. Nothing of it was merged. No branch
  * is nothing to do; a branch git refuses to delete (a worktree still holds it) throws.

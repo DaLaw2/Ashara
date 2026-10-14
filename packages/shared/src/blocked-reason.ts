@@ -99,11 +99,11 @@ const checksStaleSchema = z.object({
 });
 
 /**
- * An implementation task's finished work changed paths under `environment/`, the platform role's,
- * and no environment task was opened for it (ADR-074 addendum 2 d66 b): the task already had the
+ * An implementation task's finished work changed environment recipe files, the platform role's,
+ * and no environment task was opened for it (ADR-074 addendum 2 d66 b, d72 B1): the task already had the
  * bound of environment tasks opened for it, or none could be opened (no role of the roster does
  * environment work). Below the bound, the environment task is opened and the task waits on it at
- * Pending instead. `paths` names the paths its branch changed under `environment/`; nothing was
+ * Pending instead. `paths` names the recipe files its branch changed; nothing was
  * merged and the branch was deleted.
  */
 const environmentChangeNeededSchema = z.object({

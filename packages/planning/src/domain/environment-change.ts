@@ -10,13 +10,13 @@ import { blockWorkItem, createPendingWorkItem } from "./work-item.js";
  */
 const ENVIRONMENT_CHANGE_BOUND = 2;
 
-/** An implementer's finished work that changed paths under `environment/`, as Z0 refused it. */
+/** An implementer's finished work that changed environment recipe files, as Z0 refused it. */
 interface EnvironmentChangeRequest {
-  /** The paths under `environment/` the implementation's branch changed. */
+  /** The recipe files the implementation's branch changed. */
   readonly paths: readonly string[];
   /** The implementer's own statement of what it needs (its finish summary). */
   readonly need: string;
-  /** The branch's diff of `environment/`; a cut is marked by its producer. */
+  /** The branch's diff of those files; a cut is marked by its producer. */
   readonly diff: string;
   /** Z0's refusal, for the record. */
   readonly detail: string;
@@ -28,6 +28,11 @@ interface EnvironmentChangeContext {
   readonly opened: number;
   /** The roster role doing the project's environment work, or why there is none. */
   readonly owner: { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };
+  /**
+   * Whether the project's product scaffold has completed (d72 B2). Required: an environment task
+   * opened before it (the scaffold itself asking) lands on a main with no product to build or test.
+   */
+  readonly product: "present" | "absent";
 }
 
 type EnvironmentChangeExit =
@@ -39,29 +44,37 @@ type EnvironmentChangeExit =
   | { readonly kind: "unowned"; readonly why: string };
 
 /** The environment task's goal and scope as the platform role's brief states them. */
-function environmentTaskSpec(task: WorkItem, request: EnvironmentChangeRequest, ordinal: number): NonNullable<WorkItem["taskSpec"]> {
+function environmentTaskSpec(
+  task: WorkItem,
+  request: EnvironmentChangeRequest,
+  ordinal: number,
+  product: EnvironmentChangeContext["product"],
+): NonNullable<WorkItem["taskSpec"]> {
   return {
     goal: `Change the project environment as the implementation task "${task.title}" (${task.id}) needs`,
     endState:
-      `The environment under environment/ provides what that task needs, its build and test pass, and its statement ` +
-      `says what changed and why. This is environment change ${ordinal} requested for that task.`,
+      `The environment's recipe provides what that task needs, its image builds and its probe passes, and its ` +
+      `statement says what changed and why. This is environment change ${ordinal} requested for that task.`,
     scope: [
-      `The implementer of task ${task.id} changed files under environment/, which only environment work may change; ` +
-        `nothing of its work was merged. Decide what of its request the environment should provide and make that ` +
-        `change: you may change it, make it differently, or make less than asked when the request is wrong for the ` +
-        `project. Its task starts again from the project as you leave it.`,
+      `The implementer of task ${task.id} changed recipe files, which only environment work may change; nothing of ` +
+        `its work was merged. Decide what of its request the recipe should provide and make that change: you may ` +
+        `change it, make it differently, or make less than asked when the request is wrong for the project. Change ` +
+        `recipe files only: whatever of the request is product (source, manifests, tests, data) is the implementer's ` +
+        `to write, and an input the image build should read is named in the definition's inputs. Its task starts ` +
+        `again from the project as you leave it.`,
       `The implementer's statement of what it needs:\n${request.need}`,
-      `Its diff of environment/ (${request.paths.join(", ")}):\n${request.diff.trim() === "" ? "(empty)" : request.diff}`,
+      `Its diff of the recipe (${request.paths.join(", ")}):\n${request.diff.trim() === "" ? "(empty)" : request.diff}`,
     ].join("\n\n"),
-    deliverables: [`environment/ changed as the request needs, with build_environment reporting PASSED`],
+    deliverables: [`the recipe changed as the request needs, with build_environment reporting PASSED`],
     origin: "environment-change",
     checkedBy: "substrate",
+    product,
   };
 }
 
 /**
- * The exit of an InProgress implementation task whose finished work changed paths under
- * `environment/` (ADR-074 addendum 2 d66 b). Not the task's failure: within the bound a new
+ * The exit of an InProgress implementation task whose finished work changed environment recipe
+ * files (ADR-074 addendum 2 d66 b, d72 B1). Not the task's failure: within the bound a new
  * environment task, owned by the role doing environment work, is opened with the implementer's
  * need and diff, and the implementation returns to Pending waiting on it; the caller persists the
  * new task, the implementation's dependency on it and the implementation in one transaction. Past
@@ -78,7 +91,7 @@ export function requestEnvironmentChange(
       source: "environment_change_needed",
       paths: [...request.paths],
       reason:
-        `the implementer needs a change under environment/ again, after ${context.opened} environment task(s) were ` +
+        `the implementer needs a change to the environment recipe again, after ${context.opened} environment task(s) were ` +
         `opened for this task, the bound of ${ENVIRONMENT_CHANGE_BOUND}; no further one is opened. Its need:\n` +
         `${request.need}\n${request.detail}`,
     });
@@ -88,7 +101,7 @@ export function requestEnvironmentChange(
     blockWorkItem(task, {
       source: "environment_change_needed",
       paths: [...request.paths],
-      reason: `the implementer needs a change under environment/, but no environment task can be opened: ${context.owner.why}\n${request.detail}`,
+      reason: `the implementer needs a change to the environment recipe, but no environment task can be opened: ${context.owner.why}\n${request.detail}`,
     });
     return { kind: "unowned", why: context.owner.why };
   }
@@ -103,7 +116,7 @@ export function requestEnvironmentChange(
     task.projectId,
     task.parentId,
     `Requested by implementation task ${task.id}: ${request.paths.join(", ")}`,
-    environmentTaskSpec(task, request, ordinal),
+    environmentTaskSpec(task, request, ordinal, context.product),
   );
   environment.workKind = "environment";
   environment.ownerRoleId = context.owner.roleId;

@@ -36,11 +36,15 @@ export type DecomposedTaskSpec = TaskSpecCore & Traced & { readonly origin: "dec
  * A planned task's specification. It carries no checks: the decomposer does not
  * author them (ADR-074 addendum 2 d63). Each decomposed task has a check task in
  * which the check author writes them; Sprint 0 is checked by the environment substrate.
+ * The product scaffold (d72 B2) sets up the product's layout after Sprint 0 and before
+ * the check tasks, and is checked by the substrate too: the definition's build and test
+ * on its merge. Its vision items are those of every decomposed task, whose work it enables.
  * The plan's review task reads every check task's suite together before any decomposed
  * task starts (d71 c); its vision items are every item of the vision.
  */
 export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
+    | (TaskSpecCore & Traced & { readonly origin: "product-scaffold"; readonly checkedBy: "substrate" })
     | DecomposedTaskSpec
     /** `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a). */
     | (TaskSpecCore & Traced & { readonly origin: "check"; readonly checksFor: string })
@@ -77,6 +81,14 @@ export type EnvironmentPlanning =
     | { readonly kind: "new" }
     | { readonly kind: "existing"; readonly taskId: string };
 
+/**
+ * The product's layout a plan builds on (ADR-074 addendum 2 d72 B2): set up by a new product
+ * scaffold task in the plan, or already set up by a completed one (`taskId`).
+ */
+export type LayoutPlanning =
+    | { readonly kind: "new" }
+    | { readonly kind: "existing"; readonly taskId: string };
+
 export interface DecompositionInput {
     readonly epicTitle: string;
     readonly epicNorthStar: string;
@@ -86,6 +98,7 @@ export interface DecompositionInput {
     readonly conventions: string[];
     readonly manifestContext?: string;
     readonly environment: EnvironmentPlanning;
+    readonly layout: LayoutPlanning;
     /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
     readonly visionItems: readonly VisionItem[];
 }

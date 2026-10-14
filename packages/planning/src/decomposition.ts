@@ -150,15 +150,19 @@ export class DecompositionEngine {
 
         // decomposeEpicIntoTasks never returns an empty list (TaskOutputSchema
         // requires one task), so every plan carries its Sprint 0, or depends on the
-        // one already done.
-        const sprint0Id =
+        // one already done. A plan with no product layout yet then sets it up before
+        // any check is written (ADR-074 addendum 2 d72 B2); one whose layout a
+        // completed scaffold set up builds on it.
+        const environmentId =
             input.environment.kind === "new"
                 ? this.ensureSprint0Task(epic.id, allTasks, dependencyEdges)
                 : dependOnEnvironment(input.environment.taskId, allTasks, dependencyEdges);
+        const foundationId =
+            input.layout.kind === "new" ? addProductScaffold(epic.id, environmentId, allTasks, dependencyEdges) : environmentId;
         const plannedTasks = addReviewTask(
             epic.id,
-            sprint0Id,
-            addCheckTasks(epic.id, sprint0Id, allTasks, dependencyEdges),
+            foundationId,
+            addCheckTasks(epic.id, foundationId, allTasks, dependencyEdges),
             dependencyEdges,
             input.visionItems,
         );
@@ -173,11 +177,12 @@ export class DecompositionEngine {
     }
 
     /**
-     * Adds the plan's one Sprint 0 task (ADR-074 addendum 2 d62-d63): the
-     * environment role defines and builds the project environment, choosing the
-     * stack, before any implementation task runs, so every other task depends on
-     * it. Its text names no stack: choosing one is the task's own work. It carries
-     * no checks of its own; the environment substrate checks it.
+     * Adds the plan's one Sprint 0 task (ADR-074 addendum 2 d62-d63, d72 S): the
+     * environment role writes the recipe of the project environment, choosing the
+     * stack, before any other task runs, so every other task depends on it. Its text
+     * names no stack: choosing one is the task's own work. It carries no checks of
+     * its own; the environment substrate checks it by building the image and running
+     * the toolchain probe, never the product's build or test, since no product exists.
      *
      * There is no equivalent `ensureWiringTask` — wiring is not a separate task. Every
      * generated task is a vertical slice that makes its own outcome reachable in the
@@ -192,9 +197,9 @@ export class DecompositionEngine {
         const sprint0Id = generateId("task");
         const successCriteria = [
             "environment/environment.toml parses",
-            "the environment it defines builds",
-            "the work touches owned paths only",
-            "the environment's build then test commands pass on a fresh checkout, test printing output, and leave it clean",
+            "the work touches recipe files only",
+            "the image builds from the recipe",
+            "the probe passes in a cell from that image, printing output",
         ];
         const sprint0Task: WorkItemSpec & { taskSpec: TaskSpec } = {
             id: sprint0Id,
@@ -207,10 +212,10 @@ export class DecompositionEngine {
             taskSpec: {
                 goal: SPRINT0_DESCRIPTION,
                 endState: successCriteria.join("; "),
-                scope: "environment/environment.toml and the owned files it names; no product code",
+                scope: "environment/environment.toml and the recipe files it names; no product file of any kind",
                 deliverables: [
-                    "environment/environment.toml naming the owned paths, the containerfile, and the build and test commands",
-                    "the owned files environment/environment.toml names",
+                    "environment/environment.toml naming the containerfile, the recipe files, the inputs, and the probe, build and test commands",
+                    "the recipe files environment/environment.toml names",
                     "a one-paragraph statement of the stack chosen and why, given as finish's statement",
                 ],
                 capability: "Strong",
@@ -508,12 +513,74 @@ const DECOMPOSITION_EXAMPLES: ContextExamples = {
 const SPRINT0_TITLE = "Define and commit the project environment";
 
 const SPRINT0_DESCRIPTION =
-    "Define and commit the project environment, and nothing else: environment/environment.toml (owned paths, " +
-    "containerfile, build and test commands) and the owned files it names, as the environment brief states them; " +
-    "build it with build_environment and finish with a one-paragraph statement of the stack you chose and why. " +
-    "The product's code, tests and data are later tasks' work.";
+    "Define and commit the project environment's recipe, and nothing else: environment/environment.toml " +
+    "(containerfile, recipe files, inputs, probe, build and test commands) and the recipe files it names, as the " +
+    "environment brief states them; build it with build_environment and finish with a one-paragraph statement of " +
+    "the stack you chose and why. The product's layout, manifests, code, tests and data are later tasks' work.";
+
+const SCAFFOLD_TITLE = "Set up the product's layout";
+
+const SCAFFOLD_DESCRIPTION =
+    "Set up the product's skeleton in the environment the platform role defined: its module root, its manifests " +
+    "and its entry point, laid out so that the environment's build and test commands pass from the repository root " +
+    "on a fresh checkout and leave it clean. Implement none of the behaviour the vision asks for: each later task " +
+    "delivers its own, and its checks are written against this layout. Say in your finish summary where the entry " +
+    "point is and how the product is run.";
 
 type PlannedTask = WorkItemSpec & { taskSpec: TaskSpec };
+
+/**
+ * Adds the product scaffold after Sprint 0 (ADR-074 addendum 2 d72 B2): the implementer role sets up
+ * the product's module root, manifests and entry point, so that the layout every check names is the
+ * product's, never one the environment role supplied. It depends on Sprint 0; the check tasks, the
+ * review and every decomposed task depend on it. It traces to the vision items of every decomposed
+ * task, whose work it enables, and delivers none of them alone. Z0 checks it by the definition's own
+ * build and test on its merge: a check task could only be written against a layout that does not
+ * exist yet. Returns its id.
+ */
+function addProductScaffold(
+    epicId: string,
+    sprint0Id: string,
+    tasks: Array<WorkItemSpec & { taskSpec: TaskSpec }>,
+    dependencyEdges: Array<{ from: string; to: string }>,
+): string {
+    const decomposed = tasks.filter(isDecomposed);
+    const visionItems = [...new Set(decomposed.flatMap((task) => task.taskSpec.visionItems))];
+    const successCriteria = [
+        "the environment's build then test commands pass on a fresh checkout of the merge, test printing output",
+        "build and test leave the checkout clean",
+        "the work changes no recipe file",
+        "no behaviour a vision item asks for is implemented yet",
+    ];
+    const scaffold: PlannedTask = {
+        id: generateId("task"),
+        level: "task",
+        title: SCAFFOLD_TITLE,
+        description: SCAFFOLD_DESCRIPTION,
+        successCriteria,
+        parentId: epicId,
+        dependsOn: [sprint0Id],
+        taskSpec: {
+            goal: SCAFFOLD_DESCRIPTION,
+            endState: successCriteria.join("; "),
+            scope: "the product's module root, manifests and entry point; no behaviour of the vision",
+            deliverables: [
+                "the product's skeleton, on which the environment's build and test commands pass",
+                "a finish summary naming the entry point and how the product is run",
+            ],
+            capability: "Strong",
+            origin: "product-scaffold",
+            checkedBy: "substrate",
+            visionItems,
+        },
+    };
+    dependencyEdges.push({ from: scaffold.id, to: sprint0Id });
+    for (const task of decomposed) dependencyEdges.push({ from: task.id, to: scaffold.id });
+    // Right after Sprint 0 when the plan holds it; first when it builds on an environment already done.
+    const sprint0At = tasks.findIndex((task) => task.id === sprint0Id);
+    tasks.splice(sprint0At + 1, 0, scaffold);
+    return scaffold.id;
+}
 
 function bulleted(lines: readonly string[]): string {
     return lines.length === 0 ? "- (none stated)" : lines.map((line) => `- ${line}`).join("\n");
@@ -521,12 +588,13 @@ function bulleted(lines: readonly string[]): string {
 
 /**
  * The check task of one decomposed task (ADR-074 addendum 2 d63): the check author
- * writes the checks that decide whether it is done, after Sprint 0 and before any
+ * writes the checks that decide whether it is done, after the plan's foundation (the
+ * product scaffold, or the environment of a revision, d72 B2) and before any
  * implementation task of the plan starts (d67 a). Its text names no stack: the checks
  * are commands of the project environment. `checksFor` names the task its checks decide,
  * since every implementation task depends on every check task and the edges cannot say.
  */
-function checkTaskFor(epicId: string, sprint0Id: string, task: DecomposedTask): PlannedTask {
+function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask): PlannedTask {
     const goal =
         `Write the checks that decide whether "${task.title}" is done: observable behaviour from its deliverables ` +
         `and acceptance; each check is a command the project environment can run`;
@@ -548,7 +616,7 @@ function checkTaskFor(epicId: string, sprint0Id: string, task: DecomposedTask): 
         description,
         successCriteria,
         parentId: epicId,
-        dependsOn: [sprint0Id],
+        dependsOn: [foundationId],
         taskSpec: {
             goal: description,
             endState: successCriteria.join("; "),
@@ -609,8 +677,9 @@ function reviewTaskFor(
 }
 
 /**
- * Adds the review task after every task of the plan: it depends on the environment task and on every
- * check task, and every decomposed task depends on it (beside its edges to every check task, d67 a).
+ * Adds the review task after every task of the plan: it depends on the plan's foundation (the product
+ * scaffold, or a revision's environment task) and on every check task, and every decomposed task
+ * depends on it (beside its edges to every check task, d67 a).
  */
 function addReviewTask(
     epicId: string,
@@ -670,21 +739,22 @@ function dependOnEnvironment(
 }
 
 /**
- * Gives every decomposed task its check task, each depending on Sprint 0, and makes every
+ * Gives every decomposed task its check task, each depending on the plan's foundation (the product
+ * scaffold of a new project, d72 B2, or the environment task of a revision), and makes every
  * decomposed task depend on every check task of the plan (ADR-074 addendum 2 d67 a): all checks
- * are authored and red-run against main as Sprint 0 left it, before any implementation changes
- * it, as a QA team writes a sprint's acceptance tests up front. Each check task is placed right
- * after the task it decides, so the plan's writer meets that task before the reference to it.
+ * are authored and red-run against main as the foundation left it, before any implementation
+ * changes it, as a QA team writes a sprint's acceptance tests up front. Each check task is placed
+ * right after the task it decides, so the plan's writer meets that task before the reference to it.
  */
 function addCheckTasks(
     epicId: string,
-    sprint0Id: string,
+    foundationId: string,
     tasks: readonly PlannedTask[],
     dependencyEdges: Array<{ from: string; to: string }>,
 ): PlannedTask[] {
     const decomposed = tasks.filter(isDecomposed);
-    const checkOf = new Map(decomposed.map((task) => [task.id, checkTaskFor(epicId, sprint0Id, task)]));
-    for (const check of checkOf.values()) dependencyEdges.push({ from: check.id, to: sprint0Id });
+    const checkOf = new Map(decomposed.map((task) => [task.id, checkTaskFor(epicId, foundationId, task)]));
+    for (const check of checkOf.values()) dependencyEdges.push({ from: check.id, to: foundationId });
     for (const task of decomposed) {
         for (const check of checkOf.values()) dependencyEdges.push({ from: task.id, to: check.id });
     }

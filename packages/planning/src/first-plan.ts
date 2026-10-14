@@ -242,6 +242,7 @@ function workKindOf(origin: TaskSpec["origin"]): WorkKind {
     case "sprint0":
       return "environment";
     case "decomposition":
+    case "product-scaffold":
       return "implementation";
     case "check":
     case "review":
@@ -368,6 +369,7 @@ export class FirstPlanner implements FirstPlanning {
       epicDescription: project.visionText,
       conventions: [],
       environment: { kind: "new" },
+      layout: { kind: "new" },
       visionItems: visionItemsOf(project),
     };
     return new DecompositionEngine(llm).decompose(input);

@@ -6,7 +6,7 @@ import { describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { DomainEvent, ProjectBlockCause, ProjectId, WorkItemStatus } from "@ashara/shared";
 import type { BulkPlanEdge } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
-import type { DecompositionInput, DecompositionResult, EnvironmentPlanning } from "./decomposition-types.js";
+import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
 import type { FirstPlanWrite } from "./first-plan.js";
@@ -251,11 +251,22 @@ function isTask(planned: PlannedItem): boolean {
 }
 
 function isGoalTask(item: WorkItem): boolean {
-  return item.taskSpec?.origin !== "check" && item.taskSpec?.origin !== "sprint0" && item.workKind !== "environment" && item.workKind !== "check";
+  const origin = item.taskSpec?.origin;
+  return origin !== "check" && origin !== "sprint0" && origin !== "product-scaffold" && item.workKind !== "environment" && item.workKind !== "check";
 }
 
 function isEnvironmentTask(item: WorkItem): boolean {
   return item.workKind === "environment" || item.taskSpec?.origin === "sprint0";
+}
+
+/**
+ * The product layout a revision builds on (ADR-074 addendum 2 d72 B2): the latest completed product
+ * scaffold, or a new one when none completed (an open one is superseded with the rest).
+ */
+function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
+  const scaffolds = completed.filter(({ item }) => item.taskSpec?.origin === "product-scaffold");
+  const current = scaffolds[scaffolds.length - 1];
+  return current === undefined ? { kind: "new" } : { kind: "existing", taskId: current.item.id };
 }
 
 /** The work already done, kept as the revision's context: titles and what merged them. */
@@ -415,6 +426,7 @@ export class Replanner implements Replanning {
               },
             ],
       environment,
+      layout: layoutOf(completed),
       // The same rule as a first plan (ADR-074 addendum 2 d71 d): every new task traces to the current vision.
       visionItems: visionItemsOf(project),
     };

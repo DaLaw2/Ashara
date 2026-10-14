@@ -79,56 +79,59 @@ const STATIC_PROMPT = [
 ].join("\n\n");
 
 /**
- * Environment work defines how the project is built and tested; it names no stack: choosing one is
- * the work. The definition's schema and rules come from execution-infra, which enforces them. The
- * finish statement is the statement of that choice, which Z0 keeps on the task.
+ * Environment work writes the recipe of the image every task works in; it names no stack: choosing
+ * one is the work. The definition's schema and rules come from execution-infra, which enforces them.
+ * The finish statement is the statement of that choice, which Z0 keeps on the task.
  */
 const ENVIRONMENT_PROMPT = [
   [
     `# Defining the environment`,
-    `You define the environment every later task of this project works in, and nothing else: do not write the product.`,
-    `- Use build_environment to build the environment you defined and run its build and test commands. Call it again`,
-    `  after each change; finish with status "done" only after it reports PASSED on the files as they are.`,
-    `- Finish with a statement: one paragraph on the stack you chose and why. The client reads it; it lists no files.`,
-    `  Say what the environment's test covers: it proves the toolchain builds and runs; product behaviour is verified`,
-    `  by the check author's checks. Never promise that later tasks extend the test: its command is in environment/,`,
-    `  which only environment work may change.`,
+    `You write the recipe of the environment every later task of this project works in, and nothing else. The product`,
+    `owns its layout, its manifests, its source and its tests: do not write any of them, not even a placeholder.`,
+    `- Use build_environment to build the image from your recipe and run its probe. Call it again after each change;`,
+    `  finish with status "done" only after it reports PASSED on the files as they are.`,
+    `- The product does not exist yet, and its build and test commands are not run now: the product's first task sets`,
+    `  up its layout so that they pass. State them as that product will be built and tested from the repository root.`,
+    `- Finish with a statement: one paragraph on the stack you chose and why, and how the product is built and tested`,
+    `  with it. The client reads it; it lists no files. The probe only proves the toolchain is present; product`,
+    `  behaviour is verified by the check author's checks.`,
   ].join("\n"),
   environmentDefinitionRules(),
 ].join("\n\n");
 
 /**
- * The paths Z0 refuses the work for changing, named before work starts (ADR-074 addendum 2 d66 c),
- * for every task that does not define the environment itself; null when the brief carries none
- * (the BaseCell) or the task is environment work, which may change environment/.
+ * The paths Z0 refuses the work for changing, named before work starts (ADR-074 addendum 2 d66 c,
+ * d72 B1), for every task that does not write the recipe itself; null when the brief carries none
+ * (the BaseCell) or the task is environment work, which may change the recipe and nothing else.
  */
 function protectedPathsSection(brief: AssignmentBrief, workKind: WorkKind | null): string | null {
   const paths = brief.protectedPaths;
   if (paths === undefined || workKind === "environment") return null;
+  const recipe = paths.recipe.join(", ");
   const checkFiles = paths.checkFiles.length === 0 ? "none is stored yet" : paths.checkFiles.join(", ");
-  const ownedFiles = paths.ownedFiles.length === 0 ? "none" : paths.ownedFiles.join(", ");
+  const inputs = paths.inputs.length === 0 ? "none is named" : paths.inputs.join(", ");
   const lines = [
     `# Protected paths`,
     `Z0 checks your finished work against these paths, whatever else it holds:`,
-    `- ${paths.environment} belongs to the platform role, who defines the project environment.`,
+    `- The environment recipe belongs to the platform role, who builds the project's image from it: ${recipe}.`,
     `- The stored check files belong to the check author who wrote them: ${checkFiles}.`,
+    `Every other file is the product's, wherever it lives: its layout, its manifests, its source and its tests.`,
   ];
   if (workKind === "check") {
     lines.push(
-      `None of your check files may be a file the environment owns: ${paths.environment} or ${ownedFiles}. Nothing of`,
-      `your workspace is merged, so do not change the project's files for your checks either.`,
+      `None of your check files may be a recipe file or an input the image build reads (${inputs}). Nothing of your`,
+      `workspace is merged, so do not change the project's files for your checks either.`,
     );
     return lines.join("\n");
   }
   lines.push(
     `- Work that changes a stored check file fails, and nothing of it is merged.`,
-    `- If your task needs a change under ${paths.environment}, make it in your workspace and say in your finish summary`,
-    `  what you need and why. Nothing of your work is merged then: Z0 opens an environment task for the platform role`,
-    `  carrying your summary and your changes under ${paths.environment}, and your task starts again from the project`,
-    `  as that task leaves it.`,
-    `The environment's other owned files (${ownedFiles}) are not protected: you may change them. A change to one`,
-    `builds the environment again from your merged work, and the merge is accepted only when that environment's build`,
-    `and test and every check that verification runs pass on it.`,
+    `- If your task needs a change to the recipe, make it in your workspace and say in your finish summary what you`,
+    `  need and why. Nothing of your work is merged then: Z0 opens an environment task for the platform role carrying`,
+    `  your summary and your changes to the recipe, and your task starts again from the project as that task leaves it.`,
+    `The inputs the image build reads (${inputs}) are product files: you may change them. A change to one builds the`,
+    `image again from your merged work, and the merge is accepted only when the product's build and test and every`,
+    `check that verification runs pass on it.`,
   );
   return lines.join("\n");
 }

@@ -422,18 +422,22 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 
 /**
  * Commits a minimal environment definition to the target's main, as a merged Sprint 0 leaves it;
- * with `ownedFiles`, the definition also owns those single files outside environment/.
+ * with `inputs`, the definition names those product files as inputs the image build reads, and
+ * main holds them (a merged product scaffold's manifests).
  */
-async function commitEnvironment(target: string, ownedFiles: Readonly<Record<string, string>> = {}): Promise<void> {
+async function commitEnvironment(target: string, inputs: Readonly<Record<string, string>> = {}): Promise<void> {
   await mkdir(join(target, "environment"));
-  const owned = ["environment/", ...Object.keys(ownedFiles)].map((path) => JSON.stringify(path)).join(", ");
+  const named = Object.keys(inputs).map((path) => JSON.stringify(path)).join(", ");
   await writeFile(
     join(target, "environment", "environment.toml"),
-    `owned = [${owned}]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "true"\n`,
+    `containerfile = "environment/Containerfile"\nrecipe = []\ninputs = [${named}]\nprobe = "echo ok"\nbuild = "true"\ntest = "true"\n`,
   );
   await writeFile(join(target, "environment", "Containerfile"), "FROM scratch\n");
-  for (const [path, content] of Object.entries(ownedFiles)) await writeFile(join(target, path), content);
-  await git(target, "add", "environment", ...Object.keys(ownedFiles));
+  for (const [path, content] of Object.entries(inputs)) {
+    await mkdir(dirname(join(target, path)), { recursive: true });
+    await writeFile(join(target, path), content);
+  }
+  await git(target, "add", "environment", ...Object.keys(inputs));
   await git(target, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
 }
 
@@ -672,8 +676,12 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly checkFiles?: readonly StoredCheckFile[];
     /** The task is a check task deciding one implementation task; an implementation task when absent. */
     readonly checkWork?: boolean;
-    /** Single files outside environment/ the environment owns on main, with their content. */
-    readonly ownedFiles?: Readonly<Record<string, string>>;
+    /** Product files the definition names as inputs of the image build, on main with their content. */
+    readonly inputs?: Readonly<Record<string, string>>;
+    /** The task is the product scaffold (ADR-074 addendum 2 d72 B2), decided by the definition's build and test. */
+    readonly scaffold?: boolean;
+    /** A verifier cell's run of exactly this command exits 1. */
+    readonly verifierFailsCommand?: string;
     /** A build of an environment version other than main's fails. */
     readonly rebuildFails?: boolean;
     /** The agent finishes done at once, writing nothing: its branch holds no change against main. */
@@ -714,7 +722,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     const target = join(root, "target");
     await mkdir(target);
     await ensureTargetGitInit(target);
-    await commitEnvironment(target, faults.ownedFiles);
+    await commitEnvironment(target, faults.inputs);
     const mainBefore = await git(target, "rev-parse", "main");
     const workdirBase = join(root, "cells", "work");
     const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
@@ -739,6 +747,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             // No status report: podman exec itself failed, the command never ran.
             if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
             if (role === "ci" && faults.ciFailsCommand !== undefined && args.at(-1) === faults.ciFailsCommand) return ran("broken\n", 1);
+            if (role === "verifier" && faults.verifierFailsCommand !== undefined && args.at(-1) === faults.verifierFailsCommand) return ran("broken\n", 1);
             return role === "ci" ? ran(faults.ciStdout ?? "hello\n", faults.ciExit ?? 0) : ran("hello\n");
           }
           case "rm":
@@ -753,7 +762,12 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       await writeFile(join(workdirBase, "checkouts"), "not a directory\n");
     }
     const checkWork = faults.checkWork === true;
-    const task = { ...someTask(), attempt: faults.attempt ?? 1, workKind: checkWork ? ("check" as const) : ("implementation" as const) };
+    const task = {
+      ...someTask(),
+      attempt: faults.attempt ?? 1,
+      workKind: checkWork ? ("check" as const) : ("implementation" as const),
+      ...(faults.scaffold === true ? { taskSpec: { origin: "product-scaffold" as const, checkedBy: "substrate" as const } } : {}),
+    };
     const workDir = join(workdirBase, (checkWork ? checkBranchName(task.id) : taskBranchName(task.id)).replace(/\//g, "-"));
     const shutdown = faults.shutdownDuringSecondTurn;
     // Read when the dispatch plans its work, after the environment's build reported its version.
@@ -1134,7 +1148,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(result.need).toBe("wrote greet.txt");
       expect(result.diff).toContain("+RUN true");
       expect(result.diff).not.toContain("greet.txt");
-      expect(result.detail).toContain("environment/ belongs to the platform role");
+      expect(result.detail).toContain("the environment recipe (environment/environment.toml, environment/Containerfile) belongs to the platform role");
       expect(result.errorEnvelope.chain.operation).toBe("ownershipGate");
       expect(started.map((s) => s.role)).toEqual(["developer"]);
       expect(events.filter((e) => e.event === "environment_change_requested")).toEqual([expect.objectContaining({ paths: ["environment/Containerfile"] })]);
@@ -1145,11 +1159,15 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(branchKept).toBe(false);
     });
 
-    // ADR-074 addendum 2 d66 a: an owned single file outside environment/ is versioned, not fenced.
-    test("a branch changing an owned file outside environment/: the merge's environment is rebuilt, its build and test pass, it merges and carries the statement", async () => {
+    // ADR-074 addendum 2 d72 B1, B3: an input the recipe reads is the product's, versioned, not fenced,
+    // wherever it lives.
+    test.each([
+      ["outside environment/", "manifest.txt"],
+      ["inside environment/ but no recipe file", "environment/manifest.txt"],
+    ])("a branch changing an input %s: the merge's environment is rebuilt, the product's build and test pass, it merges and carries the statement", async (_label, input) => {
       const { result, events, started, probe, mainBefore, mainAfter, taskId } = await dispatch({
-        ownedFiles: { "manifest.txt": "dependencies: none\n" },
-        agentAlsoWrites: { "manifest.txt": "dependencies: greeter\n" },
+        inputs: { [input]: "dependencies: none\n" },
+        agentAlsoWrites: { [input]: "dependencies: greeter\n" },
       });
 
       expect(result.status, result.detail).toBe("completed");
@@ -1166,15 +1184,26 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
     });
 
-    test("a branch changing an owned file whose rebuilt image cannot be built: failed with the build output; nothing merged, no statement", async () => {
+    test("a branch writing a manifest the definition does not name: no recipe file, so the gate passes and nothing is rebuilt", async () => {
+      const { result, events, probe } = await dispatch({
+        agentAlsoWrites: { "environment/go.mod-like.txt": "module x\n", "manifest.txt": "dependencies: greeter\n" },
+      });
+
+      expect(result.status, result.detail).toBe("completed");
+      expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
+      expect(events.some((e) => e.event === "environment_rebuilt")).toBe(false);
+      expect(probe.builds).toBe(1);
+    });
+
+    test("a branch changing an input whose rebuilt image cannot be built: failed with the build output; nothing merged, no statement", async () => {
       const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({
-        ownedFiles: { "manifest.txt": "dependencies: none\n" },
+        inputs: { "manifest.txt": "dependencies: none\n" },
         agentAlsoWrites: { "manifest.txt": "dependencies: greeter\n" },
         rebuildFails: true,
       });
 
       expect(result.status, result.detail).toBe("failed");
-      expect(result.detail).toContain("The merge changes files the environment owns outside environment/");
+      expect(result.detail).toContain("The merge changes the environment's build context (its inputs)");
       expect(result.detail).toContain("the image build exited 1");
       expect(result.detail).toContain("step 2/2: missing package");
       expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed" });
@@ -1192,8 +1221,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(result.status, result.detail).toBe("failed");
       expect(result.detail).toContain(`checks/greet.sh (checks of task ${CHECK_FILE.taskId})`);
       expect(result.detail).toContain("check files belong to the check author");
-      expect(result.detail).toContain("environment/Containerfile");
-      expect(result.detail).toContain("environment/ belongs to the platform role");
+      expect(result.detail).toContain("The branch changed these recipe files: environment/Containerfile");
+      expect(result.detail).toContain("belongs to the platform role");
       expect(result.errorEnvelope?.chain.operation).toBe("ownershipGate");
       expect(started.map((s) => s.role)).toEqual(["developer"]);
       expect(events.filter((e) => e.event === "gate_failed")).toHaveLength(1);
@@ -1211,18 +1240,51 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(mainAfter).not.toBe(mainBefore);
     });
 
-    // ADR-074 addendum 2 d66 c: the brief names what the gate refuses before work starts.
-    test("the implementer's brief names the protected paths, the stored check files and the owned files it may change", async () => {
-      const { result, workdirBase, taskId } = await dispatch({ ownedFiles: { "manifest.txt": "dependencies: none\n" }, checkFiles: [CHECK_FILE] });
+    // ADR-074 addendum 2 d72 B2: the scaffold is decided by the product's build and test, never by stored checks.
+    test("the product scaffold: no stored check is read; the definition's build and test pass on its merge and it merges", async () => {
+      const { result, events, started, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "manifest.txt": "module greeter\n" } });
+
+      expect(result.status, result.detail).toBe("completed");
+      expect(mainAfter).not.toBe(mainBefore);
+      expect(events.filter((e) => e.event === "ownership_gate")).toEqual([expect.objectContaining({ verdict: "clean" })]);
+      expect(started.map((s) => s.role)).toEqual(["developer", "verifier"]);
+      const verify = events.find((e) => e.event === "post_merge_verify");
+      expect(verify).toMatchObject({ verdict: "passed", details: expect.stringContaining("the product's build and test") });
+      expect(verify?.["details"]).toContain("Checkout after build and test: clean.");
+      expect(events.some((e) => e.event === "checks_revalidated" || e.event === "task_checks_run")).toBe(false);
+    });
+
+    test("the product scaffold whose build fails on its merge: failed with the run; nothing merged", async () => {
+      const { result, mainBefore, mainAfter } = await dispatch({ scaffold: true, verifierFailsCommand: "true" });
+
+      expect(result.status, result.detail).toBe("failed");
+      expect(result.detail).toContain("Verdict: FAILED");
+      expect(mainAfter).toBe(mainBefore);
+    });
+
+    test("the product scaffold may not write the recipe either: an environment change is requested", async () => {
+      const { result, mainBefore, mainAfter } = await dispatch({ scaffold: true, agentAlsoWrites: { "environment/environment.toml": "probe = \"x\"\n" } });
+
+      expect(result.status, result.detail).toBe("environment_change_requested");
+      expect(mainAfter).toBe(mainBefore);
+    });
+
+    // ADR-074 addendum 2 d66 c, d72: the brief names what the gate refuses before work starts.
+    test("the implementer's brief names the recipe, the stored check files and the inputs it may change", async () => {
+      const { result, workdirBase, taskId } = await dispatch({ inputs: { "manifest.txt": "dependencies: none\n" }, checkFiles: [CHECK_FILE] });
 
       expect(result.status, result.detail).toBe("completed");
       const [sessionDir] = await readdir(join(workdirBase, "records", taskId));
       const conversation = await readFile(join(workdirBase, "records", taskId, sessionDir ?? "", "conversation.jsonl"), "utf8");
       const { system } = z.object({ system: z.string() }).parse(JSON.parse(conversation.split("\n")[0] ?? "null"));
       expect(system).toContain("# Protected paths");
-      expect(system).toContain("- environment/ belongs to the platform role");
+      expect(system).toContain(
+        "- The environment recipe belongs to the platform role, who builds the project's image from it: " +
+          "environment/environment.toml, environment/Containerfile.",
+      );
       expect(system).toContain("The stored check files belong to the check author who wrote them: checks/greet.sh.");
-      expect(system).toContain("The environment's other owned files (manifest.txt) are not protected: you may change them.");
+      expect(system).toContain("The inputs the image build reads (manifest.txt) are product files: you may change them.");
+      expect(system).toContain("Every other file is the product's, wherever it lives");
       expect(system).toContain("Z0 opens an environment task for the platform role");
     });
   });

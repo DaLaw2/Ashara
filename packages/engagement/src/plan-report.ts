@@ -16,6 +16,8 @@ interface PlanTaskCounts {
   readonly decomposition: number;
   /** The task that sets up the project environment before any other. */
   readonly sprint0: number;
+  /** The task that sets up the product's layout after the environment and before any check is written. */
+  readonly scaffolds: number;
   /** The tasks in which the checks of a decomposed task are written, one per decomposed task. */
   readonly checks: number;
   /** The review that reads every check of the plan together before any of its work starts. */
@@ -81,7 +83,7 @@ export interface LiaisonPlanReports {
 /**
  * A first plan that cannot be reported truthfully: no epic, no task decomposed
  * from the client's goal, not exactly one environment setup task, not exactly one
- * check task per decomposed task, a task whose producer is not recorded (so it can
+ * product scaffold task, not exactly one check task per decomposed task, a task whose producer is not recorded (so it can
  * be neither counted toward the goal nor described as setup), or no record of the
  * ordering hints the plan dropped.
  */
@@ -95,7 +97,8 @@ class PlanReportUnfounded extends Error {
     const droppedText = dropped.kind === "recorded" ? `${dropped.count} dropped ordering hint(s)` : "no record of dropped ordering hints";
     super(
       `project ${projectId} is recorded as planned with ${epics} epic(s), ${tasks.decomposition} decomposed task(s), ` +
-        `${tasks.sprint0} Sprint 0 task(s), ${tasks.checks} check task(s), ${tasks.reviews} check review task(s), ` +
+        `${tasks.sprint0} Sprint 0 task(s), ${tasks.scaffolds} product scaffold task(s), ${tasks.checks} check task(s), ` +
+        `${tasks.reviews} check review task(s), ` +
         `${tasks.unrecorded} task(s) of unrecorded origin ` +
         `and ${droppedText}; ` +
         `no report is posted`,
@@ -150,7 +153,7 @@ function firstPlanReport(epicTitles: readonly string[], goalTasks: number, check
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
     `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
-      `before any of those tasks starts.`,
+      `before any of those tasks starts. Then a developer sets up the product's layout, which every later task builds on.`,
     `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
       `is done (${plural(checkTasks, "check task")}). A task counts as done only when its checks pass.`,
     REVIEW_SENTENCE,
@@ -263,6 +266,7 @@ export class PlanReports implements LiaisonPlanReports {
       due.epicTitles.length === 0 ||
       tasks.decomposition === 0 ||
       tasks.sprint0 !== 1 ||
+      tasks.scaffolds !== 1 ||
       tasks.checks !== tasks.decomposition ||
       tasks.reviews !== 1 ||
       tasks.unrecorded > 0 ||

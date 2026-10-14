@@ -35,7 +35,7 @@ const projectTagSchema = z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,127}$/, "a pro
 interface EnvironmentBuildIdentity {
   readonly projectId: ProjectId;
   readonly version: string;
-  /** The environment version's commit: the last one that touched an owned path. */
+  /** The environment version's commit: the last one that touched its build context. */
   readonly commit: string;
   readonly imageRef: string;
   /** The network the build ran with; recorded because builds are the one thing that may reach it. */
@@ -212,7 +212,7 @@ export async function pruneEnvironmentImages(
 }
 
 /**
- * Builds the project's environment image from the owned files at `commit` and nothing else, or
+ * Builds the project's environment image from its build context at `commit` (the recipe and the inputs that exist) and nothing else, or
  * reuses the image already built for this version when its succeeded build is on record.
  */
 export async function buildEnvironmentImage(request: EnvironmentBuildRequest, deps: EnvironmentBuildDeps): Promise<BuiltEnvironment> {
@@ -263,7 +263,7 @@ export async function buildEnvironmentImage(request: EnvironmentBuildRequest, de
       await mkdir(context);
       await materializeSnapshot(request.repoGitDir, snapshot, context);
     } catch (err) {
-      return await fail(null, false, "", `the owned files could not be exported: ${describeErrorChain(err)}`, err);
+      return await fail(null, false, "", `the build context could not be exported: ${describeErrorChain(err)}`, err);
     }
 
     const args = [

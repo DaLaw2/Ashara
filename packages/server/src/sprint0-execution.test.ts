@@ -85,12 +85,22 @@ const STATEMENT = "A shell-only environment on the pinned Debian base: the proje
 /** The finish summary names files; only the statement may reach the work item and the client. */
 const SUMMARY = "Wrote environment/environment.toml and environment/Containerfile.";
 
-function definition(test: string, options: { readonly build?: string; readonly owned?: readonly string[] } = {}): string {
+interface DefinitionOptions {
+  readonly build?: string;
+  readonly test?: string;
+  readonly recipe?: readonly string[];
+  readonly inputs?: readonly string[];
+}
+
+/** An environment definition (ADR-074 addendum 2 d72): the recipe, its inputs, the probe and the product's commands. */
+function definition(probe: string, options: DefinitionOptions = {}): string {
   return [
-    `owned = ${JSON.stringify(options.owned ?? ["environment/"])}`,
     'containerfile = "environment/Containerfile"',
+    `recipe = ${JSON.stringify(options.recipe ?? [])}`,
+    `inputs = ${JSON.stringify(options.inputs ?? [])}`,
+    `probe = ${JSON.stringify(probe)}`,
     `build = ${JSON.stringify(options.build ?? "true")}`,
-    `test = ${JSON.stringify(test)}`,
+    `test = ${JSON.stringify(options.test ?? "echo product tests ok")}`,
     "",
   ].join("\n");
 }
@@ -113,6 +123,18 @@ async function sprint0Task(): Promise<TaskDescriptor> {
     workKind: "environment",
     successCriteria: ["environment/environment.toml parses"],
   };
+}
+
+/** An environment task Z0 opened for a requester, as requestEnvironmentChange writes it. */
+async function environmentChangeTask(product: "present" | "absent"): Promise<TaskDescriptor> {
+  const id = createWorkItemId();
+  const title = `Environment change 1 (${product})`;
+  const taskSpec = { goal: "Change the project environment as the requester needs", origin: "environment-change", checkedBy: "substrate", product } as const;
+  await db.execute(sql`
+    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id, work_kind, owner_role_id)
+    VALUES (${id}, 'Task', 'InProgress', ${title}, ${JSON.stringify(taskSpec)}::jsonb,
+            ${RUN_SCOPE_AD_HOC}, ${projectId}, 'environment', ${randomUUID()})`);
+  return { id, projectId, title, taskSpec, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
 }
 
 /**
@@ -266,9 +288,12 @@ afterAll(async () => {
 }, 120_000);
 
 describe("Sprint 0", () => {
-  it("the environment role builds its environment, finishes with its statement, passes the substrate gate and merges", async () => {
+  // ADR-074 addendum 2 d72 S: the gate builds the image and runs the probe on a tree that holds no
+  // product; the product's build and test, which would fail there, are never run.
+  it("the environment role writes only its recipe, its probe passes on an empty product, it passes the substrate gate and merges", async () => {
+    const recipe = definition("echo toolchain ok", { build: "echo no product to build >&2; exit 1", test: "exit 1", inputs: ["manifest.txt"] });
     const { result, mock, events, target, taskId } = await runSprint0("pass", [
-      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: recipe }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
       toolCallTurn("build_environment", {}),
       toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
@@ -276,71 +301,48 @@ describe("Sprint 0", () => {
 
     expect(result.status, result.detail).toBe("completed");
     expect(mock.doGenerateCalls[0]?.tools?.map((tool) => tool.name)).toContain("build_environment");
-    // build_environment ran the test in a cell from the image it built and told the model so.
+    // build_environment ran the probe in a cell from the image it built and told the model so.
+    expect(promptText(mock, 3)).toContain("Probe stdout:\\ntoolchain ok");
     expect(promptText(mock, 3)).toContain("Verdict: PASSED");
+    expect(promptText(mock, 3)).not.toContain("Build command");
     expect(promptText(mock, 3)).toMatch(/Environment version [0-9a-f]{64}/);
 
-    // The gate rebuilt nothing (same environment version) and its CI cell's test passed.
+    // The gate rebuilt nothing (same environment version) and its CI cell's probe passed.
     expect(events.find((e) => e.event === "substrate_gate_result")).toMatchObject({ passed: true, report: "tested" });
     expect(events.some((e) => e.event === "verify_started")).toBe(false);
-    expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
+    const verify = events.find((e) => e.event === "post_merge_verify");
+    expect(verify).toMatchObject({ verdict: "passed" });
+    expect(String(verify?.["details"])).not.toContain("no product to build");
     expect(await buildsOf()).toEqual(["succeeded"]);
 
-    // Merged into the target's main; the statement is kept on the work item.
-    expect(await readFile(join(target, "environment", "environment.toml"), "utf8")).toBe(definition("echo ok"));
+    // Merged into the target's main: the recipe and nothing else; the statement is kept on the work item.
+    const { stdout: files } = await run("git", ["-C", target, "ls-tree", "-r", "--name-only", "main"]);
+    expect(files.trim().split("\n")).toEqual(["environment/Containerfile", "environment/environment.toml"]);
+    expect(await readFile(join(target, "environment", "environment.toml"), "utf8")).toBe(recipe);
     expect(await statementOf(taskId)).toBe(STATEMENT);
     expect(await statementOf(taskId)).not.toContain("environment/");
   }, 300_000);
 
-  it("work outside the owned paths fails the gate listing each path, and merges nothing", async () => {
-    const { result, target, taskId } = await runSprint0("scope", [
-      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok") }),
+  it.each([
+    ["product code outside environment/", "src/x"],
+    ["a product file inside environment/ the definition names as no recipe file", "environment/main.txt"],
+    ["an input the recipe reads", "manifest.txt"],
+  ])("work touching %s fails the gate listing it, and merges nothing", async (_label, path) => {
+    const { result, target, taskId } = await runSprint0(`scope-${path.replace(/\W/g, "-")}`, [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok", { inputs: ["manifest.txt"] }) }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("write_file", { path: "src/x", content: "product code\n" }),
+      toolCallTurn("write_file", { path, content: "product\n" }),
       toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
     ]);
 
     expect(result.status).toBe("failed");
-    expect(result.detail).toContain("touches paths outside the owned paths [environment/]");
-    expect(result.detail).toContain("- src/x");
-    expect(result.detail).not.toContain("- environment/");
+    expect(result.detail).toContain("touches paths outside the recipe [environment/environment.toml, environment/Containerfile]");
+    expect(result.detail).toContain(`- ${path}`);
     expect(existsSync(join(target, "environment"))).toBe(false);
     expect(await statementOf(taskId)).toBeNull();
   }, 300_000);
 
-  it("a build output left untracked fails build_environment and the gate listing it; a .gitignore that lists it passes both", async () => {
-    const build = "mkdir -p out && echo a > out/a";
-    const dirty = await runSprint0("dirty", [
-      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo ok", { build }) }),
-      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("build_environment", {}),
-      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
-    ]);
-    expect(promptText(dirty.mock, 3)).toContain("Checkout after build and test: NOT clean");
-    expect(promptText(dirty.mock, 3)).toContain("- out/a");
-    expect(dirty.result.status).toBe("failed");
-    expect(dirty.result.detail).toContain("substrate gate failed");
-    expect(dirty.result.detail).toContain("- out/a");
-    expect(existsSync(join(dirty.target, "environment"))).toBe(false);
-
-    // Its test reads what build wrote: post-merge verify must run build before test, as the gate does.
-    const owned = ["environment/", ".gitignore"];
-    const clean = await runSprint0("clean", [
-      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("cat out/a", { build, owned }) }),
-      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("write_file", { path: ".gitignore", content: "out/\n" }),
-      toolCallTurn("build_environment", {}),
-      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
-    ]);
-    expect(promptText(clean.mock, 4)).toContain("Checkout after build and test: clean.");
-    expect(clean.result.status, clean.result.detail).toBe("completed");
-    expect(clean.events.find((e) => e.event === "substrate_gate_result")).toMatchObject({ passed: true, report: "tested" });
-    expect(clean.events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "passed" });
-    expect(await readFile(join(clean.target, ".gitignore"), "utf8")).toBe("out/\n");
-    expect(existsSync(join(clean.target, "out")), "post-merge verify ran on a throwaway checkout, not the target").toBe(false);
-  }, 600_000);
-
-  it("a definition whose test fails fails the gate with its output, merges nothing and records no statement", async () => {
+  it("a definition whose probe fails fails the gate with its output, merges nothing and records no statement", async () => {
     const { result, target, taskId } = await runSprint0("broken", [
       toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("echo broken-test-output; exit 3") }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
@@ -349,7 +351,7 @@ describe("Sprint 0", () => {
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("substrate gate failed");
-    expect(result.detail).toContain("FAILED: the test command exited 3");
+    expect(result.detail).toContain("FAILED: the probe command exited 3");
     expect(result.detail).toContain("broken-test-output");
     expect(existsSync(join(target, "environment"))).toBe(false);
     expect(await statementOf(taskId)).toBeNull();
@@ -495,14 +497,15 @@ describe("Sprint 0", () => {
     expect(moved.mock.doGenerateCalls).toHaveLength(0);
   }, 600_000);
 
-  // third-run-2026-10-14 N7 and ADR-074 addendum 2 d66: an owned single file outside environment/ is
-  // versioned, not fenced; only environment/ is protected, and a change there is requested, not parked.
-  it("an implementation changing an owned file merges once the rebuilt environment's build and test pass; the next dispatch runs on that version", async () => {
-    const owned = ["environment/", "manifest.txt"];
+  // ADR-074 addendum 2 d72 B1, B3: an input the recipe reads is the product's, versioned, not fenced;
+  // only the recipe is protected, and a change there is requested, not parked.
+  it("an implementation writing an input merges once the rebuilt image passes the product's build and test and the checks; the next dispatch runs on that version", async () => {
     const sprint0 = await runSprint0("owned", [
-      toolCallTurn("write_file", { path: "environment/environment.toml", content: definition("cat manifest.txt", { owned }) }),
+      toolCallTurn("write_file", {
+        path: "environment/environment.toml",
+        content: definition("echo ok", { test: "cat manifest.txt", inputs: ["manifest.txt"] }),
+      }),
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
-      toolCallTurn("write_file", { path: "manifest.txt", content: "dependencies: none\n" }),
       toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
     ]);
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
@@ -560,7 +563,39 @@ describe("Sprint 0", () => {
     expect(next.events.some((e) => e.event === "environment_rebuilt")).toBe(false);
   }, 600_000);
 
-  it("an implementation changing a file under environment/ requests an environment change: nothing merged, its branch deleted", async () => {
+  // The t-env-recipe review: the product scaffold asking for an environment change opens one whose
+  // merge lands on a main with no product; running the product's build and test there fails it and
+  // stalls every task behind the scaffold. Recorded "absent", only the probe runs (d72 S).
+  it("an environment change opened with no product on main runs the probe only; one opened with a product runs its build and test", async () => {
+    const recipe = definition("echo toolchain ok", { build: "cat product.txt", test: "cat product.txt" });
+    const sprint0 = await runSprint0("scaffold-asks", [
+      toolCallTurn("write_file", { path: "environment/environment.toml", content: recipe }),
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
+      toolCallTurn("finish", { status: "done", summary: SUMMARY, statement: STATEMENT }),
+    ]);
+    expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
+    if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
+    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit);
+    await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
+    const change = (): ScriptStep[] => [
+      toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),
+      toolCallTurn("build_environment", {}),
+      toolCallTurn("finish", { status: "done", summary: "Added a RUN step.", statement: STATEMENT }),
+    ];
+
+    const present = await runTask("scaffold-asks", await environmentChangeTask("present"), change(), memorySessions);
+    expect(present.result.status).toBe("failed");
+    expect(String(present.events.find((e) => e.event === "post_merge_verify")?.["details"])).toContain("The product's build and test on the merge");
+
+    const absent = await runTask("scaffold-asks", await environmentChangeTask("absent"), change(), memorySessions);
+    expect(absent.result.status, absent.result.detail).toBe("completed");
+    const verify = absent.events.find((e) => e.event === "post_merge_verify");
+    expect(verify).toMatchObject({ verdict: "passed" });
+    expect(String(verify?.["details"])).not.toContain("The product's build and test");
+    expect(await readFile(join(absent.target, "environment", "Containerfile"), "utf8")).toBe(`FROM ${base.image}\nRUN true\n`);
+  }, 600_000);
+
+  it("an implementation changing a recipe file requests an environment change: nothing merged, its branch deleted", async () => {
     const { stdout: mainBefore } = await run("git", ["-C", join(root, "owned", "projects", "p"), "rev-parse", "main"]);
     const { result, events, target, taskId } = await runTask(
       "owned",

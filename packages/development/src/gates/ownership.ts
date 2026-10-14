@@ -1,17 +1,18 @@
-import { ENVIRONMENT_DIR, ownedPathsCover, runHostGit } from "@ashara/execution-infra";
+import { runHostGit } from "@ashara/execution-infra";
 import { targetRepo } from "../host-git.js";
 import type { StoredCheckFile } from "../task-checks.js";
 
 // Separation of duties held by Z0, not by the model (story s-platform-role-m1, sprint0-run D5;
-// ADR-074 addendum 2 d66 a): an implementation task's branch may not change what another role
-// writes. Two kinds of path are protected: `environment/`, the platform role's, and every stored
-// check file, the check author's who wrote it. Owned files of the environment outside
-// `environment/` are not protected: a change to one is accepted when the environment rebuilt
-// from the merge passes its build and test (the post-merge verification).
+// ADR-074 addendum 2 d72 B1): an implementation task's branch may not change what another role
+// writes. Two kinds of path are protected: the environment recipe (the definition, its
+// containerfile and the recipe files it names), the platform role's, because checks run in the
+// image it builds; and every stored check file, the check author's who wrote it. Nothing else is
+// fenced: the product's layout and manifests are the product's, and a change to an input the
+// recipe reads is accepted when the environment rebuilt from the merge passes (post-merge).
 
 const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-/** Longest part of the branch's diff of `environment/` carried to the environment task; a cut is marked. */
-const MAX_ENVIRONMENT_DIFF_CHARS = 16000;
+/** Longest part of the branch's diff of the recipe carried to the environment task; a cut is marked. */
+const MAX_RECIPE_DIFF_CHARS = 16000;
 
 /** A git step of the ownership gate printed something that is not what it must print. */
 class OwnershipDiffFailed extends Error {
@@ -28,12 +29,12 @@ class OwnershipDiffFailed extends Error {
 type OwnershipVerdict =
   | { readonly kind: "clean" }
   /**
-   * Only paths under `environment/` were changed: the work needs an environment change, which the
-   * platform role makes. `diff` is the branch's diff of those paths against its merge base.
+   * Only recipe files were changed: the work needs an environment change, which the platform role
+   * makes. `diff` is the branch's diff of those files against its merge base.
    */
   | { readonly kind: "environment_change"; readonly paths: readonly string[]; readonly diff: string; readonly reason: string }
-  /** A stored check file was changed (with or without `environment/` paths): the task's failure. */
-  | { readonly kind: "refused"; readonly environmentPaths: readonly string[]; readonly checkPaths: readonly string[]; readonly reason: string };
+  /** A stored check file was changed (with or without recipe files): the task's failure. */
+  | { readonly kind: "refused"; readonly recipePaths: readonly string[]; readonly checkPaths: readonly string[]; readonly reason: string };
 
 async function mergeBase(targetProjectPath: string, taskId: string, branch: string): Promise<string> {
   const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["merge-base", "--end-of-options", "refs/heads/main", `refs/heads/${branch}`]);
@@ -52,43 +53,45 @@ export async function branchChangedPaths(targetProjectPath: string, taskId: stri
   return stdout.split("\0").filter((path) => path !== "");
 }
 
-/** The branch's diff of `environment/` against its merge base, as text; a cut is marked. */
-async function environmentDiff(targetProjectPath: string, taskId: string, branch: string): Promise<string> {
+/** The branch's diff of `paths` against its merge base, as text; a cut is marked. */
+async function recipeDiff(targetProjectPath: string, taskId: string, branch: string, paths: readonly string[]): Promise<string> {
   const base = await mergeBase(targetProjectPath, taskId, branch);
   const { stdout } = await runHostGit(targetRepo(targetProjectPath), [
-    "diff", "--no-renames", "--no-color", "--no-ext-diff", base, `refs/heads/${branch}`, "--", ENVIRONMENT_DIR,
+    "diff", "--no-renames", "--no-color", "--no-ext-diff", base, `refs/heads/${branch}`, "--", ...paths,
   ]);
-  if (stdout.length <= MAX_ENVIRONMENT_DIFF_CHARS) return stdout;
-  return `${stdout.slice(0, MAX_ENVIRONMENT_DIFF_CHARS)}\n[diff cut at ${MAX_ENVIRONMENT_DIFF_CHARS} of ${stdout.length} characters]`;
+  if (stdout.length <= MAX_RECIPE_DIFF_CHARS) return stdout;
+  return `${stdout.slice(0, MAX_RECIPE_DIFF_CHARS)}\n[diff cut at ${MAX_RECIPE_DIFF_CHARS} of ${stdout.length} characters]`;
 }
 
 /**
- * Checks the task branch against the paths its role may not write: `environment/` and every
- * stored check file of the project. Run before the tentative merge.
+ * Checks the task branch against the paths its role may not write: `recipe` (the recipe of the
+ * environment on main, recipePaths) and every stored check file of the project. Run before the
+ * tentative merge.
  */
 export async function checkBranchOwnership(
   targetProjectPath: string,
   taskId: string,
   branch: string,
+  recipe: readonly string[],
   checkFiles: readonly StoredCheckFile[],
 ): Promise<OwnershipVerdict> {
   const changed = await branchChangedPaths(targetProjectPath, taskId, branch);
-  const environmentPaths = changed.filter((path) => ownedPathsCover([ENVIRONMENT_DIR], path));
+  const recipeHits = changed.filter((path) => recipe.includes(path));
   const checkHits = changed.flatMap((path) => {
     const owners = [...new Set(checkFiles.filter((file) => file.path === path).map((file) => file.taskId))];
     return owners.length === 0 ? [] : [{ path, owners }];
   });
-  if (environmentPaths.length === 0 && checkHits.length === 0) return { kind: "clean" };
+  if (recipeHits.length === 0 && checkHits.length === 0) return { kind: "clean" };
 
-  const environmentRule =
-    `${ENVIRONMENT_DIR} belongs to the platform role; a change there is made by an environment task. The branch ` +
-    `changed these paths under it: ${environmentPaths.join(", ")}`;
+  const recipeRule =
+    `the environment recipe (${recipe.join(", ")}) belongs to the platform role; a change to it is made by an ` +
+    `environment task. The branch changed these recipe files: ${recipeHits.join(", ")}`;
   if (checkHits.length === 0) {
     return {
       kind: "environment_change",
-      paths: environmentPaths,
-      diff: await environmentDiff(targetProjectPath, taskId, branch),
-      reason: `${environmentRule}. Nothing was merged; an environment task is requested for the change (ADR-074 addendum 2 d66 b)`,
+      paths: recipeHits,
+      diff: await recipeDiff(targetProjectPath, taskId, branch, recipeHits),
+      reason: `${recipeRule}. Nothing was merged; an environment task is requested for the change (ADR-074 addendum 2 d66 b)`,
     };
   }
   const checkRule =
@@ -97,8 +100,8 @@ export async function checkBranchOwnership(
   const restore = "Restore every listed path to main's content (delete it if main has none) and finish again; nothing was merged";
   return {
     kind: "refused",
-    environmentPaths,
+    recipePaths: recipeHits,
     checkPaths: checkHits.map((hit) => hit.path),
-    reason: [checkRule, ...(environmentPaths.length > 0 ? [environmentRule] : []), restore].join(". "),
+    reason: [checkRule, ...(recipeHits.length > 0 ? [recipeRule] : []), restore].join(". "),
   };
 }

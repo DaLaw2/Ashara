@@ -13,7 +13,7 @@ import type { EnvironmentImages, EnvironmentStatementStore } from "./environment
 import { targetRepo as hostRepoOf } from "./host-git.js";
 
 // Every task after Sprint 0 runs in cells built from the project's CURRENT environment version:
-// the owned files of environment/environment.toml as committed on the target's main. There is no
+// the build context (recipe and inputs) of environment/environment.toml as committed on main. There is no
 // other build path and no fallback to the BaseCell (s-platform-role-m1 C2).
 
 const MAIN = "main";
@@ -22,7 +22,7 @@ const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** The project's current environment: its version, the image built from it, and the team's statement. */
 export interface CurrentEnvironment {
   readonly version: string;
-  /** The last commit on main that touched an owned path. */
+  /** The last commit on main that touched the build context. */
   readonly commit: string;
   readonly imageId: string;
   readonly imageRef: string;
@@ -30,10 +30,12 @@ export interface CurrentEnvironment {
   readonly reused: boolean;
   /** The statement recorded with this version when the task that produced it merged. */
   readonly statement: string;
-  /** The definition's `test` command on main: run on every post-merge checkout, from this image. */
-  readonly test: string;
-  /** The definition's owned paths on main: the environment's files, which no check may touch. */
-  readonly owned: readonly string[];
+  /**
+   * The definition on main: its recipe is fenced from every other role, its build context is what
+   * no check file may overwrite, and its `build` and `test` run on every post-merge checkout, from
+   * this image.
+   */
+  readonly definition: EnvironmentDefinition;
 }
 
 export type EnvironmentResolution =
@@ -209,8 +211,7 @@ export async function resolveCurrentEnvironment(
       imageRef: built.imageRef,
       reused: built.reused,
       statement,
-      test: definition.test,
-      owned: definition.owned,
+      definition,
     },
   };
 }

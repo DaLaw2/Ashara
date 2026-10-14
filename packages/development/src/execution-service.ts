@@ -3,14 +3,15 @@ import { join } from "node:path";
 import type { BaseCellReference, BuiltEnvironment, Cell, CellSpec, EnvironmentDefinition, SubstrateInfo } from "@ashara/execution-infra";
 import {
   CellTeardownFailed,
-  ENVIRONMENT_DIR,
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
   SubstrateUnavailable,
   createCellBackend,
+  buildContextPaths,
   environmentVersion,
   readEnvironmentDefinition,
+  recipePaths,
 } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
@@ -23,9 +24,11 @@ import {
   checkVerdict,
   environmentCheckPassed,
   environmentCommandsPassed,
+  environmentProbePassed,
   formatEnvironmentCheck,
   formatCheckRuns,
   formatEnvironmentCommands,
+  formatEnvironmentProbe,
   runAttempt,
 } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
@@ -33,7 +36,7 @@ import { DispatchRecords, toAgentOutput } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
 import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
 import type { CurrentEnvironment } from "./current-environment.js";
-import { environmentCheckPort, runPostMergeEnvironmentCommands, runSubstrateGate } from "./environment-check.js";
+import { environmentCheckPort, runPostMergeEnvironmentCommands, runPostMergeProbe, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
 import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
 import type { EnvironmentError } from "./environment-failure.js";
@@ -257,8 +260,8 @@ function mainRunBlocked(
 }
 
 /**
- * A task decided by stored checks reached its ownership gate or its post-merge run without an
- * environment: no owned set to hold its branch to, no test to run on its merge.
+ * A task decided by stored checks, or the product scaffold, reached its ownership gate or its
+ * post-merge run without an environment: no recipe to hold its branch to, no test to run on its merge.
  */
 class PostMergeEnvironmentMissing extends Error {
   constructor(readonly taskId: string) {
@@ -269,13 +272,23 @@ class PostMergeEnvironmentMissing extends Error {
 
 /**
  * The environment a tentative merge is verified in: the dispatch's own version, unchanged; a new
- * version the merge produced, rebuilt and its build and test passed (`details` says so); or none
- * the merge can be verified in, which refuses it (`details` says why).
+ * version the merge produced by changing the build context (an input, ADR-074 addendum 2 d72 B3),
+ * rebuilt and the product's build and test passed on it (`details` says so); or none the merge can
+ * be verified in, which refuses it (`details` says why).
  */
 type MergedEnvironment =
-  | { readonly kind: "unchanged"; readonly version: string; readonly test: string; readonly image: string }
-  | { readonly kind: "rebuilt"; readonly version: string; readonly test: string; readonly image: string; readonly statement: string; readonly details: string }
+  | ({ readonly kind: "unchanged" } & MergedImage)
+  | ({ readonly kind: "rebuilt"; readonly statement: string; readonly details: string } & MergedImage)
   | { readonly kind: "refused"; readonly details: string };
+
+/** The image a merge is verified in, and the definition it was built from. */
+interface MergedImage {
+  readonly version: string;
+  /** The image id: what the verifier cells start from. */
+  readonly image: string;
+  readonly imageRef: string;
+  readonly definition: EnvironmentDefinition;
+}
 
 /**
  * The verdict on suites run in order (the environment's test, then `regressionCount` earlier
@@ -373,12 +386,15 @@ function briefEnvironment(environment: DispatchEnvironment): AgentBrief["project
 }
 
 /**
- * What decides a task's work: the environment substrate (Sprint 0), the checks the check author
- * stored for it (every implementation task), or, for a check task, Z0's red run of the checks it
- * defines (story s-independent-verify-m1). Resolved before the brief and the worktree.
+ * What decides a task's work: the environment substrate (Sprint 0 and every environment task), the
+ * product's own build and test from the definition (the product scaffold, ADR-074 addendum 2 d72
+ * B2), the checks the check author stored for it (every other implementation task), or, for a check
+ * task, Z0's red run of the checks it defines (story s-independent-verify-m1). Resolved before the
+ * brief and the worktree.
  */
 type WorkPlan =
   | { readonly kind: "substrate" }
+  | { readonly kind: "scaffold" }
   | { readonly kind: "stored-checks"; readonly stored: TaskChecks }
   | {
       readonly kind: "check-authoring";
@@ -726,9 +742,9 @@ interface DisputedResult {
 }
 
 /**
- * The implementer's finished work changed paths under `environment/` and nothing else the ownership
- * gate refuses: it needs an environment change, which only the platform role makes (ADR-074
- * addendum 2 d66 b). Nothing was merged, and the task branch is deleted, so the task's next
+ * The implementer's finished work changed recipe files and nothing else the ownership gate
+ * refuses: it needs an environment change, which only the platform role makes (ADR-074
+ * addendum 2 d66 b, d72 B1). Nothing was merged, and the task branch is deleted, so the task's next
  * dispatch starts a fresh branch from main once the environment has changed. Not the task's
  * failure and no lesson: the orchestrator opens an environment task carrying `need` and `diff`
  * and the item waits on it (bounded per implementation task), never routing it through the
@@ -736,11 +752,11 @@ interface DisputedResult {
  */
 interface EnvironmentChangeRequestedResult {
   readonly status: "environment_change_requested";
-  /** The paths under `environment/` the branch changed. */
+  /** The recipe files the branch changed. */
   readonly paths: readonly string[];
   /** The implementer's own statement of what it needs: its finish summary. */
   readonly need: string;
-  /** The branch's diff of `environment/` against where it left main; a cut is marked. */
+  /** The branch's diff of those files against where it left main; a cut is marked. */
   readonly diff: string;
   readonly detail: string;
   readonly output: AgentOutputJson;
@@ -987,14 +1003,15 @@ export class DevelopmentService {
       return substrateBlocked(task, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
     }
 
-    // Only the environment role's work is checked by the substrate: any other task so marked
-    // would skip verification without being able to build what the gate checks.
-    if (task.taskSpec?.checkedBy === "substrate" && task.workKind !== "environment") {
+    // Only the environment role's work and the product scaffold are checked by the substrate: any
+    // other task so marked would skip verification without being able to build what the gate checks.
+    const substrateKind = task.taskSpec?.origin === "product-scaffold" ? "implementation" : "environment";
+    if (task.taskSpec?.checkedBy === "substrate" && task.workKind !== substrateKind) {
       const result = failedBeforeAgent(
         task,
         sessionId,
         "checkSubstrateGate",
-        `task_spec.checkedBy is "substrate" but the task's work kind is ${task.workKind ?? "unrecorded"}, not environment`,
+        `task_spec.checkedBy is "substrate" but the task's work kind is ${task.workKind ?? "unrecorded"}, not ${substrateKind}`,
         `no gate can check ${task.id}`,
       );
       await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
@@ -1330,6 +1347,18 @@ export class DevelopmentService {
    * from nothing).
    */
   private async planWork(task: TaskDescriptor, environment: DispatchEnvironment): Promise<WorkPlan | Unplannable> {
+    // The product scaffold is decided by the product's build and test from the definition on its
+    // merge: no check can be written for a layout that does not exist yet (ADR-074 addendum 2 d72 B2).
+    if (task.taskSpec?.origin === "product-scaffold") {
+      if (task.taskSpec.checkedBy !== "substrate" || environment.kind !== "environment") {
+        return {
+          kind: "unplannable",
+          operation: "checkSubstrateGate",
+          reason: `product scaffold ${task.id} needs task_spec.checkedBy "substrate" and a defined environment to run the product's build and test in`,
+        };
+      }
+      return { kind: "scaffold" };
+    }
     if (task.taskSpec?.checkedBy === "substrate") return { kind: "substrate" };
     // Environment work (Sprint 0, and every environment task an implementation requested) is decided
     // by the substrate gate alone: stored checks and the implementer's ownership gate would refuse
@@ -1384,7 +1413,16 @@ export class DevelopmentService {
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
   private checkoutDir(
     d: Dispatch,
-    purpose: "red-run" | "verify" | "post-merge-checks" | "delivered-on-main" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
+    purpose:
+      | "red-run"
+      | "verify"
+      | "verify-probe"
+      | "post-merge-checks"
+      | "delivered-on-main"
+      | `run-checks-${number}`
+      | `define-check-${number}`
+      | "environment-check"
+      | "substrate-gate",
   ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
@@ -1431,14 +1469,14 @@ export class DevelopmentService {
       }
     }
     const operatorUnblock = task.blockedReason?.source === "operator_unblock" ? formatOperatorUnblock(task.blockedReason) : undefined;
-    // Named before work starts (ADR-074 addendum 2 d66 c): what the ownership gate refuses, and
-    // the owned files whose change rebuilds the environment.
+    // Named before work starts (ADR-074 addendum 2 d66 c, d72): what the ownership gate refuses,
+    // and the inputs whose change rebuilds the environment.
     const protectedPaths: AgentBrief["protectedPaths"] =
       environment.kind === "environment"
         ? {
-            environment: ENVIRONMENT_DIR,
+            recipe: [...recipePaths(environment.definition)],
             checkFiles: [...new Set((await this.deps.checks.checkFilesOf(task.projectId)).map((file) => file.path))].sort(),
-            ownedFiles: environment.owned.filter((entry) => entry !== ENVIRONMENT_DIR),
+            inputs: [...environment.definition.inputs],
           }
         : undefined;
     return createAgentBrief(
@@ -1618,7 +1656,7 @@ export class DevelopmentService {
       if (uncommitted !== null) return uncommitted;
     }
 
-    if (d.work.kind === "stored-checks") {
+    if (d.work.kind === "stored-checks" || d.work.kind === "scaffold") {
       const refused = await this.ownershipGate(d, output);
       if (refused !== null) return refused;
     }
@@ -1631,6 +1669,12 @@ export class DevelopmentService {
         eventSink,
         postMergeOperation: "postMergeVerify",
         postMergeVerify: (path) => this.postMergeEnvironmentTest(d, path, gate.tested),
+      };
+    } else if (d.work.kind === "scaffold") {
+      finalizeDeps = {
+        eventSink,
+        postMergeOperation: "postMergeVerify",
+        postMergeVerify: (path) => this.postMergeScaffold(d, path),
       };
     } else {
       const { stored } = d.work;
@@ -1832,7 +1876,7 @@ export class DevelopmentService {
       unchecked = completed.unchecked;
       own = { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files };
       suites = [
-        { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.test }], files: [] },
+        { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.definition.test }], files: [] },
         ...earlier.map((prior) => ({
           label: `earlier task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
           checks: prior.checks,
@@ -1988,12 +2032,12 @@ export class DevelopmentService {
   }
 
   /**
-   * Separation of duties (s-platform-role-m1, sprint0-run D5; ADR-074 addendum 2 d66), before the
-   * tentative merge: the task branch's changes since it left main may not touch `environment/`
-   * (the platform role's) nor any stored check file of the project (the check author's). Other
-   * owned files of the environment may change: the post-merge verification rebuilds it. Only
-   * `environment/` paths: environment_change_requested with the implementer's need and the diff of
-   * those paths; the task branch is deleted so the next dispatch starts fresh from main. Any check
+   * Separation of duties (s-platform-role-m1, sprint0-run D5; ADR-074 addendum 2 d72 B1), before
+   * the tentative merge: the task branch's changes since it left main may not touch the recipe of
+   * main's environment (the platform role's) nor any stored check file of the project (the check
+   * author's). Every other file is the product's, inputs the image build reads included: the
+   * post-merge verification rebuilds the image when one changes. Only recipe files:
+   * environment_change_requested with the implementer's need and the diff of those files; the task branch is deleted so the next dispatch starts fresh from main. Any check
    * file: failed with the paths and the rule, the branch kept. Nothing is merged either way. Z0's
    * own git failing blocks for the operator. Null when clean.
    */
@@ -2023,11 +2067,11 @@ export class DevelopmentService {
     };
     let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
     try {
-      // Fail closed: a task decided by stored checks dispatched without an environment has no
-      // rebuild to accept an owned-file change against.
+      // Fail closed: a task dispatched without an environment has no recipe to fence and no
+      // rebuild to accept an input change against.
       if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
       const checkFiles = await this.deps.checks.checkFilesOf(task.projectId);
-      verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), checkFiles);
+      verdict = await checkBranchOwnership(targetProjectPath, task.id, taskBranchName(task.id), recipePaths(d.environment.definition), checkFiles);
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the ownership gate could not run");
       return blockOn(e, "ownership gate");
@@ -2064,7 +2108,7 @@ export class DevelopmentService {
     const chain = wrapError("development", "ownershipGate", verdict.reason, {
       taskId: task.id,
       checkPaths: verdict.checkPaths,
-      environmentPaths: verdict.environmentPaths,
+      recipePaths: verdict.recipePaths,
     });
     eventSink?.emit({ event: "gate_failed", taskId: task.id, attempt: task.attempt, reason: summary });
     return {
@@ -2126,29 +2170,85 @@ export class DevelopmentService {
   }
 
   /**
-   * A substrate-checked task's post-merge check: the gate's run again, the environment's `build` then
-   * `test` from the gate's image, on a throwaway checkout of the tentative merge, left clean.
+   * An environment task's post-merge check: the gate's run again, the definition's `probe` from the
+   * gate's image, on a throwaway checkout of the tentative merge. Sprint 0's merge holds no product,
+   * so it runs nothing else (ADR-074 addendum 2 d72 S), nor does an environment change opened with
+   * product "absent" (the product scaffold asked before any scaffold completed; its own merge runs
+   * them). Any other environment change lands on a product: after the probe, the product's `build`
+   * then `test` run on the merge from the same image and must leave the checkout clean.
    */
   private async postMergeEnvironmentTest(d: Dispatch, targetProjectPath: string, tested: TestedEnvironment): Promise<PostMergeVerdict> {
     const commit = await tentativeMergeCommit(targetProjectPath, d.task.id);
-    const commands = await runPostMergeEnvironmentCommands(
-      this.environmentScope(d),
-      POST_MERGE_VERIFIER_ROLE,
-      tested,
-      commit,
-      this.deps.attemptPolicy.perCommandTimeoutSeconds,
-    );
-    const passed = environmentCommandsPassed(commands);
-    const details = formatEnvironmentCommands(commands);
+    const scope = this.environmentScope(d);
+    const timeoutSeconds = this.deps.attemptPolicy.perCommandTimeoutSeconds;
+    const probe = await runPostMergeProbe(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);
+    let passed = environmentProbePassed(probe);
+    let details = formatEnvironmentProbe(probe);
+    const noProduct = d.task.taskSpec?.origin === "sprint0" || d.task.taskSpec?.product === "absent";
+    if (passed && !noProduct) {
+      const commands = await runPostMergeEnvironmentCommands(scope, POST_MERGE_VERIFIER_ROLE, tested, commit, timeoutSeconds);
+      passed = environmentCommandsPassed(commands);
+      details = `${details}\nThe product's build and test on the merge:\n${formatEnvironmentCommands(commands)}`;
+    }
     this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: d.task.id, attempt: d.task.attempt, verdict: passed ? "passed" : "failed", details });
     return { passed, details };
   }
 
   /**
-   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d, d66 a).
-   * First the merge's own environment (mergedEnvironment): when the work changed an owned file
-   * outside `environment/`, the merge's version is rebuilt and its build and test must pass, and
-   * that version's image and test replace the dispatch's below; the merge passing records the
+   * The product scaffold's post-merge check (ADR-074 addendum 2 d72 B2): the environment of the
+   * tentative merge (mergedEnvironment: rebuilt when the scaffold wrote an input the recipe reads),
+   * then the definition's `build` then `test` on a throwaway checkout of the merge in a verifier
+   * cell from that image, which must pass and leave the checkout clean. A rebuilt version passing
+   * records the dispatch's statement for it. A substrate failure throws.
+   */
+  private async postMergeScaffold(d: Dispatch, targetProjectPath: string): Promise<PostMergeVerdict> {
+    const { task } = d;
+    let verdict: PostMergeVerdict;
+    let merged: MergedEnvironment;
+    try {
+      if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
+      const commit = await tentativeMergeCommit(targetProjectPath, task.id);
+      merged = await this.mergedEnvironment(d, d.environment, commit);
+      if (merged.kind === "refused") {
+        verdict = { passed: false, details: merged.details };
+      } else if (merged.kind === "rebuilt") {
+        verdict = { passed: true, details: merged.details };
+      } else {
+        const commands = await runPostMergeEnvironmentCommands(
+          this.environmentScope(d),
+          POST_MERGE_VERIFIER_ROLE,
+          { version: merged.version, imageRef: merged.imageRef, definition: merged.definition },
+          commit,
+          this.deps.attemptPolicy.perCommandTimeoutSeconds,
+        );
+        verdict = {
+          passed: environmentCommandsPassed(commands),
+          details: `the product's build and test (environment version ${merged.version}) on the merge:\n${formatEnvironmentCommands(commands)}`,
+        };
+      }
+    } catch (e) {
+      if (environmentErrorOf(e) !== null) throw e;
+      throw new VerificationInfrastructureFault(task.id, "product scaffold build and test", { cause: e });
+    }
+    this.deps.eventSink?.emit({ event: "post_merge_verify", taskId: task.id, attempt: task.attempt, verdict: verdict.passed ? "passed" : "failed", details: verdict.details });
+    if (verdict.passed && merged.kind === "rebuilt") await this.recordRebuiltStatement(task.id, merged);
+    return verdict;
+  }
+
+  /** The version a verified merge produced carries the statement of the stack it was built from. */
+  private async recordRebuiltStatement(taskId: WorkItemId, merged: Extract<MergedEnvironment, { readonly kind: "rebuilt" }>): Promise<void> {
+    try {
+      await this.deps.environment.statements.record(taskId, merged.statement, merged.version);
+    } catch (e) {
+      throw new VerificationInfrastructureFault(taskId, `record the environment statement for rebuilt version ${merged.version}`, { cause: e });
+    }
+  }
+
+  /**
+   * Every other task's post-merge check (s-independent-verify-m1, ADR-074 addendum 2 d64 d, d72 B3).
+   * First the merge's own environment (mergedEnvironment): when the work changed an input the
+   * recipe reads, the merge's version is rebuilt and the product's build and test must pass on it,
+   * and that version's image and test replace the dispatch's below; the merge passing records the
    * dispatch's statement for that version. Then, in one verifier cell from that image on a
    * throwaway checkout of the tentative merge, in order:
    * the environment definition's `test`; the latest stored checks of every implementation task of
@@ -2184,7 +2284,7 @@ export class DevelopmentService {
       earlier = completed.checked;
       unchecked = completed.unchecked;
       suites = [
-        { label: `the environment's test (version ${merged.version})`, checks: [{ name: "environment test", command: merged.test }], files: [] },
+        { label: `the environment's test (version ${merged.version})`, checks: [{ name: "environment test", command: merged.definition.test }], files: [] },
         ...earlier.map((prior) => ({
           label: `earlier task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
           checks: prior.checks,
@@ -2234,26 +2334,22 @@ export class DevelopmentService {
       boundSeconds: checkCount * this.deps.attemptPolicy.perCommandTimeoutSeconds,
       details: verdict.details,
     });
-    if (verdict.passed && merged.kind === "rebuilt") {
-      // The version this merge produces is the stack the team stated, with files a verified merge
-      // changed: it carries that statement, so the next dispatch resolves it (current-environment.ts).
-      try {
-        await this.deps.environment.statements.record(task.id, merged.statement, merged.version);
-      } catch (e) {
-        throw new VerificationInfrastructureFault(task.id, `record the environment statement for rebuilt version ${merged.version}`, { cause: e });
-      }
-    }
+    // The version this merge produces is the stack the team stated, with inputs a verified merge
+    // changed: it carries that statement, so the next dispatch resolves it (current-environment.ts).
+    if (verdict.passed && merged.kind === "rebuilt") await this.recordRebuiltStatement(task.id, merged);
     return verdict;
   }
 
   /**
-   * The environment of the tentative merge `commit` (ADR-074 addendum 2 d66 a): its definition and
-   * version read from the merge's committed objects. The same version as the dispatch's: its image
-   * and test. Another one (the work changed an owned file outside `environment/`): its image is
-   * built and recorded, and its `build` then `test` run on a fresh checkout of the merge in a
-   * verifier cell from it, which must pass and leave the checkout clean. A definition the merge
-   * leaves unreadable, an image that cannot be built and a failed build or test refuse the merge
-   * with what failed, the task's failure. A substrate failure throws.
+   * The environment of the tentative merge `commit` (ADR-074 addendum 2 d72 B3): its definition and
+   * version read from the merge's committed objects, the version being the digest of the build
+   * context (environmentVersion, the same function the image build uses). The same version as the
+   * dispatch's: its image. Another one (the work changed an input the recipe reads): its image is
+   * built and recorded, and the product's `build` then `test` run on a fresh checkout of the merge
+   * in a verifier cell from it, which must pass and leave the checkout clean; the caller then runs
+   * the stored checks on that image. A definition the merge leaves unreadable, an image that cannot
+   * be built and a failed build or test refuse the merge with what failed, the task's failure. A
+   * substrate failure throws.
    */
   private async mergedEnvironment(d: Dispatch, current: CurrentEnvironment, commit: string): Promise<MergedEnvironment> {
     const { task } = d;
@@ -2270,9 +2366,11 @@ export class DevelopmentService {
       }
       throw e;
     }
-    if (version === current.version) return { kind: "unchanged", version, test: current.test, image: current.imageId };
+    if (version === current.version) {
+      return { kind: "unchanged", version, image: current.imageId, imageRef: current.imageRef, definition: current.definition };
+    }
 
-    const change = `The merge changes files the environment owns outside ${ENVIRONMENT_DIR}: version ${current.version} becomes ${version}`;
+    const change = `The merge changes the environment's build context (its inputs): version ${current.version} becomes ${version}`;
     let built: BuiltEnvironment;
     try {
       built = await this.deps.environment.images.build({ projectId: task.projectId, repoGitDir: gitDir, commit, definition });
@@ -2307,9 +2405,17 @@ export class DevelopmentService {
       commit,
       this.deps.attemptPolicy.perCommandTimeoutSeconds,
     );
-    const ran = `the rebuilt environment's build and test (version ${version}) on the merge:\n${formatEnvironmentCommands(commands)}`;
+    const ran = `the product's build and test on the rebuilt environment (version ${version}) on the merge:\n${formatEnvironmentCommands(commands)}`;
     if (!environmentCommandsPassed(commands)) return refused(`${change}, and ${ran}`);
-    return { kind: "rebuilt", version, test: definition.test, image: built.imageId, statement: current.statement, details: `${change}; ${ran}` };
+    return {
+      kind: "rebuilt",
+      version,
+      image: built.imageId,
+      imageRef: built.imageRef,
+      definition,
+      statement: current.statement,
+      details: `${change}; ${ran}`,
+    };
   }
 
   /**
@@ -2367,13 +2473,14 @@ export class DevelopmentService {
   private checkDefinitionPort(d: Dispatch, work: CheckAuthoring): CheckDefinitionPort {
     let runs = 0;
     return {
+      fileWritten: (path) => work.recorder.fileWritten(path),
       define: async (check, timeoutSeconds) => {
         const recording = work.recorder.record(check);
         if (recording.kind === "refused") return recording;
         runs += 1;
         let redRun: CheckRedRunPreview;
         try {
-          const harvest = await previewCheckFiles(d.repo, d.task.id, work.startCommit, work.environment.owned);
+          const harvest = await previewCheckFiles(d.repo, d.task.id, work.startCommit, buildContextPaths(work.environment.definition), work.recorder.writtenFiles());
           if (harvest.kind === "rejected") {
             redRun = { kind: "files_refused", detail: harvest.reason };
           } else {
@@ -2445,7 +2552,7 @@ export class DevelopmentService {
       return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on main");
     }
     // Every check passing on main is the over-delivered case (d67 b), not a stale one: an earlier
-    // implementation did this task's work, and the version moved because it touched an owned path.
+    // implementation did this task's work, and the version moved because it touched the build context.
     // Reopening the check task could never end, since its red run rejects every check that passes.
     const allPass = redRun.kind === "ran" && redRun.runs.length > 0 && redRun.runs.every(checkPassed);
     if (allPass) {
@@ -2534,7 +2641,7 @@ export class DevelopmentService {
     try {
       const defined = work.recorder.checks();
       if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check");
-      const harvest = await harvestCheckFiles(d.repo, task.id, work.startCommit, work.environment.owned);
+      const harvest = await harvestCheckFiles(d.repo, task.id, work.startCommit, buildContextPaths(work.environment.definition), work.recorder.writtenFiles());
       if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason);
 
       let redRun: CheckRunReport;

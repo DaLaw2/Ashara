@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import { environmentVersion, parseEnvironmentDefinition, readEnvironmentDefinition } from "./environment.js";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNotAFile } from "./errors.js";
+import { environmentVersion, parseEnvironmentDefinition, readEnvironmentDefinition, recipePaths } from "./environment.js";
+import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
 
 const run = promisify(execFile);
 const scratch: string[] = [];
@@ -15,8 +15,10 @@ afterAll(async () => {
 });
 
 const VALID = `
-owned = ["environment/", "package.json"]
 containerfile = "environment/Containerfile"
+recipe = ["environment/setup.sh"]
+inputs = ["package.json"]
+probe = "make --version"
 build = "make"
 test = "make check"
 `;
@@ -33,39 +35,37 @@ function issuesOf(text: string): readonly string[] {
 
 describe("parseEnvironmentDefinition", () => {
   it("accepts a definition and adds nothing to it", () => {
-    expect(parseEnvironmentDefinition(VALID, "env.toml")).toEqual({
-      owned: ["environment/", "package.json"],
+    const definition = parseEnvironmentDefinition(VALID, "env.toml");
+    expect(definition).toEqual({
       containerfile: "environment/Containerfile",
+      recipe: ["environment/setup.sh"],
+      inputs: ["package.json"],
+      probe: "make --version",
       build: "make",
       test: "make check",
     });
+    expect(recipePaths(definition)).toEqual(["environment/environment.toml", "environment/Containerfile", "environment/setup.sh"]);
   });
 
-  it("requires environment/ among the owned paths", () => {
-    expect(issuesOf(VALID.replace('"environment/", ', ""))).toEqual(
-      expect.arrayContaining([expect.stringContaining('owned must include "environment/"')]),
+  it("keeps every recipe file under environment/, so a recipe can never name a product file", () => {
+    expect(issuesOf(VALID.replace('"environment/setup.sh"', '"main.go"')).join("; ")).toContain(
+      '"main.go" must be a file under "environment/"',
     );
-  });
-
-  it("refuses owned paths that escape the repository or are absolute", () => {
-    const escaping = issuesOf(VALID.replace('"package.json"', '"../secrets"'));
-    expect(escaping.join("; ")).toContain("escapes the repository");
-    const absolute = issuesOf(VALID.replace('"package.json"', '"/etc/passwd"'));
-    expect(absolute.join("; ")).toContain("is absolute");
-  });
-
-  it("refuses any owned directory other than environment/", () => {
-    expect(issuesOf(VALID.replace('"package.json"', '"src/"')).join("; ")).toContain(
-      '"src/" names a directory; the only owned directory is "environment/"',
-    );
-  });
-
-  it("refuses extra keys, a containerfile outside the owned set and empty commands", () => {
-    expect(issuesOf(`${VALID}\nimage = "x"\n`).join("; ")).toContain("image");
     expect(issuesOf(VALID.replace('"environment/Containerfile"', '"Containerfile"')).join("; ")).toContain(
-      "containerfile must be inside an owned path",
+      '"Containerfile" must be a file under "environment/"',
     );
-    expect(issuesOf(VALID.replace('"make check"', '"  "')).join("; ")).toContain("test: must be a non-empty command");
+  });
+
+  it("refuses paths that escape the repository, are absolute or name a directory", () => {
+    expect(issuesOf(VALID.replace('"package.json"', '"../secrets"')).join("; ")).toContain("escapes the repository");
+    expect(issuesOf(VALID.replace('"package.json"', '"/etc/passwd"')).join("; ")).toContain("is absolute");
+    expect(issuesOf(VALID.replace('"package.json"', '"src/"')).join("; ")).toContain("names a directory");
+  });
+
+  it("refuses a recipe file that is also an input, extra keys and empty commands", () => {
+    expect(issuesOf(VALID.replace('"package.json"', '"environment/setup.sh"')).join("; ")).toContain("recipe files cannot also be inputs");
+    expect(issuesOf(`${VALID}\nowned = ["environment/"]\n`).join("; ")).toContain("owned");
+    expect(issuesOf(VALID.replace('"make --version"', '"  "')).join("; ")).toContain("probe: must be a non-empty command");
   });
 });
 
@@ -85,7 +85,7 @@ async function commitFiles(repo: string, files: Record<string, string>, message:
 }
 
 describe("environmentVersion", () => {
-  it("is stable across commits outside the owned set and changes with an owned file", async () => {
+  it("is stable across product commits, changes with an input, and holds while an input is absent", async () => {
     const repo = await mkdtemp(join(tmpdir(), "ashara-env-version-"));
     scratch.push(repo);
     await git(repo, "init", "-q", "-b", "main");
@@ -94,7 +94,7 @@ describe("environmentVersion", () => {
       {
         "environment/environment.toml": VALID,
         "environment/Containerfile": "FROM scratch\n",
-        "package.json": "{}\n",
+        "environment/setup.sh": "true\n",
         "src/app.txt": "v1\n",
       },
       "env",
@@ -104,29 +104,36 @@ describe("environmentVersion", () => {
     const v1 = await environmentVersion(gitDir, "main", definition);
     expect(v1).toEqual({ version: expect.stringMatching(/^[0-9a-f]{64}$/), commit: first });
 
-    await commitFiles(repo, { "src/app.txt": "v2\n", "README": "unrelated\n" }, "unrelated");
+    await commitFiles(repo, { "src/app.txt": "v2\n", "README": "unrelated\n", "environment/notes.txt": "not recipe\n" }, "product");
     expect(await environmentVersion(gitDir, "main", definition)).toEqual(v1);
 
-    const changed = await commitFiles(repo, { "package.json": '{"dependencies":{}}\n' }, "owned change");
+    const added = await commitFiles(repo, { "package.json": "{}\n" }, "input appears");
     const v2 = await environmentVersion(gitDir, "main", definition);
-    expect(v2.commit).toBe(changed);
+    expect(v2.commit).toBe(added);
     expect(v2.version).not.toBe(v1.version);
+
+    await commitFiles(repo, { "package.json": '{"dependencies":{}}\n' }, "input changes");
+    expect((await environmentVersion(gitDir, "main", definition)).version).not.toBe(v2.version);
     // An earlier commit still resolves to the earlier version.
     expect(await environmentVersion(gitDir, first, definition)).toEqual(v1);
   });
 
-  it("refuses an owned file entry that is a directory in the committed tree, naming it", async () => {
+  it("refuses an input that is a directory in the committed tree, naming it", async () => {
     const repo = await mkdtemp(join(tmpdir(), "ashara-env-version-"));
     scratch.push(repo);
     await git(repo, "init", "-q", "-b", "main");
-    await commitFiles(repo, { "environment/Containerfile": "FROM scratch\n", "package.json/index.txt": "a directory\n" }, "dir");
+    await commitFiles(
+      repo,
+      { "environment/Containerfile": "FROM scratch\n", "environment/setup.sh": "true\n", "package.json/index.txt": "a directory\n" },
+      "dir",
+    );
     const definition = parseEnvironmentDefinition(VALID, "env.toml");
     const refusal = environmentVersion(join(repo, ".git"), "main", definition);
-    await expect(refusal).rejects.toBeInstanceOf(OwnedPathNotAFile);
-    await expect(refusal).rejects.toMatchObject({ ownedPath: "package.json", containedPath: "package.json/index.txt" });
+    await expect(refusal).rejects.toBeInstanceOf(EnvironmentVersionUnresolved);
+    await expect(refusal).rejects.toThrow(/"package\.json" is a directory at this commit/);
   });
 
-  it("fails closed on an owned path that matches nothing and on a missing definition", async () => {
+  it("fails closed on a missing recipe file and on a missing definition", async () => {
     const repo = await mkdtemp(join(tmpdir(), "ashara-env-version-"));
     scratch.push(repo);
     await git(repo, "init", "-q", "-b", "main");
@@ -134,7 +141,7 @@ describe("environmentVersion", () => {
     const gitDir = join(repo, ".git");
     await expect(readEnvironmentDefinition(gitDir, "main")).rejects.toBeInstanceOf(EnvironmentDefinitionInvalid);
     const definition = parseEnvironmentDefinition(VALID, "env.toml");
-    await expect(environmentVersion(gitDir, "main", definition)).rejects.toThrow(/package\.json.*match no file/);
+    await expect(environmentVersion(gitDir, "main", definition)).rejects.toThrow(/recipe file\(s\).*environment\/environment\.toml.*not files/);
     await expect(environmentVersion(gitDir, "--output=x", definition)).rejects.toBeInstanceOf(EnvironmentVersionUnresolved);
   });
 });

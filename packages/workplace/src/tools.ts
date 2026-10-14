@@ -146,10 +146,9 @@ const TOOL_SCHEMAS: ToolSchemas = {
 const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
   description:
     "Build the environment defined in environment/environment.toml from the workspace's current files, then run " +
-    "its build and test commands on a fresh checkout of those files in a workspace started from the built image, " +
-    "and list any file they left untracked or modified. Refuses work that touches a path outside the owned paths. " +
-    "Returns the environment version, the image build log, both commands' output and the verdict. Only the image " +
-    "build can reach the network.",
+    "its probe command on a fresh checkout of those files in a workspace started from the built image. Refuses " +
+    "work that touches a path outside the recipe. Returns the environment version, the image build log, the " +
+    "probe's output and the verdict. Only the image build can reach the network.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 };
 
@@ -168,10 +167,10 @@ const ENVIRONMENT_FINISH_SCHEMA: TurnToolSchema = {
         maxLength: MAX_STATEMENT_CHARS,
         description:
           'Required when status is "done": one paragraph stating the stack you chose (language, toolchain, base ' +
-          "image) and why, and what the environment's test covers: it proves the toolchain builds and runs, and " +
-          "product behaviour is verified by the check author's checks. Do not promise that later tasks extend the " +
-          "test: its command is in environment/, which implementation work cannot change. It is shown to the client: " +
-          "no file list, no list of changes.",
+          "image) and why, and how the product is built and tested with it (the definition's build and test " +
+          "commands, which the product's first task makes pass). The probe only proves the toolchain is present; " +
+          "product behaviour is verified by the check author's checks. It is shown to the client: no file list, no " +
+          "list of changes.",
       },
       blockedReason: { type: "string", description: 'Required when status is "blocked".' },
     },
@@ -361,6 +360,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = writeFileArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       await cell.writeFile(args.data.path, args.data.content);
+      context.checks?.fileWritten(args.data.path);
       return ok(`Wrote ${args.data.path} (${args.data.content.length} characters).`);
     }
     case "edit_file": {
@@ -374,6 +374,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (count > 1) return toolError(`old_text matches ${count} locations in ${path}. Include more surrounding text.`);
       // Spliced by index: String.replace would interpret `$&` and `$1` in new_text.
       await cell.writeFile(path, file.text.slice(0, first) + newText + file.text.slice(first + oldText.length));
+      context.checks?.fileWritten(path);
       return ok(`Edited ${path}: replaced ${oldText.split("\n").length} line(s) with ${newText.split("\n").length} line(s).`);
     }
     case "list_directory": {

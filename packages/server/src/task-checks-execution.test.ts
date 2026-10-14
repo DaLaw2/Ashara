@@ -227,7 +227,8 @@ beforeAll(async () => {
   // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.
   await writeFile(
     join(target, "environment", "environment.toml"),
-    'owned = ["environment/"]\ncontainerfile = "environment/Containerfile"\nbuild = "true"\ntest = "test ! -e BROKEN && echo environment ok"\n',
+    'containerfile = "environment/Containerfile"\nrecipe = []\ninputs = []\nprobe = "echo toolchain ok"\nbuild = "true"\n' +
+      'test = "test ! -e BROKEN && echo environment ok"\n',
   );
   await writeFile(join(target, "environment", "Containerfile"), `FROM ${base.image}\n`);
   await run("git", ["init", "-q", "-b", "main"], { cwd: target });

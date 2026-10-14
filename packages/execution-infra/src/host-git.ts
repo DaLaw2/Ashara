@@ -48,7 +48,7 @@ export async function runHostGit(repo: HostRepo, args: readonly string[]): Promi
 
 /**
  * git against an explicit git dir with no work tree: for commands that read committed objects only
- * (ls-tree, log, cat-file). Pathspecs are literal, so an owned path is never read as a glob or as
+ * (ls-tree, log, cat-file). Pathspecs are literal, so a build context path is never read as a glob or as
  * pathspec magic. stdout is bytes: a blob is not necessarily text.
  */
 export async function runHostGitObjects(gitDir: string, args: readonly string[]): Promise<Buffer> {

@@ -24,6 +24,8 @@ interface TaskCounts {
   readonly decomposition: number;
   /** The Sprint 0 task decomposition adds to every plan: the project environment. */
   readonly sprint0: number;
+  /** The product scaffold decomposition adds after Sprint 0: the product's layout (ADR-074 addendum 2 d72 B2). */
+  readonly scaffolds: number;
   /** The check task decomposition adds for each task it produced. */
   readonly checks: number;
   /** The review of every check of the plan, read together before any of its work starts (ADR-074 addendum 2 d71 c). */
@@ -129,6 +131,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       tasks: {
         decomposition: origins.filter((o) => o === "decomposition").length,
         sprint0: origins.filter((o) => o === "sprint0").length,
+        scaffolds: origins.filter((o) => o === "product-scaffold").length,
         checks: origins.filter((o) => o === "check").length,
         reviews: origins.filter((o) => o === "review").length,
         unrecorded: origins.filter((o) => o === undefined).length,

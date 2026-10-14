@@ -53,5 +53,10 @@ export type CheckDefinitionResult =
  * red-runs it at once. A substrate that cannot run it throws.
  */
 export interface CheckDefinitionPort {
+  /**
+   * The author wrote `path` with write_file or edit_file: only such files are its submission, never
+   * a file a command it ran left in the workspace (fifth run N22).
+   */
+  fileWritten(path: string): void;
   define(check: CheckDefinition, timeoutSeconds: number): Promise<CheckDefinitionResult>;
 }

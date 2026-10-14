@@ -240,8 +240,8 @@ export class EnvironmentDefinitionInvalid extends ExecutionInfraError {
 }
 
 /**
- * The environment version cannot be computed at `commit`: git failed, an owned path matches
- * nothing, or the owned set holds an entry an image cannot be built from (a submodule, a symlink).
+ * The environment version cannot be computed at `commit`: git failed, a recipe file is missing, or
+ * the build context holds an entry an image cannot be built from (a directory, a submodule, a symlink).
  */
 export class EnvironmentVersionUnresolved extends ExecutionInfraError {
   readonly gitDir: string;
@@ -254,27 +254,6 @@ export class EnvironmentVersionUnresolved extends ExecutionInfraError {
     this.gitDir = gitDir;
     this.commit = commit;
     this.reason = reason;
-  }
-}
-
-/**
- * An owned entry named as one file is a directory in the committed tree. Only `environment/` can be
- * an owned directory, so no environment version exists for that commit.
- */
-export class OwnedPathNotAFile extends EnvironmentVersionUnresolved {
-  readonly ownedPath: string;
-  readonly containedPath: string;
-
-  constructor(gitDir: string, commit: string, ownedPath: string, containedPath: string) {
-    super(
-      gitDir,
-      commit,
-      `owned entry ${JSON.stringify(ownedPath)} is a directory at this commit (it holds ${JSON.stringify(containedPath)}); ` +
-        `only "environment/" can be an owned directory, every other owned entry must be one file`,
-    );
-    this.name = "OwnedPathNotAFile";
-    this.ownedPath = ownedPath;
-    this.containedPath = containedPath;
   }
 }
 

@@ -100,7 +100,7 @@ interface SuiteReviewProblemsResult {
   readonly detail: string;
 }
 
-/** An implementer's finished work that changed paths under environment/, as development returned it. */
+/** An implementer's finished work that changed environment recipe files, as development returned it. */
 interface EnvironmentChangeResult {
   readonly paths: readonly string[];
   readonly need: string;
@@ -166,7 +166,7 @@ async function executeTask(
   const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
 
   if (execResult.status === "environment_change_requested") {
-    // Not a failure to retry: only environment work may change environment/, so a replan would
+    // Not a failure to retry: only environment work may change the recipe, so a replan would
     // meet the same refusal. An environment task is opened for the platform role and the item
     // waits on it, within a bound (ADR-074 addendum 2 d66 b); its branch is already deleted, so it
     // restarts from main once the environment has changed.
@@ -694,7 +694,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
 }
 
 /**
- * The exit of an item whose implementer changed paths under environment/ (planning's
+ * The exit of an item whose implementer changed environment recipe files (planning's
  * requestEnvironmentChange). How many environment tasks were already opened for it is read from
  * its dependencies, a durable count; the owner is the role doing the project's environment work.
  * Within the bound the new environment task, the item's dependency on it and the item back at
@@ -713,6 +713,14 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
     const dependency = await PlanningService.findWorkItem(deps.workItemRepo, dependencyId);
     if (dependency?.taskSpec?.origin === "environment-change") opened++;
   }
+  // The product's build and test are skipped only on evidence there is no product: the product
+  // scaffold itself is asking and none of the project's has completed. Any other requester (a plan
+  // from before the scaffold included) keeps them, the stricter check.
+  const completed = await deps.workItemRepo.findByProjectAndStatus(task.projectId, "Completed");
+  const product =
+    item.taskSpec?.origin === "product-scaffold" && !completed.some((done) => done.taskSpec?.origin === "product-scaffold")
+      ? "absent"
+      : "present";
   let owner: Awaited<ReturnType<ExecutionRoutingDeps["environmentOwner"]>>;
   try {
     owner = await deps.environmentOwner(task.projectId);
@@ -722,7 +730,7 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
   const previousStatus = item.status;
   let exit: ReturnType<typeof requestEnvironmentChange>;
   try {
-    exit = requestEnvironmentChange(item, request, { opened, owner });
+    exit = requestEnvironmentChange(item, request, { opened, owner, product });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     console.warn(`[${task.id}] environment-change exit rejected (${e.from} -> ${e.to}); item left at ${e.from} (${request.detail})`);
@@ -762,7 +770,7 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
   await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
   const dispatchCount = await refundBestEffort(deps, task.id, "an environment change request");
   console.warn(
-    `[${task.id}] needs a change under environment/ (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
+    `[${task.id}] needs a change to the environment recipe (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
       `(${opened + 1} for this task), item back at Pending waiting on it (dispatch count ${dispatchCount})`,
   );
 }

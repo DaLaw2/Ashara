@@ -1,7 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { afterAll, describe, expect, test } from "vitest";
 import type { CheckRun } from "@ashara/workplace";
+import { targetRepo } from "./host-git.js";
 import {
   CheckRecorder,
+  harvestCheckFiles,
   formatChecksForBrief,
   formatProjectChecksForCheckAuthor,
   redRunPreview,
@@ -83,6 +90,50 @@ describe("define_check's record", () => {
       kind: "files_refused",
       detail: "the check files cannot be placed on main: link",
     });
+  });
+});
+
+// Fifth run N22: a check run wrote an interpreter cache into the workspace, and the harvest rejected
+// every check for it ("not UTF-8 text").
+describe("the harvest of a check attempt's files", () => {
+  const scratch: string[] = [];
+  afterAll(async () => {
+    for (const dir of scratch) await rm(dir, { recursive: true, force: true });
+  });
+
+  async function repoWithStart(): Promise<{ readonly dir: string; readonly start: string }> {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "ashara-harvest-")));
+    scratch.push(dir);
+    const git = (...args: string[]) => promisify(execFile)("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+    await git("init", "-q", "-b", "main");
+    await git("config", "user.name", "t");
+    await git("config", "user.email", "t@t");
+    await writeFile(join(dir, "README"), "product\n");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "start");
+    return { dir, start: (await git("rev-parse", "HEAD")).stdout.trim() };
+  }
+
+  test("keeps only the files the author wrote with its file tools; what a command it ran left behind is no check file", async () => {
+    const { dir, start } = await repoWithStart();
+    await mkdir(join(dir, "checks", "__pycache__"), { recursive: true });
+    await writeFile(join(dir, "checks", "run.py"), "print('hi')\n");
+    await writeFile(join(dir, "checks", "__pycache__", "run.cpython-311.pyc"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
+    const recorder = new CheckRecorder();
+    recorder.fileWritten("./checks/run.py");
+
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles());
+    expect(harvest).toEqual({ kind: "harvested", files: [{ path: "checks/run.py", content: "print('hi')\n" }] });
+  });
+
+  test("a written file of the environment's build context still rejects the whole harvest", async () => {
+    const { dir, start } = await repoWithStart();
+    await writeFile(join(dir, "manifest.txt"), "dependencies: none\n");
+    const recorder = new CheckRecorder();
+    recorder.fileWritten("manifest.txt");
+
+    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles());
+    expect(harvest).toMatchObject({ kind: "rejected", reason: expect.stringContaining("overlap the environment's recipe and inputs") });
   });
 });
 

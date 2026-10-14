@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, posix } from "node:path";
 import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
-import { ownedPathsCover, runHostGit } from "@ashara/execution-infra";
+import { runHostGit } from "@ashara/execution-infra";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_RUNNER } from "@ashara/workplace";
 import type { CheckDefinition, CheckRedRunPreview, CheckRun, CheckRunReport } from "@ashara/workplace";
@@ -103,10 +103,22 @@ type CheckRecording =
 
 /**
  * define_check's record: keeps each definition of one attempt for Z0 to harvest. A definition
- * with the name of an earlier one replaces it in place (the last definition of a name wins).
+ * with the name of an earlier one replaces it in place (the last definition of a name wins). It
+ * also keeps the paths the author wrote with its file tools: only those are its submission, never
+ * a file a command it ran left behind (fifth run N22).
  */
 export class CheckRecorder {
   private readonly defined: CheckDefinition[] = [];
+  private readonly written = new Set<string>();
+
+  /** `path` as the file tool was given it; kept as the repository-relative path git reports. */
+  fileWritten(path: string): void {
+    this.written.add(posix.normalize(path).replace(/^(?:\.\/)+/, ""));
+  }
+
+  writtenFiles(): ReadonlySet<string> {
+    return new Set(this.written);
+  }
 
   record(check: CheckDefinition): CheckRecording {
     const earlier = this.defined.findIndex((d) => d.name === check.name);
@@ -249,20 +261,23 @@ export type CheckHarvest =
   | { readonly kind: "rejected"; readonly reason: string };
 
 /**
- * The files a check attempt added or changed: everything in its worktree is committed to the
- * throwaway branch, the branch is diffed against the commit it started from (hardened git), and
- * each file is read through the safe tree reader. A deletion, a link, a file in the environment's
- * owned paths, a file too large or not UTF-8 text rejects the whole harvest.
+ * The files a check attempt wrote: everything in its worktree is committed to the throwaway branch,
+ * the branch is diffed against the commit it started from (hardened git), and of the paths it
+ * changed only those the author wrote with its file tools (`written`) are its submission; whatever
+ * else changed was left by a command it ran and is no check file (fifth run N22). Each file is read
+ * through the safe tree reader. A deletion, a link, a file of the environment's build context
+ * (`buildContext`), a file too large or not UTF-8 text rejects the whole harvest.
  */
 export async function harvestCheckFiles(
   repo: HostRepo,
   taskId: string,
   startCommit: string,
-  owned: readonly string[],
+  buildContext: readonly string[],
+  written: ReadonlySet<string>,
 ): Promise<CheckHarvest> {
   await runHostGit(repo, ["add", "-A"]);
   await runHostGit(repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${taskId}`]);
-  return collectCheckFiles(repo, startCommit, "HEAD", owned);
+  return collectCheckFiles(repo, startCommit, "HEAD", buildContext, written);
 }
 
 /**
@@ -274,10 +289,11 @@ export async function previewCheckFiles(
   repo: HostRepo,
   taskId: string,
   startCommit: string,
-  owned: readonly string[],
+  buildContext: readonly string[],
+  written: ReadonlySet<string>,
 ): Promise<CheckHarvest> {
   const snapshot = await worktreeSnapshotCommit(repo, taskId, "define_check");
-  return collectCheckFiles(repo, startCommit, snapshot, owned);
+  return collectCheckFiles(repo, startCommit, snapshot, buildContext, written);
 }
 
 /** The harvest's rules on the diff from `startCommit` to `endCommit`, each file read from the worktree. */
@@ -285,21 +301,27 @@ async function collectCheckFiles(
   repo: HostRepo,
   startCommit: string,
   endCommit: string,
-  owned: readonly string[],
+  buildContext: readonly string[],
+  written: ReadonlySet<string>,
 ): Promise<CheckHarvest> {
   const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
   const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, endCommit]);
   const fields = stdout.split("\0").filter((field) => field !== "");
   const changed: Array<{ readonly status: string; readonly path: string }> = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) changed.push({ status: fields[i] ?? "", path: fields[i + 1] ?? "" });
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const path = fields[i + 1] ?? "";
+    if (written.has(path)) changed.push({ status: fields[i] ?? "", path });
+  }
 
   const deleted = changed.filter((c) => c.status !== "A" && c.status !== "M");
   if (deleted.length > 0) {
     return rejected(`a check may only add or change files; these were deleted or changed in kind: ${deleted.map((c) => `${c.path} (${c.status})`).join(", ")}`);
   }
-  const ownedHit = changed.filter((c) => ownedPathsCover(owned, c.path));
-  if (ownedHit.length > 0) {
-    return rejected(`check files overlap the environment's owned paths [${owned.join(", ")}]: ${ownedHit.map((c) => c.path).join(", ")}`);
+  const contextHit = changed.filter((c) => buildContext.includes(c.path));
+  if (contextHit.length > 0) {
+    return rejected(
+      `check files overlap the environment's recipe and inputs [${buildContext.join(", ")}]: ${contextHit.map((c) => c.path).join(", ")}`,
+    );
   }
   if (changed.length > MAX_CHECK_FILES) return rejected(`${changed.length} check files; at most ${MAX_CHECK_FILES} are kept`);
 

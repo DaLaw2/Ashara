@@ -17,7 +17,7 @@ import {
 } from "@ashara/execution-infra";
 import type { ProjectId } from "@ashara/shared";
 
-// Real git, real podman, real Postgres: the build path from committed owned files to a row and a
+// Real git, real podman, real Postgres: the build path from a committed build context to a row and a
 // cell. No network is needed (the base image is local, the Containerfile has no RUN), and no skip.
 
 const run = promisify(execFile);
@@ -82,20 +82,24 @@ afterAll(async () => {
 }, 120_000);
 
 describe("environment image build", () => {
-  it("builds from the owned files only, records it, reuses it, and a cell runs from it", async () => {
+  it("builds from the recipe and the existing inputs only, records it, reuses it, and a cell runs from it", async () => {
     const base = await loadBaseCell();
     await commitFiles(
       {
         "environment/environment.toml": [
-          'owned = ["environment/"]',
           'containerfile = "environment/Containerfile"',
+          'recipe = ["environment/recipe.txt"]',
+          'inputs = ["manifest.txt", "not-written-yet.txt"]',
+          'probe = "true"',
           'build = "true"',
           'test = "true"',
           "",
         ].join("\n"),
         "environment/Containerfile": `FROM ${base.image}\nCOPY . /opt/ctx/\n`,
-        "environment/owned.txt": "owned content\n",
-        "src/secret.txt": "not owned\n",
+        "environment/recipe.txt": "recipe content\n",
+        "environment/notes.txt": "under environment/ but no recipe file\n",
+        "manifest.txt": "dependencies: none\n",
+        "src/secret.txt": "not in the build context\n",
       },
       "environment",
     );
@@ -131,13 +135,14 @@ describe("environment image build", () => {
       instance: `env-build-test-${NONCE}`,
       mount: { hostPath: workspace },
     });
-    const owned = await cell.exec(["cat", "/opt/ctx/environment/owned.txt"], { timeoutSeconds: 30 });
-    expect(owned).toMatchObject({ exitCode: 0, stdout: "owned content\n" });
+    const recipe = await cell.exec(["cat", "/opt/ctx/environment/recipe.txt"], { timeoutSeconds: 30 });
+    expect(recipe).toMatchObject({ exitCode: 0, stdout: "recipe content\n" });
     const listing = await cell.exec(["find", "/opt/ctx", "-type", "f"], { timeoutSeconds: 30 });
     expect(listing.stdout.split("\n").filter((line) => line !== "").sort()).toEqual([
       "/opt/ctx/environment/Containerfile",
       "/opt/ctx/environment/environment.toml",
-      "/opt/ctx/environment/owned.txt",
+      "/opt/ctx/environment/recipe.txt",
+      "/opt/ctx/manifest.txt",
     ]);
     await cell.teardown();
   });

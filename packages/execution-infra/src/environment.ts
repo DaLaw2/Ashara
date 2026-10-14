@@ -4,93 +4,92 @@ import { dirname, join, relative, sep } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
-import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, OwnedPathNotAFile } from "./errors.js";
+import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
 import { runHostGitObjects } from "./host-git.js";
 
-const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
-/**
- * The one owned entry Ashara requires: the definition itself lives under it. It is also the only
- * protected path of the environment: only environment work may change it (ADR-074 addendum 2 d66 a).
- */
-export const ENVIRONMENT_DIR = "environment/";
+/** Where the definition lives; it is always part of the recipe. */
+export const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
+/** Every recipe file lives under it; nothing else about it is special (ADR-074 addendum 2 d72). */
+const ENVIRONMENT_DIR = "environment/";
 
-/** Why `path` is not a normalized repo-relative path, or null. A trailing "/" names a directory. */
-function repoPathProblem(path: string): string | null {
+/** Why `path` is not a normalized repo-relative file path, or null. */
+function filePathProblem(path: string): string | null {
   if (path.includes("\0")) return "contains NUL";
   if (path.startsWith("/")) return "is absolute";
-  const body = path.endsWith("/") ? path.slice(0, -1) : path;
-  const segments = body.split("/");
+  if (path.endsWith("/")) return "names a directory; name each file";
+  const segments = path.split("/");
   if (segments.includes("..")) return "escapes the repository ('..')";
   if (segments.includes(".")) return "is not normalized ('.')";
   if (segments.includes("")) return "has an empty segment";
   return null;
 }
 
-const repoPath = z.string().superRefine((path, ctx) => {
-  const problem = repoPathProblem(path);
+const filePath = z.string().superRefine((path, ctx) => {
+  const problem = filePathProblem(path);
   if (problem !== null) ctx.addIssue({ code: "custom", message: `${JSON.stringify(path)} ${problem}` });
 });
 
-const command = z.string().refine((text) => text.trim() !== "", "must be a non-empty command");
-
-/** True when the owned entry `owned` contains `path` (itself, or anything under it). */
-function covers(owned: string, path: string): boolean {
-  return owned.endsWith("/") ? path.startsWith(owned) : path === owned || path.startsWith(`${owned}/`);
-}
-
-/** True when some owned entry contains `path`: the paths environment work may touch. */
-export function ownedPathsCover(owned: readonly string[], path: string): boolean {
-  return owned.some((entry) => covers(entry, path));
-}
-
-/**
- * The only directory an owned entry may name is `environment/`; every other entry is one file
- * (ADR-074 addendum 2 d64 a). Structural only: no stack is named.
- */
-const ownedEntry = repoPath.superRefine((path, ctx) => {
-  if (path.endsWith("/") && path !== ENVIRONMENT_DIR) {
+/** A file of the recipe: under `environment/`, so naming one can never fence the product's files. */
+const recipeFile = filePath.superRefine((path, ctx) => {
+  if (!path.startsWith(ENVIRONMENT_DIR) || path === ENVIRONMENT_DEFINITION_PATH) {
     ctx.addIssue({
       code: "custom",
-      message: `${JSON.stringify(path)} names a directory; the only owned directory is ${JSON.stringify(ENVIRONMENT_DIR)}, every other owned entry is one file`,
+      message: `${JSON.stringify(path)} must be a file under ${JSON.stringify(ENVIRONMENT_DIR)} other than the definition itself`,
     });
   }
 });
 
+const uniqueFiles = <T extends z.ZodType<string>>(entry: T, what: string) =>
+  z.array(entry).refine((paths) => new Set(paths).size === paths.length, `${what} must be unique`);
+
+const command = z.string().refine((text) => text.trim() !== "", "must be a non-empty command");
+
 /** The definition's fields; DEFINITION_FIELD_RULES describes exactly these keys, so the brief cannot drift from them. */
 const definitionFields = {
-  owned: z
-    .array(ownedEntry)
-    .min(1)
-    .refine((owned) => new Set(owned).size === owned.length, "owned paths must be unique")
-    .refine((owned) => owned.includes(ENVIRONMENT_DIR), `owned must include ${JSON.stringify(ENVIRONMENT_DIR)}`),
-  containerfile: repoPath.refine((path) => !path.endsWith("/"), "containerfile must name a file"),
+  containerfile: recipeFile,
+  recipe: uniqueFiles(recipeFile, "recipe files"),
+  inputs: uniqueFiles(filePath, "inputs"),
+  probe: command,
   build: command,
   test: command,
 };
 
 const DEFINITION_FIELD_RULES: Readonly<Record<keyof typeof definitionFields, string>> = {
-  owned:
-    `array of repository paths: ${JSON.stringify(ENVIRONMENT_DIR)} (required, the one owned directory) plus individual ` +
-    `files outside it (for example a dependency manifest or .gitignore), each without a trailing "/". No other ` +
-    `directory can be owned: an entry that is a directory in the committed tree is refused. Only ` +
-    `${JSON.stringify(ENVIRONMENT_DIR)} is protected: later implementation tasks may change an owned file outside it, ` +
-    `and every such change builds the environment again from the merged files, whose build and test must pass before ` +
-    `it is merged. Own a file outside ${JSON.stringify(ENVIRONMENT_DIR)} only when the image is built from it.`,
-  containerfile: "path of the container build file, inside an owned path; the image is built from the owned files only.",
-  build: "shell command that builds the project; it must exit 0.",
+  containerfile: `path of the container build file, a file under ${JSON.stringify(ENVIRONMENT_DIR)}. It is part of the recipe.`,
+  recipe:
+    `array of the other files under ${JSON.stringify(ENVIRONMENT_DIR)} the image build reads (scripts, configuration), ` +
+    `possibly empty. The recipe is ${ENVIRONMENT_DEFINITION_PATH}, the containerfile and these files: only environment ` +
+    `work may change them, and environment work may change nothing else.`,
+  inputs:
+    `array of product files the image build also reads, for example the product's dependency manifests, possibly ` +
+    `empty. They are the product's: an input need not exist yet, and the build context holds only the recipe and the ` +
+    `inputs that exist, so the containerfile must build while any input is still absent. Any task ` +
+    `may change one, and a merge that changes one builds the image again and must pass the product's build, test and ` +
+    `checks on it. Never name the product's source, its tests or its data here.`,
+  probe:
+    "shell command that proves the toolchain is present and runs; it must exit 0 within its time limit and print " +
+    "non-empty output. It runs in a cell from the built image on a checkout that may hold no product at all, so it " +
+    "must not build or test the product.",
+  build:
+    "shell command that builds the product from the repository root once the product exists; it must exit 0. It is " +
+    "not run when the environment is defined: the product's first task sets up its layout so that it passes, and it " +
+    "runs after every later merge.",
   test:
-    "shell command that proves the toolchain builds and runs; it must exit 0 within its time limit and print " +
-    "non-empty output. Product behaviour is verified by the check author's checks, never by this command: the " +
-    `command lives in ${ENVIRONMENT_DEFINITION_PATH}, which only environment work may change, so no implementation ` +
-    "task can extend it.",
+    "shell command that runs the product's tests from the repository root once the product exists; it must exit 0 and " +
+    "print non-empty output. Like build, it is not run when the environment is defined.",
 };
 
 const definitionSchema = z
   .object(definitionFields)
   .strict()
   .superRefine((definition, ctx) => {
-    if (!definition.owned.some((owned) => covers(owned, definition.containerfile))) {
-      ctx.addIssue({ code: "custom", path: ["containerfile"], message: "containerfile must be inside an owned path" });
+    if (definition.recipe.includes(definition.containerfile)) {
+      ctx.addIssue({ code: "custom", path: ["recipe"], message: "the containerfile is already part of the recipe; list it only as containerfile" });
+    }
+    const recipe = new Set([ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe]);
+    const overlap = definition.inputs.filter((path) => recipe.has(path));
+    if (overlap.length > 0) {
+      ctx.addIssue({ code: "custom", path: ["inputs"], message: `recipe files cannot also be inputs: ${JSON.stringify(overlap)}` });
     }
   });
 
@@ -105,13 +104,11 @@ export function environmentDefinitionRules(): string {
     ...Object.entries(DEFINITION_FIELD_RULES).map(([field, rule]) => `- ${field}: ${rule}`),
     ``,
     `What decides this work:`,
-    `- Only owned paths may be added, changed or deleted; any other path in the work is refused. Product code, its`,
-    `  tests and its data are later tasks' work, not part of defining the environment.`,
-    `- build, then test, run on a fresh checkout of the committed work, in a cell from the built image. Afterwards the`,
-    `  checkout must be unchanged: every file build or test writes must be ignored by a committed .gitignore (then an`,
-    `  owned file). Any untracked or modified file left behind is listed and refused.`,
-    `- The gate passes only when build exits 0 and test exits 0 within its time limit with non-empty output: stdout`,
-    `  and stderr together must hold more than whitespace. A test that exits 0 and prints nothing fails.`,
+    `- Only recipe files may be added, changed or deleted; any other path in the work is refused. The product's`,
+    `  code, its manifests, its tests and its data are the product's tasks' work, never part of the environment.`,
+    `- The image is built from the recipe and the inputs that exist. Then probe runs in a cell from that image on a`,
+    `  fresh checkout of the committed work. The gate passes only when the image builds and probe exits 0 within its`,
+    `  time limit with non-empty output: stdout and stderr together must hold more than whitespace.`,
   ].join("\n");
 }
 
@@ -173,29 +170,49 @@ export async function readEnvironmentDefinition(gitDir: string, commit: string):
   return parseEnvironmentDefinition(text.toString("utf8"), source);
 }
 
-interface OwnedBlob {
+/**
+ * The recipe: the definition, its containerfile and the recipe files it names. Only environment work
+ * changes them (ADR-074 addendum 2 d72 B1), and environment work changes nothing else.
+ */
+export function recipePaths(definition: EnvironmentDefinition): readonly string[] {
+  return [ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe];
+}
+
+/**
+ * Everything the image build reads: the recipe and the inputs. The environment version is the digest
+ * of exactly these files, so a merge that changes any of them moves the version (d72 B3).
+ */
+export function buildContextPaths(definition: EnvironmentDefinition): readonly string[] {
+  return [...recipePaths(definition), ...definition.inputs];
+}
+
+interface ContextBlob {
   readonly mode: "100644" | "100755";
   readonly oid: string;
   readonly path: string;
 }
 
-/** What an environment version is: the owned tree's digest and the last commit that touched it. */
+/** What an environment version is: the build context's digest and the last commit that touched it. */
 interface EnvironmentVersion {
-  /** sha256 (hex) over the sorted `ls-tree -r` entries of the owned paths. */
+  /** sha256 (hex) over the sorted `ls-tree -r` entries of the build context's files. */
   readonly version: string;
-  /** The last commit at or before the requested one that touched an owned path. */
+  /** The last commit at or before the requested one that touched a build context path. */
   readonly commit: string;
 }
 
 interface EnvironmentSnapshot extends EnvironmentVersion {
   /** The requested revision, resolved; the blobs are read from it. */
   readonly resolvedCommit: string;
-  readonly blobs: readonly OwnedBlob[];
+  readonly blobs: readonly ContextBlob[];
 }
 
 const lsTreeEntry = /^(\d{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})\t([^]+)$/;
 
-/** @internal used by environment-build.ts */
+/**
+ * The build context at `commit`: every recipe file must be a regular file there; an input may be
+ * absent (the product has not written it yet) but never a directory, a link or a submodule.
+ * @internal used by environment-build.ts
+ */
 export async function snapshotEnvironment(
   gitDir: string,
   commit: string,
@@ -205,14 +222,15 @@ export async function snapshotEnvironment(
   const fail = (reason: string, cause?: unknown): never => {
     throw new EnvironmentVersionUnresolved(gitDir, resolvedCommit, reason, cause === undefined ? undefined : { cause });
   };
+  const paths = buildContextPaths(definition);
 
   let listing: Buffer;
   try {
-    listing = await runHostGitObjects(gitDir, ["ls-tree", "-r", "-z", "--full-tree", resolvedCommit, "--", ...definition.owned]);
+    listing = await runHostGitObjects(gitDir, ["ls-tree", "-r", "-z", "--full-tree", resolvedCommit, "--", ...paths]);
   } catch (err) {
     return fail(`ls-tree failed: ${describeErrorChain(err)}`, err);
   }
-  const blobs: OwnedBlob[] = [];
+  const blobs: ContextBlob[] = [];
   for (const record of listing.toString("utf8").split("\0")) {
     if (record === "") continue;
     const match = lsTreeEntry.exec(record);
@@ -221,25 +239,22 @@ export async function snapshotEnvironment(
     if (mode === undefined || type === undefined || oid === undefined || path === undefined) {
       return fail(`unexpected ls-tree record ${JSON.stringify(record)}`);
     }
+    if (!paths.includes(path)) {
+      // ls-tree lists a directory's files under its name: a named file that is a directory here.
+      const named = paths.find((entry) => path.startsWith(`${entry}/`)) ?? path;
+      return fail(
+        `build context entry ${JSON.stringify(named)} is a directory at this commit (it holds ${JSON.stringify(path)}); every entry must be one file`,
+      );
+    }
     if (type !== "blob" || (mode !== "100644" && mode !== "100755")) {
       // A submodule's content is not in this repository and a symlink's target is outside the
-      // owned set: neither can be part of a build context made of owned files only.
-      return fail(`owned entry ${JSON.stringify(path)} is a ${type} with mode ${mode}; only regular files can be owned`);
+      // build context: neither can be part of it.
+      return fail(`build context entry ${JSON.stringify(path)} is a ${type} with mode ${mode}; only regular files can be built from`);
     }
-    const problem = repoPathProblem(path);
-    if (problem !== null) return fail(`owned entry ${JSON.stringify(path)} ${problem}`);
     blobs.push({ mode, oid, path });
   }
-  for (const owned of definition.owned) {
-    if (owned.endsWith("/")) continue;
-    const inside = blobs.find((blob) => blob.path.startsWith(`${owned}/`));
-    if (inside !== undefined) throw new OwnedPathNotAFile(gitDir, resolvedCommit, owned, inside.path);
-  }
-  const unmatched = definition.owned.filter((owned) => !blobs.some((blob) => covers(owned, blob.path)));
-  if (unmatched.length > 0) return fail(`owned path(s) ${JSON.stringify(unmatched)} match no file at this commit`);
-  if (!blobs.some((blob) => blob.path === definition.containerfile)) {
-    return fail(`containerfile ${JSON.stringify(definition.containerfile)} is not a file at this commit`);
-  }
+  const missing = recipePaths(definition).filter((path) => !blobs.some((blob) => blob.path === path));
+  if (missing.length > 0) return fail(`recipe file(s) ${JSON.stringify(missing)} are not files at this commit`);
 
   blobs.sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)));
   const digest = createHash("sha256");
@@ -247,18 +262,18 @@ export async function snapshotEnvironment(
 
   let lastTouch: Buffer;
   try {
-    lastTouch = await runHostGitObjects(gitDir, ["log", "-1", "--format=%H", resolvedCommit, "--", ...definition.owned]);
+    lastTouch = await runHostGitObjects(gitDir, ["log", "-1", "--format=%H", resolvedCommit, "--", ...paths]);
   } catch (err) {
     return fail(`log failed: ${describeErrorChain(err)}`, err);
   }
   const touched = commitHash.safeParse(lastTouch.toString("utf8").trim());
-  if (!touched.success) return fail(`no commit touching the owned paths: log printed ${JSON.stringify(lastTouch.toString("utf8"))}`);
+  if (!touched.success) return fail(`no commit touching the build context: log printed ${JSON.stringify(lastTouch.toString("utf8"))}`);
 
   return { version: digest.digest("hex"), commit: touched.data, resolvedCommit, blobs };
 }
 
 /**
- * The environment version at `commit`: unchanged by commits that touch no owned path.
+ * The environment version at `commit`: unchanged by commits that touch no build context path.
  */
 export async function environmentVersion(
   gitDir: string,
@@ -271,7 +286,7 @@ export async function environmentVersion(
 
 /**
  * Writes exactly the snapshot's blobs under `dir` (which must be empty): the build context holds
- * owned files only, never a work-tree file or anything else in the repository.
+ * the recipe and the existing inputs only, never a work-tree file or anything else in the repository.
  * @internal used by environment-build.ts
  */
 export async function materializeSnapshot(gitDir: string, snapshot: EnvironmentSnapshot, dir: string): Promise<void> {
@@ -279,7 +294,7 @@ export async function materializeSnapshot(gitDir: string, snapshot: EnvironmentS
     const target = join(dir, blob.path);
     const fromDir = relative(dir, target);
     if (fromDir === "" || fromDir.startsWith(`..${sep}`) || fromDir === "..") {
-      throw new EnvironmentVersionUnresolved(gitDir, snapshot.resolvedCommit, `owned entry ${JSON.stringify(blob.path)} leaves the build context`);
+      throw new EnvironmentVersionUnresolved(gitDir, snapshot.resolvedCommit, `build context entry ${JSON.stringify(blob.path)} leaves the build context`);
     }
     const content = await runHostGitObjects(gitDir, ["cat-file", "blob", blob.oid]);
     await mkdir(dirname(target), { recursive: true });

@@ -25,13 +25,16 @@ const storedTaskSpecSchema = z.object({
   // implementation's work needs a change under environment/, in which the
   // environment role makes it (ADR-074 addendum 2 d66 b), or the review decomposition
   // adds to every plan revision, in which every suite its check tasks stored is read
-  // together before any implementation starts (ADR-074 addendum 2 d71 c). Absent on
-  // rows written before it was recorded.
-  origin: z.enum(["decomposition", "sprint0", "check", "environment-change", "review"]).optional(),
-  // What checks the task's work: "substrate" means the checks are the
-  // environment substrate's own (the definition parses, the image builds, its
-  // test command passes), so the task carries none of its own. Absent means no
-  // producer has said.
+  // together before any implementation starts (ADR-074 addendum 2 d71 c), or the product scaffold
+  // decomposition adds after Sprint 0 and before the check tasks, in which the implementer role
+  // sets up the product's module root, manifests and entry point (d72 B2; not the pre-033
+  // 'scaffold', which was Sprint 0). Absent on rows written before it was recorded.
+  origin: z.enum(["decomposition", "sprint0", "check", "environment-change", "review", "product-scaffold"]).optional(),
+  // What checks the task's work: "substrate" means the checks are the environment
+  // substrate's own, so the task carries none of its own: for environment work the
+  // definition parses, the image builds and its probe passes; for the product scaffold
+  // the definition's build and test pass on its merge (d72). Absent means no producer
+  // has said.
   checkedBy: z.enum(["substrate"]).optional(),
   // A check task's: the work item id of the implementation task its checks decide. Every
   // implementation task of a plan revision depends on every check task of it (ADR-074 addendum 2
@@ -41,6 +44,11 @@ const storedTaskSpecSchema = z.object({
   // decomposed task's are those it delivers, its check task's are the same, and a review task's are
   // every item of the vision its plan revision was decomposed from. Absent on rows written before it.
   visionItems: z.array(z.string().min(1)).optional(),
+  // An environment-change task's: whether the project's product scaffold had completed when Z0
+  // opened it (d72 S, B2). "absent" means its merge lands on a main with no product, so its
+  // post-merge check runs the probe only; the product's build and test run on the scaffold's own
+  // merge. Absent on rows written before it, which run the product's build and test, the stricter check.
+  product: z.enum(["present", "absent"]).optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;
