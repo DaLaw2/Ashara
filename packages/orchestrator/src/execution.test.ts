@@ -1184,4 +1184,16 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(writes).toEqual(["InProgress", "Completed"]);
     expect(stored().status).toBe("Completed");
   });
+
+  // ADR-074 addendum 2 d67 b: work already on main is closed by its checks, with main's commit as its record.
+  test("work already delivered records main's commit its checks passed on, then the task is Completed", async () => {
+    const mainCommit = "fedcba9876543210fedcba9876543210fedcba98";
+    const { deps, stored, writes } = buildMergeDeps({ ...merged, delivered: { kind: "already-delivered", mainCommit } }, async () => {});
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(writes).toEqual(["InProgress", `merge ${mainCommit}`, "Completed"]);
+    expect(stored().status).toBe("Completed");
+  });
 });

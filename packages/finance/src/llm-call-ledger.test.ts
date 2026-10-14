@@ -643,6 +643,9 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     const rows = await rowsOfThisProject();
     expect(rows).toHaveLength(attempts.length);
     expect(rows.every((row) => row.errorKind === "InvalidJson" && row.finishReason === "stop")).toBe(true);
+    // Fourth run N17: a failed attempt's event recorded "unknown" while its llm_calls row had the model.
+    expect(attempts.map((a) => a.model)).toEqual(rows.map((row) => row.model));
+    expect(rows.every((row) => row.model === "ds-ladder")).toBe(true);
   });
 
   test("text cut off at length is never closed into acceptance: every ladder attempt is a truncated row", async () => {

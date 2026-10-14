@@ -99,11 +99,17 @@ export class RoutingProfileUnresolved extends GatewayError {
 
 export class SchemaValidationError extends GatewayError {
   readonly errors: string[];
+  /**
+   * The model whose answer failed (its config id, as llm_calls records it), so a failed ladder
+   * attempt names the model that was called (fourth run N17); null when no model answered.
+   */
+  readonly model: string | null;
 
-  constructor(errors: string[], options?: ErrorOptions) {
+  constructor(errors: string[], model: string | null, options?: ErrorOptions) {
     super(`Schema validation failed: ${errors.join("; ")}`, options);
     this.name = "SchemaValidationError";
     this.errors = errors;
+    this.model = model;
   }
 }
 
@@ -138,6 +144,7 @@ export class StructuredOutputTruncated extends SchemaValidationError {
           `${context.reasoningTokens ?? "unreported"}; text length ${context.text.length})`,
         `Raw LLM response: ${context.text.slice(0, 500)}`,
       ],
+      context.model,
       options,
     );
     this.name = "StructuredOutputTruncated";

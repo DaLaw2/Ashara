@@ -109,6 +109,7 @@ type EnvironmentStage =
   | "branchWork"
   | "substrateGate"
   | "checkRedRun"
+  | "deliveredCheckRun"
   | "ownershipGate"
   | "postMergeVerify"
   | "postMergeCheckRun";
@@ -214,31 +215,34 @@ function substrateBlocked(
 }
 
 /**
- * A red run of checks on main that threw before any verdict: a substrate failure blocks under
- * checkRedRun with the cell named; anything else is Z0's own machinery (main's commit, the
- * checkout's worktree or directory) and blocks as a VerificationInfrastructureFault. Neither
- * says anything about the checks or the task, so neither is ever a failure to route.
+ * A run of checks on main that threw before any verdict (a check task's red run, or an
+ * implementation's checks run on main when it changed nothing): a substrate failure blocks under
+ * `stage` with the cell named; anything else is Z0's own machinery (main's commit, the
+ * checkout's worktree or directory) and blocks as a VerificationInfrastructureFault at `step`.
+ * Neither says anything about the checks or the task, so neither is ever a failure to route.
  */
-function redRunBlocked(
+function mainRunBlocked(
   task: DispatchRef,
   sessionId: string,
   e: unknown,
   agent: AgentPart,
   eventSink: ExecutionEventSink | undefined,
+  stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">,
+  step: string,
 ): ExecutionResult {
   const taskId = task.id;
   const environmentFailure = environmentErrorOf(e);
-  if (environmentFailure !== null) return substrateBlocked(task, sessionId, "checkRedRun", environmentFailure, "CI cell", agent, eventSink);
-  const fault = new VerificationInfrastructureFault(taskId, "red run on main", { cause: e });
+  if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink);
+  const fault = new VerificationInfrastructureFault(taskId, step, { cause: e });
   const unavailable = `verification infrastructure (${fault.step})`;
   return environmentBlocked(
     {
       task,
       sessionId,
-      stage: "checkRedRun",
+      stage,
       errorClass: fault.name,
       message: fault.message,
-      chain: wrapError("development", "checkRedRun", fault, { taskId, unavailable, errorClass: fault.name }),
+      chain: wrapError("development", stage, fault, { taskId, unavailable, errorClass: fault.name }),
       unavailable,
       ...agent,
     },
@@ -268,17 +272,24 @@ type MergedEnvironment =
   | { readonly kind: "refused"; readonly details: string };
 
 /**
- * The post-merge verdict on suites run in order (the environment's test, then `regressionCount`
- * earlier tasks' checks, then the task's own): passed only when every suite ran every one of its
- * checks and each passed. The details open with each failure, naming its suite and check.
+ * The verdict on suites run in order (the environment's test, then `regressionCount` earlier
+ * tasks' checks, then the task's own) on the task's tentative merge, or on main itself for a task
+ * that changed nothing: passed only when every suite ran every one of its checks and each passed.
+ * The details open with each failure, naming its suite and check. Only on a merge is an earlier
+ * task's failing check this task's regression; on main the task changed nothing to cause it.
  */
-function suitesVerdict(suites: readonly CheckSuite[], runs: readonly SuiteRun[], regressionCount: number): PostMergeVerdict {
+function suitesVerdict(
+  suites: readonly CheckSuite[],
+  runs: readonly SuiteRun[],
+  regressionCount: number,
+  on: "merge" | "main",
+): PostMergeVerdict {
   const failures: string[] = [];
   const sections: string[] = [];
   let regressed = false;
   if (runs.length !== suites.length) failures.push(`${runs.length} of ${suites.length} suites reported a run`);
   suites.forEach((suite, index) => {
-    const regression = index >= 1 && index <= regressionCount;
+    const regression = on === "merge" && index >= 1 && index <= regressionCount;
     const prefix = regression ? "REGRESSION: " : "";
     const run = runs[index];
     if (run === undefined || run.suite !== suite) {
@@ -287,7 +298,7 @@ function suitesVerdict(suites: readonly CheckSuite[], runs: readonly SuiteRun[],
       return;
     }
     if (run.report.kind === "files_refused") {
-      failures.push(`${prefix}${suite.label}: its check files could not be written over the merged work: ${run.report.detail}`);
+      failures.push(`${prefix}${suite.label}: its check files could not be written over ${on === "merge" ? "the merged work" : "main"}: ${run.report.detail}`);
       sections.push(`${suite.label}: not run, its check files could not be written: ${run.report.detail}`);
       regressed ||= regression;
       return;
@@ -304,7 +315,7 @@ function suitesVerdict(suites: readonly CheckSuite[], runs: readonly SuiteRun[],
     sections.push(`${suite.label}:\n${formatCheckRuns(ran, checkVerdict)}`);
   });
   if (failures.length === 0) return { passed: true, details: sections.join("\n") };
-  const head = [`${failures.length} failure(s) on the merge:`, ...failures.map((failure) => `- ${failure}`)];
+  const head = [`${failures.length} failure(s) on ${on === "merge" ? "the merge" : "main"}:`, ...failures.map((failure) => `- ${failure}`)];
   if (regressed) {
     head.push("This task's merge breaks checks of a task already merged: the regression is this task's, and nothing was merged.");
   }
@@ -646,8 +657,9 @@ interface InterruptedResult {
 }
 
 /**
- * The task's stored checks were red-run on another environment version and no longer all fail on
- * main on the dispatch's: they cannot decide its work. Not the implementer's failure (no model ran)
+ * The task's stored checks were red-run on another environment version and on the dispatch's no
+ * longer all fail on main, nor all pass there (that is work already delivered, d67 b): they cannot
+ * decide its work. Not the implementer's failure (no model ran)
  * and no lesson: the orchestrator reopens the check task that must write them again and the item
  * waits on it (planning's exitStaleChecks, bounded by `revision`), never routes it through the
  * FailureRouter, whose replan would meet the same checks.
@@ -762,13 +774,19 @@ interface AgentExecutionResult {
  */
 type Delivery =
   | { readonly kind: "merged"; readonly mergeCommit: string }
+  /**
+   * An implementation that changed nothing whose checks and the regression suite already pass on
+   * main (ADR-074 addendum 2 d67 b): `mainCommit` is main when they ran, the delivering commit.
+   */
+  | { readonly kind: "already-delivered"; readonly mainCommit: string }
   | { readonly kind: "checks-recorded"; readonly revision: number };
 
 interface CompletedResult {
   readonly status: "completed";
   readonly delivered: Delivery;
   readonly detail: string;
-  readonly output: AgentOutputJson;
+  /** null only for work found already delivered before any model was called. */
+  readonly output: AgentOutputJson | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope?: undefined;
@@ -791,6 +809,9 @@ interface Dispatch {
   readonly environment: DispatchEnvironment;
   readonly work: DispatchWork;
 }
+
+/** Why an implementer's done with nothing to merge is not taken at its word. */
+const NO_CHANGE_REASON = "agent produced no file changes: the task branch holds no change against main";
 
 /** The ashara.role label of the post-merge check's cell. */
 const POST_MERGE_VERIFIER_ROLE = "verifier";
@@ -1238,7 +1259,7 @@ export class DevelopmentService {
   /** A throwaway checkout of the dispatch, under the workdir base the substrate mounts from. */
   private checkoutDir(
     d: Dispatch,
-    purpose: "red-run" | "verify" | "post-merge-checks" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
+    purpose: "red-run" | "verify" | "post-merge-checks" | "delivered-on-main" | `run-checks-${number}` | `define-check-${number}` | "environment-check" | "substrate-gate",
   ): string {
     return join(this.deps.config.workdirBase, "checkouts", `${purpose}-${d.task.id}-${d.sessionId}`);
   }
@@ -1447,8 +1468,10 @@ export class DevelopmentService {
       const onBranch = await this.branchWork(d, output);
       if (onBranch.kind === "ended") return onBranch.result;
       workChanged = onBranch.paths;
+      // Work already on main (ADR-074 addendum 2 d67 b) is decided by its checks on main, never by the word of an implementer that changed nothing.
+      if (workChanged.length === 0 && d.work.kind === "stored-checks") return this.deliveredOnMain(d, d.work.stored, { output, agentWork: "kept" }, outcome.turnsUsed);
       if (workChanged.length === 0) {
-        const reason = "agent produced no file changes: the task branch holds no change against main";
+        const reason = NO_CHANGE_REASON;
         eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
         await cleanupWorkdir(workDir, targetProjectPath);
         const chain = wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount: outcome.turnsUsed });
@@ -1568,6 +1591,100 @@ export class DevelopmentService {
       delivered: { kind: "merged", mergeCommit: finalizeResult.mergeCommit },
       detail: "task completed and verified successfully",
       output,
+      sessionId,
+      attempt: task.attempt,
+    };
+  }
+
+  /**
+   * An implementer that finished done with no change against main (ADR-074 addendum 2 d67 b): an
+   * earlier task may have delivered this one's work already. Z0 decides that by the checks, never by
+   * the implementer's word: on a throwaway checkout of main itself, in a CI cell from the dispatch's
+   * environment image, it runs the environment's test, the latest checks of every Completed
+   * implementation task of the project (the regression suite) and this task's own checks, each with
+   * its files written over the checkout. All pass: completed as already delivered, with main's commit
+   * at that time as the delivering commit, the task branch deleted and nothing merged. Any fails:
+   * failed as "no changes" with the run's output, the branch kept as today. A run that could not run
+   * at all blocks for the operator. Reached also before any model is called, when revalidateChecks
+   * finds every stored check passing on main: `agent` is then NO_AGENT and `turnCount` null.
+   */
+  private async deliveredOnMain(d: Dispatch, stored: TaskChecks, agent: AgentPart, turnCount: number | null): Promise<ExecutionResult> {
+    const { eventSink } = this.deps;
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    let main: string;
+    let suites: readonly CheckSuite[];
+    let runs: readonly SuiteRun[];
+    let earlier: readonly CompletedTaskChecks[];
+    let unchecked: readonly string[];
+    try {
+      if (d.environment.kind !== "environment") throw new PostMergeEnvironmentMissing(task.id);
+      const environment = d.environment;
+      main = await mainCommit(targetProjectPath, task.id);
+      const completed = await this.deps.checks.completedOf(task.projectId, task.id);
+      earlier = completed.checked;
+      unchecked = completed.unchecked;
+      suites = [
+        { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.test }], files: [] },
+        ...earlier.map((prior) => ({
+          label: `earlier task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
+          checks: prior.checks,
+          files: prior.files,
+        })),
+        { label: `this task's checks revision ${stored.revision} (check task ${stored.checkTaskId})`, checks: stored.checks, files: stored.files },
+      ];
+      runs = await runSuitesOnCheckout(this.checkCells(d), RED_RUN_ROLE, environment.imageId, main, this.checkoutDir(d, "delivered-on-main"), suites);
+    } catch (e) {
+      await cleanupWorkdir(workDir, targetProjectPath);
+      return mainRunBlocked(task, sessionId, e, agent, eventSink, "deliveredCheckRun", "checks run on main");
+    }
+    const ran = suitesVerdict(suites, runs, earlier.length, "main");
+    const verdict: PostMergeVerdict =
+      unchecked.length === 0
+        ? ran
+        : { passed: ran.passed, details: `${ran.details}\nNot re-run, no check is stored for them (completed before checks existed): ${unchecked.join(", ")}` };
+    eventSink?.emit({
+      event: "delivered_on_main_verify",
+      taskId: task.id,
+      attempt: task.attempt,
+      verdict: verdict.passed ? "passed" : "failed",
+      mainCommit: main,
+      revision: stored.revision,
+      regressionTasks: earlier.map((prior) => prior.taskId),
+      uncheckedTasks: unchecked,
+      details: verdict.details,
+    });
+
+    if (!verdict.passed) {
+      const why =
+        turnCount === null
+          ? "its stored checks pass on main before any implementer ran, but not every suite does"
+          : `${NO_CHANGE_REASON}, and its checks do not all pass on main`;
+      const reason = `${why} (${main}), so its work is not already delivered:\n${verdict.details}`;
+      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
+      await cleanupWorkdir(workDir, targetProjectPath);
+      const chain =
+        turnCount === null
+          ? wrapError("development", "revalidateTaskChecks", reason, { taskId: task.id, mainCommit: main })
+          : wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount });
+      const { output } = agent;
+      return {
+        status: "failed",
+        detail: reason,
+        output,
+        sessionId,
+        attempt: task.attempt,
+        errorEnvelope: { outcome: "failed", summary: reason, chain, ...(output === null ? {} : { agentOutput: output }) },
+      };
+    }
+
+    await cleanupWorkdir(workDir, targetProjectPath, taskBranchName(task.id));
+    console.log(`[${task.id}] already delivered: its checks, the environment's test and the regression suite pass on main ${main}; nothing merged`);
+    eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "already_delivered" });
+    return {
+      status: "completed",
+      delivered: { kind: "already-delivered", mainCommit: main },
+      detail: `task already delivered on main at ${main}: its checks revision ${stored.revision} and every suite pass there; nothing merged`,
+      output: agent.output,
       sessionId,
       attempt: task.attempt,
     };
@@ -1890,7 +2007,7 @@ export class DevelopmentService {
       throw new VerificationInfrastructureFault(task.id, "stored-check run", { cause: e });
     }
     const checkCount = suites.reduce((sum, suite) => sum + suite.checks.length, 0);
-    const suitesVerdictRun = suitesVerdict(suites, runs, earlier.length);
+    const suitesVerdictRun = suitesVerdict(suites, runs, earlier.length, "merge");
     const suitesRun: PostMergeVerdict =
       merged.kind === "rebuilt"
         ? { passed: suitesVerdictRun.passed, details: `${merged.details}\n${suitesVerdictRun.details}` }
@@ -2099,7 +2216,9 @@ export class DevelopmentService {
   /**
    * Stored checks were red-run on their check task's environment version. On a dispatch from another
    * version they are red-run again on main in a CI cell from this dispatch's image: if every check
-   * still fails there decisively they are trusted; otherwise the task is checks_stale before the
+   * still fails there decisively they are trusted; if every check passes there the task's work may
+   * already be on main, and deliveredOnMain decides it before any model is called (ADR-074
+   * addendum 2 d67 b); otherwise the task is checks_stale before the
    * model is called, naming both versions and the check task, since a check that no longer fails on
    * main cannot tell the task's work from its absence, and the implementer could not answer for it.
    * A red run that could not run at all is environment-blocked. null when the checks may be trusted.
@@ -2124,7 +2243,23 @@ export class DevelopmentService {
       );
     } catch (e) {
       await cleanupWorkdir(workDir, targetProjectPath);
-      return redRunBlocked(task, sessionId, e, NO_AGENT, eventSink);
+      return mainRunBlocked(task, sessionId, e, NO_AGENT, eventSink, "checkRedRun", "red run on main");
+    }
+    // Every check passing on main is the over-delivered case (d67 b), not a stale one: an earlier
+    // implementation did this task's work, and the version moved because it touched an owned path.
+    // Reopening the check task could never end, since its red run rejects every check that passes.
+    const allPass = redRun.kind === "ran" && redRun.runs.length > 0 && redRun.runs.every(checkPassed);
+    if (allPass) {
+      eventSink?.emit({
+        event: "checks_revalidated",
+        taskId: task.id,
+        attempt: task.attempt,
+        revision: stored.revision,
+        storedVersion: stored.environmentVersion,
+        currentVersion: current,
+        trusted: false,
+      });
+      return this.deliveredOnMain(d, stored, NO_AGENT, null);
     }
     const problem =
       redRun.kind === "files_refused"
@@ -2214,7 +2349,7 @@ export class DevelopmentService {
           harvest.files,
         );
       } catch (e) {
-        return redRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink);
+        return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on main");
       }
       if (redRun.kind === "files_refused") return this.checksRejected(d, output, `the check files cannot be placed on main: ${redRun.detail}`);
       const report = formatCheckRuns(redRun.runs, (run) => redRunProblem(run) === null ? "fails on main, as it must" : `REJECTED: ${redRunProblem(run)}`);

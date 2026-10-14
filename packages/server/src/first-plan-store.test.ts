@@ -270,13 +270,15 @@ const checksOf = (title: string) => `Write the checks for "${title}"`;
 
 /**
  * t2 depends on t1, every decomposed task depends on the Sprint 0 task decomposition adds and on
- * its own check task, and each check task depends on Sprint 0.
+ * every check task of the plan (ADR-074 addendum 2 d67 a), and each check task depends on Sprint 0.
  */
 const EXPECTED_EDGES = [
   `${BOOKING_FORM} -> ${CLASS_LIST}`,
   `${BOOKING_FORM} -> ${SPRINT0_TITLE}`,
   `${BOOKING_FORM} -> ${checksOf(BOOKING_FORM)}`,
+  `${BOOKING_FORM} -> ${checksOf(CLASS_LIST)}`,
   `${CLASS_LIST} -> ${SPRINT0_TITLE}`,
+  `${CLASS_LIST} -> ${checksOf(BOOKING_FORM)}`,
   `${CLASS_LIST} -> ${checksOf(CLASS_LIST)}`,
   `${checksOf(BOOKING_FORM)} -> ${SPRINT0_TITLE}`,
   `${checksOf(CLASS_LIST)} -> ${SPRINT0_TITLE}`,
@@ -387,7 +389,7 @@ describe("first plan", () => {
     // Sprint 0 and the check tasks are stated apart, not counted toward the client's goal.
     expect(outbound[0]?.body).toMatch(/1 epic \(".*"\), split into 2 tasks for what you asked for\./);
     expect(outbound[0]?.body).toContain("First, the team sets up the project environment");
-    expect(outbound[0]?.body).toContain("writes the checks that decide whether it is done (2 check tasks)");
+    expect(outbound[0]?.body).toContain("Before any of those tasks starts, team members who do not do them write the checks that decide whether each is done (2 check tasks)");
     expect(outbound[0]?.body).not.toContain("ordering hint");
     expect(await droppedOf(projectId)).toEqual([]);
   });

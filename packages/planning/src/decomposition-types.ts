@@ -29,7 +29,8 @@ interface TaskSpecCore {
 export type TaskSpec =
     | (TaskSpecCore & { readonly origin: "sprint0"; readonly checkedBy: "substrate" })
     | (TaskSpecCore & { readonly origin: "decomposition" })
-    | (TaskSpecCore & { readonly origin: "check" });
+    /** `checksFor`: the id of the decomposed task whose checks it writes (ADR-074 addendum 2 d67 a). */
+    | (TaskSpecCore & { readonly origin: "check"; readonly checksFor: string });
 
 /**
  * A `dependsOn` entry the model emitted that named no sibling task, was re-asked

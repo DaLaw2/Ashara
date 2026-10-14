@@ -143,7 +143,7 @@ function firstPlanReport(epicTitles: readonly string[], goalTasks: number, check
       `split into ${plural(goalTasks, "task")} for what you asked for.`,
     `First, the team sets up the project environment: it chooses how the project is built and tested, ` +
       `before any of those tasks starts.`,
-    `Before each of those tasks starts, a team member who does not do it writes the checks that decide whether it ` +
+    `Before any of those tasks starts, team members who do not do them write the checks that decide whether each ` +
       `is done (${plural(checkTasks, "check task")}). A task counts as done only when its checks pass.`,
   ];
   if (droppedHints > 0) {
@@ -170,7 +170,7 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
   }
   paragraphs.push(
     `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
-    `Before each of them starts, a team member who does not do it writes the checks that decide whether it is done ` +
+    `Before any of them starts, team members who do not do them write the checks that decide whether each is done ` +
       `(${plural(summary.newCheckTasks, "check task")}).`,
   );
   const setAside = summary.supersededTasks.length + summary.supersededOther;

@@ -527,7 +527,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       kind: "error",
       errorKind: parsed.errorKind,
     });
-    throw new SchemaValidationError([...parsed.errors, `Raw LLM response: ${result.text.slice(0, 500)}`]);
+    throw new SchemaValidationError([...parsed.errors, `Raw LLM response: ${result.text.slice(0, 500)}`], resolved.modelConfig.id);
   }
 
   resolveModel(capability: CapabilityLevel, site: KnownLLMSite): ResolvedModel {
@@ -601,7 +601,7 @@ function structuredFailureOf(
       { cause: error },
     );
   }
-  return new SchemaValidationError([describeErrorChain(error), `Raw LLM response: ${text.slice(0, 500)}`], {
+  return new SchemaValidationError([describeErrorChain(error), `Raw LLM response: ${text.slice(0, 500)}`], resolved.modelConfig.id, {
     cause: error,
   });
 }

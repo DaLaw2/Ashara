@@ -1,7 +1,7 @@
 import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../connection.js";
-import { dependencies, taskChecks, workItems } from "../schema.js";
+import { taskChecks, workItems } from "../schema.js";
 
 // Quality's task checks (migration 036): the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.
@@ -71,15 +71,23 @@ interface CompletedChecks {
 export class TaskCheckRepository {
   constructor(private readonly db: Database) {}
 
-  /** The implementation tasks that depend on the check task: the tasks its checks decide. */
+  /**
+   * The implementation task the check task's `task_spec.checksFor` names, when one exists: the task
+   * its checks decide. Not read from the dependency edges: every implementation task of a plan
+   * revision depends on every check task of it (ADR-074 addendum 2 d67 a).
+   */
   async checkedTasksOf(checkTaskId: string): Promise<string[]> {
     const rows = await this.db
       .select({ id: workItems.id })
-      .from(dependencies)
-      .innerJoin(workItems, eq(workItems.id, dependencies.fromId))
-      .where(and(eq(dependencies.toId, checkTaskId), eq(workItems.workKind, "implementation")))
+      .from(workItems)
+      .where(
+        and(
+          eq(workItems.workKind, "implementation"),
+          sql`${workItems.id}::text = (SELECT check_task.task_spec->>'checksFor' FROM work_items check_task WHERE check_task.id = ${checkTaskId})`,
+        ),
+      )
       .orderBy(asc(workItems.id));
-    return [...new Set(rows.map((row) => row.id))];
+    return rows.map((row) => row.id);
   }
 
   /**

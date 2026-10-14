@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
-import { GatewayError, SchemaValidationError, StructuredOutputTruncated } from "./errors.js";
+import { GatewayError, SchemaValidationError } from "./errors.js";
 import { CAPABILITY_RANK } from "./pricing.js";
 import type { KnownLLMSite } from "./types.js";
 
@@ -380,7 +380,7 @@ export function withStructuredLadder(
                   ok: false,
                   errors: err.errors,
                   rawExcerpt: excerpt(err.errors.join("; ")),
-                  model: err instanceof StructuredOutputTruncated ? err.model : undefined,
+                  model: err.model ?? undefined,
                 };
               }
               throw err;

@@ -182,6 +182,12 @@ describe("Work Items", () => {
     expect((await res.json()).error).toBe("work item not found");
   });
 
+  test("PATCH /work-items/:id/status on a malformed id returns 400 naming the id, before any read", async () => {
+    const res = await req("PATCH", `/work-items/not-a-uuid/status`, { status: "InProgress" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("not-a-uuid");
+  });
+
   test("PATCH /work-items/:id/status transitions successfully", async () => {
     const res = await req("PATCH", `/work-items/${createdId}/status`, {
       status: "InProgress",

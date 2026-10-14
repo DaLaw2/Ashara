@@ -94,21 +94,27 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
   const implementationId = createWorkItemId();
   const checkId = createWorkItemId();
   const checkTitle = `Write the checks for "${title}"`;
+  const checkSpec = { goal: checkTitle, origin: "check", checksFor: implementationId } as const;
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id)
-    VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}),
-           (${checkId}, 'Task', 'InProgress', ${checkTitle}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()})`);
+    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec)
+    VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
+           (${checkId}, 'Task', 'InProgress', ${checkTitle}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()},
+            ${JSON.stringify(checkSpec)}::jsonb)`);
   await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${implementationId}, ${checkId})`);
-  const descriptor = (id: WorkItemId, taskTitle: string, workKind: WorkKind): TaskDescriptor => ({
+  const descriptor = (id: WorkItemId, taskTitle: string, workKind: WorkKind, taskSpec?: TaskDescriptor["taskSpec"]): TaskDescriptor => ({
     id,
     projectId,
     title: taskTitle,
+    taskSpec,
     dispatchCount: 0,
     attempt: 1,
     workKind,
     successCriteria: [],
   });
-  return { implementation: descriptor(implementationId, title, "implementation"), check: descriptor(checkId, checkTitle, "check") };
+  return {
+    implementation: descriptor(implementationId, title, "implementation"),
+    check: descriptor(checkId, checkTitle, "check", checkSpec),
+  };
 }
 
 interface TaskRun {
@@ -566,6 +572,26 @@ describe("post-merge regression suite", () => {
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("the task branch holds no change against main");
+    expect(result.detail).toContain('check "empties" FAILED: exited 2');
+  }, 300_000);
+
+  // Fourth run N13: work an earlier task delivered beyond its scope parked the later task for the operator.
+  it("no change against main, and its checks and the regression suite pass on main itself: completed as already delivered at main, nothing merged", async () => {
+    const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt" });
+    const mainBefore = await git("rev-parse", "main");
+
+    const { result, events } = await runTask(again.implementation, [toolCallTurn("finish", { status: "done", summary: "wave.txt is already on main." })]);
+
+    expect(result.status, result.detail).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    const verify = events.find((e) => e.event === "delivered_on_main_verify");
+    expect(verify).toMatchObject({ verdict: "passed", mainCommit: mainBefore, regressionTasks: [hello.implementation.id] });
+    expect(verify?.["details"]).toContain('Check "environment test": PASSED');
+    expect(verify?.["details"]).toContain('Check "says hello": PASSED');
+    expect(verify?.["details"]).toContain('Check "waves again": PASSED');
+    expect(await git("rev-parse", "main")).toBe(mainBefore);
+    expect(await git("branch", "--list", `task/${again.implementation.id}`)).toBe("");
   }, 300_000);
 });
 

@@ -43,7 +43,7 @@ describe("first-plan report", () => {
     expect(posted).toHaveLength(1);
     expect(posted[0]).toContain(`1 epic ("Studio sign-up merge"), split into 6 tasks for what you asked for.`);
     expect(posted[0]).toContain("First, the team sets up the project environment");
-    expect(posted[0]).toContain("writes the checks that decide whether it is done (6 check tasks)");
+    expect(posted[0]).toContain("Before any of those tasks starts, team members who do not do them write the checks that decide whether each is done (6 check tasks)");
     expect(posted[0]).not.toMatch(/7 tasks|12 tasks|13 tasks|ordering hint/);
   });
 

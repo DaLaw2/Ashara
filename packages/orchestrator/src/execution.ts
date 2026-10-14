@@ -270,15 +270,18 @@ async function executeTask(
   }
 
   if (execResult.status === "completed") {
-    if (execResult.delivered.kind === "merged") {
+    const delivered = execResult.delivered;
+    if (delivered.kind === "merged" || delivered.kind === "already-delivered") {
       // The merge record first, whatever the item's status now (a preempted item merged all the
       // same): the task is never Completed without it (Discipline A). The merge is on main, so a
       // record that cannot be written parks the item rather than leaving it InProgress, which the
-      // startup reconciler would requeue and so re-dispatch merged work.
-      const mergeCommit = execResult.delivered.mergeCommit;
+      // startup reconciler would requeue and so re-dispatch merged work. Work already delivered
+      // (ADR-074 addendum 2 d67 b) merged nothing: its record is main's commit its checks passed on.
+      const mergeCommit = delivered.kind === "merged" ? delivered.mergeCommit : delivered.mainCommit;
       const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit);
       if (unrecorded !== null) {
-        const detail = `merged on main as ${mergeCommit}, but the merge record could not be written: ${unrecorded}`;
+        const what = delivered.kind === "merged" ? `merged on main as ${mergeCommit}` : `already delivered on main at ${mergeCommit}`;
+        const detail = `${what}, but the merge record could not be written: ${unrecorded}`;
         await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, reason: detail });
         return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
       }

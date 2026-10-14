@@ -63,8 +63,8 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         expect(result.knowledge.nodes).toEqual([]);
-        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "check", "decomposition", "check", "decomposition"]);
-        expect(result.tasks[4]?.taskSpec.endState).toBe("t2 is observable");
+        expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual(["sprint0", "decomposition", "check", "decomposition", "check"]);
+        expect(result.tasks[3]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
         expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
         expect(result.droppedDependencies).toEqual([]);
@@ -85,7 +85,7 @@ describe("DecompositionEngine", () => {
         expect(result.tasks.every((t) => !("checks" in t.taskSpec))).toBe(true);
     });
 
-    test("every decomposed task gets one check task, after Sprint 0 and before the task; its text names no stack", async () => {
+    test("every decomposed task gets one check task, after Sprint 0, naming it by checksFor; its text names no stack", async () => {
         const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
@@ -94,9 +94,11 @@ describe("DecompositionEngine", () => {
         const checks = result.tasks.filter((t) => t.taskSpec.origin === "check");
         expect(checks).toHaveLength(decomposed.length);
         for (const implementation of decomposed) {
-            const own = checks.filter((c) => result.dependencyEdges.some((e) => e.from === implementation.id && e.to === c.id));
+            const own = checks.filter((c) => c.taskSpec.origin === "check" && c.taskSpec.checksFor === implementation.id);
             expect(own).toHaveLength(1);
             const check = own[0];
+            // The plan's writer resolves checksFor by temp id, so the task comes before its check task.
+            expect(result.tasks.indexOf(implementation)).toBeLessThan(result.tasks.findIndex((t) => t.id === check?.id));
             expect(check?.dependsOn).toEqual([sprint0Id]);
             expect(result.dependencyEdges).toContainEqual({ from: check?.id, to: sprint0Id });
             expect(check?.title).toBe(`Write the checks for "${implementation.title}"`);
@@ -110,6 +112,36 @@ describe("DecompositionEngine", () => {
         // No check task decides another check task, and none depends on an implementation task.
         for (const check of checks) {
             expect(result.dependencyEdges.filter((e) => e.from === check.id).map((e) => e.to)).toEqual([sprint0Id]);
+        }
+    });
+
+    // Fourth run N13: check tasks depending only on Sprint 0 ran after earlier implementations changed
+    // main, found their work already there, and the red-run rule left them no exit.
+    test.each([
+        ["a first plan", { kind: "new" } as const],
+        ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
+    ])("in %s every implementation task depends on every check task of the plan", async (_label, environment) => {
+        const llm = scriptedLlm(
+            { nodes: [], edges: [] },
+            { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] }), task("t3")] },
+            seen,
+        );
+        const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment });
+
+        const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "sprint0")?.id : environment.taskId;
+        const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
+        const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
+        expect(checkIds).toHaveLength(3);
+        for (const implementation of decomposed) {
+            const targets = result.dependencyEdges.filter((e) => e.from === implementation.id).map((e) => e.to);
+            for (const checkId of checkIds) expect(targets).toContain(checkId);
+            expect(targets).toContain(environmentId);
+        }
+        // The model's own ordering survives beside them.
+        const [t1, t2] = decomposed;
+        expect(result.dependencyEdges).toContainEqual({ from: t2?.id, to: t1?.id });
+        for (const checkId of checkIds) {
+            expect(result.dependencyEdges.filter((e) => e.from === checkId).map((e) => e.to)).toEqual([environmentId]);
         }
     });
 

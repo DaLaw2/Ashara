@@ -56,7 +56,7 @@ describe("TenderIntake failure accounting", () => {
       forCall: () => ({
         generateStructured: async (request) => {
           capabilities.push(request.capability);
-          throw new SchemaValidationError(["scripted failure"]);
+          throw new SchemaValidationError(["scripted failure"], null);
         },
       }),
     };

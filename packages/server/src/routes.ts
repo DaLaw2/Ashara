@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { ProjectId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
-import { InvalidStatusTransition, describeErrorChain, parseProjectId, parseWorkItemStatus } from "@ashara/shared";
+import type { ProjectId, WorkItemId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
+import { InvalidId, InvalidStatusTransition, describeErrorChain, parseProjectId, parseWorkItemId, parseWorkItemStatus } from "@ashara/shared";
 import {
   WorkItemRepository,
   EventStoreRepository,
@@ -78,7 +78,13 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
 
   app.patch("/work-items/:id/status", async (c) => {
     const { workItemRepo, eventStore, discardTaskBranch } = c.get("deps");
-    const id = c.req.param("id");
+    let id: WorkItemId;
+    try {
+      id = parseWorkItemId(c.req.param("id"), "id route param");
+    } catch (e) {
+      if (!(e instanceof InvalidId)) throw e;
+      return c.json({ error: e.message }, 400);
+    }
     const body = await c.req.json();
 
     let newStatus: WorkItemStatus;

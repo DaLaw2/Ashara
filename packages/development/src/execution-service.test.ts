@@ -636,6 +636,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly storedFiles?: TaskChecks["files"];
     /** The exit code of every check run in a CI cell (a red run or run_checks); 0 when absent. */
     readonly ciExit?: number;
+    /** What every check run in a CI cell prints; "hello\n" when absent. */
+    readonly ciStdout?: string;
     /** The first turn writes greet.txt and calls run_checks; the second finishes. */
     readonly agentRunsChecks?: boolean;
     /** A file sits where the throwaway checkouts' directory must be: Z0 cannot make a checkout. */
@@ -656,6 +658,8 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly ownedFiles?: Readonly<Record<string, string>>;
     /** A build of an environment version other than main's fails. */
     readonly rebuildFails?: boolean;
+    /** The agent finishes done at once, writing nothing: its branch holds no change against main. */
+    readonly agentWritesNothing?: boolean;
   }
 
   const ok = (stdout = "", exitCode = 0, stderr = "", statusReport: string | null = null) => ({
@@ -716,7 +720,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
             const role = roleOf(args[5]);
             // No status report: podman exec itself failed, the command never ran.
             if (faults.execFails !== undefined && faults.execFails === role) return ok("", 125, "Error: OCI runtime error", "");
-            return role === "ci" ? ran("hello\n", faults.ciExit ?? 0) : ran("hello\n");
+            return role === "ci" ? ran(faults.ciStdout ?? "hello\n", faults.ciExit ?? 0) : ran("hello\n");
           }
           case "rm":
             return faults.teardownFails === true ? ok("", 1, "Error: container is busy") : ok();
@@ -767,7 +771,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
         return turn("run_command", { command: "true" });
       }
       if (faults.agentRunsCommand === true && probe.modelCalls === 1) return turn("run_command", { command: "true" });
-      if (probe.modelCalls === 1) {
+      if (probe.modelCalls === 1 && faults.agentWritesNothing !== true) {
         writeFileSync(join(workDir, "greet.txt"), "hello\n");
         for (const [path, content] of Object.entries(faults.agentAlsoWrites ?? {})) {
           mkdirSync(dirname(join(workDir, path)), { recursive: true });
@@ -920,9 +924,27 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_blocked")).toBe(false);
   });
 
+  // t-checks-before-work review: an over-delivering task that moved the environment version sent the
+  // next task's passing checks to checks_stale, whose check task's red run could never accept a check.
+  test("checks from another environment version that all pass on main: already delivered before the model, nothing merged", async () => {
+    const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0 });
+
+    expect(result.status, result.detail).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    expect(result.output).toBeNull();
+    expect(probe.modelCalls).toBe(0);
+    expect(events.some((e) => e.event === "agent_launched" || e.event === "task_blocked")).toBe(false);
+    expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "passed", mainCommit: mainBefore });
+    expect(events.find((e) => e.event === "task_completed")).toMatchObject({ result: "already_delivered" });
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci", "ci"]);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(false);
+  });
+
   // The (c) review: stale checks were "failed", so replanned and lessoned against the implementer.
-  test("checks from another environment version that pass on main: checks_stale before the model, naming the check task and both versions", async () => {
-    const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0 });
+  test("checks from another environment version that exit 0 on main without passing: checks_stale before the model, naming the check task and both versions", async () => {
+    const { result, probe, events, mainBefore, mainAfter } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 0, ciStdout: "" });
 
     expect(result.status, result.detail).toBe("checks_stale");
     if (result.status !== "checks_stale") return;
@@ -1016,6 +1038,53 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.status, result.detail).toBe("failed");
     expect(result.detail).toContain("wall_clock");
     expect(events.some((e) => e.event === "task_interrupted")).toBe(false);
+  });
+
+  // Fourth run N13 (ADR-074 addendum 2 d67 b): work an earlier task over-delivered had no exit but the operator.
+  test("no change against main and the checks, the environment's test and the regression suite pass on main: already delivered at main, nothing merged", async () => {
+    const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ agentWritesNothing: true, ciExit: 0 });
+
+    expect(result.status, result.detail).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
+    expect(result.detail).toContain(`already delivered on main at ${mainBefore}`);
+    // Main itself, in a CI cell: no developer work to merge, so no verifier cell and no merge.
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci"]);
+    expect(started[1]?.image).toBe(ENV_IMAGE_ID);
+    expect(mainAfter).toBe(mainBefore);
+    expect(branchKept).toBe(false);
+    expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({
+      verdict: "passed",
+      mainCommit: mainBefore,
+      revision: STORED_CHECKS.revision,
+      details: expect.stringContaining("environment test"),
+    });
+    expect(events.find((e) => e.event === "task_completed")).toMatchObject({ result: "already_delivered" });
+    expect(events.some((e) => e.event === "post_merge_verify" || e.event === "task_failed")).toBe(false);
+  });
+
+  test("no change against main and a check fails on main: failed as no changes with the run's output; never completed on the implementer's word", async () => {
+    const { result, events, started, mainBefore, mainAfter } = await dispatch({ agentWritesNothing: true, ciExit: 1 });
+
+    expect(result.status, result.detail).toBe("failed");
+    expect(result.detail).toContain("the task branch holds no change against main");
+    expect(result.detail).toContain(`do not all pass on main (${mainBefore})`);
+    expect(result.detail).toContain("FAILED");
+    expect(result.errorEnvelope?.chain.operation).toBe("agentExecution");
+    expect(started.map((s) => s.role)).toEqual(["developer", "ci"]);
+    expect(mainAfter).toBe(mainBefore);
+    expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "failed" });
+    expect(events.some((e) => e.event === "task_completed")).toBe(false);
+  });
+
+  test("no change against main and Z0 cannot make main's checkout: blocked under deliveredCheckRun, never completed or failed", async () => {
+    const { result, events } = await dispatch({ agentWritesNothing: true, checkoutsBlocked: true });
+
+    expect(result.status, result.detail).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.errorEnvelope.chain.operation).toBe("deliveredCheckRun");
+    expect(result.unavailable).toBe("verification infrastructure (checks run on main)");
+    expect(events.some((e) => e.event === "task_completed" || e.event === "task_failed")).toBe(false);
   });
 
   // Sprint 0 run D5: an implementer's commit changed the environment's files and moved its version.

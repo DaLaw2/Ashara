@@ -11,6 +11,7 @@ import {
   DEFAULT_DATABASE_URL,
   LlmCallRepository,
   ProjectRepository,
+  TaskCheckRepository,
   WorkItemRepository,
 } from "@ashara/db";
 import { BlockReports, ClientAnswers, PlanReports, TenderIntake } from "@ashara/engagement";
@@ -359,6 +360,14 @@ describe("a late client change is planned", () => {
     ]);
     // No new environment task: the new work builds on the Sprint 0 already done.
     for (const task of added.filter((i) => i.level === "Task")) expect(await dependenciesOf(task.id)).toContain(sprint0.id);
+    // The revision's check task names the task it decides by its stored id, and that task waits on it.
+    const newCheck = added.find((i) => i.origin === "check");
+    const newTask = added.find((i) => i.origin === "decomposition");
+    if (newCheck === undefined || newTask === undefined) throw new Error("the revision planned no check task or no task");
+    const checksFor = await db.execute(sql`SELECT task_spec->>'checksFor' AS "checksFor" FROM work_items WHERE id = ${newCheck.id}`);
+    expect(checksFor.rows).toEqual([{ checksFor: newTask.id }]);
+    expect(await dependenciesOf(newTask.id)).toContain(newCheck.id);
+    expect(await new TaskCheckRepository(db).checkedTasksOf(newCheck.id)).toEqual([newTask.id]);
 
     const revisions = await db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ revision: 2, requestedBy: answerId }]);

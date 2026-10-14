@@ -31,6 +31,10 @@ const storedTaskSpecSchema = z.object({
   // test command passes), so the task carries none of its own. Absent means no
   // producer has said.
   checkedBy: z.enum(["substrate"]).optional(),
+  // A check task's: the work item id of the implementation task its checks decide. Every
+  // implementation task of a plan revision depends on every check task of it (ADR-074 addendum 2
+  // d67 a), so the dependency edges no longer say which one. Absent on rows written before it.
+  checksFor: z.string().min(1).optional(),
 });
 
 export type StoredTaskSpec = z.infer<typeof storedTaskSpecSchema>;

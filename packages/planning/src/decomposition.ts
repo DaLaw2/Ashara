@@ -483,8 +483,10 @@ function bulleted(lines: readonly string[]): string {
 
 /**
  * The check task of one decomposed task (ADR-074 addendum 2 d63): the check author
- * writes the checks that decide whether it is done, after Sprint 0 and before it
- * starts. Its text names no stack: the checks are commands of the project environment.
+ * writes the checks that decide whether it is done, after Sprint 0 and before any
+ * implementation task of the plan starts (d67 a). Its text names no stack: the checks
+ * are commands of the project environment. `checksFor` names the task its checks decide,
+ * since every implementation task depends on every check task and the edges cannot say.
  */
 function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): PlannedTask {
     const goal =
@@ -517,6 +519,7 @@ function checkTaskFor(epicId: string, sprint0Id: string, task: PlannedTask): Pla
             ],
             capability: "Strong",
             origin: "check",
+            checksFor: task.id,
         },
     };
 }
@@ -532,8 +535,11 @@ function dependOnEnvironment(
 }
 
 /**
- * Gives every decomposed task its check task: the check task depends on Sprint 0 and the
- * decomposed task depends on its check task. Each check task is placed before its task.
+ * Gives every decomposed task its check task, each depending on Sprint 0, and makes every
+ * decomposed task depend on every check task of the plan (ADR-074 addendum 2 d67 a): all checks
+ * are authored and red-run against main as Sprint 0 left it, before any implementation changes
+ * it, as a QA team writes a sprint's acceptance tests up front. Each check task is placed right
+ * after the task it decides, so the plan's writer meets that task before the reference to it.
  */
 function addCheckTasks(
     epicId: string,
@@ -541,11 +547,15 @@ function addCheckTasks(
     tasks: readonly PlannedTask[],
     dependencyEdges: Array<{ from: string; to: string }>,
 ): PlannedTask[] {
+    const decomposed = tasks.filter((task) => task.taskSpec.origin === "decomposition");
+    const checkOf = new Map(decomposed.map((task) => [task.id, checkTaskFor(epicId, sprint0Id, task)]));
+    for (const check of checkOf.values()) dependencyEdges.push({ from: check.id, to: sprint0Id });
+    for (const task of decomposed) {
+        for (const check of checkOf.values()) dependencyEdges.push({ from: task.id, to: check.id });
+    }
     return tasks.flatMap((task) => {
-        if (task.taskSpec.origin !== "decomposition") return [task];
-        const check = checkTaskFor(epicId, sprint0Id, task);
-        dependencyEdges.push({ from: check.id, to: sprint0Id }, { from: task.id, to: check.id });
-        return [check, task];
+        const check = checkOf.get(task.id);
+        return check === undefined ? [task] : [task, check];
     });
 }
 

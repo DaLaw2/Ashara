@@ -643,6 +643,16 @@ describe("define_check", () => {
     expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("must not contradict them");
   });
 
+  // Fourth run N15: date and amount checks covered only accepted inputs, so a looser parser passed them.
+  it("asks the check author for a check of every assumption the task touches, rejected inputs included", () => {
+    const prompt = buildSystemPrompt(assignment().brief, "check");
+    expect(prompt).toContain("Check every assumption the task touches");
+    expect(prompt).toContain("write a check that gives that input and requires it to be refused");
+    expect(prompt).toContain("## Assumptions work proceeds on");
+    expect(prompt).toContain("That task has not started: what it");
+    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Check every assumption the task touches");
+  });
+
   it("an operator's unblock note reaches the next attempt's prompt, and only when there is one (third run N11)", () => {
     const brief = { ...assignment().brief, operatorUnblock: "Unblocked by operator-a.\nOperator's note: the environment owns main.go no more" };
     const prompt = buildSystemPrompt(brief, "implementation");

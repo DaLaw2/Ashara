@@ -36,11 +36,25 @@ export interface BulkPlanEdge {
 class BulkReferenceError extends Error {
   constructor(
     readonly reference: string,
-    readonly context: "parent" | "edge_from" | "edge_to",
+    readonly context: "parent" | "edge_from" | "edge_to" | "checks_for",
   ) {
     super(`unresolved ${context} reference: "${reference}" is not a tempId in this batch`);
     this.name = "BulkReferenceError";
   }
+}
+
+/**
+ * A check task's `checksFor` names the task it decides by temp id; it is stored as that task's
+ * work item id. The task comes earlier in the batch, so the reference resolves when it is written.
+ */
+function resolveChecksFor(
+  taskSpec: StoredTaskSpec | undefined,
+  tempIdToId: ReadonlyMap<string, WorkItemId>,
+): StoredTaskSpec | undefined {
+  if (taskSpec?.checksFor === undefined) return taskSpec;
+  const resolved = tempIdToId.get(taskSpec.checksFor);
+  if (resolved === undefined) throw new BulkReferenceError(taskSpec.checksFor, "checks_for");
+  return { ...taskSpec, checksFor: resolved };
 }
 
 export interface BulkPlanResult {
@@ -101,7 +115,7 @@ export async function createBulkPlanWithContract(
         deps.projectId,
         parentRealId,
         spec.description,
-        spec.taskSpec,
+        resolveChecksFor(spec.taskSpec, tempIdToId),
         spec.northStar,
       );
       const createdItem = await PlanningService.createWorkItem(workItemRepo, item);
