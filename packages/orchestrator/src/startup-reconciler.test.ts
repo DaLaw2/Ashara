@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -297,10 +297,23 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     expect(world.row().status).toBe("Pending");
   });
 
+  test("its target's repository does not exist yet: it holds no merge, so the orphan is requeued", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "ashara-orphan-"));
+    dirs.push(parent);
+    const world = orphanWorld(createWorkItemId(), join(parent, "never-created"));
+
+    const summary = await reconcileOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ orphansRequeued: 1, orphansBlocked: 0 });
+    expect(world.projectBlocks).toEqual([]);
+    expect(world.row().status).toBe("Pending");
+  });
+
   test("main cannot be read: Blocked as Ashara's own fault and the project blocked, never requeued blind", async () => {
-    const notARepo = mkdtempSync(join(tmpdir(), "ashara-orphan-"));
-    dirs.push(notARepo);
-    const world = orphanWorld(createWorkItemId(), notARepo);
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-orphan-"));
+    dirs.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const world = orphanWorld(createWorkItemId(), unreadable);
 
     const summary = await reconcileOnStartup(world.deps);
 

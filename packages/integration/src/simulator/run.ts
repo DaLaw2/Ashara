@@ -26,7 +26,7 @@ import type { FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
-import { checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
+import { asharaFaultHaltOf, checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
 import type { Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
@@ -71,6 +71,8 @@ export interface RunResult {
   readonly seed: number;
   readonly profile: Profile;
   readonly outcome: Outcome;
+  /** Each project of the run that ended halted on Ashara's own fault, as `project <n>: <recorded reason>`. */
+  readonly asharaHalts: readonly string[];
   readonly violations: readonly Violation[];
   /** Canonical: ids and commits replaced by their order of first appearance, no time in it; the violations last. */
   readonly trace: readonly string[];
@@ -451,6 +453,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     if (!violations.has(violation.key)) violations.set(violation.key, violation);
   };
   let outcome: Outcome = { kind: "open" };
+  const asharaHalts: string[] = [];
   let cycles = 0;
   let dispatches = 0;
   let restarts = 0;
@@ -914,6 +917,10 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     const finals = await snapshotsOf();
     await sampleModelPaths(coverage, observing, projectIds);
     const [final] = finals;
+    for (const [index, each] of finals.entries()) {
+      const halt = asharaFaultHaltOf(each);
+      if (halt !== null) asharaHalts.push(`project ${index + 1}: ${halt}`);
+    }
     // The report clause needs the settle cycles a halt's report is posted on: a run cut off for no
     // progress had none, and may end on a halt begun in its last cycle (I8 judges that run).
     for (const [index, each] of finals.entries()) {
@@ -983,6 +990,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     seed: options.seed,
     profile: options.profile,
     outcome,
+    asharaHalts,
     violations: [...violations.values()],
     // The violations close the trace, so one equality covers what a run did and what it was judged to have done.
     trace: canonical([...trace, ...[...violations.values()].map((violation) => `violation ${violation.key}: ${violation.statement}`)], workdir),

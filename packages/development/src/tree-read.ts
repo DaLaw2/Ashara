@@ -224,6 +224,15 @@ export async function writeTreeFile(root: string, relPath: string, content: stri
   }
 }
 
+/**
+ * Whether anything exists at `relPath` under `root`, checked without following any link: false only
+ * when the root or a component is absent (ENOENT, ENOTDIR). A symbolic link on the way throws
+ * TreePathRefused; any other failure to tell throws as it is.
+ */
+export async function treeHasEntry(root: string, relPath: string): Promise<boolean> {
+  return (await walk(root, relPath)) !== null;
+}
+
 /** Whether `relPath` exists under `root` as a directory, checked without following any link. */
 export async function treeHasDirectory(root: string, relPath: string): Promise<boolean> {
   const walked = await walk(root, relPath);

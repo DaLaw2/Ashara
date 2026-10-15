@@ -11,6 +11,8 @@ export interface SeedReport {
   /** The seed's terminal lines, in order: its verdict, its violations, its replay file. */
   readonly lines: readonly string[];
   readonly coverage: Coverage;
+  /** Each project the seed ended halted on Ashara's own fault (RunResult asharaHalts). */
+  readonly asharaHalts: readonly string[];
   /** A failure expected-failures.ts does not list, a listed one not failed, or a run that never reported. */
   readonly unexpected: boolean;
 }
@@ -25,6 +27,6 @@ export const WorkerReplySchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("ready") }),
   z.strictObject({
     kind: z.literal("report"),
-    report: z.strictObject({ seed, lines: z.array(z.string()), coverage: CoverageSchema, unexpected: z.boolean() }),
+    report: z.strictObject({ seed, lines: z.array(z.string()), coverage: CoverageSchema, asharaHalts: z.array(z.string()), unexpected: z.boolean() }),
   }),
 ]);

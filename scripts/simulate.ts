@@ -9,7 +9,8 @@
  * written as a replay file; `--minimize` reduces it to the decisions it needs first. Exits 1 when
  * any seed fails an invariant it is not listed as failing, or never reports, or when a soak of at
  * least FLOOR_SEEDS seeds leaves a floored behaviour key (coverage.ts behavioursBelowFloor) reached
- * by no seed. Every soak prints how many seeds reached each key.
+ * by no seed. Every soak prints how many seeds reached each key, and every project that ended
+ * halted on Ashara's own fault.
  *
  * `--jobs J` runs the seeds on J worker processes, each this script with `--worker`, one seed at a
  * time per worker (default: the host's cores, at most DEFAULT_JOBS; `--jobs 1` runs every seed in
@@ -212,12 +213,12 @@ async function soakSeed(seed: number, args: Args, base: Base, mode: RunMode): Pr
     await writeFile(path, `${JSON.stringify({ seed, profile, ...mode, decisions: minimal ?? result.decisions }, null, 2)}\n`);
     lines.push(`  replay: npx tsx scripts/simulate.ts --replay ${path}${known ? "  (known: listed in expected-failures.ts)" : ""}`);
   }
-  return { seed, lines, coverage: result.coverage, unexpected };
+  return { seed, lines, coverage: result.coverage, asharaHalts: result.asharaHalts.map((halt) => `seed ${seed} (${profile}) ${halt}`), unexpected };
 }
 
 /** A seed with no verdict: its run threw, or its worker never reported. A failure, never a seed left out. */
 function unreported(seed: number, detail: string): SeedReport {
-  return { seed, lines: [`seed ${seed}: no verdict: ${detail}`], coverage: emptyCoverage(), unexpected: true };
+  return { seed, lines: [`seed ${seed}: no verdict: ${detail}`], coverage: emptyCoverage(), asharaHalts: [], unexpected: true };
 }
 
 async function reportSeed(seed: number, args: Args, base: Base, mode: RunMode): Promise<SeedReport> {
@@ -419,8 +420,10 @@ async function main(): Promise<void> {
   const coverage = emptyCoverage();
   const counts = emptyBehaviourCounts();
   let unexpected = 0;
+  const asharaHalts: string[] = [];
   const emit = (report: SeedReport): void => {
     for (const line of report.lines) console.log(line);
+    asharaHalts.push(...report.asharaHalts);
     mergeCoverage(coverage, report.coverage);
     countBehaviours(counts, report.coverage);
     if (report.unexpected) unexpected += 1;
@@ -445,6 +448,10 @@ async function main(): Promise<void> {
   } else {
     console.log(`coverage floor (${floor}): ${atZero.length === 0 ? "every floored behaviour key reached" : `${atZero.length} floored behaviour key(s) reached by no seed: ${atZero.join(", ")}`}`);
   }
+  // Failing closed halts a project on Ashara's own fault, and no invariant judges that wrong: each is
+  // named here so a soak never passes over one in silence.
+  console.log(`\nprojects ending halted on Ashara's own fault (block kind fault): ${asharaHalts.length}`);
+  for (const halt of asharaHalts) console.log(`  ${halt}`);
   console.log(`\n${args.seeds} seed(s), ${unexpected} with an unexpected failure`);
   process.exitCode = unexpected > 0 || atZero.length > 0 ? 1 : 0;
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
@@ -440,11 +440,25 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(refunds()).toBe(0);
   });
 
+  test("a fault before the target's repository exists: it holds no merge, so the fault is routed as one and the task requeued", async () => {
+    const { deps, stored, refunds, halts } = buildEnvironmentBlockedDeps();
+    const parent = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+    targets.push(parent);
+    deps.projectRepo.get = async () => ({ workspacePath: join(parent, "never-created") });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored().status).toBe("Pending");
+    expect(refunds()).toBe(1);
+    expect(halts).toEqual([]);
+  });
+
   test("main unreadable after a fault: Blocked orphan_unreconciled with the project blocked, never requeued blind", async () => {
     const { deps, stored, halts } = buildEnvironmentBlockedDeps();
-    const notARepo = mkdtempSync(join(tmpdir(), "ashara-execution-"));
-    targets.push(notARepo);
-    deps.projectRepo.get = async () => ({ workspacePath: notARepo });
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+    targets.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    deps.projectRepo.get = async () => ({ workspacePath: unreadable });
 
     await processTask(deps, freshPendingItem());
 

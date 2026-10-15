@@ -23,8 +23,10 @@ class TaskProjectMissing extends Error {
  * The merge commit Z0's merge step made on the target's main for `item`, read from git, or null
  * when main holds none. A project with no workspace recorded has no target: the path is recorded
  * before any dispatch receives it (task-helpers.ts resolveTargetProjectPath), so nothing of the
- * task can be merged. A stored path is validated before git touches it (the database is a trust
- * boundary). Every other failure throws: a main that cannot be read is never "nothing merged".
+ * task can be merged; nor in a target whose repository was never created (a dispatch that faulted
+ * before its git init), which taskMergeOnMain asks of the filesystem. A stored path is validated
+ * before git touches it (the database is a trust boundary). Every other failure throws: a main
+ * that cannot be read is never "nothing merged".
  */
 export async function mergeOnMainOf(projects: TargetPathSource, item: WorkItem): Promise<string | null> {
   const project = await projects.get(item.projectId);

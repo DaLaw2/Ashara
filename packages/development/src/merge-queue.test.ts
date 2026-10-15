@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
-import { commitMerge, resetCheckoutToHead, tentativeMerge } from "./merge.js";
+import { commitMerge, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
 import { ensureTargetGitInit } from "./workspace.js";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +76,28 @@ describe("the merge record", () => {
 
     expect(mergeCommit).toBe(await git(target, "rev-parse", "main"));
     expect(await git(target, "rev-parse", `${mergeCommit}^2`)).toBe(branchTip);
+  });
+
+  test("taskMergeOnMain finds the merge commitMerge made, and none of another task", async () => {
+    await commitOnTaskBranch("task/one", { "a.txt": "a\n" });
+    await tentativeMerge(target, "task/one");
+    const mergeCommit = await commitMerge(target, "one");
+
+    expect(await taskMergeOnMain(target, "one")).toBe(mergeCommit);
+    expect(await taskMergeOnMain(target, "two")).toBeNull();
+  });
+
+  test("a target whose repository does not exist yet holds no merge", async () => {
+    const parent = await makeDir("ashara-merge-absent-");
+    expect(await taskMergeOnMain(join(parent, "never-created"), "one")).toBeNull();
+    await mkdir(join(parent, "no-repo"));
+    expect(await taskMergeOnMain(join(parent, "no-repo"), "one")).toBeNull();
+  });
+
+  test("a repository git cannot read is MainUnreadable, never no merge", async () => {
+    const broken = join(await makeDir("ashara-merge-broken-"), "project");
+    await mkdir(join(broken, ".git"), { recursive: true });
+    await expect(taskMergeOnMain(broken, "one")).rejects.toMatchObject({ name: "MainUnreadable" });
   });
 });
 

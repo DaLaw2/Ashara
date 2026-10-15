@@ -300,6 +300,18 @@ export function haltCauseOf(kind: string): HaltCause {
   return HALT_CAUSE_OF.get(kind) ?? "unrecognized";
 }
 
+/**
+ * The recorded reason of a project that ended halted on Ashara's own fault, or null. Block kind
+ * `fault` is the one production writes for its own record or step failing (shared
+ * projectBlockCause): a halt no oracle judges wrong, since failing closed is right, but one a soak
+ * names rather than passes in silence.
+ */
+export function asharaFaultHaltOf(snapshot: Snapshot): string | null {
+  const { project } = snapshot;
+  if (project.status !== "blocked" || project.blockedCategory !== "fault") return null;
+  return project.blockedReason ?? "(no reason)";
+}
+
 export function outcomeOf(snapshot: Snapshot): Outcome {
   const { project } = snapshot;
   if (project.status === "stopped") return { kind: "stopped" };

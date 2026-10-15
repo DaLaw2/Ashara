@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -243,9 +243,10 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
   });
 
   test("main still cannot be read: it stays Blocked, never requeued blind", async () => {
-    const notARepo = mkdtempSync(join(tmpdir(), "ashara-parked-"));
-    dirs.push(notARepo);
-    const { released, saves } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), notARepo);
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    dirs.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const { released, saves } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), unreadable);
 
     expect(await released).toBe(0);
     expect(saves).toEqual([]);

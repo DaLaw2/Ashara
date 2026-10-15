@@ -3,6 +3,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { runHostGit } from "@ashara/execution-infra";
 import type { HostRepo } from "@ashara/execution-infra";
 import { targetRepo } from "./host-git.js";
+import { treeHasEntry } from "./tree-read.js";
 
 /** execFile's rejection carries the child's stderr as a string; anything else carries none. */
 function stderrOf(e: unknown): string {
@@ -170,11 +171,21 @@ class MainUnreadable extends Error {
 
 /**
  * The merge commit commitMerge made on main for the task, read from git: the newest commit on
- * main whose subject is the task's merge subject, or null when main holds none. A repository with
- * no main branch (`rev-parse -q --verify` exits 1 with nothing on stderr) holds no merge. Any other
- * failure of git is MainUnreadable.
+ * main whose subject is the task's merge subject, or null when main holds none. A target whose
+ * repository does not exist yet (no target directory, or no `.git` in it: what ensureTargetGitInit
+ * creates before any merge) holds no merge; that is asked of the filesystem first, so git is never
+ * run in a directory that is not there (its spawn would fail ENOENT, which says nothing about
+ * main). A repository with no main branch (`rev-parse -q --verify` exits 1 with nothing on stderr)
+ * holds no merge. A probe that cannot tell, and any other failure of git, is MainUnreadable.
  */
 export async function taskMergeOnMain(targetPath: string, taskId: string): Promise<string | null> {
+  let repositoryExists: boolean;
+  try {
+    repositoryExists = await treeHasEntry(targetPath, ".git");
+  } catch (e) {
+    throw new MainUnreadable(taskId, targetPath, "probe the target's repository", { cause: e });
+  }
+  if (!repositoryExists) return null;
   const repo = targetRepo(targetPath);
   try {
     await runHostGit(repo, ["rev-parse", "-q", "--verify", "refs/heads/main^{commit}"]);
