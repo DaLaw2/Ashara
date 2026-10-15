@@ -158,10 +158,20 @@ function clientAnswers(): ClientAnswers {
   return new ClientAnswers({ llm, store: { ...store, openAnswers: async () => (await store.openAnswers()).filter((open) => ourProjects.has(open.projectId)) } });
 }
 
+/** Where each delivered report read the product's interface file: the project's workspace at the accepted commit. */
+const interfaceReads: string[] = [];
+const INTERFACE_TEXT = "Run: kv put <key> <value>\n";
+
 function deliveredReports(): DeliveredReports {
   const store = createDeliveredReportStore(db);
   const ours: DeliveredReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => ourProjects.has(due.projectId)) };
-  return new DeliveredReports(ours);
+  return new DeliveredReports(ours, {
+    file: "PUBLIC_INTERFACE.md",
+    at: async (targetProjectPath, commit) => {
+      interfaceReads.push(`${targetProjectPath}@${commit}`);
+      return { kind: "present", text: INTERFACE_TEXT };
+    },
+  });
 }
 
 function sweepDeps(passed: boolean, details: string, ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] }) {
@@ -232,11 +242,14 @@ describe("acceptance on main", () => {
     expect(await projects.listActiveIds()).not.toContain(projectId);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([]);
 
+    interfaceReads.length = 0;
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     expect(await deliveredReports().runPending()).toEqual([]);
+    expect(interfaceReads).toEqual([`/tmp/${NAME_PREFIX}@${MAIN}`]);
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(1);
     const [body] = reports;
+    expect(body).toContain(`quoted as PUBLIC_INTERFACE.md reads on main at commit ${MAIN}.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
     expect(body.split("\n\n")[0]).toContain(`the environment's test and the stored checks of 2 completed tasks passed together on main, commit ${MAIN}`);
     // The scaffold, checked only by the substrate, is done but listed apart from what passed.
     expect(body).toContain(`not checked by a stored check: none was written for them, so nothing in the run above confirms them:\n- "Set up the module root"`);

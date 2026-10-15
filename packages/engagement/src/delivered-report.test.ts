@@ -19,20 +19,90 @@ function assumption(id: string, text: string, standing: AcceptedAssumptionStandi
   return { type: "assumption", id, text, standing, kind };
 }
 
-async function render(due: Due): Promise<string> {
+const WORKSPACE = "/work/target";
+const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
+type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
+
+async function render(fields: Omit<Due, "targetProjectPath">, read: InterfaceRead = { kind: "absent" }): Promise<string> {
+  const due: Due = { ...fields, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
-  const reports = new DeliveredReports({
-    dueReports: async () => [due],
-    postReport: async (sweepId, body) => {
-      expect(sweepId).toBe(due.sweepId);
-      posted.push(body);
-      return "posted";
+  const reads: string[] = [];
+  const reports = new DeliveredReports(
+    {
+      dueReports: async () => [due],
+      postReport: async (sweepId, body) => {
+        expect(sweepId).toBe(due.sweepId);
+        posted.push(body);
+        return "posted";
+      },
     },
-  });
+    {
+      file: INTERFACE_FILE,
+      at: async (targetProjectPath, commit) => {
+        reads.push(`${targetProjectPath}@${commit}`);
+        return read;
+      },
+    },
+  );
   expect(await reports.runPending()).toEqual([{ kind: "posted", projectId }]);
   expect(posted).toHaveLength(1);
+  expect(reads).toEqual([`${WORKSPACE}@${due.mainCommit}`]);
   return posted[0];
 }
+
+const BASE: Omit<Due, "targetProjectPath"> = {
+  sweepId: "s9",
+  projectId,
+  mainCommit: MAIN,
+  goals: [{ title: "Count words", close: { kind: "merged", commit: MERGE_A } }],
+  checked: ["Count words"],
+  unchecked: [],
+  givenUp: [],
+  vision: { kind: "unrecorded" },
+};
+
+/** The paragraph that tells the client how to run the product, up to the next section. */
+function howToRun(body: string): string {
+  const start = body.indexOf("How to run");
+  const end = body.indexOf("\n\nWhich parts of what you asked for");
+  expect(start).toBeGreaterThan(0);
+  return body.slice(start, end);
+}
+
+// smoke2 D3: the plan said tally.py, the product was wc.py, and the report never said how to run it.
+describe("how to run the product", () => {
+  test("quotes the public interface file from main as is, after what was delivered", async () => {
+    const text = "Run: python wc.py <file>...\n\nPrints lines, words and bytes, then a total.\n";
+    const body = await render(BASE, { kind: "present", text });
+    expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("How to run"));
+    expect(howToRun(body)).toBe(`How to run it: the product's public interface, quoted as ${INTERFACE_FILE} reads on main at commit ${MAIN}.\n\`\`\`\n${text}\`\`\``);
+  });
+
+  test("a file holding a fence is quoted in a longer one, so nothing in it closes the quote", async () => {
+    const text = "Usage:\n```\nkv put <key> <value>\n```";
+    const quote = howToRun(await render(BASE, { kind: "present", text }));
+    expect(quote.endsWith(`\n\`\`\`\`\n${text}\n\`\`\`\``)).toBe(true);
+  });
+
+  test("with no public interface file, says the product has none and names the file looked for", async () => {
+    expect(howToRun(await render(BASE))).toBe(
+      `How to run the product is not on record: it has no public interface file. ${INTERFACE_FILE} is not on main at commit ${MAIN}.`,
+    );
+  });
+
+  test("where no checkout is held, says the file was not read and why, claiming neither its text nor its absence", async () => {
+    expect(howToRun(await render(BASE, { kind: "not-held", reason: "no checkout here" }))).toBe(
+      `How to run the product is not quoted: ${INTERFACE_FILE} on main at commit ${MAIN} was not read (no checkout here).`,
+    );
+  });
+
+  test("an oversized file keeps its start and end, says it was cut, and marks how many characters are missing", async () => {
+    const text = `${"H".repeat(3000)}${"m".repeat(10_000)}${"T".repeat(3000)}`;
+    const quote = howToRun(await render(BASE, { kind: "present", text }));
+    expect(quote).toContain(`It is longer than 4000 characters, so only its start and end are quoted;`);
+    expect(quote).toContain(`\n\`\`\`\n${"H".repeat(1600)}\n[truncated by Ashara: 12000 characters cut here]\n${"T".repeat(2400)}\n\`\`\``);
+  });
+});
 
 // Story s-independent-verify-m1 W7 (eighth run E3): the delivered report, every line from a record.
 describe("the delivered report", () => {

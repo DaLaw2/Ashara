@@ -31,7 +31,8 @@
  *   today's Engagement does not post again (a project with a stop awaiting the Liaison is not
  *   reported on) gets its kept report back and is judged as kept, and says so. A brief's
  *   other sections (its context map, checks, knowledge) need the run's checkout, which a dump does
- *   not hold, so they are not composed; questions, the assumptions report, answer replies and plan
+ *   not hold, so they are not composed, and a delivered report composed again says it does not
+ *   quote the product's public interface file, for the same reason; questions, the assumptions report, answer replies and plan
  *   reports are written with a model call or in the step that made the record, so they are judged
  *   as kept only.
  * Exits 1 when a text today's code composed again states a fact its records do not hold, or when any
@@ -56,6 +57,7 @@ import {
   settleReports,
 } from "@ashara/integration";
 import type { StoredTextViolation } from "@ashara/integration";
+import { PUBLIC_INTERFACE_FILE } from "@ashara/quality";
 import { createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { describeErrorChain } from "@ashara/shared";
@@ -169,7 +171,10 @@ async function main(): Promise<void> {
       const kept = new Map<string, StoredTextViolation[]>();
       for (const project of projects) kept.set(project.id, await judgeStoredText(db, project.id, "as-recorded"));
       const setAside = await setAsideReports(db);
-      await new DeliveredReports(createDeliveredReportStore(db)).runPending();
+      await new DeliveredReports(createDeliveredReportStore(db), {
+        file: PUBLIC_INTERFACE_FILE,
+        at: async () => ({ kind: "not-held", reason: "a replay of a kept run's records holds no checkout of its product" }),
+      }).runPending();
       await new BlockReports(createBlockReportStore(db)).runPending();
       const recomposed = await settleReports(db, setAside);
       console.log(

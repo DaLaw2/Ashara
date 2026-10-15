@@ -314,6 +314,17 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 
+  // smoke2 D3: the delivered report quotes the public interface file main holds, cut when it is too
+  // long, or says main holds none. The scaffold writes a short one (benign), none (1) or a long one (2).
+  it("catches a delivered report whose how-to-run section is not main's public interface file", async () => {
+    const scaffold = (form: number): Direction => draw("agent.scaffold.public-interface", "every", form, "scaffold");
+    const oversized = await directed([scaffold(2)]);
+    expect(oversized.outcome.kind).toBe("accepted");
+    expect(keys(oversized)).toEqual([]);
+    expect(keys(await directed([], { mutation: "delivered-report-misquotes-interface" }))).toEqual(["I9:delivered-interface"]);
+    expect(keys(await directed([scaffold(1)], { mutation: "delivered-report-misquotes-interface" }))).toEqual(["I9:delivered-interface"]);
+  }, 180_000);
+
   // W6/W7: a halt's report quotes the cause recorded on its episode. Under a cell outage the project
   // halts on infrastructure and then undeliverable (plan_repair); at the low cap it halts at once.
   it("catches a halt report that states a fixed cause instead of the recorded one", async () => {

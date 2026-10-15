@@ -4,6 +4,7 @@ import { pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
 import type { QueryPlant } from "./faults.js";
 import {
   briefMisstatesStanding,
+  deliveredReportMisquotesInterface,
   deliveredReportMisstatesStanding,
   deliveredReportMisstatesUnchecked,
   deliveredReportOmitsGoal,
@@ -37,6 +38,8 @@ import {
  *   (I9, W12a D1's class);
  * - delivered-report-misstates-standing: the delivered report says an assumption the client was
  *   asked about was reported to them (I9, smoke2 D1's class);
+ * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
+ *   public interface file main holds, or misstates its absence (I9, smoke2 D3's class);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9).
  */
@@ -54,6 +57,7 @@ export const MUTATIONS = [
   "delivered-report-unrecorded",
   "brief-misstates-standing",
   "delivered-report-misstates-standing",
+  "delivered-report-misquotes-interface",
   "question-misstates-assumption",
 ] as const;
 export type Mutation = (typeof MUTATIONS)[number];
@@ -80,6 +84,7 @@ export const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
   "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
   "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
+  "delivered-report-misquotes-interface": { bypassed: [], queries: deliveredReportMisquotesInterface, code: null },
   "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
 };
 

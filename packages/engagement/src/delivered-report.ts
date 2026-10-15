@@ -1,3 +1,4 @@
+import { keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import type { VisionSource } from "./vision-language/vision-source.js";
@@ -45,6 +46,8 @@ interface DueDeliveredReport {
   readonly projectId: ProjectId;
   /** The commit on main the acceptance sweep passed on. */
   readonly mainCommit: string;
+  /** The project's target checkout, whose main holds the product. */
+  readonly targetProjectPath: string;
   readonly goals: ReadonlyArray<{ readonly title: string; readonly close: GoalClose }>;
   /** The completed tasks whose stored checks the sweep ran, by title. */
   readonly checked: readonly string[];
@@ -53,6 +56,26 @@ interface DueDeliveredReport {
   /** Goal tasks given up, which the plan was repaired around, by title. */
   readonly givenUp: readonly string[];
   readonly vision: VisionCoverage;
+}
+
+/**
+ * A file of the product at one commit of its target checkout: its whole text, or absent from that
+ * commit's tree; or, where no checkout is held (a replay of a kept run's records), why it is not read.
+ */
+type ProductFileAt =
+  | { readonly kind: "present"; readonly text: string }
+  | { readonly kind: "absent" }
+  | { readonly kind: "not-held"; readonly reason: string };
+
+/**
+ * Where the product states how it is run: its public interface file, one name for every product,
+ * read at one commit of the project's target checkout. The composition root supplies it from the
+ * context that owns the convention; what the file says is the product's, quoted as is.
+ */
+interface ProductInterfaceSource {
+  /** The file, at the repository root, the product's public interface is written in. */
+  readonly file: string;
+  at(targetProjectPath: string, commit: string): Promise<ProductFileAt>;
 }
 
 /** Engagement's persistence port for delivered reports. */
@@ -65,6 +88,36 @@ export interface DeliveredReportStore {
 interface DeliveredReportOutcome {
   readonly kind: "posted" | "already-posted";
   readonly projectId: ProjectId;
+}
+
+/** At most this many characters of the public interface file are quoted; a longer one keeps its start and end. */
+const INTERFACE_QUOTE_CHARS = 4000;
+
+/** A fence no run of backticks in `text` can close early. */
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length));
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/**
+ * How to run the product, as main holds it at the accepted commit: the public interface file quoted
+ * as is (never reworded, so the report states nothing of the product the product does not), bounded
+ * and marked where cut; or that the product has none, naming the file looked for.
+ */
+function howToRunSection(file: string, commit: string, read: ProductFileAt): string {
+  if (read.kind === "absent") {
+    return `How to run the product is not on record: it has no public interface file. ${file} is not on main at commit ${commit}.`;
+  }
+  if (read.kind === "not-held") return `How to run the product is not quoted: ${file} on main at commit ${commit} was not read (${read.reason}).`;
+  const quoted = keepEnds(wholeText(read.text), INTERFACE_QUOTE_CHARS);
+  const text = renderElided(quoted);
+  const fence = fenceFor(text);
+  const body = text === "" || text.endsWith("\n") ? text : `${text}\n`;
+  const cut =
+    uncutText(quoted) === null
+      ? ` It is longer than ${INTERFACE_QUOTE_CHARS} characters, so only its start and end are quoted; the marker inside says how many characters were cut.`
+      : "";
+  return `How to run it: the product's public interface, quoted as ${file} reads on main at commit ${commit}.${cut}\n${fence}\n${body}${fence}`;
 }
 
 /** What the core loop asks of the Liaison each cycle (no LLM call). */
@@ -178,10 +231,11 @@ function plural(count: number, noun: string): string {
 }
 
 /** The client's delivered report, every line from the records. */
-function deliveredReport(due: DueDeliveredReport): string {
+function deliveredReport(due: DueDeliveredReport, file: string, productInterface: ProductFileAt): string {
   return [
     opening(due),
     `What was delivered:\n${due.goals.map((goal) => closeLine(goal.title, goal.close)).join("\n")}`,
+    howToRunSection(file, due.mainCommit, productInterface),
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),
     coverageSection(due.vision),
@@ -190,13 +244,17 @@ function deliveredReport(due: DueDeliveredReport): string {
 }
 
 export class DeliveredReports implements LiaisonDeliveredReports {
-  constructor(private readonly store: DeliveredReportStore) {}
+  constructor(
+    private readonly store: DeliveredReportStore,
+    private readonly productInterface: ProductInterfaceSource,
+  ) {}
 
-  /** A store failure throws through and fails the cycle. */
+  /** A store failure, or a failure to read the product's interface file, throws through and fails the cycle. */
   async runPending(): Promise<readonly DeliveredReportOutcome[]> {
     const outcomes: DeliveredReportOutcome[] = [];
     for (const due of await this.store.dueReports()) {
-      const kind = await this.store.postReport(due.sweepId, deliveredReport(due));
+      const read = await this.productInterface.at(due.targetProjectPath, due.mainCommit);
+      const kind = await this.store.postReport(due.sweepId, deliveredReport(due, this.productInterface.file, read));
       outcomes.push({ kind, projectId: due.projectId });
     }
     return outcomes;

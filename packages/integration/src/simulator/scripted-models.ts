@@ -11,11 +11,13 @@ import {
   CheckSpecSchema,
   LAYOUT_FILE,
   MANIFEST_FILE,
+  PUBLIC_INTERFACE_PATH,
   RECIPE_DEFECT_SYMPTOM,
   RECIPE_DEFECT_TOKEN,
   SHARED_INDEX_FILE,
   TOOLCHAIN_TOKEN,
   behaviourPath,
+  publicInterfaceText,
   taskOfTitle,
   taskTitle,
 } from "./product.js";
@@ -454,7 +456,7 @@ export class StandIns {
       steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
     } else if (origin === "product-scaffold") {
       work = "scaffold";
-      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], finished("Set up the product layout.")];
+      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(), finished("Set up the product layout.")];
     } else {
       work = "implementation";
       steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
@@ -487,6 +489,13 @@ export class StandIns {
     if (end === null) return { steps, end: "complete", cut: null };
     const at = tape.pick("agent.misbehaving-turn", steps.length, work);
     return { steps: steps.slice(0, at), end, cut: end === "truncated" ? (steps[at] ?? null) : null };
+  }
+
+  /** The scaffold's public interface file (smoke2 D3): written as briefed, left out, or longer than any report quotes whole. */
+  private publicInterfaceWork(): ToolStep[] {
+    const form = this.context.tape.pick("agent.scaffold.public-interface", 3, "scaffold");
+    if (form === 1) return [];
+    return [["write_file", { path: PUBLIC_INTERFACE_PATH, content: publicInterfaceText(form === 0 ? "short" : "oversized") }]];
   }
 
   private environmentWork(): ToolStep[] {

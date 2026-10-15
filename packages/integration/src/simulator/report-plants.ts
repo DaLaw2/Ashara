@@ -125,6 +125,19 @@ export const deliveredReportMisstatesStanding = rewriteReport(
   (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),
 );
 
+/**
+ * A delivered report whose how-to-run section is not main's (smoke2 D3's class: the plan said
+ * tally, the product was another name): the quoted interface names another command, or, where
+ * main holds no interface file, the report says it is empty instead of saying there is none.
+ */
+export const deliveredReportMisquotesInterface = rewriteReport(
+  (body) => body.startsWith("Your project is delivered."),
+  (body) =>
+    body.includes("Run: sim <behaviour>")
+      ? body.replace("Run: sim <behaviour>", "Run: tally <behaviour>")
+      : body.replace("it has no public interface file.", "its public interface file is empty."),
+);
+
 /** A question that says work proceeds on an assumption its vision does not record. */
 export const questionMisstatesAssumption = rewriteInsert("client_messages", (param) =>
   param.replace(/(Until you answer, we proceed on this assumption: )(.*)/, "$1Messages are in Latin."),

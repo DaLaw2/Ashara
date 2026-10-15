@@ -51,6 +51,8 @@ interface DueDeliveredReportRow {
   readonly sweepId: string;
   readonly projectId: ProjectId;
   readonly mainCommit: string;
+  /** The project's target checkout (projects.workspace_path). */
+  readonly targetProjectPath: string;
   readonly goals: ReadonlyArray<{ readonly title: string; readonly close: GoalClose }>;
   /** The titles of the completed tasks whose stored checks the sweep ran. */
   readonly checked: readonly string[];
@@ -361,6 +363,17 @@ class AcceptedSweepWithoutMain extends Error {
   }
 }
 
+/** A passed sweep's project records no target checkout: main, where the product is, cannot be read. */
+class AcceptedProjectWithoutWorkspace extends Error {
+  constructor(
+    readonly sweepId: string,
+    readonly projectId: string,
+  ) {
+    super(`acceptance sweep ${sweepId} passed, but project ${projectId} records no workspace_path: the product on main cannot be read for its delivered report`);
+    this.name = "AcceptedProjectWithoutWorkspace";
+  }
+}
+
 /**
  * Every passed sweep whose delivered report is not yet posted, oldest first, with what the report
  * is rendered from. A project the client stopped, or has a stop awaiting the Liaison, is not
@@ -375,6 +388,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
       checkedTasks: acceptanceSweeps.checkedTasks,
       uncheckedTasks: acceptanceSweeps.uncheckedTasks,
       acceptedAt: acceptanceSweeps.createdAt,
+      workspacePath: projects.workspacePath,
     })
     .from(acceptanceSweeps)
     .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
@@ -386,10 +400,12 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
     const goalIds = (await completedGoalTasks(db, row.projectId)).map((goal) => goal.id);
     // A passed sweep always ran on main (acceptance_sweeps_pass_has_main).
     if (row.mainCommit === null) throw new AcceptedSweepWithoutMain(row.id);
+    if (row.workspacePath === null) throw new AcceptedProjectWithoutWorkspace(row.id, row.projectId);
     due.push({
       sweepId: row.id,
       projectId: parseProjectId(row.projectId, "acceptance_sweeps.project_id"),
       mainCommit: row.mainCommit,
+      targetProjectPath: row.workspacePath,
       goals,
       checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
       unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),

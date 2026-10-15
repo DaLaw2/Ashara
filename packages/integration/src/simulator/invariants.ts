@@ -182,7 +182,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     events,
     main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
     reports: await readReportRecords(db, projectId),
-    textFacts: await readTextFactRecords(db, projectId),
+    textFacts: await readTextFactRecords(db, projectId, project.workspacePath),
   };
 }
 

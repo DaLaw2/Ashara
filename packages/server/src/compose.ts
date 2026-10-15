@@ -27,7 +27,6 @@ import {
   ClientAnswers,
   ClientChanges,
   ClientStops,
-  DeliveredReports,
   PlanReports,
   StackChoiceReports,
   TenderIntake,
@@ -91,7 +90,7 @@ import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createPlanReportStore } from "./plan-report-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
-import { createAcceptanceStore, createDeliveredReportStore } from "./acceptance-store.js";
+import { createAcceptanceStore, createDeliveredReportStore, createDeliveredReports } from "./acceptance-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
@@ -388,7 +387,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     dispatchService,
     acceptanceSweeper: dispatchService.verification,
     acceptance: createAcceptanceStore(db),
-    deliveredReports: new DeliveredReports(createDeliveredReportStore(db)),
+    deliveredReports: createDeliveredReports(createDeliveredReportStore(db)),
     failureRouter,
     spendCap,
     clientStops: new ClientStops(createClientStopStore(db)),

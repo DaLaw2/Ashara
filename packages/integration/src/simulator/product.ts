@@ -12,6 +12,21 @@ const BEHAVIOUR_DIR = "product/behaviours";
 export const LAYOUT_FILE = "product/LAYOUT";
 export const MANIFEST_FILE = "product/MANIFEST";
 export const SHARED_INDEX_FILE = "product/INDEX";
+/**
+ * Where the scaffold's brief asks the product's public interface to be written, as the simulator
+ * knows it (never read from Quality: the oracle states what it expects on its own, ADR-081).
+ */
+export const PUBLIC_INTERFACE_PATH = "PUBLIC_INTERFACE.md";
+
+/**
+ * The public interface file a scripted scaffold writes: a short one, none, or one longer than any
+ * report quotes whole. The text carries blank lines and a fence, as a real one may.
+ */
+export function publicInterfaceText(form: "short" | "oversized"): string {
+  const usage = "Run: sim <behaviour>\n\nEach behaviour prints its name:\n```\nsim b1\n```\n";
+  if (form === "short") return usage;
+  return `${usage}${Array.from({ length: 400 }, (_, i) => `- behaviour note ${i + 1}: unchanged by every task\n`).join("")}End of interface.\n`;
+}
 /** git's conflict marker lines, as `sim resolve` removes them: both sides' lines are kept. */
 export const CONFLICT_MARKER_LINE = /^(<{7}|={7}|>{7})( |$)/;
 

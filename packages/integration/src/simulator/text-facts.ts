@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
 import type { Database } from "./database.js";
+import { PUBLIC_INTERFACE_PATH } from "./product.js";
 
 /**
  * I9, text against fact (ADR-081; test retrospective 2026-10-15 pattern 1): every fact a composer
@@ -26,7 +30,9 @@ import type { Database } from "./database.js";
  * - the first-plan report: its decomposed and check task counts, of the plan that stood when it was
  *   posted;
  * - the delivered report: each assumption it lists stands with the client as the vision current at
- *   acceptance and the client's replies by then say (smoke2 D1).
+ *   acceptance and the client's replies by then say (smoke2 D1); and the public interface file it
+ *   quotes is the one main holds at the sweep's commit, or it says main holds none (smoke2 D3),
+ *   judged only where the project's checkout is held.
  * Halt, stop and the rest of the delivered report are I4's (client-reports.ts). The expected
  * wording is written here, never read from a composer: an oracle that asks production what to
  * expect can never find production wrong (boundary-rules.toml [integration] `named-only`).
@@ -36,7 +42,7 @@ const visionRow = z.object({ version: z.number(), inferences: z.unknown(), openQ
 const briefRow = z.object({ title: z.string(), visionAtCreation: z.number().nullable(), brief: z.unknown(), taskSpec: z.unknown() });
 const messageRow = z.object({ id: z.string(), body: z.string() });
 const replyRow = z.object({ answerId: z.string(), body: z.string() });
-const deliveredRow = z.object({ sweepId: z.string(), body: z.string(), visionAtAcceptance: z.number().nullable() });
+const deliveredRow = z.object({ sweepId: z.string(), body: z.string(), mainCommit: z.string(), visionAtAcceptance: z.number().nullable() });
 const sweepReplyRow = z.object({ sweepId: z.string(), questionId: z.string(), readByAcceptance: z.boolean() });
 const firstPlanRow = z.object({ body: z.string() });
 const planItemRow = z.object({ origin: z.string().nullable(), beforeReport: z.boolean(), blockedReason: z.unknown() });
@@ -57,6 +63,11 @@ export interface TextFactRecords {
   readonly delivered: ReadonlyArray<z.infer<typeof deliveredRow>>;
   /** Each delivered report's sweep: the client answers sent by acceptance, by question, and whether read by then. */
   readonly sweepReplies: ReadonlyArray<z.infer<typeof sweepReplyRow>>;
+  /**
+   * The product's public interface file as main holds it at each delivered report's sweep commit,
+   * by sweep id, read from the project's checkout; not held where no checkout is (a kept run's dump).
+   */
+  readonly interfaceOnMain: { readonly kind: "read"; readonly bySweep: ReadonlyMap<string, MainFile> } | { readonly kind: "not-held" };
   /** The latest Completed review task's task_spec (every item of the vision), or null. */
   readonly reviewSpec: unknown;
   readonly firstPlan: {
@@ -66,8 +77,50 @@ export interface TextFactRecords {
   };
 }
 
-export async function readTextFactRecords(db: Database, projectId: string): Promise<TextFactRecords> {
+/** A file of main at one commit, as the observer's own git reads it. */
+type MainFile = { readonly kind: "present"; readonly text: string } | { readonly kind: "absent" };
+
+/** The observer could not read a file of main: the report would be judged against nothing. */
+class MainFileUnreadable extends Error {
+  constructor(
+    readonly checkout: string,
+    readonly commit: string,
+    readonly path: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`git of ${checkout} could not read ${path} at ${commit}: ${describeErrorChain(options.cause)}`, options);
+    this.name = "MainFileUnreadable";
+  }
+}
+
+const runGit = promisify(execFile);
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** `path` at `commit` of `checkout`, read by the host's git outside every seam (the observer is never faulted). */
+async function mainFileAt(checkout: string, commit: string, path: string): Promise<MainFile> {
+  try {
+    const { stdout: listed } = await runGit("git", ["-C", checkout, "ls-tree", "--name-only", commit, "--", path], { maxBuffer: GIT_MAX_BUFFER });
+    if (listed === "") return { kind: "absent" };
+    const { stdout: text } = await runGit("git", ["-C", checkout, "cat-file", "blob", `${commit}:${path}`], { maxBuffer: GIT_MAX_BUFFER });
+    return { kind: "present", text };
+  } catch (err) {
+    throw new MainFileUnreadable(checkout, commit, path, { cause: err });
+  }
+}
+
+/** `checkout` is the project's target checkout, or null where none is held: then no file of main is read. */
+export async function readTextFactRecords(db: Database, projectId: string, checkout: string | null): Promise<TextFactRecords> {
   const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> => z.array(schema).parse((await db.execute(query)).rows);
+  const records = await readStoreRecords(rows, projectId);
+  if (checkout === null) return { ...records, interfaceOnMain: { kind: "not-held" } };
+  const bySweep = new Map<string, MainFile>();
+  for (const report of records.delivered) bySweep.set(report.sweepId, await mainFileAt(checkout, report.mainCommit, PUBLIC_INTERFACE_PATH));
+  return { ...records, interfaceOnMain: { kind: "read", bySweep } };
+}
+
+type Rows = <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>) => Promise<T[]>;
+
+async function readStoreRecords(rows: Rows, projectId: string): Promise<Omit<TextFactRecords, "interfaceOnMain">> {
   const [firstPlan] = await rows(
     firstPlanRow,
     sql`SELECT body FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound' AND reports_on = 'first-plan'`,
@@ -106,7 +159,7 @@ export async function readTextFactRecords(db: Database, projectId: string): Prom
     ),
     delivered: await rows(
       deliveredRow,
-      sql`SELECT s.id AS "sweepId", m.body,
+      sql`SELECT s.id AS "sweepId", m.body, s.main_commit AS "mainCommit",
                  (SELECT max(v.version) FROM vision_documents v WHERE v.project_id = s.project_id AND v.created_at <= s.created_at) AS "visionAtAcceptance"
           FROM acceptance_sweeps s JOIN client_messages m ON m.id = s.report_id
           WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
@@ -250,6 +303,7 @@ export function checkTextFacts(records: TextFactRecords): TextViolation[] {
   checkAssumptionsReport(records, versions, add);
   checkFirstPlan(records, add);
   checkDeliveredStandings(records, versions, add);
+  checkDeliveredInterface(records, add);
   return found;
 }
 
@@ -537,6 +591,102 @@ function checkDeliveredStandings(records: TextFactRecords, versions: ReadonlyMap
       }
       const expected = acceptedLine(assumption, standing);
       if (line !== expected) add(`delivered-standing:${source.id}`, `the delivered report says "${line.slice(0, 200)}"; at acceptance ${source.id} stood ${standing}: "${expected.slice(0, 200)}"`);
+    }
+  }
+}
+
+/** How the delivered report introduces the quoted public interface, as the oracle words it. */
+function quotedLead(commit: string): string {
+  return `How to run it: the product's public interface, quoted as ${PUBLIC_INTERFACE_PATH} reads on main at commit ${commit}.`;
+}
+
+/** How the delivered report says the product has no public interface file, as the oracle words it. */
+function noneLine(commit: string): string {
+  return `How to run the product is not on record: it has no public interface file. ${PUBLIC_INTERFACE_PATH} is not on main at commit ${commit}.`;
+}
+
+const CUT_SAID = "so only its start and end are quoted";
+const CUT_MARKER = /(?:^|\n)\[truncated by Ashara: (\d+) characters cut here\]\n/g;
+const FENCE = /^`{3,}$/;
+
+/** The sentence that leads the quote and the fenced block's text, or null when the report holds no such block. */
+function quotedBlock(body: string, lead: string): { readonly said: string; readonly quoted: string } | null {
+  const at = body.indexOf(`\n\n${lead}`);
+  if (at < 0) return null;
+  const [said = "", fence = "", ...rest] = body.slice(at + 2).split("\n");
+  if (!FENCE.test(fence)) return null;
+  const close = rest.indexOf(fence);
+  if (close < 0) return null;
+  const inner = rest.slice(0, close);
+  return { said, quoted: inner.length === 0 ? "" : `${inner.join("\n")}\n` };
+}
+
+/** `text`, and `text` less the one newline a quote may have added to end its line. */
+function withAddedNewline(text: string): string[] {
+  return text.endsWith("\n") ? [text, text.slice(0, -1)] : [text];
+}
+
+/**
+ * Whether `quoted` is `file` as is ("whole"), or its start and end with one marker counting exactly
+ * the characters between them ("cut"); null when it is neither.
+ */
+function quoteOf(quoted: string, file: string): "whole" | "cut" | null {
+  const markers = [...quoted.matchAll(CUT_MARKER)];
+  if (markers.length === 0) return quoted === file || (!file.endsWith("\n") && quoted === `${file}\n`) ? "whole" : null;
+  const [marker] = markers;
+  if (markers.length > 1 || marker === undefined) return null;
+  const cut = Number(marker[1]);
+  const head = quoted.slice(0, marker.index + (marker[0].startsWith("\n") ? 1 : 0));
+  const tail = quoted.slice(marker.index + marker[0].length);
+  for (const h of withAddedNewline(head)) {
+    for (const t of withAddedNewline(tail)) {
+      if (h.length + cut + t.length === file.length && file.startsWith(h) && file.endsWith(t)) return "cut";
+    }
+  }
+  return null;
+}
+
+/**
+ * The delivered report's how-to-run section against main (smoke2 D3): the quoted block is the public
+ * interface file as main holds it at the sweep's commit, whole or its start and end around one
+ * marker counting exactly what was cut, and the report says it was cut exactly when it was; with no
+ * such file on main, the report says the product has none, naming the file. Not judged where no
+ * checkout is held.
+ */
+function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
+  const onMain = records.interfaceOnMain;
+  if (onMain.kind === "not-held") return;
+  for (const report of records.delivered) {
+    const file = onMain.bySweep.get(report.sweepId);
+    const commit = report.mainCommit;
+    if (file === undefined) {
+      add("delivered-interface-unread", `${PUBLIC_INTERFACE_PATH} was not read at commit ${commit.slice(0, 12)} for a delivered report`);
+      continue;
+    }
+    const block = quotedBlock(report.body, quotedLead(commit));
+    if (file.kind === "absent") {
+      if (block !== null || !report.body.includes(`\n\n${noneLine(commit)}`)) {
+        add("delivered-interface", `main holds no ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report does not say "${noneLine(commit)}"`);
+      }
+      continue;
+    }
+    if (block === null) {
+      add("delivered-interface", `main holds ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report quotes no block of it after "${quotedLead(commit)}"`);
+      continue;
+    }
+    const quote = quoteOf(block.quoted, file.text);
+    if (quote === null) {
+      add(
+        "delivered-interface",
+        `the delivered report's quoted block is not ${PUBLIC_INTERFACE_PATH} as main holds it at ${commit.slice(0, 12)}: it reads "${block.quoted.slice(0, 120)}", main "${file.text.slice(0, 120)}"`,
+      );
+      continue;
+    }
+    if ((quote === "cut") !== block.said.includes(CUT_SAID)) {
+      add(
+        "delivered-interface-cut",
+        `the delivered report quotes ${PUBLIC_INTERFACE_PATH} ${quote}, but ${quote === "cut" ? "does not say" : "says"} it was cut: "${block.said.slice(0, 200)}"`,
+      );
     }
   }
 }

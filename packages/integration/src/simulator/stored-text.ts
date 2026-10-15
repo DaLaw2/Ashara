@@ -59,7 +59,8 @@ export async function judgeStoredText(db: Database, projectId: string, briefs: "
         FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`,
   );
   const checked = new Set((await rows(checkedRow, sql`SELECT DISTINCT task_id AS "taskId" FROM task_checks WHERE project_id = ${projectId}`)).map((row) => row.taskId));
-  const recorded = await readTextFactRecords(db, projectId);
+  // A dump holds no checkout: the public interface a delivered report quotes from main is not judged.
+  const recorded = await readTextFactRecords(db, projectId, null);
   const facts = briefs === "as-recorded" ? recorded : { ...recorded, briefs };
   const reports = await readReportRecords(db, projectId);
   // I4 judges a delivered report only on an accepted project. A kept run ends stopped or reopened

@@ -13,6 +13,7 @@ const none: TextFactRecords = {
   sweepReplies: [],
   reviewSpec: null,
   firstPlan: { report: null, items: [], revisions: [] },
+  interfaceOnMain: { kind: "not-held" },
 };
 
 const asked = { key: "A1", statement: "Commands wait for the lock.", status: "Inferred", kind: "client-visible", disclosed: "asked" };
@@ -125,6 +126,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
   const reviewSpec = { origin: "review", sources: [{ type: "assumption", id: "A1", text: "Commands wait for the lock.", status: "Inferred", standing: "asked", kind: "client-visible" }] };
   const delivered = (line: string, visionAtAcceptance: number) => ({
     sweepId: "s1",
+    mainCommit: "c".repeat(40),
     visionAtAcceptance,
     body: `Your project is delivered.\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${line}`,
   });
@@ -142,5 +144,44 @@ describe("checkTextFacts, the delivered report's standings", () => {
     const unread = [{ sweepId: "s1", questionId: "q1", readByAcceptance: false }];
     expect(keysOf({ visions: [v1], reviewSpec, delivered: [line("which you were asked about; your reply had not been read when the project was accepted")], sweepReplies: unread })).toEqual([]);
     expect(keysOf({ visions: [v1], reviewSpec, delivered: [line("which you were asked about and have not answered")], sweepReplies: unread })).toEqual(["delivered-standing:A1"]);
+  });
+});
+
+// smoke2 D3: the report never said how to run the product, though the scaffold wrote its interface.
+describe("checkTextFacts, the delivered report's quote of the public interface", () => {
+  const commit = "d".repeat(40);
+  const lead = `How to run it: the product's public interface, quoted as PUBLIC_INTERFACE.md reads on main at commit ${commit}.`;
+  const none = `How to run the product is not on record: it has no public interface file. PUBLIC_INTERFACE.md is not on main at commit ${commit}.`;
+  const report = (section: string) => ({ sweepId: "s1", mainCommit: commit, visionAtAcceptance: 1, body: `Your project is delivered.\n\n${section}\n\nNothing more is built.` });
+  const onMain = (text: string | null): TextFactRecords["interfaceOnMain"] => ({
+    kind: "read",
+    bySweep: new Map([["s1", text === null ? { kind: "absent" as const } : { kind: "present" as const, text }]]),
+  });
+  const judged = (text: string | null, section: string) => keysOf({ delivered: [report(section)], interfaceOnMain: onMain(text) });
+
+  it("holds the quoted block to the file on main, whole", () => {
+    const file = "Run: wc.py <file>\n\nPrints counts.\n";
+    expect(judged(file, `${lead}\n\`\`\`\n${file}\`\`\``)).toEqual([]);
+    expect(judged("Run: wc.py <file>", `${lead}\n\`\`\`\nRun: wc.py <file>\n\`\`\``)).toEqual([]);
+    expect(judged(file, `${lead}\n\`\`\`\nRun: tally.py <file>\n\nPrints counts.\n\`\`\``)).toEqual(["delivered-interface"]);
+    expect(judged(file, none)).toEqual(["delivered-interface"]);
+  });
+
+  it("holds the report to saying the product has none exactly when main holds none", () => {
+    expect(judged(null, none)).toEqual([]);
+    expect(judged(null, `${lead}\n\`\`\`\nRun: wc.py\n\`\`\``)).toEqual(["delivered-interface"]);
+  });
+
+  it("accepts a cut quote only with its start, its end, an exact count, and a sentence saying so", () => {
+    const file = `${"H".repeat(10)}${"m".repeat(50)}${"T".repeat(10)}`;
+    const said = `${lead} It is longer than 20 characters, so only its start and end are quoted; the marker inside says how many characters were cut.`;
+    const quote = (cut: number) => `\`\`\`\n${"H".repeat(10)}\n[truncated by Ashara: ${cut} characters cut here]\n${"T".repeat(10)}\n\`\`\``;
+    expect(judged(file, `${said}\n${quote(50)}`)).toEqual([]);
+    expect(judged(file, `${said}\n${quote(49)}`)).toEqual(["delivered-interface"]);
+    expect(judged(file, `${lead}\n${quote(50)}`)).toEqual(["delivered-interface-cut"]);
+  });
+
+  it("judges nothing where no checkout is held", () => {
+    expect(keysOf({ delivered: [report("Nothing about the interface.")] })).toEqual([]);
   });
 });

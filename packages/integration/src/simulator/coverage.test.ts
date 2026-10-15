@@ -23,6 +23,7 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
       sweepReplies: [],
       reviewSpec: null,
       firstPlan: { report: null, items: [], revisions: [] },
+      interfaceOnMain: { kind: "not-held" },
     },
   };
 }
