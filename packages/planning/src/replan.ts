@@ -142,7 +142,7 @@ interface PlanRevisionWrite {
   /** The given-up tasks whose awaited repair the revision records, whatever asked for it. */
   readonly repaired: readonly string[];
   readonly superseded: readonly SupersededItem[];
-  /** The new items, edges between them by temp id, owners and knowledge, as a first plan writes them. */
+  /** The new items, edges between them by temp id, and owners, as a first plan writes them. */
   readonly plan: FirstPlanWrite;
   /** Edges from a new item (temp id) to work already on record (its id): the environment kept. */
   readonly existingEdges: readonly BulkPlanEdge[];
@@ -667,7 +667,6 @@ export class Replanner implements Replanning {
       epicTitle: project.projectName,
       epicNorthStar: northStar,
       epicDescription: project.visionText,
-      conventions: [],
       priorEpicResults:
         completed.length === 0
           ? []

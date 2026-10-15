@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
-import type { CapabilityLevel, ProjectKnowledge } from "@ashara/shared";
-import { PUBLIC_INTERFACE_FILE, ProjectKnowledgeSchema, visionSourceLine } from "@ashara/shared";
+import type { CapabilityLevel } from "@ashara/shared";
+import { PUBLIC_INTERFACE_FILE, visionSourceLine } from "@ashara/shared";
 import type { StructuredValidation } from "@ashara/llm-gateway";
 import type {
     DecomposedTaskSpec,
@@ -43,19 +43,6 @@ export interface DecompositionLLM {
 
 type RawTask = z.infer<typeof TaskOutputSchema>["tasks"][number];
 
-// Rewrites negative-framed instructions ("do not modify X") into positive
-// equivalents ("only modify files outside of X") — models follow positive
-// constraints more reliably than negations. `$1` is the captured target/action.
-const POSITIVE_FRAMING_RULES: ReadonlyArray<readonly [RegExp, string]> = [
-    [/\bdo\s+not\s+modify\s+(.+)/gi, "only modify files outside of $1"],
-    [/\bdon['']t\s+modify\s+(.+)/gi, "only modify files outside of $1"],
-    [/\bdon['']t\s+use\s+(.+)/gi, "use alternatives to $1"],
-    [/\bdo\s+not\s+use\s+(.+)/gi, "use alternatives to $1"],
-    [/\bnever\s+(.+)/gi, "ensure $1 does not occur"],
-    [/\bmust\s+not\s+(.+)/gi, "ensure $1 is avoided"],
-    [/\bavoid\s+(.+)/gi, "prefer alternatives to $1"],
-];
-
 export class DecompositionEngine {
     private readonly llm: DecompositionLLM;
     private readonly config: DecompositionConfig;
@@ -69,51 +56,6 @@ export class DecompositionEngine {
     async decompose(input: DecompositionInput): Promise<DecompositionResult> {
         if (input.visionItems.length === 0) throw new VisionItemsMissing(input.epicTitle);
         return this.decomposeInternal(input);
-    }
-
-    ensurePositiveFraming(text: string): string {
-        return POSITIVE_FRAMING_RULES.reduce((result, [pattern, replacement]) => result.replace(pattern, replacement), text);
-    }
-
-    /**
-     * The single producer of the project knowledge graph. Private on purpose:
-     * there is one call site (`decomposeInternal`) and no way to obtain a decomposition whose
-     * graph was never derived.
-     */
-    private async deriveKnowledge(
-        visionTitle: string,
-        visionDescription: string,
-        northStar?: string,
-        manifestContext?: string,
-    ): Promise<ProjectKnowledge> {
-        const contextParts = [`Vision: "${visionTitle}"\nDescription: ${visionDescription}`];
-        if (northStar && northStar.trim().length > 0) {
-            contextParts.push(`North Star: ${northStar}`);
-        }
-        if (manifestContext && manifestContext.trim().length > 0) {
-            contextParts.push(`Project manifest files found:\n${manifestContext}`);
-        }
-
-        const prompt = [
-            `You are analyzing a software project vision to produce a structured knowledge graph.`,
-            ``,
-            contextParts.join("\n\n"),
-            ``,
-            `Produce nodes for any of these kinds that the vision or the manifest files state: language, runtime, framework, database, subsystem, entry_point, check, build_tool.`,
-            `- Emit only what is stated. Where they state no implementation stack, emit no language, runtime, framework, database or build_tool node: an empty "nodes" array is a valid answer, and choosing a stack is not your decision here.`,
-            `- check nodes MUST have meta.command set to a string array (the shell command to run)`,
-            ``,
-            `Produce edges between nodes using these relationship types: uses, depends_on, serves, reads_writes, targets.`,
-            ``,
-            `Each node needs a unique short slug id, a kind, and a human-readable label.`,
-            ``,
-            `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
-        ].join("\n");
-
-        // A graph with no stack node is a valid answer: Ashara never picks the
-        // client's stack. The Sprint 0 task chooses it, and every later task's
-        // brief carries that team's own statement of the environment.
-        return this.llm.generateStructured(prompt, ProjectKnowledgeSchema);
     }
 
     private async decomposeInternal(input: DecompositionInput): Promise<DecompositionResult> {
@@ -131,19 +73,7 @@ export class DecompositionEngine {
         const allTasks: Array<WorkItemSpec & { taskSpec: TaskSpec }> = [];
         const dependencyEdges: Array<{ from: string; to: string }> = [];
 
-        // Derive the graph BEFORE the tasks so the task prompt carries whatever
-        // stack the vision states (buildDecomposePrompt reads input.knowledge).
-        // An explicitly supplied graph — a re-decomposition against a contract
-        // that already states the stack — is authoritative and is not re-derived.
-        const knowledge = input.knowledge ?? await this.deriveKnowledge(
-            input.epicTitle,
-            input.epicDescription,
-            input.epicNorthStar,
-            input.manifestContext,
-        );
-        const knownInput: DecompositionInput = { ...input, knowledge };
-
-        const { tasks, droppedDependencies } = await this.decomposeEpicIntoTasks(epic, knownInput);
+        const { tasks, droppedDependencies } = await this.decomposeEpicIntoTasks(epic, input);
         for (const task of tasks) {
             allTasks.push(task);
             for (const dep of task.dependsOn) {
@@ -181,7 +111,6 @@ export class DecompositionEngine {
             epic,
             tasks: plannedTasks,
             dependencyEdges,
-            knowledge,
             droppedDependencies,
         };
     }
@@ -365,11 +294,8 @@ export class DecompositionEngine {
             "decompose this epic into tasks",
             epic.title,
             epic.description,
-            input.knowledge,
-            input.conventions,
             priorContext,
             input.epicNorthStar,
-            input.manifestContext,
             taskCap,
             input.environment,
             input.visionItems,
@@ -423,16 +349,12 @@ export class DecompositionEngine {
         instruction: string,
         title: string,
         description: string,
-        knowledge: ProjectKnowledge | undefined,
-        conventions: string[],
         priorContext: string,
         northStar: string,
-        manifestContext: string | undefined,
         taskCap: number,
         environment: EnvironmentPlanning,
         visionItems: readonly VisionItem[],
     ): string {
-        const positiveConventions = conventions.map((c) => this.ensurePositiveFraming(c));
         const jsonFormat = '{"tasks": [{"ref": "t1", "title": "...", "description": "...", "dependsOn": ["t0"], "goal": "...", "endState": "...", "scope": "...", "deliverables": [{"text": "...", "sources": ["S1"]}], "acceptance": [{"text": "...", "sources": ["S1", "A2"]}], "capability": "Medium", "capabilityReason": "..."}]}';
 
         const lines = [
@@ -449,21 +371,10 @@ export class DecompositionEngine {
             lines.push(`North Star: ${northStar}`);
         }
 
-        if (knowledge && knowledge.nodes.length > 0) {
-            const labels = knowledge.nodes.map(n => `${n.label} (${n.kind})`).join(", ");
-            lines.push(`Project Knowledge: ${labels}`);
-        } else {
-            lines.push(`Project Knowledge: none stated. Plan the work in terms of what the project must do; choose no implementation stack.`);
-        }
-
         lines.push(
-            `Conventions: ${positiveConventions.join("; ")}`,
-            priorContext ?? "",
+            `Plan the work in terms of what the project must do; choose no implementation stack the vision items below do not state.`,
+            priorContext,
         );
-
-        if (manifestContext && manifestContext.trim().length > 0) {
-            lines.push(``, `Project manifest files found:`, manifestContext);
-        }
 
         lines.push(
             ``,

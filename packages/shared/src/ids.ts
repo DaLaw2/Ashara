@@ -35,7 +35,7 @@ function parseUuid(brand: IdBrand, raw: unknown, field: string): string {
 
 /**
  * The one way an external value becomes a `ProjectId` — a projects.id
- * (migration 014), the key of a project's visions, work items and contract.
+ * (migration 014), the key of a project's visions and work items.
  */
 export function parseProjectId(raw: unknown, field: string): ProjectId {
   return parseUuid("ProjectId", raw, field) as ProjectId;

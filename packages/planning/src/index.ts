@@ -24,7 +24,7 @@ export {
 export { FailureRouter } from "./failure-router.js";
 export type { RawFailureContext } from "./failure-router.js";
 
-export { createBulkPlanWithContract } from "./bulk-plan.js";
+export { createBulkPlan } from "./bulk-plan.js";
 
 export { FirstPlanner } from "./first-plan.js";
 export type { FirstPlanOutcome, FirstPlanStore, FirstPlanning } from "./first-plan.js";

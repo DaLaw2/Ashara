@@ -80,11 +80,6 @@ function jsonResult(value: unknown) {
   };
 }
 
-const KNOWLEDGE = {
-  nodes: [{ id: "lang-x", kind: "language", label: "Stated language" }],
-  edges: [],
-};
-
 const CLASS_LIST = "Create the class list for both studios";
 const BOOKING_FORM = "Create the booking form for a class";
 
@@ -103,12 +98,9 @@ const TASKS = {
   ],
 };
 
-/** Answers the knowledge-graph call and the task call by what each prompt asks for. */
+/** Answers the task call. */
 function decompositionModel(): MockLanguageModelV4 {
-  return stubModel({
-    doGenerate: async (options) =>
-      jsonResult(JSON.stringify(options.prompt).includes("structured knowledge graph") ? KNOWLEDGE : TASKS),
-  });
+  return stubModel({ doGenerate: async () => jsonResult(TASKS) });
 }
 
 function planner(): FirstPlanner {
@@ -372,7 +364,6 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${ours})`);
-  await db.execute(sql`DELETE FROM project_contracts WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE in_reply_to IS NOT NULL AND project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM client_messages WHERE project_id IN (${ours})`);
@@ -398,7 +389,7 @@ describe("first plan", () => {
     expect(tasks.every((t) => t.parentId === epics[0]?.id)).toBe(true);
     expect(await edgesOf(projectId)).toEqual(EXPECTED_EDGES);
     const sites = await callSitesOf(projectId);
-    expect(sites).toHaveLength(2);
+    expect(sites).toHaveLength(1);
     expect(new Set(sites)).toEqual(new Set(["decomposition"]));
     expect((await new ProjectRepository(db).get(projectId))?.status).toBe("active");
 
@@ -419,8 +410,7 @@ describe("first plan", () => {
   test("an ordering hint the re-ask drops is recorded with the plan and stated in its report", async () => {
     let taskCalls = 0;
     stubModel({
-      doGenerate: async (options) => {
-        if (JSON.stringify(options.prompt).includes("structured knowledge graph")) return jsonResult(KNOWLEDGE);
+      doGenerate: async () => {
         taskCalls += 1;
         const [classList, bookingForm] = TASKS.tasks;
         // First answer names a task it never wrote; the corrected one drops that edge.
@@ -488,7 +478,6 @@ describe("first plan", () => {
         { tempId: "task-1", level: "Task", title: "Task", parentId: "epic-1" },
       ],
       edges: [],
-      knowledge: KNOWLEDGE,
       owners: [],
       droppedDependencies: [],
     });
@@ -517,7 +506,7 @@ describe("first plan", () => {
     expect(await workItemsOf(projectId)).toHaveLength(8);
   });
 
-  test("the client's answers in the vision's Stated assumptions reach decomposition, and the knowledge graph the contract", async () => {
+  test("the client's answers in the vision's Stated assumptions reach decomposition", async () => {
     const mock = decompositionModel();
     const projectId = await projectWithVision(true, [
       NO_ACCOUNT,
@@ -536,13 +525,6 @@ describe("first plan", () => {
     expect(prompts.some((p) => p.includes("Client clarifications") && p.includes("Which studio opens first? -> The harbour studio"))).toBe(true);
     // A Stated assumption is a clarification, not an assumption awaiting the client.
     expect(prompts.some((p) => p.includes("The harbour studio opens first. (Stated)"))).toBe(false);
-    const contract = await db.execute(
-      sql`SELECT contract FROM project_contracts WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`,
-    );
-    const [row] = z
-      .array(z.object({ contract: z.object({ knowledge: z.object({ nodes: z.array(z.object({ label: z.string() })) }) }) }))
-      .parse(contract.rows);
-    expect(row?.contract.knowledge.nodes.map((n) => n.label)).toContain("Stated language");
   });
 
   test("a plan with an unresolved edge writes nothing and the project still awaits its first plan", async () => {
@@ -556,7 +538,6 @@ describe("first plan", () => {
         { tempId: "task-1", level: "Task", title: "Task", parentId: "epic-1" },
       ],
       edges: [{ from: "task-1", to: "ghost" }],
-      knowledge: KNOWLEDGE,
       owners: [],
       droppedDependencies: [],
     });
@@ -567,7 +548,7 @@ describe("first plan", () => {
   });
 
   test("an invalid model response three times writes no plan, blocks the project and reports once", async () => {
-    stubModel({ doGenerate: jsonResult({ nodes: "not a graph" }) });
+    stubModel({ doGenerate: jsonResult({ tasks: "not a plan" }) });
     const projectId = await projectWithVision();
     const delivery = planner();
 

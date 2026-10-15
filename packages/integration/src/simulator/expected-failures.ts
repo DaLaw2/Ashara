@@ -100,43 +100,42 @@ const B3 = "B3 (baseline §3, §7.8, §7.9; task t-orphan-requeue-failure): a fa
  * Completed update and "[startup-reconciler] requeued 83f9aaa3" (B5). Every key is a fault seam's;
  * none a model response's. B3, B5 and B8 are not fixed.
  */
+/*
+ * Re-rolled 2026-10-15 (t-ddd-r1-contract-out): the planner's knowledge-graph call is deleted, one
+ * model call and its llm_calls admission and record queries fewer per plan, so every later db seam
+ * draws at a different occurrence and the crash windows of B3 and B5 moved. On master 42353f94,
+ * `simulate.ts --seeds 80` at `--projects 1` and at `--projects 2` reported 0 unexpected. On the
+ * change, `--seeds 80 --projects 1`, `--seeds 10 --start 81 --projects 1`, `--seeds 80 --projects 2`,
+ * `--seeds 10 --start 81 --projects 2` and `--seeds 90 --projects 2 --cap 10` reported: listed but
+ * not failed 49, 86 and 89 (two projects, both caps) and 65 (at $10); a key moved for 6 (one
+ * project: orphan occurrence 3 -> 2; two projects: the p2 orphan became a p2 unrecorded), 56 (two
+ * projects: project 1 -> project 2) and 89 (one project: the environment task -> the layout task);
+ * newly failing 29 (one project) and 59 (two projects, both caps). Replay traces: 6 (one project)
+ * and 59 show "failed to requeue crash-orphaned InProgress item" on a failed dev_sessions read (B3);
+ * 29, 89, 6 (two projects) and 56 show the task's "merge committed to main" with the startup
+ * reconciler then requeuing it, 56 after "merge record ... giving up" (B5). B3 and B5 are not fixed.
+ */
 const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 49, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 6, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 56, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
   { seed: 82, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 86, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
-  { seed: 6, keys: ["I7:p2:orphan:Define and commit the project environment:1"], baseline: B3 },
-  { seed: 89, keys: ["I7:p2:orphan:Define and commit the project environment:11"], baseline: B3 },
+  { seed: 59, keys: ["I7:orphan:Define and commit the project environment:6"], baseline: B3 },
 ];
 /** Two projects at $10 only (`--projects 2 --cap 10`). */
 const TWO_PROJECT_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 65, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
 ];
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
-  // Seed 6 (hostile) re-rolled on t-adversarial-models: B3, the log names "failed to requeue
-  // crash-orphaned InProgress item" on a failed dev_sessions read.
-  { seed: 6, keys: ["I7:orphan:Set up the product's layout:3"], baseline: B3 },
+  // Seed 6 (hostile) re-rolled on t-adversarial-models and again on t-ddd-r1-contract-out: B3, the
+  // log names "failed to requeue crash-orphaned InProgress item" on a failed dev_sessions read.
+  { seed: 6, keys: ["I7:orphan:Set up the product's layout:2"], baseline: B3 },
+  { seed: 29, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   // Seed 45 (B5, the crash on a host git call inside the merge, baseline §7.10) is removed on
   // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed;
   // B5 is not fixed. Seed 89 fails B5's key since master 02d1e6e5 (`simulate.ts --seeds 120 --start 1`).
   // Seeds 7 and 43 are removed at the merge above (listed but not failed); B5 is not fixed.
-  { seed: 89, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  // Re-rolled on t-ddd-fix-durable-reservation (2026-10-15): an admission now writes its call's
-  // llm_calls row and a record updates it, two more db seams per call, and seed 10 under the
-  // typical profile (`just simulate --seeds 10 --profile typical`) now crashes and then draws a
-  // db-query-failed on the startup reconciler's work_items requeue UPDATE. Observed with
-  // `simulate.ts --seeds 1 --start 10 --profile typical`: exit 1 with these keys, and the trace's
-  // "failed to requeue crash-orphaned InProgress item"; on master f6655789 the same run ends
-  // accepted with 0 restarts. B3 names the dev_sessions read; the UPDATE is the same window, a
-  // fault anywhere in requeueOrphan (startup-reconciler.ts) leaves the orphan InProgress.
-  {
-    seed: 10,
-    profile: "typical",
-    keys: ["I1:open", 'I7:orphan:Write the checks for "Deliver b1, b2, b3, b4 [sim t1]":1', "I8:InProgress", "I8:Pending"],
-    baseline: B3,
-  },
+  { seed: 89, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
   ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
   ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2 }) as const),
   // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it

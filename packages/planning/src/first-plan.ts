@@ -9,7 +9,7 @@ import {
   describeErrorChain,
   projectBlockCause,
 } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId, ProjectKnowledge, ScopeSide, WorkItemLevel, WorkKind } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId, ScopeSide, WorkItemLevel, WorkKind } from "@ashara/shared";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type {
@@ -67,7 +67,6 @@ export interface FirstPlanWrite {
   readonly projectId: ProjectId;
   readonly items: readonly BulkPlanItem[];
   readonly edges: readonly BulkPlanEdge[];
-  readonly knowledge: ProjectKnowledge;
   /** One entry per Task item; an Epic has no owner. */
   readonly owners: readonly TaskOwnership[];
   /** Ordering hints the decomposition dropped, recorded with the plan so its report states them. */
@@ -320,7 +319,6 @@ export function toWrite(projectId: ProjectId, result: DecompositionResult, owner
     projectId,
     items,
     edges,
-    knowledge: result.knowledge,
     owners: taskOwners,
     droppedDependencies: result.droppedDependencies,
   };
@@ -420,7 +418,6 @@ export class FirstPlanner implements FirstPlanning {
       epicTitle: project.projectName,
       epicNorthStar: vision.northStar,
       epicDescription: project.visionText,
-      conventions: [],
       environment: { kind: "new" },
       layout: { kind: "new" },
       visionItems: vision.items,

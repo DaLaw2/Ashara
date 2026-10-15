@@ -11,7 +11,7 @@ import type { Mutation, RunOptions, RunResult } from "./run.js";
  * The fast tier (design §4.13): fixed seeds on today's code, each judged against
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
  * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
- * two (production's MAX_BATCH_SIZE default); seed 30 is judged in the checkout-lock test below.
+ * two (production's MAX_BATCH_SIZE default); seed 11 is judged in the checkout-lock test below.
  */
 const FAST_SEEDS = [1, 2, 4, 10, 14, 41] as const;
 const MAX_CYCLES = 120;
@@ -188,15 +188,18 @@ describe("lifecycle simulator, fast tier", () => {
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // ADR-074 d82 W3: seed 30 runs two implementations in one batch, and one finalize waits on the
+  // ADR-074 d82 W3: seed 11 runs two implementations in one batch, and one finalize waits on the
   // other's checkout. Skipping that wait lets the second finalize's recovery abort the first's
-  // staged merge, which I7's merge-queue clause names.
+  // staged merge, which I7's merge-queue clause names. Seed 30 stopped contending on the checkout
+  // when the knowledge-graph call was deleted (t-ddd-r1-contract-out): a scan of seeds 1-60 found
+  // 11, 13, 24 and 40 passing clean with both contentions covered and failing the merge --abort
+  // clause planted (observed 2026-10-15).
   it("catches two finalizes overlapping on one checkout when the checkout lock is skipped", async () => {
-    const clean = await seeded(30);
+    const clean = await seeded(11);
     expect(diffExpected(clean, {}), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
     expect([...clean.coverage.concurrency]).toContain("contended:target-checkout");
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(30, "no-checkout-lock");
+    const planted = await seeded(11, "no-checkout-lock");
     expect(planted.violations.map((v) => v.key)).toContain("I7:checkout-overlap:merge --abort");
   }, 90_000);
 
@@ -220,13 +223,16 @@ describe("lifecycle simulator, fast tier", () => {
   // merge of t-intake-failure-classes (the gateway's pre-call check moved into its own admit step):
   // a serial scan of seeds 1-120 in the same mode, planted, found 60, 81, 84 and 100 failing
   // I5:over-committed alone and each passing clean with contended:spend-admission covered
-  // (observed 2026-10-15). Seed 81 is the one every scan since t-ddd-fix-own-faults has found.
+  // (observed 2026-10-15). Seed 81 stopped catching it when the knowledge-graph call was deleted
+  // (t-ddd-r1-contract-out): a scan of seeds 1-120 in the same mode, planted, found 16, 50, 58, 80, 104
+  // and 114 failing I5:over-committed alone and each passing clean with contended:spend-admission
+  // covered (observed 2026-10-15).
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(81, undefined, shared);
+    const clean = await seeded(16, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(81, "no-admission-queue", shared);
+    const planted = await seeded(16, "no-admission-queue", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
@@ -235,12 +241,14 @@ describe("lifecycle simulator, fast tier", () => {
   // rows out, as an in-memory in-flight set is left out by the next process: an admission made while
   // another call is in flight sees only the recorded spend. It needs two admissions to meet near the
   // cap (observed, scan of 2026-10-15 over seeds 1-20 at $6 with two projects: seeds 14 and 19 fail
-  // I5:over-committed alone and pass clean).
+  // I5:over-committed alone and pass clean). Seed 14 stopped catching it when the knowledge-graph
+  // call was deleted (t-ddd-r1-contract-out): a scan of seeds 1-30 in the same mode found 6, 16, 27
+  // and 29 failing I5:over-committed alone, planted, and passing clean (observed 2026-10-15).
   it("catches an admission that leaves out the calls admitted and not yet recorded", async () => {
     const shared = { projects: 2, capUsd: 6 } as const;
-    const clean = await seeded(14, undefined, shared);
+    const clean = await seeded(6, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
-    const planted = await seeded(14, "pending-uncounted", shared);
+    const planted = await seeded(6, "pending-uncounted", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
@@ -381,13 +389,15 @@ describe("lifecycle simulator, adversarial models", () => {
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // (b), (c), (d), (g) on one-shot structured calls: each is a failed ladder attempt, never an answer.
-  it("retries structured calls that are cut, empty, all reasoning or of the wrong shape", async () => {
+  // (b), (c), (d) on one-shot structured calls: each is a failed ladder attempt, never an answer.
+  // (g), the wrong shape, was modelled only on the knowledge-graph call, deleted with the contract
+  // path (t-ddd-r1-contract-out); seed 8 then still reached the other three (observed 2026-10-15).
+  it("retries structured calls that are cut, empty or all reasoning", async () => {
     const result = await adversarial(8);
     expectReached(
       result,
-      ["decomposition.knowledge schema-mismatch", "decomposition.knowledge empty", "decomposition.tasks truncated", "suite-review reasoning-exhausted"],
-      ["structured:invalid", "structured:empty", "structured:truncated", "structured:reasoning-exhausted"],
+      ["liaison-intake empty", "decomposition.tasks truncated", "suite-review reasoning-exhausted"],
+      ["structured:empty", "structured:truncated", "structured:reasoning-exhausted"],
       [],
     );
     expect(result.outcome.kind).toBe("accepted");

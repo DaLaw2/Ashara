@@ -21,6 +21,4 @@ export { giveUpAcceptanceDefect, openAcceptanceDefect } from "./acceptance.js";
 
 export type { WorkItemRepository } from "./repository.js";
 
-export { ContractAlreadyExists } from "./errors.js";
-
 export { PlanningService } from "./service.js";

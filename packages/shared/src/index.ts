@@ -29,20 +29,6 @@ export { contendedWait, observeContendedWaits } from "./contended-wait.js";
 export type { DomainEvent } from "./types.js";
 export { createDomainEvent } from "./types.js";
 
-export type {
-  ProjectKnowledge,
-  ContractBody,
-  ContractInput,
-  ContractDelta,
-  ProjectContract,
-} from "./contract.js";
-export {
-  ProjectKnowledgeSchema,
-  ContractBodySchema,
-  ContractDeltaSchema,
-  nodeByKind,
-} from "./contract.js";
-
 export type { AgentBrief } from "./agent-brief.js";
 export { createAgentBrief } from "./agent-brief.js";
 
@@ -78,8 +64,6 @@ export {
   canTransitionTo,
   InvalidStatusTransition,
   WorkItemNotFound,
-  RepositoryError,
-  ContractVersionConflict,
 } from "./transitions.js";
 export { OUTBOUND_TRANSITIONS } from "./transitions.js";
 
@@ -100,8 +84,6 @@ export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 
 export type { WorkKind } from "./work-kind.js";
 export { WORK_KINDS, parseWorkKind } from "./work-kind.js";
-
-export type { ContractRepository } from "./repository-ports.js";
 
 export { CONVERSATION_RECORDS_DIR } from "./workspace-layout.js";
 

@@ -3,9 +3,7 @@ import { z } from "zod";
 import { InvalidStatusTransition, parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems } from "../schema.js";
-import { ContractRepository } from "./contract.js";
 import { noOpenAnswer, tasksWithoutRosterOwner } from "./first-plan.js";
-import type { PlanningTransactionRepos } from "./planning-transaction.js";
 import { noOpenStop, pendingChange, pendingRepair } from "./project.js";
 import { WorkItemRepository } from "./work-item.js";
 
@@ -214,7 +212,7 @@ interface PlanRevisionRecord {
 export async function withPlanRevisionTransaction(
   db: Database,
   record: PlanRevisionRecord,
-  fn: (repos: PlanningTransactionRepos) => Promise<void>,
+  fn: (workItemRepo: WorkItemRepository) => Promise<void>,
 ): Promise<"written" | "moved"> {
   const { projectId } = record;
   if (record.answers.length === 0 && record.repaired.length === 0) throw new RevisionCauseMissing(projectId, record.revision);
@@ -263,7 +261,7 @@ export async function withPlanRevisionTransaction(
       if (running) throw new RevisionReadMoved(projectId, `task ${running.id} is in progress`);
       // An Epic is not an attempt: it is superseded with its open tasks (supersedeWorkItem).
 
-      await fn({ workItemRepo: new WorkItemRepository(tx), contractRepo: new ContractRepository(tx) });
+      await fn(new WorkItemRepository(tx));
 
       const unowned = await tasksWithoutRosterOwnerAmongOpen(tx, projectId);
       if (unowned.length > 0) throw new RevisionTaskUnowned(projectId, unowned);

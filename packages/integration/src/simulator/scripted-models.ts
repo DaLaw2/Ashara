@@ -126,19 +126,6 @@ function firstHalf(json: string): string {
   return json.slice(0, Math.max(1, Math.floor(json.length / 2)));
 }
 
-/**
- * A knowledge graph whose edge carries no `rel`, so it fails the strict schema at `edges.0.rel`, the
- * error the first decomposition call of every paid run in scope recorded (test retro part D, W11 D9).
- * Which field those answers named the relation by instead: unverified; this one names it `type`.
- */
-const EDGES_WITHOUT_REL = {
-  nodes: [
-    { id: "product", kind: "subsystem", label: "The product" },
-    { id: "cli", kind: "entry_point", label: "Command line" },
-  ],
-  edges: [{ from: "cli", to: "product", type: "uses" }],
-};
-
 /** The brief section of an attempt handed its conflict with main (development merge.ts formatConflictForBrief). */
 const CONFLICT_HEADING = "## Merge with main in progress";
 
@@ -258,7 +245,6 @@ export class StandIns {
     const keys = schemaKeys(format.schema);
     if (keys.includes("inScope")) return this.structured(options, "liaison-intake", () => this.intake());
     if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
-    if (keys.includes("nodes")) return this.structured(options, "decomposition.knowledge", () => ({ nodes: [], edges: [] }), EDGES_WITHOUT_REL);
     if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan());
     if (keys.includes("problems")) return this.structured(options, "suite-review", () => this.review());
     if (keys.includes("verdict")) return this.structured(options, "liaison-answer", () => this.answer());
@@ -275,10 +261,10 @@ export class StandIns {
 
   /**
    * One structured answer, or one of the response-level misbehaviours a provider shows: output
-   * that does not parse, no content, the whole bound spent on reasoning, a well-formed object of the
-   * wrong shape (`mismatch`, the site's recurring one), or the answer cut at the bound mid-object.
+   * that does not parse, no content, the whole bound spent on reasoning, or the answer cut at the
+   * bound mid-object.
    */
-  private async structured(options: LanguageModelV4CallOptions, site: string, answer: () => unknown, mismatch?: unknown): Promise<LanguageModelV4GenerateResult> {
+  private async structured(options: LanguageModelV4CallOptions, site: string, answer: () => unknown): Promise<LanguageModelV4GenerateResult> {
     const { tape, rates, onModelCall } = this.context;
     if (tape.chance(`model.${site}.invalid`, rates.invalidOutput)) {
       onModelCall({ site, action: "invalid-output" });
@@ -291,10 +277,6 @@ export class StandIns {
     if (tape.chance(`model.${site}.reasoning-exhausted`, rates.reasoningExhausted)) {
       onModelCall({ site, action: "reasoning-exhausted" });
       return reasoningOnly(outputBoundOf(options));
-    }
-    if (mismatch !== undefined && tape.chance(`model.${site}.schema-mismatch`, rates.schemaMismatch)) {
-      onModelCall({ site, action: "schema-mismatch" });
-      return textResult(JSON.stringify(mismatch));
     }
     const value = await answer();
     if (tape.chance(`model.${site}.truncated`, rates.truncatedStructured)) {

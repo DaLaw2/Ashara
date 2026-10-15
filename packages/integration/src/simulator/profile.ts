@@ -73,8 +73,6 @@ export interface AdversaryRates {
   readonly truncatedStructured: number;
   /** A structured call answers with no content at all. */
   readonly emptyStructured: number;
-  /** The knowledge call answers with edges that carry no `rel` (the recurring edges.N.rel mismatch, W11 D9). */
-  readonly schemaMismatch: number;
 }
 
 export interface FaultRates {
@@ -87,7 +85,7 @@ export interface FaultRates {
 /** No response-level misbehaviour: the profiles the stand-ins cooperate under at the response level. */
 const COOPERATIVE_RESPONSES = {
   sharedFileEdit: 0, conflictMarkersLeft: 0, truncatedTurn: 0, emptyTurn: 0, reasoningExhausted: 0, turnCapMidEdit: 0,
-  truncatedStructured: 0, emptyStructured: 0, schemaMismatch: 0,
+  truncatedStructured: 0, emptyStructured: 0,
 } as const;
 
 const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
@@ -109,7 +107,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     timeout: 0.1, invalidOutput: 0.2, disputeRight: 0.9, disputeWrong: 0.2, reviewCatch: 0.7, recipeDefect: 0.15,
     lateChange: 0.2, clientStop: 0.05, lowBudget: 0.1,
     sharedFileEdit: 0.15, conflictMarkersLeft: 0.2, truncatedTurn: 0.02, emptyTurn: 0.02, reasoningExhausted: 0.02, turnCapMidEdit: 0.05,
-    truncatedStructured: 0.02, emptyStructured: 0.02, schemaMismatch: 0.2,
+    truncatedStructured: 0.02, emptyStructured: 0.02,
   },
   chaos: {
     overDelivery: 0.8, underDelivery: 0.5, regression: 0.3, wrongCheck: 0.3, contradictoryCheck: 0.3, vacuousCheck: 0.3,
@@ -117,7 +115,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     timeout: 0.2, invalidOutput: 0.3, disputeRight: 0.9, disputeWrong: 0.4, reviewCatch: 0.5, recipeDefect: 0.3,
     lateChange: 0.3, clientStop: 0.1, lowBudget: 0.2,
     sharedFileEdit: 0.3, conflictMarkersLeft: 0.3, truncatedTurn: 0.04, emptyTurn: 0.04, reasoningExhausted: 0.04, turnCapMidEdit: 0.1,
-    truncatedStructured: 0.04, emptyStructured: 0.04, schemaMismatch: 0.3,
+    truncatedStructured: 0.04, emptyStructured: 0.04,
   },
   adversarial: {
     overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.1, contradictoryCheck: 0.1, vacuousCheck: 0.05,
@@ -126,7 +124,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     lateChange: 0.1, clientStop: 0.02, lowBudget: 0,
     // A stalled attempt spends its whole turn cap; each unpriced stand-in call counts at its worst-case estimate.
     sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, turnCapMidEdit: 0.08,
-    truncatedStructured: 0.05, emptyStructured: 0.05, schemaMismatch: 0.3,
+    truncatedStructured: 0.05, emptyStructured: 0.05,
   },
 };
 

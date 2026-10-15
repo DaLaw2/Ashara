@@ -12,7 +12,7 @@ import {
 } from "@ashara/db";
 import type { DbTransaction, createDb } from "@ashara/db";
 import type { PlanReportStore } from "@ashara/engagement";
-import { createBulkPlanWithContract } from "@ashara/planning";
+import { createBulkPlan } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, type ProjectId } from "@ashara/shared";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -49,16 +49,16 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
     },
     async writeFirstPlan(write) {
       // The bulk-plan path runs inside the locked first-plan transaction, so the
-      // items, their edges, their owners, the contract and the planned stamp with
-      // the dropped ordering hints commit together.
+      // items, their edges, their owners and the planned stamp with the dropped
+      // ordering hints commit together.
       const result = await withFirstPlanTransaction(
         db,
         write.projectId,
         write.droppedDependencies,
-        async ({ workItemRepo, contractRepo }) => {
-          const plan = await createBulkPlanWithContract(
+        async (workItemRepo) => {
+          const plan = await createBulkPlan(
             {
-              withPlanningTransaction: (fn) => fn({ workItemRepo: adaptWorkItemRepo(workItemRepo), contractRepo }),
+              workItemRepo: adaptWorkItemRepo(workItemRepo),
               // The loop's run id is not handed to planning, so the first plan is written
               // under RUN_SCOPE_AD_HOC. This is the only work-item writer, and nothing
               // reads run_scope beyond parsing it.
@@ -67,7 +67,6 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
             },
             write.items,
             write.edges,
-            write.knowledge,
           );
           for (const owner of write.owners) {
             const id = plan.tempIdToId[owner.tempId];

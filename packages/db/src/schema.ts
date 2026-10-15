@@ -394,32 +394,6 @@ export const secrets = pgTable("secrets", {
 });
 
 // ---------------------------------------------------------------------------
-// project_contracts (ADR-028, migration 019)
-// ---------------------------------------------------------------------------
-// Per-project, append-only versioned ProjectContract. Each amendment inserts a new
-// row at version N+1 (prior versions kept for audit). The UNIQUE (project_id,
-// version) constraint is the monotonicity guard: two racing amends that compute the
-// same next version fail closed on the constraint instead of reusing a version. The
-// whole body lives in `contract` jsonb, validated by Zod at both read and write.
-// Since migration 014 `project_id` is a projects.id; rows written before it are
-// keyed by a root work item id and carry no FK for that reason.
-
-export const projectContracts = pgTable(
-  "project_contracts",
-  {
-    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
-    projectId: uuid("project_id").notNull(),
-    version: integer().notNull(),
-    contract: jsonb().notNull(),
-    createdAt: timestamptz("created_at").notNull().defaultNow(),
-  },
-  (t) => ({
-    projectVersionUnique: unique("project_contracts_project_version_unique").on(t.projectId, t.version),
-    projectVersionIdx: index("project_contracts_project_version_idx").on(t.projectId, t.version),
-  }),
-);
-
-// ---------------------------------------------------------------------------
 // llm_calls (migration 015, K10 cost ledger, Finance context)
 // ---------------------------------------------------------------------------
 // One row per provider call. Token and cost columns are nullable with no

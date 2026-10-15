@@ -122,7 +122,6 @@ afterAll(async () => {
     // Replies first: in_reply_to references another row of the same table.
     await pool.query("DELETE FROM client_messages WHERE project_id = $1 AND in_reply_to IS NOT NULL", [id]);
     await pool.query("DELETE FROM client_messages WHERE project_id = $1", [id]);
-    await pool.query("DELETE FROM project_contracts WHERE project_id = $1", [id]);
     await pool.query("DELETE FROM projects WHERE id = $1", [id]);
   }
   await pool.query("DELETE FROM clients WHERE id = $1", [suiteClientId]);

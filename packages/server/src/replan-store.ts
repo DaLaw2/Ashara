@@ -7,7 +7,7 @@ import {
   withPlanRevisionTransaction,
 } from "@ashara/db";
 import type { createDb } from "@ashara/db";
-import { PlanningService, createBulkPlanWithContract } from "@ashara/planning";
+import { PlanningService, createBulkPlan } from "@ashara/planning";
 import type { ReplanStore } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, parseWorkItemId, type ProjectId } from "@ashara/shared";
 import { adaptWorkItemRepo, rowToWorkItem } from "./work-item-adapter.js";
@@ -58,8 +58,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
     },
     async writeRevision(write) {
       // The supersession and the bulk-plan path run inside the locked revision transaction, so
-      // the superseded items, the new items with their edges and owners, the contract, the
-      // revision record and the answers and repairs it took in commit together.
+      // the superseded items, the new items with their edges and owners, the revision record and the answers and repairs it took in commit together.
       return withPlanRevisionTransaction(
         db,
         {
@@ -71,21 +70,20 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           summary: write.summary,
           events: write.events,
         },
-        async ({ workItemRepo, contractRepo }) => {
+        async (workItemRepo) => {
           const domainRepo = adaptWorkItemRepo(workItemRepo);
           for (const { item, previousStatus } of write.superseded) {
             await PlanningService.saveWorkItem(domainRepo, item, previousStatus);
           }
-          const plan = await createBulkPlanWithContract(
+          const plan = await createBulkPlan(
             {
-              withPlanningTransaction: (fn) => fn({ workItemRepo: domainRepo, contractRepo }),
+              workItemRepo: domainRepo,
               // As for the first plan: the loop's run id is not handed to planning.
               runScope: RUN_SCOPE_AD_HOC,
               projectId: write.projectId,
             },
             write.plan.items,
             write.plan.edges,
-            write.plan.knowledge,
           );
           for (const edge of write.existingEdges) {
             const from = plan.tempIdToId[edge.from];

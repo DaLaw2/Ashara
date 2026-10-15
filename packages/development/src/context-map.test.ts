@@ -31,15 +31,9 @@ describe("buildContextMap on a cell-written target", () => {
     await mkdir(join(target, "src"));
     await symlink(hostFile, join(target, "src", "main.c"));
 
-    const map = await buildContextMap(target, "src/main.c");
+    const map = await buildContextMap(target);
 
     expect(map).toContain("regular manifest text");
-    expect(map).not.toContain(SECRET);
-    expect(map).not.toContain("## Entry Point");
-  });
-
-  test("an entry point outside the tree is not read", async () => {
-    const map = await buildContextMap(target, "../host-secret.txt");
     expect(map).not.toContain(SECRET);
   });
 

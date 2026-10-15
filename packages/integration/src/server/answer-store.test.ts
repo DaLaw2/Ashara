@@ -98,7 +98,6 @@ const ROSTER = {
   ],
 };
 
-const KNOWLEDGE = { nodes: [{ id: "lang-x", kind: "language", label: "Stated language" }], edges: [] };
 const TASKS = {
   tasks: [
     {
@@ -111,7 +110,7 @@ const TASKS = {
 
 /**
  * One model for every call of the pipeline, answering each by what its prompt asks:
- * intake, roster, the knowledge graph, the tasks, and the answer reading.
+ * intake, roster, the tasks, and the answer reading.
  */
 function pipelineModel(reading: unknown): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
@@ -119,7 +118,6 @@ function pipelineModel(reading: unknown): MockLanguageModelV4 {
       const prompt = JSON.stringify(options.prompt);
       if (prompt.includes("Read their answer and say what it does")) return jsonResult(reading);
       if (prompt.includes("prepare the first version of the project's vision")) return jsonResult(INTAKE);
-      if (prompt.includes("structured knowledge graph")) return jsonResult(KNOWLEDGE);
       if (prompt.includes("client-comms")) return jsonResult(ROSTER);
       return jsonResult(TASKS);
     },
@@ -239,7 +237,6 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
-  await db.execute(sql`DELETE FROM project_contracts WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${projects})`);
   // Replies before what they reply to: a report replies to an answer, which replies to a question.
   await db.execute(sql`DELETE FROM client_messages WHERE direction = 'outbound' AND kind = 'report' AND project_id IN (${projects})`);

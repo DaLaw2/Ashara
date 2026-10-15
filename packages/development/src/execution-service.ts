@@ -16,8 +16,8 @@ import {
 } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
-import type { ProjectId, WorkItemId, AgentBrief, Clock, ProjectContract, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
-import { createSessionId, createAgentBrief, describeErrorChain, nodeByKind, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief, renderElided } from "@ashara/shared";
+import type { ProjectId, WorkItemId, AgentBrief, Clock, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
+import { createSessionId, createAgentBrief, describeErrorChain, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief, renderElided } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   AssignmentRole,
@@ -1127,16 +1127,6 @@ type SubstrateGateOutcome =
 // DevelopmentService
 // ---------------------------------------------------------------------------
 
-/**
- * Port that yields the current ProjectContract for the project a task belongs to,
- * or null when the project has no contract. Injected so the BC stays free of any
- * db dependency (ADR-027); the composition root resolves task → project → latest
- * contract.
- */
-export interface ContractSource {
-  loadForTask(taskId: string): Promise<ProjectContract | null>;
-}
-
 export interface DevelopmentServiceDeps {
   readonly config: DevelopmentConfig;
   readonly sessionStore: SessionStore;
@@ -1148,11 +1138,6 @@ export interface DevelopmentServiceDeps {
    * is not dispatched: a brief with an invented intent is the failure this port exists to prevent.
    */
   readonly intentSource: ProjectIntentSource;
-  /**
-   * Yields the ProjectContract for a task's project; its knowledge graph feeds the entry-point
-   * context. Absent (or a null result) means the project has no contract.
-   */
-  readonly contractSource?: ContractSource;
   /**
    * Required: execute() probes the substrate before anything else and runs every
    * tool call and every check in a cell, so there is no configuration in which
@@ -1231,7 +1216,7 @@ export class DevelopmentService {
     // substrate, environment, worktree or cell is involved, so none is probed.
     if (task.taskSpec?.origin === "review") return this.reviewSuites(task, sessionId, targetProjectPath);
 
-    // First, before the contract, the brief (which may call an LLM) or the
+    // First, before the brief (which may call an LLM) or the
     // worktree: a substrate that cannot host the task blocks it here, so no
     // later path can fall through to host execution.
     try {
@@ -1302,13 +1287,6 @@ export class DevelopmentService {
       return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink);
     }
 
-    let contract: ProjectContract | null = null;
-    try {
-      contract = await this.loadContract(task.id);
-    } catch (e) {
-      console.warn(`[${task.id}] contract load failed; dispatching without contract context:`, e);
-    }
-
     // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
     // same files first, w12b D2), the attempt starts with main merged into it and the conflict in
     // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
@@ -1340,7 +1318,7 @@ export class DevelopmentService {
 
     let brief: AgentBrief;
     try {
-      brief = await this.buildBrief(task, targetProjectPath, contract, environment, plan, conflict);
+      brief = await this.buildBrief(task, targetProjectPath, environment, plan, conflict);
     } catch (e) {
       // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
       // other throw building the brief: never the agent's work, so blocked under class ashara.
@@ -1628,7 +1606,6 @@ export class DevelopmentService {
   private async buildBrief(
     task: TaskDescriptor,
     targetProjectPath: string,
-    contract: ProjectContract | null,
     environment: DispatchEnvironment,
     plan: WorkPlan,
     conflict: MainConflict | null,
@@ -1648,8 +1625,7 @@ export class DevelopmentService {
       deliverables: stringArrayOrEmpty(taskSpec?.deliverables),
     };
 
-    const contractEntryPoint = contract ? nodeByKind(contract.knowledge, "entry_point")?.label ?? null : null;
-    const contextMap = await buildContextMap(targetProjectPath, contractEntryPoint ?? undefined);
+    const contextMap = await buildContextMap(targetProjectPath);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
 
     // createAgentBrief: the compiler checks the shape at this construction site,
@@ -1690,18 +1666,6 @@ export class DevelopmentService {
       },
       "development:buildBrief",
     );
-  }
-
-  /**
-   * Loads this task's ProjectContract via the injected port. Returns null when no
-   * contract source is wired or the project has no contract. Throws on load
-   * errors so callers can distinguish "no contract" from "load failed" and route
-   * their own fail-soft policy at the appropriate level.
-   */
-  private async loadContract(taskId: string): Promise<ProjectContract | null> {
-    const source = this.deps.contractSource;
-    if (!source) return null;
-    return await source.loadForTask(taskId);
   }
 
   private async buildKnowledgeContext(task: TaskDescriptor, spec: TaskSpec): Promise<string> {

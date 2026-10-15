@@ -2,8 +2,6 @@ import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { projects, visionDocuments, workItems } from "../schema.js";
-import type { PlanningTransactionRepos } from "./planning-transaction.js";
-import { ContractRepository } from "./contract.js";
 import { WorkItemRepository } from "./work-item.js";
 import { noOpenStop } from "./project.js";
 
@@ -135,7 +133,7 @@ export async function withFirstPlanTransaction<T>(
   db: Database,
   projectId: ProjectId,
   droppedDependencies: readonly DroppedPlanDependency[],
-  fn: (repos: PlanningTransactionRepos) => Promise<T>,
+  fn: (workItemRepo: WorkItemRepository) => Promise<T>,
 ): Promise<FirstPlanTransaction<T>> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
@@ -151,7 +149,7 @@ export async function withFirstPlanTransaction<T>(
       .where(and(eq(projects.id, projectId), awaitingPlan()));
     if (!stillAwaiting) return { kind: "already-planned" };
 
-    const value = await fn({ workItemRepo: new WorkItemRepository(tx), contractRepo: new ContractRepository(tx) });
+    const value = await fn(new WorkItemRepository(tx));
 
     const [anyItem] = await tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.projectId, projectId)).limit(1);
     if (!anyItem) throw new ProjectNotAwaitingPlan(projectId, "stamp a first plan that wrote no work items");

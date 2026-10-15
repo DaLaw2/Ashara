@@ -72,23 +72,3 @@ export class WorkItemNotFound extends Error {
     this.name = "WorkItemNotFound";
   }
 }
-
-export class RepositoryError extends Error {
-  constructor(message: string) {
-    super(`Repository error: ${message}`);
-    this.name = "RepositoryError";
-  }
-}
-
-export class ContractVersionConflict extends Error {
-  constructor(
-    public readonly projectId: string,
-    public readonly attemptedVersion: number,
-  ) {
-    super(
-      `Contract version ${attemptedVersion} for project ${projectId} was taken concurrently; ` +
-        `re-read the latest version and retry`,
-    );
-    this.name = "ContractVersionConflict";
-  }
-}

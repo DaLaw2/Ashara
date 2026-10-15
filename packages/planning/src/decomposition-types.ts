@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CapabilityLevel, ProjectKnowledge, VisionSource } from "@ashara/shared";
+import type { CapabilityLevel, VisionSource } from "@ashara/shared";
 import { CapabilityLevelSchema } from "@ashara/shared";
 
 export interface WorkItemSpec {
@@ -129,10 +129,7 @@ export interface DecompositionInput {
     readonly epicTitle: string;
     readonly epicNorthStar: string;
     readonly epicDescription: string;
-    readonly knowledge?: ProjectKnowledge;
     readonly priorEpicResults?: PriorEpicResult[];
-    readonly conventions: string[];
-    readonly manifestContext?: string;
     readonly environment: EnvironmentPlanning;
     readonly layout: LayoutPlanning;
     /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
@@ -151,16 +148,6 @@ export interface DecompositionResult {
     readonly epic: WorkItemSpec;
     readonly tasks: Array<WorkItemSpec & { readonly taskSpec: TaskSpec }>;
     readonly dependencyEdges: Array<{ readonly from: string; readonly to: string }>;
-    /**
-     * The project's knowledge graph (ADR-038), derived by the SAME call that
-     * produced the tasks. Required, and deliberately so: an earlier producer sat
-     * behind a gate that never opened, while `createBulkPlanWithContract` took it
-     * as an optional dependency with zero suppliers and substituted
-     * `{nodes:[],edges:[]}`, which made the contract graph structurally
-     * unfillable. A required field on the type decomposition returns removes the
-     * identity element rather than guarding against it (ADR-048 cause A).
-     */
-    readonly knowledge: ProjectKnowledge;
     /** Every ordering hint the re-ask dropped; empty when none was. */
     readonly droppedDependencies: readonly DroppedDependency[];
 }

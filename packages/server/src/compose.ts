@@ -10,7 +10,6 @@ import {
   ConfigRepository,
   KnowledgeRepository,
   FailedApproachRepository,
-  ContractRepository,
   SecretRepository,
   LlmCallRepository,
   ClientMessageRepository,
@@ -56,7 +55,6 @@ import type {
   KnowledgeSink,
   KnowledgeSource,
   ExecutionEventSink,
-  ContractSource,
   ProjectIntentSource,
   EnvironmentImages,
 } from "@ashara/development";
@@ -81,7 +79,7 @@ import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig 
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
-import type { Clock, ProjectId, ProjectContract } from "@ashara/shared";
+import type { Clock, ProjectId } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
 import type { WorkItemRepository } from "@ashara/planning";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
@@ -207,7 +205,6 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const configRepo = new ConfigRepository(db);
   const knowledgeRepo = new KnowledgeRepository(db);
   const failedApproachRepo = new FailedApproachRepository(db);
-  const contractRepo = new ContractRepository(db);
 
   const workItemRepo: WorkItemRepository = adaptWorkItemRepo(dbWorkItemRepo);
 
@@ -336,21 +333,13 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   // A task's project is the project_id on its own row (migration 014): the
-  // contract and the vision are both keyed by it, so no reader walks the parent
-  // chain or falls back on a global latest. A task that cannot be found yields
-  // null and blocks the dispatch — handing an agent some other project's
-  // contract or intent would be worse than stopping.
+  // vision is keyed by it, so no reader walks the parent chain or falls back on
+  // a global latest. A task that cannot be found yields null and blocks the
+  // dispatch — handing an agent some other project's intent would be worse than
+  // stopping.
   const findTaskProjectId = async (taskId: string): Promise<ProjectId | null> => {
     const task = await workItemRepo.findById(parseWorkItemId(taskId, "taskId"));
     return task ? task.projectId : null;
-  };
-
-  // The task's project contract: its knowledge graph names the entry point.
-  const contractSource: ContractSource = {
-    async loadForTask(taskId: string): Promise<ProjectContract | null> {
-      const projectId = await findTaskProjectId(taskId);
-      return projectId ? contractRepo.getLatest(projectId) : null;
-    },
   };
 
   // The brief's intent: the task's project's current vision, its VERBATIM
@@ -384,7 +373,6 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     knowledgeSource,
     eventSink: devEventSink,
     intentSource,
-    contractSource,
     cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
     llm: llmGateway,
     staffing,

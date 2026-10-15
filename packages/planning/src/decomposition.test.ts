@@ -12,7 +12,6 @@ const INPUT: DecompositionInput = {
     epicTitle: "Studio bookings",
     epicNorthStar: "Members can book a seat in a class.",
     epicDescription: "Two studios merge their class schedules; members book seats in either.",
-    conventions: [],
     environment: { kind: "new" },
     layout: { kind: "new" },
     visionItems: [
@@ -58,10 +57,10 @@ interface Seen {
 }
 
 /**
- * Answers the graph call with `graph` and the task call with `tasks`, parsing
- * through the real schema and recording the semantic verdict, as the ladder does.
+ * Answers the task call with `tasks`, parsing through the real schema and
+ * recording the semantic verdict, as the ladder does.
  */
-function scriptedLlm(graph: unknown, tasks: unknown, seen: Seen): DecompositionLLM {
+function scriptedLlm(tasks: unknown, seen: Seen): DecompositionLLM {
     return {
         async generateStructured<T>(
             prompt: string,
@@ -69,7 +68,7 @@ function scriptedLlm(graph: unknown, tasks: unknown, seen: Seen): DecompositionL
             validate?: (value: T) => StructuredValidation,
         ): Promise<T> {
             seen.prompts.push(prompt);
-            const value = schema.parse(prompt.includes("structured knowledge graph") ? graph : tasks);
+            const value = schema.parse(tasks);
             if (validate) seen.verdicts.push(validate(value));
             return value;
         },
@@ -101,22 +100,21 @@ describe("DecompositionEngine", () => {
         seen = { prompts: [], verdicts: [] };
     });
 
-    test("a vision naming no stack decomposes with no stack node and no stack in the prompt", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+    test("a vision naming no stack decomposes with no stack in the prompt", async () => {
+        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
-        expect(result.knowledge.nodes).toEqual([]);
         expect(result.tasks.map((t) => t.taskSpec.origin)).toEqual([
             "sprint0", "product-scaffold", "decomposition", "check", "decomposition", "check", "review",
         ]);
         expect(result.tasks[4]?.taskSpec.endState).toBe("t2 is observable");
         expect(seen.verdicts).toEqual([{ ok: true }]);
-        expect(seen.prompts[1]).toContain("Project Knowledge: none stated");
+        expect(seen.prompts[0]).toContain("choose no implementation stack the vision items below do not state");
         expect(result.droppedDependencies).toEqual([]);
     });
 
     test("a plan has exactly one Sprint 0 task, checked by the substrate, that every other task depends on; no task carries checks", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const sprint0 = result.tasks.filter((t) => t.taskSpec.origin === "sprint0");
@@ -133,7 +131,6 @@ describe("DecompositionEngine", () => {
     // ADR-074 addendum 2 d72 B2: the product's layout is set by an implementer before any check names it.
     test("a first plan sets up the product's layout after Sprint 0 and before every check, traced to the items it enables", async () => {
         const llm = scriptedLlm(
-            { nodes: [], edges: [] },
             { tasks: [task("t1", {}, ["S1"]), task("t2", { dependsOn: ["t1"] }, ["A1"])] },
             seen,
         );
@@ -163,7 +160,7 @@ describe("DecompositionEngine", () => {
         // A revision builds on the layout already merged: no second scaffold.
         resetIdCounter();
         const revision = await new DecompositionEngine(
-            scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+            scriptedLlm({ tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
         ).decompose({ ...INPUT, environment: { kind: "existing", taskId: "env-done" }, layout: { kind: "existing", taskId: "layout-done" } });
         expect(revision.tasks.filter((t) => t.taskSpec.origin === "product-scaffold")).toEqual([]);
     });
@@ -171,7 +168,7 @@ describe("DecompositionEngine", () => {
     test("a revision on a merged layout red-runs on that layout's latest merge, never on the environment task merged before it (W11 D2)", async () => {
         const decompose = (environment: DecompositionInput["environment"]) =>
             new DecompositionEngine(
-                scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
+                scriptedLlm({ tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
             ).decompose({ ...INPUT, environment, layout: { kind: "existing", taskId: "layout-latest" } });
 
         const onExisting = await decompose({ kind: "existing", taskId: "env-done" });
@@ -192,7 +189,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("every decomposed task gets one check task, after the product scaffold, naming it by checksFor; its text names no stack", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose(INPUT);
 
         const sprint0Id = result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id;
@@ -232,7 +229,6 @@ describe("DecompositionEngine", () => {
     ])("in %s every implementation task depends on every check task of the plan", async (_label, environment) => {
         const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
         const llm = scriptedLlm(
-            { nodes: [], edges: [] },
             { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] }), task("t3")] },
             seen,
         );
@@ -258,10 +254,10 @@ describe("DecompositionEngine", () => {
     });
 
     test("the task prompt names no stack and demands no file path or command", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
         await new DecompositionEngine(llm).decompose(INPUT);
 
-        const prompt = seen.prompts[1] ?? "";
+        const prompt = seen.prompts[0] ?? "";
         expect(prompt).toContain("Plan only the product's behavior here.");
         const forbidden = [
             /file path/i, /\bfiles?\b/i, /director(y|ies)/i, /\bcommands?\b/i, /runnable/i, /executable/i,
@@ -286,7 +282,6 @@ describe("DecompositionEngine", () => {
                 validate?: (value: T) => StructuredValidation,
             ): Promise<T> {
                 seen.prompts.push(prompt);
-                if (prompt.includes("structured knowledge graph")) return schema.parse({ nodes: [], edges: [] });
                 for (const answer of answers) {
                     const value = schema.parse(answer);
                     const verdict = validate ? validate(value) : { ok: true as const };
@@ -308,15 +303,15 @@ describe("DecompositionEngine", () => {
     test("states the per-epic cap and rejects an over-cap response instead of truncating it", async () => {
         const cap = DEFAULT_DECOMPOSITION_CONFIG.maxTasksPerEpic;
         const tasks = Array.from({ length: cap + 1 }, (_, i) => task(`t${i}`));
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks }, seen);
+        const llm = scriptedLlm({ tasks }, seen);
 
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(TaskCapExceededError);
-        expect(seen.prompts[1]).toContain(`Emit at most ${cap} tasks`);
+        expect(seen.prompts[0]).toContain(`Emit at most ${cap} tasks`);
         expect(seen.verdicts[0]).toMatchObject({ ok: false });
     });
 
     test.each(["endState", "scope", "deliverables", "acceptance"])("a task missing %s is rejected, not inferred", async (field) => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1", { [field]: undefined })] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
     });
     // Fifth run N21: the first task printed a column count the tender never asked for (ADR-074 addendum 2 d71 d).
@@ -326,7 +321,7 @@ describe("DecompositionEngine", () => {
         ["a deliverable that names no source", { deliverables: [{ text: "sorted listing", sources: [] }] }, "names no vision item it serves"],
         ["a line naming an item the vision does not hold", { acceptance: [{ text: "keys come back sorted", sources: ["S9"] }] }, '"S9", which is no vision item'],
     ])("a plan with %s is rejected through the ladder, never written", async (_label, broken, message) => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", broken)] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", broken)] }, seen);
 
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
         expect(seen.verdicts).toHaveLength(1);
@@ -344,17 +339,17 @@ describe("DecompositionEngine", () => {
         ]) {
             resetIdCounter();
             const verdicts: StructuredValidation[] = [];
-            const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1", broken)] }, { prompts: [], verdicts });
+            const llm = scriptedLlm({ tasks: [task("t1", broken)] }, { prompts: [], verdicts });
             await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toBeInstanceOf(UntraceableTaskError);
             expect(verdicts[0]?.ok === false ? verdicts[0].errors.join("\n") : "").toContain("names A2, an internal-design assumption");
         }
     });
 
     test("the task prompt lists every vision item by id with its kind and asks each line to name its sources", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
         await new DecompositionEngine(llm).decompose(INPUT);
 
-        const prompt = seen.prompts[1] ?? "";
+        const prompt = seen.prompts[0] ?? "";
         expect(prompt).toContain("- S1 (in scope): In: booking a seat in a class of either studio");
         expect(prompt).toContain("- A1 (assumption; Inferred; reported to the client; client-visible behaviour): A class holds at most twenty members");
         expect(prompt).toContain("- A2 (assumption; Inferred; reported to the client; internal design, not citable): Bookings are recorded in one ledger");
@@ -363,7 +358,7 @@ describe("DecompositionEngine", () => {
     });
 
     test("a vision with no item is refused before any model call", async () => {
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1")] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1")] }, seen);
         await expect(new DecompositionEngine(llm).decompose({ ...INPUT, visionItems: [] })).rejects.toBeInstanceOf(VisionItemsMissing);
         expect(seen.prompts).toEqual([]);
     });
@@ -371,7 +366,6 @@ describe("DecompositionEngine", () => {
     // W11 (d89 A): the traced items are exactly the union of the lines' sources, never chosen beside them.
     test("a task's traced items are exactly the union of its lines' sources, by id or exact text; its check task carries them", async () => {
         const llm = scriptedLlm(
-            { nodes: [], edges: [] },
             {
                 tasks: [
                     task("t1", {
@@ -413,7 +407,7 @@ describe("DecompositionEngine", () => {
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
     ])("in %s one review task waits on every check task and every implementation waits on it", async (_label, environment) => {
         const layout = environment.kind === "new" ? ({ kind: "new" } as const) : ({ kind: "existing", taskId: "layout-done" } as const);
-        const llm = scriptedLlm({ nodes: [], edges: [] }, { tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
+        const llm = scriptedLlm({ tasks: [task("t1"), task("t2", { dependsOn: ["t1"] })] }, seen);
         const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
         const reviews = result.tasks.filter((t) => t.taskSpec.origin === "review");
@@ -435,7 +429,6 @@ describe("DecompositionEngine", () => {
     // ADR-074 addendum 2 d70: the planner grades each task; the plan's own tasks keep a fixed level.
     test("each decomposed task keeps its grade and reason; checks never fall below Strong; the plan's own tasks are Strong", async () => {
         const llm = scriptedLlm(
-            { nodes: [], edges: [] },
             {
                 tasks: [
                     task("t1", { capability: "Light", capabilityReason: "a fully specified one-part change" }),
@@ -454,7 +447,7 @@ describe("DecompositionEngine", () => {
         for (const origin of ["sprint0", "product-scaffold", "review"]) {
             expect(result.tasks.find((t) => t.taskSpec.origin === origin)?.taskSpec.capability, origin).toBe("Strong");
         }
-        expect(seen.prompts[1]).toContain('Grade every task\'s difficulty in "capability", one of Light, Medium, Strong, Frontier');
+        expect(seen.prompts[0]).toContain('Grade every task\'s difficulty in "capability", one of Light, Medium, Strong, Frontier');
     });
 
     test.each([
@@ -466,9 +459,6 @@ describe("DecompositionEngine", () => {
         const taskPrompts: string[] = [];
         const provider: StructuredProvider = {
             async generateStructured(request) {
-                if (request.prompt.includes("structured knowledge graph")) {
-                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake", provider: "fake" };
-                }
                 taskPrompts.push(request.prompt);
                 const parsed = request.schema.safeParse(answers[taskPrompts.length - 1]);
                 if (!parsed.success) {
@@ -488,9 +478,6 @@ describe("DecompositionEngine", () => {
     test("a grade the model never gives exhausts the ladder: no plan is written on an assumed level", async () => {
         const provider: StructuredProvider = {
             async generateStructured(request) {
-                if (request.prompt.includes("structured knowledge graph")) {
-                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake", provider: "fake" };
-                }
                 const parsed = request.schema.safeParse({ tasks: [task("t1", { capability: undefined })] });
                 if (parsed.success) throw new Error("the schema accepted a task without a grade");
                 throw new SchemaValidationError(parsed.error.issues.map((i) => i.message), "fake");

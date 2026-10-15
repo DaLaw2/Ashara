@@ -65,7 +65,7 @@ type ProjectRow = z.infer<typeof projectRow>;
  * A halt episode and the report that told the client of it. A planning stop is told by the
  * planning-stopped report (one client message, reports_on 'planning-stopped', posted after the stop),
  * which its episode row does not link: that message is its report. First met under the adversarial
- * profile (seed 5: twelve failed knowledge calls stopped planning, and I2 named the told episode).
+ * profile (seed 5: twelve failed knowledge calls, a planning call since deleted, stopped planning, and I2 named the told episode).
  */
 const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
 const checkRow = z.object({

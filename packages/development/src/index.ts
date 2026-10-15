@@ -19,7 +19,6 @@ export { SuiteReviewer, gitPublicInterface } from "./suite-review.js";
 export type { SuiteReviewSource } from "./suite-review.js";
 export type {
   AgentStaffing,
-  ContractSource,
   SessionStore,
   ExecutionEventSink,
   TaskDescriptor,

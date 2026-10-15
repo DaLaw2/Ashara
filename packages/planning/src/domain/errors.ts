@@ -18,20 +18,3 @@ export class CycleDetected extends PlanningError {
     this.name = "CycleDetected";
   }
 }
-
-export class ContractAlreadyExists extends PlanningError {
-  constructor(public readonly projectId: string) {
-    super(
-      `Contract already exists for project ${projectId}; use amendContract to change it`,
-      "CONTRACT_ALREADY_EXISTS",
-    );
-    this.name = "ContractAlreadyExists";
-  }
-}
-
-export class ContractNotFound extends PlanningError {
-  constructor(public readonly projectId: string) {
-    super(`No contract found for project ${projectId}; write it before amending`, "CONTRACT_NOT_FOUND");
-    this.name = "ContractNotFound";
-  }
-}

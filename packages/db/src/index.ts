@@ -50,7 +50,6 @@ export { EventStoreRepository } from "./repositories/event-store.js";
 export { KnowledgeRepository } from "./repositories/knowledge.js";
 export { FailedApproachRepository } from "./repositories/failed-approach.js";
 export { ConfigRepository } from "./repositories/config.js";
-export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { LlmCallMeasurement } from "./repositories/llm-call.js";
