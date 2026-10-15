@@ -1,4 +1,5 @@
 export type { ProjectIntentSource } from "./project-intent.js";
+export { loadProjectIntent } from "./project-intent.js";
 
 export { DevelopmentService } from "./execution-service.js";
 /** @testseam scripts/run-report.test.ts drives a scripted attempt through the session's terminal write */

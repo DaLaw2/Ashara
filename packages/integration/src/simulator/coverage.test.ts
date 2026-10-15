@@ -13,6 +13,17 @@ function snapshotWith(events: Snapshot["events"]): Snapshot {
     events,
     main: [],
     reports: { reports: [], episodes: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, checkAuthors: [] },
+    textFacts: {
+      visions: [],
+      briefs: [],
+      questions: [],
+      answerReplies: [],
+      tenderReports: [],
+      delivered: [],
+      sweepReplies: [],
+      reviewSpec: null,
+      firstPlan: { report: null, items: [], revisions: [] },
+    },
   };
 }
 

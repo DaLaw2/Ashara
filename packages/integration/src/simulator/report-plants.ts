@@ -82,6 +82,39 @@ export const deliveredReportOmitsUncovered = rewriteReport(
   (body) => dropFirstNamed(body, UNCOVERED_HEAD, "- "),
 );
 
+/**
+ * Plants on what a composer states (I9). Each rewrites one fact in a text as production writes it,
+ * where drizzle sends it as a parameter (a jsonb brief is sent as its JSON text).
+ */
+function rewriteInsert(table: string, rewrite: (param: string) => string): QueryPlant {
+  return (args) => {
+    const text = textOf(args);
+    const params = args[1];
+    if (text === null || !text.startsWith(`insert into "${table}"`) || !Array.isArray(params)) return [...args];
+    return [args[0], params.map((param: unknown) => (typeof param === "string" ? rewrite(param) : param)), ...args.slice(2)];
+  };
+}
+
+/**
+ * A brief that calls an assumption the client was asked about Stated by the client: the standing it
+ * states is not the one of the vision it carries (W12a D1's class, the other way round). The
+ * stand-ins' one assumption is asked about, and every brief carries it among its assumptions; no
+ * stand-in task's text lists it (the stand-ins' plan cites scope lines only, and the suite review is
+ * a structured call with no brief), so text-facts.test.ts holds the assumption-line clause.
+ */
+export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"standing":"asked"`, `"standing":"stated"`));
+
+/** A delivered report that says the client was told of an assumption it asked them about (smoke2 D1's class). */
+export const deliveredReportMisstatesStanding = rewriteReport(
+  (body) => body.startsWith("Your project is delivered."),
+  (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),
+);
+
+/** A question that says work proceeds on an assumption its vision does not record. */
+export const questionMisstatesAssumption = rewriteInsert("client_messages", (param) =>
+  param.replace(/(Until you answer, we proceed on this assumption: )(.*)/, "$1Messages are in Latin."),
+);
+
 /** The delivered report is posted but its sweep never records it, so it is due, and posted, again. */
 export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const text = textOf(args);

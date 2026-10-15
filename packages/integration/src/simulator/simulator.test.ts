@@ -267,6 +267,17 @@ describe("lifecycle simulator, fast tier", () => {
     expect(keys(await seeded(10, "delivered-report-unrecorded"))).toContain("I4:unrecorded-report");
   }, 120_000);
 
+  // I9 (text against fact): what a composer states is what the store held when it composed it. The
+  // stand-ins' one assumption is asked about and cited by no acceptance line, so every brief carries
+  // its standing, the delivered report lists it, and the question states it.
+  it("catches a brief, a question and a delivered report that state what their records do not hold", async () => {
+    const briefs = keys(await seeded(10, "brief-misstates-standing"));
+    expect(briefs).toContain("I9:brief-assumptions:Define and commit the project environment");
+    expect(briefs.every((key) => key.startsWith("I9:brief-assumptions:"))).toBe(true);
+    expect(keys(await seeded(10, "delivered-report-misstates-standing"))).toEqual(["I9:delivered-standing:A1"]);
+    expect(keys(await seeded(10, "question-misstates-assumption"))).toEqual(["I9:question:A1"]);
+  }, 120_000);
+
   // W6/W7: a halt's report quotes the cause recorded on its episode. Seed 10 under a cell outage
   // halts on infrastructure and then undeliverable (plan_repair); seed 1 halts at the spend cap.
   it("catches a halt report that states a fixed cause instead of the recorded one", async () => {

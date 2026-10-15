@@ -9,11 +9,13 @@ import { checkReports, readReportRecords } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
+import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
+import type { TextFactRecords } from "./text-facts.js";
 
 const run = promisify(execFile);
 
 /** The invariants of design §2.9, as judged on today's schema. */
-const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8"] as const;
+const INVARIANTS = ["I1", "I2", "I3", "I4", "I5", "I6", "I7", "I8", "I9"] as const;
 type InvariantId = (typeof INVARIANTS)[number];
 
 export interface Violation {
@@ -85,6 +87,8 @@ export interface Snapshot {
   readonly main: readonly MainCommit[];
   /** What the client was sent and the records each report is rendered from (I4). */
   readonly reports: ReportRecords;
+  /** What every brief, question and report states, with the records it is composed from (I9). */
+  readonly textFacts: TextFactRecords;
 }
 
 /** A snapshot query returned no row where it always returns one: the invariants cannot be judged. */
@@ -165,6 +169,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
     events,
     main: project.workspacePath === null ? [] : await mainLog(project.workspacePath),
     reports: await readReportRecords(db, projectId),
+    textFacts: await readTextFactRecords(db, projectId),
   };
 }
 
@@ -254,7 +259,7 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
 }
 
 /**
- * I2-I7, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
+ * I2-I7 and I9, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
  * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
  */
 export function checkSnapshot(step: number, snapshot: Snapshot, context: { readonly spendCapUsd: number; readonly cells: readonly FakeCell[]; readonly final: boolean }): Violation[] {
@@ -312,6 +317,12 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
   if (context.final) {
     const checked = new Set(snapshot.checks.map((check) => check.taskId));
     for (const found of checkReports(snapshot.reports, snapshot.project, snapshot.items, checked)) add("I4", found.key, found.statement);
+  }
+
+  // I9: every fact a brief, a question or a report states is the one the store held when it was
+  // composed (text-facts.ts). Judged once the run ends, like I4's report clauses.
+  if (context.final) {
+    for (const found of checkTextFacts(snapshot.textFacts)) add("I9", found.key, found.statement);
   }
 
   // I5: spend within the cap; every call has a recorded cost.

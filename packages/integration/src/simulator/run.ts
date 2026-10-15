@@ -33,7 +33,17 @@ import { emptyCoverage, observeAcceptanceSweeps, sample } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
 import { ADVERSARY, FAULTS } from "./profile.js";
-import { deliveredReportMisstatesUnchecked, deliveredReportOmitsGoal, deliveredReportOmitsUncovered, deliveredReportUnrecorded, haltReportFixedCause, stopReportOmitsMerge } from "./report-plants.js";
+import {
+  briefMisstatesStanding,
+  deliveredReportMisstatesStanding,
+  deliveredReportMisstatesUnchecked,
+  deliveredReportOmitsGoal,
+  deliveredReportOmitsUncovered,
+  deliveredReportUnrecorded,
+  haltReportFixedCause,
+  questionMisstatesAssumption,
+  stopReportOmitsMerge,
+} from "./report-plants.js";
 import type { Profile } from "./profile.js";
 import { StandIns } from "./scripted-models.js";
 import { Tape } from "./tape.js";
@@ -57,7 +67,13 @@ import type { Decision, TapeMode } from "./tape.js";
  * - delivered-report-omits-uncovered: the delivered report leaves out an asked-for item no
  *   acceptance line of a swept check task cites (I4, W11c D3);
  * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
- *   it is posted again (I4, exactly once).
+ *   it is posted again (I4, exactly once);
+ * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
+ *   (I9, W12a D1's class);
+ * - delivered-report-misstates-standing: the delivered report says an assumption the client was
+ *   asked about was reported to them (I9, smoke2 D1's class);
+ * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
+ *   not record (I9).
  */
 const MUTATIONS = [
   "skip-merge-record",
@@ -71,6 +87,9 @@ const MUTATIONS = [
   "delivered-report-misstates-unchecked",
   "delivered-report-omits-uncovered",
   "delivered-report-unrecorded",
+  "brief-misstates-standing",
+  "delivered-report-misstates-standing",
+  "question-misstates-assumption",
 ] as const;
 /** @testseam simulator.test.ts plants each to prove I5, I7 and I8 are not blind */
 export type Mutation = (typeof MUTATIONS)[number];
@@ -95,6 +114,9 @@ const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "delivered-report-misstates-unchecked": { bypassed: [], queries: deliveredReportMisstatesUnchecked, code: null },
   "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncovered, code: null },
   "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
+  "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
+  "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
+  "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
 };
 
 export interface RunOptions {

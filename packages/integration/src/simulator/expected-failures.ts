@@ -88,9 +88,20 @@ const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
   // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed,
   // with the re-roll above; B5 is not fixed. Seeds 81 and 89 fail B5's key with this change and on
   // master 273cc7b0's development and planning sources alike (observed, `simulate.ts --seeds 1
-  // --start 81` and `--start 89` on each, 2026-10-15): unlisted before, not introduced by it.
-  { seed: 81, keys: ["I7:unrecorded:Deliver b1, b2 [sim t1]"], baseline: B5 },
-  { seed: 89, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
+  // --start 81` and `--start 89` on each, 2026-10-15): unlisted before, not introduced by it. Seed 81
+  // is removed and seed 89 re-keyed since, below.
+  // Re-rolled at master 02d1e6e5 (t-text-vs-fact-oracle, 2026-10-15): `simulate.ts --seeds 120 --start 1` reported
+  // seed 81 listed but not failed, seed 89 failing B5's key on "Define and commit the project environment" instead
+  // of "Set up the product's layout", and seed 43 failing B5's key unlisted ("main commit ... has no item Completed
+  // recording it (the item is Pending)"). Each the same with I9's reads removed from the snapshot (`--seeds 9
+  // --start 81`, `--seeds 1 --start 43`), so not introduced by I9; which master commit re-rolled them: unverified.
+  // B5 is not fixed.
+  { seed: 89, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 43, keys: ["I7:unrecorded:Deliver b1, b2, b3 [sim t1]"], baseline: B5 },
+  // Unlisted at master 02d1e6e5, observed at $10 only (`simulate.ts --seeds 85 --projects 2 --cap 10`, 2026-10-15):
+  // project 2's environment task is left InProgress after a restart; the same with I9's reads removed from the
+  // snapshot (`--seeds 1 --start 6 --projects 2 --cap 10`). At the tape's own cap: unverified.
+  { seed: 6, projects: 2, capUsd: 10, keys: ["I7:p2:orphan:Define and commit the project environment:1"], baseline: B3 },
   // Re-rolled on t-ddd-fix-durable-reservation (2026-10-15): an admission now writes its call's
   // llm_calls row and a record updates it, two more db seams per call, and seed 10 under the
   // typical profile (`just simulate --seeds 10 --profile typical`) now crashes and then draws a
