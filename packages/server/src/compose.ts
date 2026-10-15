@@ -7,16 +7,12 @@ import {
   DevSessionRepository,
   ProjectRepository,
   ConfigRepository,
-  KnowledgeRepository,
-  FailedApproachRepository,
   SecretRepository,
   LlmCallRepository,
   ClientSessionRepository,
   ClientRepository,
   ClientLoginFailureRepository,
   EnvironmentBuildRepository,
-  CheckDisputeRepository,
-  SuiteReviewFindingRepository,
   latestRosterRevision,
   latestRosterRoles,
   assertMigrationsCurrent,
@@ -25,19 +21,21 @@ import {
   MigrationDriftError,
 } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
+import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
+import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
 import {
   CoreLoop,
   ContinuousRunner,
+  DispatchService,
   reconcileWorkItemsOnStartup,
 } from "@ashara/orchestrator";
-import type { CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
+import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
 import {
   FailureRouter,
   FirstPlanner,
   Replanner,
   assignmentIntentOf,
 } from "@ashara/planning";
-import { DevelopmentService, SuiteReviewer, gitPublicInterface } from "@ashara/development";
 import {
   BlockReports,
   ClientAnswers,
@@ -52,14 +50,14 @@ import {
   createProjectWithTender,
 } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import type {
-  AgentStaffing,
-  SessionStore,
-  KnowledgeSink,
-  KnowledgeSource,
-  ExecutionEventSink,
-  ProjectIntentSource,
-} from "@ashara/development";
+import {
+  CheckDisputeRepository,
+  SuiteReviewFindingRepository,
+  SuiteReviewer,
+  gitPublicInterface,
+  readEnvironmentDefinition,
+} from "@ashara/quality";
+import type { ExecutionEventSink } from "@ashara/quality";
 import {
   ENVIRONMENT_BUILD_TIMEOUT_MS,
   PodmanSubstrate,
@@ -88,6 +86,7 @@ import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig 
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import { terminalizeOrphanedSessions } from "@ashara/workplace";
+import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
 import type { Clock, ProjectId } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
@@ -374,7 +373,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     prune: (projectId, keepVersion) => pruneEnvironmentImages(cellSubstrate, projectId, keepVersion),
   };
 
-  const developmentService = new DevelopmentService({
+  const dispatchService = new DispatchService({
     config: {
       workdirBase: config.coreLoop.workdirBase,
     },
@@ -413,8 +412,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     eventStore,
     failedApproachRepo,
     projectRepo,
-    developmentService,
-    acceptanceSweeper: developmentService,
+    dispatchService,
+    acceptanceSweeper: dispatchService.verification,
     acceptance: createAcceptanceStore(db),
     deliveredReports: new DeliveredReports(createDeliveredReportStore(db)),
     failureRouter,
@@ -557,7 +556,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       // Environment images an earlier process left of versions main no longer uses (third run N12).
       // Pruning never fails the start: each project's failure is logged and retried next time.
       for (const project of await projectRepo.listWithWorkspace()) {
-        await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages);
+        await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages, readEnvironmentDefinition);
       }
     }),
     abort: () => abortController.abort(),

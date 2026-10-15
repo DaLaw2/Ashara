@@ -23,7 +23,7 @@
  * - kept: the briefs the sessions recorded and the reports the run posted, as they are (what the
  *   code of that run stated);
  * - today: the same, after today's code composes them again from the migrated records: each recorded
- *   session's brief facts (its goal as Development takes it from the task's task_spec, and the
+ *   session's brief facts (its goal as Delivery takes it from the task's task_spec, and the
  *   project intent today's loadProjectIntent states from the vision current when the session was
  *   recorded), the delivered report of each passed sweep (its project accepted again for the
  *   while, as it was when the report was composed), and the report of a blocked project's open

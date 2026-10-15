@@ -12,9 +12,9 @@ import {
   latestRosterRoles,
   LlmCallRepository,
   ProjectRepository,
-  TaskCheckRepository,
   WorkItemRepository,
 } from "@ashara/db";
+import { TaskCheckRepository } from "@ashara/quality";
 import {
   BlockReports,
   ClientAnswers,

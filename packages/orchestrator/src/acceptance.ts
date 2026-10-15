@@ -1,7 +1,7 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import { describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { DevelopmentService } from "./acl/development-acl.js";
+import type { TaskVerification } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./acl/planning-acl.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./acl/planning-acl.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution.js";
@@ -51,7 +51,7 @@ export interface AcceptanceStore {
 
 export interface AcceptanceDeps {
   readonly acceptance: AcceptanceStore;
-  readonly acceptanceSweeper: Pick<DevelopmentService, "sweepForAcceptance">;
+  readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
   readonly projectRepo: { block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> };
   readonly eventStore: Pick<EventStoreRepository, "publish">;
 }

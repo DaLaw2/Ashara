@@ -10,17 +10,16 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
-  CheckDisputeRepository,
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
   EnvironmentBuildRepository,
   LlmCallRepository,
   ProjectRepository,
-  TaskCheckRepository,
 } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
-import type { TaskDescriptor } from "@ashara/development";
+import { CheckDisputeRepository, TaskCheckRepository } from "@ashara/quality";
+import { DispatchService } from "@ashara/orchestrator";
+import type { TaskDescriptor } from "@ashara/orchestrator";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -121,7 +120,7 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
 }
 
 interface TaskRun {
-  readonly result: Awaited<ReturnType<DevelopmentService["execute"]>>;
+  readonly result: Awaited<ReturnType<DispatchService["execute"]>>;
   readonly mock: MockLanguageModelV4;
   readonly events: ReadonlyArray<Record<string, unknown> & { readonly event: string }>;
 }
@@ -151,7 +150,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
   ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = new DevelopmentService({
+  const service = new DispatchService({
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },

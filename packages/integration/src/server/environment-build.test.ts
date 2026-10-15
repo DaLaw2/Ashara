@@ -13,8 +13,8 @@ import {
   PodmanSubstrate,
   buildEnvironmentImage,
   loadBaseCell,
-  readEnvironmentDefinition,
 } from "@ashara/execution-infra";
+import { readEnvironmentDefinition } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
 
 // Real git, real podman, real Postgres: the build path from a committed build context to a row and a

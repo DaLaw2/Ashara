@@ -1,9 +1,8 @@
 import { join } from "node:path";
 import type { ProjectId } from "@ashara/shared";
-import type { FailedApproachRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { PlanningService } from "./acl/planning-acl.js";
-import { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./acl/development-acl.js";
+import { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./acl/execution-infra-acl.js";
 
 // The slice of the Project Record that minting a workspace needs; ProjectRepository
 // satisfies it. The vision is Engagement's record and is neither read nor written here.
@@ -57,61 +56,6 @@ export async function resolveTargetProjectPath(
     if (!(e instanceof InvalidTargetProjectPath)) throw e;
     return { kind: "rejected", reason: e.message };
   }
-}
-
-/**
- * Records a failed_approaches row. `learned` defaults to `errorDetail` rather than
- * the pre-fix hard-coded "" (kl-t1 Q1 secondary defect) — the field is never left
- * empty, even for the plain thrown-orchestrator-error call site that has no richer
- * lesson to compose. Callers on the FailureRouter-routed path pass a real lesson
- * via `composeRoutedLesson` below.
- */
-export async function recordFailedApproach(
-  failedApproachRepo: Pick<FailedApproachRepository, "record">,
-  workItemRepo: WorkItemRepository,
-  task: WorkItem,
-  errorDetail: string,
-  learned?: string,
-): Promise<void> {
-  try {
-    const epicId = await findEpicId(workItemRepo, task);
-    // FINDING: taskSpec.area was read but never written by any producer — a silent
-    // death of the shouldSplit class. The fallback was always taken. Removed the
-    // dead read; only the fallback remains.
-    const affectedArea = task.title.toLowerCase();
-
-    await failedApproachRepo.record(
-      task.projectId,
-      task.id,
-      epicId,
-      task.title,
-      `Task '${task.title}' attempted execution`,
-      errorDetail,
-      learned ?? errorDetail,
-      affectedArea,
-    );
-  } catch (e) {
-    console.warn(`[${task.id}] failed to record failed approach:`, e);
-  }
-}
-
-/**
- * Deterministic "lesson" text for a FailureRouter-routed failure (kl-t1): every
- * decision — replan or abandon — means
- * this dispatch attempt did not succeed, so each is worth a lesson, composed with
- * zero LLM calls from data already in scope (no distillation — deferred by story
- * decision). Provenance-bearing: names the task, the action taken, and the
- * attempt count, so a later brief's "Failed Approaches" section reads as an
- * imperative lesson rather than a bare error string.
- */
-export function composeRoutedLesson(
-  title: string,
-  action: "replan" | "abandon",
-  attempts: number,
-  detail: string,
-): string {
-  const verb = action === "abandon" ? "abandoned" : "replanned for another attempt";
-  return `Task '${title}' was ${verb} after ${attempts} attempt(s): ${detail}`;
 }
 
 export async function findEpicId(

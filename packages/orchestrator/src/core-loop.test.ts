@@ -118,7 +118,7 @@ function buildDeps(
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
       blockAllActive: async () => [],
     },
-    developmentService: { execute: notExercised("execute") },
+    dispatchService: { execute: notExercised("execute") },
     spendCap,
     failureRouter: { route: notExercised("route") },
     clientStops,

@@ -1,7 +1,9 @@
-import type { EventStoreRepository, FailedApproachRepository } from "@ashara/db";
+import type { EventStoreRepository } from "@ashara/db";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import type { WorkItemRepository, FailureRecoveryDeps, FirstPlanning, PlanningService, Replanning } from "./acl/planning-acl.js";
-import type { DevelopmentService } from "./acl/development-acl.js";
+import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
+import type { TaskVerification } from "./acl/quality-acl.js";
+import type { DispatchService } from "./dispatch/dispatch-service.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
 import type {
   LiaisonAnswers,
@@ -123,9 +125,9 @@ export interface CoreLoopDeps {
    * (migration 048). ProjectRepository satisfies it.
    */
   readonly projectRepo: WorkspacePathStore & Parameters<typeof PlanningService.gate>[1] & InfrastructureHalts & SpendCapHalts;
-  readonly developmentService: Pick<DevelopmentService, "execute">;
-  /** Z0's acceptance sweep of a project on main HEAD (Development; no model is called). */
-  readonly acceptanceSweeper: Pick<DevelopmentService, "sweepForAcceptance">;
+  readonly dispatchService: Pick<DispatchService, "execute">;
+  /** Z0's acceptance sweep of a project on main HEAD (Quality; no model is called). */
+  readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
   /** The acceptance sweeps recorded on main (migration 049): which projects are ready, and their verdicts. */
   readonly acceptance: AcceptanceStore;
   /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */

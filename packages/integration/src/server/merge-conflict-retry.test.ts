@@ -15,11 +15,11 @@ import {
   EnvironmentBuildRepository,
   LlmCallRepository,
   ProjectRepository,
-  TaskCheckRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
-import type { TaskDescriptor } from "@ashara/development";
+import { TaskCheckRepository } from "@ashara/quality";
+import { DispatchService } from "@ashara/orchestrator";
+import type { TaskDescriptor } from "@ashara/orchestrator";
 import { PodmanSubstrate, buildEnvironmentImage, execFileGitRunner, loadBaseCell, pruneEnvironmentImages, withGitRunner } from "@ashara/execution-infra";
 import type { BaseCellReference, GitRunner } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -116,7 +116,7 @@ async function checkedTask(title: string, check: { readonly name: string; readon
 }
 
 interface TaskRun {
-  readonly result: Awaited<ReturnType<DevelopmentService["execute"]>>;
+  readonly result: Awaited<ReturnType<DispatchService["execute"]>>;
   readonly mock: MockLanguageModelV4;
   readonly events: ReadonlyArray<Record<string, unknown> & { readonly event: string }>;
 }
@@ -146,7 +146,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
   ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const service = new DevelopmentService({
+  const service = new DispatchService({
     config: { workdirBase },
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },

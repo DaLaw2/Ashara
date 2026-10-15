@@ -5,7 +5,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { EnvironmentImages } from "./current-environment.js";
 import type { BuiltEnvironment } from "./environment-build.js";
 import type { EnvironmentCheckReport, EnvironmentTestRun } from "./environment-report.js";
-import type { EnvironmentDefinition } from "./environment.js";
+import type { EnvironmentBuildContext } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentVersionUnresolved } from "./errors.js";
 import { runHostGit } from "./host-git.js";
 import type { HostRepo } from "./host-git.js";
@@ -100,29 +100,30 @@ export async function withCheckoutCell<T>(
   }
 }
 
-/** The definition's `probe` in one cell from `imageRef` on a fresh checkout of `commit`. */
+/** The definition's `probe` command in one cell from `imageRef` on a fresh checkout of `commit`. */
 export function runProbeOnCheckout(
   scope: EnvironmentCheckScope,
   purpose: EnvironmentCheckoutPurpose,
   role: string,
   imageRef: string,
   commit: string,
-  definition: EnvironmentDefinition,
+  probe: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentTestRun> {
-  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runEnvironmentCommand(cell, definition.probe, timeoutSeconds));
+  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runEnvironmentCommand(cell, probe, timeoutSeconds));
 }
 
 /**
- * Builds the image of `definition` as committed at `commit`, then runs `probe` on a fresh checkout
- * of that commit. A definition, image build or version the agent got wrong is a report; a
- * substrate failure throws.
+ * Builds the image of `definition`'s build context as committed at `commit`, then runs the `probe`
+ * command on a fresh checkout of that commit. A definition, image build or version the agent got
+ * wrong is a report; a substrate failure throws.
  */
 export async function buildAndProbe(
   scope: EnvironmentCheckScope,
   purpose: EnvironmentCheckoutPurpose,
   commit: string,
-  definition: EnvironmentDefinition,
+  definition: EnvironmentBuildContext,
+  probe: string,
   role: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentCheckReport> {
@@ -136,13 +137,13 @@ export async function buildAndProbe(
     if (err instanceof EnvironmentVersionUnresolved) return { kind: "definition_refused", detail: err.reason };
     throw err;
   }
-  const probe = await runProbeOnCheckout(scope, purpose, role, built.imageRef, commit, definition, timeoutSeconds);
+  const probeRun = await runProbeOnCheckout(scope, purpose, role, built.imageRef, commit, probe, timeoutSeconds);
   return {
     kind: "tested",
     version: built.version,
     imageRef: built.imageRef,
     build: built.reused ? { kind: "reused" } : { kind: "built", log: built.log },
-    probe,
+    probe: probeRun,
   };
 }
 

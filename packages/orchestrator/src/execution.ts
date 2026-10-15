@@ -25,12 +25,14 @@ import {
   exitSuiteReview,
   requestEnvironmentChange,
 } from "./acl/planning-acl.js";
-import type { FaultClass, TaskDescriptor } from "./acl/development-acl.js";
+import { composeRoutedLesson, recordFailedApproach } from "./acl/knowledge-acl.js";
+import type { FaultClass } from "./acl/quality-acl.js";
 import type { Outcome } from "./acl/workplace-acl.js";
 import { toRecordedOutcome } from "./acl/workplace-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
-import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
+import type { TaskDescriptor } from "./dispatch/dispatch-service.js";
+import { findEpicId, resolveTargetProjectPath } from "./task-helpers.js";
 import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 
@@ -144,7 +146,7 @@ interface ExecutionRoutingDeps {
 
 async function executeTask(
   deps: ExecutionRoutingDeps,
-  developmentService: CoreLoopDeps["developmentService"],
+  dispatchService: CoreLoopDeps["dispatchService"],
   task: WorkItem,
   targetProjectPath: string,
   attempt: number,
@@ -160,8 +162,7 @@ async function executeTask(
    */
   routedHere: boolean;
 }> {
-  // Walked up here (not inside @ashara/development, which has no dependency on
-  // @ashara/planning) so storeFailureKnowledge scopes
+  // Walked up here, where the WorkItem hierarchy is read, so storeFailureKnowledge scopes
   // knowledge_entries by the true Epic, not whatever task.parentId points at
   // (kl-t2/Q5 — the epic_id mis-write that made recentFindings effectively
   // globally scoped across projects).
@@ -184,7 +185,7 @@ async function executeTask(
     successCriteria: task.successCriteria ?? [],
   };
 
-  const execResult = await developmentService.execute(taskDescriptor, targetProjectPath);
+  const execResult = await dispatchService.execute(taskDescriptor, targetProjectPath);
 
   if (execResult.status === "environment_change_requested") {
     // Not a failure to retry: only environment work may change the recipe, so a replan would
@@ -1161,7 +1162,7 @@ export async function processTask(
 
   let executed: Awaited<ReturnType<typeof executeTask>>;
   try {
-    executed = await executeTask(routingDeps, deps.developmentService, task, targetProjectPath, attempt);
+    executed = await executeTask(routingDeps, deps.dispatchService, task, targetProjectPath, attempt);
   } catch (e) {
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
     // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
@@ -1247,8 +1248,8 @@ export async function processTask(
           // double-writes.
           await recordFailedApproach(
             deps.failedApproachRepo,
-            deps.workItemRepo,
             current,
+            () => findEpicId(deps.workItemRepo, current),
             failure.detail,
             composeRoutedLesson(current.title, action, attempts, failure.detail),
           );
@@ -1288,8 +1289,8 @@ export async function processTask(
           await salvagePreemptedResult(deps.workItemRepo, current, outcomeKind, result.detail);
           await recordFailedApproach(
             deps.failedApproachRepo,
-            deps.workItemRepo,
             current,
+            () => findEpicId(deps.workItemRepo, current),
             result.detail,
             `Preempted to Abandoned during execution (result: ${result.status}). ` +
             `Agent spend incurred, result salvaged.`,

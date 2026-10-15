@@ -1,4 +1,4 @@
-import type { TaskDescriptor } from "@ashara/development";
+import type { TaskDescriptor } from "@ashara/orchestrator";
 import { classifyFailure, shouldEscalate, tryParseEnvelope } from "@ashara/planning";
 import type { CapabilityLevel, StoredBlockedReason, WorkItemId } from "@ashara/shared";
 

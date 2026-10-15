@@ -11,25 +11,40 @@
 allow = []
 
 [orchestrator]
-# planning + development + engagement + organization + workplace reachable ONLY through acl/ (enforced by restrict below)
+# Every other context is reachable ONLY through acl/ (enforced by restrict below), except that the
+# dispatcher (src/dispatch/) composes a task's dispatch from Workplace's attempt, Quality's
+# verification, Knowledge's context and lessons, Execution Infrastructure's cells and worktrees and
+# Finance's guarded model port directly.
 # db is infrastructure, not a BC boundary
-# ADR-075 context map: Delivery reads Workplace's Outcome, an attempt's claim.
-allow = ["shared", "db", "planning", "development", "engagement", "organization", "workplace"]
+# ADR-075 context map: Delivery reads Workplace's Outcome, an attempt's claim, and Quality's verdict.
+allow = ["shared", "db", "planning", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance"]
 restrict.planning = ["src/acl/*.ts"]
-restrict.development = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
 restrict.organization = ["src/acl/*.ts"]
-restrict.workplace = ["src/acl/*.ts"]
+restrict.workplace = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.quality = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.knowledge = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.execution-infra = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
 
 [planning]
 # ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind), and Engagement
 # of both: each reads the client vision as its published VisionVersion through its ACL (S7, S8).
-allow = ["shared", "finance", "model-access", "organization", "engagement"]
+allow = ["shared", "finance", "model-access", "organization", "engagement", "quality"]
 restrict.engagement = ["src/acl/*.ts"]
+restrict.quality = ["src/acl/*.ts"]
 
-[development]
-# ADR-075: Execution runs every task on a cell (execution-infra) through the Workplace attempt loop.
-allow = ["shared", "finance", "model-access", "execution-infra", "workplace"]
+[quality]
+# ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
+# acceptance sweep, run on cells (execution-infra). Workplace is upstream: Quality supplies the ports
+# its tools call and the verdicts they show. Quality owns its repositories; db supplies the
+# connection and the schema.
+allow = ["shared", "db", "finance", "model-access", "execution-infra", "workplace"]
+
+[knowledge]
+# ADR-075 Knowledge: findings and failed approaches. It owns its repositories; db supplies the
+# connection and the schema.
+allow = ["shared", "db"]
 
 [db]
 allow = ["shared"]
@@ -89,9 +104,9 @@ importers = []
 # formality. The cross-package tests (src/server/) are not held to it.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
-names.development = ["DevelopmentService", "EXECUTION_STATUSES"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
 names.model-access = ["LanguageModelFactory"]
+names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["ATTEMPT_TERMINALS", "BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]

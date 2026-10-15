@@ -1,7 +1,8 @@
 import type { ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { WorkItem } from "./acl/planning-acl.js";
-import { assertValidTargetProjectPath, taskMergeOnMain } from "./acl/development-acl.js";
+import { assertValidTargetProjectPath } from "./acl/execution-infra-acl.js";
+import { taskMergeOnMain } from "./acl/quality-acl.js";
 
 /** The slice of the Project Record that reading a task's merge on main needs. */
 export interface TargetPathSource {

@@ -63,14 +63,15 @@ export { cellInstanceFor, reconcileCellsAtStartup, substrateProbe, teardownCells
 export { elidedOutput, spawnProcess } from "./process-runner.js";
 export type { ProcessRunner } from "./process-runner.js";
 export {
+  buildContextFields,
   buildContextPaths,
   ENVIRONMENT_DEFINITION_PATH,
-  environmentDefinitionRules,
-  parseEnvironmentDefinition,
-  readEnvironmentDefinition,
+  ENVIRONMENT_DIR,
+  parseEnvironmentFile,
+  readEnvironmentFile,
   recipePaths,
+  refineBuildContext,
 } from "./environment.js";
-export type { EnvironmentDefinition } from "./environment.js";
 export { environmentVersion } from "./environment.js";
 export { ENVIRONMENT_BUILD_TIMEOUT_MS, buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
 export type { BuiltEnvironment } from "./environment-build.js";

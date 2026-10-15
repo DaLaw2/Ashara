@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, blockingReview, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { BlockedReasonCorrupt, parseProjectId, parseStoredBlockedReason, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
 
@@ -79,6 +79,12 @@ interface BlockingReviewRow {
   readonly times: number;
   readonly problems: readonly string[];
 }
+
+/**
+ * Reads the last review of the project recorded at or before `blockedAt`, null when none was:
+ * Quality's record, which the composition root supplies.
+ */
+type BlockingReviewReader = (db: DbHandle, projectId: string, blockedAt: Date) => Promise<BlockingReviewRow | null>;
 
 /** A suite_review block has no review of its project recorded at or before it: nothing to report it by. */
 class BlockingReviewMissing extends Error {
@@ -192,7 +198,7 @@ const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'plannin
  * Every block report not yet posted, oldest first within each subject. A project the client
  * stopped, or has a stop awaiting the Liaison, is not reported on.
  */
-export async function listDueBlockReports(db: DbHandle): Promise<DueBlockReportRow[]> {
+export async function listDueBlockReports(db: DbHandle, blockingReview: BlockingReviewReader): Promise<DueBlockReportRow[]> {
   const due: DueBlockReportRow[] = [];
 
   const resumed = await db

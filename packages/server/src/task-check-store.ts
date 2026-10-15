@@ -1,6 +1,6 @@
-import { TaskCheckRepository } from "@ashara/db";
 import type { createDb } from "@ashara/db";
-import type { SuiteReviewSource, TaskCheckStore } from "@ashara/development";
+import { TaskCheckRepository } from "@ashara/quality";
+import type { SuiteReviewSource, TaskCheckStore } from "@ashara/quality";
 
 /** Quality's task-check store over task_checks, work_items and dependencies (migration 036). */
 export function createTaskCheckStore(db: ReturnType<typeof createDb>): TaskCheckStore {

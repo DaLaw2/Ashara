@@ -17,5 +17,7 @@ export { resolveTargetProjectPath } from "./task-helpers.js";
 export { ContinuousRunner } from "./runner.js";
 export type { CycleRunner } from "./runner.js";
 
+export { DispatchService } from "./dispatch/dispatch-service.js";
+export type { AgentStaffing, TaskDescriptor } from "./dispatch/dispatch-service.js";
 
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";

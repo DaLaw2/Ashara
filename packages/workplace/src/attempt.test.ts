@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
-import type { CellBackend, EnvironmentCheckReport, EnvironmentTestRun, ExecResult } from "@ashara/execution-infra";
+import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
 import type { ResolvedModel } from "@ashara/model-access";
@@ -12,12 +12,13 @@ import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
 import type { AttemptDeps } from "./attempt.js";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
-import type { CheckRunReport, TaskCheckRunPort } from "./check-run.js";
+import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish } from "./errors.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { promptDigest } from "./prompt-digest.js";
 import type { AttemptRecord } from "./records.js";
+import type { VerdictReport } from "./verdict-report.js";
 
 type TurnRequest = Parameters<ReturnType<ContextualTurnLlm["forCall"]>["generateTurn"]>[0];
 type Call = { readonly name: string; readonly input: unknown; readonly invalid?: string };
@@ -467,23 +468,16 @@ describe("runAttempt", () => {
 });
 
 describe("build_environment", () => {
-  const empty = wholeText("");
-  const probe: EnvironmentTestRun = { command: "echo ok", exitCode: 0, timedOut: false, stdout: wholeText("ok\n"), stderr: empty };
-  const tested: EnvironmentCheckReport = {
-    kind: "tested",
-    version: "v".repeat(64),
-    imageRef: "localhost/ashara-env-p:vvvv",
-    build: { kind: "built", log: wholeText("STEP 1/1: FROM base") },
-    probe,
-  };
+  // Quality's verdict on the check, as the port returns it; Quality's tests cover how it is worded.
+  const tested: VerdictReport = { passed: true, report: `Environment version ${"v".repeat(64)}, image localhost/ashara-env-p:vvvv.\nVerdict: PASSED` };
   const STATEMENT = "A shell-only environment, because nothing more is needed.";
 
-  function port(report: EnvironmentCheckReport) {
+  function port(verdict: VerdictReport) {
     const timeouts: number[] = [];
     const environment: EnvironmentCheckPort = {
       async check(testTimeoutSeconds) {
         timeouts.push(testTimeoutSeconds);
-        return report;
+        return verdict;
       },
     };
     return { environment, timeouts };
@@ -505,7 +499,7 @@ describe("build_environment", () => {
     });
   });
 
-  it("returns the version, build log and probe output to the environment role's model", async () => {
+  it("returns Quality's report on the check to the environment role's model", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "build_environment", input: {} }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Wrote environment/ and .gitignore.", statement: STATEMENT } }]),
@@ -519,10 +513,7 @@ describe("build_environment", () => {
     expect(outcome).toMatchObject({ kind: "finished", status: "done", summary: "Wrote environment/ and .gitignore.", statement: STATEMENT });
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("build_environment");
     expect(timeouts).toEqual([60]);
-    const [result] = toolResultsOf(requests[1]?.messages.at(-1));
-    expect(result).toMatchObject({ type: "text", value: expect.stringContaining(`Environment version ${"v".repeat(64)}`) });
-    expect(result).toMatchObject({ value: expect.stringContaining("Probe stdout:\nok") });
-    expect(result).toMatchObject({ value: expect.stringContaining("Verdict: PASSED") });
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "text", value: tested.report });
   });
 
   it("environment work's done without a statement is an argument error the model can fix; other work's finish takes none", async () => {
@@ -559,28 +550,14 @@ describe("build_environment", () => {
     expect(finishSchema).toContain("The probe only proves the toolchain is present; product behaviour is verified by the check author's checks");
   });
 
-  it("a probe that prints nothing, out-of-scope work or a failed build is a tool error the model can act on", async () => {
-    const silent: EnvironmentCheckReport = { ...tested, probe: { ...probe, stdout: empty } };
-    const outside: EnvironmentCheckReport = { kind: "out_of_scope", recipe: ["environment/environment.toml"], paths: ["src/x"] };
-    const failed: EnvironmentCheckReport = {
-      kind: "build_failed",
-      version: "v".repeat(64),
-      detail: "podman build exited 1",
-      log: [{ kind: "cut", chars: 120 }, { kind: "kept", text: "Error: no such image" }],
-    };
-    for (const [report, expected] of [
-      [silent, "FAILED: the probe command printed nothing"],
-      [outside, "- src/x"],
-      [failed, "Image build log:\n[truncated by Ashara: 120 characters cut here]\nError: no such image"],
-    ] as const) {
-      const { llm, requests } = scriptedLlm([
-        () => turn([{ name: "build_environment", input: {} }]),
-        () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails." } }]),
-      ]);
-      const { environment } = port(report);
-      await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
-      expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining(expected) });
-    }
+  it("a check Quality did not pass is a tool error the model can act on, with Quality's report", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "build_environment", input: {} }]),
+      () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails." } }]),
+    ]);
+    const { environment } = port({ passed: false, report: "Environment work refused: it touches paths outside the recipe.\n- src/x" });
+    await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("- src/x") });
   });
 
   it("refuses an environment assignment without Z0's check, and the check for any other work", async () => {
@@ -659,7 +636,7 @@ describe("define_check", () => {
         () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool." } }]),
       ]);
       const environment: EnvironmentCheckPort | null =
-        workKind === "environment" ? { check: async () => ({ kind: "definition_refused", detail: "unused" }) } : null;
+        workKind === "environment" ? { check: async () => ({ passed: false, report: "unused" }) } : null;
       await runAttempt({ ...assignment(), workKind }, deps(llm, fakeCell().cell, { environment }).deps);
       expect(Object.keys(requests[0]?.tools ?? {}), String(workKind)).not.toContain("define_check");
       expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Unknown tool "define_check"') });
@@ -818,40 +795,33 @@ describe("define_check", () => {
 });
 
 describe("run_checks", () => {
-  function taskChecks(report: CheckRunReport) {
+  // Quality's verdict on the run, as the port returns it; Quality's tests cover how it is worded.
+  function taskChecks(checkNames: readonly string[], verdict: VerdictReport) {
     const timeouts: number[] = [];
     const port: TaskCheckRunPort = {
-      checkNames: report.kind === "ran" ? report.runs.map((run) => run.name) : [],
+      checkNames,
       mergedChecks: [],
       run: async (timeoutSeconds) => {
         timeouts.push(timeoutSeconds);
-        return report;
+        return verdict;
       },
     };
     return { port, timeouts };
   }
 
-  it("runs the stored checks through Z0's port and reports each verdict; a failing check is a tool error", async () => {
+  it("runs the stored checks through Z0's port and shows Quality's report; a run Quality did not pass is a tool error", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "run_checks", input: {} }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
     ]);
-    const { port, timeouts } = taskChecks({
-      kind: "ran",
-      runs: [
-        { name: "greets", command: "cat greet.txt", exitCode: 0, timedOut: false, output: "hello" },
-        { name: "lists", command: "ls missing", exitCode: 2, timedOut: false, output: "No such file" },
-      ],
-    });
+    const report = '1 of 2 check(s) pass on your current work.\nCheck "greets": PASSED\nCheck "lists": FAILED: exited 2';
+    const { port, timeouts } = taskChecks(["greets", "lists"], { passed: false, report });
 
     await runAttempt(assignment({ perCommandTimeoutSeconds: 45 }), deps(llm, fakeCell().cell, { taskChecks: port }).deps);
 
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("run_checks");
     expect(timeouts).toEqual([45]);
-    const [result] = toolResultsOf(requests[1]?.messages.at(-1));
-    expect(result).toMatchObject({ type: "error-text", value: expect.stringContaining("1 of 2 check(s) pass") });
-    expect(result).toMatchObject({ value: expect.stringContaining('Check "greets": PASSED') });
-    expect(result).toMatchObject({ value: expect.stringContaining('Check "lists": FAILED: exited 2') });
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: report });
   });
 
   it("is offered only with Z0's port, takes no arguments, and is refused to check work", async () => {
@@ -863,7 +833,7 @@ describe("run_checks", () => {
     expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("run_checks");
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Unknown tool "run_checks"') });
 
-    const passing = taskChecks({ kind: "ran", runs: [{ name: "a", command: "true", exitCode: 0, timedOut: false, output: "ok" }] });
+    const passing = taskChecks(["a"], { passed: true, report: '1 of 1 check(s) pass on your current work.\nCheck "a": PASSED' });
     const second = scriptedLlm([
       () => turn([{ name: "run_checks", input: { command: "true" } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Done." } }]),
@@ -881,7 +851,7 @@ describe("run_checks", () => {
       runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
     // Environment work is decided by its gate alone: it is never given the stored checks either.
-    const environment: EnvironmentCheckPort = { check: async () => ({ kind: "definition_refused", detail: "unused" }) };
+    const environment: EnvironmentCheckPort = { check: async () => ({ passed: false, report: "unused" }) };
     await expect(
       runAttempt({ ...assignment(), workKind: "environment" }, deps(scriptedLlm([]).llm, fakeCell().cell, { environment, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
@@ -893,10 +863,7 @@ describe("run_checks", () => {
       () => turn([{ name: "run_checks", input: {} }]),
       () => turn([{ name: "dispute_check", input: { name: "lists", reason: "the check uses bash syntax under sh" } }]),
     ]);
-    const { port } = taskChecks({
-      kind: "ran",
-      runs: [{ name: "lists", command: "[[ -f x ]]", exitCode: 2, timedOut: false, output: "sh: [[: not found" }],
-    });
+    const { port } = taskChecks(["lists"], { passed: false, report: 'Check "lists": FAILED: exited 2\nsh: [[: not found' });
     const { deps: d, records } = deps(llm, fakeCell().cell, { taskChecks: port });
 
     const outcome = await runAttempt(assignment(), d);
@@ -914,7 +881,7 @@ describe("run_checks", () => {
       () => turn([{ name: "dispute_check", input: { name: "lists", task: "t-merged", reason: "x" } }]),
       () => turn([{ name: "dispute_check", input: { name: "totals", task: "t-merged", reason: "it fixes a format the vision never states" } }]),
     ]);
-    const { port: own } = taskChecks({ kind: "ran", runs: [{ name: "lists", command: "true", exitCode: 0, timedOut: false, output: "" }] });
+    const { port: own } = taskChecks(["lists"], { passed: false, report: 'Check "lists": FAILED: printed nothing' });
     const port: TaskCheckRunPort = { ...own, mergedChecks: [{ taskId: "t-merged", name: "totals" }] };
 
     const outcome = await runAttempt(assignment(), deps(llm, fakeCell().cell, { taskChecks: port }).deps);
@@ -928,7 +895,7 @@ describe("run_checks", () => {
     await runAttempt(assignment(), deps(llm, fakeCell().cell).deps);
     expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("dispute_check");
 
-    const { port } = taskChecks({ kind: "ran", runs: [] });
+    const { port } = taskChecks([], { passed: false, report: "0 of 0 check(s) pass on your current work." });
     const legacy = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done." } }])]);
     await runAttempt({ ...assignment(), workKind: null }, deps(legacy.llm, fakeCell().cell, { taskChecks: port }).deps);
     expect(Object.keys(legacy.requests[0]?.tools ?? {})).not.toContain("dispute_check");

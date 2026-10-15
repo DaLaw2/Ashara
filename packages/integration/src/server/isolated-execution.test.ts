@@ -10,8 +10,9 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
-import type { SessionStore, TaskCheckStore } from "@ashara/development";
+import { DispatchService } from "@ashara/orchestrator";
+import type { TaskCheckStore } from "@ashara/quality";
+import type { SessionStore } from "@ashara/workplace";
 import { PodmanSubstrate, buildEnvironmentImage, cellInstanceFor, loadBaseCell, pruneEnvironmentImages, reconcileCellsAtStartup } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -177,7 +178,7 @@ describe("a task runs on cells end to end", () => {
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];
     const sessions = new MemorySessionStore();
-    const service = new DevelopmentService({
+    const service = new DispatchService({
       config: { workdirBase },
       sessionStore: sessions,
       knowledgeSink: { storeFinding: async () => {} },

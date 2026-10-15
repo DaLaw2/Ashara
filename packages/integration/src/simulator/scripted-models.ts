@@ -126,7 +126,7 @@ function firstHalf(json: string): string {
   return json.slice(0, Math.max(1, Math.floor(json.length / 2)));
 }
 
-/** The brief section of an attempt handed its conflict with main (development merge.ts formatConflictForBrief). */
+/** The brief section of an attempt handed its conflict with main (Quality merge.ts formatConflictForBrief). */
 const CONFLICT_HEADING = "## Merge with main in progress";
 
 /** The files a conflict section lists, `- <path>` one per line; none when the prompt has no such section. */

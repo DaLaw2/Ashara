@@ -1,7 +1,7 @@
-import { environmentDefinitionRules } from "@ashara/execution-infra";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
+import { environmentDefinitionRules } from "./environment-rules.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
@@ -84,7 +84,7 @@ const STATIC_PROMPT = [
 
 /**
  * Environment work writes the recipe of the image every task works in; it names no stack: choosing
- * one is the work. The definition's schema and rules come from execution-infra, which enforces them.
+ * one is the work. The definition's schema and rules are stated in environment-rules.ts; Quality enforces them.
  * The finish statement is the statement of that choice, which Z0 keeps on the task.
  */
 const ENVIRONMENT_PROMPT = [

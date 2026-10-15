@@ -6,9 +6,7 @@ import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText, WorkKind } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
-import { checkPassed, formatCheckRunReport } from "./check-run.js";
 import type { TaskCheckRunPort } from "./check-run.js";
-import { environmentCheckPassed, formatEnvironmentCheck } from "./environment-check.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { truncateElided } from "./records.js";
 
@@ -479,8 +477,8 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = buildEnvironmentArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       if (context.environment === null) return toolError(`build_environment is not available in this attempt.`);
-      const report = await context.environment.check(context.commandTimeoutSeconds);
-      return result(formatEnvironmentCheck(report), !environmentCheckPassed(report));
+      const verdict = await context.environment.check(context.commandTimeoutSeconds);
+      return result(verdict.report, !verdict.passed);
     }
     case "define_check": {
       const args = defineCheckArgs.safeParse(input);
@@ -501,9 +499,8 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       const args = runChecksArgs.safeParse(input);
       if (!args.success) return argsError(toolName, args.error);
       if (context.taskChecks === null) return toolError(`run_checks is not available in this attempt.`);
-      const report = await context.taskChecks.run(context.commandTimeoutSeconds);
-      const allPass = report.kind === "ran" && report.runs.length > 0 && report.runs.every(checkPassed);
-      return result(formatCheckRunReport(report), !allPass);
+      const verdict = await context.taskChecks.run(context.commandTimeoutSeconds);
+      return result(verdict.report, !verdict.passed);
     }
     case "dispute_check": {
       const args = disputeCheckArgs.safeParse(input);

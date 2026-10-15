@@ -2,8 +2,8 @@ import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
 import type { createDb } from "@ashara/db";
-import { loadProjectIntent } from "@ashara/development";
-import type { ProjectIntentSource } from "@ashara/development";
+import { loadProjectIntent } from "@ashara/workplace";
+import type { ProjectIntentSource } from "@ashara/workplace";
 import { assignmentIntentOf } from "@ashara/planning";
 import { parseStoredTaskSpec, parseWorkItemId } from "@ashara/shared";
 import type { RecomposedBrief } from "../simulator/stored-text.js";
@@ -92,7 +92,7 @@ function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
 }
 
 /**
- * Today's statement of each recorded session's brief facts: the goal Development's buildBrief takes
+ * Today's statement of each recorded session's brief facts: the goal Delivery's buildBrief takes
  * from the task's task_spec (the title when it holds none), and the intent today's loadProjectIntent
  * states. Its other sections need the run's checkout and are not composed. A session whose intent
  * cannot be composed throws ProjectIntentUnavailable: the replay fails, never judges less.

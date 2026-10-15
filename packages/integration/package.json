@@ -11,10 +11,10 @@
   "dependencies": {
     "@ai-sdk/provider": "4.0.22",
     "@ashara/db": "*",
-    "@ashara/development": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
     "@ashara/model-access": "*",
+    "@ashara/quality": "*",
     "@ashara/security": "*",
     "@ashara/server": "*",
     "@ashara/shared": "*",
@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@ashara/engagement": "*",
+    "@ashara/knowledge": "*",
     "@ashara/orchestrator": "*",
     "@ashara/organization": "*",
     "@ashara/planning": "*",

@@ -15,13 +15,13 @@ import {
   DevSessionRepository,
   EnvironmentBuildRepository,
   EventStoreRepository,
-  FailedApproachRepository,
   LlmCallRepository,
   ProjectRepository,
-  TaskCheckRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
+import { TaskCheckRepository } from "@ashara/quality";
+import { FailedApproachRepository } from "@ashara/knowledge";
+import { DispatchService } from "@ashara/orchestrator";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -35,7 +35,7 @@ import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // c-platform-role C2 (ADR-074 d96 c), end to end through the real contractor loop, the real
-// DevelopmentService, real podman and git, and the recorded gateway with scripted models: an
+// DispatchService, real podman and git, and the recorded gateway with scripted models: an
 // implementer's change to the environment recipe becomes a platform task whose new version the
 // implementation's next dispatch runs on; a platform task whose definition does not build merges
 // nothing, so the prior version stays current, and its implementation never runs on a broken one.
@@ -157,7 +157,7 @@ async function harness(name: string): Promise<Harness> {
   const workItems = new WorkItemRepository(db);
   const sessions = new DevSessionRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
-  const developmentService = new DevelopmentService({
+  const dispatchService = new DispatchService({
     config: { workdirBase },
     sessionStore: {
       insert: (sid, tid, brief, version) => sessions.insert(sid, tid, brief, version),
@@ -209,7 +209,7 @@ async function harness(name: string): Promise<Harness> {
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
       blockAllActive: async () => [],
     },
-    developmentService,
+    dispatchService,
     // The production bound (packages/server/src/compose.ts).
     failureRouter: new FailureRouter(3),
     spendCap,

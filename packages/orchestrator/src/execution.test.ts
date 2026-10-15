@@ -85,7 +85,7 @@ function notExercised(label: string): () => never {
  * compile error here, never a runtime TypeError. The loop's steps are never run by processTask.
  */
 function coreLoopDeps(
-  parts: Pick<CoreLoopDeps, "workItemRepo" | "developmentService"> & Partial<CoreLoopDeps>,
+  parts: Pick<CoreLoopDeps, "workItemRepo" | "dispatchService"> & Partial<CoreLoopDeps>,
 ): CoreLoopDeps {
   return {
     // Every target here is made under the temporary directory.
@@ -188,7 +188,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
 
   const deps = coreLoopDeps({
     workItemRepo,
-    developmentService: {
+    dispatchService: {
       execute: async () =>
         agentOutcome === "completed"
           ? {
@@ -325,7 +325,7 @@ describe("processTask post-agent status ladder", () => {
 });
 
 describe("an environment-blocked dispatch: an infrastructure fault requeues uncharged, other environment outcomes park", () => {
-  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["developmentService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
 
   const probeBlocked: ExecutionResult = {
     status: "environment_blocked",
@@ -388,10 +388,10 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       withTransaction: notExercised("withTransaction"),
     };
 
-    const base = coreLoopDeps({ workItemRepo, developmentService: { execute: async () => execResult } });
+    const base = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => execResult } });
     const deps = coreLoopDeps({
       workItemRepo,
-      developmentService: { execute: async () => execResult },
+      dispatchService: { execute: async () => execResult },
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
       projectRepo: {
@@ -528,7 +528,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
   test("a throw out of the dispatch past the seam: Ashara's fault, back to Pending with the dispatch refunded, no lesson", async () => {
     const { deps, stored, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
-    deps.developmentService.execute = async () => {
+    deps.dispatchService.execute = async () => {
       throw new Error("dev_sessions insert failed");
     };
 
@@ -720,7 +720,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
     const deps = coreLoopDeps({
       workItemRepo,
       eventStore: { publish: async (event) => void events.push(event.eventType) },
-      developmentService: {
+      dispatchService: {
         execute: async () => ({
           status: "checks_stale",
           checkTaskId: CHECK_ID,
@@ -870,7 +870,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
     };
     const deps = coreLoopDeps({
       workItemRepo,
-      developmentService: {
+      dispatchService: {
         execute: async () => ({
           status: "disputed",
           checksOf: whose === "own" ? ITEM_ID : mergedTaskId,
@@ -1031,7 +1031,7 @@ describe("an environment change requested: an environment task is opened and the
     };
     const deps = coreLoopDeps({
       workItemRepo,
-      developmentService: {
+      dispatchService: {
         execute: async () => ({
           status: "environment_change_requested",
           paths: ["environment/Containerfile"],
@@ -1222,7 +1222,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
 
     const deps = coreLoopDeps({
       workItemRepo,
-      developmentService: {
+      dispatchService: {
         execute: async (task) => {
           attempts.push(task.attempt);
           return scope === "shutdown"
@@ -1311,7 +1311,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
 // t-stop-report-from-merge-record: what the client is told was merged comes from the work item's
 // merge record, written before the task is completed.
 describe("a completed dispatch records its merge before the task is Completed", () => {
-  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["developmentService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatchService"]["execute"]>>;
 
   function buildMergeDeps(execResult: ExecutionResult, mergeWrite: (commit: string) => Promise<void>): {
     deps: CoreLoopDeps;
@@ -1348,7 +1348,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       listDependenciesByProject: notExercised("listDependenciesByProject"),
       withTransaction: notExercised("withTransaction"),
     };
-    const deps = coreLoopDeps({ workItemRepo, developmentService: { execute: async () => execResult } });
+    const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => execResult } });
     return { deps, stored: () => row, writes };
   }
 
@@ -1587,7 +1587,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
     };
     const deps = coreLoopDeps({
       workItemRepo,
-      developmentService: {
+      dispatchService: {
         execute: async () => ({
           status: "suite_review_problems",
           problems,

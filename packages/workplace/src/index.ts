@@ -1,20 +1,23 @@
 export { runAttempt } from "./attempt.js";
-export type { AssignmentRole } from "./assignment.js";
+export type { AssignmentStaff } from "./assignment.js";
 export { CHECK_MISSING_EXIT, CHECK_RUNNER } from "./check-definition.js";
 export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe } from "./check-definition.js";
-export { checkPassed, checkVerdict, describeProductChange, formatCheckRuns } from "./check-run.js";
-export type { CheckRun, CheckRunReport, ProductChangedReport, TaskCheckRunPort } from "./check-run.js";
-export {
-  environmentBuildPassed,
-  environmentCheckPassed,
-  environmentCommandsPassed,
-  environmentProbePassed,
-  formatEnvironmentCheck,
-  formatEnvironmentCommands,
-  formatEnvironmentProbe,
-} from "./environment-check.js";
-export type { EnvironmentCheckPort, EnvironmentCommandsRun } from "./environment-check.js";
+export type { CheckRun, TaskCheckRunPort } from "./check-run.js";
+export type { EnvironmentCheckPort } from "./environment-check.js";
+export type { EnvironmentDefinitionField } from "./environment-rules.js";
+export type { VerdictReport } from "./verdict-report.js";
 export type { Outcome } from "./outcome.js";
 export { toRecordedOutcome } from "./records.js";
 export { ORPHANED_SESSION_RESOLVER, terminalizeOrphanedSessions } from "./session-reconcile.js";
 export type { AttemptRecord, AttemptRecordSink } from "./records.js";
+export { attemptSummary, outcomeRecord, toSessionAttempt } from "./session-attempt.js";
+export { withSessionLifecycle } from "./session-lifecycle.js";
+export type { AttemptSlot, SessionStore } from "./session-lifecycle.js";
+export { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
+export type { TaskSpec } from "./task-spec.js";
+export { buildContextMap } from "./context-map.js";
+export { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
+export type { ProjectIntentSource } from "./project-intent.js";
+export { renderKnowledgeContext } from "./knowledge-context.js";
+export type { KnowledgeSection } from "./knowledge-context.js";
+export { priorAttemptFailure } from "./replan-context.js";

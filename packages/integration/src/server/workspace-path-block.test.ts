@@ -10,12 +10,12 @@ import {
   createDb,
   DEFAULT_DATABASE_URL,
   EventStoreRepository,
-  FailedApproachRepository,
   LlmCallRepository,
   ProjectRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
+import { FailedApproachRepository } from "@ashara/knowledge";
+import { DispatchService } from "@ashara/orchestrator";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -26,7 +26,7 @@ import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
-// directory. Against Postgres, with a real DevelopmentService on a recording substrate.
+// directory. Against Postgres, with a real DispatchService on a recording substrate.
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 
@@ -124,7 +124,7 @@ describe("a project whose workspace path is refused", () => {
       clock: () => new Date(),
     }), new LlmCallLedger(calls, spendCap));
     const workdirBase = join(root, "work");
-    const developmentService = new DevelopmentService({
+    const dispatchService = new DispatchService({
       config: { workdirBase },
       sessionStore: { insert: notExercised("insert"), complete: notExercised("complete"), fail: notExercised("fail") },
       knowledgeSink: { storeFinding: notExercised("storeFinding") },
@@ -162,7 +162,7 @@ describe("a project whose workspace path is refused", () => {
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: async () => [],
       },
-      developmentService,
+      dispatchService,
       failureRouter: new FailureRouter(),
       spendCap,
       clientStops: { runPending: async () => [] },

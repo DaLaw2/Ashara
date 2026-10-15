@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { TaskDescriptor } from "@ashara/development";
+import type { TaskDescriptor } from "@ashara/orchestrator";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CapabilityLevel, StoredTaskSpec } from "@ashara/shared";

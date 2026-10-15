@@ -1,7 +1,8 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { DevelopmentService, EXECUTION_STATUSES } from "@ashara/development";
+import { EXECUTION_STATUSES, observeAcceptanceSweeps as observeQualitySweeps } from "@ashara/quality";
+import type { AcceptanceSweep } from "@ashara/quality";
 import { ATTEMPT_TERMINALS, BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 import type { WorkItemStatus } from "@ashara/shared";
 import type { Database } from "./database.js";
@@ -38,10 +39,8 @@ export interface Coverage {
   readonly plants: Set<string>;
 }
 
-type AcceptanceSweep = Awaited<ReturnType<DevelopmentService["sweepForAcceptance"]>>;
-
 /**
- * Every outcome of an acceptance sweep, by the kind Development returns (execution-service.ts
+ * Every outcome of an acceptance sweep, by the kind Quality returns (verification.ts
  * AcceptanceSweep): `satisfies` makes the type checker refuse this list when a kind is added or
  * removed there, so it cannot drift from the code's own union.
  */
@@ -56,21 +55,11 @@ function sweepOutcome(sweep: AcceptanceSweep): string {
 }
 
 /**
- * Records the outcome of every acceptance sweep the run's instances return, observing
- * Development's own method (the sweep writes no record of an unrunnable sweep); returns what
- * undoes it.
+ * Records the outcome of every acceptance sweep the run's instances return, through Quality's
+ * declared observer (the sweep writes no record of an unrunnable sweep); returns what undoes it.
  */
 export function observeAcceptanceSweeps(onSweep: (outcome: string) => void): () => void {
-  const prototype = DevelopmentService.prototype;
-  const real = prototype.sweepForAcceptance;
-  prototype.sweepForAcceptance = async function (this: DevelopmentService, ...args: Parameters<DevelopmentService["sweepForAcceptance"]>): Promise<AcceptanceSweep> {
-    const sweep = await real.apply(this, args);
-    onSweep(sweepOutcome(sweep));
-    return sweep;
-  };
-  return () => {
-    prototype.sweepForAcceptance = real;
-  };
+  return observeQualitySweeps((sweep) => onSweep(sweepOutcome(sweep)));
 }
 
 /**
@@ -251,7 +240,7 @@ export function modelPathOf(row: CallRow): ModelPath | null {
 
 const terminalRows = z.array(z.object({ terminal: z.string() }));
 const countRow = z.tuple([z.object({ n: z.number().int() })]);
-/** The heading development's brief opens an attempt's conflict with main with (merge.ts formatConflictForBrief). */
+/** The heading an attempt's brief opens its conflict with main with (Quality's merge.ts formatConflictForBrief). */
 const CONFLICT_BRIEF_HEADING = "## Merge with main in progress";
 
 /** What the run's records show of attempts and model misbehaviour: read once, at the run's end, from its projects' rows. */

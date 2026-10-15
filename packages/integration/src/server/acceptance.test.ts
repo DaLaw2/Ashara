@@ -23,7 +23,7 @@ import { createClientStopStore } from "@ashara/server/client-stop-store";
 // Story s-independent-verify-m1 W7 (design P11, §2.8; eighth run E3): a project whose goal tasks are
 // all done is swept on main once; a pass makes it Accepted with one delivered report rendered from
 // the records, a failure is a defect repaired like any task given up. The sweep itself (cells, main)
-// is Development's and is stood in here; every record is real Postgres. Every row belongs to a
+// is Quality's and is stood in here; every record is real Postgres. Every row belongs to a
 // project this suite creates under a unique name; afterAll deletes them.
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;

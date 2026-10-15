@@ -44,7 +44,6 @@ export {
   ASSUMPTION_KIND_LABEL,
   ASSUMPTION_STANDING_LABEL,
   AssumptionKindSchema,
-  PUBLIC_INTERFACE_FILE,
 } from "./vision-assumption.js";
 
 

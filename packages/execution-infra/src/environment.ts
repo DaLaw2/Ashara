@@ -7,10 +7,15 @@ import { describeErrorChain } from "@ashara/shared";
 import { EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
 import { runHostGitObjects } from "./host-git.js";
 
+// The environment definition is the platform role's work product in the repository; Execution
+// Infrastructure owns only its build context (ADR-075 §5): the recipe and the inputs the image is
+// built from, and the version that is their digest. The definition's commands, and the parse of
+// the whole file, are Quality's, which runs them.
+
 /** Where the definition lives; it is always part of the recipe. */
 export const ENVIRONMENT_DEFINITION_PATH = "environment/environment.toml";
 /** Every recipe file lives under it; nothing else about it is special (ADR-074 addendum 2 d72). */
-const ENVIRONMENT_DIR = "environment/";
+export const ENVIRONMENT_DIR = "environment/";
 
 /** Why `path` is not a normalized repo-relative file path, or null. */
 function filePathProblem(path: string): string | null {
@@ -42,102 +47,53 @@ const recipeFile = filePath.superRefine((path, ctx) => {
 const uniqueFiles = <T extends z.ZodType<string>>(entry: T, what: string) =>
   z.array(entry).refine((paths) => new Set(paths).size === paths.length, `${what} must be unique`);
 
-const command = z.string().refine((text) => text.trim() !== "", "must be a non-empty command");
-
-/** The definition's fields; DEFINITION_FIELD_RULES describes exactly these keys, so the brief cannot drift from them. */
-const definitionFields = {
+/** The definition's build-context fields: what the image is built from. */
+export const buildContextFields = {
   containerfile: recipeFile,
   recipe: uniqueFiles(recipeFile, "recipe files"),
   inputs: uniqueFiles(filePath, "inputs"),
-  probe: command,
-  build: command,
-  test: command,
 };
 
-const DEFINITION_FIELD_RULES: Readonly<Record<keyof typeof definitionFields, string>> = {
-  containerfile: `path of the container build file, a file under ${JSON.stringify(ENVIRONMENT_DIR)}. It is part of the recipe.`,
-  recipe:
-    `array of the other files under ${JSON.stringify(ENVIRONMENT_DIR)} the image build reads (scripts, configuration), ` +
-    `possibly empty. The recipe is ${ENVIRONMENT_DEFINITION_PATH}, the containerfile and these files: only environment ` +
-    `work may change them, and environment work may change nothing else.`,
-  inputs:
-    `array of product files the image build also reads, for example the product's dependency manifests, possibly ` +
-    `empty. They are the product's: an input need not exist yet, and the build context holds only the recipe and the ` +
-    `inputs that exist, so the containerfile must build while any input is still absent. Any task ` +
-    `may change one, and a merge that changes one builds the image again and must pass the product's build, test and ` +
-    `checks on it. Never name the product's source, its tests or its data here.`,
-  probe:
-    "shell command that proves the toolchain is present and runs; it must exit 0 within its time limit and print " +
-    "non-empty output. It runs in a cell from the built image on a checkout that may hold no product at all, so it " +
-    "must not build or test the product.",
-  build:
-    "shell command that builds the product from the repository root once the product exists; it must exit 0. It is " +
-    "not run when the environment is defined: the product's first task sets up its layout so that it passes, and it " +
-    "runs after every later merge.",
-  test:
-    "shell command that runs the product's tests from the repository root once the product exists; it must exit 0 and " +
-    "print non-empty output. Like build, it is not run when the environment is defined.",
-};
+/** The build context of an environment definition: the recipe and the product files the image build reads. */
+export interface EnvironmentBuildContext {
+  readonly containerfile: string;
+  readonly recipe: readonly string[];
+  readonly inputs: readonly string[];
+}
 
-const definitionSchema = z
-  .object(definitionFields)
-  .strict()
-  .superRefine((definition, ctx) => {
-    if (definition.recipe.includes(definition.containerfile)) {
-      ctx.addIssue({ code: "custom", path: ["recipe"], message: "the containerfile is already part of the recipe; list it only as containerfile" });
-    }
-    const recipe = new Set([ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe]);
-    const overlap = definition.inputs.filter((path) => recipe.has(path));
-    if (overlap.length > 0) {
-      ctx.addIssue({ code: "custom", path: ["inputs"], message: `recipe files cannot also be inputs: ${JSON.stringify(overlap)}` });
-    }
-  });
-
-/**
- * The definition's schema and the rules Z0 holds environment work to, as the environment role's
- * brief states them: generated from the fields above, naming no stack.
- */
-export function environmentDefinitionRules(): string {
-  return [
-    `# The environment definition`,
-    `Write ${ENVIRONMENT_DEFINITION_PATH} as TOML with exactly these top-level keys, no table and no other key:`,
-    ...Object.entries(DEFINITION_FIELD_RULES).map(([field, rule]) => `- ${field}: ${rule}`),
-    ``,
-    `What decides this work:`,
-    `- Only recipe files may be added, changed or deleted; any other path in the work is refused. The product's`,
-    `  code, its manifests, its tests and its data are the product's tasks' work, never part of the environment.`,
-    `- The image is built from the recipe and the inputs that exist. Then probe runs in a cell from that image on a`,
-    `  fresh checkout of the committed work. The gate passes only when the image builds and probe exits 0 within its`,
-    `  time limit with non-empty output: stdout and stderr together must hold more than whitespace.`,
-    `- The image build runs as root, but every cell from the image (the probe's, every task's, every check's) runs`,
-    `  as a non-root user with HOME set to a writable, empty directory of the cell's own; the image's HOME is not`,
-    `  used. So the recipe must not create, as root, a path the build, the tests or the tools later write (a cache, a`,
-    `  temporary or output directory): leave it to the tools' defaults under HOME, or make it writable by any user.`,
-  ].join("\n");
+/** The build context's rules across its fields, for the definition's schema to refine with. */
+export function refineBuildContext(definition: EnvironmentBuildContext, ctx: z.RefinementCtx): void {
+  if (definition.recipe.includes(definition.containerfile)) {
+    ctx.addIssue({ code: "custom", path: ["recipe"], message: "the containerfile is already part of the recipe; list it only as containerfile" });
+  }
+  const recipe = new Set([ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe]);
+  const overlap = definition.inputs.filter((path) => recipe.has(path));
+  if (overlap.length > 0) {
+    ctx.addIssue({ code: "custom", path: ["inputs"], message: `recipe files cannot also be inputs: ${JSON.stringify(overlap)}` });
+  }
 }
 
 /**
- * The project's environment as the platform role commits it. Ashara never interprets it: the
- * commands are the project's, run as given; nothing is defaulted or inferred.
+ * Reads the definition committed at a commit and parses it with its owner's schema; the
+ * composition passes Quality's, so a definition is parsed once, whole.
  */
-export type EnvironmentDefinition = z.infer<typeof definitionSchema>;
+export type EnvironmentDefinitionReader<D extends EnvironmentBuildContext> = (gitDir: string, commit: string) => Promise<D>;
 
 function issuesOf(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
 }
 
-
 /**
- * Parses `environment/environment.toml` text. `source` names where it was read from, for the error.
+ * Parses `environment/environment.toml` text with `schema`. `source` names where it was read from, for the error.
  */
-export function parseEnvironmentDefinition(text: string, source: string): EnvironmentDefinition {
+export function parseEnvironmentFile<D>(text: string, source: string, schema: z.ZodType<D>): D {
   let raw: unknown;
   try {
     raw = parseToml(text);
   } catch (err) {
     throw new EnvironmentDefinitionInvalid(source, [`invalid TOML: ${describeErrorChain(err)}`], { cause: err });
   }
-  const parsed = definitionSchema.safeParse(raw);
+  const parsed = schema.safeParse(raw);
   if (!parsed.success) throw new EnvironmentDefinitionInvalid(source, issuesOf(parsed.error));
   return parsed.data;
 }
@@ -160,9 +116,9 @@ async function resolveCommit(gitDir: string, rev: string): Promise<string> {
 }
 
 /**
- * Reads and parses the definition as committed at `commit` (never from a work tree).
+ * Reads the definition as committed at `commit` (never from a work tree) and parses it with `schema`.
  */
-export async function readEnvironmentDefinition(gitDir: string, commit: string): Promise<EnvironmentDefinition> {
+export async function readEnvironmentFile<D>(gitDir: string, commit: string, schema: z.ZodType<D>): Promise<D> {
   const hash = await resolveCommit(gitDir, commit);
   const source = `${hash}:${ENVIRONMENT_DEFINITION_PATH}`;
   let text: Buffer;
@@ -171,14 +127,14 @@ export async function readEnvironmentDefinition(gitDir: string, commit: string):
   } catch (err) {
     throw new EnvironmentDefinitionInvalid(source, [`the file cannot be read at that commit: ${describeErrorChain(err)}`], { cause: err });
   }
-  return parseEnvironmentDefinition(text.toString("utf8"), source);
+  return parseEnvironmentFile(text.toString("utf8"), source, schema);
 }
 
 /**
  * The recipe: the definition, its containerfile and the recipe files it names. Only environment work
  * changes them (ADR-074 addendum 2 d72 B1), and environment work changes nothing else.
  */
-export function recipePaths(definition: EnvironmentDefinition): readonly string[] {
+export function recipePaths(definition: EnvironmentBuildContext): readonly string[] {
   return [ENVIRONMENT_DEFINITION_PATH, definition.containerfile, ...definition.recipe];
 }
 
@@ -186,7 +142,7 @@ export function recipePaths(definition: EnvironmentDefinition): readonly string[
  * Everything the image build reads: the recipe and the inputs. The environment version is the digest
  * of exactly these files, so a merge that changes any of them moves the version (d72 B3).
  */
-export function buildContextPaths(definition: EnvironmentDefinition): readonly string[] {
+export function buildContextPaths(definition: EnvironmentBuildContext): readonly string[] {
   return [...recipePaths(definition), ...definition.inputs];
 }
 
@@ -220,7 +176,7 @@ const lsTreeEntry = /^(\d{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})\t([^]+)$/;
 export async function snapshotEnvironment(
   gitDir: string,
   commit: string,
-  definition: EnvironmentDefinition,
+  definition: EnvironmentBuildContext,
 ): Promise<EnvironmentSnapshot> {
   const resolvedCommit = await resolveCommit(gitDir, commit);
   const fail = (reason: string, cause?: unknown): never => {
@@ -282,7 +238,7 @@ export async function snapshotEnvironment(
 export async function environmentVersion(
   gitDir: string,
   commit: string,
-  definition: EnvironmentDefinition,
+  definition: EnvironmentBuildContext,
 ): Promise<EnvironmentVersion> {
   const snapshot = await snapshotEnvironment(gitDir, commit, definition);
   return { version: snapshot.version, commit: snapshot.commit };

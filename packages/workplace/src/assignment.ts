@@ -24,7 +24,7 @@ export type AssignmentBrief = Pick<
 >;
 
 /** The roster role an attempt works as: the task's owner, by its roster id and name. */
-export interface AssignmentRole {
+interface AssignmentRole {
   readonly id: string;
   readonly name: string;
 }
@@ -50,6 +50,9 @@ export interface Assignment {
   readonly model: ResolvedModel;
   readonly limits: AttemptLimits;
 }
+
+/** Who works an attempt and on which model: the agent half of an Assignment, which its caller staffs. */
+export type AssignmentStaff = Pick<Assignment, "role" | "model">;
 
 const positiveInt = z.number().int().positive();
 

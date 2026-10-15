@@ -7,15 +7,11 @@ import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
 import { ConfigRepository } from "./repositories/config.js";
-import { KnowledgeRepository } from "./repositories/knowledge.js";
-import { FailedApproachRepository } from "./repositories/failed-approach.js";
 import { ClientRepository } from "./repositories/client.js";
 import { ProjectRepository } from "./repositories/project.js";
 import {
   devSessions,
   domainEvents,
-  knowledgeEntries,
-  failedApproaches,
   modelConfigs,
   providerConfigs,
 } from "./schema/index.js";
@@ -34,8 +30,6 @@ const createdDevSessionIds: string[] = [];
 const createdEventIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
-const createdKnowledgeIds: string[] = [];
-const createdFailedApproachTaskIds: string[] = [];
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 
@@ -59,12 +53,6 @@ afterAll(async () => {
 });
 
 async function cleanupAll() {
-  for (const taskId of createdFailedApproachTaskIds) {
-    await db.execute(sql`DELETE FROM failed_approaches WHERE task_id = ${taskId}`);
-  }
-  for (const id of createdKnowledgeIds) {
-    await db.execute(sql`DELETE FROM knowledge_entries WHERE id = ${id}`);
-  }
   for (const modelId of createdModelIds) {
     await db.execute(sql`DELETE FROM model_configs WHERE model_id = ${modelId}`);
   }
@@ -256,133 +244,10 @@ describe("ConfigRepository", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. KnowledgeRepository
+// 6. Two projects on one database (migration 051, ADR-074 d92 a)
 // ---------------------------------------------------------------------------
 
-describe("KnowledgeRepository", () => {
-  let repo: KnowledgeRepository;
-  const epicId = randomUUID();
-  const taskId = randomUUID();
-
-  beforeAll(async () => {
-    repo = new KnowledgeRepository(db);
-
-    const wiRepo = new WorkItemRepository(db);
-    await wiRepo.create({
-      id: epicId,
-      level: "Epic",
-      status: "Pending",
-      title: "Knowledge Test Epic",
-      projectId: testProjectId,
-    });
-    createdWorkItemIds.push(epicId);
-
-    await wiRepo.create({
-      id: taskId,
-      level: "Task",
-      status: "Completed",
-      parentId: epicId,
-      title: "Knowledge Test Task",
-      projectId: testProjectId,
-    });
-    createdWorkItemIds.push(taskId);
-  });
-
-  test("storeKnowledgeFinding inserts a finding and it can be read back", async () => {
-    await repo.storeKnowledgeFinding(
-      testProjectId,
-      taskId,
-      epicId,
-      "Test Finding Title",
-      "This is a test finding content for integration tests",
-      ["test", "integration"],
-    );
-
-    const rows = await db
-      .select()
-      .from(knowledgeEntries)
-      .where(sql`${knowledgeEntries.sourceTaskId} = ${taskId} AND ${knowledgeEntries.kind} = 'finding'`);
-
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    const row = rows[0];
-    createdKnowledgeIds.push(row.id);
-
-    expect(row.title).toBe("Test Finding Title");
-    expect(row.content).toBe("This is a test finding content for integration tests");
-    expect(row.epicId).toBe(epicId);
-    expect(row.sourceTaskId).toBe(taskId);
-    expect(row.tags).toEqual(["test", "integration"]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 7. FailedApproachRepository
-// ---------------------------------------------------------------------------
-
-describe("FailedApproachRepository", () => {
-  let repo: FailedApproachRepository;
-  const taskId = randomUUID();
-  const epicId = randomUUID();
-
-  beforeAll(async () => {
-    repo = new FailedApproachRepository(db);
-
-    const wiRepo = new WorkItemRepository(db);
-    await wiRepo.create({
-      id: epicId,
-      level: "Epic",
-      status: "Pending",
-      title: "FailedApproach Test Epic",
-      projectId: testProjectId,
-    });
-    createdWorkItemIds.push(epicId);
-
-    await wiRepo.create({
-      id: taskId,
-      level: "Task",
-      status: "Pending",
-      parentId: epicId,
-      title: "FailedApproach Test Task",
-      projectId: testProjectId,
-    });
-    createdWorkItemIds.push(taskId);
-  });
-
-  test("record inserts a failed approach and it can be read back", async () => {
-    await repo.record(
-      testProjectId,
-      taskId,
-      epicId,
-      "Bad Architecture Choice",
-      "Tried microservices for a single-user app",
-      "Over-engineering, latency issues",
-      "Keep it simple for solo projects",
-      "architecture",
-    );
-    createdFailedApproachTaskIds.push(taskId);
-
-    const rows = await db
-      .select()
-      .from(failedApproaches)
-      .where(sql`${failedApproaches.taskId} = ${taskId}`);
-
-    expect(rows.length).toBe(1);
-    const row = rows[0];
-    expect(row.epicId).toBe(epicId);
-    expect(row.title).toBe("Bad Architecture Choice");
-    expect(row.approachDescription).toBe("Tried microservices for a single-user app");
-    expect(row.failureReason).toBe("Over-engineering, latency issues");
-    expect(row.learned).toBe("Keep it simple for solo projects");
-    expect(row.affectedArea).toBe("architecture");
-    expect(row.projectId).toBe(testProjectId);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 8. Two projects on one database (migration 051, ADR-074 d92 a)
-// ---------------------------------------------------------------------------
-
-describe("project-scoped knowledge", () => {
+describe("two projects", () => {
   const projectTasks = new Map<ProjectId, string>();
   let otherProjectId: ProjectId;
 
@@ -398,10 +263,6 @@ describe("project-scoped knowledge", () => {
   });
 
   afterAll(async () => {
-    for (const projectId of projectTasks.keys()) {
-      await db.execute(sql`DELETE FROM knowledge_entries WHERE project_id = ${projectId}`);
-      await db.execute(sql`DELETE FROM failed_approaches WHERE project_id = ${projectId}`);
-    }
     const otherTask = projectTasks.get(otherProjectId);
     if (otherTask !== undefined) await db.execute(sql`DELETE FROM work_items WHERE id = ${otherTask}`);
     await db.execute(sql`DELETE FROM projects WHERE id = ${otherProjectId}`);
@@ -412,23 +273,6 @@ describe("project-scoped knowledge", () => {
     if (taskId === undefined) throw new Error(`test setup: no task for project ${projectId}`);
     return taskId;
   }
-
-  test("each project's read returns only its own findings and failed approaches", async () => {
-    const knowledge = new KnowledgeRepository(db);
-    const approaches = new FailedApproachRepository(db);
-    for (const projectId of projectTasks.keys()) {
-      const taskId = taskOf(projectId);
-      await knowledge.storeKnowledgeFinding(projectId, taskId, null, `finding of ${projectId}`, "shared words", []);
-      await approaches.record(projectId, taskId, null, `approach of ${projectId}`, "d", "shared words", "l", "a");
-    }
-
-    for (const projectId of projectTasks.keys()) {
-      const findings = await knowledge.recentFindingsScoped(projectId, null, "shared words", 50);
-      expect(findings.map((f) => f.title)).toEqual([`finding of ${projectId}`]);
-      const failed = await approaches.failedApproachesScoped(projectId, null, "shared words", 50);
-      expect(failed.map((f) => f.title)).toEqual([`approach of ${projectId}`]);
-    }
-  });
 
   test("a dependency edge across two projects is refused", async () => {
     await expect(

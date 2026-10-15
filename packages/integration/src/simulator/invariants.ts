@@ -326,9 +326,9 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
 }
 
 /**
- * The ashara.role labels of the cells Z0 itself runs on a task's work (development), each with the
- * work kinds it may run on: POST_MERGE_VERIFIER_ROLE (execution-service.ts), the post-merge check
- * of any task's tentative merge; RED_RUN_ROLE (execution-service.ts, environment-check.ts's
+ * The ashara.role labels of the cells Z0 itself runs on a task's work (Quality's verification), each with the
+ * work kinds it may run on: POST_MERGE_VERIFIER_ROLE (Quality verification.ts), the post-merge check
+ * of any task's tentative merge; RED_RUN_ROLE (Quality verification.ts, environment-check.ts's
  * substrate gate), a run of stored checks, a foundation build or the substrate gate in a fresh CI
  * cell; and "environment-check" (environment-check.ts), build_environment's build and probe, a
  * port only environment work's attempt is given. None is a roster role's id, so none is another

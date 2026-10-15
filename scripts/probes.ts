@@ -17,7 +17,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
-import { probeEnvironmentWrite } from "@ashara/development";
+import { probeEnvironmentWrite } from "@ashara/quality";
 import {
   CELL_LIMIT_VARIABLES,
   PodmanSubstrate,

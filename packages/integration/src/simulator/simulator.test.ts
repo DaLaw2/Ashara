@@ -163,7 +163,7 @@ describe("lifecycle simulator, directed", () => {
   }, 90_000);
 
   // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window): the process dies on the
-  // merge-record write right after the merge commit landed on main (development merge.ts
+  // merge-record write right after the merge commit landed on main (Quality merge.ts
   // commitMerge, then orchestrator execution.ts writes the record). The startup reconciler reads
   // main before it requeues an orphan, and records the merge it finds instead of dispatching the
   // merged work again.

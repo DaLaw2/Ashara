@@ -201,7 +201,7 @@ describe("cell on real podman", () => {
     const base = await loadBaseCell();
     const worktree = await mkdtemp(join(mountRoot, "user-task-"));
     const checkout = await mkdtemp(join(mountRoot, "user-probe-"));
-    // As execution-service makes them: the task cell's private tree, the probe cell's shared checkout.
+    // As the dispatch and its verification make them: the task cell's private tree, the probe cell's shared checkout.
     const taskCell = await substrate.createCell({ image: base.image, project: "proj-cell-test", task: `${task}-user`, role: "worker", instance, mount: { hostPath: worktree } });
     const probeCell = await substrate.createCell({
       image: base.image,

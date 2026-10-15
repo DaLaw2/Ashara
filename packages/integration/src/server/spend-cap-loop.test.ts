@@ -13,12 +13,12 @@ import {
   createDb,
   DEFAULT_DATABASE_URL,
   EventStoreRepository,
-  FailedApproachRepository,
   LlmCallRepository,
   ProjectRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { DevelopmentService } from "@ashara/development";
+import { FailedApproachRepository } from "@ashara/knowledge";
+import { DispatchService } from "@ashara/orchestrator";
 import { ClientStops, ClientMessageRepository } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
@@ -114,7 +114,7 @@ function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">)
       resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
       blockAllActive: async () => [],
     },
-    developmentService: { execute: notExercised("execute") },
+    dispatchService: { execute: notExercised("execute") },
     failureRouter: { route: notExercised("route") },
     clientStops: { runPending: async () => [] },
     clientChanges: { runPending: async () => [] },
@@ -337,7 +337,7 @@ describe("a turn refused at the project's spend cap", () => {
     stub.model = mock;
     const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 5 } });
     const gateway = gatewayOn(spendCap, calls);
-    const developmentService = new DevelopmentService({
+    const dispatchService = new DispatchService({
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
       knowledgeSink: { storeFinding: notExercised("storeFinding") },
@@ -384,7 +384,7 @@ describe("a turn refused at the project's spend cap", () => {
         resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
         blockAllActive: async () => [],
       },
-      developmentService,
+      dispatchService,
       failureRouter: new FailureRouter(),
       spendCap,
     });

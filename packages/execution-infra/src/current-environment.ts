@@ -1,8 +1,8 @@
 import type { ProjectId } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
 import type { BuiltEnvironment, EnvironmentBuildRequest, EnvironmentImagePrune } from "./environment-build.js";
-import { environmentVersion, readEnvironmentDefinition } from "./environment.js";
-import type { EnvironmentDefinition } from "./environment.js";
+import { environmentVersion } from "./environment.js";
+import type { EnvironmentBuildContext, EnvironmentDefinitionReader } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
 import { runHostGit } from "./host-git.js";
 import type { HostRepo } from "./host-git.js";
@@ -29,7 +29,7 @@ export interface EnvironmentStatementSource {
 }
 
 /** The project's current environment: its version, the image built from it, and the team's statement. */
-export interface CurrentEnvironment {
+export interface CurrentEnvironment<D extends EnvironmentBuildContext = EnvironmentBuildContext> {
   readonly version: string;
   /** The last commit on main that touched the build context. */
   readonly commit: string;
@@ -44,11 +44,11 @@ export interface CurrentEnvironment {
    * no check file may overwrite, and its `build` and `test` run on every post-merge checkout, from
    * this image.
    */
-  readonly definition: EnvironmentDefinition;
+  readonly definition: D;
 }
 
-export type EnvironmentResolution =
-  | { readonly kind: "current"; readonly environment: CurrentEnvironment }
+type EnvironmentResolution<D extends EnvironmentBuildContext> =
+  | { readonly kind: "current"; readonly environment: CurrentEnvironment<D> }
   /** Nothing a cell could be built from; `reason` says what is missing, for the operator. */
   | { readonly kind: "undefined"; readonly reason: string };
 
@@ -80,14 +80,15 @@ async function mainCommit(repo: HostRepo): Promise<{ readonly commit: string } |
 /**
  * Removes the project's environment images that main's current environment version does not use
  * and no container uses (third run N12), after an environment task ends and at startup. When main
- * cannot be read, or its environment cannot be resolved, nothing is removed: which version is
- * current is unknown. Cleanup never fails its caller: any failure is logged at warn, and the
+ * cannot be read, or its environment cannot be resolved (read by `readDefinition`, the definition's
+ * owner's parse), nothing is removed: which version is current is unknown. Cleanup never fails its caller: any failure is logged at warn, and the
  * next environment task's end or startup tries again.
  */
 export async function pruneStaleEnvironmentImages(
   projectId: ProjectId,
   targetProjectPath: string,
   images: Pick<EnvironmentImages, "prune">,
+  readDefinition: EnvironmentDefinitionReader<EnvironmentBuildContext>,
 ): Promise<void> {
   try {
     const repo = hostRepoOf(targetProjectPath);
@@ -98,7 +99,7 @@ export async function pruneStaleEnvironmentImages(
     }
     let keep: string;
     try {
-      const definition = await readEnvironmentDefinition(repo.gitDir, main.commit);
+      const definition = await readDefinition(repo.gitDir, main.commit);
       keep = (await environmentVersion(repo.gitDir, main.commit, definition)).version;
     } catch (err) {
       if (!(err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved)) throw err;
@@ -125,25 +126,27 @@ export async function pruneStaleEnvironmentImages(
 /**
  * Resolves the environment version on the target's main (read from committed objects through
  * hardened git, never from a work tree), finds or builds its image (the build is recorded), and
- * reads the team's statement of the stack. Anything missing is `undefined` with its reason; a
- * substrate or store failure throws.
+ * reads the team's statement of the stack. The definition is read by `readDefinition`, its owner's
+ * parse of the whole file. Anything missing is `undefined` with its reason; a substrate or store
+ * failure throws.
  */
-export async function resolveCurrentEnvironment(
+export async function resolveCurrentEnvironment<D extends EnvironmentBuildContext>(
   projectId: ProjectId,
   targetRepo: HostRepo,
   images: EnvironmentImages,
   statements: EnvironmentStatementSource,
-): Promise<EnvironmentResolution> {
-  const undefinedBecause = (reason: string): EnvironmentResolution => ({ kind: "undefined", reason });
+  readDefinition: EnvironmentDefinitionReader<D>,
+): Promise<EnvironmentResolution<D>> {
+  const undefinedBecause = (reason: string): EnvironmentResolution<D> => ({ kind: "undefined", reason });
 
   const main = await mainCommit(targetRepo);
   if ("problem" in main) return undefinedBecause(main.problem);
   const { commit } = main;
 
-  let definition: EnvironmentDefinition;
+  let definition: D;
   let version: string;
   try {
-    definition = await readEnvironmentDefinition(targetRepo.gitDir, commit);
+    definition = await readDefinition(targetRepo.gitDir, commit);
     version = (await environmentVersion(targetRepo.gitDir, commit, definition)).version;
   } catch (err) {
     if (err instanceof EnvironmentDefinitionInvalid || err instanceof EnvironmentVersionUnresolved) {

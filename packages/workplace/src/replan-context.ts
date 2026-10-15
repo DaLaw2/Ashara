@@ -1,0 +1,110 @@
+import type { ErrorLayer, StoredBlockedReason } from "@ashara/shared";
+import { errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+
+// Replan context injection: the FailureRouter replans a failed item back to Pending and Delivery
+// persists the raw failure context on WorkItem.blockedReason.replanContext. Surfacing it in the
+// next brief — read BEFORE the agent dispatch, never cleared in between (startWorkItem does not
+// touch blockedReason) — is what makes a replan an INFORMED retry instead of a repeat of the exact
+// attempt that just failed.
+
+interface ReplanContext {
+  readonly attempt: number;
+  readonly detail: string;
+  readonly raw: unknown;
+}
+
+function isReplanContext(value: unknown): value is ReplanContext {
+  if (typeof value !== "object" || value === null) return false;
+  // contract-erasing: narrowing for ReplanContext, which has a known shape
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.attempt === "number" && typeof candidate.detail === "string";
+}
+
+/**
+ * Fail-safe (Discipline A): blockedReason is untyped jsonb round-tripped
+ * through the DB, so a malformed or absent replanContext must never crash
+ * brief assembly — it just means the "Prior Attempt Failure" section is
+ * omitted. Absence is the normal (non-replanned) case and is silent; a
+ * present-but-malformed shape is unexpected and is logged.
+ */
+function extractReplanContext(
+  taskId: string,
+  blockedReason: StoredBlockedReason | undefined,
+): ReplanContext | null {
+  if (!blockedReason) return null;
+  // Only the "replan" variant carries replanContext; other variants do not.
+  if (blockedReason.source !== "replan") return null;
+  const candidate = blockedReason.replanContext;
+  if (candidate === undefined) return null;
+
+  if (!isReplanContext(candidate)) {
+    console.warn(
+      `[${taskId}] malformed blockedReason.replanContext (expected {attempt: number, detail: string, raw}); ` +
+        `omitting Prior Attempt Failure section from brief:`,
+      candidate,
+    );
+    return null;
+  }
+  return candidate;
+}
+
+function innermostLayer(layer: ErrorLayer): ErrorLayer {
+  let current = layer;
+  while (current.cause) {
+    current = current.cause;
+  }
+  return current;
+}
+
+function formatPriorAttemptFailure(ctx: ReplanContext): string {
+  const envelopeParsed = errorEnvelopeSchema.safeParse(ctx.raw);
+  if (envelopeParsed.success) {
+    const envelope = envelopeParsed.data;
+    const diagnostic = innermostLayer(envelope.chain).message;
+
+    const lines: string[] = [
+      `# CRITICAL: Previous attempt FAILED — read this FIRST`,
+      ``,
+      `Your previous attempt (attempt ${ctx.attempt}) failed. You MUST address this before doing anything else.`,
+      ``,
+      `## What failed`,
+      diagnostic,
+      ``,
+      `## Do NOT repeat`,
+      `YOU MUST fix: ${diagnostic}. Previous attempt failed because ${ctx.detail}.`,
+      ``,
+      renderChainForBrief(envelope),
+    ];
+    return lines.join("\n");
+  }
+
+  let rawText: string;
+  try {
+    rawText = JSON.stringify(ctx.raw, null, 2);
+  } catch {
+    rawText = String(ctx.raw);
+  }
+
+  return [
+    `# CRITICAL: Previous attempt FAILED — read this FIRST`,
+    ``,
+    `Your previous attempt (attempt ${ctx.attempt}) failed. You MUST address this before doing anything else.`,
+    ``,
+    `## What failed`,
+    `Detail: ${ctx.detail}`,
+    ``,
+    `## Do NOT repeat`,
+    `Do NOT repeat the same approach that produced this failure.`,
+    ``,
+    `## Previous attempt's raw failure payload`,
+    "```",
+    rawText,
+    "```",
+  ].join("\n");
+}
+
+/** The brief's "Prior Attempt Failure" section for a replanned task; undefined when it was not replanned. */
+export function priorAttemptFailure(taskId: string, blockedReason: StoredBlockedReason | undefined): string | undefined {
+  const replanContext = extractReplanContext(taskId, blockedReason);
+  return replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
+}

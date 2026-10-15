@@ -6,7 +6,7 @@ import { z } from "zod";
 import { describeErrorChain, joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, ProjectId } from "@ashara/shared";
 import { buildLimitArgs } from "./cell-limits.js";
-import { materializeSnapshot, snapshotEnvironment, type EnvironmentDefinition } from "./environment.js";
+import { materializeSnapshot, snapshotEnvironment, type EnvironmentBuildContext } from "./environment.js";
 import { EnvironmentBuildFailed, EnvironmentBuildUnrecorded, InvalidCellRequest, PodmanCommandFailed } from "./errors.js";
 import type { PodmanSubstrate } from "./podman.js";
 import { elidedOutput } from "./process-runner.js";
@@ -68,7 +68,7 @@ export interface EnvironmentBuildRequest {
   /** The target repository's git dir, read for committed objects only. */
   readonly repoGitDir: string;
   readonly commit: string;
-  readonly definition: EnvironmentDefinition;
+  readonly definition: EnvironmentBuildContext;
 }
 
 /**
