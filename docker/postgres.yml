@@ -1,6 +1,8 @@
 services:
   postgres:
     image: docker.io/pgvector/pgvector:pg17
+    # The simulator runs up to 20 seed workers at once, each holding several sessions (scripts/simulate.ts).
+    command: ["postgres", "-c", "max_connections=400"]
     ports:
       # 127.0.0.1-only binding is the sole access boundary under trust auth.
       # A prior binding to 0.0.0.0 once let an E2E-built app write into the
