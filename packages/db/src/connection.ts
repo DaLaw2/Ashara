@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { describeErrorChain } from "@ashara/shared";
 import * as schema from "./schema/index.js";
@@ -45,5 +46,75 @@ export function createDb(databaseUrl: string, createPool: PoolFactory = createPg
       `[db] WARN: an idle pooled connection failed and was removed from the pool (code ${code}): ${describeErrorChain(err)}`,
     );
   });
-  return drizzle(pool, { schema });
+  const db = drizzle(pool, { schema });
+  // Every top-level transaction of this Database runs through the one wrapper below: drizzle's own
+  // pool transaction sends BEGIN before the try/finally that releases its client, so a failed BEGIN
+  // would keep the connection checked out for good. Nested `tx.transaction` calls are savepoints on
+  // the already checked-out client and need no wrapper.
+  db.transaction = transactionOnOwnCheckout(pool);
+  return db;
+}
+
+type SchemaDatabase = NodePgDatabase<typeof schema>;
+
+/** BEGIN failed, so no transaction was opened; the connection it was sent on was destroyed, not pooled. */
+class TransactionBeginFailed extends Error {
+  constructor(cause: unknown) {
+    super(`BEGIN failed, no transaction was opened: ${describeErrorChain(cause)}`, { cause });
+    this.name = "TransactionBeginFailed";
+  }
+}
+
+/** The body failed and the ROLLBACK after it failed too: `cause` is the body's error. */
+class TransactionRollbackFailed extends Error {
+  constructor(
+    cause: unknown,
+    readonly rollbackError: unknown,
+  ) {
+    super(`ROLLBACK failed after the transaction body failed: body ${describeErrorChain(cause)}; rollback ${describeErrorChain(rollbackError)}`, {
+      cause,
+    });
+    this.name = "TransactionRollbackFailed";
+  }
+}
+
+/** How far one transaction got; a record, so the body's closure writes are visible after the await. */
+interface TransactionProgress {
+  entered: boolean;
+  bodyFailure: { readonly error: unknown } | null;
+}
+
+/**
+ * A transaction on a client this wrapper checks out itself and releases on every path. drizzle runs
+ * BEGIN, the body, and COMMIT or ROLLBACK on that one client (a client, not a pool, so drizzle
+ * releases nothing). A connection whose BEGIN, COMMIT or ROLLBACK failed is in an unknown state and
+ * is destroyed instead of returned to the pool; one whose body failed and rolled back is reused.
+ */
+function transactionOnOwnCheckout(pool: pg.Pool): SchemaDatabase["transaction"] {
+  return async (body, config) => {
+    const client = await pool.connect();
+    const progress: TransactionProgress = { entered: false, bodyFailure: null };
+    let destroy = true;
+    try {
+      const result = await drizzle(client, { schema }).transaction(async (tx) => {
+        progress.entered = true;
+        try {
+          return await body(tx);
+        } catch (err: unknown) {
+          progress.bodyFailure = { error: err };
+          throw err;
+        }
+      }, config);
+      destroy = false;
+      return result;
+    } catch (err: unknown) {
+      if (!progress.entered) throw new TransactionBeginFailed(err);
+      if (progress.bodyFailure === null) throw err;
+      if (progress.bodyFailure.error !== err) throw new TransactionRollbackFailed(progress.bodyFailure.error, err);
+      destroy = false;
+      throw err;
+    } finally {
+      client.release(destroy);
+    }
+  };
 }

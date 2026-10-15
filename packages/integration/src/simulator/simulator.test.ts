@@ -140,12 +140,12 @@ describe("lifecycle simulator, directed", () => {
   /** An implementation attempt's draw, counted over implementation attempts only. */
   const implementation = (site: string, nth: number | "every"): Direction => draw(site, nth, 1, "implementation");
 
-  // B8 (baseline §3; task t-begin-failure-leaks-connection): the first BEGIN fails with a 40001.
-  // Before the leak was named, its teardown waited on the pool's end forever.
-  it("names a connection production leaves checked out instead of hanging on it", async () => {
+  // B8 (baseline §3): the first BEGIN fails with a 40001. The transaction wrapper (db
+  // connection.ts) releases the connection whose BEGIN failed, so no checkout outlives the process.
+  it("releases the connection of a failed BEGIN, leaving none checked out", async () => {
     const result = await directed([{ kind: "fault", seam: "db", label: "begin", nth: 1, fault: "db-query-failed" }]);
     expect(result.faults.map((f) => `${f.label}:${f.fault}`)).toEqual(["begin:db-query-failed"]);
-    expect(keys(result)).toEqual(["I1:leaked-connection:begin"]);
+    expect(keys(result)).toEqual([]);
   }, 90_000);
 
   // B3 (baseline §3; task t-orphan-requeue-failure): a crash, a crash right after the task is set

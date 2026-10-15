@@ -30,12 +30,7 @@ interface ExpectedFailure {
  * list is re-derived from a soak whenever such a change lands; simulator.test.ts forces each
  * defect on a directed tape instead of pinning a seed.
  */
-const B8 =
-  "B8 (baseline §3; task t-begin-failure-leaks-connection): a BEGIN that fails leaves its pool client checked out: drizzle-orm " +
-  "0.45.2's node-postgres session transaction() sends begin before its try/finally, so the client is never released";
-const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
-  { seed: 86, keys: ["I1:leaked-connection:begin"], baseline: B8 },
-];
+const EXPECTED_FAILURES: readonly ExpectedFailure[] = [];
 
 /** The entry of one run, if it has one: its seed under the entry's profile, in its run mode. */
 function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): ExpectedFailure | undefined {
