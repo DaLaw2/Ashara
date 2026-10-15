@@ -8,7 +8,8 @@
  * probe; the BaseCell when absent, config/base-cell.toml) and prints one verdict per probe:
  * the cell's resource caps, a credential read, an outbound host (`--host`, 1.1.1.1 when absent) and
  * an environment-file write without the grant. Every container and directory it makes is removed.
- * Exits 0 only when every probe held. No database, no model call.
+ * Exits 0 only when every probe held: a breached or an unverifiable probe exits 1. No database, no
+ * model call.
  */
 
 import { randomUUID } from "node:crypto";
@@ -25,6 +26,7 @@ import {
   probeOutboundHost,
   probeResourceCaps,
   readCellLimits,
+  summarizeProbes,
   type CredentialCanaries,
   type ProbeVerdict,
 } from "@ashara/execution-infra";
@@ -107,13 +109,13 @@ async function main(): Promise<void> {
     await rm(mountRoot, { recursive: true, force: true });
   }
 
-  for (const verdict of verdicts) console.log(`[${verdict.held ? "HELD" : "BREACHED"}] ${verdict.probe}: ${verdict.evidence}`);
-  const breached = verdicts.filter((verdict) => !verdict.held);
-  if (breached.length > 0) {
-    console.error(`\n${breached.length} of ${verdicts.length} probe(s) did not hold.`);
-    process.exit(1);
+  for (const verdict of verdicts) console.log(`[${verdict.outcome.toUpperCase()}] ${verdict.probe}: ${verdict.evidence}`);
+  const { exitCode, summary } = summarizeProbes(verdicts);
+  if (exitCode !== 0) {
+    console.error(`\n${summary}`);
+    process.exit(exitCode);
   }
-  console.log(`\nAll ${verdicts.length} probes held.`);
+  console.log(`\n${summary}`);
 }
 
 main().catch((err: unknown) => {

@@ -50,8 +50,8 @@ describe("exit 6 probes from inside a real cell", () => {
   it("the cell's cgroup holds the configured memory, swap, CPU and pids caps; other caps do not match", async () => {
     const caps = await probeResourceCaps(cell, LIMITS);
     expect(caps.evidence).toBe("memory.max=268435456, memory.swap.max=0, cpu.max=50000 100000, pids.max=64");
-    expect(caps.held).toBe(true);
-    expect((await probeResourceCaps(cell, { ...LIMITS, pids: 65 })).held).toBe(false);
+    expect(caps.outcome).toBe("held");
+    expect((await probeResourceCaps(cell, { ...LIMITS, pids: 65 })).outcome).toBe("breached");
   });
 
   it("the pids cap stops a fork past it", async () => {
@@ -70,21 +70,21 @@ describe("exit 6 probes from inside a real cell", () => {
     const denied = await probeCredentialRead(cell, canaries);
     expect(denied.evidence).toContain(`path ${join(keyDir, "secret.key")} absent`);
     expect(denied.evidence).toContain("none found");
-    expect(denied.held).toBe(true);
+    expect(denied.outcome).toBe("held");
 
     // A value inside a probed path (npx's INIT_CWD inside `<cwd>/.env`, W5 D4) is not the probe's own leak.
     const pathPrefix = await probeCredentialRead(cell, { ...canaries, values: [...canaries.values, { name: "INIT_CWD", value: keyDir }] });
     expect(pathPrefix.evidence).toContain("none found");
-    expect(pathPrefix.held).toBe(true);
+    expect(pathPrefix.outcome).toBe("held");
 
     const control = await probeCredentialRead(cell, { ...canaries, paths: [`${WORKSPACE_ROOT}/planted.txt`] });
-    expect(control.held).toBe(false);
+    expect(control.outcome).toBe("breached");
     expect(control.evidence).toContain("found: the secret key file");
   });
 
-  it("an outbound host is unreachable: loopback only, no route, and wget fails", async () => {
+  it("an outbound host is unreachable: loopback only, no route, and busybox's nc and wget both fail to connect", async () => {
     const outbound = await probeOutboundHost(cell, "1.1.1.1");
-    expect(outbound.evidence).toMatch(/^interfaces \[lo\]; routes: 0; connect: wget exit [1-9][0-9]*/);
-    expect(outbound.held).toBe(true);
+    expect(outbound.evidence).toMatch(/^interfaces \[lo\]; routes: 0; connect: nc exit [1-9][0-9]*.*, wget exit [1-9][0-9]*/);
+    expect(outbound.outcome).toBe("held");
   });
 });

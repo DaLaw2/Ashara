@@ -77,7 +77,7 @@ export async function probeEnvironmentWrite(request: EnvironmentWriteProbeReques
   const mainUnchanged = mainContainerfile === CONTAINERFILE_TEXT;
   return {
     probe,
-    held: verdict.kind !== "clean" && mainUnchanged,
+    outcome: verdict.kind !== "clean" && mainUnchanged ? "held" : "breached",
     evidence:
       `${write}; the ownership gate returned ${verdict.kind}` +
       (verdict.kind === "clean" ? "" : ` (${verdict.reason})`) +

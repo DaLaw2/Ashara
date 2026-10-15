@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { probeCredentialRead, probeOutboundHost } from "./cell-probes.js";
+import { probeCredentialRead, probeOutboundHost, summarizeProbes } from "./cell-probes.js";
 import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
@@ -31,7 +31,7 @@ describe("probeCredentialRead", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.argv.some((arg) => arg.includes(path))).toBe(false);
     expect(calls[0]?.stdin).toBe(`${path}\n`);
-    expect(verdict).toMatchObject({ held: true });
+    expect(verdict).toMatchObject({ outcome: "held" });
   });
 
   it("refuses a path that cannot be sent as one line rather than probe something else", async () => {
@@ -40,14 +40,44 @@ describe("probeCredentialRead", () => {
 });
 
 describe("probeOutboundHost", () => {
-  const isolated = "routes: 0\nconnect: wget exit 1\n";
+  const refused = "connect: bash-dev-tcp exit 1\n  bash: connect: Network is unreachable\n";
 
-  it("holds with loopback only, no route and a refused connect", async () => {
-    expect((await probeOutboundHost(cellPrinting(`interfaces: lo\n${isolated}`), "1.1.1.1")).held).toBe(true);
+  it("holds when a mechanism tried and failed to connect, with loopback only and no route", async () => {
+    const verdict = await probeOutboundHost(cellPrinting(`interfaces: lo\nroutes: 0\n${refused}`), "1.1.1.1");
+    expect(verdict.outcome).toBe("held");
+    expect(verdict.evidence).toContain("connect: bash-dev-tcp exit 1 (bash: connect: Network is unreachable)");
   });
 
-  it("does not hold on an empty or missing interface list: nothing was observed", async () => {
-    expect((await probeOutboundHost(cellPrinting(`interfaces:\n${isolated}`), "1.1.1.1")).held).toBe(false);
-    expect((await probeOutboundHost(cellPrinting(isolated), "1.1.1.1")).held).toBe(false);
+  it("is breached when any mechanism connected, whatever the others did", async () => {
+    const stdout = `interfaces: lo\nroutes: 0\n${refused}connect: wget exit 0\n`;
+    expect((await probeOutboundHost(cellPrinting(stdout), "1.1.1.1")).outcome).toBe("breached");
+  });
+
+  it("is unverifiable, never held, when the image has no mechanism to attempt a connection (W12 D3)", async () => {
+    const verdict = await probeOutboundHost(cellPrinting("interfaces: lo\nroutes: 0\nconnect: none\n"), "1.1.1.1");
+    expect(verdict.outcome).toBe("unverifiable");
+    expect(verdict.evidence).toContain("no connection mechanism in the image");
+    expect(summarizeProbes([verdict]).exitCode).toBe(1);
+  });
+
+  it("is unverifiable on an empty or missing interface list: nothing was observed", async () => {
+    expect((await probeOutboundHost(cellPrinting(`interfaces:\nroutes: 0\n${refused}`), "1.1.1.1")).outcome).toBe("unverifiable");
+    expect((await probeOutboundHost(cellPrinting(`routes: 0\n${refused}`), "1.1.1.1")).outcome).toBe("unverifiable");
+  });
+
+  it("is breached when a refused connect sits beside a non-loopback interface", async () => {
+    expect((await probeOutboundHost(cellPrinting(`interfaces: eth0 lo\nroutes: 1\n${refused}`), "1.1.1.1")).outcome).toBe("breached");
+  });
+});
+
+describe("summarizeProbes", () => {
+  it("passes only when every verdict held, and never on none", () => {
+    const held = { probe: "a", outcome: "held", evidence: "" } as const;
+    expect(summarizeProbes([held]).exitCode).toBe(0);
+    expect(summarizeProbes([held, { ...held, outcome: "unverifiable" }])).toEqual({
+      exitCode: 1,
+      summary: "1 of 2 probe(s) did not hold: 0 breached, 1 unverifiable.",
+    });
+    expect(summarizeProbes([]).exitCode).toBe(1);
   });
 });

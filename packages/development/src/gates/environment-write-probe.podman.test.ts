@@ -30,6 +30,6 @@ describe("environment-file write without the grant", () => {
 
     expect(verdict.evidence).toMatch(/^the in-cell write exited 0; the ownership gate returned environment_change \(/);
     expect(verdict.evidence).toContain("main's environment/Containerfile is unchanged");
-    expect(verdict.held).toBe(true);
+    expect(verdict.outcome).toBe("held");
   });
 });
