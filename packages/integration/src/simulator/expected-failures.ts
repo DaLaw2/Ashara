@@ -67,8 +67,9 @@ const B8 = "B8 (baseline §3, §7.8; task t-begin-failure-leaks-connection): a f
  */
 const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
   { seed: 28, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 31, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
-  { seed: 39, keys: ["I7:p2:unrecorded:Set up the product's layout", "I7:unrecorded:Set up the product's layout"], baseline: B5 },
+  // Removed on the batch-1 merge (2026-10-15, after t-simulator-parallel, t-oracle-independence, t-ddd-fix-*): the
+  // 80-seed soaks (`simulate.ts --seeds 80 --projects 1|2`) reported each listed but not failed; B3 and B5 are not fixed.
+  { seed: 39, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
   { seed: 46, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
@@ -79,12 +80,10 @@ const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "ca
 ];
 /** Two projects at the tape's own cap only (`--projects 2`): at $10 these seeds end with no violation. */
 const TWO_PROJECT_TAPE_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 77, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
 ];
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
   { seed: 7, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 57, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   // Seed 45 (B5, the crash on a host git call inside the merge, baseline §7.10) is removed on
   // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed,
   // with the re-roll above; B5 is not fixed. Seeds 81 and 89 fail B5's key with this change and on
