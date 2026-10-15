@@ -46,9 +46,11 @@ typecheck-full:
 test:
     npx vitest run
 
-# The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, one
-# at a time, each on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL
-# (default DATABASE_URL). Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
+# The lifecycle simulator's soak tier (story s-independent-verify-m1 L2): consecutive seeds, each
+# on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default
+# DATABASE_URL), run by `--jobs J` worker processes at once (default: the host's cores, at most 6;
+# at most 8; `--jobs 1` runs them in one process). Output and exit code are the serial run's, each
+# seed's lines in seed order. Bounded: at most 500 seeds, 120 cycles and 120 s per seed.
 # Example: just simulate --seeds 50 --start 100 --minimize
 simulate *ARGS:
     npx tsx scripts/simulate.ts {{ARGS}}

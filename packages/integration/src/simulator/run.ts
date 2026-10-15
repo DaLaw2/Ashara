@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
 import { ClientMessageRepository, ClientRepository, SecretRepository, createDb, createProjectWithTender } from "@ashara/db";
-import { execFileGitRunner, loadBaseCell } from "@ashara/execution-infra";
+import { loadBaseCell } from "@ashara/execution-infra";
 import { SecretStore, generateKeyFileContent, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
@@ -24,6 +24,7 @@ import { FakePodman } from "./fake-podman.js";
 import type { PodmanEvent } from "./fake-podman.js";
 import { GitDates, Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
 import type { FaultKind, FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
+import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
@@ -476,6 +477,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   let database: RunDatabase | null = null;
   let observer: Database | null = null;
   let instance: Live | null = null;
+  const gitBroker = new GitBroker();
   try {
     database = await createRunDatabase(options.databaseUrl, options.template, options.seed);
     const db = database;
@@ -578,7 +580,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             createPool: faultingPools(seam, instanceName(generation), planted?.queries ?? null),
             models: faultingModels(seam, standIns.factory),
             processRunner: faultingPodman(seam, podman.runner),
-            git: faultingGit(seam, execFileGitRunner),
+            git: faultingGit(seam, gitBroker.runner),
             clock,
             taskLanes: interleaver.lanes,
           });
@@ -810,6 +812,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
     if (observer !== null) await observer.$client.end();
     if (database !== null) await database.drop();
+    gitBroker.close();
     restoreCode?.();
     restoreSweeps();
     restoreWaits();

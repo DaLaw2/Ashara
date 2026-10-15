@@ -120,6 +120,19 @@ export async function dropStaleRunDatabases(baseUrl: string): Promise<string[]> 
   });
 }
 
+/** Run databases of a process known dead (a killed `--jobs` worker): its own cleanup never ran. */
+export async function dropRunDatabasesOf(baseUrl: string, pid: number): Promise<string[]> {
+  return withAdmin(baseUrl, async (admin) => {
+    const dropped: string[] = [];
+    for (const name of await databaseNames(admin, RUN_PREFIX)) {
+      if (/^ashara_sim_r_\d+_(\d+)_\d+$/.exec(name)?.[1] !== String(pid)) continue;
+      await dropDatabase(admin, name);
+      dropped.push(name);
+    }
+    return dropped;
+  });
+}
+
 let runCounter = 0;
 
 export interface RunDatabase {

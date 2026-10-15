@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { DevelopmentService, EXECUTION_STATUSES } from "@ashara/development";
 import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
@@ -95,6 +96,21 @@ const COVERAGE_KEYS = [
   "sweeps",
   "halts",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
+
+const coverageSet = z.set(z.string());
+
+/** A Coverage that crossed a process boundary (simulate.ts --jobs): read back, never trusted. */
+export const CoverageSchema = z.strictObject({
+  transitions: coverageSet,
+  blockedSources: coverageSet,
+  projectStatuses: coverageSet,
+  blockKinds: coverageSet,
+  executionStatuses: coverageSet,
+  faults: coverageSet,
+  concurrency: coverageSet,
+  sweeps: coverageSet,
+  halts: coverageSet,
+}) satisfies z.ZodType<Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
   for (const key of COVERAGE_KEYS) for (const value of from[key]) into[key].add(value);
