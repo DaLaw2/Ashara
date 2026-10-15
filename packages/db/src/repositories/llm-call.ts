@@ -159,6 +159,12 @@ export class LlmCallRepository {
    * At startup, before any call is admitted: every row still pending was admitted by a process
    * that ended before recording it. The call may have been sent and its cost is unknown, so the
    * row stays counted at its estimate, marked unmeasured_after_crash. Returns how many.
+   *
+   * Every pending row of the database, not only this process's targets: it assumes one server
+   * process per database, as the work-item reconcile does (startup-reconciler.ts itemsByProject
+   * requeues every InProgress item of every project) and the deployment cap does (it sums the whole
+   * table). A second live process on the same database would see its in-flight rows relabelled;
+   * they stay counted at their estimate and its record still completes them.
    */
   async markPendingUnmeasuredAfterCrash(): Promise<number> {
     const result = await this.db.execute(sql`

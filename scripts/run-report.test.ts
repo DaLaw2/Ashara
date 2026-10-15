@@ -285,4 +285,20 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
     expect(report.text).toContain("UNTIED: 3 llm_calls row(s) on this task and 1 session(s) without a recorded attempt");
     expect(report.text).toContain("6 dev session(s), 1 with a recorded attempt, 5 without; 1 task(s) UNTIED");
   });
+
+  test("a call admitted and never recorded is told apart from a recorded call whose cost is unknown", async () => {
+    const [, idleTaskId] = taskIds;
+    if (idleTaskId === undefined) throw new Error("tasks not created");
+    for (const state of ["pending", "unmeasured_after_crash"]) {
+      await db.execute(sql`
+        INSERT INTO llm_calls (id, project_id, task_id, call_site, provider, model, estimated_cost_usd, state)
+        VALUES (${randomUUID()}, ${projectId}, ${idleTaskId}, 'attempt', 'deepseek', 'deepseek-scripted', 0.5, ${state})`);
+    }
+    const evidence = await readRunEvidence(db, projectId);
+    expect(evidence.calls.find((c) => c.taskId === idleTaskId)).toMatchObject({ calls: 2, measuredCalls: 0, pendingCalls: 1, lostCalls: 1 });
+    // The run's totals hold the earlier test's recorded call with no measured cost as well.
+    expect(formatRunReport(evidence).text).toContain(
+      "1 admitted and not yet recorded, 1 admitted by a process that ended before recording them, 1 recorded with no cost measured)",
+    );
+  });
 });

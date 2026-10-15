@@ -66,6 +66,8 @@ const CallTotalsRowSchema = z.object({
   measuredCalls: count,
   measuredUsd: usd,
   unmeasuredEstimateUsd: usd,
+  pendingCalls: count,
+  lostCalls: count,
   zeroCostCalls: count,
   cacheCountedCalls: count,
   inputTokens: count,
@@ -102,8 +104,11 @@ interface SessionEvidence {
 }
 
 /**
- * One task's (or, with taskId null, the project's own) llm_calls of one provider. `zeroCostCalls`
- * counts rows priced at exactly $0, which the ledger must never write; `cacheCountedCalls` are the
+ * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
+ * row is one of three (migration 053): `pendingCalls` admitted and not yet recorded, `lostCalls`
+ * admitted by a process that ended before recording them (unmeasured_after_crash), and the rest
+ * recorded with no cost measured. `zeroCostCalls` counts rows priced at exactly $0, which the
+ * ledger must never write; `cacheCountedCalls` are the
  * rows reporting both input and cache-read tokens, the only ones a cache-hit share is taken over.
  */
 type CallTotals = z.infer<typeof CallTotalsRowSchema>;
@@ -197,6 +202,8 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
            COUNT(cost_usd)::int AS "measuredCalls",
            COALESCE(SUM(cost_usd), 0)::float8 AS "measuredUsd",
            COALESCE(SUM(estimated_cost_usd) FILTER (WHERE cost_usd IS NULL), 0)::float8 AS "unmeasuredEstimateUsd",
+           COUNT(*) FILTER (WHERE state = 'pending')::int AS "pendingCalls",
+           COUNT(*) FILTER (WHERE state = 'unmeasured_after_crash')::int AS "lostCalls",
            COUNT(*) FILTER (WHERE cost_usd = 0)::int AS "zeroCostCalls",
            COUNT(*) FILTER (WHERE input_tokens IS NOT NULL AND cache_read_tokens IS NOT NULL)::int AS "cacheCountedCalls",
            COALESCE(SUM(input_tokens) FILTER (WHERE cache_read_tokens IS NOT NULL), 0)::bigint AS "inputTokens",

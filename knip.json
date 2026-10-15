@@ -12,6 +12,11 @@
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false
     },
+    "packages/integration": {
+      "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+      "vitest": false,
+      "ignoreDependencies": ["@ashara/finance"]
+    },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false

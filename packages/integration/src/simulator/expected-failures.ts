@@ -1,4 +1,5 @@
 import { profileOfSeed } from "./profile.js";
+import type { Profile } from "./profile.js";
 import type { RunMode, RunResult } from "./run.js";
 
 /**
@@ -7,12 +8,14 @@ import type { RunMode, RunResult } from "./run.js";
  * defect (docs/investigations/simulator-baseline-2026-10-14.md). A seed here must fail exactly
  * these keys: a new violation in a known-failing seed, even of an invariant it already fails, is
  * unexpected, and a fix makes the seed fail its test until its entry is removed, so a known
- * failure can neither hide a new one nor outlive its fix. Every entry was observed under its seed's
- * own profile (profile.ts profileOfSeed), so it applies only to a run under that profile: the
+ * failure can neither hide a new one nor outlive its fix. An entry applies only to a run under the
+ * profile it was observed under, its seed's own (profile.ts profileOfSeed) unless it names one: the
  * profile chooses the faults, and under another one the seed is a different run with no entry.
  */
 interface ExpectedFailure {
   readonly seed: number;
+  /** The profile the failure was observed under (`--profile`); the seed's own when absent. */
+  readonly profile?: Profile;
   /** The run mode the seed fails in (RunOptions.projects, RunOptions.capUsd); one project and the tape's cap when absent. */
   readonly projects?: 1 | 2;
   readonly capUsd?: number;
@@ -89,6 +92,20 @@ const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
   // --start 81` and `--start 89` on each, 2026-10-15): unlisted before, not introduced by it.
   { seed: 81, keys: ["I7:unrecorded:Deliver b1, b2 [sim t1]"], baseline: B5 },
   { seed: 89, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
+  // Re-rolled on t-ddd-fix-durable-reservation (2026-10-15): an admission now writes its call's
+  // llm_calls row and a record updates it, two more db seams per call, and seed 10 under the
+  // typical profile (`just simulate --seeds 10 --profile typical`) now crashes and then draws a
+  // db-query-failed on the startup reconciler's work_items requeue UPDATE. Observed with
+  // `simulate.ts --seeds 1 --start 10 --profile typical`: exit 1 with these keys, and the trace's
+  // "failed to requeue crash-orphaned InProgress item"; on master f6655789 the same run ends
+  // accepted with 0 restarts. B3 names the dev_sessions read; the UPDATE is the same window, a
+  // fault anywhere in requeueOrphan (startup-reconciler.ts) leaves the orphan InProgress.
+  {
+    seed: 10,
+    profile: "typical",
+    keys: ["I1:open", 'I7:orphan:Write the checks for "Deliver b1, b2, b3, b4 [sim t1]":1', "I8:InProgress", "I8:Pending"],
+    baseline: B3,
+  },
   ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
   ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_TAPE_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2 }) as const),
   // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it
@@ -96,10 +113,15 @@ const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
   // seed no longer reaches its window (which of master's three commits re-rolled it: unverified).
 ];
 
-/** The entry of one run, if it has one: its seed under the seed's own profile, in its run mode. */
+/** The entry of one run, if it has one: its seed under the entry's profile, in its run mode. */
 function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): ExpectedFailure | undefined {
-  if (run.profile !== profileOfSeed(run.seed)) return undefined;
-  return EXPECTED_FAILURES.find((entry) => entry.seed === run.seed && (entry.projects ?? 1) === (mode.projects ?? 1) && entry.capUsd === mode.capUsd);
+  return EXPECTED_FAILURES.find(
+    (entry) =>
+      entry.seed === run.seed &&
+      (entry.profile ?? profileOfSeed(entry.seed)) === run.profile &&
+      (entry.projects ?? 1) === (mode.projects ?? 1) &&
+      entry.capUsd === mode.capUsd,
+  );
 }
 
 /** How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer fails. */

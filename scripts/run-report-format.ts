@@ -14,6 +14,8 @@ interface Totals {
   measuredCalls: number;
   measuredUsd: number;
   unmeasuredEstimateUsd: number;
+  pendingCalls: number;
+  lostCalls: number;
   zeroCostCalls: number;
   cacheCountedCalls: number;
   inputTokens: number;
@@ -21,7 +23,7 @@ interface Totals {
 }
 
 function emptyTotals(): Totals {
-  return { calls: 0, measuredCalls: 0, measuredUsd: 0, unmeasuredEstimateUsd: 0, zeroCostCalls: 0, cacheCountedCalls: 0, inputTokens: 0, cacheReadTokens: 0 };
+  return { calls: 0, measuredCalls: 0, measuredUsd: 0, unmeasuredEstimateUsd: 0, pendingCalls: 0, lostCalls: 0, zeroCostCalls: 0, cacheCountedCalls: 0, inputTokens: 0, cacheReadTokens: 0 };
 }
 
 function addTo(sum: Totals, row: Totals): void {
@@ -29,6 +31,8 @@ function addTo(sum: Totals, row: Totals): void {
   sum.measuredCalls += row.measuredCalls;
   sum.measuredUsd += row.measuredUsd;
   sum.unmeasuredEstimateUsd += row.unmeasuredEstimateUsd;
+  sum.pendingCalls += row.pendingCalls;
+  sum.lostCalls += row.lostCalls;
   sum.zeroCostCalls += row.zeroCostCalls;
   sum.cacheCountedCalls += row.cacheCountedCalls;
   sum.inputTokens += row.inputTokens;
@@ -51,11 +55,22 @@ function cacheShare(t: Totals): string {
   );
 }
 
+/** Which unmeasured calls never returned to their record: an admitted call is not a call with an unknown price. */
+function unmeasuredDetail(t: Totals, unmeasured: number): string {
+  const parts = [
+    ...(t.pendingCalls > 0 ? [`${t.pendingCalls} admitted and not yet recorded`] : []),
+    ...(t.lostCalls > 0 ? [`${t.lostCalls} admitted by a process that ended before recording them`] : []),
+  ];
+  const returned = unmeasured - t.pendingCalls - t.lostCalls;
+  if (parts.length === 0) return "";
+  return `: ${[...parts, ...(returned > 0 ? [`${returned} recorded with no cost measured`] : [])].join(", ")}`;
+}
+
 function costLine(t: Totals): string {
   const unmeasured = t.calls - t.measuredCalls;
   return (
     `${t.calls} call(s), cost measured on ${t.measuredCalls}/${t.calls}: ${usd(t.measuredUsd)}` +
-    `${unmeasured > 0 ? `; ${unmeasured} unmeasured (worst-case estimate ${usd(t.unmeasuredEstimateUsd)})` : ""}` +
+    `${unmeasured > 0 ? `; ${unmeasured} unmeasured (worst-case estimate ${usd(t.unmeasuredEstimateUsd)}${unmeasuredDetail(t, unmeasured)})` : ""}` +
     `${t.zeroCostCalls > 0 ? `; ${t.zeroCostCalls} PRICED AT $0` : ""}`
   );
 }
