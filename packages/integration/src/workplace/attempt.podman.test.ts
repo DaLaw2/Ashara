@@ -8,8 +8,8 @@ import { PodmanSubstrate, createCellBackend, loadBaseCell } from "@ashara/execut
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LlmCallRecorder, LlmProviderCall, ModelConfig } from "@ashara/llm-gateway";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
-import { runAttempt } from "./attempt.js";
-import type { AttemptRecord } from "./records.js";
+import { runAttempt } from "@ashara/workplace";
+import type { AttemptRecord } from "@ashara/workplace";
 
 // Real podman cell from the BaseCell image, real gateway, mock model: no real LLM call, no skip
 // (CI rejects skipped tests). The recorder is in memory: it counts the rows the gateway would write.

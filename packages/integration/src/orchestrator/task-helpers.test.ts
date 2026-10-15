@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { resolveTargetProjectPath } from "@ashara/orchestrator";
 import { parseProjectId } from "@ashara/shared";
-import { resolveTargetProjectPath } from "./task-helpers.js";
 
 // Against the shared dev database: every row here is created under a unique name
 // and deleted in afterAll.

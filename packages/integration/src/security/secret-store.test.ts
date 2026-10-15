@@ -1,9 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
-import { EmptySecretValue, InvalidSecretName, SecretKeyMismatch, SecretNotFound } from "./errors.js";
-import { MasterKey } from "./master-key.js";
-import { SecretStore } from "./secret-store.js";
+import { EmptySecretValue, InvalidSecretName, MasterKey, SecretKeyMismatch, SecretNotFound, SecretStore } from "@ashara/security";
 
 // Runs against the shared dev database: every row this suite writes carries a
 // unique prefix, and only rows under that prefix are deleted afterwards.

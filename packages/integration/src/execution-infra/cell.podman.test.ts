@@ -7,11 +7,15 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { loadBaseCell } from "./base-cell.js";
-import { createCellBackend } from "./cell-backend.js";
-import { BaseCellConfigInvalid, CellExecFailed, SubstrateUnavailable } from "./errors.js";
-import { runHostGit } from "./host-git.js";
-import { PodmanSubstrate } from "./podman.js";
+import {
+  BaseCellConfigInvalid,
+  CellExecFailed,
+  PodmanSubstrate,
+  SubstrateUnavailable,
+  createCellBackend,
+  loadBaseCell,
+  runHostGit,
+} from "@ashara/execution-infra";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
 // absent reports the same green as one that ran.

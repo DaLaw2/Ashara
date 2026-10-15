@@ -91,7 +91,7 @@ jobs:
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium
 
-      # packages/execution-infra/src/cell.podman.test.ts runs real cells, never skipped. ubuntu-latest
+      # packages/integration/src/execution-infra/cell.podman.test.ts runs real cells, never skipped. ubuntu-latest
       # (24.04) lists Podman 4.9.3 in its runner image; catatonit backs `podman run --init` and is
       # installed explicitly rather than assumed. Cells run with --pull=never, so the pinned BaseCell
       # image is pulled here, by the reference config/base-cell.toml names.
@@ -104,11 +104,11 @@ jobs:
           test -n "$image"
           podman pull "$image"
           # The busybox cell cell.podman.test.ts runs beside the BaseCell, by the reference it names.
-          alpine="$(sed -n 's/^const ALPINE_IMAGE = "\(.*\)";$/\1/p' packages/execution-infra/src/cell.podman.test.ts)"
+          alpine="$(sed -n 's/^const ALPINE_IMAGE = "\(.*\)";$/\1/p' packages/integration/src/execution-infra/cell.podman.test.ts)"
           test -n "$alpine"
           podman pull "$alpine"
           # The cell with a git client cell.podman.test.ts runs to read a cell's own repository, by the reference it names.
-          gitimage="$(sed -n 's/^const GIT_IMAGE = "\(.*\)";$/\1/p' packages/execution-infra/src/cell.podman.test.ts)"
+          gitimage="$(sed -n 's/^const GIT_IMAGE = "\(.*\)";$/\1/p' packages/integration/src/execution-infra/cell.podman.test.ts)"
           test -n "$gitimage"
           podman pull "$gitimage"
 

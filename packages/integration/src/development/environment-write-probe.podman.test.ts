@@ -3,8 +3,8 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { probeEnvironmentWrite } from "@ashara/development";
 import { PodmanSubstrate } from "@ashara/execution-infra";
-import { probeEnvironmentWrite } from "./environment-write-probe.js";
 
 // Roadmap M2 exit 6, the third probe (ADR-074 d82 W9): real podman, real git, no skip.
 

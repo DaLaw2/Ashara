@@ -3,9 +3,14 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { probeCredentialRead, probeOutboundHost, probeResourceCaps } from "./cell-probes.js";
-import { PodmanSubstrate, type Cell } from "./podman.js";
-import { WORKSPACE_ROOT } from "./workspace-path.js";
+import {
+  PodmanSubstrate,
+  WORKSPACE_ROOT,
+  probeCredentialRead,
+  probeOutboundHost,
+  probeResourceCaps,
+  type Cell,
+} from "@ashara/execution-infra";
 
 // Roadmap M2 exit 6 (ADR-074 d82 W9), from inside a real cell on real podman, no skip. The
 // environment-file write probe needs the ownership gate and lives in packages/development.

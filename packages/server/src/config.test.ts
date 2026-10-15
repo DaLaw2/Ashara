@@ -7,7 +7,7 @@ const TEST_TOKEN = "test-token";
 
 // Finding (a), E2E Run 11: the owner's cap must reach Finance's deployment cap
 // whichever of its two names the owner set. Finance's enforcement of it is
-// tested against llm_calls in packages/finance/src/spend-cap.test.ts.
+// tested against llm_calls in packages/integration/src/finance/spend-cap.test.ts.
 describe("loadServerConfig — budget cap plumbing (finding a)", () => {
   const saved: Record<string, string | undefined> = {};
   const KEYS = [

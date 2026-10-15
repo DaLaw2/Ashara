@@ -4,11 +4,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { BudgetExceeded, LlmCallLedger, SpendCap, UnpricedModel } from "@ashara/finance";
 import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
-import { BudgetExceeded, UnpricedModel } from "./errors.js";
-import { LlmCallLedger } from "./llm-call-ledger.js";
-import { SpendCap } from "./spend-cap.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
