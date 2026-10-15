@@ -23,6 +23,9 @@
  * is itself a violation, so the list never grows past what is used (ADR-081: a simulator oracle
  * never imports the production predicate it judges).
  *
+ * It also fails on a default on a price or cost column of packages/db/src/schema.ts
+ * (scripts/price-defaults.ts).
+ *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
  *
@@ -32,6 +35,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describeErrorChain } from "@ashara/shared";
+import { findPriceColumnDefaults } from "./price-defaults.js";
 
 // ---------------------------------------------------------------------------
 // TOML parser (minimal: [section] headers, `allow = [...]`, `restrict.x = [...]`)
@@ -506,6 +510,19 @@ function main(): void {
         }
       }
     }
+  }
+
+  // Not an import rule, run here so `just check` keeps its four steps: a price column with a
+  // default reads an insert that forgot the rate as a free model (scripts/price-defaults.ts).
+  const schemaPath = path.join(packagesDir, "db", "src", "schema.ts");
+  for (const found of findPriceColumnDefaults(fs.readFileSync(schemaPath, "utf-8"))) {
+    violations.push({
+      file: path.relative(root, schemaPath),
+      line: found.line,
+      fromPkg: "db",
+      specifier: found.column,
+      reason: `a price or cost column has a default; every writer must supply the rate (${found.text})`,
+    });
   }
 
   // Report

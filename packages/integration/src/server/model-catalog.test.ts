@@ -220,7 +220,7 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
           models: catalog.filter((m) => m.provider === name),
           enabled: true,
         })),
-        defaultProvider: providerNames[0] ?? "none",
+        defaultProvider: providerNames.length > 0 ? providerNames[0] : null,
         routingProfiles: withProfiles ? loadRoutingProfilesFromToml(resolveModelsConfigPath()) : {},
       },
       checkedSources: ["test"],

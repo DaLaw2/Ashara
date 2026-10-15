@@ -313,9 +313,10 @@ export const modelConfigs = pgTable("model_configs", {
     .references(() => providerConfigs.name),
   apiModelId: text("api_model_id"),
   capability: text().notNull(),
-  inputCostPer1m: doublePrecision("input_cost_per_1m").notNull().default(0),
-  outputCostPer1m: doublePrecision("output_cost_per_1m").notNull().default(0),
-  maxContextTokens: integer("max_context_tokens").notNull().default(128000),
+  // No defaults (migration 054): a forgotten price would read as a free model, a forgotten window as a measured one.
+  inputCostPer1m: doublePrecision("input_cost_per_1m").notNull(),
+  outputCostPer1m: doublePrecision("output_cost_per_1m").notNull(),
+  maxContextTokens: integer("max_context_tokens").notNull(),
   cacheReadCostPer1m: doublePrecision("cache_read_cost_per_1m"),
   cacheWriteCostPer1m: doublePrecision("cache_write_cost_per_1m"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),

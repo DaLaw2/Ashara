@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { InvalidRoutingProfiles } from "./errors.js";
+import { InvalidRoutingProfiles, ModelsConfigUnreadable } from "./errors.js";
 import { loadRoutingProfilesFromToml } from "./routing-profiles.js";
 
 function writeToml(body: string): string {
@@ -40,7 +40,9 @@ describe("loadRoutingProfilesFromToml", () => {
     });
   });
 
-  test("degrades to no profiles when the file is absent", () => {
-    expect(loadRoutingProfilesFromToml(join(tmpdir(), "ashara-absent-models.toml"))).toEqual({});
+  test("a file with no [routing.profiles] block is no profiles; an absent or non-TOML file is refused", () => {
+    expect(loadRoutingProfilesFromToml(writeToml(`[thinking]\ndefault = "off"\n`))).toEqual({});
+    expect(() => loadRoutingProfilesFromToml(join(tmpdir(), "ashara-absent-models.toml"))).toThrow(ModelsConfigUnreadable);
+    expect(() => loadRoutingProfilesFromToml(writeToml("not = [toml"))).toThrow(ModelsConfigUnreadable);
   });
 });

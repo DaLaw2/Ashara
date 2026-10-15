@@ -74,7 +74,8 @@ export interface LadderAttemptEvent {
   /** 1-based across the whole ladder (all tiers). */
   readonly attempt: number;
   readonly capability: CapabilityLevel;
-  readonly model: string;
+  /** Null for an invalid attempt whose failure named no model. */
+  readonly model: string | null;
   readonly outcome: "valid" | "invalid";
   readonly errors?: readonly string[];
   readonly rawExcerpt?: string;
@@ -93,7 +94,8 @@ interface LadderResult<T> {
 
 interface LadderModelAttempts {
   readonly capability: CapabilityLevel;
-  readonly model: string;
+  /** Null when no attempt at this tier reported the model it reached. */
+  readonly model: string | null;
   readonly attempts: number;
   readonly errors: readonly string[];
 }
@@ -125,7 +127,7 @@ export class StructuredOutputExhausted extends GatewayError {
     unavailableEscalation: UnavailableEscalation | null,
   ) {
     const models = perModel
-      .map((m) => `${m.capability}/${m.model} x${m.attempts}`)
+      .map((m) => `${m.capability}/${m.model ?? "no model reported"} x${m.attempts}`)
       .join(", ");
     const escalation = unavailableEscalation
       ? `; escalation to ${unavailableEscalation.capability} unavailable: ${unavailableEscalation.reason}`
@@ -213,7 +215,7 @@ async function runLadderCore<T>(
   let lastErrors: readonly string[] = [];
 
   for (const [tierIndex, capability] of tiers.entries()) {
-    let tierModel = "unknown";
+    let tierModel: string | null = null;
     let tierErrors: readonly string[] = [];
 
     for (let i = 0; i < deps.attempts; i++) {
@@ -311,8 +313,8 @@ interface StructuredProviderRequest<T> {
 
 interface StructuredProviderResult<T> {
   readonly data: T;
-  readonly model?: string;
-  readonly provider?: string;
+  readonly model: string;
+  readonly provider: string;
 }
 
 export interface StructuredProvider {
@@ -406,8 +408,8 @@ export function withStructuredLadder(
               return {
                 ok: true,
                 value: response.data,
-                model: response.model ?? "structured",
-                provider: response.provider ?? "structured",
+                model: response.model,
+                provider: response.provider,
               };
             } catch (err) {
               if (err instanceof SchemaValidationError) {

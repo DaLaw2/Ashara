@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { loadServerConfig, loadDatabaseUrl } from "./config.js";
@@ -8,13 +9,16 @@ const TEST_TOKEN = "test-token";
 // Finding (a), E2E Run 11: the owner's cap must reach Finance's deployment cap
 // whichever of its two names the owner set. Finance's enforcement of it is
 // tested against llm_calls in packages/integration/src/finance/spend-cap.test.ts.
-describe("loadServerConfig — budget cap plumbing (finding a)", () => {
+describe("loadServerConfig — budget cap plumbing (finding a) and settings that fail closed", () => {
   const saved: Record<string, string | undefined> = {};
   const KEYS = [
     "DATABASE_URL",
     "ASHARA_BUDGET_LIMIT_USD",
     "ASHARA_BUDGET_TOTAL",
     "ASHARA_PROJECT_BUDGET_LIMIT_USD",
+    "WORKDIR_BASE",
+    "ASHARA_PORT",
+    "MAX_BATCH_SIZE",
   ] as const;
 
   beforeEach(() => {
@@ -22,6 +26,9 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     delete process.env["ASHARA_BUDGET_LIMIT_USD"];
     delete process.env["ASHARA_BUDGET_TOTAL"];
     delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
+    delete process.env["ASHARA_PORT"];
+    delete process.env["MAX_BATCH_SIZE"];
+    process.env["WORKDIR_BASE"] = "/srv/ashara-work";
   });
 
   afterEach(() => {
@@ -71,6 +78,38 @@ describe("loadServerConfig — budget cap plumbing (finding a)", () => {
     expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).spendCaps.perProjectUsd).toBe(0.5);
     process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"] = "none";
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_BUDGET_LIMIT_USD="none"/);
+  });
+
+  test("unset ASHARA_PORT and MAX_BATCH_SIZE take their policy defaults; set ones are read", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    const defaults = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
+    expect([defaults.port, defaults.coreLoop.maxBatchSize]).toEqual([3000, 2]);
+    process.env["ASHARA_PORT"] = "8080";
+    process.env["MAX_BATCH_SIZE"] = "4";
+    const set = loadServerConfig(TEST_DB_URL, TEST_TOKEN);
+    expect([set.port, set.coreLoop.maxBatchSize]).toEqual([8080, 4]);
+  });
+
+  test.each([
+    ["ASHARA_PORT", "80a"],
+    ["ASHARA_PORT", "0"],
+    ["ASHARA_PORT", "70000"],
+    ["MAX_BATCH_SIZE", "two"],
+    ["MAX_BATCH_SIZE", "0"],
+    ["MAX_BATCH_SIZE", "-1"],
+    ["MAX_BATCH_SIZE", "1.5"],
+  ])("a set but unusable %s=%s is refused, never replaced by the default", (variable, raw) => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    process.env[variable] = raw;
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(`${variable}="${raw}" is not an integer`);
+  });
+
+  test("WORKDIR_BASE has no default: unset refuses to start", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    delete process.env["WORKDIR_BASE"];
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/WORKDIR_BASE is not set/);
+    process.env["WORKDIR_BASE"] = "relative-work";
+    expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).coreLoop.workdirBase).toBe(join(process.cwd(), "relative-work"));
   });
 });
 

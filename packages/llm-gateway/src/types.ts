@@ -49,7 +49,8 @@ export type RoutingProfiles = Record<string, Partial<Record<KnownLLMSite, Routin
 
 export interface GatewayConfig {
   providers: ProviderConfig[];
-  defaultProvider: string;
+  /** Searched first in capability routing; null only with zero providers, which `buildGateway` refuses. */
+  defaultProvider: string | null;
   /** Static per-site routing playbooks, keyed by enabled-provider combo. */
   routingProfiles?: RoutingProfiles;
   /**

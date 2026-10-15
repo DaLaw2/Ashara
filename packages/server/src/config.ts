@@ -1,5 +1,5 @@
 import path from "node:path";
-import os from "node:os";
+import { z } from "zod";
 import type { CoreLoopConfig } from "@ashara/orchestrator";
 import { DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
@@ -39,21 +39,49 @@ class InvalidBudgetLimit extends Error {
   }
 }
 
+/** A server setting that is unset with no default, or set to a value it cannot take. */
+class InvalidServerSetting extends Error {
+  constructor(
+    public readonly variable: string,
+    public readonly raw: string | undefined,
+    public readonly expected: string,
+  ) {
+    super(
+      raw === undefined
+        ? `${variable} is not set; expected ${expected}`
+        : `${variable}="${raw}" is not ${expected}`,
+    );
+    this.name = "InvalidServerSetting";
+  }
+}
+
 export function loadDatabaseUrl(): string {
   return process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
 }
 
 export function loadServerConfig(databaseUrl: string, apiToken: string): ServerConfig {
 
-  const port = parseIntOr(process.env["ASHARA_PORT"], 3000);
+  // Policy default: unset, the web client listens on 3000 (README). A wrong port is seen at once,
+  // and the number flows into no verdict; a set but unusable one is refused, never replaced.
+  const rawPort = nonEmptyEnv("ASHARA_PORT");
+  const port = rawPort === undefined ? 3000 : parseIntegerSetting("ASHARA_PORT", rawPort, 1, 65535);
 
-  const workdirBaseRaw = process.env["WORKDIR_BASE"]
-    ?? path.join(os.tmpdir(), "ashara-work");
-  const workdirBase = path.isAbsolute(workdirBaseRaw)
-    ? workdirBaseRaw
-    : path.resolve(workdirBaseRaw);
+  // No default: projects, their worktrees and the pipeline log live here, and the database keeps
+  // pointing at them after a restart. A temp directory would answer "is this kept?" with a guess
+  // the operator never made, and a reboot may clear it.
+  const workdirBaseRaw = nonEmptyEnv("WORKDIR_BASE");
+  if (workdirBaseRaw === undefined) {
+    throw new InvalidServerSetting("WORKDIR_BASE", undefined, "the directory where projects are kept");
+  }
+  const workdirBase = path.resolve(workdirBaseRaw);
 
-  const maxBatchSize = parseIntOr(process.env["MAX_BATCH_SIZE"], 2);
+  // Policy default: unset, the loop's own batch size (DEFAULT_CONFIG). It sets throughput only;
+  // a set but unusable one is refused, never replaced.
+  const rawBatchSize = nonEmptyEnv("MAX_BATCH_SIZE");
+  const maxBatchSize =
+    rawBatchSize === undefined
+      ? DEFAULT_CONFIG.maxBatchSize
+      : parseIntegerSetting("MAX_BATCH_SIZE", rawBatchSize, 1, Number.MAX_SAFE_INTEGER);
   // Finding (a), E2E Run 11: the owner's $1 cap lived in ASHARA_BUDGET_TOTAL
   // while the enforcing cap read only ASHARA_BUDGET_LIMIT_USD, and the run
   // over-ran to $1.08. Both names set the one deployment cap, the dedicated
@@ -99,10 +127,12 @@ function nonEmptyEnv(key: string): string | undefined {
   return value;
 }
 
-function parseIntOr(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+const DecimalInteger = z.string().trim().regex(/^\d+$/).transform(Number);
+
+function parseIntegerSetting(variable: string, raw: string, min: number, max: number): number {
+  const parsed = DecimalInteger.pipe(z.number().int().min(min).max(max)).safeParse(raw);
+  if (!parsed.success) throw new InvalidServerSetting(variable, raw, `an integer from ${min} to ${max}`);
+  return parsed.data;
 }
 
 // An owner-set cap that does not parse is not consent to the default: a typo must

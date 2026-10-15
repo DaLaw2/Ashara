@@ -467,14 +467,14 @@ describe("DecompositionEngine", () => {
         const provider: StructuredProvider = {
             async generateStructured(request) {
                 if (request.prompt.includes("structured knowledge graph")) {
-                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake" };
+                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake", provider: "fake" };
                 }
                 taskPrompts.push(request.prompt);
                 const parsed = request.schema.safeParse(answers[taskPrompts.length - 1]);
                 if (!parsed.success) {
                     throw new SchemaValidationError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`), "fake");
                 }
-                return { data: parsed.data, model: "fake" };
+                return { data: parsed.data, model: "fake", provider: "fake" };
             },
         };
         const result = await new DecompositionEngine(createGatewayDecompositionLLM(provider)).decompose(INPUT);
@@ -489,7 +489,7 @@ describe("DecompositionEngine", () => {
         const provider: StructuredProvider = {
             async generateStructured(request) {
                 if (request.prompt.includes("structured knowledge graph")) {
-                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake" };
+                    return { data: request.schema.parse({ nodes: [], edges: [] }), model: "fake", provider: "fake" };
                 }
                 const parsed = request.schema.safeParse({ tasks: [task("t1", { capability: undefined })] });
                 if (parsed.success) throw new Error("the schema accepted a task without a grade");

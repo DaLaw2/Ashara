@@ -1,8 +1,8 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test, vi } from "vitest";
-import { InvalidThinkingPolicy } from "./errors.js";
+import { describe, expect, test } from "vitest";
+import { InvalidThinkingPolicy, ModelsConfigUnreadable } from "./errors.js";
 import { loadThinkingPolicyFromToml, outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 
@@ -33,11 +33,9 @@ describe("loadThinkingPolicyFromToml", () => {
     }
   });
 
-  test("no [thinking] table, or no file, is thinking off everywhere (ADR-074 D13)", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  test("no [thinking] table is thinking off everywhere (ADR-074 D13); no file is refused, never read as off", () => {
     expect(loadThinkingPolicyFromToml(writeToml(`[routing.profiles."deepseek"]\n`))).toEqual({ default: "off", sites: {} });
-    expect(loadThinkingPolicyFromToml(join(tmpdir(), "ashara-absent-thinking.toml"))).toEqual({ default: "off", sites: {} });
-    warn.mockRestore();
+    expect(() => loadThinkingPolicyFromToml(join(tmpdir(), "ashara-absent-thinking.toml"))).toThrow(ModelsConfigUnreadable);
   });
 
   test("the repo's config/models.toml turns thinking on at every routing site but suite-review (ADR-074 item 83 a, d95 b)", () => {

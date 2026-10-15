@@ -77,7 +77,7 @@ function scripted(answers: unknown[], prompts: string[] = []): ContextualLlm {
         const answer = answers[Math.min(next, answers.length - 1)];
         next++;
         if (answer instanceof Error) throw answer;
-        return { data: request.schema.parse(answer) };
+        return { data: request.schema.parse(answer), model: "stub-model", provider: "stub" };
       },
     }),
   };

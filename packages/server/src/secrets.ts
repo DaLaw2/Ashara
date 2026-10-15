@@ -68,7 +68,11 @@ interface ProviderRow {
   readonly baseUrl: string | null;
 }
 
-/** A provider with no stored key gets no apiKey; buildGatewayConfig then leaves it out. */
+/**
+ * A provider with no stored key gets no apiKey, logged at warn naming the secret; buildGatewayConfig
+ * then leaves it out unless it is a local one with a base URL. Storing the key is how the owner
+ * enables a provider (policy), so absence is not an error here.
+ */
 export async function resolveProviderCredentials(
   secrets: SecretReader,
   providers: readonly ProviderRow[],
@@ -77,6 +81,9 @@ export async function resolveProviderCredentials(
   for (const provider of providers) {
     const secretName = providerApiKeySecretName(provider.name);
     const apiKey = (await secrets.has(secretName)) ? await secrets.get(secretName) : undefined;
+    if (apiKey === undefined) {
+      console.warn(`[Secrets] provider "${provider.name}" has no stored key at ${secretName}; it is enabled only if it needs none`);
+    }
     credentials.push({ name: provider.name, providerType: provider.providerType, apiKey, baseUrl: provider.baseUrl });
   }
   return credentials;

@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
-import { InvalidThinkingPolicy } from "./errors.js";
+import { InvalidThinkingPolicy, ModelsConfigUnreadable } from "./errors.js";
 import { KNOWN_LLM_SITES, THINKING_MODES } from "./types.js";
 import type { KnownLLMSite, ProviderType, ThinkingMode, ThinkingPolicy } from "./types.js";
 
@@ -21,21 +20,17 @@ const ThinkingTableSchema = z
 const TomlThinkingRootSchema = z.object({ thinking: z.unknown().optional() });
 
 /**
- * Reads the `[thinking]` table of a models.toml file. A missing or unparseable
- * file, or a file with no `[thinking]` table, is thinking off everywhere, the
- * same convention `loadRoutingProfilesFromToml` follows for this file; a table
- * that IS present and invalid throws {@link InvalidThinkingPolicy}.
+ * Reads the `[thinking]` table of a models.toml file. A file that parses with
+ * no `[thinking]` table is thinking off everywhere (ADR-074 D13); a missing or
+ * unparseable file throws {@link ModelsConfigUnreadable}, and a table that IS
+ * present and invalid throws {@link InvalidThinkingPolicy}.
  */
 export function loadThinkingPolicyFromToml(configPath: string): ThinkingPolicy {
   let table: unknown;
   try {
     table = TomlThinkingRootSchema.parse(parse(readFileSync(configPath, "utf-8"))).thinking;
   } catch (err) {
-    console.warn(
-      `[ThinkingPolicy] failed to read ${configPath}, thinking is off at every site (ADR-074 D13):`,
-      describeErrorChain(err),
-    );
-    return THINKING_OFF;
+    throw new ModelsConfigUnreadable(configPath, "[thinking]", err);
   }
   if (table === undefined) return THINKING_OFF;
 

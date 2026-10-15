@@ -169,6 +169,9 @@ export class ProviderRegistry {
     try {
       return this.resolve(capability, [failedProvider], site);
     } catch (err) {
+      // Only "no other provider serves this" means no fallback; any other error is a
+      // configuration fault (e.g. RoutingProfileUnresolved) and must not read as one.
+      if (!(err instanceof NoProviderAvailableError)) throw err;
       console.warn(`[ProviderRegistry] no fallback for ${capability} (excluding ${failedProvider}):`, describeErrorChain(err));
       return null;
     }

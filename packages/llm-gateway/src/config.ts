@@ -43,6 +43,12 @@ function parseProviderType(source: string, providerName: string, raw: string): P
  * The caller owns the credential source: the server resolves each key from
  * its secret store (`provider/<name>/api_key`). The spend cap is Finance's,
  * applied by the call recorder before every request.
+ *
+ * A row with no catalog model, or with no key (no base URL for a local one),
+ * is left out: storing a key is how the owner enables a provider (policy). It
+ * is logged at warn, since leaving one out changes the enabled-provider combo
+ * and so the routing profile that applies. Zero providers leaves
+ * `defaultProvider` null, which `buildGateway` refuses.
  */
 export function buildGatewayConfig(
   allModels: Record<string, ModelConfig>,
@@ -61,12 +67,21 @@ export function buildGatewayConfig(
   for (const cred of credentials) {
     const providerType = parseProviderType("provider_configs", cred.name, cred.providerType);
     const providerModels = modelsByProvider[cred.name];
-    if (!providerModels) continue;
+    if (!providerModels) {
+      console.warn(`[GatewayConfig] provider "${cred.name}" left out: no model_configs row names it`);
+      continue;
+    }
 
     const hasCredentials =
       (cred.apiKey != null && cred.apiKey !== "") ||
       (providerType === "local" && cred.baseUrl != null);
-    if (!hasCredentials) continue;
+    if (!hasCredentials) {
+      console.warn(
+        `[GatewayConfig] provider "${cred.name}" left out: no API key` +
+          (providerType === "local" ? " and no base URL" : ""),
+      );
+      continue;
+    }
 
     providers.push({
       name: cred.name,
@@ -78,11 +93,9 @@ export function buildGatewayConfig(
     });
   }
 
-  const defaultProvider = providers.length > 0 ? providers[0].name : "local";
-
   return {
     providers,
-    defaultProvider,
+    defaultProvider: providers.length > 0 ? providers[0].name : null,
     routingProfiles,
   };
 }

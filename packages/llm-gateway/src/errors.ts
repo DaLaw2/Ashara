@@ -167,6 +167,41 @@ export class StructuredOutputTruncated extends SchemaValidationError {
   }
 }
 
+/**
+ * Thrown by `resolveAsharaRoot` when no ancestor of the module's directory carries the monorepo
+ * signature. The process's cwd is not a substitute: it is wherever the process was started.
+ */
+export class AsharaRootNotFound extends GatewayError {
+  /** Every directory checked, nearest first. */
+  readonly searched: readonly string[];
+
+  constructor(searched: readonly string[]) {
+    super(
+      `No Ashara root found: none of ${searched.join(", ")} holds both config/models.toml and packages/. ` +
+        `Set ASHARA_MODELS_CONFIG to the models.toml path, or run from an Ashara checkout.`,
+    );
+    this.name = "AsharaRootNotFound";
+    this.searched = searched;
+  }
+}
+
+/**
+ * Thrown when models.toml cannot be read or is not TOML. Its routing profiles and thinking policy
+ * are deployment configuration, so an unreadable file is not "none configured".
+ */
+export class ModelsConfigUnreadable extends GatewayError {
+  readonly configPath: string;
+  /** Which table the reader was loading, e.g. "[routing.profiles]". */
+  readonly table: string;
+
+  constructor(configPath: string, table: string, cause: unknown) {
+    super(`Cannot load ${table} from ${configPath}: ${describeErrorChain(cause)}`, { cause });
+    this.name = "ModelsConfigUnreadable";
+    this.configPath = configPath;
+    this.table = table;
+  }
+}
+
 /** Thrown by `loadThinkingPolicyFromToml` when a present `[thinking]` table fails validation. */
 export class InvalidThinkingPolicy extends GatewayError {
   readonly configPath: string;

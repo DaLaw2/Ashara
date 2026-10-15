@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, parse as parsePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AsharaRootNotFound } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // CWD-independent Ashara root anchoring (rp-t2 — CWD blindness)
@@ -23,16 +24,17 @@ import { fileURLToPath } from "node:url";
  * `config/models.toml` file and a `packages/` directory). CWD-independent by
  * design — see the module header for why process.cwd() cannot be trusted.
  *
- * If no ancestor matches (e.g. an exotic single-file bundle outside the repo),
- * it falls back to process.cwd() to preserve the prior resolution behavior
- * rather than throwing — callers of the anchored path already degrade
- * gracefully on a missing file (see loadModelsWithFallback).
+ * Throws {@link AsharaRootNotFound} when no ancestor matches (e.g. a bundle
+ * outside the repo): the cwd would be an evidence default, a directory that
+ * merely happens to be where the process started.
  */
 export function resolveAsharaRoot(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   const { root } = parsePath(dir);
+  const searched: string[] = [];
 
   for (;;) {
+    searched.push(dir);
     if (
       existsSync(join(dir, "config", "models.toml")) &&
       existsSync(join(dir, "packages"))
@@ -43,5 +45,5 @@ export function resolveAsharaRoot(): string {
     dir = dirname(dir);
   }
 
-  return process.cwd();
+  throw new AsharaRootNotFound(searched);
 }

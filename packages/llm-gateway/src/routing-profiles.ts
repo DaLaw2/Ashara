@@ -1,8 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import { z } from "zod";
-import { describeErrorChain } from "@ashara/shared";
-import { InvalidRoutingProfiles } from "./errors.js";
+import { InvalidRoutingProfiles, ModelsConfigUnreadable } from "./errors.js";
 import { KNOWN_LLM_SITES } from "./types.js";
 import type { RoutingProfileEntry, RoutingProfiles } from "./types.js";
 
@@ -83,11 +82,10 @@ const INVALID_PROFILES_HOW_TO_FIX =
 /**
  * Parses `[routing.profiles."<combo>"]` tables from a models.toml file.
  *
- * Degrades to "no profiles" (empty map, warned) when the file is missing or
- * unparseable, or when it carries no `[routing.profiles]` block at all —
- * those are deployment shapes, and routing profiles are an optional overlay
- * whose absence must never block gateway construction (mirrors
- * `loadModelsWithFallback`'s convention for this same file).
+ * Throws {@link ModelsConfigUnreadable} when the file is missing or is not
+ * TOML: that is a broken deployment, not one that chose no profiles. A file
+ * that parses but carries no `[routing.profiles]` block is "no profiles", an
+ * optional overlay the deployment chose not to write (policy default).
  *
  * THROWS {@link InvalidRoutingProfiles} when the block IS present but fails
  * validation. That is an authoring error, and degrading it to `{}` would be
@@ -101,11 +99,7 @@ export function loadRoutingProfilesFromToml(configPath: string): RoutingProfiles
     const parsed = TomlRoutingRootSchema.parse(parse(readFileSync(configPath, "utf-8")));
     profiles = parsed.routing?.profiles;
   } catch (err) {
-    console.warn(
-      `[RoutingProfiles] failed to load routing profiles from ${configPath}, proceeding with none:`,
-      describeErrorChain(err),
-    );
-    return {};
+    throw new ModelsConfigUnreadable(configPath, "[routing.profiles]", err);
   }
 
   if (!profiles) return {};

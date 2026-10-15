@@ -211,7 +211,7 @@ describe("TenderIntake assumption label", () => {
       assumptions: [{ statement: "Until you answered nothing changes.", rationale: "Kept as written.", kind: "internal-design" }],
     };
     const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw) }) }),
+      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(raw), model: "stub-model", provider: "stub" }) }),
     };
     const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
     const store: IntakeStore = {
@@ -330,7 +330,7 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
 
   async function intakeOf(response: unknown) {
     const llm: ContextualLlm = {
-      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response) }) }),
+      forCall: () => ({ generateStructured: async (request) => ({ data: request.schema.parse(response), model: "stub-model", provider: "stub" }) }),
     };
     const writes: Parameters<IntakeStore["recordIntake"]>[0][] = [];
     const store = storeOf("tender-r", async (write) => {

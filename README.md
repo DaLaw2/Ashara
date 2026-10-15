@@ -94,8 +94,8 @@ read -rs K && printf '%s' "$K" | npx tsx scripts/secret.ts put provider/anthropi
 # Create your client login. Type an access code of your choice at the prompt.
 read -rs C && printf '%s' "$C" | npx tsx scripts/client.ts add "Your Name"
 
-# Start Ashara with a spending limit, in US dollars.
-ASHARA_BUDGET_LIMIT_USD=5 just server
+# Start Ashara with a spending limit, in US dollars, and a folder to keep projects in.
+ASHARA_BUDGET_LIMIT_USD=5 WORKDIR_BASE=~/ashara-work just server
 ```
 
 Open http://localhost:3000, sign in with your access code, and send your request.
@@ -106,8 +106,8 @@ Open http://localhost:3000, sign in with your access code, and send your request
 |---|---|
 | `ASHARA_BUDGET_LIMIT_USD` | Required. The most Ashara may spend on model calls. |
 | `ASHARA_PROJECT_BUDGET_LIMIT_USD` | Optional. A smaller limit for each project. |
-| `ASHARA_PORT` | The web client's port (default 3000). |
-| `WORKDIR_BASE` | Where projects are kept. The default is a folder in your system's temp directory. |
+| `ASHARA_PORT` | The web client's port (default 3000). A value that is not a port stops Ashara from starting. |
+| `WORKDIR_BASE` | Required. Where projects are kept. Ashara will not start without it. |
 
 Each project is a git repository under `WORKDIR_BASE/projects/`; the delivered product is on its `main` branch.
 Model choices are in `config/models.toml`.

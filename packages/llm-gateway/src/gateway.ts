@@ -179,11 +179,17 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     } catch (error) {
       if (shouldRethrow?.(error)) throw error;
 
-      const fallback = this.registry.resolveFallback(
-        request.capability,
-        resolved.providerName,
-        request.site,
-      );
+      let fallback: ResolvedProvider | null;
+      try {
+        fallback = this.registry.resolveFallback(request.capability, resolved.providerName, request.site);
+      } catch (resolutionError) {
+        // The configuration fault propagates; the call failure that led here is not lost.
+        console.error(
+          `[LLMGateway] ${label} on provider=${resolved.providerName} model=${resolved.modelConfig.id} failed ` +
+            `(${describeErrorChain(error)}), and resolving a fallback failed: ${describeErrorChain(resolutionError)}`,
+        );
+        throw resolutionError;
+      }
       if (!fallback) {
         const rootMsg = describeErrorChain(error);
         throw new ProviderError(
