@@ -13,8 +13,9 @@ import type { Database } from "./database.js";
  * client asked for that no acceptance line of a swept check task cites. Every expectation is read
  * from the rows; the report's text is only what is judged. The oracle states its own expected wording
  * and classification and imports none of Engagement's composers or the acceptance repository's
- * predicates (ADR-081; boundary-rules.toml restricts the integration package's engagement imports to
- * src/server/): an oracle that asks production what to expect can never find production wrong.
+ * predicates (ADR-081; boundary-rules.toml [integration] `named-only` admits into src/simulator/ only
+ * the symbols it lists, none of them a composer or predicate): an oracle that asks production what to
+ * expect can never find production wrong.
  */
 
 const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable() });

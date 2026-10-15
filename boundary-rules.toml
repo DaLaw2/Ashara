@@ -69,8 +69,18 @@ allow = ["shared", "llm-gateway"]
 allow = ["*"]
 importers = []
 # ADR-081: a simulator oracle never imports the production predicate or report composer it judges.
-# The simulator composes the system only through server's composition root; Engagement (the
-# client's reports) and the orchestrator (the acceptance sweep) are imported by the cross-package
-# tests alone.
-restrict.engagement = ["src/server/**"]
-restrict.orchestrator = ["src/server/**"]
+# scripts/check-boundaries.ts holds every file under src/simulator/ to importing from another
+# package only the symbols listed here: composition, a fake's port type, a class the simulator wraps
+# to observe, and the shared vocabulary. No Engagement composer, no acceptance or block-report read
+# model of db, nothing from the orchestrator is listed. Adding a name is a decision to review, not a
+# formality. The cross-package tests (src/server/) are not held to it.
+named-only = ["src/simulator/**"]
+names.db = ["ClientMessageRepository", "ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "createDb", "createProjectWithTender", "runMigrations"]
+names.development = ["DevelopmentService", "EXECUTION_STATUSES"]
+names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
+names.finance = ["SpendCap"]
+names.llm-gateway = ["LanguageModelFactory"]
+names.security = ["MasterKey", "SecretStore", "generateKeyFileContent", "loadMasterKey"]
+names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
+names.shared = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]
+names.workplace = ["CHECK_MISSING_EXIT"]

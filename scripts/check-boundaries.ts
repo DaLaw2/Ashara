@@ -12,6 +12,16 @@
  *   restrict.<pkg>   = [glob, ...]  which files inside this package may import <pkg>
  *   importers        = [...]        which packages may import this package; checked even
  *                                   against a wildcard `allow`, so `[]` means none may
+ *   named-only       = [glob, ...]  files inside this package that may import from another
+ *                                   package only the symbols its `names.<pkg>` lists
+ *   names.<pkg>      = [...]        those symbols; a package with no `names.<pkg>` gives the
+ *                                   named-only files nothing
+ *
+ * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
+ * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
+ * relative import may not leave the named-only files, and a listed name no named-only file imports
+ * is itself a violation, so the list never grows past what is used (ADR-081: a simulator oracle
+ * never imports the production predicate it judges).
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.
@@ -56,6 +66,10 @@ interface PackageRule {
   readonly restrict: ReadonlyMap<string, readonly string[]>;
   /** Packages that may import this one; null when the section states none. */
   readonly importers: readonly string[] | null;
+  /** File globs whose cross-package imports are held to `names`; empty when the section states none. */
+  readonly namedOnly: readonly string[];
+  /** importedPkg -> the only symbols the named-only files may import from it. */
+  readonly names: ReadonlyMap<string, readonly string[]>;
 }
 
 type BoundaryRules = ReadonlyMap<string, PackageRule>;
@@ -67,7 +81,10 @@ function parseList(inner: string): string[] {
 }
 
 function parseRules(toml: string, rulesPath: string): BoundaryRules {
-  const rules = new Map<string, { allow: string[]; restrict: Map<string, string[]>; importers: string[] | null }>();
+  const rules = new Map<
+    string,
+    { allow: string[]; restrict: Map<string, string[]>; importers: string[] | null; namedOnly: string[]; names: Map<string, string[]> }
+  >();
   let currentSection: string | null = null;
   const lines = toml.split("\n");
 
@@ -81,7 +98,7 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
     if (sectionMatch) {
       currentSection = sectionMatch[1];
       if (!rules.has(currentSection)) {
-        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null });
+        rules.set(currentSection, { allow: [], restrict: new Map(), importers: null, namedOnly: [], names: new Map() });
       }
       continue;
     }
@@ -122,6 +139,25 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
       continue;
     }
 
+    const namedOnlyMatch = /^named-only\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (namedOnlyMatch) {
+      rule.namedOnly = parseList(namedOnlyMatch[1]);
+      if (rule.namedOnly.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "named-only list is empty");
+      }
+      continue;
+    }
+
+    const namesMatch = /^names\.([a-z][a-z0-9-]*)\s*=\s*\[([^\]]*)\]$/.exec(line);
+    if (namesMatch) {
+      const names = parseList(namesMatch[2]);
+      if (names.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "names list is empty (omit it to give the named-only files nothing)");
+      }
+      rule.names.set(namesMatch[1], names);
+      continue;
+    }
+
     // Fail closed: a typo in a rule key must not silently disable the gate.
     throw new BoundaryRulesParseError(rulesPath, lineNumber, line, "unrecognised rule key");
   }
@@ -139,12 +175,20 @@ function parseRules(toml: string, rulesPath: string): BoundaryRules {
         );
       }
     }
+    for (const named of rule.names.keys()) {
+      if (rule.namedOnly.length === 0) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, "names a package's symbols, but the section has no named-only files");
+      }
+      if (!isWildcard && !rule.allow.includes(named)) {
+        throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] names.${named}`, `lists symbols of "${named}", which is not in its allow list`);
+      }
+    }
     for (const importer of rule.importers ?? []) {
       if (!rules.has(importer)) {
         throw new BoundaryRulesParseError(rulesPath, 0, `[${pkg}] importers`, `names "${importer}", which has no section`);
       }
     }
-    result.set(pkg, { allow: rule.allow, restrict: rule.restrict, importers: rule.importers });
+    result.set(pkg, { allow: rule.allow, restrict: rule.restrict, importers: rule.importers, namedOnly: rule.namedOnly, names: rule.names });
   }
 
   return result;
@@ -263,6 +307,54 @@ function extractAsharaImports(
 }
 
 // ---------------------------------------------------------------------------
+// Named imports (named-only files)
+// ---------------------------------------------------------------------------
+
+interface NamedImport {
+  readonly line: number;
+  readonly specifier: string;
+  readonly pkg: string;
+  /** The imported symbols; null when the clause is a default or namespace import, which names none. */
+  readonly names: readonly string[] | null;
+}
+
+// A statement whose clause is a brace list, a namespace or a default binding. Anything else that
+// carries an `@ashara/` specifier (a side-effect or dynamic import, a clause this does not parse)
+// is left unaccounted and reported, never assumed harmless.
+const NAMED_STATEMENT_RE =
+  /\b(?:import|export)\s+(?:type\s+)?(\{[^}]*\}|\*\s+as\s+[\w$]+|\*|[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?)\s*from\s*(["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["'])/g;
+const ASHARA_LITERAL_RE = /["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["']/g;
+
+function lineAt(content: string, offset: number): number {
+  return content.slice(0, offset).split("\n").length;
+}
+
+function clauseNames(clause: string): string[] | null {
+  if (!clause.startsWith("{")) return null;
+  return clause
+    .slice(1, -1)
+    .split(",")
+    .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim())
+    .filter((name) => name !== "");
+}
+
+/** The file's `@ashara/` imports by statement, and the line of every `@ashara/` specifier no statement accounts for. */
+function extractNamedImports(content: string): { imports: NamedImport[]; unaccounted: { line: number; specifier: string }[] } {
+  const imports: NamedImport[] = [];
+  const accounted = new Set<number>();
+  for (const match of content.matchAll(NAMED_STATEMENT_RE)) {
+    const literalOffset = match.index + match[0].length - match[2].length;
+    accounted.add(literalOffset);
+    imports.push({ line: lineAt(content, literalOffset), specifier: match[3], pkg: match[4], names: clauseNames(match[1]) });
+  }
+  const unaccounted: { line: number; specifier: string }[] = [];
+  for (const match of content.matchAll(ASHARA_LITERAL_RE)) {
+    if (!accounted.has(match.index)) unaccounted.push({ line: lineAt(content, match.index), specifier: match[1] });
+  }
+  return { imports, unaccounted };
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -323,11 +415,51 @@ function main(): void {
       ...(fs.existsSync(testDir) ? collectTsFiles(testDir) : []),
     ];
 
+    const namesUsed = new Map<string, Set<string>>();
+
     for (const filePath of files) {
       filesChecked++;
       const content = fs.readFileSync(filePath, "utf-8");
       const imports = extractAsharaImports(content, filePath, packagesDir, pkgName);
       const pkgRelative = path.relative(pkgRoot, filePath).split(path.sep).join("/");
+
+      if (rule.namedOnly.length > 0 && matchesAnyGlob(pkgRelative, rule.namedOnly)) {
+        const at = (line: number, specifier: string, reason: string): Violation => ({
+          file: path.relative(root, filePath),
+          line,
+          fromPkg: pkgName,
+          specifier,
+          reason: `named-only file: ${reason}`,
+        });
+        const named = extractNamedImports(content);
+        for (const loose of named.unaccounted) {
+          violations.push(at(loose.line, loose.specifier, "not an `import {...} from` or `export {...} from` statement, so its names cannot be checked"));
+        }
+        for (const ref of named.imports) {
+          if (ref.names === null) {
+            violations.push(at(ref.line, ref.specifier, "a default or namespace import names no symbols; import the listed names in braces"));
+            continue;
+          }
+          const listed = rule.names.get(ref.pkg);
+          for (const name of ref.names) {
+            if (listed === undefined || !listed.includes(name)) {
+              violations.push(at(ref.line, ref.specifier, `"${name}" is not in names.${ref.pkg}`));
+              continue;
+            }
+            const used = namesUsed.get(ref.pkg) ?? new Set<string>();
+            used.add(name);
+            namesUsed.set(ref.pkg, used);
+          }
+        }
+        scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
+          const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), match[1])).split(path.sep).join("/");
+          if (target.startsWith("../") || path.isAbsolute(target)) return;
+          const candidates = [target, target.replace(/\.js$/, ".ts")];
+          if (!candidates.some((candidate) => matchesAnyGlob(candidate, rule.namedOnly))) {
+            violations.push(at(line, match[1], `the relative import leaves the named-only files (${rule.namedOnly.join(", ")})`));
+          }
+        });
+      }
 
       for (const ref of imports) {
         const violation = (reason: string): Violation => ({
@@ -357,6 +489,20 @@ function main(): void {
         const soleImporters = rule.restrict.get(ref.pkg);
         if (soleImporters !== undefined && !matchesAnyGlob(pkgRelative, soleImporters)) {
           violations.push(violation(`only ${soleImporters.join(", ")} may import package "${ref.pkg}"`));
+        }
+      }
+    }
+
+    for (const [importedPkg, listed] of rule.names) {
+      for (const name of listed) {
+        if (namesUsed.get(importedPkg)?.has(name) !== true) {
+          violations.push({
+            file: rulesRelative,
+            line: 0,
+            fromPkg: pkgName,
+            specifier: `names.${importedPkg}`,
+            reason: `"${name}" is listed but no named-only file imports it; remove it`,
+          });
         }
       }
     }
