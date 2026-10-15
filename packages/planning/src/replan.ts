@@ -9,8 +9,8 @@ import { DecompositionEngine } from "./decomposition.js";
 import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
-import type { FirstPlanWrite } from "./first-plan.js";
-import { northStarOf, planOwners, toWrite, visionItemsOf } from "./first-plan.js";
+import type { FirstPlanWrite, PlanningVision } from "./first-plan.js";
+import { VisionUnreadable, northStarOf, planOwners, toWrite, visionItemsOf } from "./first-plan.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
@@ -551,7 +551,8 @@ export class Replanner implements Replanning {
           err instanceof ReplanRequestMissing ||
           err instanceof RepairSubjectUnreadable ||
           err instanceof RosterUnreadable ||
-          err instanceof WorkKindOwnerUnresolved;
+          err instanceof WorkKindOwnerUnresolved ||
+          err instanceof VisionUnreadable;
         if (!projectRecord) throw err;
         outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
       }
@@ -583,6 +584,8 @@ export class Replanner implements Replanning {
     }
 
     const owners = planOwners(projectId, project.rosterRows);
+    // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
+    const vision: PlanningVision = { northStar: northStarOf(project), items: visionItemsOf(project) };
     const tasks = project.items.filter(isTask);
     // The store lists a project only with no task in progress; one seen here started since.
     if (tasks.some(({ item }) => item.status === "InProgress")) return { kind: "moved", projectId };
@@ -595,7 +598,7 @@ export class Replanner implements Replanning {
     let result: "written" | "moved";
     try {
       const environment = await this.environmentOf(project, cause, completed);
-      const decomposition = await this.decompose(project, cause, completed, environment);
+      const decomposition = await this.decompose(project, vision, cause, completed, environment);
       write = this.compose(project, cause, decomposition, owners, environment, completed, [...open, ...openEpics]);
       result = await this.deps.store.writeRevision(write);
     } catch (err) {
@@ -650,6 +653,7 @@ export class Replanner implements Replanning {
 
   private async decompose(
     project: ProjectAwaitingReplan,
+    vision: PlanningVision,
     cause: RevisionCause,
     completed: readonly PlannedItem[],
     environment: EnvironmentPlanning,
@@ -658,7 +662,7 @@ export class Replanner implements Replanning {
       this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
       this.deps.onAttempt,
     );
-    const northStar = [northStarOf(project), causeSection(cause), doneSection(completed)].join("\n\n");
+    const northStar = [vision.northStar, causeSection(cause), doneSection(completed)].join("\n\n");
     const input: DecompositionInput = {
       epicTitle: project.projectName,
       epicNorthStar: northStar,
@@ -679,7 +683,7 @@ export class Replanner implements Replanning {
       environment,
       layout: layoutOf(completed),
       // The same rule as a first plan (ADR-074 addendum 2 d71 d): every new task traces to the current vision.
-      visionItems: visionItemsOf(project),
+      visionItems: vision.items,
     };
     return new DecompositionEngine(llm).decompose(input);
   }

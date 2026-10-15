@@ -30,6 +30,24 @@ class WorkspaceError extends Error {
   }
 }
 
+/** The directory a branch's worktree is created at under `base`. */
+function workdirOf(base: string, branch: string): string {
+  return join(base, branch.replace(/\//g, "-"));
+}
+
+/**
+ * Clears the slot a branch's worktree is created at of what a crash or a faulted cleanup left: its
+ * directory, and every registration whose directory is gone (`worktree prune`). A registration
+ * left behind would make every later `worktree add` there, and the deletion of the branch it
+ * holds, refuse, and no attempt could ever be dispatched again. Nothing of a worktree at the slot
+ * is kept: an attempt's work is kept only as commits on its branch. A failure here throws (rm's or
+ * git's): Z0's own, never read as a clear slot.
+ */
+export async function clearWorktreeSlot(base: string, targetProjectPath: string, branch: string): Promise<void> {
+  await rm(workdirOf(base, branch), { recursive: true, force: true });
+  await runHostGit(targetRepo(targetProjectPath), ["worktree", "prune"]);
+}
+
 export async function createWorkdir(
   base: string,
   targetProjectPath: string,
@@ -39,7 +57,8 @@ export async function createWorkdir(
   // racing a finalize, must not share that index.
   await withTargetCheckout(targetProjectPath, `the git init before ${taskBranch}'s worktree`, () => ensureTargetGitInit(targetProjectPath));
   await mkdir(base, { recursive: true });
-  const workDir = join(base, taskBranch.replace(/\//g, "-"));
+  const workDir = workdirOf(base, taskBranch);
+  await clearWorktreeSlot(base, targetProjectPath, taskBranch);
 
   try {
     await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, "-b", taskBranch, "main"]);
@@ -78,7 +97,8 @@ export async function createWorkdirForRetry(
 ): Promise<WorkdirInfo> {
   await mkdir(base, { recursive: true });
   const taskBranch = taskBranchName(taskId);
-  const workDir = join(base, taskBranch.replace(/\//g, "-"));
+  const workDir = workdirOf(base, taskBranch);
+  await clearWorktreeSlot(base, targetProjectPath, taskBranch);
 
   try {
     await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, taskBranch]);

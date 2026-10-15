@@ -123,8 +123,11 @@ class PlanFailureUnrecorded extends Error {
   }
 }
 
-/** The stored vision could not be read as a planning input. */
-class VisionUnreadable extends Error {
+/**
+ * The stored vision could not be read as a planning input: the project's own record, which no
+ * further planning attempt can change, so the project is blocked with it and no attempt is counted.
+ */
+export class VisionUnreadable extends Error {
   constructor(
     readonly projectId: ProjectId,
     readonly visionVersion: number,
@@ -323,6 +326,12 @@ export function toWrite(projectId: ProjectId, result: DecompositionResult, owner
   };
 }
 
+/** The stored vision read as planning input, before any counted attempt. */
+export interface PlanningVision {
+  readonly northStar: string;
+  readonly items: VisionItem[];
+}
+
 interface FirstPlannerDeps {
   readonly llm: ContextualLlm;
   readonly store: FirstPlanStore;
@@ -349,10 +358,13 @@ export class FirstPlanner implements FirstPlanning {
       try {
         outcomes.push(await this.plan(project));
       } catch (err) {
-        // A roster that cannot be read or cannot assign an owner is the project's
-        // own record; planning again would not change it.
+        // A roster that cannot be read or cannot assign an owner, and a vision that cannot be read,
+        // are the project's own record; planning again would not change it.
         const projectRecord =
-          err instanceof PlanFailureUnrecorded || err instanceof RosterUnreadable || err instanceof WorkKindOwnerUnresolved;
+          err instanceof PlanFailureUnrecorded ||
+          err instanceof RosterUnreadable ||
+          err instanceof WorkKindOwnerUnresolved ||
+          err instanceof VisionUnreadable;
         if (!projectRecord) throw err;
         outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
       }
@@ -377,11 +389,13 @@ export class FirstPlanner implements FirstPlanning {
     }
 
     const owners = planOwners(projectId, project.rosterRows);
+    // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
+    const vision: PlanningVision = { northStar: northStarOf(project), items: visionItemsOf(project) };
 
     let write: FirstPlanWrite;
     let commit: FirstPlanCommit;
     try {
-      write = toWrite(projectId, await this.decompose(project), owners);
+      write = toWrite(projectId, await this.decompose(project, vision), owners);
       commit = await this.deps.store.writeFirstPlan(write);
     } catch (err) {
       return this.fail(project, err);
@@ -397,19 +411,19 @@ export class FirstPlanner implements FirstPlanning {
     return { kind: "planned", projectId, epics, tasks: commit.created - epics };
   }
 
-  private async decompose(project: ProjectAwaitingPlan): Promise<DecompositionResult> {
+  private async decompose(project: ProjectAwaitingPlan, vision: PlanningVision): Promise<DecompositionResult> {
     const llm = createGatewayDecompositionLLM(
       this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
       this.deps.onAttempt,
     );
     const input: DecompositionInput = {
       epicTitle: project.projectName,
-      epicNorthStar: northStarOf(project),
+      epicNorthStar: vision.northStar,
       epicDescription: project.visionText,
       conventions: [],
       environment: { kind: "new" },
       layout: { kind: "new" },
-      visionItems: visionItemsOf(project),
+      visionItems: vision.items,
     };
     return new DecompositionEngine(llm).decompose(input);
   }

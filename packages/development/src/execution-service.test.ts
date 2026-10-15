@@ -83,6 +83,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
   if (status === "environment_blocked") {
     return {
       status,
+      fault: "substrate",
       unavailable: "task cell",
       detail: `${status} detail`,
       output: null,
@@ -634,6 +635,26 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
+    expect(existsSync(workdirBase)).toBe(false);
+  });
+
+  // ADR-080 d3 c (development #1): a store that throws is Ashara's own fault, never the task's work.
+  test("a check store that throws: blocked under class ashara, never failed; no lesson, no model, no worktree", async () => {
+    const throwing: TaskCheckStore = {
+      ...checkStore(null),
+      latest: async () => {
+        throw new Error("task_checks read: connection terminated");
+      },
+    };
+    const { result, probe, workdirBase } = await dispatchWith(throwing, "implementation");
+
+    expect(result.status).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.fault).toBe("ashara");
+    expect(result.unavailable).toBe("Ashara's own machinery (read the checks that decide the work)");
+    expect(result.detail).toContain("connection terminated");
+    expect(probe.findings).toBe(0);
+    expect(probe.modelCalls).toBe(0);
     expect(existsSync(workdirBase)).toBe(false);
   });
 

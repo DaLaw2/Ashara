@@ -189,19 +189,9 @@ export class FailureRouter {
           failure,
         };
 
-      // A branch that conflicts with main is never re-dispatched unchanged: it would conflict again.
-      case "MERGE_RETRY_UNPREPARED":
-        return {
-          action: "abandon",
-          reason: "the task's conflict with main could not be prepared for another attempt; the plan is repaired around it",
-          attempts: priorAttempts,
-          failure,
-        };
-
       case "VERIFICATION_GAP":
       case "COMPILATION_ERROR":
       case "AGENT_STUCK":
-      case "SPAWN_FAILURE":
         return null;
 
       default: {

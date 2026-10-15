@@ -71,14 +71,6 @@ describe("classifyFailure", () => {
     expect(classifyFailure(e)).toBe("AGENT_STUCK");
   });
 
-  test("SPAWN_FAILURE — createWorkdir", () => {
-    expect(classifyFailure(envelope(layer("createWorkdir", "failed to create workdir")))).toBe("SPAWN_FAILURE");
-  });
-
-  test("SPAWN_FAILURE — createWorktree", () => {
-    expect(classifyFailure(envelope(layer("createWorktree", "git worktree add failed")))).toBe("SPAWN_FAILURE");
-  });
-
   test("MERGE_CONFLICT — tentativeMerge with conflict", () => {
     const e = envelope(layer("tentativeMerge", "merge conflict in src/index.ts"));
     expect(classifyFailure(e)).toBe("MERGE_CONFLICT");
@@ -90,13 +82,12 @@ describe("classifyFailure", () => {
     expect(classifyFailure(envelope(layer("conflictMarkersLeft", "markers left in f")))).toBe("MERGE_CONFLICT_PERSISTS");
   });
 
-  test("MERGE_RETRY_UNPREPARED — prepareConflictRetry", () => {
-    expect(classifyFailure(envelope(layer("prepareConflictRetry", "merge-tree failed")))).toBe("MERGE_RETRY_UNPREPARED");
-  });
-
-  test("SPAWN_FAILURE — tentativeMerge without conflict", () => {
-    const e = envelope(layer("tentativeMerge", "merge failed: branch not found"));
-    expect(classifyFailure(e)).toBe("SPAWN_FAILURE");
+  // ADR-080 d3 c: Z0's faults (a worktree, a merge refused without a conflict, a conflict that cannot be
+  // prepared) are blocked under their class in development and never routed here; none has a category.
+  test("an operation only Z0's faults were recorded under has no category of its own", () => {
+    expect(classifyFailure(envelope(layer("tentativeMerge", "merge failed: index.lock exists")))).toBe("VERIFICATION_GAP");
+    expect(classifyFailure(envelope(layer("createWorkdir", "failed to create workdir")))).toBe("VERIFICATION_GAP");
+    expect(classifyFailure(envelope(layer("prepareConflictRetry", "merge-tree failed")))).toBe("VERIFICATION_GAP");
   });
 
   test("VERIFICATION_GAP — unknown operation (fail-closed)", () => {
@@ -138,10 +129,6 @@ describe("shouldEscalate", () => {
     expect(shouldEscalate("COMPILATION_ERROR", ["COMPILATION_ERROR"])).toBe(false);
   });
 
-  test("SPAWN_FAILURE never escalates even with priors", () => {
-    expect(shouldEscalate("SPAWN_FAILURE", ["SPAWN_FAILURE"])).toBe(false);
-  });
-
   test("MERGE_CONFLICT never escalates even with priors", () => {
     expect(shouldEscalate("MERGE_CONFLICT", ["MERGE_CONFLICT"])).toBe(false);
   });
@@ -151,7 +138,7 @@ describe("shouldEscalate", () => {
   });
 
   test("escalatable with mixed priors containing match → true", () => {
-    expect(shouldEscalate("AGENT_STUCK", ["COMPILATION_ERROR", "AGENT_STUCK", "SPAWN_FAILURE"])).toBe(true);
+    expect(shouldEscalate("AGENT_STUCK", ["COMPILATION_ERROR", "AGENT_STUCK", "TREE_REGRESSION"])).toBe(true);
   });
 });
 

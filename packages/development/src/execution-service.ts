@@ -7,7 +7,6 @@ import {
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
-  SubstrateUnavailable,
   cellRunBoundMs,
   createCellBackend,
   buildContextPaths,
@@ -54,14 +53,15 @@ import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./curren
 import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runFoundationBuild, runPostMergeEnvironmentCommands, runPostMergeProbe, runSubstrateGate } from "./environment-check.js";
 import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
-import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
-import type { EnvironmentError } from "./environment-failure.js";
+import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf } from "./fault-class.js";
+import type { EnvironmentError, FaultClass } from "./fault-class.js";
 import { targetRepo } from "./host-git.js";
 import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
 import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
+import { withTargetCheckout } from "./checkout-lock.js";
 import type { CheckoutLease } from "./checkout-lock.js";
 import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
@@ -94,11 +94,14 @@ import {
 import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
   cleanupWorkdir,
+  clearWorktreeSlot,
   commitAllChanges,
   commitPartialWork,
   createWorkdir,
   createWorkdirForRetry,
+  ensureTargetGitInit,
   getChangedFiles,
+  WorktreeCommitFailed,
   WorktreeCommitIncomplete,
 } from "./workspace.js";
 import type { PartialCommitOutcome, WorkdirInfo } from "./workspace.js";
@@ -132,16 +135,24 @@ async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string, targe
 }
 
 /**
- * The stage of a dispatch whose substrate failed: the probe and the task cell before the attempt,
+ * The stage of a dispatch whose substrate or Z0 machinery failed: the probe, the environment, the
+ * work plan, the staffing, the worktree, the resumed branch and the task cell before the attempt,
  * the attempt itself, the substrate gate, the red run of a check task's checks on main, and the
- * post-merge verifier cell; and postMergeCheckRun, where Z0's own machinery around the post-merge
- * check (a worktree, the tentative merge's commit, a check file) failed and no check ran: around
- * the stored checks and the earlier tasks' checks, or around a substrate-checked task's run of the
- * environment's build and test (finalize labels the latter step "post-merge verification").
+ * post-merge verifier cell; postMergeCheckRun, where Z0's own machinery around the merge and its
+ * check (the merge itself, a worktree, the tentative merge's commit, a check file, the dirty-tree
+ * check) failed and no verdict was reached; and runExecution, a throw out of the dispatch past the
+ * cell's creation that no stage caught.
  */
 type EnvironmentStage =
   | "probeSubstrate"
   | "resolveEnvironment"
+  | "planWork"
+  | "buildBrief"
+  | "assignAgent"
+  | "createWorkdir"
+  | "resumeBranch"
+  | "prepareConflictRetry"
+  | "runExecution"
   | "createCell"
   | "agentAttempt"
   | "commitWork"
@@ -158,10 +169,10 @@ type EnvironmentStage =
  * What became of the agent's work when a dispatch ended without done: no agent ran; it is
  * committed on the task branch for the next dispatch; for a check task, discarded (nothing of a
  * check task is kept, its next attempt starts again from main); for an attempt handed a conflict
- * with main, its unfinished merge is discarded with the worktree; or git refused the partial commit
- * and the work is lost with the worktree.
+ * with main, its unfinished merge is discarded with the worktree; git refused the partial commit
+ * and the work is lost with the worktree; or not known, when Z0 itself failed mid-dispatch.
  */
-type AgentWork = "none" | "kept" | "discarded" | "merge-discarded" | { readonly lost: string };
+type AgentWork = "none" | "kept" | "discarded" | "merge-discarded" | "unknown" | { readonly lost: string };
 
 interface AgentPart {
   readonly output: AgentOutputJson | null;
@@ -196,6 +207,8 @@ function describeAgentWork(work: AgentWork): string {
       return "the check task's partial work is discarded; its next attempt starts again from main";
     case "merge-discarded":
       return "the attempt's merge of main is discarded uncommitted; the task branch is as it was and its next attempt merges main again";
+    case "unknown":
+      return "what became of the attempt's work is not known: Z0 failed mid-dispatch, and the task branch is as Z0's last step left it";
   }
 }
 
@@ -206,6 +219,8 @@ interface EnvironmentBlock extends AgentPart {
   readonly task: DispatchRef;
   readonly sessionId: string;
   readonly stage: EnvironmentStage;
+  /** Whose failure it is: never the agent's work (fault-class.ts). */
+  readonly fault: Exclude<FaultClass, "agent_work">;
   /** The failure's class name, e.g. MountPathRejected; the reason names it. */
   readonly errorClass: string;
   readonly message: string;
@@ -215,17 +230,19 @@ interface EnvironmentBlock extends AgentPart {
 
 /**
  * The substrate cannot host a stage of the task (podman missing or not answering, a cell that
- * cannot start or be mounted, an exec the substrate could not run): Blocked for the operator with
- * the stage and error class named, never a host fallback and never a failure for the classifier
- * (s-isolated-worker-m1 C2, at every stage).
+ * cannot start or be mounted, an exec the substrate could not run), or Ashara's own Z0 machinery
+ * failed under it (a store, git on the host, a bug): Blocked under its fault class with the stage
+ * and error class named, never a host fallback, never a failure for the classifier and never a
+ * lesson (s-isolated-worker-m1 C2, at every stage; ADR-080 d3 c).
  */
 function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSink | undefined): ExecutionResult {
   const { task, stage, errorClass } = block;
   const taskId = task.id;
   const kept = describeAgentWork(block.agentWork);
+  const failed = block.fault === "substrate" ? "environment failed" : "Ashara's own machinery failed";
   const envelope: ErrorEnvelope = {
     outcome: "blocked",
-    summary: `environment failed at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,
+    summary: `${failed} at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,
     chain: block.chain,
     ...(block.output !== null ? { agentOutput: block.output } : {}),
   };
@@ -233,6 +250,7 @@ function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSi
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage, errorClass, reason: envelope.summary });
   return {
     status: "environment_blocked",
+    fault: block.fault,
     unavailable: block.unavailable,
     detail: envelope.summary,
     output: block.output,
@@ -259,6 +277,7 @@ function substrateBlocked(
       task,
       sessionId,
       stage,
+      fault: "substrate",
       errorClass: e.name,
       message: e.message,
       chain: chain ?? wrapError("development", stage, e, { taskId: task.id, unavailable, errorClass: e.name }),
@@ -267,6 +286,63 @@ function substrateBlocked(
     },
     eventSink,
   );
+}
+
+/** What of Ashara's own machinery failed, named for the operator. */
+function asharaUnavailableOf(fault: VerificationInfrastructureFault | DispatchFault): string {
+  if (fault.cause instanceof WorktreeCommitFailed) return `host git (${fault.cause.step} of the task worktree)`;
+  if (fault instanceof VerificationInfrastructureFault) return `verification infrastructure (${fault.step})`;
+  return `Ashara's own machinery (${fault.step})`;
+}
+
+/** A block of class `ashara`: Z0's own machinery failed at `stage`. */
+function asharaBlocked(
+  task: DispatchRef,
+  sessionId: string,
+  stage: EnvironmentStage,
+  fault: VerificationInfrastructureFault | DispatchFault,
+  agent: AgentPart,
+  eventSink: ExecutionEventSink | undefined,
+  chain?: ErrorLayer,
+): ExecutionResult {
+  const unavailable = asharaUnavailableOf(fault);
+  return environmentBlocked(
+    {
+      task,
+      sessionId,
+      stage,
+      fault: "ashara",
+      errorClass: fault.name,
+      message: fault.message,
+      chain: chain ?? wrapError("development", stage, fault, { taskId: task.id, unavailable, errorClass: fault.name }),
+      unavailable,
+      ...agent,
+    },
+    eventSink,
+  );
+}
+
+/**
+ * A throw out of a stage of a dispatch, blocked under its class (fault-class.ts): the substrate's,
+ * with `cell` named, when its class says so; otherwise Ashara's, as a DispatchFault at `step`. A
+ * throw is never the agent's work, so it is never failed against the task nor taught as a lesson.
+ */
+function thrownBlocked(
+  task: DispatchRef,
+  sessionId: string,
+  stage: EnvironmentStage,
+  e: unknown,
+  where: { readonly step: string; readonly cell: string },
+  agent: AgentPart,
+  eventSink: ExecutionEventSink | undefined,
+): ExecutionResult {
+  const fault = thrownFaultOf(e);
+  if (fault.class === "substrate") return substrateBlocked(task, sessionId, stage, fault.error, where.cell, agent, eventSink);
+  const asharaFault =
+    fault.error instanceof VerificationInfrastructureFault || fault.error instanceof DispatchFault
+      ? fault.error
+      : new DispatchFault(task.id, where.step, { cause: fault.error });
+  return asharaBlocked(task, sessionId, stage, asharaFault, agent, eventSink);
 }
 
 /**
@@ -285,24 +361,9 @@ function mainRunBlocked(
   stage: Extract<EnvironmentStage, "checkRedRun" | "deliveredCheckRun">,
   step: string,
 ): ExecutionResult {
-  const taskId = task.id;
   const environmentFailure = environmentErrorOf(e);
   if (environmentFailure !== null) return substrateBlocked(task, sessionId, stage, environmentFailure, "CI cell", agent, eventSink);
-  const fault = new VerificationInfrastructureFault(taskId, step, { cause: e });
-  const unavailable = `verification infrastructure (${fault.step})`;
-  return environmentBlocked(
-    {
-      task,
-      sessionId,
-      stage,
-      errorClass: fault.name,
-      message: fault.message,
-      chain: wrapError("development", stage, fault, { taskId, unavailable, errorClass: fault.name }),
-      unavailable,
-      ...agent,
-    },
-    eventSink,
-  );
+  return asharaBlocked(task, sessionId, stage, new VerificationInfrastructureFault(task.id, step, { cause: e }), agent, eventSink);
 }
 
 /**
@@ -701,18 +762,25 @@ export interface TaskDescriptor {
 // ---------------------------------------------------------------------------
 
 /**
- * The outcome of a dispatch the execution substrate could not host: the
- * substrate was unavailable before the attempt (no agent ran, nothing
- * executed), a cell failed under a running attempt (environment_failure), or
- * the substrate gate, a check task's red run or the post-merge verifier cell could not run.
+ * The outcome of a dispatch the execution substrate could not host, or Ashara's own Z0 machinery
+ * failed under: the substrate was unavailable before the attempt (no agent ran, nothing
+ * executed), a cell failed under a running attempt (environment_failure), the substrate gate, a
+ * check task's red run or the post-merge verifier cell could not run, or a store, git on the host
+ * or Z0's own code failed at any stage.
  * It is not a task failure (re-dispatching cannot make the substrate appear),
  * so the orchestrator requeues the item uncharged within its infrastructure fault
- * budget (past it the project halts on infrastructure, and a task whose faults outlast
+ * budget (past it the project halts under the fault's class, and a task whose faults outlast
  * the halt is given up with an `environment_unavailable` reason) instead of routing it
  * through the FailureRouter.
  */
 interface EnvironmentBlockedResult {
   readonly status: "environment_blocked";
+  /**
+   * Whose failure it is (fault-class.ts): the substrate's (the project halts on infrastructure past
+   * the budget, until the substrate probe passes) or Ashara's own Z0 machinery (the project halts
+   * for the operator past the budget, the report naming Ashara). Never the agent's work.
+   */
+  readonly fault: Exclude<FaultClass, "agent_work">;
   /** What was unavailable, named for the operator (e.g. "container substrate (podman)"). */
   readonly unavailable: string;
   readonly detail: string;
@@ -1169,8 +1237,7 @@ export class DevelopmentService {
     try {
       await cells.substrate.probeSubstrate();
     } catch (e) {
-      if (!(e instanceof SubstrateUnavailable)) throw e;
-      return substrateBlocked(task, sessionId, "probeSubstrate", e, "container substrate", NO_AGENT, eventSink);
+      return thrownBlocked(task, sessionId, "probeSubstrate", e, { step: "probe the container substrate", cell: "container substrate" }, NO_AGENT, eventSink);
     }
 
     // Only the environment role's work and the product scaffold are checked by the substrate: any
@@ -1201,21 +1268,12 @@ export class DevelopmentService {
           this.deps.environment.images,
           this.deps.environment.statements,
         );
-        if (resolution.kind === "undefined") {
-          const result = environmentUndefined(task, sessionId, resolution.reason, eventSink);
-          await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-          return result;
-        }
+        // No lesson: nothing of the agent's ran (fault-class.ts), the plan's repair answers it.
+        if (resolution.kind === "undefined") return environmentUndefined(task, sessionId, resolution.reason, eventSink);
         environment = { kind: "environment", ...resolution.environment };
       } catch (e) {
-        const environmentFailure = environmentErrorOf(e);
-        if (environmentFailure !== null) {
-          return substrateBlocked(task, sessionId, "resolveEnvironment", environmentFailure, "environment image build", NO_AGENT, eventSink);
-        }
-        const result = failedBeforeAgent(task, sessionId, "resolveCurrentEnvironment", e, `the current environment of ${task.id} could not be resolved`);
-        eventSink?.emit({ event: "error", location: "DevelopmentService:resolveCurrentEnvironment", taskId: task.id, attempt: task.attempt, error: result.detail });
-        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-        return result;
+        const where = { step: "resolve the current environment", cell: "environment image build" };
+        return thrownBlocked(task, sessionId, "resolveEnvironment", e, where, NO_AGENT, eventSink);
       }
       eventSink?.emit({
         event: "environment_resolved",
@@ -1241,10 +1299,7 @@ export class DevelopmentService {
       }
       plan = planned;
     } catch (e) {
-      const result = failedBeforeAgent(task, sessionId, "planWork", e, `the checks of ${task.id} could not be read`);
-      eventSink?.emit({ event: "error", location: "DevelopmentService:planWork", taskId: task.id, attempt: task.attempt, error: result.detail });
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink);
     }
 
     let contract: ProjectContract | null = null;
@@ -1257,16 +1312,26 @@ export class DevelopmentService {
     // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
     // same files first, w12b D2), the attempt starts with main merged into it and the conflict in
     // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
-    // that cannot be prepared fails the task for plan repair, never dispatching the branch unchanged.
+    // that cannot be prepared is Z0's git and blocks under class ashara, never dispatching the branch unchanged.
     // A branch that merges cleanly starts with main merged into it (P6: a tree regression is repaired
     // on the merged tree it was found on, createWorkdirForRetry).
-    const resumesBranch = plan.kind !== "check-authoring" && (await branchExists(targetProjectPath, taskBranchName(task.id)));
+    let resumesBranch = false;
+    try {
+      if (plan.kind !== "check-authoring") {
+        // A fresh target has no repository yet: initialised first (as createWorkdir does), so git
+        // is asked of a repository and its answer is never "no repository" read as "no branch".
+        await withTargetCheckout(targetProjectPath, `the git init before task ${task.id}'s branch is looked up`, () => ensureTargetGitInit(targetProjectPath));
+        resumesBranch = await branchExists(targetProjectPath, taskBranchName(task.id));
+      }
+    } catch (e) {
+      return thrownBlocked(task, sessionId, "resumeBranch", e, { step: "read whether the task branch exists", cell: "host git" }, NO_AGENT, eventSink);
+    }
     let conflict: MainConflict | null = null;
     if (resumesBranch) {
       try {
         conflict = await conflictWithMain(targetProjectPath, task.id);
       } catch (e) {
-        return await this.conflictUnprepared(task, sessionId, e);
+        return this.conflictUnprepared(task, sessionId, e);
       }
       if (conflict !== null) {
         eventSink?.emit({ event: "merge_conflict_presented", taskId: task.id, attempt: task.attempt, mainCommit: conflict.mainCommit, files: conflict.files });
@@ -1277,35 +1342,10 @@ export class DevelopmentService {
     try {
       brief = await this.buildBrief(task, targetProjectPath, contract, environment, plan, conflict);
     } catch (e) {
-      // A missing intent is a PLANNING-INPUT gap, not an agent failure, so the
-      // result is `blocked` with the lookup's own detail. The orchestrator
-      // nevertheless routes a `blocked` result like `failed`: the item goes to
-      // Failed and through the FailureRouter (executeTask in
-      // orchestrator/src/execution.ts). `environment_blocked`, `environment_undefined`,
-      // `owner_unresolved` and stale checks are routed without Failed.
-      if (!(e instanceof ProjectIntentUnavailable)) throw e;
-      const chain = wrapError("development", "loadProjectIntent", e, { taskId: task.id });
-      const envelope: ErrorEnvelope = {
-        outcome: "blocked",
-        summary: `project intent unavailable for ${task.id}: ${chain.message}`,
-        chain,
-      };
-      eventSink?.emit({
-        event: "task_blocked",
-        taskId: task.id,
-        attempt: task.attempt,
-        reason: envelope.summary,
-      });
-      const result: ExecutionResult = {
-        status: "blocked",
-        detail: envelope.summary,
-        output: null,
-        sessionId,
-        attempt: task.attempt,
-        errorEnvelope: envelope,
-      };
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
+      // other throw building the brief: never the agent's work, so blocked under class ashara.
+      const step = e instanceof ProjectIntentUnavailable ? "load the project's intent" : "build the brief";
+      return thrownBlocked(task, sessionId, "buildBrief", e, { step, cell: "brief" }, NO_AGENT, eventSink);
     }
 
     // The Assignment's agent half, once per attempt: a model that cannot be
@@ -1319,10 +1359,7 @@ export class DevelopmentService {
       records = new DispatchRecords(base, task.id, sessionId);
       await records.writeBrief(brief);
     } catch (e) {
-      const result = failedBeforeAgent(task, sessionId, "assignAgent", e, `agent assignment failed for ${task.id}`);
-      eventSink?.emit({ event: "error", location: "DevelopmentService:assignAgent", taskId: task.id, attempt: task.attempt, error: result.detail });
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      return thrownBlocked(task, sessionId, "assignAgent", e, { step: "staff the attempt and write its brief", cell: "attempt records" }, NO_AGENT, eventSink);
     }
 
     // A check task works on a throwaway branch fresh from main, never on a task branch: nothing of
@@ -1332,6 +1369,8 @@ export class DevelopmentService {
     try {
       if (plan.kind === "check-authoring") {
         const branch = checkBranchName(task.id);
+        // A worktree a crash left registered holds the branch, and git refuses to delete it.
+        await clearWorktreeSlot(base, targetProjectPath, branch);
         await dropCheckBranch(targetProjectPath, branch);
         workdir = await createWorkdir(base, targetProjectPath, branch);
         try {
@@ -1347,17 +1386,8 @@ export class DevelopmentService {
         work = plan;
       }
     } catch (e) {
-      if (e instanceof ConflictRetryUnprepared) return await this.conflictUnprepared(task, sessionId, e);
-      const result = failedBeforeAgent(task, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
-      eventSink?.emit({
-        event: "error",
-        location: "DevelopmentService:createWorkdir",
-        taskId: task.id,
-        attempt: task.attempt,
-        error: result.detail,
-      });
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      if (e instanceof ConflictRetryUnprepared) return this.conflictUnprepared(task, sessionId, e);
+      return thrownBlocked(task, sessionId, "createWorkdir", e, { step: "create the task worktree", cell: "host git" }, NO_AGENT, eventSink);
     }
     const { workDir, repo } = workdir;
 
@@ -1377,13 +1407,7 @@ export class DevelopmentService {
       });
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
-      const environmentFailure = environmentErrorOf(e);
-      if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "createCell", environmentFailure, "task cell", NO_AGENT, eventSink);
-      }
-      const result = failedBeforeAgent(task, sessionId, "createCell", e, `task cell refused for ${task.id}`);
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink);
     }
     eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
@@ -1408,48 +1432,18 @@ export class DevelopmentService {
         { sessionId, taskId: task.id, brief, environmentVersion: sessionEnvironmentVersion(environment) },
         (slot) => this.runExecution(dispatch, slot),
       );
-      // Every non-completed terminal outcome carries a blocking/failure reason
-      // worth keeping (kl-t4): capturing it here, ONE seam covering every return
-      // path inside runExecution, is what closes the success-only gap without
-      // touching its many return sites. A refused call, stale stored checks (the check task's to
-      // rewrite, no model ran), a disputed check (the check author's to answer), a requested
-      // environment change (the platform role's to make) and a shutdown are no lesson about the task.
-      if (
-        result.status !== "completed" &&
-        result.status !== "refused" &&
-        result.status !== "checks_stale" &&
-        result.status !== "disputed" &&
-        result.status !== "environment_change_requested" &&
-        result.status !== "interrupted"
-      ) {
+      // ONE seam covering every return path inside runExecution (kl-t4): only the agent's own work
+      // failing is a lesson about the task (fault-class.ts). A substrate or Z0 fault, a refused call,
+      // stale stored checks, a disputed check, a requested environment change and a shutdown are not.
+      if (result.status === "failed" || result.status === "blocked") {
         await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
       }
       return result;
     } catch (e) {
-      const chain = wrapError("development", "execute", e, { taskId: task.id });
-      eventSink?.emit({
-        event: "error",
-        location: "DevelopmentService:execute",
-        taskId: task.id,
-        attempt: task.attempt,
-        error: chain.message,
-      });
-      await cleanupWorkdir(workDir, targetProjectPath);
-      const envelope: ErrorEnvelope = {
-        outcome: "failed",
-        summary: `execution error for ${task.id}: ${chain.message}`,
-        chain,
-      };
-      const result: ExecutionResult = {
-        status: "failed",
-        detail: envelope.summary,
-        output: null,
-        sessionId,
-        attempt: task.attempt,
-        errorEnvelope: envelope,
-      };
-      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-      return result;
+      // A throw no stage caught: never the agent's work, so blocked under its class, no lesson.
+      eventSink?.emit({ event: "error", location: "DevelopmentService:execute", taskId: task.id, attempt: task.attempt, error: describeErrorChain(e) });
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "a throw out of the dispatch");
+      return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { output: null, agentWork: "unknown" }, eventSink);
     } finally {
       await this.teardownCell(task.id, cell);
     }
@@ -1893,7 +1887,7 @@ export class DevelopmentService {
     }
 
     const finalizeResult = await finalizeSuccess({ ...finalizeDeps, presentedConflict: d.conflict }, task, targetProjectPath, task.attempt);
-    if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
+    if (!finalizeResult.success && finalizeResult.fault.class === "substrate") {
       // The merge was aborted and the branch kept: the verifier cell's substrate
       // failed, which is the operator's to fix, not a regression of the tree.
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -1901,32 +1895,18 @@ export class DevelopmentService {
         task,
         sessionId,
         "postMergeVerify",
-        finalizeResult.environmentFailure,
+        finalizeResult.fault.error,
         "verifier cell",
         { output, agentWork: "kept" },
         eventSink,
         finalizeResult.errorLayer,
       );
     }
-    if (!finalizeResult.success && finalizeResult.infrastructureFault !== null) {
-      // No check ran, so nothing is known of the task's work: blocked for the operator, the
-      // merge aborted and the branch kept, never a failure the task is replanned against.
-      const fault = finalizeResult.infrastructureFault;
+    if (!finalizeResult.success && finalizeResult.fault.class === "ashara") {
+      // No verdict was reached, so nothing is known of the task's work: blocked for the operator,
+      // the merge aborted and the branch kept, never a failure the task is replanned against.
       await cleanupWorkdir(workDir, targetProjectPath);
-      return environmentBlocked(
-        {
-          task,
-          sessionId,
-          stage: "postMergeCheckRun",
-          errorClass: fault.name,
-          message: fault.message,
-          chain: finalizeResult.errorLayer,
-          unavailable: `verification infrastructure (${fault.step})`,
-          output,
-          agentWork: "kept",
-        },
-        eventSink,
-      );
+      return asharaBlocked(task, sessionId, "postMergeCheckRun", finalizeResult.fault.error, { output, agentWork: "kept" }, eventSink, finalizeResult.errorLayer);
     }
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer;
@@ -2283,14 +2263,13 @@ export class DevelopmentService {
 
   /**
    * The task's conflict with main could not be prepared for this attempt (ConflictRetryUnprepared),
-   * or git could not even be asked: failed under prepareConflictRetry, which planning routes to plan
-   * repair. Nothing was dispatched; the branch is kept as it was.
+   * or git could not even be asked: Z0's git, never the agent's work, so blocked under class ashara
+   * (prepareConflictRetry). Nothing was dispatched, so the branch is never dispatched as it is; it
+   * is kept as it was for the next dispatch to try again.
    */
-  private async conflictUnprepared(task: TaskDescriptor, sessionId: string, e: unknown): Promise<ExecutionResult> {
-    const result = failedBeforeAgent(task, sessionId, "prepareConflictRetry", e, `the conflict of ${task.id} with main could not be prepared`);
-    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
-    await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-    return result;
+  private conflictUnprepared(task: TaskDescriptor, sessionId: string, e: unknown): ExecutionResult {
+    const where = { step: "prepare the task's conflict with main for its next attempt", cell: "host git" };
+    return thrownBlocked(task, sessionId, "prepareConflictRetry", e, where, NO_AGENT, this.deps.eventSink);
   }
 
   /**
@@ -2307,20 +2286,8 @@ export class DevelopmentService {
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the conflict markers could not be read");
       const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
-      return environmentBlocked(
-        {
-          task,
-          sessionId,
-          stage: "conflictResolution",
-          errorClass: fault.name,
-          message: fault.message,
-          chain: wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name }),
-          unavailable: `verification infrastructure (${fault.step})`,
-          output,
-          agentWork: "merge-discarded",
-        },
-        this.deps.eventSink,
-      );
+      const chain = wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name });
+      return asharaBlocked(task, sessionId, "conflictResolution", fault, { output, agentWork: "merge-discarded" }, this.deps.eventSink, chain);
     }
     this.deps.eventSink?.emit({ event: "merge_conflict_resolution", taskId: task.id, attempt: task.attempt, files: conflict.files, markersLeft: left });
     if (left.length === 0) return null;
@@ -2343,11 +2310,10 @@ export class DevelopmentService {
       await commitAllChanges(d.repo, `ashara: agent output for task ${task.id}`);
       return null;
     } catch (e) {
-      const environmentFailure = environmentErrorOf(e);
-      if (environmentFailure === null && !(e instanceof WorktreeCommitIncomplete)) throw e;
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
-      if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "commitWork", environmentFailure, "host git", { output, agentWork: "kept" }, this.deps.eventSink);
+      if (!(e instanceof WorktreeCommitIncomplete)) {
+        // Z0's git refused to record the work (WorktreeCommitFailed), or anything else failed: never the agent's.
+        return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { output, agentWork: "kept" }, this.deps.eventSink);
       }
       const chain = wrapError("development", "commitWork", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
@@ -2383,23 +2349,8 @@ export class DevelopmentService {
         };
       }
       const fault = new VerificationInfrastructureFault(task.id, "task branch diff against main", { cause: e });
-      return {
-        kind: "ended",
-        result: environmentBlocked(
-          {
-            task,
-            sessionId,
-            stage: "branchWork",
-            errorClass: fault.name,
-            message: fault.message,
-            chain: wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name }),
-            unavailable: `verification infrastructure (${fault.step})`,
-            output,
-            agentWork: "kept",
-          },
-          this.deps.eventSink,
-        ),
-      };
+      const chain = wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name });
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { output, agentWork: "kept" }, this.deps.eventSink, chain) };
     }
   }
 
@@ -2422,20 +2373,8 @@ export class DevelopmentService {
         return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { output, agentWork: "kept" }, eventSink);
       }
       const fault = new VerificationInfrastructureFault(task.id, step, { cause: e });
-      return environmentBlocked(
-        {
-          task,
-          sessionId,
-          stage: "ownershipGate",
-          errorClass: fault.name,
-          message: fault.message,
-          chain: wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name }),
-          unavailable: `verification infrastructure (${fault.step})`,
-          output,
-          agentWork: "kept",
-        },
-        eventSink,
-      );
+      const chain = wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name });
+      return asharaBlocked(task, sessionId, "ownershipGate", fault, { output, agentWork: "kept" }, eventSink, chain);
     };
     let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
     try {
@@ -2519,13 +2458,9 @@ export class DevelopmentService {
     try {
       run = await runSubstrateGate(this.environmentScope(d), attemptPolicy.perCommandTimeoutSeconds);
     } catch (e) {
-      const environmentFailure = environmentErrorOf(e);
-      if (environmentFailure === null) throw e;
-      await cleanupWorkdir(workDir, targetProjectPath);
-      return {
-        kind: "ended",
-        result: substrateBlocked(task, sessionId, "substrateGate", environmentFailure, "CI cell", { output, agentWork: "kept" }, eventSink),
-      };
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the substrate gate could not run");
+      const fault = environmentErrorOf(e) ?? new VerificationInfrastructureFault(task.id, "substrate gate run", { cause: e });
+      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { output, agentWork: "kept" }, eventSink) };
     }
 
     const passed = environmentCheckPassed(run.report);
@@ -2537,7 +2472,14 @@ export class DevelopmentService {
       return fail(`substrate gate failed for ${task.id}:\n${gateOutput}`, chain);
     }
 
-    await this.deps.environment.statements.record(task.id, statement, run.tested.version);
+    try {
+      await this.deps.environment.statements.record(task.id, statement, run.tested.version);
+    } catch (e) {
+      // The gate passed; only Z0's store failed to keep its statement, as recordRebuiltStatement's write.
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the stack statement could not be recorded");
+      const fault = new VerificationInfrastructureFault(task.id, `record the environment statement for version ${run.tested.version}`, { cause: e });
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { output, agentWork: "kept" }, eventSink) };
+    }
     return { kind: "passed", tested: run.tested };
   }
 
@@ -3381,6 +3323,9 @@ export class DevelopmentService {
       const errorClass = outcome.error instanceof Error ? outcome.error.name : typeof outcome.error;
       const typed = environmentErrorOf(outcome.error);
       const cell = outcome.lastToolCall?.toolName === "run_checks" ? "CI cell (run_checks)" : "task cell";
+      // Substrate only by its class (fault-class.ts); records that cannot be written, Z0's
+      // verification machinery and anything unclassified are Ashara's (fail-closed).
+      const fault = outcome.source !== "records" && typed !== null ? "substrate" : "ashara";
       const unavailable =
         outcome.source === "records"
           ? "attempt records"
@@ -3388,12 +3333,13 @@ export class DevelopmentService {
             ? `verification infrastructure (${outcome.error.step})`
             : typed !== null
               ? unavailableOf(typed, cell)
-              : cell;
+              : `Ashara's own machinery under the ${cell}`;
       return environmentBlocked(
         {
           task,
           sessionId,
           stage: "agentAttempt",
+          fault,
           errorClass,
           message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),

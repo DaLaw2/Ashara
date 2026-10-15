@@ -108,3 +108,24 @@ describe("a retry of a branch that conflicts with main", () => {
     await expect(conflictWithMain(target, "no-such-task")).rejects.toBeInstanceOf(ConflictRetryUnprepared);
   });
 });
+
+// The fault-class soak (t-ddd-fix-own-faults): a cleanup whose git failed left a worktree registered
+// with its directory gone, or a crash left the directory too; every later `worktree add` there, and
+// the deletion of a check branch it held, refused, and the task could never be dispatched again.
+describe("a worktree slot left by a crash or a faulted cleanup", () => {
+  test("a registration whose directory is gone, or a directory left whole, never stops the next worktree", async () => {
+    const { target, workdirBase } = await sameBaseConflict();
+    const left = await createWorkdirForRetry(workdirBase, target, "first", null);
+    await rm(left.workDir, { recursive: true, force: true });
+
+    const again = await createWorkdirForRetry(workdirBase, target, "first", null);
+    expect(again.workDir).toBe(left.workDir);
+    await writeFile(join(again.workDir, "residue.txt"), "uncommitted\n");
+
+    // The directory left whole, still registered.
+    const third = await createWorkdirForRetry(workdirBase, target, "first", null);
+    expect(await readFile(join(third.workDir, "first.txt"), "utf8")).toBe("first\n");
+    await expect(readFile(join(third.workDir, "residue.txt"), "utf8")).rejects.toThrow();
+    await cleanupWorkdir(third.workDir, target);
+  });
+});

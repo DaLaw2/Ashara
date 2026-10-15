@@ -189,6 +189,21 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
     ).toThrow(/inferences is not in a readable shape/);
   });
 
+  // Planning #21: the stored vision cannot change between attempts, so an unreadable one is the
+  // project's record, blocked at once, never counted and retried as a failed plan attempt.
+  test("an unreadable vision blocks the project with VisionUnreadable; no attempt is counted, no model called", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000026", "test");
+    const blocked: Blocked = [];
+    const unreadable = { ...awaiting(projectId, null, 0), inferences: [{ key: "A1", statement: "x", status: "Inferred", kind: "client-visible", disclosed: "emailed" }] };
+    const store: FirstPlanStore = { ...storeWith([], blocked), projectsAwaitingPlan: async () => [unreadable] };
+
+    const outcomes = await new FirstPlanner({ llm, store }).runPending();
+
+    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(blocked[0]?.cause).toMatchObject({ category: "fault", errorClass: "VisionUnreadable" });
+  });
+
   test("a vision with no item fails the plan attempt before any model call", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");

@@ -17,7 +17,8 @@ function exitCodeOf(e: unknown): number | null {
 export type MergeResult =
   | { readonly status: "clean" }
   | { readonly status: "conflict"; readonly files: string[] }
-  | { readonly status: "error"; readonly message: string };
+  /** Git refused the merge for a reason other than a conflict, or could not say which files conflict: `cause` is its error. */
+  | { readonly status: "error"; readonly message: string; readonly cause: unknown };
 
 export type CheckoutReset =
   | { readonly status: "clean" }
@@ -42,25 +43,27 @@ export async function discardTaskBranch(targetPath: string, taskId: string): Pro
   return "deleted";
 }
 
+/**
+ * Whether the branch exists. `rev-parse -q --verify` exits 1 with no output for a missing ref; any
+ * other failure is no answer and throws, never read as "absent" (a resumed branch recreated with -b).
+ */
 export async function branchExists(targetPath: string, branch: string): Promise<boolean> {
   try {
-    await runHostGit(targetRepo(targetPath), ["rev-parse", "--verify", `refs/heads/${branch}`]);
+    await runHostGit(targetRepo(targetPath), ["rev-parse", "-q", "--verify", `refs/heads/${branch}`]);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
+    throw e;
   }
 }
 
+/** The files the staged merge left unmerged; throws when git cannot say, never reads that as "none". */
 async function getConflictingFiles(targetPath: string): Promise<string[]> {
-  try {
-    const { stdout } = await runHostGit(targetRepo(targetPath), ["diff", "--name-only", "--diff-filter=U"]);
-    return stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-  } catch {
-    return [];
-  }
+  const { stdout } = await runHostGit(targetRepo(targetPath), ["diff", "--name-only", "--diff-filter=U"]);
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 /**
@@ -105,9 +108,15 @@ export async function tentativeMerge(targetPath: string, branch: string): Promis
     const errMsg = describeErrorChain(e);
     const stderr = stderrOf(e);
     console.warn(`[tentativeMerge] merge failed for ${branch}: ${errMsg.slice(0, 200)} | stderr: ${stderr.slice(0, 300)}`);
-    const files = await getConflictingFiles(targetPath);
+    const message = `${errMsg.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}`;
+    let files: string[];
+    try {
+      files = await getConflictingFiles(targetPath);
+    } catch (diffError) {
+      return { status: "error", message: `${message}; and the conflicting files could not be listed: ${describeErrorChain(diffError).slice(0, 300)}`, cause: diffError };
+    }
     if (files.length > 0) return { status: "conflict", files };
-    return { status: "error", message: `${errMsg.slice(0, 300)}${stderr ? ` (stderr: ${stderr.slice(0, 200)})` : ""}` };
+    return { status: "error", message, cause: e };
   }
 }
 

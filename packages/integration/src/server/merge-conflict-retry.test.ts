@@ -8,7 +8,6 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4GenerateResult } from "@ai-sdk/provider";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 import {
   ClientRepository,
   createDb,
@@ -216,18 +215,6 @@ async function redispatch(task: TaskDescriptor): Promise<TaskDescriptor> {
   return { ...task, attempt, dispatchCount: attempt, ...(blockedReason === undefined ? {} : { blockedReason }) };
 }
 
-const ItemRowSchema = z.object({ status: z.string(), source: z.string().nullable(), repairs: z.number() });
-
-async function itemRow(taskId: string): Promise<z.infer<typeof ItemRowSchema>> {
-  const result = await db.execute(sql`
-    SELECT status, blocked_reason->>'source' AS source,
-           (SELECT count(*)::int FROM plan_repairs WHERE work_item_id = ${taskId}) AS repairs
-    FROM work_items WHERE id = ${taskId}`);
-  const [row] = z.array(ItemRowSchema).parse(result.rows);
-  if (row === undefined) throw new Error(`task ${taskId} not found`);
-  return row;
-}
-
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   clientId = (await new ClientRepository(db).create(`merge-conflict-${randomUUID()}`)).id;
@@ -320,7 +307,7 @@ describe("a merge conflict between two tasks of one batch", () => {
     expect(await git("rev-parse", "main~1")).toBe(mainBefore);
   }, 600_000);
 
-  it("a conflict that cannot be prepared is never dispatched on the branch as it is: the task goes to plan repair", async () => {
+  it("a conflict that cannot be prepared is never dispatched on the branch as it is: blocked as Ashara's fault", async () => {
     const third = await checkedTask("Write gamma into notes.txt", { name: "has gamma", command: "grep -x gamma notes.txt || exit 99" });
     // Its branch left main before the merges above, and changes the same file.
     await git("branch", `task/${third.id}`, foundation);
@@ -342,15 +329,15 @@ describe("a merge conflict between two tasks of one batch", () => {
     };
     const { result, mock } = await withGitRunner(failingMergeTree, () => runTask({ ...third, attempt: 2, dispatchCount: 2 }, []));
 
-    expect(result.status).toBe("failed");
+    // Z0's git, never the task's work (ADR-080 d3 c): blocked under class ashara, not routed against
+    // the task, and the branch is never dispatched as it is.
+    expect(result.status).toBe("environment_blocked");
+    if (result.status !== "environment_blocked") return;
+    expect(result.fault).toBe("ashara");
     expect(mock.doGenerateCalls).toHaveLength(0);
-    if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
     expect(result.errorEnvelope.chain.operation).toBe("prepareConflictRetry");
-    expect(classifyFailure(result.errorEnvelope)).toBe("MERGE_RETRY_UNPREPARED");
+    expect(result.detail).toContain("merge-tree: simulated failure");
     expect(await git("rev-parse", `task/${third.id}`)).toBe(branchBefore);
-
-    expect(await routeFailure(third.id, result)).toBe("abandon");
-    expect(await itemRow(third.id)).toEqual({ status: "Abandoned", source: "failure_router", repairs: 1 });
   }, 300_000);
 
   it("an attempt handed a conflict that ends without done says its merge is discarded, never that its work is kept", async () => {

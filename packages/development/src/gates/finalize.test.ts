@@ -217,8 +217,10 @@ describe("a tentative merge that cannot be undone", () => {
     );
     expect(first.success).toBe(false);
     if (first.success) return;
-    expect(first.infrastructureFault).toBeInstanceOf(VerificationInfrastructureFault);
-    expect(first.infrastructureFault?.message).toMatch(/could not be aborted after postMergeTaskChecks.*no merge runs on this checkout until it is restored/s);
+    expect(first.fault.class).toBe("ashara");
+    if (first.fault.class !== "ashara") return;
+    expect(first.fault.error).toBeInstanceOf(VerificationInfrastructureFault);
+    expect(first.fault.error.message).toMatch(/could not be aborted after postMergeTaskChecks.*no merge runs on this checkout until it is restored/s);
     expect(first.errorLayer.operation).toBe("postMergeCheckRun");
 
     let verified = false;
@@ -234,7 +236,7 @@ describe("a tentative merge that cannot be undone", () => {
     expect(verified).toBe(false);
     expect(blocked.success).toBe(false);
     if (blocked.success) return;
-    expect(blocked.infrastructureFault?.step).toBe("restoring the target checkout to HEAD before the merge");
+    expect(blocked.fault.class === "ashara" ? blocked.fault.error.step : blocked.fault.class).toBe("restoring the target checkout to HEAD before the merge");
 
     await rm(lock);
     const restored = await finalizeSuccess(deps(async () => ({ passed: true, details: "ok" })), b, target, 1);
@@ -258,7 +260,7 @@ describe("a conflicted merge", () => {
     };
     const stale = await finalizeSuccess(deps(verify), b, target, 1);
     if (stale.success) throw new Error("expected a conflict");
-    expect(stale).toMatchObject({ failedStep: "merge", infrastructureFault: null, environmentFailure: null });
+    expect(stale).toMatchObject({ failedStep: "merge", fault: { class: "agent_work" } });
     expect(stale.errorLayer).toMatchObject({ operation: "tentativeMerge", context: { conflictFiles: ["shared.txt"] } });
     expect(stale.gateFailureContext).toContain("- shared.txt");
     expect(stale.gateFailureContext).not.toContain("conflict markers");
@@ -269,6 +271,57 @@ describe("a conflicted merge", () => {
     expect(again.errorLayer.operation).toBe("tentativeMergeAfterConflict");
     expect(again.gateFailureContext).toContain("conflicted again");
     expect(verified).toBe(false);
+    expect(await hasMergeHead(target)).toBe(false);
+  });
+});
+
+// ADR-080 d3 c (development #25, #27, #28; t-classifier-dirty-tree): a merge git refuses without a
+// conflict, and a target checkout changed outside the merge, are Z0's own faults, never the task's.
+describe("Z0's faults in the merge are blocked under class ashara", () => {
+  test("a merge git refuses without a conflict: class ashara under postMergeCheckRun; no check runs", async () => {
+    const t = task();
+    const target = join(await makeDir("ashara-finalize-nobranch-"), "project");
+    await ensureTargetGitInit(target);
+    let verified = false;
+
+    // The task branch does not exist: git refuses the merge, and no file is left unmerged.
+    const result = await finalizeSuccess(
+      deps(async () => {
+        verified = true;
+        return { passed: true, details: "ok" };
+      }),
+      t,
+      target,
+      1,
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.fault.class).toBe("ashara");
+    expect(result.errorLayer.operation).toBe("postMergeCheckRun");
+    expect(verified).toBe(false);
+    expect(await hasMergeHead(target)).toBe(false);
+  });
+
+  test("a tracked file changed outside the merge before its commit: class ashara, the merge aborted", async () => {
+    const a = task();
+    const target = await targetWithBranches([a]);
+
+    const result = await finalizeSuccess(
+      deps(async () => {
+        // Every check runs on a throwaway checkout: a change here is residue no check could leave.
+        await writeFile(join(target, "file-0.txt"), "residue\n", "utf-8");
+        return { passed: true, details: "ok" };
+      }),
+      a,
+      target,
+      1,
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.fault.class).toBe("ashara");
+    expect(result.gateFailureContext).toContain("changed outside the merge");
     expect(await hasMergeHead(target)).toBe(false);
   });
 });

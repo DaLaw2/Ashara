@@ -209,13 +209,16 @@ describe("lifecycle simulator, fast tier", () => {
   // catching it when migration 053 (an admission is two spend reads and a pending-row insert, each a
   // seam) merged with the batch's other seam changes; neither alone moved it. Observed 2026-10-15,
   // scan of seeds 1-40 at $10 with two projects, planted: seeds 4 and 21 fail I5:over-committed
-  // alone, and both pass clean with contended:spend-admission covered.
+  // alone, and both pass clean with contended:spend-admission covered. Seed 4 stopped catching it on
+  // t-ddd-fix-own-faults (a fault of Z0 is requeued uncharged, not replanned): its scan of 2026-10-15
+  // over seeds 1-120, the same mode, found none in 1-40 and seeds 47, 60, 63, 68, 81 and 84 failing
+  // I5:over-committed alone, planted, and passing clean with contended:spend-admission covered.
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(4, undefined, shared);
+    const clean = await seeded(47, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(4, "no-admission-queue", shared);
+    const planted = await seeded(47, "no-admission-queue", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

@@ -308,6 +308,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
 
   const probeBlocked: ExecutionResult = {
     status: "environment_blocked",
+    fault: "substrate",
     unavailable: "podman",
     detail: "execution substrate \"podman\" unavailable; no agent ran: podman binary not found on PATH",
     output: null,
@@ -411,6 +412,71 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts[0]?.reason).toContain("podman binary not found");
   });
 
+  // ADR-080 d3 c: Ashara's own Z0 fault is not the machines; the substrate probe cannot end its halt.
+  test("Ashara's own fault past the budget halts the project as a fault for the operator, never on infrastructure", async () => {
+    const detail = "Ashara's own machinery failed at stage commitWork (DispatchFault): git add failed: index.lock exists";
+    const asharaBlocked: ExecutionResult = {
+      status: "environment_blocked",
+      fault: "ashara",
+      unavailable: "host git (add of the task worktree)",
+      detail,
+      output: null,
+      sessionId: "test-session",
+      attempt: 1,
+      errorEnvelope: { outcome: "blocked", summary: detail, chain: { boundary: "development", operation: "commitWork", message: detail, timestamp: new Date().toISOString() } },
+    };
+    const { deps, stored, refunds, halts, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps(asharaBlocked, 3);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored().status).toBe("Pending");
+    expect(refunds()).toBe(1);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+    expect(halts).toHaveLength(1);
+    expect(halts[0]).toMatchObject({ category: "fault", errorClass: "AsharaFaultBudgetSpent" });
+    expect(halts[0]?.reason).toContain("index.lock exists");
+  });
+
+  // Orchestrator D2: a fault before the dispatch seam was charged as the task's and replanned without bound.
+  test("a throw before the dispatch seam: Ashara's fault, back to Pending uncounted, no failure router, no lesson", async () => {
+    const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
+    let counted = 0;
+    deps.workItemRepo.incrementDispatchCount = async () => {
+      counted++;
+      return 1;
+    };
+    deps.projectRepo.get = async () => {
+      throw new Error("connection terminated unexpectedly");
+    };
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("interrupted");
+    expect(result.detail).toContain("connection terminated unexpectedly");
+    expect(statusesWritten).toEqual(["InProgress", "Pending"]);
+    expect(stored().status).toBe("Pending");
+    expect(counted).toBe(0);
+    expect(refunds()).toBe(0);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+  });
+
+  test("a throw out of the dispatch past the seam: Ashara's fault, back to Pending with the dispatch refunded, no lesson", async () => {
+    const { deps, stored, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
+    deps.developmentService.execute = async () => {
+      throw new Error("dev_sessions insert failed");
+    };
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("interrupted");
+    expect(stored().status).toBe("Pending");
+    expect(refunds()).toBe(1);
+    expect(failureRoutes()).toBe(0);
+    expect(failedApproaches()).toBe(0);
+  });
+
   test("a fault after the halt resumed gives the item up for a plan repair, with the fault as its cause", async () => {
     const { deps, stored, statusesWritten, failureRoutes, halts } = buildEnvironmentBlockedDeps(probeBlocked, 4);
 
@@ -450,6 +516,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       "task t blocked, the agent's work is kept on the task branch";
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches } = buildEnvironmentBlockedDeps({
       status: "environment_blocked",
+      fault: "substrate",
       unavailable: "verifier cell mount (/x/target)",
       detail,
       output,
@@ -1000,6 +1067,28 @@ describe("an environment change requested: an environment task is opened and the
     expect(approaches()).toBe(0);
   });
 
+  // Orchestrator D3: a roster read error was folded into "no owner", and the task was given up.
+  test("a roster that cannot be read: Ashara's fault, back to Pending with the dispatch refunded, never given up", async () => {
+    const built = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
+    const { item, opened, routed, approaches } = built;
+    let faults = 0;
+    built.deps.workItemRepo.recordInfrastructureFault = async () => ++faults;
+    const deps: CoreLoopDeps = {
+      ...built.deps,
+      environmentOwner: async () => {
+        throw new Error("roster query failed");
+      },
+    };
+
+    await processTask(deps, freshPendingItem());
+
+    expect(opened()).toEqual([]);
+    expect(item()).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(faults).toBe(1);
+    expect(routed()).toBe(0);
+    expect(approaches()).toBe(0);
+  });
+
   test("no role does environment work: given up with environment_change_needed saying why; nothing opened", async () => {
     const { deps, item, opened } = buildEnvironmentChangeDeps(0, { kind: "none", why: "no role holds write-environment" });
 
@@ -1230,6 +1319,30 @@ describe("a completed dispatch records its merge before the task is Completed", 
     sessionId: "test-session",
     attempt: 1,
   };
+
+  // Orchestrator D1: the Completed transition commits before its events publish; a failed publish
+  // after it routed a merged, Completed task as failed and wrote a false lesson.
+  test("a publish that fails after the task is Completed: still completed, no lesson", async () => {
+    const built = buildMergeDeps(merged, async () => {});
+    const { stored, writes } = built;
+    let approaches = 0;
+    const deps: CoreLoopDeps = {
+      ...built.deps,
+      failedApproachRepo: { record: async () => { approaches++; } },
+      eventStore: {
+        publish: async () => {
+          throw new Error("domain_events insert failed");
+        },
+      },
+    };
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(writes).toEqual(["InProgress", `merge ${MERGE_COMMIT}`, "Completed"]);
+    expect(stored().status).toBe("Completed");
+    expect(approaches).toBe(0);
+  });
 
   test("the merge commit is recorded, then the task is Completed", async () => {
     const { deps, stored, writes } = buildMergeDeps(merged, async () => {});

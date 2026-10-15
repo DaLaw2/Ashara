@@ -84,13 +84,11 @@ describe("FailureRouter", () => {
       if (atBound.action === "abandon") expect(atBound.reason).toContain("conflicts with main");
     });
 
-    test("MERGE_CONFLICT_PERSISTS and MERGE_RETRY_UNPREPARED abandon at once, whatever budget remains", () => {
+    test("MERGE_CONFLICT_PERSISTS abandons at once, whatever budget remains", () => {
       const router = new FailureRouter(3);
-      for (const category of ["MERGE_CONFLICT_PERSISTS", "MERGE_RETRY_UNPREPARED"] as const) {
-        const decision = router.route(makeInput({ priorAttempts: 1, category }));
-        expect(decision).toMatchObject({ action: "abandon", attempts: 1 });
-        if (decision.action === "abandon") expect(decision.reason).toContain("the plan is repaired around it");
-      }
+      const decision = router.route(makeInput({ priorAttempts: 1, category: "MERGE_CONFLICT_PERSISTS" }));
+      expect(decision).toMatchObject({ action: "abandon", attempts: 1 });
+      if (decision.action === "abandon") expect(decision.reason).toContain("the plan is repaired around it");
     });
   });
 });

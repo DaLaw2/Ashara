@@ -10,7 +10,7 @@
  */
 
 // --- Types (re-exported as type-only) ---
-export type { DevelopmentService, TaskDescriptor } from "@ashara/development";
+export type { DevelopmentService, FaultClass, TaskDescriptor } from "@ashara/development";
 
 // --- Values (re-exported) ---
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "@ashara/development";

@@ -2,7 +2,6 @@ import type { EventStoreRepository } from "@ashara/db";
 import type { DomainEvent, MergeKind, StoredBlockedReason } from "@ashara/shared";
 import {
   describeErrorChain,
-  wrapError,
   InvalidStatusTransition,
   InvalidId,
   withSalvagedResult,
@@ -27,7 +26,7 @@ import {
   exitSuiteReview,
   requestEnvironmentChange,
 } from "./acl/planning-acl.js";
-import type { TaskDescriptor } from "./acl/development-acl.js";
+import type { FaultClass, TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
@@ -233,10 +232,10 @@ async function executeTask(
   }
 
   if (execResult.status === "environment_blocked") {
-    // Not a task failure: the machines the task runs on failed, so the attempt is not charged and
-    // the item goes back to Pending, within its fault budget; past it the project halts on
-    // infrastructure until the substrate probe passes (infrastructure-halts.ts).
-    await routeAsInfrastructureFault(deps, task, { unavailable: execResult.unavailable, reason: execResult.detail }, "counted");
+    // Not a task failure: the machines the task runs on, or Ashara's own Z0 machinery, failed, so
+    // the attempt is not charged and the item goes back to Pending, within its fault budget; past it
+    // the project halts under the fault's class (routeAsInfrastructureFault).
+    await routeAsInfrastructureFault(deps, task, { class: execResult.fault, unavailable: execResult.unavailable, reason: execResult.detail }, "counted");
     return {
       result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
       output: execResult.output,
@@ -458,13 +457,17 @@ async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsGivenUp");
 }
 
-/** Why the machines a task runs on failed: what was unavailable, and the substrate's own diagnostic. */
+/**
+ * Why a dispatch stopped on something that is not the task's work (development's fault-class.ts):
+ * its class, what was unavailable, and the fault's own diagnostic.
+ */
 interface InfrastructureFault {
+  readonly class: Exclude<FaultClass, "agent_work">;
   readonly unavailable: string;
   readonly reason: string;
 }
 
-/** The project's cause on record when a task's infrastructure faults spent their budget. */
+/** The project's cause on record when a task's substrate faults spent their budget. */
 class InfrastructureFaultBudgetSpent extends Error {
   constructor(
     readonly taskId: string,
@@ -480,13 +483,30 @@ class InfrastructureFaultBudgetSpent extends Error {
   }
 }
 
+/** The project's cause on record when a task's faults spent their budget and the last was Ashara's own. */
+class AsharaFaultBudgetSpent extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly faults: number,
+    readonly fault: InfrastructureFault,
+  ) {
+    super(
+      `task ${taskId} met ${faults} fault(s) that were not its work, past the budget of ${INFRASTRUCTURE_FAULT_BUDGET} uncharged ` +
+        `requeues, the last of Ashara's own machinery; the project halts until the operator repairs it. The last fault: ` +
+        `${fault.unavailable}: ${fault.reason}`,
+    );
+    this.name = "AsharaFaultBudgetSpent";
+  }
+}
+
 /**
- * An infrastructure fault under a dispatch (story s-loop-never-stop-m1 W6): not the task's, so it
- * is counted on the task, durably, and the attempt is not charged. Within the budget the item goes
- * back to Pending (its dispatch refunded when the seam `counted` it). The fault past the budget
- * halts the project on infrastructure, with one report, and requeues the item the same way: the
- * gate skips it until the substrate probe resumes the project. A fault after that gives the item
- * up: the halt could not wait it out.
+ * A fault under a dispatch that is not the task's work (story s-loop-never-stop-m1 W6; ADR-080 d3 c):
+ * the substrate's or Ashara's own Z0 machinery. It is counted on the task, durably, and the attempt
+ * is not charged and no lesson is written. Within the budget the item goes back to Pending (its
+ * dispatch refunded when the seam `counted` it). The fault past the budget halts the project under
+ * its class, with one report, and requeues the item the same way: a substrate fault on
+ * infrastructure, which the substrate probe resumes; Ashara's own as a fault, which the operator
+ * repairs. A fault after that gives the item up: the halt could not wait it out.
  */
 async function routeAsInfrastructureFault(
   deps: ExecutionRoutingDeps,
@@ -505,14 +525,25 @@ async function routeAsInfrastructureFault(
     });
     return;
   }
-  const why = `infrastructure fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET} (${fault.unavailable} unavailable)`;
+  const why = `infrastructure fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET} (${fault.class}: ${fault.unavailable} unavailable)`;
   if (dispatch === "counted") await requeueAndRefund(deps, task.id, why, "execution.routeAsInfrastructureFault");
   else await requeueUncounted(deps, task.id, why);
   if (faults > INFRASTRUCTURE_FAULT_BUDGET) {
-    const err = new InfrastructureFaultBudgetSpent(task.id, faults, fault);
-    const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
-    console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
+    if (fault.class === "substrate") {
+      const err = new InfrastructureFaultBudgetSpent(task.id, faults, fault);
+      const halted = await deps.projects.block(task.projectId, { ...projectBlockCause(err), category: "infrastructure" });
+      console.warn(`[${task.id}] project ${task.projectId} ${halted} on infrastructure: ${err.message}`);
+    } else {
+      const err = new AsharaFaultBudgetSpent(task.id, faults, fault);
+      const halted = await deps.projects.block(task.projectId, projectBlockCause(err));
+      console.warn(`[${task.id}] project ${task.projectId} ${halted} on Ashara's own fault: ${err.message}`);
+    }
   }
+}
+
+/** A throw out of the dispatch's own steps (Z0's store, its code): Ashara's, never the task's work. */
+function asharaFaultOf(e: unknown, step: string): InfrastructureFault {
+  return { class: "ashara", unavailable: `Ashara's own machinery (${step})`, reason: describeErrorChain(e) };
 }
 
 /** Requeues an item whose dispatch was never counted (the seam was not reached): nothing to refund. */
@@ -805,12 +836,9 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
     item.taskSpec?.origin === "product-scaffold" && !completed.some((done) => done.taskSpec?.origin === "product-scaffold")
       ? "absent"
       : "present";
-  let owner: Awaited<ReturnType<ExecutionRoutingDeps["environmentOwner"]>>;
-  try {
-    owner = await deps.environmentOwner(task.projectId);
-  } catch (e) {
-    owner = { kind: "none", why: `the project's roster could not be read: ${describeErrorChain(e)}` };
-  }
+  // A roster that cannot be read throws through (the port's contract): Ashara's fault, routed
+  // uncharged by processTask, never read as "no owner", which would give the task up.
+  const owner = await deps.environmentOwner(task.projectId);
   const previousStatus = item.status;
   let exit: ReturnType<typeof requestEnvironmentChange>;
   try {
@@ -873,10 +901,10 @@ async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: stri
 }
 
 async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
+  // The Completed transition is committed before its events return: a publish failure after it must
+  // not route a merged, Completed task as failed (orchestrator D1).
   const events = await PlanningService.route(deps.workItemRepo, task.id, true);
-  for (const event of events) {
-    await deps.eventStore.publish(event);
-  }
+  await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsSuccess");
 }
 
 async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
@@ -995,11 +1023,6 @@ export async function processTask(
   const previousStatus = workItem.status;
   startWorkItem(workItem);
   await PlanningService.saveWorkItem(deps.workItemRepo, workItem, previousStatus);
-  const startEvents = takeEvents(workItem);
-  const ancestorEvents = await PlanningService.activateAncestors(deps.workItemRepo, workItem.parentId);
-  for (const event of [...startEvents, ...ancestorEvents]) {
-    await deps.eventStore.publish(event);
-  }
 
   const routingDeps: ExecutionRoutingDeps = {
     workItemRepo: deps.workItemRepo,
@@ -1010,38 +1033,54 @@ export async function processTask(
     suiteReviewFindings: deps.suiteReviewFindings,
     environmentOwner: deps.environmentOwner,
   };
-  const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
-  if (workspace.kind === "rejected") {
-    // Before the dispatch is counted, any model call or any cell: without a valid target checkout
-    // the work has nowhere to be done or merged. The host's, not the task's: an uncharged
-    // infrastructure fault, within the task's budget.
-    await routeAsInfrastructureFault(routingDeps, workItem, { unavailable: "target workspace", reason: workspace.reason }, "not-counted");
-    return { taskId: task.id, status: "interrupted", detail: workspace.reason };
+
+  // Before the dispatch seam nothing of the task ran: a throw here is Ashara's own (a store, the
+  // audit log, the workspace's record), never the task's, so it is routed uncharged and uncounted.
+  let targetProjectPath: string;
+  let attempt: number;
+  try {
+    const startEvents = takeEvents(workItem);
+    const ancestorEvents = await PlanningService.activateAncestors(deps.workItemRepo, workItem.parentId);
+    await publishBestEffort(deps.eventStore, task.id, [...startEvents, ...ancestorEvents], "execution.processTask");
+
+    const workspace = await resolveTargetProjectPath(deps.projectRepo, workItem.projectId, deps.config.workdirBase);
+    if (workspace.kind === "rejected") {
+      // Before the dispatch is counted, any model call or any cell: without a valid target checkout
+      // the work has nowhere to be done or merged. Ashara's own record of the project, not the
+      // task's: an uncharged fault, within the task's budget; no substrate probe can repair it.
+      await routeAsInfrastructureFault(routingDeps, workItem, { class: "ashara", unavailable: "target workspace", reason: workspace.reason }, "not-counted");
+      return { taskId: task.id, status: "interrupted", detail: workspace.reason };
+    }
+    targetProjectPath = workspace.path;
+
+    // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
+    // is about to be handed to the agent. Bump the dispatch counter with a single
+    // atomic UPDATE BEFORE executeTask, so the attempt is recorded even if the agent
+    // crashes, its output is discarded, or any downstream step throws — the exact
+    // Run-9 hole where a discarded output left the retry bound reading zero forever.
+    // This is the ONE place a dispatch is counted; every retry-bound consumer
+    // (FailureRouter recovery, startup reconciler) reads the resulting
+    // dispatch_count off the reloaded WorkItem.
+    attempt = await deps.workItemRepo.incrementDispatchCount(task.id);
+  } catch (e) {
+    const fault = asharaFaultOf(e, "start the dispatch");
+    console.warn(`[${task.id}] the dispatch could not start, Ashara's own fault, routed uncharged: ${fault.reason}`);
+    await routeAsInfrastructureFault(routingDeps, workItem, fault, "not-counted");
+    return { taskId: task.id, status: "interrupted", detail: fault.reason };
   }
-  const targetProjectPath = workspace.path;
 
-  // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
-  // is about to be handed to the agent. Bump the dispatch counter with a single
-  // atomic UPDATE BEFORE executeTask, so the attempt is recorded even if the agent
-  // crashes, its output is discarded, or any downstream step throws — the exact
-  // Run-9 hole where a discarded output left the retry bound reading zero forever.
-  // This is the ONE place a dispatch is counted; every retry-bound consumer
-  // (FailureRouter recovery, startup reconciler) reads the resulting
-  // dispatch_count off the reloaded WorkItem.
-  const attempt = await deps.workItemRepo.incrementDispatchCount(task.id);
-
-  const {
-    result,
-    output,
-    errorEnvelope: execEnvelope,
-    routedHere,
-  } = await executeTask(
-    routingDeps,
-    deps.developmentService,
-    task,
-    targetProjectPath,
-    attempt,
-  );
+  let executed: Awaited<ReturnType<typeof executeTask>>;
+  try {
+    executed = await executeTask(routingDeps, deps.developmentService, task, targetProjectPath, attempt);
+  } catch (e) {
+    // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
+    // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
+    const fault = asharaFaultOf(e, "run or route the dispatch");
+    console.warn(`[${task.id}] the dispatch threw, Ashara's own fault, routed uncharged: ${fault.reason}`);
+    await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
+    return { taskId: task.id, status: "interrupted", detail: fault.reason };
+  }
+  const { result, output, errorEnvelope: execEnvelope, routedHere } = executed;
 
   // The target project path is minted, validated, and recorded on the project
   // inside resolveTargetProjectPath, its single writer.
@@ -1205,15 +1244,14 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem): Promise<void
 }
 
 /**
- * Recovers from a THROWN orchestrator error during `processTask` (as opposed to
- * a typed failed/blocked TaskResult, which processTask already routes itself):
- * commits the item to Failed, records the failed-approach lesson, and routes it
- * through the SAME FailureRouter policy as the clean-failure path — without
- * this the item strands at Failed until the next process restart (the gate
- * selects Pending only, so its dependents deadlock). Fully fail-closed: if
- * recovery itself throws (including the item lookup), the item is left at
- * Failed for the STARTUP reconciler to retry and the caller's cycle loop
- * continues — a single task's recovery must never crash the batch.
+ * Recovers from a THROWN orchestrator error during `processTask` (as opposed to a typed TaskResult,
+ * which processTask routes itself, its own throws included): the throw is Ashara's own fault, never
+ * the task's work, so no lesson is written for it (ADR-080 d3 c). An item left InProgress is
+ * requeued uncharged as Ashara's fault (counted on its fault budget; the dispatch is not refunded,
+ * since whether the seam counted it is unknown here: the conservative direction). An item the
+ * agent's failure already committed to Failed is routed through the FailureRouter, so it neither
+ * strands at Failed nor deadlocks its dependents. Fully fail-closed: if recovery itself throws, the
+ * item is left for the STARTUP reconciler and the caller's cycle loop continues.
  */
 export async function handleProcessingError(
   deps: CoreLoopDeps,
@@ -1221,29 +1259,29 @@ export async function handleProcessingError(
   error: unknown,
 ): Promise<TaskResult> {
   console.warn(`[${task.id}] task processing failed with orchestrator error:`, error);
-  await handleTaskError(deps, task);
-
-  const chain = wrapError("orchestrator", "processTask", error, { taskId: task.id });
-  const envelope: ErrorEnvelope = {
-    outcome: "failed",
-    summary: chain.message,
-    chain,
-  };
-
-  const result = failedResult(task.id, chain.message);
-  await recordFailedApproach(deps.failedApproachRepo, deps.workItemRepo, task, chain.message);
+  const fault = asharaFaultOf(error, "process the task");
 
   try {
     const current = await PlanningService.findWorkItem(deps.workItemRepo, task.id);
     if (!current) {
-      console.warn(
-        `[${task.id}] work item vanished during orchestrator error recovery; ` +
-        `item left for startup reconciler`,
-      );
+      console.warn(`[${task.id}] work item vanished during orchestrator error recovery; item left for startup reconciler`);
     } else {
-      // Exhaustive over WorkItemStatus so a new member is a compile error
-      // here, not a silent skip of recovery.
+      // Exhaustive over WorkItemStatus so a new member is a compile error here, not a silent skip.
       switch (current.status) {
+        case "InProgress": {
+          const routingDeps: ExecutionRoutingDeps = {
+            workItemRepo: deps.workItemRepo,
+            eventStore: deps.eventStore,
+            spendCap: deps.spendCap,
+            projects: deps.projectRepo,
+            checkDisputes: deps.checkDisputes,
+            suiteReviewFindings: deps.suiteReviewFindings,
+            environmentOwner: deps.environmentOwner,
+          };
+          await routeAsInfrastructureFault(routingDeps, current, fault, "not-counted");
+          break;
+        }
+
         case "Failed":
           await recoverFailedItem(
             {
@@ -1252,17 +1290,7 @@ export async function handleProcessingError(
               failureRouter: deps.failureRouter,
             },
             current,
-            { detail: chain.message, raw: { ...envelope } },
-          );
-          break;
-
-        case "InProgress":
-          // handleTaskError was called but the concurrent pre-image guard
-          // rejected the transition. The startup reconciler will requeue.
-          console.warn(
-            `[${task.id}] work item still InProgress after handleTaskError ` +
-            `in error recovery (expected Failed); ` +
-            `item left for startup reconciler`,
+            { detail: `the routing of this task's failed attempt was interrupted by Ashara's own fault: ${fault.reason}`, raw: {} },
           );
           break;
 
@@ -1270,12 +1298,9 @@ export async function handleProcessingError(
         case "Pending":
         case "Blocked":
         case "Abandoned":
-          // Preempted by an external actor while the agent was executing.
-          // Recovery is not meaningful for a non-Failed item.
           console.warn(
-            `[${task.id}] work item preempted during error recovery: ` +
-            `expected Failed, found "${current.status}"; ` +
-            `recovery skipped, dispatchCount already incremented`,
+            `[${task.id}] work item at "${current.status}" during error recovery: ` +
+            `nothing to route, recovery skipped`,
           );
           break;
 
@@ -1290,10 +1315,10 @@ export async function handleProcessingError(
     }
   } catch (recoveryError) {
     console.warn(
-      `[${task.id}] recovery after orchestrator error failed; item left at Failed for the startup reconciler:`,
+      `[${task.id}] recovery after orchestrator error failed; item left for the startup reconciler:`,
       recoveryError,
     );
   }
 
-  return result;
+  return { taskId: task.id, status: "interrupted", detail: fault.reason };
 }

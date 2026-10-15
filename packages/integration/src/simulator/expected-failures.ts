@@ -51,7 +51,6 @@ interface ExpectedFailure {
  */
 const B5 = "B5 (baseline §3, §7.8; task t-merge-record-crash-window): a crash between the merge commit on main and its record; the startup reconciler requeues the task without looking on main";
 const B3 = "B3 (baseline §3, §7.8, §7.9; task t-orphan-requeue-failure): a fault on the startup reconciler's dev_sessions read leaves a crash orphan InProgress until the next boot";
-const B8 = "B8 (baseline §3, §7.8; task t-begin-failure-leaks-connection): a failed BEGIN leaves its pool connection checked out (drizzle-orm node-postgres session.transaction)";
 /**
  * Two projects fail the same keys at a cap of $10 (§7.8's soak) and at the tape's own cap
  * (`--projects 2` alone, baseline §7.10), so each is listed in both modes.
@@ -65,24 +64,48 @@ const B8 = "B8 (baseline §3, §7.8; task t-begin-failure-leaks-connection): a f
  * fails, and 77 fails it at the tape's cap only; each statement is B5's ("main commit ... has no item
  * Completed recording it (the item is Pending)"). Where in the merge each new crash lands: unverified.
  */
+/*
+ * Re-rolled 2026-10-15 (t-ddd-fix-own-faults): a fault of Ashara's own machinery is no longer
+ * charged as a failed attempt and replanned but requeued uncharged, and a worktree slot is cleared
+ * before each `worktree add`; both move every later seam call. Observed with `simulate.ts --seeds 80
+ * --projects 2 --jobs 4`, `--seeds 85 --projects 2 --cap 10 --jobs 4` and `--seeds 10 --start 81
+ * --projects 2`: 28, 39, 46 and 75 were reported listed but not failed in both modes, 82 no longer
+ * fails its project-1 key, 59 fails its orphan in project 2; 5, 6, 9, 19 and 49 fail newly. Each
+ * I7:unrecorded statement is B5's, and the replay traces of 5, 19 and 49 show "merge record ...
+ * giving up" and of 9 "requeued ...; its dispatch never finished" for the task of the unrecorded
+ * merge commit; the replay traces of 6 and 59 show "failed to requeue crash-orphaned InProgress
+ * item" (B3). Seed 89 (`--projects 2`) fails I7:p2:orphan outside the soak's range: unlisted, its
+ * cause unverified. B3, B5 and B8 are not fixed.
+ */
 const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 28, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
-  // Removed on the batch-1 merge (2026-10-15, after t-simulator-parallel, t-oracle-independence, t-ddd-fix-*): the
-  // 80-seed soaks (`simulate.ts --seeds 80 --projects 1|2`) reported each listed but not failed; B3 and B5 are not fixed.
-  { seed: 39, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
-  { seed: 46, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 5, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 19, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 49, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
-  { seed: 82, keys: ["I7:p2:unrecorded:Define and commit the project environment", "I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 75, keys: ["I1:leaked-connection:begin"], baseline: B8 },
-  // Named at the sixth restart since baseline §7.10 (the fifth in §7.9).
-  { seed: 59, keys: ["I7:orphan:Define and commit the project environment:6"], baseline: B3 },
+  { seed: 82, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 6, keys: ["I7:p2:orphan:Define and commit the project environment:1"], baseline: B3 },
+  { seed: 59, keys: ["I7:p2:orphan:Define and commit the project environment:6"], baseline: B3 },
 ];
-/** Two projects at the tape's own cap only (`--projects 2`): at $10 these seeds end with no violation. */
+/**
+ * A post-merge verifier cell whose teardown drew cell-teardown-failed ("container is busy") stays
+ * live until teardownAll, by design, and I3 reads its `verifier` role label as a role other than
+ * the task's owner. Observed: seed 65 at $10, replay trace "cell teardown failed ... container is
+ * busy" for task 643564ff, then its merge; the oracle's reading, not a production defect.
+ */
+const I3_VERIFIER_CELL = "oracle: invariants.ts I3 cell-role counts a live post-merge verifier cell (POST_MERGE_VERIFIER_ROLE) whose teardown failed as a role violation";
+/** Two projects at $10 only (`--projects 2 --cap 10`). */
+const TWO_PROJECT_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
+  { seed: 9, keys: ["I7:p2:unrecorded:Define and commit the project environment", "I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 65, keys: ["I3:cell-role:Set up the product's layout:verifier"], baseline: I3_VERIFIER_CELL },
+];
+/** Two projects at the tape's own cap only (`--projects 2`). */
 const TWO_PROJECT_TAPE_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
+  { seed: 9, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
 ];
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
-  { seed: 7, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  // Seed 7 is removed on t-ddd-fix-own-faults: `simulate.ts --seeds 80 --projects 1 --jobs 4` reported
+  // it listed but not failed; B5 is not fixed.
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   // Seed 45 (B5, the crash on a host git call inside the merge, baseline §7.10) is removed on
   // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed,
@@ -116,7 +139,7 @@ const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
     keys: ["I1:open", 'I7:orphan:Write the checks for "Deliver b1, b2, b3, b4 [sim t1]":1', "I8:InProgress", "I8:Pending"],
     baseline: B3,
   },
-  ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
+  ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
   ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_TAPE_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2 }) as const),
   // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it
   // ends halted spend_cap with no violation there, the same on two runs; B5 is not fixed, the

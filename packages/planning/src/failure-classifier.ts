@@ -1,16 +1,19 @@
 import { errorEnvelopeSchema, flattenChain } from "@ashara/shared";
 import type { ErrorEnvelope, ErrorLayer } from "@ashara/shared";
 
+/**
+ * The category of a failure of the agent's own work (development's fault-class.ts `agent_work`):
+ * the only failures routed here. A fault of the substrate or of Ashara's own Z0 machinery (a
+ * worktree that cannot be created, a merge git refuses for a reason other than a conflict, a
+ * conflict that cannot be prepared) is blocked under its class and never reaches the router.
+ */
 export type FailureCategory =
   | "VERIFICATION_GAP"
   | "COMPILATION_ERROR"
   | "AGENT_STUCK"
-  | "SPAWN_FAILURE"
   | "MERGE_CONFLICT"
   /** The attempt was handed its conflict with main and finished done with conflict markers left in it. */
   | "MERGE_CONFLICT_PERSISTS"
-  /** The conflict with main could not be put in front of the next attempt. */
-  | "MERGE_RETRY_UNPREPARED"
   | "TREE_REGRESSION";
 
 export function classifyFailure(envelope: ErrorEnvelope): FailureCategory {
@@ -26,16 +29,11 @@ export function classifyFailure(envelope: ErrorEnvelope): FailureCategory {
 
 function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCategory | null {
   switch (layer.operation) {
-    case "createWorkdir":
-    case "createWorktree":
-      return "SPAWN_FAILURE";
-
+    // Only a conflict is recorded under tentativeMerge; any other merge failure is Z0's and blocked.
+    // POLICY default: absent context is empty — the "conflict" discriminator lives in layer.message.
     case "tentativeMerge": {
-      // POLICY default: absent context is empty — the "conflict" discriminator
-      // this branch searches for lives in layer.message, not layer.context.
       const text = `${layer.message} ${JSON.stringify(layer.context ?? {})}`.toLowerCase();
-      if (text.includes("conflict")) return "MERGE_CONFLICT";
-      return "SPAWN_FAILURE";
+      return text.includes("conflict") ? "MERGE_CONFLICT" : null;
     }
 
     // A branch that holds the presented main and conflicts again met main's newer work, merged
@@ -46,9 +44,6 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
     // Handed the conflict with main and finished done with markers left in it.
     case "conflictMarkersLeft":
       return "MERGE_CONFLICT_PERSISTS";
-
-    case "prepareConflictRetry":
-      return "MERGE_RETRY_UNPREPARED";
 
     case "agentExecution":
       return classifyAgentExecution(layer, envelope);
@@ -124,10 +119,8 @@ export function shouldEscalate(
       return priorCategories.includes(category);
 
     case "COMPILATION_ERROR":
-    case "SPAWN_FAILURE":
     case "MERGE_CONFLICT":
     case "MERGE_CONFLICT_PERSISTS":
-    case "MERGE_RETRY_UNPREPARED":
     case "TREE_REGRESSION":
       return false;
 

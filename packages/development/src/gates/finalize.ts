@@ -2,8 +2,8 @@ import { runHostGit } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import { CheckoutHolderOverran, withTargetCheckout, type CheckoutLease } from "../checkout-lock.js";
-import { environmentErrorOf } from "../environment-failure.js";
-import type { EnvironmentError } from "../environment-failure.js";
+import { environmentErrorOf } from "../fault-class.js";
+import type { EnvironmentError } from "../fault-class.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
 import { targetRepo } from "../host-git.js";
 import {
@@ -39,6 +39,19 @@ export class VerificationInfrastructureFault extends Error {
 /** The operation an infrastructure fault of the post-merge check is recorded under. */
 const POST_MERGE_CHECK_RUN = "postMergeCheckRun";
 
+/**
+ * Whose a failed finalize is (fault-class.ts FaultClass): the task's work (a conflict, a failed
+ * check on the merge), routed against the task; or the verifier cell's substrate, or Z0's own merge
+ * and verification machinery (recorded under postMergeCheckRun), each blocked under its class and
+ * never routed against a tree no verdict was reached on.
+ */
+type FinalizeFault =
+  | { readonly class: "agent_work" }
+  | { readonly class: "substrate"; readonly error: EnvironmentError }
+  | { readonly class: "ashara"; readonly error: VerificationInfrastructureFault };
+
+const AGENT_WORK: FinalizeFault = { class: "agent_work" };
+
 export type FinalizeResult =
   /** `mergeCommit`: the commit the merge made on main, read back from git; the task's merge record. */
   | { readonly success: true; readonly mergeCommit: string }
@@ -48,16 +61,7 @@ export type FinalizeResult =
       readonly failedStep: "merge" | "verification";
       readonly gateFailureContext: string;
       readonly errorLayer: ErrorLayer;
-      /**
-       * Set when the verifier cell's substrate failed, not a check: the caller blocks the task on
-       * the environment instead of routing a failure against a tree no check ever ran on.
-       */
-      readonly environmentFailure: EnvironmentError | null;
-      /**
-       * Set when Z0's own verification machinery failed (recorded under postMergeCheckRun): the
-       * caller blocks the task for the operator, never routes a failure against the task.
-       */
-      readonly infrastructureFault: VerificationInfrastructureFault | null;
+      readonly fault: FinalizeFault;
     };
 
 /** The post-merge check's verdict on the target checkout holding the tentative merge. */
@@ -127,6 +131,18 @@ class TargetCheckoutUnrestored extends Error {
   }
 }
 
+/** Tracked files of the target checkout changed outside the staged merge, before its commit. */
+class TargetCheckoutDirty extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly targetPath: string,
+    readonly files: readonly string[],
+  ) {
+    super(`task ${taskId}: ${files.length} tracked file(s) of ${targetPath} changed outside the merge: ${files.slice(0, 20).join(", ")}`);
+    this.name = "TargetCheckoutDirty";
+  }
+}
+
 /** Why the checkout is not back at HEAD with no merge staged, or null when it is. */
 async function unrestoredReason(targetProjectPath: string): Promise<string | null> {
   const reset = await resetCheckoutToHead(targetProjectPath);
@@ -177,8 +193,7 @@ function unrestoredFailure(
       gateOperation: gate.operation,
       gateOutput: wrapError("development", gate.operation, gate.gateOutput),
     }),
-    environmentFailure: null,
-    infrastructureFault: fault,
+    fault: { class: "ashara", error: fault },
   };
 }
 
@@ -189,8 +204,7 @@ async function abortAndFail(
   gateFailureContext: string,
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
   errorLayerInfo: { operation: string; gateOutput: string | Error; gateContext?: Record<string, unknown> },
-  environmentFailure: EnvironmentError | null = null,
-  infrastructureFault: VerificationInfrastructureFault | null = null,
+  fault: FinalizeFault,
 ): Promise<FinalizeResult> {
   console.log(`[${taskId}] ${failedLogMessage}`);
 
@@ -200,7 +214,7 @@ async function abortAndFail(
 
   const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, errorLayerInfo.gateContext);
 
-  return { success: false, failedStep: "verification", gateFailureContext, errorLayer, environmentFailure, infrastructureFault };
+  return { success: false, failedStep: "verification", gateFailureContext, errorLayer, fault };
 }
 
 /**
@@ -229,8 +243,7 @@ export async function finalizeSuccess(
       failedStep: "merge",
       gateFailureContext: fault.message,
       errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, { taskId: task.id, attempt, holder: e.holder, boundMs: e.boundMs, heldMs: e.heldMs }),
-      environmentFailure: null,
-      infrastructureFault: fault,
+      fault: { class: "ashara", error: fault },
     };
   }
 }
@@ -275,8 +288,7 @@ async function finalizeHeld(
         attempt,
         step: "resetCheckoutToHead",
       }),
-      environmentFailure: null,
-      infrastructureFault: fault,
+      fault: { class: "ashara", error: fault },
     };
   }
 
@@ -297,31 +309,30 @@ async function finalizeHeld(
       failedStep: "merge",
       gateFailureContext: mergeContext,
       errorLayer: wrapError("development", operation, "merge conflict", gateContext),
-      environmentFailure: null,
-      infrastructureFault: null,
+      fault: AGENT_WORK,
     };
   }
 
   if (mergeResult.status === "error") {
+    // Not a conflict: git on the host refused the merge (an index lock, residue, Z0's own git). The
+    // branch was never weighed against main, so this is Ashara's fault, never the task's.
+    const fault = new VerificationInfrastructureFault(task.id, "tentative merge of the task branch into main", { cause: mergeResult.cause });
+    const gateContext = { taskId: task.id, attempt, errorClass: fault.name, step: fault.step };
     const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a failed tentative merge");
     if (unrestored !== null) {
       return unrestoredFailure(unrestored, "merge", `Tentative merge failed: ${mergeResult.message}`, {
-        operation: "tentativeMerge",
-        gateOutput: mergeResult.message,
-        gateContext: { taskId: task.id, attempt },
+        operation: POST_MERGE_CHECK_RUN,
+        gateOutput: fault,
+        gateContext,
       });
     }
-    console.log(`[${task.id}] tentative merge FAILED — aborted`);
+    console.warn(`[${task.id}] tentative merge FAILED without a conflict — aborted: ${fault.message}`);
     return {
       success: false,
       failedStep: "merge",
       gateFailureContext: `Tentative merge failed: ${mergeResult.message}`,
-      errorLayer: wrapError("development", "tentativeMerge", mergeResult.message, {
-        taskId: task.id,
-        attempt,
-      }),
-      environmentFailure: null,
-      infrastructureFault: null,
+      errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, gateContext),
+      fault: { class: "ashara", error: fault },
     };
   }
 
@@ -344,7 +355,7 @@ async function finalizeHeld(
         `Post-merge verify could not run: ${detail}`,
         // The typed error itself is the cause, its class and fields intact, never a flattened string.
         { operation: "postMergeVerify", gateOutput: environmentFailure, gateContext: { taskId: task.id, attempt, errorClass: environmentFailure.name } },
-        environmentFailure,
+        { class: "substrate", error: environmentFailure },
       );
     }
     const fault = e instanceof VerificationInfrastructureFault ? e : new VerificationInfrastructureFault(task.id, "post-merge verification", { cause: e });
@@ -354,8 +365,7 @@ async function finalizeHeld(
       `post-merge verification could not run, Z0's verification machinery failed (${fault.step}) — aborting tentative merge`,
       `Post-merge verify could not run: ${fault.message}`,
       { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
-      null,
-      fault,
+      { class: "ashara", error: fault },
     );
   }
 
@@ -370,43 +380,40 @@ async function finalizeHeld(
         gateOutput: postMergeVerify.details,
         gateContext: { taskId: task.id, attempt },
       },
+      AGENT_WORK,
     );
   }
 
-  // Dirty-tree check: detect tracked-file contamination from check commands.
-  // commitMerge commits only staged changes (the merge diff), so check-written
-  // modifications would persist in the working tree without being committed.
-  // But contamination of tracked files signals a check command that modifies
-  // source — that is unexpected and should abort rather than proceed.
+  // Dirty-tree check: the merge must be the only change in the target checkout before it is
+  // committed. Every check runs on a throwaway checkout of the merge (task-checks.ts,
+  // environment-check.ts), so a tracked file changed here is residue of Z0's own machinery, and a
+  // git diff that cannot run is Z0's git: either way Ashara's fault, never the implementer's.
   let dirtyFiles: string[];
   try {
     dirtyFiles = await detectDirtyTrackedFiles(targetProjectPath);
   } catch (e) {
-    const detail = describeErrorChain(e);
+    const fault = new VerificationInfrastructureFault(task.id, "dirty-tree check of the target checkout (git diff)", { cause: e });
     return abortAndFail(
       task.id,
       targetProjectPath,
-      "post-merge dirty-tree check FAILED — git diff unavailable",
-      `Could not run git diff to verify clean working tree: ${detail}`,
-      {
-        operation: "postMergeDirtyTree",
-        gateOutput: `git diff failed: ${detail}`,
-        gateContext: { taskId: task.id, attempt },
-      },
+      "post-merge dirty-tree check could not run, git diff failed — aborting tentative merge",
+      `Could not run git diff to verify clean working tree: ${fault.message}`,
+      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step } },
+      { class: "ashara", error: fault },
     );
   }
   if (dirtyFiles.length > 0) {
     const fileList = dirtyFiles.slice(0, 20).join(", ");
+    const fault = new VerificationInfrastructureFault(task.id, "dirty-tree check of the target checkout", {
+      cause: new TargetCheckoutDirty(task.id, targetProjectPath, dirtyFiles),
+    });
     return abortAndFail(
       task.id,
       targetProjectPath,
-      "post-merge dirty-tree check FAILED — check commands modified tracked files",
-      `Check commands modified ${dirtyFiles.length} tracked file(s): ${fileList}`,
-      {
-        operation: "postMergeDirtyTree",
-        gateOutput: `${dirtyFiles.length} tracked file(s) modified by check commands: ${fileList}`,
-        gateContext: { taskId: task.id, attempt, dirtyFiles },
-      },
+      "post-merge dirty-tree check FAILED — tracked files changed outside the merge — aborting tentative merge",
+      `${dirtyFiles.length} tracked file(s) of the target checkout changed outside the merge: ${fileList}`,
+      { operation: POST_MERGE_CHECK_RUN, gateOutput: fault, gateContext: { taskId: task.id, attempt, errorClass: fault.name, step: fault.step, dirtyFiles } },
+      { class: "ashara", error: fault },
     );
   }
 
@@ -419,17 +426,10 @@ async function finalizeHeld(
   return { success: true, mergeCommit };
 }
 
-// ---------------------------------------------------------------------------
-// Dirty-tree detection: tracked files modified by check commands
-// ---------------------------------------------------------------------------
-
 /**
- * Run `git diff --name-only` against the index to detect tracked files
- * modified during post-merge verification. Build artifacts in .gitignore
- * are invisible to this check; only modifications to tracked files appear.
- *
- * Rejects when git is unavailable or exits non-zero (fail-closed): a
- * dirty-tree check that cannot run is a failed check, not a passed one.
+ * `git diff --name-only` against the index: tracked files changed outside the staged merge. Ignored
+ * paths are invisible to it. Rejects when git cannot answer (fail-closed): a dirty-tree check that
+ * cannot run never passes.
  */
 async function detectDirtyTrackedFiles(targetProjectPath: string): Promise<string[]> {
   const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["diff", "--name-only"]);

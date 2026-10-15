@@ -13,7 +13,7 @@ import {
   ensureTargetGitInit,
   WorktreeCommitFailed,
 } from "./workspace.js";
-import { environmentErrorOf, unavailableOf } from "./environment-failure.js";
+import { thrownFaultOf } from "./fault-class.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -154,7 +154,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
 });
 
 describe("commitAllChanges fails closed", () => {
-  test("a git refusal throws WorktreeCommitFailed, an environment failure, and the branch gains no commit", async () => {
+  test("a git refusal throws WorktreeCommitFailed, Ashara's own fault and not the substrate's, and the branch gains no commit", async () => {
     const base = await makeDir("ashara-commit-refused-");
     const target = join(base, "project");
     await ensureTargetGitInit(target);
@@ -171,10 +171,8 @@ describe("commitAllChanges fails closed", () => {
     if (!(thrown instanceof WorktreeCommitFailed)) return;
     expect(thrown.step).toBe("add");
     expect(thrown.detail).toContain("index.lock");
-    const environmentFailure = environmentErrorOf(thrown);
-    expect(environmentFailure).toBe(thrown);
-    if (environmentFailure === null) return;
-    expect(unavailableOf(environmentFailure, "host git")).toBe("host git (add of the task worktree)");
+    // Z0's own git on the host (ADR-080 d3 c): class ashara, never the substrate's.
+    expect(thrownFaultOf(thrown).class).toBe("ashara");
     expect(await git(workDir, "rev-parse", "HEAD")).toBe(before);
 
     await rm(join(repo.gitDir, "index.lock"));

@@ -7,6 +7,7 @@ export { withSessionLifecycle } from "./execution-service.js";
 /** @testseam scripts/run-report.test.ts maps its scripted attempt as runExecution does */
 export { toSessionAttempt } from "./cell-execution.js";
 export { EXECUTION_STATUSES } from "./execution-service.js";
+export type { FaultClass } from "./fault-class.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
 export { canonicalizeAllowingMissing } from "./checkout-lock.js";
 export { probeEnvironmentWrite } from "./gates/environment-write-probe.js";
