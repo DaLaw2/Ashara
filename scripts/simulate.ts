@@ -75,10 +75,8 @@ const MINIMIZE_REPLAYS = 40;
 /**
  * Workers by default. Each seed holds several database sessions at once: its instance's pool (max
  * 4, faults.ts faultingPools), its observer's (max 2, run.ts), its target claim and admin
- * connections, and a dead instance's while they end. The local server's max_connections was 100
- * (observed 2026-10-15, `SHOW max_connections`); docker/postgres.yml raises it to 400 for up to 20 workers.
- * Observed 2026-10-15, 80 seeds at two projects: serial 867 s, 6 workers 160 s, every line but
- * the `ms` identical.
+ * connections, and a dead instance's while they end. docker/postgres.yml sets max_connections to 400 so
+ * MAX_JOBS workers fit beside other clients.
  */
 const DEFAULT_JOBS = 16;
 const MAX_JOBS = 20;
