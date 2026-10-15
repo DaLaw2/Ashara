@@ -1,6 +1,6 @@
 /**
  * The in-process waits one task of a batch makes on another's turn: the target checkout's lock
- * (development checkout-lock.ts) and the spend cap's admission queue (finance spend-cap.ts).
+ * (execution-infra checkout-lock.ts) and the spend cap's admission queue (finance spend-cap.ts).
  */
 export type ContendedWaitKind = "target-checkout" | "spend-admission";
 
