@@ -110,8 +110,13 @@ export async function dropStaleRunDatabases(baseUrl: string): Promise<string[]> 
   return withAdmin(baseUrl, async (admin) => {
     const dropped: string[] = [];
     for (const name of await databaseNames(admin, RUN_PREFIX)) {
-      const created = Number(/^ashara_sim_r_(\d+)_/.exec(name)?.[1] ?? "0");
-      if (created < cutoff) {
+      const stamp = /^ashara_sim_r_(\d+)_/.exec(name)?.[1];
+      // A name whose creation time does not parse is not known to be stale: kept, never dropped.
+      if (stamp === undefined) {
+        console.warn(`[simulator] run database ${name} names no creation time; left in place, drop it by hand if no run holds it`);
+        continue;
+      }
+      if (Number(stamp) < cutoff) {
         await dropDatabase(admin, name);
         dropped.push(name);
       }

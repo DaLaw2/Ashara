@@ -81,11 +81,11 @@ importers = []
 # model of db, nothing from the orchestrator is listed. Adding a name is a decision to review, not a
 # formality. The cross-package tests (src/server/) are not held to it.
 named-only = ["src/simulator/**"]
-names.db = ["ClientMessageRepository", "ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "createDb", "createProjectWithTender", "runMigrations"]
+names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
 names.development = ["DevelopmentService", "EXECUTION_STATUSES"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
 names.llm-gateway = ["LanguageModelFactory"]
-names.security = ["MasterKey", "SecretStore", "createKeyFile", "loadMasterKey"]
+names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["ATTEMPT_TERMINALS", "BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]
 names.workplace = ["CHECK_MISSING_EXIT"]

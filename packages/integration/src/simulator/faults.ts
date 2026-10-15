@@ -274,8 +274,12 @@ interface SeamContext {
   readonly gitDates: GitDates;
 }
 
-/** A deliberate defect planted in the queries one instance sends (the L3 mutation check). */
-export type QueryPlant = (args: readonly unknown[]) => unknown[];
+/**
+ * A deliberate defect planted in the queries one instance sends (the L3 mutation check): the
+ * arguments it sends instead, or null when it changed nothing of this query. The run counts the
+ * queries it changed, and a plant that changed none is an error, never a quiet pass (run.ts).
+ */
+export type QueryPlant = (args: readonly unknown[]) => unknown[] | null;
 
 const sentText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
 
@@ -283,9 +287,9 @@ const sentText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
 export const skipMergeRecord: QueryPlant = (args) => {
   const parsed = sentText.safeParse(args[0]);
   const params = args[1];
-  if (!parsed.success || !Array.isArray(params)) return [...args];
+  if (!parsed.success || !Array.isArray(params)) return null;
   const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
-  if (!/set "merge_commit" = \$1/.test(text)) return [...args];
+  if (!/set "merge_commit" = \$1/.test(text)) return null;
   return [args[0], ["0".repeat(40), ...params.slice(1)], ...args.slice(2)];
 };
 
@@ -297,10 +301,10 @@ export const skipMergeRecord: QueryPlant = (args) => {
  */
 export const pinInfrastructureFaults: QueryPlant = (args) => {
   const parsed = sentText.safeParse(args[0]);
-  if (!parsed.success) return [...args];
+  if (!parsed.success) return null;
   const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
   const pinned = text.replace(/((?:"work_items"\.)?"infrastructure_faults") \+ 1/, "least($1 + 1, 4)");
-  if (pinned === text) return [...args];
+  if (pinned === text) return null;
   return [typeof parsed.data === "string" ? pinned : { ...parsed.data, text: pinned }, ...args.slice(1)];
 };
 
@@ -330,7 +334,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
     context.instance.pools.push(pool);
     const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, kill: (() => Promise<void>) | null): Promise<unknown> => {
-      const args = plant === null ? [...given] : plant(given);
+      const args = plant?.(given) ?? [...given];
       const run = (): Promise<unknown> => send(args);
       const label = labelOfQuery(args);
       // Killing the transaction needs a checked-out connection's backend: a pool query has none.

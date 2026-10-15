@@ -3,8 +3,9 @@ import type { QueryPlant } from "./faults.js";
 
 /**
  * Plants on what the client is told (I4): each rewrites one report as production posts it, at the
- * database seam, so the run must name the report against its records. A plant that matches nothing
- * plants nothing, and its test then fails for the run that should have caught it.
+ * database seam, so the run must name the report against its records. Each returns null for a query
+ * it leaves as it was, so a plant whose wording production no longer writes is counted as changing
+ * nothing, and the run throws for it (run.ts PlantInert) instead of passing as "not caught".
  */
 
 const sentText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
@@ -15,14 +16,27 @@ function textOf(args: readonly unknown[]): string | null {
   return typeof parsed.data === "string" ? parsed.data : parsed.data.text;
 }
 
+/** The parameters with each string `rewrite` applies to rewritten, or null when no parameter changed. */
+function rewriteParams(params: readonly unknown[], rewrite: (param: string) => string | null): unknown[] | null {
+  let changed = false;
+  const rewritten = params.map((param: unknown) => {
+    if (typeof param !== "string") return param;
+    const next = rewrite(param);
+    if (next === null || next === param) return param;
+    changed = true;
+    return next;
+  });
+  return changed ? rewritten : null;
+}
+
 /** Rewrites the body of an outbound report whose text `matches`, where drizzle sends it as a parameter. */
 function rewriteReport(matches: (body: string) => boolean, rewrite: (body: string) => string): QueryPlant {
   return (args) => {
     const text = textOf(args);
     const params = args[1];
-    if (text === null || !text.startsWith(`insert into "client_messages"`) || !Array.isArray(params)) return [...args];
-    const rewritten: unknown[] = params.map((param: unknown) => (typeof param === "string" && matches(param) ? rewrite(param) : param));
-    return [args[0], rewritten, ...args.slice(2)];
+    if (text === null || !text.startsWith(`insert into "client_messages"`) || !Array.isArray(params)) return null;
+    const rewritten = rewriteParams(params, (param) => (matches(param) ? rewrite(param) : null));
+    return rewritten === null ? null : [args[0], rewritten, ...args.slice(2)];
   };
 }
 
@@ -90,8 +104,9 @@ function rewriteInsert(table: string, rewrite: (param: string) => string): Query
   return (args) => {
     const text = textOf(args);
     const params = args[1];
-    if (text === null || !text.startsWith(`insert into "${table}"`) || !Array.isArray(params)) return [...args];
-    return [args[0], params.map((param: unknown) => (typeof param === "string" ? rewrite(param) : param)), ...args.slice(2)];
+    if (text === null || !text.startsWith(`insert into "${table}"`) || !Array.isArray(params)) return null;
+    const rewritten = rewriteParams(params, rewrite);
+    return rewritten === null ? null : [args[0], rewritten, ...args.slice(2)];
   };
 }
 
@@ -118,7 +133,7 @@ export const questionMisstatesAssumption = rewriteInsert("client_messages", (par
 /** The delivered report is posted but its sweep never records it, so it is due, and posted, again. */
 export const deliveredReportUnrecorded: QueryPlant = (args) => {
   const text = textOf(args);
-  if (text === null || !text.startsWith(`update "acceptance_sweeps" set "report_id" = $1`)) return [...args];
+  if (text === null || !text.startsWith(`update "acceptance_sweeps" set "report_id" = $1`)) return null;
   const planted = text.replace(`set "report_id" = $1`, `set "report_id" = nullif($1::uuid, $1::uuid)`);
   const parsed = sentText.safeParse(args[0]);
   return [parsed.success && typeof parsed.data !== "string" ? { ...parsed.data, text: planted } : planted, ...args.slice(1)];

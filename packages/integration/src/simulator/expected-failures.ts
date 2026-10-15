@@ -58,9 +58,13 @@ interface ExpectedFailure {
  * `simulate.ts --seeds 90` at `--projects 1`, `--projects 2` and `--projects 2 --cap 10`, and by
  * `--seeds 1 --start 10 --profile typical`; the entries are removed.
  */
-// Empty: no seed of the soak fails a known defect. B8 is not fixed; no seed in 1-90 at either
-// project count reaches its window, and a seed that does is listed here.
-const EXPECTED_FAILURES: readonly ExpectedFailure[] = [];
+const B8 =
+  "B8 (baseline §3; task t-begin-failure-leaks-connection): a BEGIN that fails leaves its pool client checked out: drizzle-orm " +
+  "0.45.2's node-postgres session transaction() sends begin before its try/finally, so the client is never released";
+const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
+  { seed: 75, keys: ["I1:leaked-connection:begin"], baseline: B8 },
+  { seed: 86, keys: ["I1:leaked-connection:begin"], baseline: B8 },
+];
 
 /** The entry of one run, if it has one: its seed under the entry's profile, in its run mode. */
 function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): ExpectedFailure | undefined {

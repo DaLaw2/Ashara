@@ -7,7 +7,7 @@ import { describeErrorChain } from "@ashara/shared";
  * checkout lock that serialises finalizes is in-process only (development's withTargetCheckout),
  * so two processes on one checkout would abort each other's tentative merges.
  */
-class TargetCheckoutClaimedElsewhere extends Error {
+export class TargetCheckoutClaimedElsewhere extends Error {
   constructor(
     readonly targetPath: string,
     readonly claimKey: string,

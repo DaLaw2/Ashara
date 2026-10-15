@@ -118,9 +118,9 @@ const IN_FLIGHT_FILTER = "FILTER (WHERE state = 'pending')";
  */
 export const pendingUncounted: QueryPlant = (args) => {
   const parsed = sentText.safeParse(args[0]);
-  if (!parsed.success) return [...args];
+  if (!parsed.success) return null;
   const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
-  if (!text.includes(IN_FLIGHT_FILTER)) return [...args];
+  if (!text.includes(IN_FLIGHT_FILTER)) return null;
   const planted = text.replace(IN_FLIGHT_FILTER, "FILTER (WHERE false)");
   return [typeof parsed.data === "string" ? planted : { ...parsed.data, text: planted }, ...args.slice(1)];
 };

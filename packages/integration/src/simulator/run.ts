@@ -8,9 +8,9 @@ import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
-import { ClientMessageRepository, ClientRepository, SecretRepository, createDb, createProjectWithTender } from "@ashara/db";
+import { ClientRepository, SecretRepository, TargetCheckoutClaimedElsewhere, createDb } from "@ashara/db";
 import { loadBaseCell } from "@ashara/execution-infra";
-import { SecretStore, createKeyFile, loadMasterKey } from "@ashara/security";
+import { SecretStore, clientAccessCodeSecretName, createKeyFile, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
@@ -46,6 +46,8 @@ import {
 } from "./report-plants.js";
 import type { Profile } from "./profile.js";
 import { StandIns } from "./scripted-models.js";
+import { SimulatedClient } from "./simulated-client.js";
+import type { ClientReply, ClientRoutes } from "./simulated-client.js";
 import { Tape } from "./tape.js";
 import type { Decision, TapeMode } from "./tape.js";
 
@@ -400,12 +402,62 @@ function leakedConnections(handle: InstanceHandle, step: number): Violation[] {
   });
 }
 
-const questionRow = z.array(z.object({ id: z.string() }));
+/**
+ * Requests one client action may send, read-backs included, before the run gives up on it. Each
+ * failure is a fault the tape injected on the composed instance (a failed query, a crash, a
+ * SIGTERM, the instance then restarted), and the fault budget bounds those.
+ */
+const MAX_CLIENT_REQUESTS = 8;
+/**
+ * The statuses a client meets when the server's process fails under it, which it answers by
+ * asking again: 500 (a fault reached the route), 401 (the session must be renewed), 409 (an answer
+ * already on record, read back before it is sent again).
+ */
+const CLIENT_RETRIED = new Set([401, 409, 500]);
+const STOP_BODY = "Please stop the work.";
+const CHANGE_BODY = "Use French, please.";
 
-async function firstQuestion(observer: Database, projectId: string): Promise<string | null> {
-  const result = await observer.execute(sql`
-    SELECT id FROM client_messages WHERE project_id = ${projectId} AND kind = 'question' ORDER BY created_at, position LIMIT 1`);
-  return questionRow.parse(result.rows)[0]?.id ?? null;
+/** A client route refused a request the client is entitled to make: the route, not a fault, said no. */
+class ClientRequestRefused extends Error {
+  constructor(
+    readonly seed: number,
+    readonly action: string,
+    readonly status: number,
+    readonly detail: string,
+  ) {
+    super(`seed ${seed}: the client's ${action} was refused with ${status}: ${detail}`);
+    this.name = "ClientRequestRefused";
+  }
+}
+
+/** A client action failed on every request the run allows it. */
+class ClientRequestsExhausted extends Error {
+  constructor(
+    readonly seed: number,
+    readonly action: string,
+    readonly last: string,
+  ) {
+    super(`seed ${seed}: the client's ${action} failed on all ${MAX_CLIENT_REQUESTS} requests; the last: ${last}`);
+    this.name = "ClientRequestsExhausted";
+  }
+}
+
+/** A query plant matched no query the run sent: the mutation planted nothing, so nothing was tested. */
+class PlantInert extends Error {
+  constructor(
+    readonly seed: number,
+    readonly mutation: Mutation,
+  ) {
+    super(`seed ${seed}: the plant of mutation ${mutation} rewrote no query of the run; production no longer sends what it matches`);
+    this.name = "PlantInert";
+  }
+}
+
+/** What a read-back of the server's records found of an action that may already have landed. */
+type Landed<T> = { readonly found: true; readonly value: T } | { readonly found: false };
+
+function firstQuestion(messages: ReadonlyArray<{ readonly id: string; readonly direction: string; readonly kind: string }>): string | null {
+  return messages.find((message) => message.direction === "outbound" && message.kind === "question")?.id ?? null;
 }
 
 /** What a snapshot shows of the execution statuses the cycle's routing produced (none is logged by status). */
@@ -497,6 +549,17 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
   };
   const planted = options.mutation === undefined ? null : PLANTED[options.mutation];
+  // The queries the plant changed: a mutation run whose plant changed none tested nothing.
+  let bites = 0;
+  const plantedQueries = planted?.queries ?? null;
+  const queryPlant: QueryPlant | null =
+    plantedQueries === null
+      ? null
+      : (args) => {
+          const sent = plantedQueries(args);
+          if (sent !== null) bites += 1;
+          return sent;
+        };
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
   const admissions = new AdmissionLedger();
@@ -531,21 +594,19 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     await secrets.put("server/api_token", "simulator-api-token");
     await secrets.put("provider/openai/api_key", "simulator-provider-key");
 
-    const createProject = async (suffix: string) => {
-      const client = await new ClientRepository(observing).create(`sim-client-${options.seed}${suffix}`);
-      const tender = await createProjectWithTender(observing, client.id, `sim-${options.seed}${suffix}`, `Build a product with ${universe.behaviours.join(", ")}.`);
-      return tender.project.id;
+    // The operator registers each project's client and its access code, as scripts/client.ts add
+    // does; everything the client says after that goes through the server's client routes.
+    const register = async (suffix: string): Promise<SimulatedClient> => {
+      const code = `sim-access-code-${options.seed}${suffix}-0123456789`;
+      const row = await new ClientRepository(observing).create(`sim-client-${options.seed}${suffix}`);
+      await secrets.put(clientAccessCodeSecretName(row.id), code);
+      return new SimulatedClient(row.name, code);
     };
-    // The client's late change and stop are the first project's; its outcome is the run's.
-    const projectId = await createProject("");
-    const projectIds = [projectId];
-    for (let index = 1; index < projectCount; index++) projectIds.push(await createProject(`-p${index + 1}`));
-    const snapshotsOf = async (): Promise<[Snapshot, ...Snapshot[]]> => {
-      const first = await readSnapshot(observing, projectId);
-      const rest: Snapshot[] = [];
-      for (const id of projectIds.slice(1)) rest.push(await readSnapshot(observing, id));
-      return [first, ...rest];
-    };
+    const client = await register("");
+    const others: SimulatedClient[] = [];
+    for (let index = 1; index < projectCount; index++) others.push(await register(`-p${index + 1}`));
+    // Filled as the server creates each client's project; the stand-ins answer for these only.
+    const projectIds: string[] = [];
 
     const standIns = new StandIns({
       tape,
@@ -633,7 +694,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           const ashara = await composeAshara({
             masterKey,
             databaseUrl: instanceUrl(db.url, instanceName(generation)),
-            createPool: faultingPools(seam, instanceName(generation), planted?.queries ?? null),
+            createPool: faultingPools(seam, instanceName(generation), queryPlant),
             models: faultingModels(seam, standIns.factory),
             processRunner: faultingPodman(seam, podman.runner),
             git: faultingGit(seam, gitBroker.runner),
@@ -651,7 +712,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           if (!(err instanceof SimulatedCrash)) log.push(`boot of ${handle.name} failed: ${describeErrorChain(err)}`);
           // Every earlier instance's sessions are gone before a boot (killBackends, the drain's
           // check), so a refused claim is one nothing in this run holds: never a retry, a finding.
-          if (err instanceof Error && err.name === "TargetCheckoutClaimedElsewhere") {
+          if (err instanceof TargetCheckoutClaimedElsewhere) {
             const violation: Violation = { invariant: "I1", step: cycles, statement: `${handle.name} was refused its target claim with no other instance alive: ${err.message}`, key: "I1:claim-refused" };
             violations.set(violation.key, violation);
           }
@@ -687,7 +748,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
       instance = await compose();
       // I7, restart clause: the reconciler leaves nothing InProgress and no cell of the dead process.
-      for (const [index, after] of (await snapshotsOf()).entries()) {
+      for (const [index, id] of projectIds.entries()) {
+        const after = await readSnapshot(observing, id);
         for (const item of after.items.filter((i) => i.status === "InProgress" && i.level === "Task")) {
           const violation = ofProject(index, { invariant: "I7", step: cycles, statement: `after the restart, "${item.title}" is InProgress with no live attempt`, key: `I7:orphan:${item.title}:${restarts}` });
           violations.set(violation.key, violation);
@@ -699,7 +761,83 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
     };
 
+    /** A process that died or was SIGTERMed is restarted before anything else is asked of it. */
+    const recover = async (current: Live): Promise<void> => {
+      if (current.handle.fatal !== null) trace.push(`fatal exit: ${current.handle.fatal.split(":")[0] ?? ""}`);
+      if (current.handle.dead) await restart(current, current.handle.fatal === null ? "a crash" : "a fatal exit");
+      else if (current.handle.sigtermed) await restart(current, "a SIGTERM");
+    };
+
+    /**
+     * One client action, sent to the live instance's routes. A failure the server's process can
+     * cause (a fault the tape injected, the instance then restarted) is answered as a client would:
+     * read back whether the action already landed, then send it again. Any other refusal ends the run.
+     */
+    const clientAct = async <T>(
+      action: string,
+      send: (app: ClientRoutes) => Promise<ClientReply<T>>,
+      landed: ((app: ClientRoutes) => Promise<ClientReply<Landed<T>>>) | null,
+    ): Promise<T> => {
+      let unsure = false;
+      let last = "";
+      const failed = async (reply: { readonly status: number; readonly detail: string }, current: Live, request: number): Promise<void> => {
+        last = `${reply.status} ${reply.detail}`;
+        trace.push(`client ${action}: request ${request} answered ${reply.status}`);
+        if (!CLIENT_RETRIED.has(reply.status)) throw new ClientRequestRefused(options.seed, action, reply.status, reply.detail);
+        await recover(current);
+      };
+      for (let request = 1; request <= MAX_CLIENT_REQUESTS; request++) {
+        const current = instance;
+        if (current === null) throw new ClientRequestsExhausted(options.seed, action, "no instance is composed");
+        if (unsure && landed !== null) {
+          const seen = await landed(current.ashara.app);
+          if (!seen.ok) {
+            await failed(seen, current, request);
+            continue;
+          }
+          if (seen.value.found) return seen.value.value;
+          unsure = false;
+        }
+        const reply = await send(current.ashara.app);
+        if (reply.ok) return reply.value;
+        unsure = true;
+        await failed(reply, current, request);
+      }
+      throw new ClientRequestsExhausted(options.seed, action, last);
+    };
+
     instance = await compose();
+    // Each client tenders its project through the routes; the late change and the stop are the
+    // first project's, and its outcome is the run's.
+    const tender = async (simulated: SimulatedClient, index: number): Promise<string> => {
+      const projectName = `sim-${options.seed}${index === 0 ? "" : `-p${index + 1}`}`;
+      return clientAct<string>(
+        `tender ${index + 1}`,
+        (app) => simulated.tender(app, projectName, `Build a product with ${universe.behaviours.join(", ")}.`),
+        async (app) => {
+          const listed = await simulated.projects(app);
+          if (!listed.ok) return listed;
+          const project = listed.value.find((each) => each.name === projectName);
+          return { ok: true, value: project === undefined ? { found: false } : { found: true, value: project.id } };
+        },
+      );
+    };
+    const projectId = await tender(client, 0);
+    projectIds.push(projectId);
+    for (const [index, other] of others.entries()) projectIds.push(await tender(other, index + 1));
+    const snapshotsOf = async (): Promise<[Snapshot, ...Snapshot[]]> => {
+      const first = await readSnapshot(observing, projectId);
+      const rest: Snapshot[] = [];
+      for (const id of projectIds.slice(1)) rest.push(await readSnapshot(observing, id));
+      return [first, ...rest];
+    };
+    /** Whether the first project's messages hold an inbound one `matches` picks out. */
+    const onRecord = async (app: ClientRoutes, matches: (message: { readonly kind: string; readonly body: string; readonly inReplyTo: string | null }) => boolean): Promise<ClientReply<Landed<null>>> => {
+      const listed = await client.messages(app, projectId);
+      if (!listed.ok) return listed;
+      return { ok: true, value: listed.value.some((message) => message.direction === "inbound" && matches(message)) ? { found: true, value: null } : { found: false } };
+    };
+
     const reached = new Set<string>();
     let quiet = 0;
     let faultsSeen = 0;
@@ -716,7 +854,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
       cycles += 1;
       if (stopAt !== null && cycles === stopAt) {
-        await new ClientMessageRepository(observing).insertInbound({ projectId, kind: "stop", body: "Please stop the work.", inReplyTo: null });
+        await clientAct<null>(
+          "stop",
+          (app) => client.post(app, projectId, { kind: "stop", body: STOP_BODY }),
+          (app) => onRecord(app, (message) => message.kind === "stop" && message.body === STOP_BODY),
+        );
         trace.push(`client stop at cycle ${cycles}`);
       }
       const current: Live = instance;
@@ -745,9 +887,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
       // The runner's own wait between cycles (orchestrator runner.ts defaults), on the simulated clock.
       clock.jump(processed > 0 ? POLL_INTERVAL_MS : IDLE_INTERVAL_MS);
-      if (current.handle.fatal !== null) trace.push(`fatal exit: ${current.handle.fatal.split(":")[0] ?? ""}`);
-      if (current.handle.dead) await restart(current, current.handle.fatal === null ? "a crash" : "a fatal exit");
-      else if (current.handle.sigtermed) await restart(current, "a SIGTERM");
+      await recover(current);
 
       const snapshots = await snapshotsOf();
       const [snapshot] = snapshots;
@@ -764,9 +904,20 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       );
 
       if (lateChange && !changed && snapshot.items.some((i) => i.origin === "decomposition" && i.status === "Completed")) {
-        const question = await firstQuestion(observing, projectId);
+        const question = await clientAct<string | null>(
+          "reading its messages",
+          async (app) => {
+            const listed = await client.messages(app, projectId);
+            return listed.ok ? { ok: true, value: firstQuestion(listed.value) } : listed;
+          },
+          null,
+        );
         if (question !== null) {
-          await new ClientMessageRepository(observing).insertInbound({ projectId, kind: "answer", body: "Use French, please.", inReplyTo: question });
+          await clientAct<null>(
+            "answer",
+            (app) => client.post(app, projectId, { kind: "answer", body: CHANGE_BODY, inReplyTo: question }),
+            (app) => onRecord(app, (message) => message.kind === "answer" && message.inReplyTo === question),
+          );
           changed = true;
           trace.push(`client answer changes an assumption at cycle ${cycles}`);
         }
@@ -812,6 +963,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       }
     }
 
+    if (options.mutation !== undefined && queryPlant !== null && bites === 0) throw new PlantInert(options.seed, options.mutation);
     const finals = await snapshotsOf();
     await sampleModelPaths(coverage, observing, projectIds);
     const [final] = finals;

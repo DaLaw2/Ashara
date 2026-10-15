@@ -329,6 +329,12 @@ describe("lifecycle simulator, fast tier", () => {
     expect(keys(await stop("stop-report-omits-merge"))).toEqual(["I4:stop-merges"]);
   }, 90_000);
 
+  // A plant whose query production never sends planted nothing: the run says so instead of
+  // reporting the mutation as not caught. At a cap of $0.02 nothing merges, so no merge record is written.
+  it("throws for a plant that rewrote no query", async () => {
+    await expect(seeded(1, "skip-merge-record", { capUsd: 0.02 })).rejects.toThrow(/plant of mutation skip-merge-record rewrote no query/);
+  }, 90_000);
+
   it("catches a merge recorded under a commit main does not hold", async () => {
     const clean = await seeded(10);
     expect(failed(clean)).toEqual([]);

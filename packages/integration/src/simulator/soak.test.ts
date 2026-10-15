@@ -26,7 +26,7 @@ function canonical(stdout: string): string[] {
 }
 
 /** The soak tier as a reader runs it: scripts/simulate.ts in its own process, on the test's database server. */
-async function soak(jobs: number, args: readonly string[] = ["--seeds", "2", "--start", "74", "--projects", "2"]): Promise<Soak> {
+async function soak(jobs: number, args: readonly string[] = ["--seeds", "2", "--start", "75"]): Promise<Soak> {
   try {
     const { stdout } = await run("npx", ["tsx", "scripts/simulate.ts", ...args, "--jobs", String(jobs)], {
       cwd: REPO_ROOT,
@@ -41,13 +41,14 @@ async function soak(jobs: number, args: readonly string[] = ["--seeds", "2", "--
 }
 
 describe("simulate.ts --jobs", () => {
-  // Seeds 74-75 at two projects: a hostile seed with four restarts beside a typical one. A worker's
-  // seed is a function of the seed and the mode alone (owner 2026-10-15, ADR-081): in two processes
-  // at once, every line but the time is the serial run's.
+  // Seeds 75-76 at one project: seed 75 fails its listed B8 key (expected-failures.ts), so the
+  // replay line is compared too. A worker's seed is a function of the seed and the mode alone (owner
+  // 2026-10-15, ADR-081): in two processes at once, every line but the time is the serial run's.
   it("reports every seed as the serial run does, in seed order", async () => {
     const serial = await soak(1);
     const parallel = await soak(2);
-    expect(serial.lines.filter((line) => line.startsWith("seed ")).map((line) => line.split(" (")[0])).toEqual(["seed 74", "seed 75"]);
+    expect(serial.lines.filter((line) => line.startsWith("seed ")).map((line) => line.split(" (")[0])).toEqual(["seed 75", "seed 76"]);
+    expect(serial.lines.some((line) => line.includes("(known: listed in expected-failures.ts)"))).toBe(true);
     expect(parallel).toEqual(serial);
     expect(serial.exitCode).toBe(0);
   }, 300_000);

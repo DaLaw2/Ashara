@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, parseStoredBlockedReason } from "@ashara/shared";
+import { BLOCKED_REASON_SOURCES, BlockedReasonCorrupt, describeErrorChain, parseStoredBlockedReason } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/shared";
 import { checkReports, readReportRecords } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
@@ -182,8 +184,54 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   };
 }
 
+/** The observer could not read main of a target repository: the snapshot would judge against nothing. */
+class MainUnreadable extends Error {
+  constructor(
+    readonly repository: string,
+    readonly command: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`git ${command} of ${repository} failed: ${describeErrorChain(options.cause)}`, options);
+    this.name = "MainUnreadable";
+  }
+}
+
+const gitExit = z.object({ code: z.number() });
+const absentPath = z.object({ code: z.literal("ENOENT") });
+
+/** Whether `path` exists; any failure but its absence is the observer's own and throws. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (err) {
+    if (absentPath.safeParse(err).success) return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether main has a commit yet. The project's path is recorded before its repository is made
+ * (orchestrator task-helpers.ts), and a crash may land between them: no directory, a directory
+ * with no repository, or a repository with no main are each "nothing on main yet". Every other
+ * git failure throws: a corrupt or unreadable repository is never read as an empty main.
+ */
+async function hasMain(repository: string): Promise<boolean> {
+  if (!(await exists(repository)) || !(await exists(join(repository, ".git")))) return false;
+  try {
+    await run("git", ["-C", repository, "rev-parse", "--verify", "--quiet", "refs/heads/main"]);
+    return true;
+  } catch (err) {
+    // rev-parse --verify --quiet exits 1, printing nothing, only for a ref that does not exist.
+    const exit = gitExit.safeParse(err);
+    if (exit.success && exit.data.code === 1) return false;
+    throw new MainUnreadable(repository, "rev-parse --verify refs/heads/main", { cause: err });
+  }
+}
+
 /** main's first-parent history, read by the host's git outside every seam (the observer is never faulted). */
 async function mainLog(repository: string): Promise<MainCommit[]> {
+  if (!(await hasMain(repository))) return [];
   try {
     const { stdout } = await run("git", ["-C", repository, "log", "--first-parent", "--format=%H%x00%s", "main"]);
     return stdout
@@ -194,20 +242,18 @@ async function mainLog(repository: string): Promise<MainCommit[]> {
         return { commit, subject };
       });
   } catch (err) {
-    // A repository with no commit on main yet has no history: that is the snapshot, not a failure.
-    console.warn(`[simulator] git log of ${repository} read nothing: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
-    return [];
+    throw new MainUnreadable(repository, "log main", { cause: err });
   }
 }
 
 /** The files main holds, read like mainLog; none when main has no commit. */
 export async function mainFiles(repository: string): Promise<string[]> {
+  if (!(await hasMain(repository))) return [];
   try {
     const { stdout } = await run("git", ["-C", repository, "ls-tree", "-r", "--name-only", "main"]);
     return stdout.split("\n").filter((line) => line !== "");
   } catch (err) {
-    console.warn(`[simulator] git ls-tree of ${repository} read nothing: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
-    return [];
+    throw new MainUnreadable(repository, "ls-tree main", { cause: err });
   }
 }
 
