@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ProcessRunner } from "@ashara/execution-infra";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import {
+  CONFLICT_MARKER_LINE,
   CheckSpecSchema,
   HUNG,
   LAYOUT_FILE,
@@ -371,6 +372,16 @@ export class FakePodman {
       case "rm": {
         if (root.readOnly) return exited(1, "", "sim rm: Read-only file system\n");
         await rm(join(root.host, ...(words[2] ?? "").split("/")), { force: true });
+        return exited(0, "");
+      }
+      case "resolve": {
+        // A model resolving a conflict by keeping both sides: every marker line goes, every side's line stays.
+        if (root.readOnly) return exited(1, "", "sim resolve: Read-only file system\n");
+        const path = words[2] ?? "";
+        const file = join(root.host, ...path.split("/"));
+        if (!(await exists(file))) return exited(1, "", `sim resolve: ${path}: no such file\n`);
+        const lines = (await readFile(file, "utf8")).split("\n");
+        await writeFile(file, lines.filter((line) => !CONFLICT_MARKER_LINE.test(line)).join("\n"));
         return exited(0, "");
       }
       case "sleep":

@@ -29,10 +29,10 @@ import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
 import { checkSnapshot, checkTotality, mainFiles, outcomeOf, progressFacts, readSnapshot, sourceOf } from "./invariants.js";
 import type { Outcome, Snapshot, Violation } from "./invariants.js";
-import { emptyCoverage, observeAcceptanceSweeps, sample } from "./coverage.js";
+import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
-import { ADVERSARY, FAULTS } from "./profile.js";
+import { FAULTS, drawRates } from "./profile.js";
 import {
   briefMisstatesStanding,
   deliveredReportMisstatesStanding,
@@ -173,6 +173,13 @@ const REPAIRS = 2;
 const ATTEMPTS = 3;
 const CONTESTS = 2;
 const DEFAULT_CAP_USD = 25;
+/**
+ * The adversarial profile's cap. Every stand-in call is unpriced and counts at its worst-case
+ * estimate (about $0.35 at a turn's bound), and misbehaving responses are retried: at $25, 17 of
+ * adversarial seeds 1-30 halted at the cap (observed 2026-10-15), seed 9 with its conflict retry
+ * refused, so the paths after a misbehaviour went unreached. At $100, 7 of seeds 1-40 do.
+ */
+const ADVERSARIAL_CAP_USD = 100;
 const LOW_CAP_USD = 0.02;
 /**
  * I8's bound: fault-free cycles in a row with no progress (invariants.ts progressFacts) after which
@@ -435,10 +442,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   await assertGitCheckout();
   const started = Date.now();
   const tape = new Tape(options.tape);
-  const rates = ADVERSARY[options.profile];
+  const rates = drawRates(options.profile, tape);
   const clock = new SimClock();
   const universe = drawUniverse(tape);
-  const capUsd = options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : DEFAULT_CAP_USD);
+  const capUsd =
+    options.capUsd ?? (tape.chance("finance.low-budget", rates.lowBudget) ? LOW_CAP_USD : options.profile === "adversarial" ? ADVERSARIAL_CAP_USD : DEFAULT_CAP_USD);
   const projectCount = options.projects ?? 1;
   const lateChange = tape.chance("client.late-change", rates.lateChange);
   const stopAt = tape.chance("client.stop", rates.clientStop) ? 2 + tape.pick("client.stop-cycle", 30) : null;
@@ -778,6 +786,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     }
 
     const finals = await snapshotsOf();
+    await sampleModelPaths(coverage, observing, projectIds);
     const [final] = finals;
     // The report clause needs the settle cycles a halt's report is posted on: a run cut off for no
     // progress had none, and may end on a halt begun in its last cycle (I8 judges that run).

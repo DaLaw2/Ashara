@@ -77,54 +77,52 @@ const B3 = "B3 (baseline §3, §7.8, §7.9; task t-orphan-requeue-failure): a fa
  * item" (B3). Seed 89 (`--projects 2`) fails I7:p2:orphan outside the soak's range: unlisted, its
  * cause unverified. B3, B5 and B8 are not fixed.
  */
+/*
+ * Re-rolled 2026-10-15 (t-adversarial-models): hostile and chaos now draw their review and dispute
+ * rates per seed and mix response-level model misbehaviour in (profile.ts), which moves the seams
+ * every hostile and chaos seed passes through, so the crash windows of B3, B5 and B8 moved between
+ * seeds. Observed on its branch (before the merge onto t-ddd-fix-own-faults) with `simulate.ts
+ * --seeds 90` at `--projects 2` and at `--projects 2 --cap 10`: every new key was a fault seam's (a
+ * crash, a failed query), none a model response's.
+ */
+/*
+ * Re-derived 2026-10-15 at the merge of t-adversarial-models onto t-ddd-fix-own-faults,
+ * t-text-vs-fact-oracle and t-change-message-honest (master 640d8205): the two changes' re-rolls
+ * compose into a different run per hostile and chaos seed, so the union of both sides' entries was
+ * soaked and cut to what fails. Observed with `simulate.ts --seeds 90 --jobs 6` at `--projects 1`,
+ * `--projects 2` and `--projects 2 --cap 10`: listed but not failed were 7 and 43 (one project), 5,
+ * 7, 19, 28, 46 and 59 and 49's and 82's project-1 keys (two projects, both caps), 9 (both caps),
+ * 65's I3 key and 75 (B8) at $10. Unlisted and now listed: 86 in both modes, replay trace "merge
+ * committed to main as f72835da" for task 779a80b5, then a crash on the work_items update and
+ * "[startup-reconciler] requeued 779a80b5" (B5); 89 in both modes, replay trace "failed to requeue
+ * crash-orphaned InProgress item a57e631b ... select "phase" from "dev_sessions"" (B3); 65 at $10,
+ * replay trace "merge committed to main as 5cbf0acf" for task 83f9aaa3, then a crash on its
+ * Completed update and "[startup-reconciler] requeued 83f9aaa3" (B5). Every key is a fault seam's;
+ * none a model response's. B3, B5 and B8 are not fixed.
+ */
 const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 5, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 19, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 49, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
   { seed: 82, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 86, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
   { seed: 6, keys: ["I7:p2:orphan:Define and commit the project environment:1"], baseline: B3 },
-  { seed: 59, keys: ["I7:p2:orphan:Define and commit the project environment:6"], baseline: B3 },
+  { seed: 89, keys: ["I7:p2:orphan:Define and commit the project environment:11"], baseline: B3 },
 ];
-/**
- * A post-merge verifier cell whose teardown drew cell-teardown-failed ("container is busy") stays
- * live until teardownAll, by design, and I3 reads its `verifier` role label as a role other than
- * the task's owner. Observed: seed 65 at $10, replay trace "cell teardown failed ... container is
- * busy" for task 643564ff, then its merge; the oracle's reading, not a production defect.
- */
-const I3_VERIFIER_CELL = "oracle: invariants.ts I3 cell-role counts a live post-merge verifier cell (POST_MERGE_VERIFIER_ROLE) whose teardown failed as a role violation";
 /** Two projects at $10 only (`--projects 2 --cap 10`). */
 const TWO_PROJECT_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 9, keys: ["I7:p2:unrecorded:Define and commit the project environment", "I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 65, keys: ["I3:cell-role:Set up the product's layout:verifier"], baseline: I3_VERIFIER_CELL },
-];
-/** Two projects at the tape's own cap only (`--projects 2`). */
-const TWO_PROJECT_TAPE_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
-  { seed: 9, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 65, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
 ];
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
-  // Seed 7 is removed on t-ddd-fix-own-faults: `simulate.ts --seeds 80 --projects 1 --jobs 4` reported
-  // it listed but not failed; B5 is not fixed.
+  // Seed 6 (hostile) re-rolled on t-adversarial-models: B3, the log names "failed to requeue
+  // crash-orphaned InProgress item" on a failed dev_sessions read.
+  { seed: 6, keys: ["I7:orphan:Set up the product's layout:3"], baseline: B3 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   // Seed 45 (B5, the crash on a host git call inside the merge, baseline §7.10) is removed on
-  // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed,
-  // with the re-roll above; B5 is not fixed. Seeds 81 and 89 fail B5's key with this change and on
-  // master 273cc7b0's development and planning sources alike (observed, `simulate.ts --seeds 1
-  // --start 81` and `--start 89` on each, 2026-10-15): unlisted before, not introduced by it. Seed 81
-  // is removed and seed 89 re-keyed since, below.
-  // Re-rolled at master 02d1e6e5 (t-text-vs-fact-oracle, 2026-10-15): `simulate.ts --seeds 120 --start 1` reported
-  // seed 81 listed but not failed, seed 89 failing B5's key on "Define and commit the project environment" instead
-  // of "Set up the product's layout", and seed 43 failing B5's key unlisted ("main commit ... has no item Completed
-  // recording it (the item is Pending)"). Each the same with I9's reads removed from the snapshot (`--seeds 9
-  // --start 81`, `--seeds 1 --start 43`), so not introduced by I9; which master commit re-rolled them: unverified.
-  // B5 is not fixed.
+  // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed;
+  // B5 is not fixed. Seed 89 fails B5's key since master 02d1e6e5 (`simulate.ts --seeds 120 --start 1`).
+  // Seeds 7 and 43 are removed at the merge above (listed but not failed); B5 is not fixed.
   { seed: 89, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 43, keys: ["I7:unrecorded:Deliver b1, b2, b3 [sim t1]"], baseline: B5 },
-  // Unlisted at master 02d1e6e5, observed at $10 only (`simulate.ts --seeds 85 --projects 2 --cap 10`, 2026-10-15):
-  // project 2's environment task is left InProgress after a restart; the same with I9's reads removed from the
-  // snapshot (`--seeds 1 --start 6 --projects 2 --cap 10`). At the tape's own cap: unverified.
-  { seed: 6, projects: 2, capUsd: 10, keys: ["I7:p2:orphan:Define and commit the project environment:1"], baseline: B3 },
   // Re-rolled on t-ddd-fix-durable-reservation (2026-10-15): an admission now writes its call's
   // llm_calls row and a record updates it, two more db seams per call, and seed 10 under the
   // typical profile (`just simulate --seeds 10 --profile typical`) now crashes and then draws a
@@ -140,7 +138,7 @@ const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
     baseline: B3,
   },
   ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
-  ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_TAPE_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2 }) as const),
+  ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2 }) as const),
   // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it
   // ends halted spend_cap with no violation there, the same on two runs; B5 is not fixed, the
   // seed no longer reaches its window (which of master's three commits re-rolled it: unverified).

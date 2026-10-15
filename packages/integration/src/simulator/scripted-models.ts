@@ -13,6 +13,7 @@ import {
   MANIFEST_FILE,
   RECIPE_DEFECT_SYMPTOM,
   RECIPE_DEFECT_TOKEN,
+  SHARED_INDEX_FILE,
   TOOLCHAIN_TOKEN,
   behaviourPath,
   taskOfTitle,
@@ -78,6 +79,81 @@ const REFUSAL: LanguageModelV4GenerateResult = {
   warnings: [],
 };
 
+/** The output bound a request names, or the gateway's turn bound when it names none. */
+const DEFAULT_OUTPUT_BOUND = 16_384;
+
+function outputBoundOf(options: LanguageModelV4CallOptions): number {
+  return options.maxOutputTokens ?? DEFAULT_OUTPUT_BOUND;
+}
+
+/** A response with no content at all: no text, no tool call, nothing billed for output. */
+const EMPTY: LanguageModelV4GenerateResult = {
+  content: [],
+  finishReason: { unified: "stop", raw: "stop" },
+  usage: { inputTokens: USAGE.inputTokens, outputTokens: { total: 0, text: 0, reasoning: 0 } },
+  warnings: [],
+};
+
+/** Output cut at the bound: `content` is what arrived before the cut, every token of the bound billed as text. */
+function cutAtBound(content: LanguageModelV4Content[], bound: number): LanguageModelV4GenerateResult {
+  return {
+    content,
+    finishReason: { unified: "length", raw: "length" },
+    usage: { inputTokens: USAGE.inputTokens, outputTokens: { total: bound, text: bound, reasoning: 0 } },
+    warnings: [],
+  };
+}
+
+/**
+ * The whole output bound spent on reasoning, no answer (W11c D4, smoke2 D2): the reasoning count
+ * in the wire format a Chat Completions provider reports it in, where the gateway reads it.
+ */
+function reasoningOnly(bound: number): LanguageModelV4GenerateResult {
+  return {
+    content: [{ type: "reasoning", text: "Let me think about every part of this carefully before answering." }],
+    finishReason: { unified: "length", raw: "length" },
+    usage: {
+      inputTokens: USAGE.inputTokens,
+      outputTokens: { total: bound, text: 0, reasoning: bound },
+      raw: { completion_tokens: bound, completion_tokens_details: { reasoning_tokens: bound } },
+    },
+    warnings: [],
+  };
+}
+
+/** The first half of a JSON text: never valid JSON itself, as an answer cut mid-object is not. */
+function firstHalf(json: string): string {
+  return json.slice(0, Math.max(1, Math.floor(json.length / 2)));
+}
+
+/**
+ * A knowledge graph whose edge carries no `rel`, so it fails the strict schema at `edges.0.rel`, the
+ * error the first decomposition call of every paid run in scope recorded (test retro part D, W11 D9).
+ * Which field those answers named the relation by instead: unverified; this one names it `type`.
+ */
+const EDGES_WITHOUT_REL = {
+  nodes: [
+    { id: "product", kind: "subsystem", label: "The product" },
+    { id: "cli", kind: "entry_point", label: "Command line" },
+  ],
+  edges: [{ from: "cli", to: "product", type: "uses" }],
+};
+
+/** The brief section of an attempt handed its conflict with main (development merge.ts formatConflictForBrief). */
+const CONFLICT_HEADING = "## Merge with main in progress";
+
+/** The files a conflict section lists, `- <path>` one per line; none when the prompt has no such section. */
+function conflictFilesOf(prompt: string): string[] {
+  const at = prompt.indexOf(CONFLICT_HEADING);
+  if (at < 0) return [];
+  const files: string[] = [];
+  for (const line of prompt.slice(at + CONFLICT_HEADING.length).split("\n")) {
+    if (line.startsWith("- ")) files.push(line.slice(2).trim());
+    else if (files.length > 0) break;
+  }
+  return files;
+}
+
 const jsonSchemaShape = z.object({
   properties: z.record(z.string(), z.unknown()).optional(),
   anyOf: z.array(z.object({ properties: z.record(z.string(), z.unknown()).optional() })).optional(),
@@ -112,13 +188,24 @@ const checkRowSchema = z.object({
 
 type ToolStep = readonly [toolName: string, input: unknown];
 
+/**
+ * What the first turn past an attempt's scripted steps answers:
+ * - complete: its steps end the attempt (finish, dispute); a turn past them is refused;
+ * - refusal: a refusal (content filter), no tool call;
+ * - stall: lists the workspace every turn until the attempt's turn cap ends it;
+ * - stall-mid-edit: the same, after only some of its edits (the trace tells the two apart);
+ * - truncated: the turn is cut at the output limit while writing its next tool call;
+ * - empty: the turn has no content at all;
+ * - reasoning-exhausted: the turn's whole output bound goes to reasoning, no content.
+ */
+type AttemptEnd = "complete" | "refusal" | "stall" | "stall-mid-edit" | "truncated" | "empty" | "reasoning-exhausted";
+
 /** One attempt's scripted turns, emitted one per model call. */
 interface AttemptScript {
   readonly steps: readonly ToolStep[];
-  /** Ends the attempt without `finish`: a refusal after the scripted steps. */
-  readonly refuses: boolean;
-  /** Keeps listing the workspace until the attempt's turn cap ends it. */
-  readonly stalls: boolean;
+  readonly end: AttemptEnd;
+  /** The tool call a truncated turn was writing when it was cut; null for every other end. */
+  readonly cut: ToolStep | null;
 }
 
 /** Every text the call's prompt carries, in order: what a model reads. */
@@ -169,15 +256,16 @@ export class StandIns {
     const format = options.responseFormat;
     if (format?.type !== "json") throw new StandInUnanswerable("structured", "a call with no tools asked for no JSON schema");
     const keys = schemaKeys(format.schema);
-    if (keys.includes("inScope")) return this.structured("liaison-intake", () => this.intake());
-    if (keys.includes("roles")) return this.structured("roster", () => this.roster());
-    if (keys.includes("nodes")) return this.structured("decomposition.knowledge", () => ({ nodes: [], edges: [] }));
-    if (keys.includes("tasks")) return this.structured("decomposition.tasks", () => this.plan());
-    if (keys.includes("problems")) return this.structured("suite-review", () => this.review());
-    if (keys.includes("verdict")) return this.structured("liaison-answer", () => this.answer());
+    if (keys.includes("inScope")) return this.structured(options, "liaison-intake", () => this.intake());
+    if (keys.includes("roles")) return this.structured(options, "roster", () => this.roster());
+    if (keys.includes("nodes")) return this.structured(options, "decomposition.knowledge", () => ({ nodes: [], edges: [] }), EDGES_WITHOUT_REL);
+    if (keys.includes("tasks")) return this.structured(options, "decomposition.tasks", () => this.plan());
+    if (keys.includes("problems")) return this.structured(options, "suite-review", () => this.review());
+    if (keys.includes("verdict")) return this.structured(options, "liaison-answer", () => this.answer());
     if (keys.includes("environmentChange")) {
       // An honest planner reads the evidence it is shown: the recipe defect names itself in the failures.
-      const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);      return this.structured("replan.environment", () => ({
+      const defect = promptText(options).includes(RECIPE_DEFECT_SYMPTOM);
+      return this.structured(options, "replan.environment", () => ({
         environmentChange: defect,
         reason: defect ? "The build cannot write its cache directory: the environment's recipe must change." : "The change is to product behaviour the environment already builds and tests.",
       }));
@@ -185,13 +273,35 @@ export class StandIns {
     throw new StandInUnanswerable("structured", `no stand-in answers a schema with keys [${keys.join(", ")}]`);
   }
 
-  private async structured(site: string, answer: () => unknown): Promise<LanguageModelV4GenerateResult> {
-    if (this.context.tape.chance(`model.${site}.invalid`, this.context.rates.invalidOutput)) {
-      this.context.onModelCall({ site, action: "invalid-output" });
+  /**
+   * One structured answer, or one of the response-level misbehaviours a provider shows: output
+   * that does not parse, no content, the whole bound spent on reasoning, a well-formed object of the
+   * wrong shape (`mismatch`, the site's recurring one), or the answer cut at the bound mid-object.
+   */
+  private async structured(options: LanguageModelV4CallOptions, site: string, answer: () => unknown, mismatch?: unknown): Promise<LanguageModelV4GenerateResult> {
+    const { tape, rates, onModelCall } = this.context;
+    if (tape.chance(`model.${site}.invalid`, rates.invalidOutput)) {
+      onModelCall({ site, action: "invalid-output" });
       return textResult("{\"not\": \"what was asked\"");
     }
+    if (tape.chance(`model.${site}.empty`, rates.emptyStructured)) {
+      onModelCall({ site, action: "empty" });
+      return EMPTY;
+    }
+    if (tape.chance(`model.${site}.reasoning-exhausted`, rates.reasoningExhausted)) {
+      onModelCall({ site, action: "reasoning-exhausted" });
+      return reasoningOnly(outputBoundOf(options));
+    }
+    if (mismatch !== undefined && tape.chance(`model.${site}.schema-mismatch`, rates.schemaMismatch)) {
+      onModelCall({ site, action: "schema-mismatch" });
+      return textResult(JSON.stringify(mismatch));
+    }
     const value = await answer();
-    this.context.onModelCall({ site, action: "answered" });
+    if (tape.chance(`model.${site}.truncated`, rates.truncatedStructured)) {
+      onModelCall({ site, action: "truncated" });
+      return cutAtBound([{ type: "text", text: firstHalf(JSON.stringify(value)) }], outputBoundOf(options));
+    }
+    onModelCall({ site, action: "answered" });
     return textResult(JSON.stringify(value));
   }
 
@@ -307,24 +417,45 @@ export class StandIns {
     const key = `${task.id}#${task.dispatchCount}`;
     let script = this.attempts.get(key);
     if (script === undefined) {
-      script = await this.scriptFor(task, toolNames);
+      script = await this.scriptFor(task, toolNames, promptText(options));
       this.attempts.set(key, script);
     }
     const turn = assistantTurns(options);
     const step = script.steps[turn];
+    const onModelCall = this.context.onModelCall;
     if (step !== undefined) {
-      this.context.onModelCall({ site: "agent-runner", action: step[0] });
+      onModelCall({ site: "agent-runner", action: step[0] });
       return toolCall(++this.toolCalls, step[0], step[1]);
     }
-    if (script.stalls) {
-      this.context.onModelCall({ site: "agent-runner", action: "stall" });
-      return toolCall(++this.toolCalls, "list_directory", { path: "." });
+    switch (script.end) {
+      case "stall":
+      case "stall-mid-edit":
+        onModelCall({ site: "agent-runner", action: script.end });
+        return toolCall(++this.toolCalls, "list_directory", { path: "." });
+      case "truncated": {
+        // Cut while writing its next call: the call's input is half a JSON text.
+        onModelCall({ site: "agent-runner", action: "truncated" });
+        const [toolName, input] = script.cut ?? ["finish", { status: "done", summary: "Done." }];
+        const content: LanguageModelV4Content[] = [
+          { type: "text", text: "Next I write the change." },
+          { type: "tool-call", toolCallId: `sim-call-${++this.toolCalls}`, toolName, input: firstHalf(JSON.stringify(input)) },
+        ];
+        return cutAtBound(content, outputBoundOf(options));
+      }
+      case "empty":
+        onModelCall({ site: "agent-runner", action: "empty" });
+        return EMPTY;
+      case "reasoning-exhausted":
+        onModelCall({ site: "agent-runner", action: "reasoning-exhausted" });
+        return reasoningOnly(outputBoundOf(options));
+      case "refusal":
+      case "complete":
+        onModelCall({ site: "agent-runner", action: script.end === "refusal" ? "refusal" : "no-more-steps" });
+        return REFUSAL;
     }
-    this.context.onModelCall({ site: "agent-runner", action: script.refuses ? "refusal" : "no-more-steps" });
-    return REFUSAL;
   }
 
-  private async scriptFor(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>): Promise<AttemptScript> {
+  private async scriptFor(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>, prompt: string): Promise<AttemptScript> {
     const { tape, rates } = this.context;
     const spec = taskSpecShape.safeParse(task.taskSpec);
     const origin = spec.success ? spec.data.origin : undefined;
@@ -332,10 +463,35 @@ export class StandIns {
     if (tools.has("build_environment")) steps = this.environmentWork();
     else if (tools.has("define_check")) steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
     else if (origin === "product-scaffold") steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], finished("Set up the product layout.")];
-    else steps = await this.implementationWork(task, tools);
-    if (tape.chance("agent.timeout", rates.timeout)) return { steps: steps.slice(0, -1), refuses: false, stalls: true };
-    if (tape.chance("agent.refusal", rates.refusal)) return { steps: steps.slice(0, -1), refuses: true, stalls: false };
-    return { steps, refuses: false, stalls: false };
+    else steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
+    if (tape.chance("agent.timeout", rates.timeout)) return { steps: steps.slice(0, -1), end: "stall", cut: null };
+    if (tape.chance("agent.refusal", rates.refusal)) return { steps: steps.slice(0, -1), end: "refusal", cut: null };
+    return this.misbehaved(steps);
+  }
+
+  /**
+   * The attempt as the profile's response-level misbehaviour leaves it, or as scripted. The last
+   * step ends the attempt (finish, dispute), so every cut lands before it:
+   * - the turn cap after some of the steps and before the rest (I11, S2: work left uncommitted);
+   * - one turn cut at the output limit mid tool call, empty, or all reasoning, where the attempt's
+   *   steps would have gone on.
+   */
+  private misbehaved(steps: ToolStep[]): AttemptScript {
+    const { tape, rates } = this.context;
+    const work = steps.length - 1;
+    if (work >= 1 && tape.chance("agent.turn-cap-mid-edit", rates.turnCapMidEdit)) {
+      return { steps: steps.slice(0, 1 + tape.pick("agent.turn-cap-mid-edit.after", work)), end: "stall-mid-edit", cut: null };
+    }
+    const end: AttemptEnd | null = tape.chance("agent.truncated-turn", rates.truncatedTurn)
+      ? "truncated"
+      : tape.chance("agent.empty-turn", rates.emptyTurn)
+        ? "empty"
+        : tape.chance("agent.reasoning-exhausted", rates.reasoningExhausted)
+          ? "reasoning-exhausted"
+          : null;
+    if (end === null) return { steps, end: "complete", cut: null };
+    const at = tape.pick("agent.misbehaving-turn", steps.length);
+    return { steps: steps.slice(0, at), end, cut: end === "truncated" ? (steps[at] ?? null) : null };
   }
 
   private environmentWork(): ToolStep[] {
@@ -408,23 +564,40 @@ export class StandIns {
     return steps;
   }
 
-  private async implementationWork(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>): Promise<ToolStep[]> {
+  /**
+   * An implementation's turns. Handed a conflict with main (`conflicted`, the files its brief
+   * names), it first resolves each by keeping both sides (`sim resolve`), or leaves one's markers
+   * in, and never writes a conflicted file over its resolution afterwards.
+   */
+  private async implementationWork(task: z.infer<typeof taskRowSchema>, tools: ReadonlySet<string>, conflicted: readonly string[]): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
     const mine = taskOfTitle(universe, task.title);
     if (mine === null) throw new StandInUnanswerable("agent-runner", `implementation ${task.id} "${task.title}" carries no simulator marker`);
     const index = universe.tasks.indexOf(mine);
+    const steps: ToolStep[] = [];
+    for (const file of conflicted) {
+      const leaves = tape.chance("agent.conflict.markers-left", rates.conflictMarkersLeft);
+      this.context.onModelCall({ site: "agent-runner", action: `handed a conflict in ${file}: ${leaves ? "leaves its markers" : "resolves it"}` });
+      if (!leaves) steps.push(["run_command", { command: `sim resolve ${file}` }]);
+    }
     let behaviours = [...mine.behaviours];
     const underDelivers = behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery);
     if (underDelivers) behaviours = behaviours.slice(0, -1);
     const later: SimTask[] = universe.tasks.slice(index + 1);
     if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery)) behaviours.push(...(later[0]?.behaviours ?? []));
-    const steps: ToolStep[] = behaviours.map((b) => ["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
+    for (const b of behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
     const earlier = universe.tasks.slice(0, index).flatMap((t) => t.behaviours);
     const victim = earlier[0];
     if (victim !== undefined && tape.chance("agent.regression", rates.regression)) {
       steps.push(["run_command", { command: `sim rm ${behaviourPath(victim)}` }]);
     }
-    if (tape.chance("agent.manifest", rates.overDelivery / 3)) steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
+    if (tape.chance("agent.manifest", rates.overDelivery / 3) && !conflicted.includes(MANIFEST_FILE)) {
+      steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
+    }
+    // w12b D2: one file two tasks of a batch both write, so the second merge conflicts.
+    if (tape.chance("agent.shared-file", rates.sharedFileEdit) && !conflicted.includes(SHARED_INDEX_FILE)) {
+      steps.push(["write_file", { path: SHARED_INDEX_FILE, content: `${mine.ref}: ${behaviours.join(", ")}\n` }]);
+    }
     if (tools.has("dispute_check")) {
       const dispute = await this.disputeOf(task, underDelivers);
       if (dispute !== null) {

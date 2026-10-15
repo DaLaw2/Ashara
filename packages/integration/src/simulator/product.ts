@@ -4,11 +4,16 @@ import type { Tape } from "./tape.js";
 /**
  * The client's product as the simulator models it (design §4.4, in today's in-repository layout:
  * the recipe under `environment/`, check files written over the checkout). A delivered behaviour
- * is one file; a regression deletes it. Distinct files never conflict in git, so merges stay real.
+ * is one file; a regression deletes it. Behaviour files are distinct, so they never conflict in
+ * git; the shared index is one file every implementation may append its line to, so two tasks of
+ * one batch that both write it conflict on the second merge, as w12b D2's did.
  */
 const BEHAVIOUR_DIR = "product/behaviours";
 export const LAYOUT_FILE = "product/LAYOUT";
 export const MANIFEST_FILE = "product/MANIFEST";
+export const SHARED_INDEX_FILE = "product/INDEX";
+/** git's conflict marker lines, as `sim resolve` removes them: both sides' lines are kept. */
+export const CONFLICT_MARKER_LINE = /^(<{7}|={7}|>{7})( |$)/;
 
 export function behaviourPath(behaviour: string): string {
   return `${BEHAVIOUR_DIR}/${behaviour}`;

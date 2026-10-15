@@ -1,8 +1,10 @@
+import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS } from "@ashara/db";
 import { DevelopmentService, EXECUTION_STATUSES } from "@ashara/development";
-import { BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
+import { ATTEMPT_TERMINALS, BLOCKED_REASON_SOURCES, OUTBOUND_TRANSITIONS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 import type { WorkItemStatus } from "@ashara/shared";
+import type { Database } from "./database.js";
 import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
 import type { FaultRecord } from "./faults.js";
 import { haltCauseOf, sourceOf } from "./invariants.js";
@@ -27,6 +29,10 @@ export interface Coverage {
   readonly sweeps: Set<string>;
   /** Each halt reached, as `<cause>:<block kind>` (invariants.ts haltCauseOf). */
   readonly halts: Set<string>;
+  /** The attempt terminals dev_sessions records (ATTEMPT_TERMINALS), read at the run's end. */
+  readonly attempts: Set<string>;
+  /** Each response-level misbehaviour as production recorded meeting it (MODEL_PATHS), read at the run's end. */
+  readonly models: Set<string>;
 }
 
 type AcceptanceSweep = Awaited<ReturnType<DevelopmentService["sweepForAcceptance"]>>;
@@ -82,6 +88,8 @@ export function emptyCoverage(): Coverage {
     concurrency: new Set(),
     sweeps: new Set(),
     halts: new Set(),
+    attempts: new Set(),
+    models: new Set(),
   };
 }
 
@@ -95,6 +103,8 @@ const COVERAGE_KEYS = [
   "concurrency",
   "sweeps",
   "halts",
+  "attempts",
+  "models",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 const coverageSet = z.set(z.string());
@@ -110,6 +120,8 @@ export const CoverageSchema = z.strictObject({
   concurrency: coverageSet,
   sweeps: coverageSet,
   halts: coverageSet,
+  attempts: coverageSet,
+  models: coverageSet,
 }) satisfies z.ZodType<Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -183,6 +195,80 @@ export function sample(coverage: Coverage, snapshot: Snapshot, faults: readonly 
   for (const status of executions) coverage.executionStatuses.add(status);
 }
 
+/**
+ * Every response-level misbehaviour the stand-ins can show (profile.ts), as production's records
+ * show it was met, never as the stand-in says it misbehaved:
+ * - turn:* / structured:*: an llm_calls row of an agent turn, or of a one-shot structured call,
+ *   recorded cut at the output limit (finish reason length) with output beyond its reasoning, or with
+ *   every output token reasoning; or recorded stopped with no output at all; or, structured, an
+ *   error stopped with output (the answer did not parse or did not validate);
+ * - merge:conflict-presented: a session's brief hands the task its conflict with main (w12b D2).
+ */
+const MODEL_PATHS = [
+  "turn:truncated",
+  "turn:reasoning-exhausted",
+  "turn:empty",
+  "structured:truncated",
+  "structured:reasoning-exhausted",
+  "structured:empty",
+  "structured:invalid",
+  "merge:conflict-presented",
+] as const;
+type ModelPath = (typeof MODEL_PATHS)[number];
+
+/** The call site every agent turn is recorded under (workplace attempt.ts AGENT_CALL_SITE). */
+const AGENT_CALL_SITE = "agent-runner";
+
+const callRowSchema = z.object({
+  callSite: z.string(),
+  finishReason: z.string().nullable(),
+  outcome: z.string().nullable(),
+  outputTokens: z.number().int().nullable(),
+  reasoningTokens: z.number().int().nullable(),
+});
+type CallRow = z.infer<typeof callRowSchema>;
+
+/**
+ * The misbehaviour one recorded llm_calls row shows it met, or null for a call answered as asked.
+ * @testseam coverage.test.ts pins the path of each recorded shape
+ */
+export function modelPathOf(row: CallRow): ModelPath | null {
+  const kind = row.callSite === AGENT_CALL_SITE ? "turn" : "structured";
+  if (row.finishReason === "length") {
+    const allReasoning = row.outputTokens !== null && row.outputTokens > 0 && row.reasoningTokens !== null && row.reasoningTokens >= row.outputTokens;
+    return `${kind}:${allReasoning ? "reasoning-exhausted" : "truncated"}`;
+  }
+  if (row.finishReason === "stop" && row.outputTokens === 0) return `${kind}:empty`;
+  if (kind === "structured" && row.finishReason === "stop" && row.outcome === "error") return "structured:invalid";
+  return null;
+}
+
+const terminalRows = z.array(z.object({ terminal: z.string() }));
+const countRow = z.tuple([z.object({ n: z.number().int() })]);
+/** The heading development's brief opens an attempt's conflict with main with (merge.ts formatConflictForBrief). */
+const CONFLICT_BRIEF_HEADING = "## Merge with main in progress";
+
+/** What the run's records show of attempts and model misbehaviour: read once, at the run's end, from its projects' rows. */
+export async function sampleModelPaths(coverage: Coverage, observer: Database, projectIds: readonly string[]): Promise<void> {
+  for (const projectId of projectIds) {
+    const terminals = await observer.execute(sql`
+      SELECT DISTINCT s.attempt_terminal AS terminal FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
+      WHERE w.project_id = ${projectId} AND s.attempt_terminal IS NOT NULL`);
+    for (const row of terminalRows.parse(terminals.rows)) coverage.attempts.add(row.terminal);
+    const calls = await observer.execute(sql`
+      SELECT call_site AS "callSite", finish_reason AS "finishReason", outcome, output_tokens AS "outputTokens", reasoning_tokens AS "reasoningTokens"
+      FROM llm_calls WHERE project_id = ${projectId} AND state = 'recorded'`);
+    for (const row of z.array(callRowSchema).parse(calls.rows)) {
+      const path = modelPathOf(row);
+      if (path !== null) coverage.models.add(path);
+    }
+    const conflicts = await observer.execute(sql`
+      SELECT count(*)::int AS n FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
+      WHERE w.project_id = ${projectId} AND strpos(s.brief::text, ${CONFLICT_BRIEF_HEADING}) > 0`);
+    if (countRow.parse(conflicts.rows)[0].n > 0) coverage.models.add("merge:conflict-presented");
+  }
+}
+
 export interface MachineCoverage {
   readonly machine: string;
   readonly reached: readonly string[];
@@ -209,5 +295,7 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("batch of two", CONCURRENCY, coverage.concurrency),
     split("acceptance sweeps (AcceptanceSweep kinds)", Object.values(SWEEP_OUTCOMES).flat(), coverage.sweeps),
     split("halts by cause (project block kinds)", PROJECT_BLOCK_KINDS.map((kind) => `${haltCauseOf(kind)}:${kind}`), coverage.halts),
+    split("attempt terminals (ATTEMPT_TERMINALS)", ATTEMPT_TERMINALS, coverage.attempts),
+    split("model misbehaviour met (MODEL_PATHS)", MODEL_PATHS, coverage.models),
   ];
 }

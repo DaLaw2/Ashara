@@ -1,8 +1,12 @@
+import type { Tape } from "./tape.js";
+
 /**
  * The adversary and fault profiles of design §4.7 and §4.9: each seed draws one, then every
- * event is drawn independently with the profile's probability.
+ * event is drawn independently with the profile's probability. `adversarial` is chosen by name
+ * only (`--profile adversarial`, never profileOfSeed): the models misbehave at the response level
+ * at high rates and no seam fault is injected, so what fails is the code's answer to the model.
  */
-export const PROFILES = ["benign", "typical", "hostile", "chaos"] as const;
+export const PROFILES = ["benign", "typical", "hostile", "chaos", "adversarial"] as const;
 export type Profile = (typeof PROFILES)[number];
 
 /** Each event of design §4.7 the simulator models, with where it acts. */
@@ -49,6 +53,28 @@ export interface AdversaryRates {
   readonly clientStop: number;
   /** The spend cap is set below what the plan needs. */
   readonly lowBudget: number;
+  /*
+   * Response-level misbehaviour (test retro 2026-10-15 pattern 2). Each reaches production as a
+   * provider's response would: through the gateway, the attempt loop and the routers.
+   */
+  /** An implementation also writes the product's shared index, which a batch partner may write too (w12b D2, H4). */
+  readonly sharedFileEdit: number;
+  /** An implementer handed its conflict with main leaves the conflict markers in. */
+  readonly conflictMarkersLeft: number;
+  /** An agent turn is cut at the output limit in the middle of a tool call (finish reason length). */
+  readonly truncatedTurn: number;
+  /** An agent turn answers with no content at all. */
+  readonly emptyTurn: number;
+  /** A call spends its whole output bound on reasoning and returns no answer (W11c D4, smoke2 D2). */
+  readonly reasoningExhausted: number;
+  /** The attempt runs out of turns after some of its edits and before the rest (I11, S2). */
+  readonly turnCapMidEdit: number;
+  /** A structured answer is cut at the output limit in the middle of its object. */
+  readonly truncatedStructured: number;
+  /** A structured call answers with no content at all. */
+  readonly emptyStructured: number;
+  /** The knowledge call answers with edges that carry no `rel` (the recurring edges.N.rel mismatch, W11 D9). */
+  readonly schemaMismatch: number;
 }
 
 export interface FaultRates {
@@ -58,30 +84,49 @@ export interface FaultRates {
   readonly budget: number;
 }
 
-export const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
+/** No response-level misbehaviour: the profiles the stand-ins cooperate under at the response level. */
+const COOPERATIVE_RESPONSES = {
+  sharedFileEdit: 0, conflictMarkersLeft: 0, truncatedTurn: 0, emptyTurn: 0, reasoningExhausted: 0, turnCapMidEdit: 0,
+  truncatedStructured: 0, emptyStructured: 0, schemaMismatch: 0,
+} as const;
+
+const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
   benign: {
     overDelivery: 0, underDelivery: 0, regression: 0, wrongCheck: 0, contradictoryCheck: 0, vacuousCheck: 0,
     allGuardSet: 0, outOfVisionCheck: 0, flakyCheck: 0, unrunnableCheck: 0, authorWritesProduct: 0, refusal: 0,
     timeout: 0, invalidOutput: 0, disputeRight: 0, disputeWrong: 0, reviewCatch: 1, recipeDefect: 0, lateChange: 0,
-    clientStop: 0, lowBudget: 0,
+    clientStop: 0, lowBudget: 0, ...COOPERATIVE_RESPONSES,
   },
   typical: {
     overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.05, contradictoryCheck: 0.05, vacuousCheck: 0.05,
     allGuardSet: 0.02, outOfVisionCheck: 0.1, flakyCheck: 0.03, unrunnableCheck: 0.05, authorWritesProduct: 0.4, refusal: 0.02,
     timeout: 0.05, invalidOutput: 0.1, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, recipeDefect: 0.05,
-    lateChange: 0.1, clientStop: 0.02, lowBudget: 0.05,
+    lateChange: 0.1, clientStop: 0.02, lowBudget: 0.05, ...COOPERATIVE_RESPONSES,
   },
   hostile: {
     overDelivery: 0.6, underDelivery: 0.35, regression: 0.15, wrongCheck: 0.2, contradictoryCheck: 0.15, vacuousCheck: 0.15,
     allGuardSet: 0.1, outOfVisionCheck: 0.2, flakyCheck: 0.1, unrunnableCheck: 0.1, authorWritesProduct: 0.4, refusal: 0.05,
     timeout: 0.1, invalidOutput: 0.2, disputeRight: 0.9, disputeWrong: 0.2, reviewCatch: 0.7, recipeDefect: 0.15,
     lateChange: 0.2, clientStop: 0.05, lowBudget: 0.1,
+    sharedFileEdit: 0.15, conflictMarkersLeft: 0.2, truncatedTurn: 0.02, emptyTurn: 0.02, reasoningExhausted: 0.02, turnCapMidEdit: 0.05,
+    truncatedStructured: 0.02, emptyStructured: 0.02, schemaMismatch: 0.2,
   },
   chaos: {
     overDelivery: 0.8, underDelivery: 0.5, regression: 0.3, wrongCheck: 0.3, contradictoryCheck: 0.3, vacuousCheck: 0.3,
     allGuardSet: 0.2, outOfVisionCheck: 0.3, flakyCheck: 0.2, unrunnableCheck: 0.2, authorWritesProduct: 0.6, refusal: 0.1,
     timeout: 0.2, invalidOutput: 0.3, disputeRight: 0.9, disputeWrong: 0.4, reviewCatch: 0.5, recipeDefect: 0.3,
     lateChange: 0.3, clientStop: 0.1, lowBudget: 0.2,
+    sharedFileEdit: 0.3, conflictMarkersLeft: 0.3, truncatedTurn: 0.04, emptyTurn: 0.04, reasoningExhausted: 0.04, turnCapMidEdit: 0.1,
+    truncatedStructured: 0.04, emptyStructured: 0.04, schemaMismatch: 0.3,
+  },
+  adversarial: {
+    overDelivery: 0.3, underDelivery: 0.15, regression: 0.05, wrongCheck: 0.1, contradictoryCheck: 0.1, vacuousCheck: 0.05,
+    allGuardSet: 0.02, outOfVisionCheck: 0.1, flakyCheck: 0.03, unrunnableCheck: 0.05, authorWritesProduct: 0.4, refusal: 0.02,
+    timeout: 0.02, invalidOutput: 0.05, disputeRight: 0.8, disputeWrong: 0.05, reviewCatch: 0.9, recipeDefect: 0.05,
+    lateChange: 0.1, clientStop: 0.02, lowBudget: 0,
+    // A stalled attempt spends its whole turn cap; each unpriced stand-in call counts at its worst-case estimate.
+    sharedFileEdit: 0.7, conflictMarkersLeft: 0.3, truncatedTurn: 0.06, emptyTurn: 0.06, reasoningExhausted: 0.05, turnCapMidEdit: 0.08,
+    truncatedStructured: 0.05, emptyStructured: 0.05, schemaMismatch: 0.3,
   },
 };
 
@@ -90,7 +135,48 @@ export const FAULTS: Readonly<Record<Profile, FaultRates>> = {
   typical: { perSeamCall: 0.002, budget: 3 },
   hostile: { perSeamCall: 0.005, budget: 10 },
   chaos: { perSeamCall: 0.01, budget: 30 },
+  adversarial: { perSeamCall: 0, budget: 0 },
 };
+
+/** A rate drawn once per seed, from its benign end (decision value 0) toward its worst end. */
+interface RateSpread {
+  readonly benign: number;
+  readonly worst: number;
+}
+
+/**
+ * The rates a profile draws per seed instead of fixing them (test retro pattern 2: a suite review
+ * that catches at one fixed rate says nothing of a review that misses more, N8, N20, R3, E4).
+ */
+const VARIED_RATES = ["reviewCatch", "disputeRight", "disputeWrong"] as const;
+type VariedRate = (typeof VARIED_RATES)[number];
+/** Steps of a varied rate's draw between its two ends. */
+const SPREAD_STEPS = 10;
+
+/** The profiles whose review and dispute rates are drawn per seed; benign and typical keep ADVERSARY's. */
+const SPREADS: Readonly<Record<Profile, Readonly<Partial<Record<VariedRate, RateSpread>>>>> = {
+  benign: {},
+  typical: {},
+  hostile: { reviewCatch: { benign: 0.95, worst: 0.2 }, disputeRight: { benign: 0.95, worst: 0.3 }, disputeWrong: { benign: 0.05, worst: 0.5 } },
+  chaos: { reviewCatch: { benign: 0.9, worst: 0 }, disputeRight: { benign: 0.95, worst: 0.2 }, disputeWrong: { benign: 0.1, worst: 0.7 } },
+  adversarial: { reviewCatch: { benign: 1, worst: 0 }, disputeRight: { benign: 1, worst: 0 }, disputeWrong: { benign: 0, worst: 0.8 } },
+};
+
+/**
+ * The seed's adversary rates: the profile's, with each rate SPREADS varies drawn once from the tape
+ * (`rates.<name>`), so a seed's review misses and its implementers dispute at its own rates, the
+ * same on every replay and in every process.
+ */
+export function drawRates(profile: Profile, tape: Tape): AdversaryRates {
+  let rates: AdversaryRates = ADVERSARY[profile];
+  for (const name of VARIED_RATES) {
+    const spread = SPREADS[profile][name];
+    if (spread === undefined) continue;
+    const step = tape.pick(`rates.${name}`, SPREAD_STEPS + 1);
+    rates = { ...rates, [name]: spread.benign + ((spread.worst - spread.benign) * step) / SPREAD_STEPS };
+  }
+  return rates;
+}
 
 /** The profile a seed draws when none is given: 10% benign, 40% typical, 40% hostile, 10% chaos. */
 export function profileOfSeed(seed: number): Profile {

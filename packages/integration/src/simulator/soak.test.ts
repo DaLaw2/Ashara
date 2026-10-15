@@ -26,9 +26,9 @@ function canonical(stdout: string): string[] {
 }
 
 /** The soak tier as a reader runs it: scripts/simulate.ts in its own process, on the test's database server. */
-async function soak(jobs: number): Promise<Soak> {
+async function soak(jobs: number, args: readonly string[] = ["--seeds", "4", "--start", "53"]): Promise<Soak> {
   try {
-    const { stdout } = await run("npx", ["tsx", "scripts/simulate.ts", "--seeds", "4", "--start", "53", "--jobs", String(jobs)], {
+    const { stdout } = await run("npx", ["tsx", "scripts/simulate.ts", ...args, "--jobs", String(jobs)], {
       cwd: REPO_ROOT,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -50,6 +50,17 @@ describe("simulate.ts --jobs", () => {
     const parallel = await soak(4);
     expect(serial.lines.filter((line) => line.startsWith("seed ")).map((line) => line.split(" (")[0])).toEqual(["seed 53", "seed 54", "seed 55", "seed 56"]);
     expect(serial.lines.some((line) => line.includes("(known: listed in expected-failures.ts)"))).toBe(true);
+    expect(parallel).toEqual(serial);
+    expect(serial.exitCode).toBe(0);
+  }, 300_000);
+
+  // The adversarial profile's misbehaviour is drawn from the tape like every other choice, so its
+  // seeds too are a function of the seed alone; the coverage lines (MODEL_PATHS met) are compared too.
+  it("reports every adversarial seed as the serial run does", async () => {
+    const args = ["--seeds", "3", "--start", "11", "--profile", "adversarial"];
+    const serial = await soak(1, args);
+    const parallel = await soak(3, args);
+    expect(serial.lines.some((line) => line.startsWith("model misbehaviour met (MODEL_PATHS)"))).toBe(true);
     expect(parallel).toEqual(serial);
     expect(serial.exitCode).toBe(0);
   }, 300_000);

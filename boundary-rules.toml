@@ -87,5 +87,5 @@ names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loa
 names.llm-gateway = ["LanguageModelFactory"]
 names.security = ["MasterKey", "SecretStore", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
-names.shared = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]
+names.shared = ["ATTEMPT_TERMINALS", "BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]
 names.workplace = ["CHECK_MISSING_EXIT"]

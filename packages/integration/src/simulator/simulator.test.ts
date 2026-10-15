@@ -213,12 +213,16 @@ describe("lifecycle simulator, fast tier", () => {
   // t-ddd-fix-own-faults (a fault of Z0 is requeued uncharged, not replanned): its scan of 2026-10-15
   // over seeds 1-120, the same mode, found none in 1-40 and seeds 47, 60, 63, 68, 81 and 84 failing
   // I5:over-committed alone, planted, and passing clean with contended:spend-admission covered.
+  // Seed 47 (hostile) stopped catching it at the merge of t-adversarial-models, which draws hostile
+  // and chaos rates per seed: of that scan's seeds, 63 and 81 (typical) still fail I5:over-committed
+  // alone, planted, and pass clean with contended:spend-admission covered (observed 2026-10-15, each
+  // run serially at $10 with two projects on the merged tree).
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(47, undefined, shared);
+    const clean = await seeded(63, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(47, "no-admission-queue", shared);
+    const planted = await seeded(63, "no-admission-queue", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
@@ -317,6 +321,72 @@ describe("lifecycle simulator, fast tier", () => {
     expect(failed(clean)).toEqual([]);
     const planted = await seeded(10, "skip-merge-record");
     expect(failed(planted)).toContain("I7");
+  }, 90_000);
+});
+
+/**
+ * The adversarial profile (test retro 2026-10-15 pattern 2; ADR-081): one pinned seed per
+ * response-level misbehaviour, each judged twice: the stand-in's trace says it misbehaved, and
+ * production's own records (coverage.ts MODEL_PATHS, the attempt terminals of dev_sessions) say the
+ * gateway, the attempt loop and the routers met it; and the seed passes every invariant. Observed
+ * 2026-10-15 over adversarial seeds 1-40 (`simulate.ts --seeds 40 --profile adversarial`): no
+ * violation. A change that moves a seed off its misbehaviour fails here: then re-pick the seed.
+ */
+describe("lifecycle simulator, adversarial models", () => {
+  function adversarial(seed: number): Promise<RunResult> {
+    return runSeed({ seed, profile: "adversarial", tape: { kind: "seeded", seed }, databaseUrl, template, maxCycles: MAX_CYCLES, timeoutMs: SEED_TIMEOUT_MS });
+  }
+
+  function expectReached(result: RunResult, injected: readonly string[], models: readonly string[], attempts: readonly string[]): void {
+    expect(keys(result), result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
+    for (const line of injected) expect(result.trace).toContain(`model ${line}`);
+    expect([...result.coverage.models]).toEqual(expect.arrayContaining([...models]));
+    expect([...result.coverage.attempts]).toEqual(expect.arrayContaining([...attempts]));
+  }
+
+  // (a) w12b D2: two tasks of a batch both write product/INDEX; the second's retry is handed the conflict.
+  it("hands the second of two same-file edits its conflict with main, which it resolves", async () => {
+    const result = await adversarial(12);
+    expectReached(result, ["agent-runner handed a conflict in product/INDEX: resolves it"], ["merge:conflict-presented"], ["finished:done"]);
+  }, 90_000);
+
+  it("hands a conflict to an implementer that leaves its markers in", async () => {
+    const result = await adversarial(17);
+    expectReached(result, ["agent-runner handed a conflict in product/INDEX: leaves its markers"], ["merge:conflict-presented"], []);
+  }, 90_000);
+
+  // (b) and (d) on agent turns: cut at the output limit mid tool call, and all reasoning; neither turn's calls run.
+  it("ends an attempt whose turn is cut at the output limit, mid tool call or all reasoning", async () => {
+    const result = await adversarial(31);
+    expectReached(result, ["agent-runner truncated", "agent-runner reasoning-exhausted"], ["turn:truncated", "turn:reasoning-exhausted"], ["output_truncated"]);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
+  // (c) on an agent turn. The gateway refuses a turn with no message (TurnResponseInvalid), so the
+  // attempt ends as transport_exhausted, not model_stopped_without_finish (observed: seed 23's records).
+  it("ends an attempt whose turn answers nothing", async () => {
+    const result = await adversarial(23);
+    expectReached(result, ["agent-runner empty"], ["turn:empty"], ["transport_exhausted"]);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
+  // (e) I11, S2: the turn cap ends an attempt after some of its edits; the task still completes.
+  it("ends an attempt at its turn cap in the middle of its edits", async () => {
+    const result = await adversarial(36);
+    expectReached(result, ["agent-runner stall-mid-edit"], [], ["turn_cap"]);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
+  // (b), (c), (d), (g) on one-shot structured calls: each is a failed ladder attempt, never an answer.
+  it("retries structured calls that are cut, empty, all reasoning or of the wrong shape", async () => {
+    const result = await adversarial(8);
+    expectReached(
+      result,
+      ["decomposition.knowledge schema-mismatch", "decomposition.knowledge empty", "decomposition.tasks truncated", "suite-review reasoning-exhausted"],
+      ["structured:invalid", "structured:empty", "structured:truncated", "structured:reasoning-exhausted"],
+      [],
+    );
+    expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 });
 

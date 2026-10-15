@@ -61,6 +61,12 @@ const projectRow = z.object({
 });
 type ProjectRow = z.infer<typeof projectRow>;
 
+/**
+ * A halt episode and the report that told the client of it. A planning stop is told by the
+ * planning-stopped report (one client message, reports_on 'planning-stopped', posted after the stop),
+ * which its episode row does not link: that message is its report. First met under the adversarial
+ * profile (seed 5: twelve failed knowledge calls stopped planning, and I2 named the told episode).
+ */
 const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
 const checkRow = z.object({
   taskId: z.string(),
@@ -128,8 +134,11 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const episodes = z.array(episodeRow).parse(
     (
       await db.execute(sql`
-        SELECT id, kind, report_id AS "reportId", ended_at IS NOT NULL AS ended
-        FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`)
+        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended,
+               COALESCE(b.report_id, CASE WHEN b.kind = 'planning_stopped' THEN (
+                 SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id AND m.reports_on = 'planning-stopped'
+                   AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
+        FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)
     ).rows,
   );
   const checks = z.array(checkRow).parse(
