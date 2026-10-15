@@ -821,7 +821,7 @@ describe("a task no roster role can work is planned around, never left waiting",
     const left = await releaseClearedBlocks({
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
-      projects: { listActiveIds: async () => [projectId] },
+      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectRepository(db).get(id) },
     });
 
     expect(left).toBe(1);

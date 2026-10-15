@@ -34,7 +34,7 @@ export class LifecycleRouter {
   }
 
   /**
-   * Completes `item`, Blocked as merge_unrecorded, once its merge record is written, and rolls
+   * Completes `item`, Blocked as merge_unrecorded (or orphan_unreconciled with its merge found), once its merge record is written, and rolls
    * the completion up to its ancestors as a completed attempt does. Saved against `Blocked`: an
    * item that moved concurrently is InvalidStatusTransition.
    */

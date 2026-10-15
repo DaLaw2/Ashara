@@ -331,6 +331,8 @@ function givenUpEvidence(reason: GivenUpReason): string {
         `(${reason.mainCommit === null ? "main could not be read" : `commit ${reason.mainCommit}`}) of the ` +
         `environment's test and every completed task's checks did not pass, or could not be carried out:\n${reason.reason}`
       );
+    case "orphan_unreconciled":
+      return `Ashara's own machinery could not settle it after a restart (${reason.step}): ${reason.reason}`;
     case "task_failed":
     case "orchestrator_error":
     case "merge_unrecorded":

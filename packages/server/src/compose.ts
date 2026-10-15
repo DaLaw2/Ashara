@@ -516,10 +516,11 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       );
 
       // A prior process may have crashed mid-dispatch, leaving items InProgress with no owning
-      // agent, or Failed with no recovery routed. Reset orphans to Pending and route parked Failed
-      // items through the same FailureRouter policy so the gate (Pending-only) sees the recovered
-      // work on the first cycle. Idempotent, and per-item fail-closed inside; a pass that throws as
-      // a whole refuses the start.
+      // agent, or Failed with no recovery routed. Each orphan is settled from its target's main
+      // (Completed with a merge found there, else back to Pending, else Blocked under a typed
+      // cause) and parked Failed items are routed through the same FailureRouter policy, so the
+      // gate (Pending-only) sees the recovered work on the first cycle. Idempotent; a pass that
+      // throws, an orphan it could not even block included, refuses the start.
       await reconcileOrRefuse(
         () =>
           reconcileOnStartup({

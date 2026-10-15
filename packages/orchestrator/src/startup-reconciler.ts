@@ -1,15 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DomainEvent, ProjectId, WorkItemStatus } from "@ashara/shared";
-import { blockedReasonToRecord, projectBlockCause, TERMINAL_SESSION_PHASES, WorkItemRowCorrupt } from "@ashara/shared";
+import type { DomainEvent, ProjectId, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
+import { blockedReasonToRecord, describeErrorChain, projectBlockCause, TERMINAL_SESSION_PHASES, WorkItemRowCorrupt } from "@ashara/shared";
 import type { DevSessionRepository, EventStoreRepository, ProjectRepository } from "@ashara/db";
 import type { WorkItem, WorkItemRepository, FailureRouter, RawFailureContext, FailureRecoveryDeps } from "./acl/planning-acl.js";
-import { requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
+import { blockWorkItem, PlanningService, requeueWorkItem, takeEvents, recoverFailedItem } from "./acl/planning-acl.js";
+import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
+import type { TargetPathSource } from "./orphan-merge.js";
 
 export interface StartupReconcilerDeps {
   readonly workItemRepo: WorkItemRepository;
-  /** Blocks a project one of whose rows does not parse (migration 025). */
-  readonly projects: Pick<ProjectRepository, "block">;
+  /**
+   * Blocks a project one of whose rows does not parse (migration 025), or whose crash orphan could
+   * not be settled; `get` names the target whose main an orphan's merge is read from.
+   */
+  readonly projects: Pick<ProjectRepository, "block"> & TargetPathSource;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failureRouter: FailureRouter;
   /**
@@ -24,7 +29,10 @@ export interface StartupReconcilerDeps {
 
 export interface ReconcileSummary {
   readonly orphansRequeued: number;
-  readonly orphansErrored: number;
+  /** Orphans whose merge was found on main: recorded and Completed, never re-dispatched. */
+  readonly orphansCompleted: number;
+  /** Orphans not settled within the bound: Blocked under a typed cause, never left InProgress. */
+  readonly orphansBlocked: number;
   readonly failedReplanned: number;
   readonly failedAbandoned: number;
   readonly failedErrored: number;
@@ -64,7 +72,8 @@ async function* itemsByProject(
 
 export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<ReconcileSummary> {
   let orphansRequeued = 0;
-  let orphansErrored = 0;
+  let orphansCompleted = 0;
+  let orphansBlocked = 0;
   let failedReplanned = 0;
   let failedAbandoned = 0;
   let failedErrored = 0;
@@ -73,16 +82,10 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
 
   for await (const orphans of itemsByProject(deps, "InProgress", blockedProjects)) {
     for (const orphan of orphans) {
-      try {
-        await requeueOrphan(deps, orphan);
-        orphansRequeued += 1;
-      } catch (error) {
-        orphansErrored += 1;
-        console.warn(
-          `[startup-reconciler] failed to requeue crash-orphaned InProgress item ${orphan.id}; left InProgress for the next reconcile:`,
-          error,
-        );
-      }
+      const settled = await settleOrphan(deps, orphan);
+      if (settled === "requeued") orphansRequeued += 1;
+      else if (settled === "completed") orphansCompleted += 1;
+      else if (settled === "blocked") orphansBlocked += 1;
     }
   }
 
@@ -115,7 +118,8 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
 
   const summary: ReconcileSummary = {
     orphansRequeued,
-    orphansErrored,
+    orphansCompleted,
+    orphansBlocked,
     failedReplanned,
     failedAbandoned,
     failedErrored,
@@ -124,7 +128,7 @@ export async function reconcileOnStartup(deps: StartupReconcilerDeps): Promise<R
     sessionsTerminalized,
   };
   console.log(
-    `[startup-reconciler] orphans requeued=${orphansRequeued} errored=${orphansErrored}; ` +
+    `[startup-reconciler] orphans requeued=${orphansRequeued} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
       `parked Failed routed=${failedRouted} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
       `errored=${failedErrored}); ` +
       `projects blocked on a corrupt row=${blockedProjects.size}; ` +
@@ -177,6 +181,111 @@ const RESOLVED_BY = "startup-reconciler";
  * re-dispatch it forever without its retry bound moving.
  */
 const MAX_ORPHAN_REFUNDS = 1;
+
+/**
+ * Policy: the waits between attempts at settling one crash orphan, and at blocking it; three
+ * attempts each. A store or a git call that fails once is retried, never taken as the answer.
+ */
+const ORPHAN_BACKOFF_MS: readonly number[] = [100, 500];
+
+type Settled = "requeued" | "completed" | "blocked" | "moved";
+
+/**
+ * Settles an InProgress item a previous process left (Discipline A, B). Main is read first: a
+ * dead process may have committed the task's merge and died before its record (B5), and a requeue
+ * would redo merged work. A merge found is recorded and the task Completed through the path a
+ * finished dispatch takes (recordMergeCommit, then PlanningService.route); none found, the task is
+ * requeued (requeueOrphan). Each attempt re-reads the item, so a partial write of the one before
+ * is never built on. Past the bound the task is blocked, never left InProgress (B3): with its merge
+ * found but unrecorded, as merge_unrecorded, whose record the loop writes again each cycle;
+ * otherwise as orphan_unreconciled under Ashara's own fault class, with the project blocked on it
+ * so the operator sees it. A block that cannot be written either throws: the start is refused
+ * rather than run with an item InProgress and no attempt alive.
+ */
+async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<Settled> {
+  let merge: string | null | undefined;
+  let step = "read main for the task's merge";
+  let last: unknown = null;
+  for (let attempt = 1; attempt <= ORPHAN_BACKOFF_MS.length + 1; attempt++) {
+    try {
+      step = "re-read the item";
+      const item = attempt === 1 ? orphan : await deps.workItemRepo.findById(orphan.id);
+      if (item === null || item.status !== "InProgress") {
+        console.warn(`[startup-reconciler] orphan ${orphan.id} is ${item?.status ?? "gone"} now; left as it is`);
+        return "moved";
+      }
+      step = "read main for the task's merge";
+      if (merge === undefined) merge = await mergeOnMainOf(deps.projects, item);
+      if (merge === null) {
+        step = "requeue the task";
+        await requeueOrphan(deps, item);
+        return "requeued";
+      }
+      step = `record the merge ${merge}`;
+      await deps.workItemRepo.recordMergeCommit(item.id, merge, "merged");
+      step = `complete the task merged as ${merge}`;
+      const events = await PlanningService.route(deps.workItemRepo, item.id, true);
+      await publishBestEffort(deps.eventStore, events, item.id);
+      console.warn(`[startup-reconciler] ${item.id} was merged on main as ${merge} by a dead process; merge recorded, Completed, not re-dispatched`);
+      return "completed";
+    } catch (error) {
+      last = error;
+      const wait = ORPHAN_BACKOFF_MS[attempt - 1];
+      console.warn(
+        `[startup-reconciler] orphan ${orphan.id}: ${step} failed on attempt ${attempt} of ${ORPHAN_BACKOFF_MS.length + 1}` +
+          `${wait === undefined ? "; blocking it" : `; retrying in ${wait}ms`}:`,
+        error,
+      );
+      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  const unsettled = new OrphanUnreconciled(orphan.id, step, ORPHAN_BACKOFF_MS.length + 1, { cause: last });
+  const reason: StoredBlockedReason =
+    typeof merge === "string"
+      ? { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: unsettled.message }
+      : { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(last) };
+  const blocked = await blockUnsettled(deps, orphan, reason, unsettled);
+  if (blocked === "moved") return "moved";
+  if (reason.source === "orphan_unreconciled") {
+    try {
+      const result = await deps.projects.block(orphan.projectId, projectBlockCause(unsettled));
+      console.warn(`[startup-reconciler] project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`);
+    } catch (error) {
+      // The item is Blocked with its own exit, which the loop takes each cycle while the project runs.
+      console.warn(`[startup-reconciler] project ${orphan.projectId} could not be blocked on ${unsettled.message}:`, error);
+    }
+  }
+  return "blocked";
+}
+
+/** Blocks the orphan under `reason`, within the same bound; throws `unsettled`'s chain when it cannot. */
+async function blockUnsettled(
+  deps: StartupReconcilerDeps,
+  orphan: WorkItem,
+  reason: StoredBlockedReason,
+  unsettled: OrphanUnreconciled,
+): Promise<"blocked" | "moved"> {
+  let last: unknown = null;
+  for (let attempt = 1; attempt <= ORPHAN_BACKOFF_MS.length + 1; attempt++) {
+    try {
+      const item = await deps.workItemRepo.findById(orphan.id);
+      if (item === null || item.status !== "InProgress") return "moved";
+      blockWorkItem(item, reason);
+      await deps.workItemRepo.save(item, "InProgress");
+      await publishBestEffort(deps.eventStore, takeEvents(item), item.id);
+      console.warn(`[startup-reconciler] orphan ${orphan.id} blocked (${reason.source}): ${unsettled.message}`);
+      return "blocked";
+    } catch (error) {
+      last = error;
+      const wait = ORPHAN_BACKOFF_MS[attempt - 1];
+      console.warn(`[startup-reconciler] orphan ${orphan.id}: its block failed on attempt ${attempt}:`, error);
+      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  throw new OrphanUnreconciled(orphan.id, `block it (${reason.source}) after this: ${unsettled.message}; the block`, ORPHAN_BACKOFF_MS.length + 1, {
+    cause: last,
+  });
+}
 
 /**
  * Requeues an InProgress item left by a previous process, and gives back the dispatch that

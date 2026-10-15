@@ -13,4 +13,4 @@
 export type { DevelopmentService, FaultClass, TaskDescriptor } from "@ashara/development";
 
 // --- Values (re-exported) ---
-export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "@ashara/development";
+export { assertValidTargetProjectPath, InvalidTargetProjectPath, taskMergeOnMain } from "@ashara/development";

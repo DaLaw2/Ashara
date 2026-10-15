@@ -257,6 +257,8 @@ function observedCause(cause: StoredBlockedReason): string {
       return `${cause.reason} (recipe files: ${cause.paths.join(", ")})`;
     case "check_disputed":
       return `check "${cause.checkName}" disputed: ${cause.reason}`;
+    case "orphan_unreconciled":
+      return `${cause.step} failed: ${cause.reason}`;
     case "acceptance_failed":
       return cause.mainCommit === null
         ? `the acceptance run could not read main: ${cause.reason}`

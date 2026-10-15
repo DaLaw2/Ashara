@@ -141,13 +141,61 @@ class MergeCommitUnreadable extends Error {
  * completed without its record.
  */
 export async function commitMerge(targetPath: string, taskId: string): Promise<string> {
-  await runHostGit(targetRepo(targetPath), ["commit", "-m", `merge: task ${taskId}`]);
+  await runHostGit(targetRepo(targetPath), ["commit", "-m", mergeSubject(taskId)]);
   // Branch deletion deferred to cleanupWorkdir — worktree must be removed first
   // (git refuses to delete a branch that has an active worktree).
   const { stdout } = await runHostGit(targetRepo(targetPath), ["rev-parse", "HEAD"]);
   const commit = CommitIdSchema.safeParse(stdout.trim());
   if (!commit.success) throw new MergeCommitUnreadable(taskId, targetPath, stdout);
   return commit.data;
+}
+
+/** The subject commitMerge writes on a task's merge commit: what taskMergeOnMain finds main's merges by. */
+function mergeSubject(taskId: string): string {
+  return `merge: task ${taskId}`;
+}
+
+/** Git gave no answer about the target's main: never read as "nothing merged". */
+class MainUnreadable extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly targetPath: string,
+    readonly step: string,
+    options: { readonly cause: unknown },
+  ) {
+    super(`main of ${targetPath} could not be read for a merge of task ${taskId}: ${step}: ${describeErrorChain(options.cause)}`, options);
+    this.name = "MainUnreadable";
+  }
+}
+
+/**
+ * The merge commit commitMerge made on main for the task, read from git: the newest commit on
+ * main whose subject is the task's merge subject, or null when main holds none. A repository with
+ * no main branch (`rev-parse -q --verify` exits 1 with nothing on stderr) holds no merge. Any other
+ * failure of git is MainUnreadable.
+ */
+export async function taskMergeOnMain(targetPath: string, taskId: string): Promise<string | null> {
+  const repo = targetRepo(targetPath);
+  try {
+    await runHostGit(repo, ["rev-parse", "-q", "--verify", "refs/heads/main^{commit}"]);
+  } catch (e) {
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return null;
+    throw new MainUnreadable(taskId, targetPath, "rev-parse main", { cause: e });
+  }
+  let stdout: string;
+  try {
+    ({ stdout } = await runHostGit(repo, ["log", "--fixed-strings", `--grep=${mergeSubject(taskId)}`, "--format=%H%x1f%s", "refs/heads/main", "--"]));
+  } catch (e) {
+    throw new MainUnreadable(taskId, targetPath, "log main", { cause: e });
+  }
+  for (const line of stdout.split("\n")) {
+    const [commit, subject] = line.split("\x1f");
+    if (subject !== mergeSubject(taskId)) continue;
+    const parsed = CommitIdSchema.safeParse(commit);
+    if (!parsed.success) throw new MainUnreadable(taskId, targetPath, "log main", { cause: new Error(`not a commit id: ${JSON.stringify(commit)}`) });
+    return parsed.data;
+  }
+  return null;
 }
 
 export async function abortMerge(targetPath: string): Promise<void> {

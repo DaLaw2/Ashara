@@ -256,7 +256,7 @@ describe("one project's bad record at startup", () => {
         workdirBase: `/nonexistent-${NAME_PREFIX}`,
       });
 
-      expect(summary).toMatchObject({ orphansRequeued: 1, orphansErrored: 0, projectsBlocked: 1 });
+      expect(summary).toMatchObject({ orphansRequeued: 1, orphansCompleted: 0, orphansBlocked: 0, projectsBlocked: 1 });
       expect(await statusOf(tx, healthy.taskIds[0] ?? "")).toBe("Pending");
       // The blocked project's items are left as they were for an operator to repair.
       expect(await statusOf(tx, bad.taskIds[0] ?? "")).toBe("InProgress");

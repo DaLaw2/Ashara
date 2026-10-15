@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { DomainEvent, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import { BLOCKED_REASON_SOURCES, blockedExitOf, createWorkItemId, InvalidStatusTransition, parseProjectId } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
@@ -33,6 +37,7 @@ function run(
   items: WorkItem[],
   saveRefused = false,
   recordMergeCommit: WorkItemRepository["recordMergeCommit"] = notExercised("recordMergeCommit"),
+  workspacePath: string | null = null,
 ) {
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: DomainEvent[] = [];
@@ -60,7 +65,7 @@ function run(
   const released = releaseClearedBlocks({
     workItemRepo,
     eventStore: { publish: async (event) => void published.push(event) },
-    projects: { listActiveIds: async () => [PROJECT] },
+    projects: { listActiveIds: async () => [PROJECT], get: async () => ({ workspacePath }) },
   });
   return { released, saves, published };
 }
@@ -131,6 +136,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     suite_review_unresolved: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "problems" },
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },
+    orphan_unreconciled: { source: "orphan_unreconciled", faultClass: "ashara", step: "requeue the task", reason: "connection lost" },
     superseded: { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" },
     acceptance_failed: { source: "acceptance_failed", mainCommit: MERGE, reason: "check failed on main" },
     api: { source: "api" },
@@ -139,11 +145,13 @@ describe("no Blocked item is left with an exit only a person takes", () => {
   // its writer is named. None is a person, and none waits on a write no production path makes.
   const WRITER: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: string } = {
     "merge-recorded": "parked-exits.ts completeRecordedMerge: WorkItemRepository.recordMergeCommit, then completeRecordedMerge to Completed",
+    "read-main": "parked-exits.ts settleOnMain: mergeOnMainOf reads main; none found (no target here), release: unblockWorkItem to Pending",
     requeue: "parked-exits.ts release: unblockWorkItem to Pending",
     "give-up": "parked-exits.ts giveUp: giveUpWorkItem to Abandoned; migration 048's plan_repair_on_abandon opens the repair the Replanner answers",
   };
   const LEAVES_TO: { readonly [K in ReturnType<typeof blockedExitOf>["kind"]]: WorkItemStatus } = {
     "merge-recorded": "Completed",
+    "read-main": "Pending",
     requeue: "Pending",
     "give-up": "Abandoned",
   };
@@ -167,12 +175,12 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     expect(saves).toEqual([expect.objectContaining({ status: "Abandoned", reason: expect.objectContaining({ source: "orchestrator_error" }) })]);
   });
 
-  test("only a merge-record wait stays Blocked past its sweep; every other source requeues or is given up", () => {
+  test("only a merge-record wait or an unreadable main stays Blocked past its sweep; every other source requeues or is given up", () => {
     const waiting = BLOCKED_REASON_SOURCES.filter((source) => {
       const exit = blockedExitOf(SAMPLE[source]);
       return exit.kind !== "requeue" && exit.kind !== "give-up";
     });
-    expect([...waiting]).toEqual(["merge_unrecorded"]);
+    expect([...waiting]).toEqual(["merge_unrecorded", "orphan_unreconciled"]);
   });
 
   test("an infrastructure block (written before migration 048) goes back to Pending at once, unblocked by its automatic exit", async () => {
@@ -204,4 +212,43 @@ test("a give-up that loses a race to a concurrent write is not counted", async (
 
   expect(await released).toBe(0);
   expect(published).toEqual([]);
+});
+
+describe("orphan_unreconciled reads main again before it leaves Blocked", () => {
+  const unreconciled: StoredBlockedReason = { source: "orphan_unreconciled", faultClass: "ashara", step: "read main for the task's merge", reason: "git failed" };
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function repoWith(subject: string): { readonly path: string; readonly head: string } {
+    const path = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    dirs.push(path);
+    const git = (...args: string[]): string =>
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: path, encoding: "utf8" }).trim();
+    git("init", "-q", "-b", "main");
+    git("commit", "-q", "--allow-empty", "-m", subject);
+    return { path, head: git("rev-parse", "HEAD") };
+  }
+
+  test("its merge is on main now: recorded and Completed, never Pending", async () => {
+    const item = blocked(unreconciled);
+    const main = repoWith(`merge: task ${item.id}`);
+    const records: string[] = [];
+    const { released, saves } = run([item], false, async (id, commit) => void records.push(`${id}:${commit}`), main.path);
+
+    expect(await released).toBe(1);
+    expect(records).toEqual([`${item.id}:${main.head}`]);
+    expect(saves).toEqual([{ id: item.id, prev: "Blocked", status: "Completed", reason: undefined }]);
+  });
+
+  test("main still cannot be read: it stays Blocked, never requeued blind", async () => {
+    const notARepo = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    dirs.push(notARepo);
+    const { released, saves } = run([blocked(unreconciled)], false, notExercised("recordMergeCommit"), notARepo);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+  });
 });

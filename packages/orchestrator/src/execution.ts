@@ -30,9 +30,11 @@ import type { FaultClass, TaskDescriptor } from "./acl/development-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
+import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
+import type { TargetPathSource } from "./orphan-merge.js";
 
 /** The block a dispatch parks a task with: the loop takes its exit by itself (parked-exits.ts). */
-type ParkedReason = Extract<StoredBlockedReason, { source: "merge_unrecorded" }>;
+type ParkedReason = Extract<StoredBlockedReason, { source: "merge_unrecorded" | "orphan_unreconciled" }>;
 
 /** The causes a dispatch gives a task up for, after which its plan is repaired. */
 type GiveUpCause = Extract<
@@ -127,8 +129,11 @@ interface ExecutionRoutingDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly spendCap: CoreLoopDeps["spendCap"];
-  /** Blocks a project whose configuration refused a model call, or halts it on infrastructure. */
-  readonly projects: Pick<CoreLoopDeps["projectRepo"], "block">;
+  /**
+   * Blocks a project whose configuration refused a model call, or halts it on infrastructure;
+   * `get` names the target whose main a faulted dispatch's merge is read from.
+   */
+  readonly projects: Pick<CoreLoopDeps["projectRepo"], "block"> & TargetPathSource;
   readonly checkDisputes: CoreLoopDeps["checkDisputes"];
   readonly suiteReviewFindings: CoreLoopDeps["suiteReviewFindings"];
   readonly environmentOwner: CoreLoopDeps["environmentOwner"];
@@ -318,6 +323,7 @@ async function executeTask(
 
   if (execResult.status === "completed") {
     const delivered = execResult.delivered;
+    let onMain: { readonly mergeCommit: string; readonly mergeKind: MergeKind; readonly what: string } | null = null;
     if (delivered.kind === "merged" || delivered.kind === "already-delivered") {
       // The merge record first, whatever the item's status now (a preempted item merged all the
       // same): the task is never Completed without it (Discipline A). The merge is on main, so a
@@ -327,21 +333,30 @@ async function executeTask(
       const mergeCommit = delivered.kind === "merged" ? delivered.mergeCommit : delivered.mainCommit;
       const mergeKind: MergeKind = delivered.kind === "merged" ? "merged" : "already_delivered";
       const unrecorded = await recordMergeWithRetry(deps, task.id, mergeCommit, mergeKind);
+      const what = delivered.kind === "merged" ? `merged on main as ${mergeCommit}` : `already delivered on main at ${mergeCommit}`;
       if (unrecorded !== null) {
-        const what = delivered.kind === "merged" ? `merged on main as ${mergeCommit}` : `already delivered on main at ${mergeCommit}`;
         const detail = `${what}, but the merge record could not be written: ${unrecorded}`;
         await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, mergeKind, reason: detail });
         return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
       }
+      onMain = { mergeCommit, mergeKind, what };
     }
     try {
-      await routeAsSuccess(deps, task);
+      // Work on main is retried within the merge record's bound: a throw here would reach
+      // processTask as Ashara's fault, which requeues the task and so redoes merged work.
+      await routeAsSuccess(deps, task, onMain === null ? 1 : MERGE_RECORD_BACKOFF_MS.length + 1);
     } catch (e) {
       // The item's status changed while the agent was executing (e.g., preempted
       // to Abandoned by HTTP PATCH). The agent's work
       // succeeded; processTask reloads the item and salvages the result based on
-      // its actual status. Any non-preemption error must still propagate.
-      if (!(e instanceof InvalidStatusTransition)) throw e;
+      // its actual status. Any other error must still propagate, but work on main is
+      // parked as merge_unrecorded, whose exit completes it, never requeued.
+      if (!(e instanceof InvalidStatusTransition)) {
+        if (onMain === null) throw e;
+        const detail = `${onMain.what} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
+        await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: onMain.mergeCommit, mergeKind: onMain.mergeKind, reason: detail });
+        return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
+      }
       console.warn(
         `[${task.id}] completion route rejected (${e.from} -> Completed); ` +
         `agent succeeded, processTask will handle salvage`,
@@ -430,7 +445,11 @@ async function routeAsParked(
     return;
   }
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  console.warn(`[${taskId}] blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`);
+  console.warn(
+    reason.source === "merge_unrecorded"
+      ? `[${taskId}] blocked, merge ${reason.mergeCommit} unrecorded, the loop writes it again each cycle: ${reason.reason}`
+      : `[${taskId}] blocked, main unread for its merge (${reason.step}), the loop reads it again each cycle: ${reason.reason}`,
+  );
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsParked");
 }
 
@@ -514,6 +533,7 @@ async function routeAsInfrastructureFault(
   fault: InfrastructureFault,
   dispatch: "counted" | "not-counted",
 ): Promise<void> {
+  if (dispatch === "counted" && (await settledOnMain(deps, task))) return;
   const faults = await deps.workItemRepo.recordInfrastructureFault(task.id);
   if (faults > INFRASTRUCTURE_FAULT_BUDGET + 1) {
     await routeAsGivenUp(deps, task.id, {
@@ -539,6 +559,56 @@ async function routeAsInfrastructureFault(
       console.warn(`[${task.id}] project ${task.projectId} ${halted} on Ashara's own fault: ${err.message}`);
     }
   }
+}
+
+/**
+ * Whether a dispatch that stopped on a fault had already merged its work: Z0 commits the merge on
+ * main and only then reads its id and writes the record, so a fault after the commit leaves merged
+ * work behind, and a requeue would redo it (B5). Main is read first, within the merge record's
+ * bound. A merge found is recorded and the task Completed (or parked merge_unrecorded when that
+ * cannot be written); main that cannot be read parks the task orphan_unreconciled, whose exit reads
+ * main again, with the project blocked on Ashara's own fault. False only when main holds no merge
+ * of the task: then the fault is routed as one.
+ */
+async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promise<boolean> {
+  let merge: string | null | undefined;
+  let last: unknown = null;
+  for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1 && merge === undefined; attempt++) {
+    try {
+      merge = await mergeOnMainOf(deps.projects, task);
+    } catch (e) {
+      last = e;
+      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
+      console.warn(`[${task.id}] main could not be read for its merge after a fault, attempt ${attempt}:`, e);
+      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  if (merge === null) return false;
+  if (merge === undefined) {
+    const step = "read main for the task's merge after its dispatch faulted";
+    const unread = new OrphanUnreconciled(task.id, step, MERGE_RECORD_BACKOFF_MS.length + 1, { cause: last });
+    await routeAsParked(deps, task.id, { source: "orphan_unreconciled", faultClass: "ashara", step, reason: describeErrorChain(last) });
+    const halted = await deps.projects.block(task.projectId, projectBlockCause(unread));
+    console.warn(`[${task.id}] project ${task.projectId} ${halted} on Ashara's own fault: ${unread.message}`);
+    return true;
+  }
+  console.warn(`[${task.id}] its dispatch faulted after merging it on main as ${merge}: recorded and Completed, never requeued`);
+  const unrecorded = await recordMergeWithRetry(deps, task.id, merge, "merged");
+  if (unrecorded !== null) {
+    await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason: `merged on main as ${merge}, but the merge record could not be written: ${unrecorded}` });
+    return true;
+  }
+  try {
+    await routeAsSuccess(deps, task, MERGE_RECORD_BACKOFF_MS.length + 1);
+  } catch (e) {
+    if (e instanceof InvalidStatusTransition) {
+      console.warn(`[${task.id}] merged as ${merge} and recorded; its completion was rejected (${e.from} -> Completed), left at ${e.from}`);
+      return true;
+    }
+    const reason = `merged on main as ${merge} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
+    await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: merge, mergeKind: "merged", reason });
+  }
+  return true;
 }
 
 /** A throw out of the dispatch's own steps (Z0's store, its code): Ashara's, never the task's work. */
@@ -900,11 +970,27 @@ async function findCheckTask(workItemRepo: WorkItemRepository, checkTaskId: stri
   return PlanningService.findWorkItem(workItemRepo, id);
 }
 
-async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {
-  // The Completed transition is committed before its events return: a publish failure after it must
-  // not route a merged, Completed task as failed (orchestrator D1).
-  const events = await PlanningService.route(deps.workItemRepo, task.id, true);
-  await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsSuccess");
+/**
+ * Completes the task, within `attempts` (the waits between them MERGE_RECORD_BACKOFF_MS's). An
+ * InvalidStatusTransition is an answer, never retried: the item moved; the last other error throws.
+ */
+async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem, attempts: number): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    let events: DomainEvent[];
+    try {
+      // The Completed transition is committed before its events return: a publish failure after it
+      // must not route a merged, Completed task as failed (orchestrator D1).
+      events = await PlanningService.route(deps.workItemRepo, task.id, true);
+    } catch (e) {
+      const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
+      if (e instanceof InvalidStatusTransition || attempt >= attempts || wait === undefined) throw e;
+      console.warn(`[${task.id}] completion failed on attempt ${attempt} of ${attempts}; retrying in ${wait}ms:`, e);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      continue;
+    }
+    await publishBestEffort(deps.eventStore, task.id, events, "execution.routeAsSuccess");
+    return;
+  }
 }
 
 async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem): Promise<void> {

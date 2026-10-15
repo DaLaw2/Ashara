@@ -45,7 +45,7 @@ export class PlanningService {
     return LifecycleRouter.route(repo, taskId, success);
   }
 
-  /** A merge_unrecorded item whose merge record is now written: Completed, with its ancestors rolled up. */
+  /** A merge_unrecorded (or orphan_unreconciled, merge found) item whose merge record is now written: Completed, with its ancestors rolled up. */
   static async completeRecordedMerge(repo: WorkItemRepository, item: WorkItem): Promise<DomainEvent[]> {
     return LifecycleRouter.completeRecordedMerge(repo, item);
   }

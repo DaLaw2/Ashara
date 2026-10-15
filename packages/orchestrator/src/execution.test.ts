@@ -1,4 +1,8 @@
-import { describe, expect, test, vi, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { ProjectBlockCause, StoredBlockedReason, WorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
 import type { AgentOutputJson } from "@ashara/shared/agent-output";
@@ -27,6 +31,26 @@ const COMPLETED_OUTPUT: AgentOutputJson = {
   turn_count: 1,
   finish_reason: "completed",
 };
+
+const targets: string[] = [];
+afterAll(() => {
+  for (const dir of targets.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A target whose main holds a commit with each subject, newest last: what a faulted dispatch's main is read from. */
+function targetWithMain(subjects: readonly string[]): { readonly path: string; readonly head: string } {
+  const path = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+  targets.push(path);
+  const git = (...args: string[]): string =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: path, encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  git("commit", "-q", "--allow-empty", "-m", "initial");
+  for (const subject of subjects) git("commit", "-q", "--allow-empty", "-m", subject);
+  return { path, head: git("rev-parse", "HEAD") };
+}
+
+/** Main holding no merge of any task: a faulted dispatch is routed as a fault. */
+const UNMERGED_TARGET = targetWithMain([]).path;
 
 function freshPendingItem(): WorkItem {
   const now = new Date();
@@ -73,7 +97,7 @@ function coreLoopDeps(
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
     projectRepo: {
-      get: async () => ({ workspacePath: "/tmp/ashara-execution-test-target" }),
+      get: async () => ({ workspacePath: UNMERGED_TARGET }),
       recordWorkspacePath: notExercised("recordWorkspacePath"),
       listActiveIds: notExercised("listActiveIds"),
       block: notExercised("block"),
@@ -399,6 +423,35 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     expect(halts).toEqual([]);
+  });
+
+  // The 400-seed deep soak (2026-10-15, two projects, seed 326): `git rev-parse HEAD` failed right
+  // after the merge commit, the dispatch faulted as Ashara's, and the merged task was requeued.
+  test("a fault after its merge reached main: the merge recorded and the task Completed, never requeued", async () => {
+    const { deps, stored, statusesWritten, refunds } = buildEnvironmentBlockedDeps();
+    const main = targetWithMain([`merge: task ${ITEM_ID}`]);
+    deps.projectRepo.get = async () => ({ workspacePath: main.path });
+    const records: string[] = [];
+    deps.workItemRepo.recordMergeCommit = async (_id, commit, kind) => void records.push(`${commit}:${kind ?? "null"}`);
+
+    await processTask(deps, freshPendingItem());
+
+    expect(records).toEqual([`${main.head}:merged`]);
+    expect(statusesWritten).toEqual(["InProgress", "Completed"]);
+    expect(stored().status).toBe("Completed");
+    expect(refunds()).toBe(0);
+  });
+
+  test("main unreadable after a fault: Blocked orphan_unreconciled with the project blocked, never requeued blind", async () => {
+    const { deps, stored, halts } = buildEnvironmentBlockedDeps();
+    const notARepo = mkdtempSync(join(tmpdir(), "ashara-execution-"));
+    targets.push(notARepo);
+    deps.projectRepo.get = async () => ({ workspacePath: notARepo });
+
+    await processTask(deps, freshPendingItem());
+
+    expect(stored()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled", faultClass: "ashara" } });
+    expect(halts).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" })]);
   });
 
   test("the fault past the budget of 3 halts the project on infrastructure once and requeues the item uncharged", async () => {
@@ -1193,7 +1246,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       failedApproachRepo: { record: async () => { approaches++; } },
       failureRouter: { route: () => { routed++; throw new Error("failure router must not be called"); } },
       projectRepo: {
-        get: async () => ({ workspacePath: "/tmp/ashara-execution-test-target" }),
+        get: async () => ({ workspacePath: UNMERGED_TARGET }),
         recordWorkspacePath: notExercised("recordWorkspacePath"),
         listActiveIds: notExercised("listActiveIds"),
         block: async (projectId, cause) => {
@@ -1392,6 +1445,49 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(() =>
       parseWorkItemJsonb({ id: ITEM_ID, projectId: "p", taskSpec: null, successCriteria: null, blockedReason: reason }),
     ).not.toThrow();
+  });
+
+  // The 400-seed deep soak (2026-10-15, two projects, seed 163): the Completed update after a
+  // recorded merge drew a serialization failure, reached processTask as Ashara's fault and was
+  // requeued, so merged work was dispatched again.
+  function failingCompletion(failures: number) {
+    const built = buildMergeDeps(merged, async () => {});
+    let failed = 0;
+    const repo = built.deps.workItemRepo;
+    const deps: CoreLoopDeps = {
+      ...built.deps,
+      workItemRepo: {
+        ...repo,
+        save: async (item, previous) => {
+          if (item.status === "Completed" && failed < failures) {
+            failed++;
+            throw new Error("could not serialize access due to concurrent update");
+          }
+          await repo.save(item, previous);
+        },
+      },
+    };
+    return { ...built, deps };
+  }
+
+  test("a Completed update that fails transiently after the merge is retried, never requeued", async () => {
+    const { deps, stored, writes } = failingCompletion(1);
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("completed");
+    expect(writes).toEqual(["InProgress", `merge ${MERGE_COMMIT}`, "Completed"]);
+    expect(stored().status).toBe("Completed");
+  });
+
+  test("a Completed update that keeps failing after the merge: Blocked merge_unrecorded, never Pending", async () => {
+    const { deps, stored, writes } = failingCompletion(Number.POSITIVE_INFINITY);
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("blocked");
+    expect(writes).toEqual(["InProgress", `merge ${MERGE_COMMIT}`, "Blocked"]);
+    expect(stored().blockedReason).toMatchObject({ source: "merge_unrecorded", mergeCommit: MERGE_COMMIT, mergeKind: "merged" });
   });
 
   test("a check task merges nothing, so no merge is recorded for it", async () => {

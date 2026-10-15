@@ -216,6 +216,23 @@ const mergeUnrecordedSchema = z.object({
 });
 
 /**
+ * A task a dead process left InProgress that the startup reconciler could not settle within its
+ * bound: it could not read the target's main for the task's merge commit, or could not write the
+ * requeue (or completion) it found. Ashara's own Z0 machinery failed (fault class `ashara`, ADR-080
+ * d3 c), so nothing is charged to the task. Never requeued without main read: its work may be
+ * merged. Its exit is automatic (orchestrator parked-exits.ts): each cycle the loop reads main
+ * again, and the task is Completed with the merge it finds, or back to Pending when main holds
+ * none. `step` names what failed, `reason` the last failure's chain.
+ */
+const orphanUnreconciledSchema = z.object({
+  source: z.literal("orphan_unreconciled"),
+  faultClass: z.literal("ashara"),
+  step: z.string().min(1),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * The task was open (not started, Blocked or Failed) when a revision of the plan replaced it: the
  * client changed what is built (migration 042), or a task was given up and the remaining work was
  * re-planned around it (a plan repair, migration 045). It is Abandoned and never dispatched. Written
@@ -275,6 +292,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   suiteReviewUnresolvedSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
+  orphanUnreconciledSchema,
   supersededSchema,
   acceptanceFailedSchema,
   apiSchema,
@@ -308,6 +326,7 @@ export const BLOCKED_REASON_SOURCES = [
   "suite_review_unresolved",
   "dependency_unsatisfiable",
   "merge_unrecorded",
+  "orphan_unreconciled",
   "superseded",
   "acceptance_failed",
   "api",
@@ -371,6 +390,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "suite_review_unresolved":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
+    case "orphan_unreconciled":
     case "superseded":
     case "acceptance_failed":
     case "api":
@@ -385,18 +405,21 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * waits on a person: story s-loop-never-stop-m1 W6, ADR-074 addendum 2 d76). Every exit is taken by
  * the loop itself, each cycle (orchestrator parked-exits.ts), and each has a production writer.
  * `merge-recorded`: to Completed (not Pending), once the record of `mergeCommit` is written; the
- * loop itself writes it again each cycle. `requeue`: back to Pending at once, uncharged: an
+ * loop itself writes it again each cycle. `read-main`: main is read for the task's merge, then to
+ * Completed with the merge found or to Pending when main holds none; main still unreadable stays
+ * Blocked for the next cycle. `requeue`: back to Pending at once, uncharged: an
  * infrastructure fault is not the task's. `give-up`: the cause cannot clear by itself, so the task
  * is given up (Abandoned) and its plan repaired (migration 045, widened by 048).
  */
 export type BlockedExit =
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
+  | { readonly kind: "read-main" }
   | { readonly kind: "requeue" }
   | { readonly kind: "give-up" };
 
 /**
- * The exit of a Blocked item's stored reason. Only merge_unrecorded is written on Blocked items
- * now; every other source on a Blocked row was written before migration 048 (or is no Blocked
+ * The exit of a Blocked item's stored reason. Only merge_unrecorded and orphan_unreconciled are
+ * written on Blocked items now; every other source on a Blocked row was written before migration 048 (or is no Blocked
  * reason at all: task_failed, orchestrator_error, replan, failure_router, superseded), as is a
  * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
  * else is given up.
@@ -406,6 +429,8 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
   switch (reason.source) {
     case "merge_unrecorded":
       return { kind: "merge-recorded", mergeCommit: reason.mergeCommit, mergeKind: reason.mergeKind ?? null };
+    case "orphan_unreconciled":
+      return { kind: "read-main" };
     case "environment_unavailable":
       return { kind: "requeue" };
     case "owner_unresolved":

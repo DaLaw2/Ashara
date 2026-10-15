@@ -32,7 +32,8 @@ import type { WorkItemStatus } from "./enums.js";
  * other items is story c-change-handling.
  *
  * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
- * `merge_unrecorded` block, for work already merged on main whose merge record is written late.
+ * `merge_unrecorded` block, or an `orphan_unreconciled` one whose merge the loop found on main, for
+ * work already merged on main whose merge record is written late.
  * Unblocking such an item to Pending would re-dispatch merged work.
  */
 export const OUTBOUND_TRANSITIONS: Record<WorkItemStatus, readonly WorkItemStatus[]> = {

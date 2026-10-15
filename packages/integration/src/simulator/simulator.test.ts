@@ -111,8 +111,10 @@ describe("lifecycle simulator, fast tier", () => {
   }, 90_000);
 
   // B3 (baseline §3; task t-orphan-requeue-failure), minimized from chaos seed 6: a crash, a crash right after the task is set
-  // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read.
-  it("leaves an orphan the reconciler failed to requeue InProgress while the process lives", async () => {
+  // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read. Until
+  // t-reconcile-merged-work the orphan was left InProgress while the process lived (I1, I7, I8); the
+  // reconciler now retries the requeue within its bound.
+  it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async () => {
     const result = await runSeed({
       seed: 6,
       profile: "chaos",
@@ -133,18 +135,17 @@ describe("lifecycle simulator, fast tier", () => {
     });
     // Kinds are indexes into each call's offered faults: pinned, so a catalogue change fails loudly.
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after", "db:db-query-failed"]);
-    expect(result.log.some((line) => line.includes("failed to requeue crash-orphaned InProgress item"))).toBe(true);
-    expect(result.violations.map((v) => v.key).sort()).toEqual(["I1:open", "I7:orphan:Define and commit the project environment:2", "I8:InProgress", "I8:Pending"]);
+    expect(result.log.some((line) => line.includes("requeue the task failed on attempt 1 of 3; retrying"))).toBe(true);
+    expect(result.violations.map((v) => v.key)).toEqual([]);
   }, 90_000);
 
-  // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window), a known production failure pinned until it is fixed: the
-  // process dies on the merge-record write right after the merge commit landed on main
-  // (development merge.ts commitMerge, then orchestrator execution.ts writes the record); at boot the
-  // startup reconciler requeues the orphan without looking on main (startup-reconciler.ts
-  // requeueOrphan), so the merged work is dispatched again and main holds a merge no record names.
-  // The two-project triage of §7.7 (seeds 31 46 56 57 78) is this defect. A fix fails this test:
-  // then it asserts the clean outcome instead.
-  it("names a merge on main whose record a crash lost (B5, known failure)", async () => {
+  // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window): the process dies on the
+  // merge-record write right after the merge commit landed on main (development merge.ts
+  // commitMerge, then orchestrator execution.ts writes the record). Until t-reconcile-merged-work the
+  // startup reconciler requeued the orphan without looking on main, so the merged work was dispatched
+  // again and main held a merge no record named (I7:unrecorded). It now reads main first, and records
+  // the merge it finds.
+  it("records a merge on main whose record a crash lost, never re-dispatching it (B5)", async () => {
     const label = 'fault.db:update "work_items" set "merge_commit" = $1, "merge_kind" = ';
     const result = await runSeed({
       seed: 10,
@@ -156,8 +157,8 @@ describe("lifecycle simulator, fast tier", () => {
       timeoutMs: SEED_TIMEOUT_MS,
     });
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["db:crash-before"]);
-    expect(result.log.some((line) => line.includes("[startup-reconciler] requeued"))).toBe(true);
-    expect(keys(result)).toEqual(["I7:unrecorded:Define and commit the project environment"]);
+    expect(result.log.some((line) => line.includes("was merged on main as") && line.includes("merge recorded, Completed, not re-dispatched"))).toBe(true);
+    expect(keys(result)).toEqual([]);
   }, 90_000);
 
   // B4 (baseline §3), seed 14's tape minimized on a9f781ce: two simulated git index.lock failures

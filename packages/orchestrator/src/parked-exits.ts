@@ -3,10 +3,13 @@ import type { DomainEvent, MergeKind, ProjectId } from "@ashara/shared";
 import { blockedExitOf, describeErrorChain, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
 import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./acl/planning-acl.js";
+import { mergeOnMainOf } from "./orphan-merge.js";
+import type { TargetPathSource } from "./orphan-merge.js";
 
 // The exits of Blocked work items (story s-loop-never-stop-m1, Discipline B; W6: no work item waits
 // on a person), each taken by the loop every cycle: a merged task whose merge record was not written
-// has the record written again, then Completed; an infrastructure block (written before migration
+// has the record written again, then Completed; a crash orphan the startup reconciler could not
+// settle has main read again, then Completed with its merge or back to Pending; an infrastructure block (written before migration
 // 048) goes back to Pending at once; any other block (written before migration 048, or with no
 // reason) has no cause that clears by itself, so the task is given up and its plan repaired.
 // Shared blockedExitOf decides which is which.
@@ -14,7 +17,8 @@ import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./
 interface ParkedExitDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
-  readonly projects: { listActiveIds(): Promise<ProjectId[]> };
+  /** `get` names the target whose main an orphan_unreconciled task's merge is read from. */
+  readonly projects: { listActiveIds(): Promise<ProjectId[]> } & TargetPathSource;
 }
 
 /**
@@ -43,6 +47,9 @@ export async function releaseClearedBlocks(deps: ParkedExitDeps): Promise<number
           break;
         case "give-up":
           left = await giveUp(deps, item);
+          break;
+        case "read-main":
+          left = await settleOnMain(deps, item);
           break;
         case "requeue":
           left = await release(deps, item);
@@ -77,6 +84,24 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
   console.log(`[parked-exits] task ${item.id}: merge ${mergeCommit} recorded; Completed`);
   await publishAll(deps, item.id, events);
   return true;
+}
+
+/**
+ * A crash orphan the startup reconciler could not settle (orphan_unreconciled): main is read again
+ * for the task's merge. Found, it is recorded and the task Completed; none, the task goes back to
+ * Pending, now that main says nothing of it was merged. Main still unreadable leaves it Blocked for
+ * the next cycle: it is never requeued blind.
+ */
+async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
+  let merge: string | null;
+  try {
+    merge = await mergeOnMainOf(deps.projects, item);
+  } catch (err) {
+    console.warn(`[parked-exits] task ${item.id}: main still cannot be read for its merge; it stays Blocked:`, err);
+    return false;
+  }
+  if (merge !== null) return completeRecordedMerge(deps, item, merge, "merged");
+  return release(deps, item);
 }
 
 async function publishAll(deps: ParkedExitDeps, taskId: WorkItem["id"], events: readonly DomainEvent[]): Promise<void> {

@@ -9,6 +9,7 @@ export { toSessionAttempt } from "./cell-execution.js";
 export { EXECUTION_STATUSES } from "./execution-service.js";
 export type { FaultClass } from "./fault-class.js";
 export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
+export { taskMergeOnMain } from "./merge.js";
 export { canonicalizeAllowingMissing } from "./checkout-lock.js";
 export { probeEnvironmentWrite } from "./gates/environment-write-probe.js";
 export { pruneStaleEnvironmentImages } from "./current-environment.js";
