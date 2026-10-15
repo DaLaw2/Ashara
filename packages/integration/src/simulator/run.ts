@@ -21,7 +21,7 @@ import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
-import type { PodmanEvent } from "./fake-podman.js";
+import type { FakeCell, PodmanEvent } from "./fake-podman.js";
 import { GitDates, Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
 import type { FaultKind, FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
@@ -223,13 +223,22 @@ interface Live {
   readonly generation: number;
 }
 
+const outlivingSessionSchema = z.object({
+  pid: z.number().int(),
+  state: z.string().nullable(),
+  backendStart: z.string().nullable(),
+  query: z.string().nullable(),
+});
+type OutlivingSession = z.infer<typeof outlivingSessionSchema>;
+
 /** A dead instance's database sessions outlived their termination: the next boot would find its claim held. */
 class BackendsOutlivedInstance extends Error {
   constructor(
     readonly applicationName: string,
-    readonly left: number,
+    readonly sessions: readonly OutlivingSession[],
   ) {
-    super(`${left} database session(s) of ${applicationName} were still open ${BACKEND_EXIT_POLLS * BACKEND_EXIT_POLL_MS} ms after pg_terminate_backend`);
+    const each = sessions.map((s) => `pid ${s.pid} ${s.state ?? "(no state)"} since ${s.backendStart ?? "?"}, last query ${JSON.stringify(s.query ?? "")}`);
+    super(`${sessions.length} database session(s) of ${applicationName} were still open ${BACKEND_EXIT_POLLS * BACKEND_EXIT_POLL_MS} ms after pg_terminate_backend: ${each.join("; ")}`);
     this.name = "BackendsOutlivedInstance";
   }
 }
@@ -548,9 +557,12 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       laneTask: () => interleaver.currentTask(),
     });
     const baseCell = await loadBaseCell();
+    /** Every cell started over the run, live or removed: I3 judges the role each one ran as. */
+    const startedCells: FakeCell[] = [];
     const observe = (event: PodmanEvent): void => {
       switch (event.kind) {
         case "cell-started":
+          startedCells.push(event.cell);
           trace.push(`cell ${event.cell.labels["ashara.task"] ?? "?"} role=${event.cell.labels["ashara.role"] ?? "?"} tokens=${event.cell.tokens.join("+")}`);
           break;
         case "image-built":
@@ -573,6 +585,12 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       const result = await observing.execute(sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE application_name = ${name}`);
       return z.tuple([z.object({ n: z.number().int() })]).parse(result.rows)[0].n;
     };
+    const sessionsOf = async (name: string): Promise<readonly OutlivingSession[]> => {
+      const result = await observing.execute(
+        sql`SELECT pid, state, backend_start::text AS "backendStart", left(query, 200) AS query FROM pg_stat_activity WHERE application_name = ${name}`,
+      );
+      return z.array(outlivingSessionSchema).parse(result.rows);
+    };
     /** Polls until the instance has no backend left; the count still left when the bound ran out. */
     const backendsAfterExit = async (name: string): Promise<number> => {
       for (let polls = 0; ; polls++) {
@@ -586,19 +604,28 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
      * pool's and the target claim's session alike (the claim connects outside the pool, named by
      * the connection string), and the restart waits until they are gone, so a claim the dead
      * process held is released before the next instance takes it, as a real crash releases it.
+     * Its pools end too: an exit closes the process's sockets, so a connection still being opened
+     * when the backends are terminated (a query of a failed Promise.all's sibling, which entered
+     * before the death) closes as it lands, never idling in a dead pool past the poll's bound.
      */
-    const killBackends = async (of: number): Promise<void> => {
+    const killBackends = async (handle: InstanceHandle, of: number): Promise<void> => {
+      for (const pool of handle.pools) {
+        if (pool.ending) continue;
+        void pool.end().catch((err: unknown) => {
+          log.push(`ending a pool of the dead ${handle.name} failed: ${describeErrorChain(err)}`);
+        });
+      }
       const name = instanceName(of);
       await observing.execute(sql`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = ${name}`);
       const left = await backendsAfterExit(name);
-      if (left > 0) throw new BackendsOutlivedInstance(name, left);
+      if (left > 0) throw new BackendsOutlivedInstance(name, await sessionsOf(name));
     };
 
     let generation = 0;
     const compose = async (): Promise<Live> => {
       for (;;) {
         generation += 1;
-        const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map() };
+        const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map(), pools: [] };
         // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
         checkouts = new CheckoutWatch(report);
         const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles, admissions, cellOutage: options.cellOutage === true, gitDates };
@@ -628,7 +655,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
             const violation: Violation = { invariant: "I1", step: cycles, statement: `${handle.name} was refused its target claim with no other instance alive: ${err.message}`, key: "I1:claim-refused" };
             violations.set(violation.key, violation);
           }
-          await killBackends(generation);
+          await killBackends(handle, generation);
           if (generation > MAX_BOOTS) throw new BootsExhausted(options.seed, generation, err);
         }
       }
@@ -652,11 +679,11 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         if (left > 0) {
           const violation: Violation = { invariant: "I1", step: cycles, statement: `${current.handle.name} drained and closed its database yet ${left} of its session(s) stayed open`, key: `I1:drain-left-sessions:${restarts}` };
           violations.set(violation.key, violation);
-          await killBackends(current.generation);
+          await killBackends(current.handle, current.generation);
         }
       } else {
         current.handle.dead = true;
-        await killBackends(current.generation);
+        await killBackends(current.handle, current.generation);
       }
       instance = await compose();
       // I7, restart clause: the reconciler leaves nothing InProgress and no cell of the dead process.
@@ -725,7 +752,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
       const snapshots = await snapshotsOf();
       const [snapshot] = snapshots;
       for (const [index, each] of snapshots.entries()) {
-        for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: podman.liveCells(), final: false })) report(ofProject(index, violation));
+        for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: false })) report(ofProject(index, violation));
         sample(coverage, each, scheduler.faults(), executionEvidence(each, statuses));
       }
       const overCommitted = await admissions.judge(observing, capUsd, cycles);
@@ -791,7 +818,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     // The report clause needs the settle cycles a halt's report is posted on: a run cut off for no
     // progress had none, and may end on a halt begun in its last cycle (I8 judges that run).
     for (const [index, each] of finals.entries()) {
-      for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: podman.liveCells(), final: !noProgress })) report(ofProject(index, violation));
+      for (const violation of checkSnapshot(cycles, each, { spendCapUsd: capUsd, cells: startedCells, final: !noProgress })) report(ofProject(index, violation));
     }
     const overCommitted = await admissions.judge(observing, capUsd, cycles);
     if (overCommitted !== null) report(overCommitted);

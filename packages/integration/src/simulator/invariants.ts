@@ -268,6 +268,48 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
 }
 
 /**
+ * The ashara.role labels of the cells Z0 itself runs on a task's work (development), each with the
+ * work kinds it may run on: POST_MERGE_VERIFIER_ROLE (execution-service.ts), the post-merge check
+ * of any task's tentative merge; RED_RUN_ROLE (execution-service.ts, environment-check.ts's
+ * substrate gate), a run of stored checks, a foundation build or the substrate gate in a fresh CI
+ * cell; and "environment-check" (environment-check.ts), build_environment's build and probe, a
+ * port only environment work's attempt is given. None is a roster role's id, so none is another
+ * role of the team, and none is the cell the agent's own tools run in.
+ */
+const Z0_CELL_ROLES: ReadonlyMap<string, (workKind: string | null) => boolean> = new Map<string, (workKind: string | null) => boolean>([
+  ["verifier", () => true],
+  ["ci", () => true],
+  ["environment-check", (workKind: string | null) => workKind === "environment"],
+]);
+
+/**
+ * I3's cell clause, over every cell a task's id labels in the run, live or removed: the cell its
+ * owner's agent works in carries the owner role's id, and Z0's own cells a Z0 role its work kind
+ * admits. Any other role is a cell that ran as someone the task is not staffed with.
+ *
+ * @testseam the clause's table is judged alone; checkSnapshot is its production caller
+ */
+export function cellRoleViolations(
+  items: ReadonlyArray<Pick<ItemRow, "id" | "title" | "workKind" | "ownerRoleId">>,
+  cells: ReadonlyArray<Pick<FakeCell, "labels">>,
+): Array<{ readonly key: string; readonly statement: string }> {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const found: Array<{ readonly key: string; readonly statement: string }> = [];
+  for (const cell of cells) {
+    const taskId = cell.labels["ashara.task"];
+    const role = cell.labels["ashara.role"];
+    const task = taskId === undefined ? undefined : byId.get(taskId);
+    if (task === undefined || task.ownerRoleId === null || role === task.ownerRoleId) continue;
+    if (role !== undefined && Z0_CELL_ROLES.get(role)?.(task.workKind) === true) continue;
+    found.push({
+      key: `cell-role:${task.title}:${role ?? "none"}`,
+      statement: `a cell of "${task.title}" ran as role ${role ?? "(no role label)"}, not its owner ${task.ownerRoleId}`,
+    });
+  }
+  return found;
+}
+
+/**
  * I2-I7 and I9, judged on one project's snapshot (design §4.8). I1, I8 (checkTotality) and I5's admission
  * clause (admissions.ts, the deployment's) are judged by the run over its whole course.
  */
@@ -307,14 +349,7 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
       }
     }
   }
-  for (const cell of context.cells) {
-    const taskId = cell.labels["ashara.task"];
-    const role = cell.labels["ashara.role"];
-    const task = taskId === undefined ? undefined : byId.get(taskId);
-    if (task !== undefined && task.ownerRoleId !== null && role !== undefined && role !== task.ownerRoleId && task.workKind !== "check") {
-      add("I3", `cell-role:${task.title}:${role}`, `a cell of "${task.title}" ran as role ${role}, not its owner ${task.ownerRoleId}`);
-    }
-  }
+  for (const found of cellRoleViolations(snapshot.items, context.cells)) add("I3", found.key, found.statement);
 
   // I4: an accepted project has its delivered report (E3), once the run ends; that a halt episode
   // has its report is I2's. What each report states is judged against the records it is rendered

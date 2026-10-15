@@ -78,6 +78,8 @@ export interface InstanceHandle {
    * One left here when the process ends holds its pool's end forever: production code leaked it.
    */
   readonly checkouts: Map<pg.PoolClient, string[]>;
+  /** The database pools it opened: its death closes every connection of them, as a process's exit does (run.ts). */
+  readonly pools: pg.Pool[];
 }
 
 export interface FaultRecord {
@@ -326,6 +328,7 @@ const CHECKOUT_LABELS = 8;
 export function faultingPools(context: SeamContext, applicationName: string, plant: QueryPlant | null = null): PoolFactory {
   return (config) => {
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
+    context.instance.pools.push(pool);
     const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, kill: (() => Promise<void>) | null): Promise<unknown> => {
       const args = plant === null ? [...given] : plant(given);
       const run = (): Promise<unknown> => send(args);

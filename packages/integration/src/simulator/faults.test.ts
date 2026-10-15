@@ -5,7 +5,7 @@ import { Interleaver } from "./interleave.js";
 import { Tape } from "./tape.js";
 
 function instance(): InstanceHandle {
-  return { name: "sim-1", dead: false, abort: () => {}, sigtermed: false, fatal: null, checkouts: new Map() };
+  return { name: "sim-1", dead: false, abort: () => {}, sigtermed: false, fatal: null, checkouts: new Map(), pools: [] };
 }
 
 /** No batch runs in these tests: every call is outside a task's lane and takes no turn. */
