@@ -478,6 +478,59 @@ export class LlmCallNotRecorded extends GatewayError {
   }
 }
 
+export interface LlmCallNotAdmittedContext {
+  readonly projectId: string;
+  readonly callSite: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly operation: string;
+}
+
+/**
+ * The recorder's pre-call check broke instead of answering: its spend read or its
+ * pending-row write failed. That is not a refusal (`PreCallRefusal`), and the request was
+ * never sent. A fallback model would meet the same ledger, so it is never retried; the
+ * recorder's own error is `cause`.
+ */
+export class LlmCallNotAdmitted extends GatewayError {
+  readonly context: LlmCallNotAdmittedContext;
+
+  constructor(context: LlmCallNotAdmittedContext, options: ErrorOptions) {
+    super(
+      `llm_calls admission failed before any request for provider="${context.provider}" model="${context.model}" ` +
+        `operation="${context.operation}" callSite="${context.callSite}" project=${context.projectId}: ` +
+        describeErrorChain(options.cause),
+      options,
+    );
+    this.name = "LlmCallNotAdmitted";
+    this.context = context;
+  }
+}
+
+/**
+ * The provider rejected a request for how Ashara is configured to reach it: credentials
+ * refused (401, 403), the account unable to pay (402), or no such endpoint or model (404).
+ * The request's content was not judged. A fallback provider has its own configuration, so
+ * the gateway still tries one; the provider's own error is `cause`.
+ */
+export class ProviderConfigurationRejected extends GatewayError {
+  readonly provider: string;
+  readonly model: string;
+  readonly statusCode: number;
+
+  constructor(provider: string, model: string, statusCode: number, options: ErrorOptions) {
+    super(
+      `Provider "${provider}" rejected model="${model}" with HTTP ${statusCode}, a rejection of Ashara's ` +
+        `configuration (credentials, account, endpoint or model id): ${describeErrorChain(options.cause)}`,
+      options,
+    );
+    this.name = "ProviderConfigurationRejected";
+    this.provider = provider;
+    this.model = model;
+    this.statusCode = statusCode;
+  }
+}
+
 /**
  * A tool passed to `generateTurn` carries an `execute` function. The gateway
  * sends tool schemas only and never runs a tool: Z0 executes every tool call.

@@ -216,13 +216,17 @@ describe("lifecycle simulator, fast tier", () => {
   // Seed 47 (hostile) stopped catching it at the merge of t-adversarial-models, which draws hostile
   // and chaos rates per seed: of that scan's seeds, 63 and 81 (typical) still fail I5:over-committed
   // alone, planted, and pass clean with contended:spend-admission covered (observed 2026-10-15, each
-  // run serially at $10 with two projects on the merged tree).
+  // run serially at $10 with two projects on the merged tree). Seed 63 stopped catching it at the
+  // merge of t-intake-failure-classes (the gateway's pre-call check moved into its own admit step):
+  // a serial scan of seeds 1-120 in the same mode, planted, found 60, 81, 84 and 100 failing
+  // I5:over-committed alone and each passing clean with contended:spend-admission covered
+  // (observed 2026-10-15). Seed 81 is the one every scan since t-ddd-fix-own-faults has found.
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(63, undefined, shared);
+    const clean = await seeded(81, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(63, "no-admission-queue", shared);
+    const planted = await seeded(81, "no-admission-queue", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

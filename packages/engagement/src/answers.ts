@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { PreCallRefusal, withStructuredLadder } from "@ashara/llm-gateway";
+import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import { classifyReadFailure } from "./read-failure.js";
 
 // The client's answers to the Liaison's questions (story s-liaison-intake-m1, task
 // t-vision-answers-reach-plan). Each question names the assumption work proceeds on
@@ -135,6 +136,21 @@ class AnswerReadingExhausted extends Error {
   }
 }
 
+/**
+ * An answer at its attempt cap with no error on record (engagement D4). Migration 019's
+ * CHECK makes this unrepresentable; meeting it means the store lied, and no error is
+ * invented to stand in for the missing one.
+ */
+class AnswerFailureUnrecorded extends Error {
+  constructor(
+    readonly answerId: string,
+    readonly attempts: number,
+  ) {
+    super(`answer ${answerId} has ${attempts} failed reading attempts but no recorded error`);
+    this.name = "AnswerFailureUnrecorded";
+  }
+}
+
 const AnswerReadingSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ verdict: z.literal("confirms") }),
   // A changed decision is classified again (W11 residual): the kind of the decision it replaced says
@@ -205,13 +221,6 @@ function replanReport(context: AnswerContext, statement: string): string {
   ].join("\n\n");
 }
 
-function isPreCallRefusal(err: unknown): boolean {
-  for (let current: unknown = err; current instanceof Error; current = current.cause) {
-    if (current instanceof PreCallRefusal) return true;
-  }
-  return false;
-}
-
 interface ClientAnswersDeps {
   readonly llm: ContextualLlm;
   readonly store: AnswerStore;
@@ -229,8 +238,8 @@ export class ClientAnswers implements LiaisonAnswers {
 
   /**
    * An answer its project's record cannot take blocks that project, and the other
-   * answers are still read. A spend-cap refusal, and any other failure of the store,
-   * throws through.
+   * answers are still read. A spend-cap refusal, a ledger failure, and any other failure
+   * of the store, throws through.
    */
   async runPending(): Promise<readonly AnswerOutcome[]> {
     const outcomes: AnswerOutcome[] = [];
@@ -245,7 +254,9 @@ export class ClientAnswers implements LiaisonAnswers {
       try {
         outcomes.push(await this.read(answer));
       } catch (err) {
-        if (!(err instanceof AnswerVisionUnusable || err instanceof AnswerReadingExhausted)) throw err;
+        const blocks =
+          err instanceof AnswerVisionUnusable || err instanceof AnswerReadingExhausted || err instanceof AnswerFailureUnrecorded;
+        if (!blocks) throw err;
         outcomes.push(await this.block(answer, projectBlockCause(err)));
       }
     }
@@ -263,7 +274,8 @@ export class ClientAnswers implements LiaisonAnswers {
   private async read(answer: OpenAnswer): Promise<AnswerOutcome> {
     const base = { answerId: answer.id, projectId: answer.projectId };
     if (answer.intakeAttempts >= MAX_ANSWER_ATTEMPTS) {
-      throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError ?? "(none recorded)");
+      if (answer.intakeLastError === null) throw new AnswerFailureUnrecorded(answer.id, answer.intakeAttempts);
+      throw new AnswerReadingExhausted(answer.id, answer.intakeAttempts, answer.intakeLastError);
     }
     let context = contextOf(answer);
     let reading = await this.interpret(context);
@@ -298,14 +310,14 @@ export class ClientAnswers implements LiaisonAnswers {
     }
   }
 
-  /** One paid reading of the answer; a failure is counted (and blocks at the cap), a spend-cap refusal throws. */
+  /** One paid reading of the answer; a failed read is counted (and blocks at the cap), Ashara's own fault throws. */
   private async interpret(
     context: AnswerContext,
   ): Promise<{ readonly kind: "read"; readonly reading: AnswerReading } | { readonly kind: "failed"; readonly outcome: AnswerOutcome }> {
     try {
       return { kind: "read", reading: await this.callModel(context) };
     } catch (err) {
-      if (isPreCallRefusal(err)) throw err;
+      if (classifyReadFailure(err) === "ashara-fault") throw err;
       return { kind: "failed", outcome: await this.fail(context.answer, err) };
     }
   }

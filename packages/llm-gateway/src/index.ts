@@ -11,7 +11,15 @@ export { sdkLanguageModels } from "./provider-registry.js";
 export type { LanguageModelFactory } from "./provider-registry.js";
 export { StructuredOutputExhausted, withStructuredLadder } from "./reliability-ladder.js";
 export type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "./reliability-ladder.js";
-export { NoLLMProvidersConfigured, PreCallRefusal } from "./errors.js";
+export {
+  GatewayError,
+  LlmCallNotAdmitted,
+  LlmCallNotRecorded,
+  NoLLMProvidersConfigured,
+  PreCallRefusal,
+  ProviderConfigurationRejected,
+  ProviderError,
+} from "./errors.js";
 /** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
 export { SchemaValidationError } from "./errors.js";
 export type {

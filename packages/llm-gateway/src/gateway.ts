@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
+import { APICallError, NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { describeErrorChain, extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import {
   LlmCallContextMissing,
+  LlmCallNotAdmitted,
   LlmCallNotRecorded,
   LlmCallRecorderMissing,
   PreCallRefusal,
+  ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
   StructuredOutputTruncated,
@@ -165,7 +167,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
    * one fallback provider and retry once, or throw a typed ProviderError if
    * none is available. `shouldRethrow` lets a caller opt an error class out of
    * the fallback retry and propagate it immediately instead —
-   * SchemaValidationError, a pre-call refusal and a failed ledger write.
+   * SchemaValidationError, a pre-call refusal and a failed ledger read or write.
    */
   private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
     request: TRequest,
@@ -372,7 +374,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
           },
         }
       : null;
-    if (admitted) await admitted.recorder.assertPriced(admitted.pending);
+    if (admitted) await this.admit(admitted);
     const requestedAt = this.clock();
     try {
       return { result: await request(), requestedAt, admitted };
@@ -381,7 +383,27 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       if (usage) this.measuredCost(usage, resolved, site, operation, requestedAt);
       const failure = failureOfRequest(error);
       await this.record(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
-      throw error;
+      throw configurationRejectionOf(error, resolved) ?? error;
+    }
+  }
+
+  /** The recorder's pre-call check: a refusal throws as itself, a check that broke as `LlmCallNotAdmitted`. */
+  private async admit(admitted: NonNullable<AdmittedCall>): Promise<void> {
+    const { recorder, pending } = admitted;
+    try {
+      await recorder.assertPriced(pending);
+    } catch (error) {
+      if (error instanceof PreCallRefusal) throw error;
+      throw new LlmCallNotAdmitted(
+        {
+          projectId: pending.context.projectId,
+          callSite: pending.context.callSite,
+          provider: pending.provider,
+          model: pending.model.id,
+          operation: pending.operation,
+        },
+        { cause: error },
+      );
     }
   }
 
@@ -564,9 +586,22 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   }
 }
 
-/** A pre-call refusal or a failed ledger write: a fallback model would hit the same wall. */
+/** A pre-call refusal or a failed ledger read or write: a fallback model would hit the same wall. */
 function isNeverRetried(error: unknown): boolean {
-  return error instanceof PreCallRefusal || error instanceof LlmCallNotRecorded;
+  return error instanceof PreCallRefusal || error instanceof LlmCallNotAdmitted || error instanceof LlmCallNotRecorded;
+}
+
+/**
+ * HTTP statuses with which a provider rejects a request as Ashara configured it (its
+ * credentials, its account, its endpoint or model id) rather than for what the request said.
+ */
+const CONFIGURATION_REJECTION_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 404]);
+
+/** A provider's rejection of Ashara's configuration, as its own class; `null` for any other request failure. */
+function configurationRejectionOf(error: unknown, resolved: CallTarget): ProviderConfigurationRejected | null {
+  if (!APICallError.isInstance(error) || error.statusCode === undefined) return null;
+  if (!CONFIGURATION_REJECTION_STATUSES.has(error.statusCode)) return null;
+  return new ProviderConfigurationRejected(resolved.providerName, resolved.modelConfig.id, error.statusCode, { cause: error });
 }
 
 type ParsedStructuredText<T> =

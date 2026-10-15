@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -100,6 +101,38 @@ function ourStore(): IntakeStore {
 
 function intake(): TenderIntake {
   return new TenderIntake({ llm: gateway, store: ourStore() });
+}
+
+/** A gateway recording through Finance's real ledger, with the spend cap's ledger port and caps given. */
+function gatewayWithLedger(spendCap: {
+  readonly ledger: ConstructorParameters<typeof SpendCap>[0]["ledger"];
+  readonly caps: ConstructorParameters<typeof SpendCap>[0]["caps"];
+}): LLMGateway {
+  return buildGateway({
+    models: sdkLanguageModels,
+    config: {
+      providers: [
+        {
+          name: "deepseek",
+          providerType: "deepseek",
+          apiKey: "test-key",
+          baseUrl: "https://stub.invalid/v1",
+          models: [model("intake-strong", "Strong"), model("intake-frontier", "Frontier")],
+          enabled: true,
+        },
+      ],
+      defaultProvider: "deepseek",
+    },
+    checkedSources: ["test"],
+    recording: {
+      kind: "recorded",
+      recorder: new LlmCallLedger(
+        new LlmCallRepository(db),
+        new SpendCap({ ledger: spendCap.ledger, projects: new ProjectRepository(db), caps: spendCap.caps }),
+      ),
+    },
+    clock: () => new Date(),
+  });
 }
 
 async function tender(body: string): Promise<{ projectId: ProjectId; tenderId: string }> {
@@ -294,6 +327,100 @@ describe("Liaison tender intake", () => {
     expect(tenderRow?.consumedAt).toBeInstanceOf(Date);
     expect(tenderRow?.intakeAttempts).toBe(3);
     expect(tenderRow?.intakeLastError).toMatch(/stub provider unavailable/);
+  });
+
+  // t-intake-failure-classes: Ashara's own faults never use up the client's tender.
+  test("a store that fails to record the intake throws through: no attempt is counted and the tender stays open", async () => {
+    stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
+    const { projectId, tenderId } = await tender("Menu board for a cafe.");
+    const failing: IntakeStore = {
+      ...ourStore(),
+      recordIntake: async () => {
+        throw new Error("scripted store failure");
+      },
+    };
+
+    await expect(new TenderIntake({ llm: gateway, store: failing }).runPending()).rejects.toThrow("scripted store failure");
+
+    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(tenderRow?.intakeLastError).toBeNull();
+    expect(await visions(projectId)).toHaveLength(0);
+  });
+
+  test("a spend-cap refusal throws through as BudgetExceeded: no attempt is counted and the tender is not consumed", async () => {
+    const mock = stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
+    const { projectId, tenderId } = await tender("Shift planner for a bakery.");
+    const capped = gatewayWithLedger({
+      ledger: new LlmCallRepository(db),
+      caps: { deploymentUsd: 1_000_000, perProjectUsd: 0.000001 },
+    });
+
+    await expect(new TenderIntake({ llm: capped, store: ourStore() }).runPending()).rejects.toMatchObject({
+      name: "BudgetExceeded",
+      scope: { kind: "project", projectId },
+    });
+
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(tenderRow?.intakeLastError).toBeNull();
+    expect((await messagesOf(projectId)).filter((m) => m.direction === "outbound")).toHaveLength(0);
+  });
+
+  test("a ledger that breaks while admitting the call throws through as LlmCallNotAdmitted: three cycles count nothing", async () => {
+    const mock = stubModel({ doGenerate: jsonResult(intakeResponse(1)) });
+    const { projectId, tenderId } = await tender("Stock list for a bike shop.");
+    const repository = new LlmCallRepository(db);
+    const broken = gatewayWithLedger({
+      ledger: {
+        spend: async () => {
+          throw new Error("scripted ledger read failure");
+        },
+        admit: (row) => repository.admit(row),
+      },
+      caps: TEST_SPEND_CAPS,
+    });
+    const liaison = new TenderIntake({ llm: broken, store: ourStore() });
+
+    for (let i = 0; i < 3; i++) {
+      await expect(liaison.runPending()).rejects.toMatchObject({ name: "LlmCallNotAdmitted" });
+    }
+
+    expect(mock.doGenerateCalls).toHaveLength(0);
+    const messages = await messagesOf(projectId);
+    const tenderRow = messages.find((m) => m.id === tenderId);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(tenderRow?.intakeLastError).toBeNull();
+    expect(messages.filter((m) => m.direction === "outbound")).toHaveLength(0);
+  });
+
+  test("a provider rejecting Ashara's credentials throws through: no attempt is counted and the tender stays open", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubModel({
+      doGenerate: async () => {
+        throw new APICallError({
+          message: "Authentication Fails (invalid api key)",
+          url: "https://stub.invalid/v1/chat/completions",
+          requestBodyValues: {},
+          statusCode: 401,
+        });
+      },
+    });
+    const { projectId, tenderId } = await tender("Loyalty card for a tea shop.");
+
+    await expect(intake().runPending()).rejects.toMatchObject({
+      name: "ProviderError",
+      cause: { name: "ProviderConfigurationRejected", statusCode: 401 },
+    });
+
+    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
+    expect(tenderRow?.intakeLastError).toBeNull();
   });
 
   test("intake on a project that already has a vision writes nothing new", async () => {

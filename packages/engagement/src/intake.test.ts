@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { SchemaValidationError } from "@ashara/llm-gateway";
+import { PreCallRefusal, SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
@@ -392,5 +392,95 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
     });
     await new TenderIntake({ llm, store }).runPending();
     expect(verdicts[0]).toBe(false);
+  });
+});
+
+describe("TenderIntake failure classes (t-intake-failure-classes)", () => {
+  const valid = {
+    summary: "A booking page.",
+    inScope: ["booking"],
+    outOfScope: [],
+    questions: [
+      {
+        text: "Which studio?",
+        whyItMatters: "It sets the rules.",
+        assumption: { statement: "The larger studio.", rationale: "Named first.", kind: "client-visible" },
+      },
+    ],
+    assumptions: [],
+  };
+
+  function storeWith(recordIntake: IntakeStore["recordIntake"], counted: string[], blocked: string[]): IntakeStore {
+    return {
+      openTenders: async () => [
+        {
+          id: "tender-c",
+          projectId: parseProjectId("00000000-0000-4000-8000-000000000006", "test"),
+          body: "A booking page.",
+          intakeAttempts: 2,
+          intakeLastError: "an earlier read failed",
+        },
+      ],
+      currentVisionVersion: async () => null,
+      recordIntake,
+      consumeTender: async () => {
+        throw new Error("consumeTender must not be reached");
+      },
+      recordFailedAttempt: async (_id, error) => {
+        counted.push(error);
+        return 3;
+      },
+      closeFailedTender: async () => {
+        throw new Error("closeFailedTender must not be reached");
+      },
+      blockProject: async (_projectId, cause) => {
+        blocked.push(cause.errorClass);
+        return "blocked";
+      },
+    };
+  }
+
+  test("questions the store posts wrongly block the project after one read, never counted as a read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let reads = 0;
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          reads++;
+          return { data: request.schema.parse(valid), model: "stub-model", provider: "stub" };
+        },
+      }),
+    };
+    const counted: string[] = [];
+    const blocked: string[] = [];
+    const store = storeWith(async (write) => {
+      write.vision([]);
+      throw new Error("unreachable: the vision callback throws first");
+    }, counted, blocked);
+
+    const [outcome] = await new TenderIntake({ llm, store }).runPending();
+
+    expect(outcome?.kind).toBe("project-blocked");
+    expect(blocked).toEqual(["QuestionIdsMismatch"]);
+    expect(counted).toEqual([]);
+    expect(reads).toBe(1);
+  });
+
+  test("a refusal before the call is sent throws through with its class and counts nothing", async () => {
+    class ScriptedRefusal extends PreCallRefusal {}
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw new ScriptedRefusal("budget_cap: scripted");
+        },
+      }),
+    };
+    const counted: string[] = [];
+    const store = storeWith(async () => {
+      throw new Error("recordIntake must not be reached");
+    }, counted, []);
+
+    await expect(new TenderIntake({ llm, store }).runPending()).rejects.toBeInstanceOf(ScriptedRefusal);
+    expect(counted).toEqual([]);
   });
 });
