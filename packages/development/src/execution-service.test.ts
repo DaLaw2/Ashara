@@ -11,6 +11,7 @@ import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
+import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { Outcome } from "@ashara/workplace";
 import { toAgentOutput } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
@@ -1066,27 +1067,30 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // (c): checks red-run on another environment version are red-run again on this one before the model.
   test("checks from another environment version that still fail on main are trusted, then decide the task", async () => {
-    const { result, events, started } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 1 });
+    const { result, events, started } = await dispatch({ storedVersion: "e".repeat(64), ciExit: CHECK_MISSING_EXIT });
 
     expect(result.status, result.detail).toBe("completed");
     expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
     expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ storedVersion: "e".repeat(64), trusted: true });
   });
 
-  // t-env-failure-precision: a check's own exit 125 was podman exec's failure code, so the red run blocked.
-  test("a stored check that itself exits 125 on main is a failing check, never an environment failure", async () => {
-    const { result, events, started } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 125 });
+  // t-env-failure-precision: a check's own exit 125 was podman exec's failure code, so the red run
+  // blocked. V7: it is the check's own exit, not its verdict that the work is missing, so the set
+  // is stale on this environment, never an environment failure.
+  test("a stored check that itself exits 125 on its baseline is the check's own, never an environment failure", async () => {
+    const { result, events, probe } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 125 });
 
-    expect(result.status, result.detail).toBe("completed");
-    expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
-    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: true });
-    expect(events.some((e) => e.event === "task_blocked")).toBe(false);
+    expect(result.status, result.detail).toBe("checks_stale");
+    expect(result.detail).toContain("it exited 125 on the foundation, not 99");
+    expect(probe.modelCalls).toBe(0);
+    expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ trusted: false });
+    expect(result.errorEnvelope?.chain.operation).toBe("revalidateTaskChecks");
   });
 
   // t-checks-before-work review: an over-delivering task that moved the environment version sent the
   // next task's passing checks to checks_stale, whose check task's red run could never accept a check.
   test("checks from another environment version that hold on their baseline and all pass on main: already delivered before the model, nothing merged", async () => {
-    const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: 1, sweepExit: 0, ciExit: 0 });
+    const { result, probe, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: CHECK_MISSING_EXIT, sweepExit: 0, ciExit: 0 });
 
     expect(result.status, result.detail).toBe("completed");
     if (result.status !== "completed") return;
@@ -1103,7 +1107,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
 
   // t-delivered-paths-exits (ADR-074 addendum 2 d68 a): main's own regression failed the task before any model ran.
   test("checks from another environment version that all pass on main while main's environment test fails: dispatched to the implementer, never failed before the model", async () => {
-    const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: 1, sweepExit: 0, ciExit: 0, ciFailsCommand: "true" });
+    const { result, probe, events } = await dispatch({ storedVersion: "e".repeat(64), baselineExit: CHECK_MISSING_EXIT, sweepExit: 0, ciExit: 0, ciFailsCommand: "true" });
 
     expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "failed" });
     expect(events.some((e) => e.event === "agent_launched")).toBe(true);

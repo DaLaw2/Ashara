@@ -283,6 +283,36 @@ export async function startMainMerge(repo: HostRepo, taskId: string, conflict: M
   }
 }
 
+/**
+ * Merges main into a resumed task branch that merges with it cleanly, as a commit on the branch,
+ * before the next attempt (lessons digest P6). A branch whose tentative merge with main failed the
+ * post-merge verification (a tree regression) would otherwise be retried on a tree that never held
+ * main's newer work: there the failure cannot reproduce, the attempt's own gate passes again, and
+ * the merge fails again for the same reason. With main merged in, the attempt works on the tree the
+ * failure was found on, so it can find which side broke it and repair it. "already" when the branch
+ * holds main. Any git failure, a conflict included (main moved since conflictWithMain), aborts the
+ * merge and throws ConflictRetryUnprepared: the branch is never dispatched without main.
+ */
+export async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"merged" | "already"> {
+  try {
+    await runHostGit(repo, ["merge-base", "--is-ancestor", "refs/heads/main", "HEAD"]);
+    return "already";
+  } catch (e) {
+    if (exitCodeOf(e) !== 1) throw new ConflictRetryUnprepared(taskId, "merge-base --is-ancestor", describeErrorChain(e), { cause: e });
+  }
+  try {
+    await runHostGit(repo, ["merge", "--no-ff", "--no-edit", "-m", `Merge main into task/${taskId} for its next attempt`, "--end-of-options", "refs/heads/main"]);
+  } catch (e) {
+    try {
+      await runHostGit(repo, ["merge", "--abort"]);
+    } catch (abortError) {
+      console.warn(`[mergeMainIntoBranch] git merge --abort failed for task ${taskId}: ${describeErrorChain(abortError)}`);
+    }
+    throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
+  }
+  return "merged";
+}
+
 /** A conflict marker line as git writes one; its length is the conflict-marker-size attribute, 7 by default. */
 const CONFLICT_MARKER = "^(<{7,}|>{7,})( |$)";
 

@@ -68,3 +68,9 @@ allow = ["shared", "llm-gateway"]
 # may import them back: test harness code never becomes a production dependency.
 allow = ["*"]
 importers = []
+# ADR-081: a simulator oracle never imports the production predicate or report composer it judges.
+# The simulator composes the system only through server's composition root; Engagement (the
+# client's reports) and the orchestrator (the acceptance sweep) are imported by the cross-package
+# tests alone.
+restrict.engagement = ["src/server/**"]
+restrict.orchestrator = ["src/server/**"]

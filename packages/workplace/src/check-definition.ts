@@ -16,6 +16,25 @@ export const CHECK_RUNNER =
   "environment's image, with no network.";
 
 /**
+ * The exit status by which a check states its own verdict that the behaviour it checks is missing
+ * (V7, lessons digest 2026-10-14). On the foundation only this exit is a decisive failure: any other
+ * non-zero exit (the product or the check's harness failing to build or start, a shell error) is a
+ * check that never reached its verdict, and counting it would accept "nothing builds" as "the work
+ * is missing". Which part of a command is setup and which is the verdict only the check's author
+ * knows, so the check declares it; no exit status a tool uses on its own is read as one. 99 is
+ * chosen as a status no common build or test tool exits with by itself (they use 1, 2, 101 and the
+ * shell's 124-127 and 128+n); a tool that does is told apart by the author's own mapping.
+ */
+export const CHECK_MISSING_EXIT = 99;
+
+/** How a check states its verdict, stated once for each brief and tool that names it. */
+export const CHECK_VERDICT =
+  `A check exits 0 when the behaviour it checks holds, and exits ${CHECK_MISSING_EXIT} (\`exit ${CHECK_MISSING_EXIT}\`) when it ran ` +
+  `and found that behaviour missing. Any other exit means the check did not reach its verdict (a build, setup or ` +
+  `harness step of its own failed): run such steps first and let their failure exit as it does, then map only the ` +
+  `verdict's failure to ${CHECK_MISSING_EXIT}, for example \`<build step> && { <test of the behaviour> || exit ${CHECK_MISSING_EXIT}; }\`.`;
+
+/**
  * Z0's immediate red run of one defined check on the plan's foundation, with the files the attempt
  * has changed so far written over it: what the check author is shown so a broken check is fixed
  * before finishing.

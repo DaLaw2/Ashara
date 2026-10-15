@@ -254,7 +254,11 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, column: "checked_t
   });
 }
 
-/** The project's goal tasks given up (Abandoned), oldest first: each is a task the plan was repaired around. */
+/**
+ * The project's goal tasks given up (Abandoned), oldest first: each is a task the plan was repaired
+ * around. A task a plan revision replaced while it was open (blocked_reason source `superseded`) was
+ * set aside, not given up, and is not one (w12b D4).
+ */
 async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<string[]> {
   const rows = await db
     .select({ title: workItems.title })
@@ -265,6 +269,7 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
         eq(workItems.level, "Task"),
         eq(workItems.status, "Abandoned"),
         sql`${workItems.taskSpec}->>'origin' = 'decomposition'`,
+        sql`${workItems.blockedReason}->>'source' IS DISTINCT FROM 'superseded'`,
       ),
     )
     .orderBy(asc(workItems.updatedAt), asc(workItems.id));

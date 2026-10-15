@@ -21,9 +21,8 @@ export async function recoverFailedItem(
   const priorAttempts = item.dispatchCount;
 
   try {
-    // Classify the failure so the router can short-circuit categories that
-    // must not consume the replan bound (e.g. TREE_REGRESSION — the merged
-    // tree is broken, not the task's own changes). Always returns a category
+    // Classify the failure so the router can route categories with routes of
+    // their own (the merge categories). Always returns a category
     // (VERIFICATION_GAP for unparseable envelopes) because the router's
     // category field is required.
     const category = classifyFromRaw(failure);
@@ -149,7 +148,7 @@ async function publishEvents(deps: Pick<FailureRecoveryDeps, "eventPublisher">, 
  * Derives the FailureCategory from the raw failure context. Always returns a
  * category — never undefined — because the FailureRouter's category field is
  * required: an absent category would silently bypass the category-specific
- * routing (e.g. the zero-replan bound for TREE_REGRESSION). When the raw
+ * routing (e.g. MERGE_CONFLICT_PERSISTS's abandon on first occurrence). When the raw
  * payload is not a valid ErrorEnvelope, returns VERIFICATION_GAP — the same
  * fail-closed default classifyFailure itself uses for unknown operations.
  * This means an unparseable envelope replans normally (bounded), which is

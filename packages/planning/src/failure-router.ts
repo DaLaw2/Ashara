@@ -31,10 +31,9 @@ export interface FailureRouteInput {
   readonly priorAttempts: number;
   /**
    * Classified failure category from the ErrorEnvelope (failure-classifier.ts).
-   * The router consults it before applying the replan bound: TREE_REGRESSION
-   * terminates on first occurrence regardless of remaining attempts. Required
-   * so that an unparseable envelope cannot silently restore the replan ladder
-   * for a tree regression — the caller must supply a category, and the
+   * The router consults it before applying the replan bound: the merge
+   * categories have routes of their own (categoryRoute). Required so that an
+   * unparseable envelope cannot silently pick a route — the caller must supply a category, and the
    * fail-closed default for an unclassifiable failure is VERIFICATION_GAP
    * (the same default classifyFailure itself uses for unknown operations).
    */
@@ -93,7 +92,7 @@ class FailureContextError extends FailureRouterError {
  *
  * Rule ladder (first match wins):
  *   0. a category with a route of its own (categoryRoute): tree regressions and
- *      merge conflicts.
+ *      merge conflicts, each bounded.
  *   1. replan  — attempts remain under the bound; retry, carrying the raw
  *      failure context forward so the next attempt is informed (never identical).
  *   2. abandon — the bound is reached; terminate so the item's dependents stop
@@ -122,20 +121,6 @@ export class FailureRouter {
     }
     const failure = parsed.data;
 
-    // Zero-replan bound for tree regressions: the post-merge verification
-    // failed against the merged tree, not against the task's own changes.
-    // Replanning would dispatch an agent into the same broken tree with the
-    // instruction "fix the failing checks" — checks it did not break and
-    // cannot fix. Terminalizing on first occurrence prevents burning the
-    // replan bound against an external regression.
-    //
-    // Honest cost: the task's own code may have been correct, so early
-    // termination gives up work that could have succeeded once the tree was
-    // fixed. That is not a regression from the prior behavior — before this
-    // change the task reached the same terminal state after paying for two
-    // more failed dispatches — but it is a real trade-off: we save the cost
-    // of doomed retries at the price of not automatically resuming when the
-    // tree heals.
     const routed = this.categoryRoute(input.category, failure, input.priorAttempts);
     if (routed) return routed;
 
@@ -163,13 +148,20 @@ export class FailureRouter {
     priorAttempts: number,
   ): FailureDecision | null {
     switch (category) {
+      // The task's own tree passed its gate, and its merge with main failed the post-merge
+      // verification: which side broke the merged tree is not yet known. Abandoning on the first
+      // occurrence gave up work that may have been correct and left a broken tree with no repair
+      // path (lessons digest P6). The next attempt starts with main merged into its branch
+      // (development's mergeMainIntoBranch), so it works on the tree the failure was found on and is
+      // told that failure: it attributes and repairs it there. Bounded by the replan bound; past it
+      // the plan is repaired around the task.
       case "TREE_REGRESSION":
+        if (priorAttempts < this.maxReplanAttempts) return { action: "replan", attempt: priorAttempts + 1, failure };
         return {
           action: "abandon",
           reason:
-            "post-merge verification failed against the merged tree (tree regression); " +
-            "the task's own changes did not cause this failure and replanning would " +
-            "dispatch into the same broken tree",
+            `the task's merge with main still failed post-merge verification (tree regression) after ${priorAttempts} attempt(s), ` +
+            "each started on main merged into its branch; the plan is repaired around it",
           attempts: priorAttempts,
           failure,
         };

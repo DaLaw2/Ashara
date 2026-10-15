@@ -1258,6 +1258,8 @@ export class DevelopmentService {
     // same files first, w12b D2), the attempt starts with main merged into it and the conflict in
     // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
     // that cannot be prepared fails the task for plan repair, never dispatching the branch unchanged.
+    // A branch that merges cleanly starts with main merged into it (P6: a tree regression is repaired
+    // on the merged tree it was found on, createWorkdirForRetry).
     const resumesBranch = plan.kind !== "check-authoring" && (await branchExists(targetProjectPath, taskBranchName(task.id)));
     let conflict: MainConflict | null = null;
     if (resumesBranch) {

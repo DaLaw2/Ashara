@@ -1,9 +1,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { recordedKindOf } from "@ashara/engagement";
-import type { ProjectBlockKind } from "@ashara/engagement";
-import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/shared";
+import { BlockedReasonCorrupt, SPEND_CAP_ERROR_CLASS, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/shared";
 import type { StoredBlockedReason, VisionSource } from "@ashara/shared";
 import type { Database } from "./database.js";
 
@@ -13,7 +11,10 @@ import type { Database } from "./database.js";
  * exactly the merges recorded, and a delivered report names each goal's recorded close, exactly the
  * completed tasks no stored check covers, the goals given up, and exactly the items of what the
  * client asked for that no acceptance line of a swept check task cites. Every expectation is read
- * from the rows; the report's text is only what is judged.
+ * from the rows; the report's text is only what is judged. The oracle states its own expected wording
+ * and classification and imports none of Engagement's composers or the acceptance repository's
+ * predicates (ADR-081; boundary-rules.toml restricts the integration package's engagement imports to
+ * src/server/): an oracle that asks production what to expect can never find production wrong.
  */
 
 const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable() });
@@ -108,6 +109,8 @@ interface ReportedItem {
   readonly origin: string | null;
   readonly mergeCommit: string | null;
   readonly mergeKind: string | null;
+  /** Its blocked_reason as stored, unparsed. */
+  readonly blockedReason: unknown;
 }
 
 /** How much of a recorded cause a report must quote: enough to be that cause and no other. */
@@ -116,8 +119,7 @@ const QUOTED_CHARS = 200;
 /**
  * How I4 judges each block kind's report, over the code's own list (`satisfies`: a kind added there
  * fails the type check here until it is placed). `stated`: the report states the episode's recorded
- * kind (engagement block-report.ts projectBlockedReport); `recordedKind` refuses a kind engagement
- * does not state. `repair`: the report names the given-up tasks with their recorded causes.
+ * kind in the words expectedKindWords states for it. `repair`: the report names the given-up tasks with their recorded causes.
  * `retired`: check_dispute and suite_review are written only before migration 048 (shared
  * work-item-row.ts ProjectBlockCategory); no code path writes either now and a run database starts
  * empty, so one in a run is a writer that should not exist, not a report to judge.
@@ -134,7 +136,7 @@ const KIND_JUDGEMENT = {
   suite_review: "retired",
 } as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], "stated" | "repair" | "retired">;
 type Judged = typeof KIND_JUDGEMENT;
-type StatedKind = { [K in keyof Judged]: Judged[K] extends "stated" ? K : never }[keyof Judged] & ProjectBlockKind;
+type StatedKind = { [K in keyof Judged]: Judged[K] extends "stated" ? K : never }[keyof Judged];
 const JUDGEMENT_OF: ReadonlyMap<string, Judged[keyof Judged]> = new Map(Object.entries(KIND_JUDGEMENT));
 const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure"];
 
@@ -167,6 +169,34 @@ function recordedWhy(raw: unknown): RecordedWhy {
 }
 
 /**
+ * What each stated kind says paused the project, in the client's words, as the oracle expects it:
+ * written here, never read from Engagement's composer, so a composer that changes a sentence or
+ * states another kind's fails I4. A budget_cap halt names whose limit from its recorded error class
+ * alone (SPEND_CAP_ERROR_CLASS, the class the writers record), and a class that is neither is told
+ * as not on record.
+ */
+function expectedKindWords(kind: StatedKind, errorClass: string | null): string {
+  switch (kind) {
+    case "budget_cap": {
+      const reached = "was reached, so the next step of the work was not paid for";
+      if (errorClass === SPEND_CAP_ERROR_CLASS.deployment) return `the spending limit set for all of Ashara's work, across every project it runs, ${reached}`;
+      if (errorClass === SPEND_CAP_ERROR_CLASS.project) return `the spending limit set for this project ${reached}`;
+      return `a spending limit set for this work ${reached}; which limit it was is not on record`;
+    }
+    case "configuration":
+      return "a step of the work needed something Ashara's own setup does not provide, for a reason other than a spending limit";
+    case "fault":
+      return "a step of Ashara's own work on this project failed, or Ashara's own record of the project did not hold together";
+    case "planning_stopped":
+      return "every attempt to make the plan failed";
+    case "replan_bound":
+      return "the plan has been revised for your changes as many times as the team revises it before its operator looks the project over";
+    case "infrastructure":
+      return "the machines Ashara runs the work on kept failing while they ran this project's work";
+  }
+}
+
+/**
  * The cause sentences a halt report must carry, from the episode's row: its recorded kind in the
  * client's words, and the episode's own id as the record that holds the detail (W11b D3); a halt
  * recorded with neither error class nor reason says no cause was.
@@ -174,7 +204,7 @@ function recordedWhy(raw: unknown): RecordedWhy {
 function statedCause(episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null }, kind: StatedKind): string {
   if (episode.reason === null && episode.errorClass === null) return "No cause was recorded for this pause.";
   return (
-    `Ashara recorded the cause as this: ${recordedKindOf(kind, episode)}. ` +
+    `Ashara recorded the cause as this: ${expectedKindWords(kind, episode.errorClass)}. ` +
     `Ashara keeps the technical detail in its own record of this pause, record ${episode.id}.`
   );
 }
@@ -197,6 +227,26 @@ function closeOnRecord(goal: ReportedItem, items: readonly ReportedItem[]): stri
     );
   }
   return `- "${title}": closed on commit ${commit}; whether it was merged or already delivered there is not on record.`;
+}
+
+/**
+ * How an Abandoned goal task left the plan, from its stored reason: set aside, when a revision of
+ * the plan replaced it while it was open (source `superseded`: the team did not give up on it, the
+ * plan stopped asking for it; w12b D4), or given up, for every other recorded reason. A reason that
+ * does not parse, or none, is its own verdict: neither reading is on record.
+ */
+type Disposal = { readonly kind: "given-up" } | { readonly kind: "set-aside" } | { readonly kind: "corrupt"; readonly detail: string };
+
+function disposalOf(raw: unknown): Disposal {
+  let parsed: StoredBlockedReason | undefined;
+  try {
+    parsed = parseStoredBlockedReason(raw);
+  } catch (err) {
+    if (!(err instanceof BlockedReasonCorrupt)) throw err;
+    return { kind: "corrupt", detail: err.message };
+  }
+  if (parsed === undefined) return { kind: "corrupt", detail: "an Abandoned task records no reason" };
+  return parsed.source === "superseded" ? { kind: "set-aside" } : { kind: "given-up" };
 }
 
 /** The paragraph of a report that opens with `head`, or null. */
@@ -324,7 +374,12 @@ export function checkReports(records: ReportRecords, project: { readonly status:
         add("delivered-unchecked", `the delivered report states ${stated.length} task(s) not checked by a stored check; the records hold ${unchecked.length}: ${unchecked.map((item) => `"${item.title}"`).join(", ")}`);
       }
 
-      const givenUp = items.filter((item) => item.level === "Task" && item.status === "Abandoned" && item.origin === "decomposition");
+      const givenUp: ReportedItem[] = [];
+      for (const item of items.filter((each) => each.level === "Task" && each.status === "Abandoned" && each.origin === "decomposition")) {
+        const disposal = disposalOf(item.blockedReason);
+        if (disposal.kind === "corrupt") add("delivered-given-up-corrupt", `"${item.title}" is Abandoned with a stored reason that does not parse, so whether it was given up is not on record: ${disposal.detail.slice(0, 200)}`);
+        else if (disposal.kind === "given-up") givenUp.push(item);
+      }
       const statedGivenUp = namedLines(paragraph(report.body, "These tasks were given up"));
       if (statedGivenUp.length !== givenUp.length || givenUp.some((item) => !statedGivenUp.includes(`- "${item.title}"`))) {
         add("delivered-given-up", `the delivered report names ${statedGivenUp.length} goal task(s) given up; the records hold ${givenUp.length}: ${givenUp.map((item) => `"${item.title}"`).join(", ")}`);

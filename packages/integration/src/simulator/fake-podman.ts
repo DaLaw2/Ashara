@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join, posix, sep } from "node:path";
 import { z } from "zod";
 import type { ProcessRunner } from "@ashara/execution-infra";
+import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import {
   CheckSpecSchema,
   HUNG,
@@ -412,11 +413,13 @@ export class FakePodman {
     for (const behaviour of spec.data.requires) if (!(await has(`product/behaviours/${behaviour}`))) missing.push(behaviour);
     const present: string[] = [];
     for (const behaviour of spec.data.forbids) if (await has(`product/behaviours/${behaviour}`)) present.push(behaviour);
+    // The scripted author's check states its verdict as the check-author brief asks (CHECK_MISSING_EXIT);
+    // its own failures above (no such file, not JSON, unrunnable) exit otherwise. A flake is a wrong verdict.
     if (missing.length > 0 || present.length > 0) {
-      return exited(1, "", `sim check ${specPath}: missing [${missing.join(", ")}], forbidden present [${present.join(", ")}]\n`);
+      return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: missing [${missing.join(", ")}], forbidden present [${present.join(", ")}]\n`);
     }
     if (spec.data.kind === "flaky" && this.options.tape.chance("podman.flaky-check", 0.3)) {
-      return exited(1, "", `sim check ${specPath}: flaked\n`);
+      return exited(CHECK_MISSING_EXIT, "", `sim check ${specPath}: flaked\n`);
     }
     return exited(0, `sim check ${specPath}: pass\n`);
   }

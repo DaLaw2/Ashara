@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { recordedKindOf } from "@ashara/engagement";
 import { checkReports } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
@@ -20,11 +19,26 @@ const stated = (sentence: string, record: string): string =>
   `Work on this project is paused.\n\nAshara recorded the cause as this: ${sentence}. Ashara keeps the technical detail in its own record of this pause, record ${record}.`;
 
 describe("checkReports, a halt's cause", () => {
+  // The expected sentences are written here, not taken from Engagement (ADR-081): a test that asks
+  // the composer what to expect pins whatever it says.
+  const FAULT = "a step of Ashara's own work on this project failed, or Ashara's own record of the project did not hold together";
+  const INFRASTRUCTURE = "the machines Ashara runs the work on kept failing while they ran this project's work";
+
   it("holds a report to its episode's recorded kind and its episode's record", () => {
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("fault", { errorClass: "MergeFailed", reason: "git exited 1" }), "e1")), "blocked")).toEqual([]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT, "e1")), "blocked")).toEqual([]);
     // Another kind's sentence, or another record's id, is not the cause on record.
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("infrastructure", { errorClass: "MergeFailed", reason: "git exited 1" }), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(recordedKindOf("fault", { errorClass: "MergeFailed", reason: "git exited 1" }), "e2")), "blocked")).toEqual(["halt-cause:fault"]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(INFRASTRUCTURE, "e1")), "blocked")).toEqual(["halt-cause:fault"]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT, "e2")), "blocked")).toEqual(["halt-cause:fault"]);
+    // A sentence reworded by one word is not the oracle's own.
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT.replace("failed", "stopped"), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
+  });
+
+  it("names whose spending limit a budget_cap halt reached from its recorded error class alone", () => {
+    const project = "the spending limit set for this project was reached, so the next step of the work was not paid for";
+    const unknown = "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record";
+    expect(keysOf(haltWith("budget_cap", "BudgetExceeded", "over", stated(project, "e1")), "blocked")).toEqual([]);
+    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(project, "e1")), "blocked")).toEqual(["halt-cause:budget_cap"]);
+    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(unknown, "e1")), "blocked")).toEqual([]);
   });
 
   it("holds a halt with no cause recorded to saying so, and one with a cause to not saying so", () => {
@@ -47,7 +61,7 @@ describe("checkReports, a halt's cause", () => {
 });
 
 describe("checkReports, a delivered report", () => {
-  const goal = { id: "t1", title: "Goal", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c1", mergeKind: null };
+  const goal = { id: "t1", title: "Goal", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c1", mergeKind: null, blockedReason: null };
   const delivered = (line: string, extra: Partial<ReportRecords> = {}, tail = ""): ReportRecords => ({
     ...noRecords,
     reports: [{ id: "r1", body: `Your project is delivered.\n\nWhat was delivered:\n${line}${tail}`, reportsOn: null, inReplyTo: null }],
@@ -59,6 +73,19 @@ describe("checkReports, a delivered report", () => {
   it("refuses a merged line for a close whose kind is not on record", () => {
     expect(keysOf(delivered(`- "Goal": built and merged, commit c1.`, {}, unrecordedTail), "accepted", [goal])).toEqual(["delivered-close"]);
     expect(keysOf(delivered(`- "Goal": closed on commit c1; whether it was merged or already delivered there is not on record.`, {}, unrecordedTail), "accepted", [goal])).toEqual([]);
+  });
+
+  // w12b D4: a goal task a plan revision replaced while it was open was set aside, not given up.
+  it("holds the given-up list to the goal tasks given up, never one a plan revision set aside", () => {
+    const merged = { ...goal, mergeKind: "merged" };
+    const close = `- "Goal": built and merged, commit c1.`;
+    const abandoned = (title: string, blockedReason: unknown) => ({ ...goal, id: title, title, status: "Abandoned", mergeCommit: null, blockedReason });
+    const gaveUp = abandoned("Hard", { source: "failure_router", reason: "exhausted 2 replan attempt(s) without success" });
+    const setAside = abandoned("Old", { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" });
+    const givenUp = (titles: readonly string[]) => `\n\nThese tasks were given up, and the plan was revised around them:\n${titles.map((title) => `- "${title}"`).join("\n")}${unrecordedTail}`;
+    expect(keysOf(delivered(close, {}, givenUp(["Hard"])), "accepted", [merged, gaveUp, setAside])).toEqual([]);
+    expect(keysOf(delivered(close, {}, givenUp(["Hard", "Old"])), "accepted", [merged, gaveUp, setAside])).toEqual(["delivered-given-up"]);
+    expect(keysOf(delivered(close, {}, givenUp(["Hard"])), "accepted", [merged, gaveUp, abandoned("Odd", { source: "no-such-source" })])).toEqual(["delivered-given-up-corrupt"]);
   });
 
   it("refuses the unrecorded-kind line for a close recorded as already delivered", () => {

@@ -272,8 +272,8 @@ afterAll(async () => {
 
 describe("a merge conflict between two tasks of one batch", () => {
   it("the second task's next attempt starts with main merged in and the conflict named; resolved, it merges", async () => {
-    const first = await checkedTask("Write alpha into notes.txt", { name: "has alpha", command: "grep -x alpha notes.txt" });
-    const second = await checkedTask("Write beta into notes.txt", { name: "has beta", command: "grep -x beta notes.txt" });
+    const first = await checkedTask("Write alpha into notes.txt", { name: "has alpha", command: "grep -x alpha notes.txt || exit 99" });
+    const second = await checkedTask("Write beta into notes.txt", { name: "has beta", command: "grep -x beta notes.txt || exit 99" });
 
     // Both leave the same main. The first is merged while the second is still at work.
     const attempt1 = await runTask(second, [
@@ -321,7 +321,7 @@ describe("a merge conflict between two tasks of one batch", () => {
   }, 600_000);
 
   it("a conflict that cannot be prepared is never dispatched on the branch as it is: the task goes to plan repair", async () => {
-    const third = await checkedTask("Write gamma into notes.txt", { name: "has gamma", command: "grep -x gamma notes.txt" });
+    const third = await checkedTask("Write gamma into notes.txt", { name: "has gamma", command: "grep -x gamma notes.txt || exit 99" });
     // Its branch left main before the merges above, and changes the same file.
     await git("branch", `task/${third.id}`, foundation);
     const work = join(root, "third");
@@ -354,7 +354,7 @@ describe("a merge conflict between two tasks of one batch", () => {
   }, 300_000);
 
   it("an attempt handed a conflict that ends without done says its merge is discarded, never that its work is kept", async () => {
-    const fourth = await checkedTask("Write delta into notes.txt", { name: "has delta", command: "grep -x delta notes.txt" });
+    const fourth = await checkedTask("Write delta into notes.txt", { name: "has delta", command: "grep -x delta notes.txt || exit 99" });
     await git("branch", `task/${fourth.id}`, foundation);
     const work = join(root, "fourth");
     await git("worktree", "add", "-q", work, `task/${fourth.id}`);

@@ -2,7 +2,7 @@ import { environmentDefinitionRules } from "@ashara/execution-infra";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "@ashara/shared";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
-import { CHECK_RUNNER } from "./check-definition.js";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
@@ -151,7 +151,7 @@ const CHECK_PROMPT = [
   `foundation: the project as it stood before any task of the plan did its work. Your workspace shows the project as`,
   `it is now, which may already hold some of that task's behaviour, delivered by other work.`,
   `- Define each check with define_check: a name and a shell command. ${CHECK_RUNNER}`,
-  `  A check passes when its command exits 0 and prints output, and fails otherwise.`,
+  `  A check passes when its command exits 0 and prints output, and fails otherwise. ${CHECK_VERDICT}`,
   `- Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites: a check states`,
   `  observable behaviour an acceptance line asks for, as its cited items say it, never how it is built. Check nothing`,
   `  that no cited item asks for: no intermediate output, no format, no file and no message they do not ask for. Before`,
@@ -164,12 +164,13 @@ const CHECK_PROMPT = [
   `  never test it, except as the public interface names it (a command, a file the client reads), in its one form.`,
   `- Name the files and entry points the project already has (its file tree is in the Project Context Map below),`,
   `  or the ones the task names; do not invent other names for them.`,
-  `- At least one check must FAIL on the foundation, for the reason the task's work is missing there; a check that`,
+  `- At least one check must FAIL on the foundation by exiting ${CHECK_MISSING_EXIT}, for the reason the task's work is missing there; a check that`,
   `  passes on the foundation is kept as a guard of behaviour that already holds. Write each check for the task's`,
   `  behaviour as its acceptance lines and their cited items state it, never stronger to make it fail: a check that demands more`,
-  `  than the task asks for makes the task's developer build more than the task. A check that times out, or whose`,
-  `  command cannot be found or run, is rejected. One that fails only on a syntax error or a missing file of its own`,
-  `  can never pass: it is worse than none.`,
+  `  than the task asks for makes the task's developer build more than the task. A check that times out, whose`,
+  `  command cannot be found or run, or that fails on the foundation with any exit other than ${CHECK_MISSING_EXIT}, is rejected:`,
+  `  it did not reach its verdict there. One that fails only on a syntax error or a missing file of its own can never`,
+  `  pass: it is worse than none.`,
   `- If the task's behaviour already holds in the project as it is now, still write its checks honestly: they are`,
   `  judged on the foundation, and the task is then closed as already delivered when they pass on the project.`,
   `- define_check red-runs the check at once on the foundation, with your files so far written over it, and shows`,

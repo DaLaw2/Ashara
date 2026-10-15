@@ -5,7 +5,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { initHostRepo, runHostGit, runOwnRepoGit, type HostRepo } from "@ashara/execution-infra";
 import { canonicalizeAllowingMissing, withTargetCheckout } from "./checkout-lock.js";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
-import { mergeInProgress, startMainMerge, taskBranchName, type MainConflict } from "./merge.js";
+import { mergeInProgress, mergeMainIntoBranch, startMainMerge, taskBranchName, type MainConflict } from "./merge.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
 
 // ---------------------------------------------------------------------------
@@ -66,8 +66,9 @@ async function worktreeWithIdentity(targetProjectPath: string, workDir: string):
  * The worktree of a task whose branch already exists, checked out as it is. When the branch
  * conflicts with main (`conflict`, conflictWithMain), main is merged into it and the merge left
  * staged with the conflicts in the files: re-dispatching the branch unchanged would only conflict
- * again (w12b D2). A merge that cannot be prepared removes the worktree and throws
- * ConflictRetryUnprepared.
+ * again (w12b D2). Otherwise main's newer work is merged into it as a commit (mergeMainIntoBranch,
+ * P6): the attempt works on the tree its merge will be verified as. A merge that cannot be prepared
+ * removes the worktree and throws ConflictRetryUnprepared.
  */
 export async function createWorkdirForRetry(
   base: string,
@@ -86,13 +87,12 @@ export async function createWorkdirForRetry(
   }
 
   const repo = await worktreeWithIdentity(targetProjectPath, workDir);
-  if (conflict !== null) {
-    try {
-      await startMainMerge(repo, taskId, conflict);
-    } catch (e) {
-      await removeWorktree(targetProjectPath, workDir);
-      throw e;
-    }
+  try {
+    if (conflict !== null) await startMainMerge(repo, taskId, conflict);
+    else await mergeMainIntoBranch(repo, taskId);
+  } catch (e) {
+    await removeWorktree(targetProjectPath, workDir);
+    throw e;
   }
   return { workDir, taskBranch, repo };
 }

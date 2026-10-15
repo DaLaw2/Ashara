@@ -361,7 +361,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     const h = await harness("granted");
     const v1 = await runSprint0(h);
 
-    const impl = await implementationTask(h, "Write hello.txt", "cat /workspace/hello.txt", v1.version, v1.commit);
+    const impl = await implementationTask(h, "Write hello.txt", "cat /workspace/hello.txt || exit 99", v1.version, v1.commit);
     h.scripts.set(ENVIRONMENT_CHANGE_GOAL, [
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),
       toolCallTurn("build_environment", {}),
@@ -409,7 +409,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     const h = await harness("refused");
     const v1 = await runSprint0(h);
 
-    const impl = await implementationTask(h, "Write hello.txt", "cat /workspace/hello.txt", v1.version, v1.commit);
+    const impl = await implementationTask(h, "Write hello.txt", "cat /workspace/hello.txt || exit 99", v1.version, v1.commit);
     const broken = (): Turn[] => [
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN echo broken-recipe; exit 7\n` }),
       toolCallTurn("finish", { status: "done", summary: "Added the RUN step.", statement: STATEMENT }),
@@ -433,7 +433,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     expect(await mainHead(h.target)).toBe(v1.commit);
 
     // Another implementation dispatched while the platform task retries runs on the prior version.
-    const other = await implementationTask(h, "Write other.txt", "cat /workspace/other.txt", v1.version, v1.commit);
+    const other = await implementationTask(h, "Write other.txt", "cat /workspace/other.txt || exit 99", v1.version, v1.commit);
     h.scripts.set("Write other.txt", [
       toolCallTurn("write_file", { path: "other.txt", content: "other\n" }),
       toolCallTurn("finish", { status: "done", summary: "Wrote other.txt." }),

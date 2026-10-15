@@ -394,7 +394,7 @@ describe("Sprint 0", () => {
       );
     if (build === undefined) throw new Error("no succeeded environment build is on record");
 
-    const task = await implementationTask("cat /workspace/hello.txt", build.version);
+    const task = await implementationTask("cat /workspace/hello.txt || exit 99", build.version);
     const sessions = new DevSessionRepository(db);
     const liveImages: string[] = [];
     const { result, events, workdirBase, taskId } = await runTask(
@@ -483,7 +483,7 @@ describe("Sprint 0", () => {
 
     const chosen = await runTask(
       "flow",
-      await implementationTask("cat /workspace/second.txt", build.version),
+      await implementationTask("cat /workspace/second.txt || exit 99", build.version),
       [toolCallTurn("write_file", { path: "second.txt", content: "second\n" }), toolCallTurn("finish", { status: "done", summary: "Wrote second.txt." })],
       memorySessions,
     );
@@ -497,7 +497,7 @@ describe("Sprint 0", () => {
     // A non-environment commit moves the version on main: no statement is on record for it.
     await writeFile(join(chosen.target, "environment", "Containerfile"), `FROM ${base.image}\n# moved by an implementer\n`);
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-am", "implementer"], { cwd: chosen.target });
-    const moved = await runTask("flow", await implementationTask("cat /workspace/third.txt", build.version), [], memorySessions);
+    const moved = await runTask("flow", await implementationTask("cat /workspace/third.txt || exit 99", build.version), [], memorySessions);
     expect(moved.result.status, moved.result.detail).toBe("environment_undefined");
     expect(moved.result.detail).toContain("recorded a statement for that version: no merge Ashara verified produced it");
     expect(moved.result.detail).not.toContain(build.version);
@@ -524,7 +524,7 @@ describe("Sprint 0", () => {
 
     const changed = await runTask(
       "owned",
-      await implementationTask("cat /workspace/hello.txt", gated),
+      await implementationTask("cat /workspace/hello.txt || exit 99", gated),
       [
         toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" }),
         toolCallTurn("write_file", { path: "manifest.txt", content: "dependencies: greeter\n" }),
@@ -561,7 +561,7 @@ describe("Sprint 0", () => {
 
     const next = await runTask(
       "owned",
-      await implementationTask("cat /workspace/next.txt", version),
+      await implementationTask("cat /workspace/next.txt || exit 99", version),
       [toolCallTurn("write_file", { path: "next.txt", content: "next\n" }), toolCallTurn("finish", { status: "done", summary: "Wrote next.txt." })],
       memorySessions,
     );
@@ -607,7 +607,7 @@ describe("Sprint 0", () => {
     const { result, events, target, taskId } = await runTask(
       "owned",
       // Stored on another environment: red-run again on its baseline, today's main.
-      await implementationTask("cat /workspace/fourth.txt", "0".repeat(64), mainBefore.trim()),
+      await implementationTask("cat /workspace/fourth.txt || exit 99", "0".repeat(64), mainBefore.trim()),
       [
         toolCallTurn("write_file", { path: "fourth.txt", content: "fourth\n" }),
         toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),

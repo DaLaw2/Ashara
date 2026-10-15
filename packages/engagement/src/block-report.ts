@@ -13,7 +13,7 @@ import type { ProjectId, StoredBlockedReason } from "@ashara/shared";
 // each at most once. No task is reported on its own: no task waits on a person (W6).
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
-export type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound" | "infrastructure";
+type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound" | "infrastructure";
 
 /** The cause recorded on a block episode: the error's class and its described chain, each null when none was written. */
 interface RecordedCause {
@@ -145,17 +145,7 @@ function spendLimitReached(limit: SpendLimit): string {
  * What the episode's recorded kind says paused the project, in the client's words: only what every
  * halt recorded with that kind is by definition (ProjectBlockCategory), stated as Ashara's own
  * record, so a misrecorded kind reads as Ashara's record and not as an observed fact (M2 trial M3).
- * Exported for the lifecycle simulator's I4 oracle, which states it from the episode's kind as read
- * from project_blocks.
  */
-/**
- * The recorded cause in the client's words, from the episode's kind and, for a budget_cap halt, its
- * recorded error class. Exported as the seam the simulator's I4 oracle judges halt reports with.
- */
-export function recordedKindOf(kind: ProjectBlockKind, cause: RecordedCause): string {
-  return recordedKind(toldHalt(kind, cause));
-}
-
 function recordedKind(halt: ToldHalt): string {
   switch (halt.kind) {
     case "budget_cap":

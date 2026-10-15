@@ -4,7 +4,7 @@ import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
 import { elidedOutput, runHostGit } from "@ashara/execution-infra";
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, ProjectId, WorkItemId } from "@ashara/shared";
-import { CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
 import type {
   CheckDefinition,
   CheckRedRunPreview,
@@ -598,25 +598,32 @@ export async function runChecksOnCheckout(
 
 /**
  * The red-run rule on one check's run on the foundation (ADR-074 addendum 2 d74 A): it must run to
- * a verdict there, an exit within its time limit by a command the environment can run. A timeout
- * proves nothing: the same check could time out on the task's work too. A check that passes on the
- * foundation is kept: it guards behaviour that already holds, and the set rule (redRunSetProblem)
- * is what proves the set can tell the task's work from its absence. null when it holds.
+ * a verdict there, an exit within its time limit by a command the environment can run, and either
+ * pass or fail with the check's own verdict that the behaviour is missing (CHECK_MISSING_EXIT). Any
+ * other failure is the check's build, setup or harness failing before its verdict: counting it as
+ * decisive would accept "nothing builds" as "the work is missing" (V7). A timeout proves nothing:
+ * the same check could time out on the task's work too. A check that passes on the foundation is
+ * kept: it guards behaviour that already holds, and the set rule (redRunSetProblem) is what proves
+ * the set can tell the task's work from its absence. null when it holds.
  */
 export function redRunProblem(run: CheckRun): string | null {
   if (run.timedOut) {
     return "it timed out on the foundation instead of exiting there; a check must exit within its time limit";
   }
   if (run.exitCode === null) return "it was killed on the foundation without an exit code, so it reached no verdict there";
+  if (run.exitCode === 0 || run.exitCode === CHECK_MISSING_EXIT) return null;
   if (COMMAND_UNRUNNABLE.has(run.exitCode)) {
     return `its command cannot be run in the project environment (exit ${run.exitCode})`;
   }
-  return null;
+  return (
+    `it exited ${run.exitCode} on the foundation, not ${CHECK_MISSING_EXIT}, the exit by which a check states the behaviour it ` +
+    `checks is missing: a step of its own (a build, setup or harness) failed before its verdict, so it reached none there`
+  );
 }
 
-/** Whether a check's run on the foundation is a decisive failure there. */
+/** Whether a check's run on the foundation is a decisive failure there: its own verdict that the behaviour is missing. */
 function failsDecisively(run: CheckRun): boolean {
-  return run.exitCode !== 0 && redRunProblem(run) === null;
+  return run.exitCode === CHECK_MISSING_EXIT && redRunProblem(run) === null;
 }
 
 /**
@@ -625,14 +632,14 @@ function failsDecisively(run: CheckRun): boolean {
  */
 export function redRunSetProblem(runs: readonly CheckRun[]): string | null {
   if (runs.some(failsDecisively)) return null;
-  return "no check of the set fails on the foundation; at least one must fail there, for the reason the task's work is missing";
+  return `no check of the set fails on the foundation; at least one must fail there by exiting ${CHECK_MISSING_EXIT}, for the reason the task's work is missing`;
 }
 
 /** One check's line in a red run's report. */
 export function redRunVerdict(run: CheckRun): string {
   const problem = redRunProblem(run);
   if (problem !== null) return `REJECTED: ${problem}`;
-  return failsDecisively(run) ? "fails on the foundation" : "passes on the foundation: kept, as a guard of behaviour that already holds";
+  return failsDecisively(run) ? "fails on the foundation: its verdict is that the behaviour is missing" : "passes on the foundation: kept, as a guard of behaviour that already holds";
 }
 
 /** define_check's red run of its one check on the foundation, as the author is shown it. */

@@ -72,9 +72,29 @@ describe("a retry of a branch that conflicts with main", () => {
     expect(await readFile(join(target, "shared.txt"), "utf8")).toBe("first\nsecond\n");
   });
 
-  test("a branch that merges cleanly is resumed as it is", async () => {
-    const { target } = await sameBaseConflict();
-    expect(await conflictWithMain(target, "first")).toBeNull();
+  // Lessons digest P6: a branch whose merge with main failed post-merge verification would be
+  // retried on a tree without main's newer work, where the failure cannot reproduce.
+  test("a branch that merges cleanly is resumed with main's newer work merged in, once", async () => {
+    const { target, workdirBase } = await sameBaseConflict();
+    const { workDir, repo } = await createWorkdir(workdirBase, target, taskBranchName("third"));
+    await writeFile(join(workDir, "third.txt"), "third\n");
+    await commitAllChanges(repo, "work of third");
+    await cleanupWorkdir(workDir, target);
+    await git(target, "merge", "-q", "--no-ff", "-m", "merge second", "-X", "theirs", taskBranchName("second"));
+    expect(await conflictWithMain(target, "third")).toBeNull();
+
+    const retry = await createWorkdirForRetry(workdirBase, target, "third", null);
+    expect(await readFile(join(retry.workDir, "second.txt"), "utf8")).toBe("second\n");
+    expect(await readFile(join(retry.workDir, "third.txt"), "utf8")).toBe("third\n");
+    expect(await git(retry.workDir, "status", "--porcelain")).toBe("");
+    expect(await git(retry.workDir, "merge-base", "--is-ancestor", "main", "HEAD")).toBe("");
+    const head = await git(retry.workDir, "rev-parse", "HEAD");
+    await cleanupWorkdir(retry.workDir, target);
+
+    // Main has not moved since: the branch already holds it, and nothing more is merged.
+    const again = await createWorkdirForRetry(workdirBase, target, "third", null);
+    expect(await git(again.workDir, "rev-parse", "HEAD")).toBe(head);
+    await cleanupWorkdir(again.workDir, target);
   });
 
   test("a conflict git does not reproduce in the worktree is unprepared, and the worktree is removed", async () => {

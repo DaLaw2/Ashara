@@ -254,6 +254,26 @@ describe("acceptance on main", () => {
     for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service", "kv.log"]) expect(body).not.toContain(absent);
   });
 
+  // w12b D4: a goal task a plan revision replaced while it was open was set aside, never given up.
+  test("the delivered report's given-up tasks are the goal tasks given up, never one a plan revision set aside", async () => {
+    const { projectId, goals, scaffold } = await deliveredProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+    const abandoned = async (title: string, reason: unknown): Promise<void> => {
+      await db.execute(sql`
+        INSERT INTO work_items (id, level, status, title, task_spec, blocked_reason, run_scope, project_id)
+        VALUES (${randomUUID()}, 'Task', 'Abandoned', ${title}, ${JSON.stringify({ origin: "decomposition" })}::jsonb,
+                ${JSON.stringify(reason)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+    };
+    await abandoned("List keys", { source: "failure_router", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
+    await abandoned("Watch keys", { source: "superseded", planRevision: 2, requestedBy: null, repairOf: ["x"], reason: "replaced by the repaired plan" });
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    expect(due?.givenUp).toEqual(["List keys"]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body] = await reportsOf(projectId);
+    expect(body).toContain(`These tasks were given up, and the plan was revised around them:\n- "List keys"`);
+    expect(body).not.toContain("Watch keys");
+  });
+
   test("coverage follows the trace: an item is checked only by a cited source of the same text, and a broken or missing trace is never read as covered", async () => {
     const due = async (projectId: ProjectId) => {
       const store = createDeliveredReportStore(db);

@@ -4,7 +4,7 @@ import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/llm-gateway";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText, WorkKind } from "@ashara/shared";
-import { CHECK_RUNNER } from "./check-definition.js";
+import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
 import { checkPassed, formatCheckRunReport } from "./check-run.js";
 import type { TaskCheckRunPort } from "./check-run.js";
@@ -187,8 +187,10 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
   description:
     "Define one check of the task. " +
     CHECK_RUNNER +
-    " The check passes when the command exits 0 and prints output. At least one check must FAIL on the plan's " +
-    "foundation, by a non-zero exit within its time limit, for the reason the task's work is missing. Any file a " +
+    " The check passes when the command exits 0 and prints output. " +
+    CHECK_VERDICT +
+    ` At least one check must FAIL on the plan's foundation, by exiting ${CHECK_MISSING_EXIT} within its time limit, for ` +
+    "the reason the task's work is missing; a check that fails there with any other exit is rejected. Any file a " +
     "check needs must be one you write in your checks directory (the Context names it): only those are kept with " +
     "the checks and written over the project whenever they run; a file you write anywhere else is discarded. A check " +
     "that changes a file the project tracks is rejected. The check is red-run at once on the foundation, with your " +

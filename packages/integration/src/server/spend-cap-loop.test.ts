@@ -32,6 +32,7 @@ import { FailureRouter } from "@ashara/planning";
 import { RUN_SCOPE_AD_HOC, SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
+import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -281,10 +282,10 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
           return ok(JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } }));
         case "run":
           return ok(`${"a".repeat(64)}\n`);
-        // Every command exits 1: the stored check, red-run again on its baseline on the BaseCell (its
+        // Every command exits the check's verdict that the work is missing: the stored check, red-run again on its baseline on the BaseCell (its
         // version differs from the check's), still fails there and on main, so the dispatch reaches the model.
         case "exec":
-          return { ...ok(), exitCode: 1, statusReport: "1\n" };
+          return { ...ok(), exitCode: CHECK_MISSING_EXIT, statusReport: `${CHECK_MISSING_EXIT}\n` };
         case "rm":
           return ok();
         default:

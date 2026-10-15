@@ -81,7 +81,7 @@ let target = "";
 let base: BaseCellReference;
 let substrate: PodmanSubstrate;
 
-const HELLO_CHECK = "grep hello hello.txt\n";
+const HELLO_CHECK = "grep hello hello.txt || exit 99\n";
 
 /** The product scaffold on record whose merge is the plan's foundation, and that merge commit. */
 let foundationTaskId: WorkItemId;
@@ -331,7 +331,7 @@ describe("independent verification", () => {
 
     const { result, mock, events } = await runTask(greeting.check, [
       toolCallTurn("define_check", { name: "says hi", command: "words=(hi); grep -q hi hi.txt && cat hi.txt" }),
-      toolCallTurn("write_file", { path: hiSh, content: "grep hi hi.txt\n" }),
+      toolCallTurn("write_file", { path: hiSh, content: "grep hi hi.txt || exit 99\n" }),
       toolCallTurn("define_check", { name: "says hi", command: `sh ${hiSh}` }),
       toolCallTurn("finish", { status: "done", summary: "One check: hi.txt says hi." }),
     ]);
@@ -350,11 +350,12 @@ describe("independent verification", () => {
     expect(afterRedefine).toContain('Replaced check \\"says hi\\" (1 defined so far)');
     expect(afterRedefine).toContain("hi.txt: No such file");
     expect(events.filter((e) => e.event === "check_defined")).toMatchObject([
-      { name: "says hi", replaced: false, exitCode: 2, rejection: null },
-      { name: "says hi", replaced: true, exitCode: 2, rejection: null },
+      // V7: a check that fails on its own syntax never reached its verdict, and is rejected at once.
+      { name: "says hi", replaced: false, exitCode: 2, rejection: expect.stringContaining("it exited 2 on the foundation, not 99") },
+      { name: "says hi", replaced: true, exitCode: 99, rejection: null },
     ]);
     expect(await checkRowsOf(greeting.implementation.id)).toEqual([
-      expect.objectContaining({ name: "says hi", command: `sh ${hiSh}`, files: [{ path: hiSh, content: "grep hi hi.txt\n" }] }),
+      expect.objectContaining({ name: "says hi", command: `sh ${hiSh}`, files: [{ path: hiSh, content: "grep hi hi.txt || exit 99\n" }] }),
     ]);
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
@@ -365,7 +366,7 @@ describe("independent verification", () => {
 
     const { result, mock, events } = await runTask(greeting.check, [
       toolCallTurn("probe_foundation", { command: "ls environment" }),
-      toolCallTurn("define_check", { name: "says hey", command: "grep hey hey.txt" }),
+      toolCallTurn("define_check", { name: "says hey", command: "grep hey hey.txt || exit 99" }),
       toolCallTurn("finish", { status: "done", summary: "One check: hey.txt says hey." }),
     ]);
 
@@ -438,7 +439,7 @@ describe("independent verification", () => {
 
     const { result, mock, events } = await runTask(pair.check, [
       toolCallTurn("define_check", { name: "already there", command: "test -f environment/environment.toml" }),
-      toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt" }),
+      toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt || exit 99" }),
       toolCallTurn("finish", { status: "done", summary: "Two checks." }),
     ]);
 
@@ -472,7 +473,7 @@ describe("independent verification", () => {
 
   it("an implementation that rewrites its check file to pass is refused by the ownership gate before the merge", async () => {
     const goodbye = await plannedPair("Write bye.txt");
-    const original = "grep goodbye bye.txt\n";
+    const original = "grep goodbye bye.txt || exit 99\n";
     await new TaskCheckRepository(db).append({
       projectId,
       taskId: goodbye.implementation.id,
@@ -548,7 +549,7 @@ describe("post-merge regression suite", () => {
   });
 
   it("a merge that breaks an earlier task's stored check fails naming that task and check, as this task's regression; nothing merged", async () => {
-    const greet = await checkedPair("Write greet.txt", { name: "greets", command: "grep hi greet.txt" });
+    const greet = await checkedPair("Write greet.txt", { name: "greets", command: "grep hi greet.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const { result, events } = await runTask(greet.implementation, [
@@ -559,7 +560,7 @@ describe("post-merge regression suite", () => {
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain(`REGRESSION: earlier task ${hello.implementation.id}'s checks revision 1`);
-    expect(result.detail).toContain('check "says hello" FAILED: exited 1');
+    expect(result.detail).toContain('check "says hello" FAILED: exited 99');
     expect(result.detail).toContain("the regression is this task's");
     // Its own check and the environment's test passed: only the regression failed it.
     expect(result.detail).toContain('Check "greets": PASSED');
@@ -573,7 +574,7 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 
   it("a merge that fails the environment's test fails naming it; nothing merged", async () => {
-    const notes = await checkedPair("Write notes.txt", { name: "notes", command: "grep note notes.txt" });
+    const notes = await checkedPair("Write notes.txt", { name: "notes", command: "grep note notes.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const { result } = await runTask(notes.implementation, [
@@ -592,7 +593,7 @@ describe("post-merge regression suite", () => {
 
   // s-independent-verify-m1 C2: the task's own stored check failing on its merge fails it; Z0 merges nothing.
   it("a merge on which the task's own stored check fails fails the task, not as a regression; nothing merged", async () => {
-    const sun = await checkedPair("Write sun.txt", { name: "shines", command: "grep sun sun.txt" });
+    const sun = await checkedPair("Write sun.txt", { name: "shines", command: "grep sun sun.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const { result, events } = await runTask(sun.implementation, [
@@ -601,7 +602,7 @@ describe("post-merge regression suite", () => {
     ]);
 
     expect(result.status).toBe("failed");
-    expect(result.detail).toContain('check "shines" FAILED: exited 1');
+    expect(result.detail).toContain('check "shines" FAILED: exited 99');
     expect(result.detail).not.toContain("REGRESSION");
     expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed" });
     expect(events.some((e) => e.event === "task_completed")).toBe(false);
@@ -613,7 +614,7 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 
   it("a merge that passes the environment's test, every earlier task's checks and its own is merged", async () => {
-    const wave = await checkedPair("Write wave.txt", { name: "waves", command: "grep wave wave.txt" });
+    const wave = await checkedPair("Write wave.txt", { name: "waves", command: "grep wave wave.txt || exit 99" });
 
     const { result, events } = await runTask(wave.implementation, [
       toolCallTurn("write_file", { path: "wave.txt", content: "wave\n" }),
@@ -635,7 +636,7 @@ describe("post-merge regression suite", () => {
   it("an earlier task Completed with no stored check is named as not re-run, never a block; the merge is decided by the rest", async () => {
     const legacy = await plannedPair("Write legacy.txt");
     await markCompleted(legacy.implementation.id);
-    const tide = await checkedPair("Write tide.txt", { name: "tides", command: "grep tide tide.txt" });
+    const tide = await checkedPair("Write tide.txt", { name: "tides", command: "grep tide tide.txt || exit 99" });
 
     const { result, events } = await runTask(tide.implementation, [
       toolCallTurn("write_file", { path: "tide.txt", content: "tide\n" }),
@@ -656,7 +657,7 @@ describe("post-merge regression suite", () => {
   // docs/investigations/second-run-2026-10-14.md N2 (no exit from a wrong check) and N3 (a retry judged
   // only on its own uncommitted diff).
   it("a disputed check ends the attempt as disputed with the work kept; a re-dispatch that finds it done on the branch runs the gates", async () => {
-    const reef = await checkedPair("Write reef.txt", { name: "reefs", command: "grep reef reef.txt" });
+    const reef = await checkedPair("Write reef.txt", { name: "reefs", command: "grep reef reef.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const first = await runTask(reef.implementation, [
@@ -672,7 +673,7 @@ describe("post-merge regression suite", () => {
       checksOf: reef.implementation.id,
       checkTaskId: reef.check.id,
       revision: 1,
-      check: { name: "reefs", command: "grep reef reef.txt" },
+      check: { name: "reefs", command: "grep reef reef.txt || exit 99" },
       reason: "the check reads the wrong file",
     });
     expect(first.result.evidence).toContain('Check "reefs"');
@@ -693,19 +694,19 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 
   it("a re-dispatch whose branch holds no change against main and that edits nothing still fails as no changes", async () => {
-    const empty = await checkedPair("Write empty.txt", { name: "empties", command: "grep empty empty.txt" });
+    const empty = await checkedPair("Write empty.txt", { name: "empties", command: "grep empty empty.txt || exit 99" });
 
     const { result } = await runTask(empty.implementation, [toolCallTurn("finish", { status: "done", summary: "Nothing to do." })]);
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("the task branch holds no change against main");
-    expect(result.detail).toContain('check "empties" FAILED: exited 2');
+    expect(result.detail).toContain('check "empties" FAILED: exited 99');
   }, 300_000);
 
   // Fourth run N13: work an earlier task delivered beyond its scope parked the later task for the
   // operator. ADR-074 addendum 2 d74 A: the sweep before dispatch closes it with no implementer.
   it("its checks and the regression suite pass on main itself: completed as already delivered at main before any model call, nothing merged", async () => {
-    const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt" });
+    const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const { result, events, mock } = await runTask(again.implementation, []);
@@ -743,7 +744,7 @@ describe("post-merge regression suite", () => {
     expect(await git("show", `${mainBefore}:hello.txt`)).toBe("hello");
 
     const authored = await runTask({ ...later.check, attempt: 2, dispatchCount: 1 }, [
-      toolCallTurn("define_check", { name: "says hello", command: "grep hello hello.txt" }),
+      toolCallTurn("define_check", { name: "says hello", command: "grep hello hello.txt || exit 99" }),
       toolCallTurn("finish", { status: "done", summary: "One check: hello.txt says hello." }),
     ]);
 
@@ -762,7 +763,7 @@ describe("post-merge regression suite", () => {
   }, 600_000);
 
   it("a check author finishing blocked because its task is delivered completes when Z0 finds that task's checks and every suite pass on main", async () => {
-    const delivered = await checkedPair("Say hello", { name: "hello again", command: "grep hello hello.txt" });
+    const delivered = await checkedPair("Say hello", { name: "hello again", command: "grep hello hello.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
 
     const { result, events } = await runTask({ ...delivered.check, attempt: 2, dispatchCount: 1 }, [
@@ -777,7 +778,7 @@ describe("post-merge regression suite", () => {
   }, 300_000);
 
   it("a check author finishing blocked whose task is not on main stays blocked, with what Z0 found", async () => {
-    const missing = await checkedPair("Write missing.txt", { name: "missing", command: "grep missing missing.txt" });
+    const missing = await checkedPair("Write missing.txt", { name: "missing", command: "grep missing missing.txt || exit 99" });
 
     const { result } = await runTask({ ...missing.check, attempt: 2, dispatchCount: 1 }, [
       toolCallTurn("finish", { status: "blocked", summary: "It is already there.", blockedReason: "The task is already delivered." }),
@@ -791,7 +792,7 @@ describe("post-merge regression suite", () => {
   // ADR-074 addendum 2 d74 D: a merged task's check blocking this merge could only be read as this
   // task's regression; the implementer may now dispute it, which reopens that check's own check task.
   it("an implementer disputes a merged task's check by that task's id: the dispute names that task's check task", async () => {
-    const echo = await checkedPair("Write echo.txt", { name: "echoes", command: "grep echo echo.txt" });
+    const echo = await checkedPair("Write echo.txt", { name: "echoes", command: "grep echo echo.txt || exit 99" });
 
     const { result, mock } = await runTask(echo.implementation, [
       toolCallTurn("dispute_check", { name: "says hello", task: hello.implementation.id, reason: "echo.txt must replace hello.txt, as the vision says" }),

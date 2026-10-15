@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
 import type { Cell } from "@ashara/execution-infra";
+import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { CheckRun } from "@ashara/workplace";
 import { targetRepo } from "./host-git.js";
 import {
@@ -27,11 +28,17 @@ const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "
 // The 30fb60d5 review (b): a check that timed out on main was kept as "fails on main". ADR-074
 // addendum 2 d74 A: one rule for every authoring, on the plan's foundation.
 describe("the red-run rule", () => {
-  test("a check is rejected only when it reaches no verdict on the foundation", () => {
-    expect(redRunProblem(run(1, false))).toBeNull();
+  // V7 (lessons digest 2026-10-14): a red run that counted any non-zero exit as decisive accepted
+  // "nothing builds" as "the work is missing". Only the check's own verdict exit is decisive.
+  test("a check is kept only when it passes or states the behaviour missing by its verdict exit", () => {
     expect(redRunProblem(run(0, false))).toBeNull();
+    expect(redRunProblem(run(CHECK_MISSING_EXIT, false))).toBeNull();
     expect(redRunProblem(run(127, false))).toContain("cannot be run");
     expect(redRunProblem(run(126, false))).toContain("cannot be run");
+  });
+
+  test.each([1, 2, 101])("exit %s on the foundation is a step of the check failing before its verdict: rejected", (exitCode) => {
+    expect(redRunProblem(run(exitCode, false))).toContain(`it exited ${exitCode} on the foundation, not ${CHECK_MISSING_EXIT}`);
   });
 
   test.each([
@@ -43,10 +50,12 @@ describe("the red-run rule", () => {
   });
 
   test("the set holds only with at least one decisive failure on the foundation", () => {
-    expect(redRunSetProblem([run(0, false), run(1, false)])).toBeNull();
+    expect(redRunSetProblem([run(0, false), run(CHECK_MISSING_EXIT, false)])).toBeNull();
     expect(redRunSetProblem([run(0, false), run(0, false)])).toContain("no check of the set fails on the foundation");
     expect(redRunSetProblem([run(0, false), run(127, false)])).toContain("no check of the set fails on the foundation");
-    expect(redRunSetProblem([run(1, true)])).toContain("no check of the set fails on the foundation");
+    // A build that fails on the foundation is not the task's work missing.
+    expect(redRunSetProblem([run(0, false), run(1, false)])).toContain("no check of the set fails on the foundation");
+    expect(redRunSetProblem([run(CHECK_MISSING_EXIT, true)])).toContain("no check of the set fails on the foundation");
   });
 });
 
@@ -70,9 +79,11 @@ describe("define_check's record", () => {
       kind: "ran",
       run: syntax,
       timeoutSeconds: 30,
-      rejection: null,
+      // A check broken by its own syntax never reached its verdict: the author is told so at once.
+      rejection: expect.stringContaining(`it exited 2 on the foundation, not ${CHECK_MISSING_EXIT}`),
       holdsAlready: false,
     });
+    expect(redRunPreview({ kind: "ran", runs: [run(CHECK_MISSING_EXIT, false)] }, 30, "/d")).toMatchObject({ rejection: null, holdsAlready: false });
     expect(redRunPreview({ kind: "ran", runs: [run(0, false)] }, 30, "/d")).toMatchObject({ rejection: null, holdsAlready: true });
     expect(redRunPreview({ kind: "ran", runs: [run(1, true)] }, 30, "/d")).toMatchObject({ rejection: expect.stringContaining("timed out"), holdsAlready: false });
     expect(redRunPreview({ kind: "files_refused", detail: "link" }, 30, "/d")).toEqual({

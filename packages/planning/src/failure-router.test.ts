@@ -13,41 +13,24 @@ function makeInput(overrides: Partial<FailureRouteInput> = {}): FailureRouteInpu
 }
 
 describe("FailureRouter", () => {
-  describe("TREE_REGRESSION — zero-replan bound", () => {
-    test("terminates on first occurrence regardless of remaining replan budget", () => {
-      const router = new FailureRouter(3);
-      // priorAttempts=1, maxReplan=3 — normally this would replan
-      const decision = router.route(makeInput({
-        priorAttempts: 1,
-        category: "TREE_REGRESSION",
-      }));
-      expect(decision.action).toBe("abandon");
-      expect(decision).toMatchObject({
-        action: "abandon",
-        attempts: 1,
-      });
+  // Lessons digest P6: abandoning on the first tree regression gave up work that may have been
+  // correct and left the broken merged tree with no repair path. The next attempt starts on main
+  // merged into its branch, where it can attribute and repair the failure; the replan bound holds.
+  describe("TREE_REGRESSION — repaired on the merged tree, bounded", () => {
+    test("a first tree regression is replanned, carrying the failure forward", () => {
+      const failure = { detail: "Post-merge verify failed: test exited 1", raw: {} };
+      const decision = new FailureRouter(2).route(makeInput({ priorAttempts: 1, category: "TREE_REGRESSION", failure }));
+      expect(decision).toEqual({ action: "replan", attempt: 2, failure });
     });
 
-    test("terminates even with zero prior attempts", () => {
-      const router = new FailureRouter(2);
-      const decision = router.route(makeInput({
-        priorAttempts: 0,
-        category: "TREE_REGRESSION",
-      }));
-      // Must not replan — the tree is broken, not the task
-      expect(decision.action).toBe("abandon");
+    test("at the replan bound it abandons, naming the tree regression", () => {
+      const decision = new FailureRouter(2).route(makeInput({ priorAttempts: 2, category: "TREE_REGRESSION" }));
+      expect(decision).toMatchObject({ action: "abandon", attempts: 2 });
+      if (decision.action === "abandon") expect(decision.reason).toContain("tree regression");
     });
 
-    test("abandon reason mentions tree regression", () => {
-      const router = new FailureRouter(2);
-      const decision = router.route(makeInput({
-        priorAttempts: 1,
-        category: "TREE_REGRESSION",
-      }));
-      expect(decision.action).toBe("abandon");
-      if (decision.action === "abandon") {
-        expect(decision.reason).toContain("tree regression");
-      }
+    test("a zero bound abandons the first tree regression", () => {
+      expect(new FailureRouter(0).route(makeInput({ priorAttempts: 0, category: "TREE_REGRESSION" })).action).toBe("abandon");
     });
   });
 
