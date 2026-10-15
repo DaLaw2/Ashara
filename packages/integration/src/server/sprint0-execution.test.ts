@@ -23,6 +23,7 @@ import {
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import { StackChoiceReports } from "@ashara/engagement";
+import type { StackChoiceStore } from "@ashara/engagement";
 import type { SessionStore, TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
@@ -434,7 +435,10 @@ describe("Sprint 0", () => {
     expect(recorded).toEqual([{ version: build.version }]);
 
     // The stack choice: an Inferred assumption in vision v2 and one report, however often the Liaison runs.
-    const liaison = new StackChoiceReports(createStackChoiceStore(db));
+    // The scan reads every project: narrowed to this one, a project another file is running is neither reported nor blocked here.
+    const store = createStackChoiceStore(db);
+    const ours: StackChoiceStore = { ...store, dueStackChoices: async () => (await store.dueStackChoices()).filter((due) => due.projectId === projectId) };
+    const liaison = new StackChoiceReports(ours);
     expect(await liaison.runPending()).toEqual([{ kind: "recorded", projectId, visionVersion: 2 }]);
     expect(await liaison.runPending()).toEqual([]);
     const vision = await new VisionRepository(db).getCurrent(projectId);
