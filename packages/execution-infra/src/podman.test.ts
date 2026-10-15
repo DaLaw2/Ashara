@@ -318,7 +318,7 @@ describe("PodmanSubstrate argv", () => {
     expect(requests[2]?.args[4]).toContain("ashara_sweep");
   });
 
-  it("a sweep that left a process alive, an exec without a session of its own, or one that cannot run argv is CellExecFailed", async () => {
+  it("a sweep that left a process alive, an exec in the init's session, or one that cannot run argv is CellExecFailed", async () => {
     const { substrate } = recorder([
       ok(ID),
       { ...ran("", 0), statusReport: "unswept 0\n" },
@@ -328,7 +328,7 @@ describe("PodmanSubstrate argv", () => {
     ]);
     const cell = await substrate.createCell(spec);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/still alive after the wrapper's sweep/);
-    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/not a session of its own.*not run/);
+    await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/cannot be told from the session of the cell's init.*not run/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/could not run the command; the command was not run/);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toThrow(/status report is malformed/);
   });

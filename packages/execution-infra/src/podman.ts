@@ -70,19 +70,25 @@ export function cellRunBoundMs(execTimeoutsSeconds: readonly number[]): number {
 /**
  * Shell functions every exec wrapper and the standalone sweep share. They use only the POSIX
  * shell's builtins (read, set, case, kill, globbing) and the cell's /proc, never a tool the image
- * might lack. `ashara_stat DIR` reads DIR/stat into ashara_state and ashara_sid (the comm field may
- * hold ") ", so the longest prefix through ") " is dropped). `ashara_sweep` SIGKILLs every live
- * process outside the session of the cell's init (the init and its keepalive), except the
- * sweeping shell itself, round after round until none is left; it fails after 50 rounds.
+ * might lack. `ashara_stat DIR` reads DIR/stat into ashara_state, ashara_ppid and ashara_sid (the
+ * comm field may hold ") ", so the longest prefix through ") " is dropped). `ashara_sweep` SIGKILLs
+ * every live process outside the session of the cell's init (the init and its keepalive), except
+ * the sweeping shell and its ancestors in the cell, round after round until none is left; it fails
+ * after 50 rounds. The ancestors are what runs the sweep, never what the command started: a process
+ * cannot become an ancestor of one that already runs. podman's exec process has none (its parent
+ * is outside the cell); a shell that runs the wrapper as its child has one, and killing it would
+ * lose the exec's own exit.
  */
 const SWEEP_FUNCTIONS = [
-  'ashara_stat() { ashara_l=; read -r ashara_l 2>/dev/null < "$1/stat" || return 1; set -- ${ashara_l##*) }; ashara_state=$1; ashara_sid=$4; }',
+  'ashara_stat() { ashara_l=; read -r ashara_l 2>/dev/null < "$1/stat" || return 1; set -- ${ashara_l##*) }; ashara_state=$1; ashara_ppid=$2; ashara_sid=$4; }',
   "ashara_sweep() {",
   "  ashara_stat /proc/1 || return 1; ashara_keep=$ashara_sid; ashara_round=0",
+  '  ashara_spare=" $$ "; ashara_p=$$',
+  '  while ashara_stat "/proc/$ashara_p" && [ "$ashara_ppid" -gt 1 ]; do ashara_p=$ashara_ppid; ashara_spare="$ashara_spare$ashara_p "; done',
   '  while [ "$ashara_round" -lt 50 ]; do',
   "    ashara_live=0",
   "    for ashara_d in /proc/[0-9]*; do",
-  '      [ "$ashara_d" = "/proc/$$" ] && continue',
+  '      case $ashara_spare in *" ${ashara_d#/proc/} "*) continue;; esac',
   '      ashara_stat "$ashara_d" || continue',
   "      case $ashara_state in Z|X|x) continue;; esac",
   '      [ "$ashara_sid" = "$ashara_keep" ] && continue',
@@ -97,11 +103,16 @@ const SWEEP_FUNCTIONS = [
 ];
 
 /**
- * The runtime starts every exec in a session of its own (observed with crun under podman 5.8.2:
- * an exec's first process has session id = its pid), apart from the init's. The sweep relies on
- * that, so the wrapper checks it before running anything and fails closed otherwise.
+ * The sweep spares the init's session, so what the command starts must never be in it: the wrapper
+ * runs nothing unless its own session is not the init's. A process leaves its session only for a
+ * new one it leads, whose id is its own pid and so never the init's; everything the command starts
+ * is therefore outside the init's session too. Runtimes differ in which session that is: crun 1.27
+ * (podman 5.8.2) starts an exec in a session of its own, its id the exec's pid; crun 1.14.1 and 1.17
+ * leave it in the caller's session, outside the cell's pid namespace, so /proc shows session id 0
+ * while the init's is 1. Both are apart from the init's. A session id 0 is refused when the init's
+ * is 0 too, since two sessions outside the cell cannot be told apart.
  */
-const ISOLATION_CHECK = 'ashara_stat "/proc/$$" && [ "$ashara_sid" = "$$" ] && [ "$$" != 1 ]';
+const ISOLATION_CHECK = 'ashara_stat /proc/1 && ashara_init_sid=$ashara_sid && ashara_stat "/proc/$$" && [ "$ashara_sid" != "$ashara_init_sid" ] && [ "$$" != 1 ]';
 
 /**
  * Every exec runs `sh -c EXEC_WRAPPER ashara-exec <grace> <seconds>` with podman's
@@ -123,8 +134,8 @@ const ISOLATION_CHECK = 'ashara_stat "/proc/$$" && [ "$ashara_sid" = "$$" ] && [
  * wrapper sweeps the cell: every process outside the init's session is killed, whatever session
  * or group it moved to. A cell's execs are serialized (PodmanCell.exec), so nothing a sweep
  * kills belongs to another live exec: the cell holds only what runs now. A sweep that leaves a
- * process alive reports `unswept <status>`; an exec that is not its own session reports
- * `unisolated` and runs nothing; one that cannot run argv (no timeout(1) on the PATH, no argv in
+ * process alive reports `unswept <status>`; an exec whose session cannot be told from the init's
+ * reports `unisolated` and runs nothing; one that cannot run argv (no timeout(1) on the PATH, no argv in
  * its environment) reports `unrunnable` and runs nothing. A wrapper that dies before it reports,
  * killed by the command it runs or by the loss of the cell, leaves no report: PodmanCell tells the
  * two apart by sweeping the cell from a fresh exec.
@@ -133,7 +144,7 @@ const ARGC_VARIABLE = "ASHARA_ARGC";
 const ARG_VARIABLE_PREFIX = "ASHARA_ARG_";
 const EXEC_WRAPPER = [
   ...SWEEP_FUNCTIONS,
-  `${ISOLATION_CHECK} || { echo "ashara-exec: the exec is not a session of its own in the cell" >&2; printf 'unisolated\\n' >&3; exit 125; }`,
+  `${ISOLATION_CHECK} || { echo "ashara-exec: the exec's session cannot be told from the session of the cell's init" >&2; printf 'unisolated\\n' >&3; exit 125; }`,
   "command -v timeout >/dev/null 2>&1 || { echo \"ashara-exec: timeout(1) is not on the cell's PATH\" >&2; printf 'unrunnable\\n' >&3; exit 127; }",
   String.raw`case $ASHARA_ARGC in ''|*[!0-9]*|0) echo "ashara-exec: no argv in ASHARA_ARGC" >&2; printf 'unrunnable\n' >&3; exit 125;; esac`,
   'k=$1; t=$2; set --; ashara_i=0',
@@ -495,8 +506,8 @@ class PodmanCell implements Cell {
         argv,
         exitCode,
         result.stderr,
-        "the exec is not a session of its own in the cell, so what the command would start could not be told " +
-          "from the cell's own processes; the command was not run",
+        "the exec's session cannot be told from the session of the cell's init, so what the command would start " +
+          "could not be told from the cell's own processes; the command was not run",
       );
     }
     if (report.kind === "unrunnable") {

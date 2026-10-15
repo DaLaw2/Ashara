@@ -15,6 +15,8 @@ import {
   createCellBackend,
   loadBaseCell,
   runHostGit,
+  spawnProcess,
+  type ProcessRunner,
 } from "@ashara/execution-infra";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
@@ -296,6 +298,54 @@ describe("cell on real podman", () => {
 
       const after = await cell.exec(["sh", "-c", "echo usable"], { timeoutSeconds: 10 });
       expect(after).toMatchObject({ exitCode: 0, stdout: "usable\n", timedOut: false });
+    } finally {
+      await cell.teardown();
+    }
+  }, 60_000);
+
+  // CI's podman 4.9.3 (crun) starts an exec in the caller's session, outside the cell, where
+  // podman 5.8.2 (crun 1.27) starts it in a session of its own; the wrapper refused the former. Here
+  // the wrapper runs as the child of a shell, so it leads no session on any runtime, and that shell
+  // must outlive the wrapper's sweep for the exec's exit to arrive.
+  it.each([
+    ["alpine (busybox)", ALPINE_IMAGE],
+    ["debian (dash, GNU timeout)", "base"],
+  ])("on %s a wrapper that leads no session runs the command, sweeps what it left and spares the shell that runs it", async (_name, image) => {
+    const marker = "ashara-test-trampoline";
+    const trampoline: ProcessRunner = (request) => {
+      const at = request.args.indexOf("-c");
+      const wrapped =
+        request.args[0] === "exec" && at > 0 && request.args[at - 1] === "sh"
+          ? [...request.args.slice(0, at + 1), `sh -c "$0" "$@"; exit $? # ${marker}`, ...request.args.slice(at + 1)]
+          : request.args;
+      return spawnProcess({ ...request, args: wrapped });
+    };
+    const nested = new PodmanSubstrate({ podmanPath: "podman", mountRoot, runner: trampoline });
+    const cell = await nested.createCell({
+      image: image === "base" ? (await loadBaseCell()).image : image,
+      project: "proj-cell-test",
+      task: `${task}-nested`,
+      role: "worker",
+      instance,
+      mount: { hostPath: workspace },
+    });
+    try {
+      // The command's session is the wrapper's: led by the trampoline shell, or outside the cell.
+      const session =
+        'read -r l < /proc/$$/stat; set -- ${l##*) }; sid=$4; if [ "$sid" = 0 ]; then echo outside; ' +
+        `elif tr '\\0' ' ' < "/proc/$sid/cmdline" | grep -qF '${marker.slice(0, 6)}''${marker.slice(6)}'; then echo trampoline; ` +
+        'else echo "other $sid"; fi; sleep 43 & setsid sleep 44 & echo started';
+      const ran = await cell.exec(["sh", "-c", session], { timeoutSeconds: 10 });
+      expect(ran, ran.stderr).toMatchObject({ exitCode: 0, timedOut: false, statusLost: false });
+      expect(ran.stdout).toMatch(/^(trampoline|outside)\nstarted\n$/);
+      const { stdout: left } = await run("podman", ["top", cell.id, "args"]);
+      expect(left).not.toMatch(/sleep 4[34]/);
+
+      const timed = await cell.exec(["sh", "-c", "sleep 45 & trap '' TERM; sleep 30"], { timeoutSeconds: 1 });
+      expect(timed).toMatchObject({ timedOut: true, statusLost: false });
+      const { stdout: afterTimeout } = await run("podman", ["top", cell.id, "args"]);
+      expect(afterTimeout).not.toMatch(/sleep (45|30)/);
+      expect(await cell.exec(["sh", "-c", "echo usable; exit 4"], { timeoutSeconds: 10 })).toMatchObject({ exitCode: 4, stdout: "usable\n" });
     } finally {
       await cell.teardown();
     }
