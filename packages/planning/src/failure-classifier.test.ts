@@ -84,6 +84,16 @@ describe("classifyFailure", () => {
     expect(classifyFailure(e)).toBe("MERGE_CONFLICT");
   });
 
+  // w12b D2: main moved again under a resolved conflict is a fresh conflict; markers left are the attempt's own.
+  test("a conflict after the attempt was handed one is MERGE_CONFLICT; markers left are MERGE_CONFLICT_PERSISTS", () => {
+    expect(classifyFailure(envelope(layer("tentativeMergeAfterConflict", "merge conflict")))).toBe("MERGE_CONFLICT");
+    expect(classifyFailure(envelope(layer("conflictMarkersLeft", "markers left in f")))).toBe("MERGE_CONFLICT_PERSISTS");
+  });
+
+  test("MERGE_RETRY_UNPREPARED — prepareConflictRetry", () => {
+    expect(classifyFailure(envelope(layer("prepareConflictRetry", "merge-tree failed")))).toBe("MERGE_RETRY_UNPREPARED");
+  });
+
   test("SPAWN_FAILURE — tentativeMerge without conflict", () => {
     const e = envelope(layer("tentativeMerge", "merge failed: branch not found"));
     expect(classifyFailure(e)).toBe("SPAWN_FAILURE");

@@ -101,8 +101,17 @@ import {
   getChangedFiles,
   WorktreeCommitIncomplete,
 } from "./workspace.js";
-import type { WorkdirInfo } from "./workspace.js";
-import { branchExists, discardTaskBranch, taskBranchName } from "./merge.js";
+import type { PartialCommitOutcome, WorkdirInfo } from "./workspace.js";
+import {
+  ConflictRetryUnprepared,
+  branchExists,
+  conflictWithMain,
+  discardTaskBranch,
+  formatConflictForBrief,
+  stagedConflictMarkers,
+  taskBranchName,
+} from "./merge.js";
+import type { MainConflict } from "./merge.js";
 import type { KnowledgeSection, KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import type { SuiteReviewing } from "./suite-review.js";
 import { buildKnowledgeQueryText, renderKnowledgeContext, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
@@ -141,15 +150,18 @@ type EnvironmentStage =
   | "checkRedRun"
   | "deliveredCheckRun"
   | "ownershipGate"
+  | "conflictResolution"
   | "postMergeVerify"
   | "postMergeCheckRun";
 
 /**
  * What became of the agent's work when a dispatch ended without done: no agent ran; it is
- * committed on the task branch for the next dispatch; or, for a check task, discarded (nothing of a
- * check task is kept, its next attempt starts again from main).
+ * committed on the task branch for the next dispatch; for a check task, discarded (nothing of a
+ * check task is kept, its next attempt starts again from main); for an attempt handed a conflict
+ * with main, its unfinished merge is discarded with the worktree; or git refused the partial commit
+ * and the work is lost with the worktree.
  */
-type AgentWork = "none" | "kept" | "discarded";
+type AgentWork = "none" | "kept" | "discarded" | "merge-discarded" | { readonly lost: string };
 
 interface AgentPart {
   readonly output: AgentOutputJson | null;
@@ -158,12 +170,23 @@ interface AgentPart {
 
 const NO_AGENT: AgentPart = { output: null, agentWork: "none" };
 
-/** The agent's work as a dispatch that ran it leaves it, stated by its kind of work. */
-function agentWorkOf(work: DispatchWork): Exclude<AgentWork, "none"> {
-  return work.kind === "check-authoring" ? "discarded" : "kept";
+/** The agent's work as the partial commit left it: stated by what git did, never by the kind of work. */
+function agentWorkOf(partial: PartialCommitOutcome): Exclude<AgentWork, "none" | "discarded"> {
+  if (partial.committed) return "kept";
+  switch (partial.reason) {
+    case "no-changes":
+      return "kept";
+    case "merge-in-progress":
+      return "merge-discarded";
+    case "git-error":
+      return { lost: partial.message };
+  }
 }
 
 function describeAgentWork(work: AgentWork): string {
+  if (typeof work === "object") {
+    return `the agent's uncommitted work could not be committed (${work.lost}) and is discarded with the worktree; the task branch is as it was`;
+  }
   switch (work) {
     case "none":
       return "no agent ran and nothing executed";
@@ -171,6 +194,8 @@ function describeAgentWork(work: AgentWork): string {
       return "the agent's work is kept on the task branch";
     case "discarded":
       return "the check task's partial work is discarded; its next attempt starts again from main";
+    case "merge-discarded":
+      return "the attempt's merge of main is discarded uncommitted; the task branch is as it was and its next attempt merges main again";
   }
 }
 
@@ -992,6 +1017,11 @@ interface Dispatch {
   /** What the task cell, the red-run and gate cells and the post-merge verifier cell are started from. */
   readonly environment: DispatchEnvironment;
   readonly work: DispatchWork;
+  /**
+   * The conflict with main the attempt starts with: main merged into the task branch in its
+   * worktree, the merge staged with git's markers in these files (startMainMerge). Null otherwise.
+   */
+  readonly conflict: MainConflict | null;
 }
 
 /**
@@ -1224,9 +1254,26 @@ export class DevelopmentService {
       console.warn(`[${task.id}] contract load failed; dispatching without contract context:`, e);
     }
 
+    // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
+    // same files first, w12b D2), the attempt starts with main merged into it and the conflict in
+    // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
+    // that cannot be prepared fails the task for plan repair, never dispatching the branch unchanged.
+    const resumesBranch = plan.kind !== "check-authoring" && (await branchExists(targetProjectPath, taskBranchName(task.id)));
+    let conflict: MainConflict | null = null;
+    if (resumesBranch) {
+      try {
+        conflict = await conflictWithMain(targetProjectPath, task.id);
+      } catch (e) {
+        return await this.conflictUnprepared(task, sessionId, e);
+      }
+      if (conflict !== null) {
+        eventSink?.emit({ event: "merge_conflict_presented", taskId: task.id, attempt: task.attempt, mainCommit: conflict.mainCommit, files: conflict.files });
+      }
+    }
+
     let brief: AgentBrief;
     try {
-      brief = await this.buildBrief(task, targetProjectPath, contract, environment, plan);
+      brief = await this.buildBrief(task, targetProjectPath, contract, environment, plan, conflict);
     } catch (e) {
       // A missing intent is a PLANNING-INPUT gap, not an agent failure, so the
       // result is `blocked` with the lookup's own detail. The orchestrator
@@ -1292,13 +1339,13 @@ export class DevelopmentService {
           throw e;
         }
       } else {
-        const branch = taskBranchName(task.id);
-        workdir = (await branchExists(targetProjectPath, branch))
-          ? await createWorkdirForRetry(base, targetProjectPath, branch)
-          : await createWorkdir(base, targetProjectPath, branch);
+        workdir = resumesBranch
+          ? await createWorkdirForRetry(base, targetProjectPath, task.id, conflict)
+          : await createWorkdir(base, targetProjectPath, taskBranchName(task.id));
         work = plan;
       }
     } catch (e) {
+      if (e instanceof ConflictRetryUnprepared) return await this.conflictUnprepared(task, sessionId, e);
       const result = failedBeforeAgent(task, sessionId, "createWorkdir", e, `workdir creation failed for ${task.id}`);
       eventSink?.emit({
         event: "error",
@@ -1350,6 +1397,7 @@ export class DevelopmentService {
       sessionId,
       environment,
       work,
+      conflict,
     };
 
     try {
@@ -1587,6 +1635,7 @@ export class DevelopmentService {
     contract: ProjectContract | null,
     environment: DispatchEnvironment,
     plan: WorkPlan,
+    conflict: MainConflict | null,
   ): Promise<AgentBrief> {
     const taskSpec = task.taskSpec;
 
@@ -1615,6 +1664,7 @@ export class DevelopmentService {
     const specContext = acceptanceSection ? `${formattedTaskSpec}\n\n${acceptanceSection}` : formattedTaskSpec;
     let taskContext = specContext;
     if (plan.kind === "stored-checks") taskContext = `${specContext}\n\n${formatChecksForBrief(plan.stored)}`;
+    if (conflict !== null) taskContext = `${taskContext}\n\n${formatConflictForBrief(conflict)}`;
     if (plan.kind === "check-authoring") {
       const stored = await this.deps.checks.storedOfProject(task.projectId, plan.checkedTaskId);
       taskContext = `${specContext}\n\n${formatProjectChecksForCheckAuthor(stored)}\n\n${formatFoundationForCheckAuthor(plan.foundation, checkAreaOf(plan.checkedTaskId))}`;
@@ -1774,6 +1824,11 @@ export class DevelopmentService {
     // A check may need no file of its own, so a check task is judged by its checks, not its diff.
     if (d.work.kind === "check-authoring") return this.keepChecks(d, d.work, output);
 
+    if (d.conflict !== null) {
+      const unresolved = await this.conflictResolution(d, d.conflict, output);
+      if (unresolved !== null) return unresolved;
+    }
+
     // "No changes" is judged on the task branch against main (ADR-074 addendum 2 d65 d), not on this
     // attempt's own edits: a re-dispatch may find its work already committed there by an earlier
     // dispatch (endWithoutDone's partial-work commit) and rightly finish done without editing.
@@ -1809,7 +1864,7 @@ export class DevelopmentService {
       if (refused !== null) return refused;
     }
 
-    let finalizeDeps: FinalizeDeps;
+    let finalizeDeps: Omit<FinalizeDeps, "presentedConflict">;
     if (d.work.kind === "substrate") {
       const gate = await this.substrateGate(d, outcome.statement, output);
       if (gate.kind === "ended") return gate.result;
@@ -1835,7 +1890,7 @@ export class DevelopmentService {
       };
     }
 
-    const finalizeResult = await finalizeSuccess(finalizeDeps, task, targetProjectPath, task.attempt);
+    const finalizeResult = await finalizeSuccess({ ...finalizeDeps, presentedConflict: d.conflict }, task, targetProjectPath, task.attempt);
     if (!finalizeResult.success && finalizeResult.environmentFailure !== null) {
       // The merge was aborted and the branch kept: the verifier cell's substrate
       // failed, which is the operator's to fix, not a regression of the tree.
@@ -1876,7 +1931,7 @@ export class DevelopmentService {
       // The lesson carries what failed: which suite and which check, and whether it was a regression.
       const envelope: ErrorEnvelope = {
         outcome: "failed",
-        summary: `post-merge verify failed for ${task.id}:\n${finalizeResult.gateFailureContext}`,
+        summary: `${finalizeResult.failedStep === "merge" ? "merge into main failed" : "post-merge verify failed"} for ${task.id}:\n${finalizeResult.gateFailureContext}`,
         chain: gateChain,
         agentOutput: output,
       };
@@ -2222,6 +2277,56 @@ export class DevelopmentService {
         }),
       teardownCell: (cell) => this.teardownCell(task.id, cell),
     };
+  }
+
+  /**
+   * The task's conflict with main could not be prepared for this attempt (ConflictRetryUnprepared),
+   * or git could not even be asked: failed under prepareConflictRetry, which planning routes to plan
+   * repair. Nothing was dispatched; the branch is kept as it was.
+   */
+  private async conflictUnprepared(task: TaskDescriptor, sessionId: string, e: unknown): Promise<ExecutionResult> {
+    const result = failedBeforeAgent(task, sessionId, "prepareConflictRetry", e, `the conflict of ${task.id} with main could not be prepared`);
+    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
+    await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+    return result;
+  }
+
+  /**
+   * An attempt handed a conflict with main finished done: every conflicting file must be free of
+   * conflict markers before anything is committed. Markers left fail the attempt under
+   * conflictMarkersLeft with nothing committed (the merge is discarded with the worktree). Z0's git
+   * failing blocks for the operator. Null when the conflict is resolved.
+   */
+  private async conflictResolution(d: Dispatch, conflict: MainConflict, output: AgentOutputJson): Promise<ExecutionResult | null> {
+    const { task, workDir, targetProjectPath, sessionId } = d;
+    let left: string[];
+    try {
+      left = await stagedConflictMarkers(d.repo, conflict.files);
+    } catch (e) {
+      await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the conflict markers could not be read");
+      const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
+      return environmentBlocked(
+        {
+          task,
+          sessionId,
+          stage: "conflictResolution",
+          errorClass: fault.name,
+          message: fault.message,
+          chain: wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name }),
+          unavailable: `verification infrastructure (${fault.step})`,
+          output,
+          agentWork: "merge-discarded",
+        },
+        this.deps.eventSink,
+      );
+    }
+    this.deps.eventSink?.emit({ event: "merge_conflict_resolution", taskId: task.id, attempt: task.attempt, files: conflict.files, markersLeft: left });
+    if (left.length === 0) return null;
+    await cleanupWorkdir(workDir, targetProjectPath);
+    const summary = `the conflict of ${task.id} with main is not resolved: conflict markers are left in ${left.join(", ")}; nothing was committed or merged`;
+    const chain = wrapError("development", "conflictMarkersLeft", summary, { taskId: task.id, mainCommit: conflict.mainCommit, conflictFiles: conflict.files, markersLeft: left });
+    this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary });
+    return { status: "failed", detail: summary, output, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output } };
   }
 
   /**
@@ -3243,13 +3348,14 @@ export class DevelopmentService {
    */
   private async endWithoutDone(d: Dispatch, outcome: Outcome, output: AgentOutputJson): Promise<ExecutionResult> {
     const { task, staff, workDir, targetProjectPath, sessionId } = d;
+    let agentWork: Exclude<AgentWork, "none">;
     if (d.work.kind === "check-authoring") {
       // Nothing of a check task is kept for a retry: the next attempt starts again from main.
       await discardCheckWorkdir(workDir, targetProjectPath, d.work.branch);
+      agentWork = "discarded";
     } else {
-      await commitPartialWork(
-        d.repo,
-        `ashara: partial work for retry (task ${task.id}, dispatch ${task.attempt}, ${outcome.kind})`,
+      agentWork = agentWorkOf(
+        await commitPartialWork(d.repo, `ashara: partial work for retry (task ${task.id}, dispatch ${task.attempt}, ${outcome.kind})`),
       );
       await cleanupWorkdir(workDir, targetProjectPath);
     }
@@ -3291,14 +3397,14 @@ export class DevelopmentService {
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
           unavailable,
           output,
-          agentWork: agentWorkOf(d.work),
+          agentWork,
         },
         this.deps.eventSink,
       );
     }
 
     if (outcome.kind === "refused") {
-      const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; ${describeAgentWork(agentWorkOf(d.work))}`;
+      const summary = `attempt stopped after ${outcome.turnsUsed} turn(s): ${outcome.detail}; ${describeAgentWork(agentWork)}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({ event: "task_refused", taskId: task.id, attempt: task.attempt, errorClass: outcome.error.name, reason: summary });
       return {
@@ -3321,7 +3427,7 @@ export class DevelopmentService {
     // reason this process's shutdown signal was aborted with. Any other cancellation stays a failure.
     const shutdown = this.deps.shutdownSignal;
     if (outcome.kind === "cancelled" && shutdown.aborted && outcome.reason === shutdown.reason) {
-      const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); ${describeAgentWork(agentWorkOf(d.work))}`;
+      const summary = `attempt interrupted by shutdown after ${outcome.turnsUsed} turn(s); ${describeAgentWork(agentWork)}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({ event: "task_interrupted", taskId: task.id, attempt: task.attempt, turns: outcome.turnsUsed });
       return {
@@ -3348,7 +3454,7 @@ export class DevelopmentService {
       const whose = checksOf === task.id ? "" : ` of merged task ${checksOf}`;
       const summary =
         `check ${JSON.stringify(check.name)}${whose} (revision ${stored.revision}, check task ${stored.checkTaskId}) disputed ` +
-        `after ${outcome.turnsUsed} turn(s): ${outcome.reason}; ${describeAgentWork(agentWorkOf(d.work))}`;
+        `after ${outcome.turnsUsed} turn(s): ${outcome.reason}; ${describeAgentWork(agentWork)}`;
       console.warn(`[${task.id}] ${summary}`);
       this.deps.eventSink?.emit({
         event: "check_disputed",

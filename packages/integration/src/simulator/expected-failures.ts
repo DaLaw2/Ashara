@@ -53,27 +53,44 @@ const B8 = "B8 (baseline §3, §7.8; task t-begin-failure-leaks-connection): a f
  * Two projects fail the same keys at a cap of $10 (§7.8's soak) and at the tape's own cap
  * (`--projects 2` alone, baseline §7.10), so each is listed in both modes.
  */
+/*
+ * Re-rolled 2026-10-15 (t-merge-conflict-rebase, w12b D2): a retry now asks git whether its branch
+ * conflicts with main, and every host git call is a seam the interleaver turns at and a crash can
+ * land on, so B5's crash window moved between seeds and projects. Observed on that change with
+ * `simulate.ts --projects 2 --cap 10` over seeds 1-85 and `--projects 2` over seeds 1-85: seeds 28,
+ * 39 and 82 now fail B5's key, 46 and 56 fail it in project 1 instead of project 2, 57 no longer
+ * fails, and 77 fails it at the tape's cap only; each statement is B5's ("main commit ... has no item
+ * Completed recording it (the item is Pending)"). Where in the merge each new crash lands: unverified.
+ */
 const TWO_PROJECT_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
+  { seed: 28, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 31, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
-  { seed: 46, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: `${B5}; the crash is at commitMerge's rev-parse HEAD, right after the commit` },
-  { seed: 56, keys: ["I7:p2:unrecorded:Define and commit the project environment"], baseline: B5 },
-  { seed: 57, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 39, keys: ["I7:p2:unrecorded:Set up the product's layout", "I7:unrecorded:Set up the product's layout"], baseline: B5 },
+  { seed: 46, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
+  { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 78, keys: ["I7:p2:unrecorded:Set up the product's layout"], baseline: B5 },
+  { seed: 82, keys: ["I7:p2:unrecorded:Define and commit the project environment", "I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 75, keys: ["I1:leaked-connection:begin"], baseline: B8 },
   // Named at the sixth restart since baseline §7.10 (the fifth in §7.9).
   { seed: 59, keys: ["I7:orphan:Define and commit the project environment:6"], baseline: B3 },
+];
+/** Two projects at the tape's own cap only (`--projects 2`): at $10 these seeds end with no violation. */
+const TWO_PROJECT_TAPE_CAP_FAILURES: ReadonlyArray<Omit<ExpectedFailure, "projects" | "capUsd">> = [
+  { seed: 77, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
 ];
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
   { seed: 7, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 56, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
   { seed: 57, keys: ["I7:unrecorded:Define and commit the project environment"], baseline: B5 },
-  {
-    seed: 45,
-    keys: ["I7:unrecorded:Define and commit the project environment"],
-    baseline: `${B5}; the crash is on a host git call inside the merge, after its commit and before "merge committed" is logged (baseline §7.10)`,
-  },
+  // Seed 45 (B5, the crash on a host git call inside the merge, baseline §7.10) is removed on
+  // t-merge-conflict-rebase: `simulate.ts --seeds 30 --start 31` reported it listed but not failed,
+  // with the re-roll above; B5 is not fixed. Seeds 81 and 89 fail B5's key with this change and on
+  // master 273cc7b0's development and planning sources alike (observed, `simulate.ts --seeds 1
+  // --start 81` and `--start 89` on each, 2026-10-15): unlisted before, not introduced by it.
+  { seed: 81, keys: ["I7:unrecorded:Deliver b1, b2 [sim t1]"], baseline: B5 },
+  { seed: 89, keys: ["I7:unrecorded:Set up the product's layout"], baseline: B5 },
   ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2, capUsd: 10 }) as const),
-  ...TWO_PROJECT_FAILURES.map((entry) => ({ ...entry, projects: 2 }) as const),
+  ...[...TWO_PROJECT_FAILURES, ...TWO_PROJECT_TAPE_CAP_FAILURES].map((entry) => ({ ...entry, projects: 2 }) as const),
   // Seed 18 at the tape's own cap (B5, baseline §7.10) is removed on the rebase onto bbd7a976: it
   // ends halted spend_cap with no violation there, the same on two runs; B5 is not fixed, the
   // seed no longer reaches its window (which of master's three commits re-rolled it: unverified).

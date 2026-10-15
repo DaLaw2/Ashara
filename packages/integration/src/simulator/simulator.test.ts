@@ -222,13 +222,17 @@ describe("lifecycle simulator, fast tier", () => {
   // the stand-in plan's lines name their sources (ADR-074 addendum 2 d89 A): ledger-read-first over
   // seeds 1-80 at $10 then caught it on none, and at $6 on seed 7 alone, which fails I5:over-committed
   // alone and passes clean (observed, scan of 2026-10-14). Why the change moved the window: unverified.
+  // Seed 96 at $6 since a retry asks git whether its branch conflicts with main (w12b D2): every host
+  // git call is a seam the interleaver turns at, and seed 7 then no longer met the window (observed,
+  // scan of 2026-10-15: ledger-read-first over seeds 1-80 at $6 and 1-60 at $10 caught it on none
+  // alone; over 81-119 at $6, seed 96 fails I5:over-committed alone and passes clean).
   it("catches an admission that counts a just-recorded call in neither the spend nor the in-flight sum", async () => {
     // The race needs two admissions to meet near the cap, so it hangs on the calls' estimated prices:
     // the check author's brief and tools grew (W11 D4) and seed 23 at $10 no longer met it.
     const shared = { projects: 2, capUsd: 6 } as const;
-    const clean = await seeded(7, undefined, shared);
+    const clean = await seeded(96, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
-    const planted = await seeded(7, "ledger-read-first", shared);
+    const planted = await seeded(96, "ledger-read-first", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

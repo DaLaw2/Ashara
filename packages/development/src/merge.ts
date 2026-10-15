@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { runHostGit } from "@ashara/execution-infra";
-import type { TaskDescriptor } from "./execution-service.js";
+import type { HostRepo } from "@ashara/execution-infra";
 import { targetRepo } from "./host-git.js";
 
 /** execFile's rejection carries the child's stderr as a string; anything else carries none. */
@@ -160,9 +160,9 @@ export async function abortMerge(targetPath: string): Promise<void> {
  * filesystem: Z0 reads a target by path only through tree-read.ts. `rev-parse -q --verify` exits 1
  * with no output for a missing ref; any other failure is no answer and throws.
  */
-export async function mergeInProgress(targetPath: string): Promise<boolean> {
+export async function mergeInProgress(repo: HostRepo): Promise<boolean> {
   try {
-    await runHostGit(targetRepo(targetPath), ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+    await runHostGit(repo, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     return true;
   } catch (e) {
     if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
@@ -172,7 +172,7 @@ export async function mergeInProgress(targetPath: string): Promise<boolean> {
 
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
 export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
-  if (await mergeInProgress(targetPath)) {
+  if (await mergeInProgress(targetRepo(targetPath))) {
     try {
       await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
     } catch (e) {
@@ -190,28 +190,132 @@ export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
   }
 }
 
+/** execFile's rejection carries the child's stdout as a string from runHostGit (`text`). */
+function stdoutOf(e: unknown): string {
+  return typeof e === "object" && e !== null && "stdout" in e && typeof e.stdout === "string" ? e.stdout : "";
+}
+
+function nulSeparated(stdout: string): string[] {
+  return stdout.split("\0").filter((entry) => entry.length > 0);
+}
+
 /**
- * Formats a merge conflict into failure context. No dedicated merge-agent
- * subprocess exists yet (conflicts are near-zero under sequential dispatch,
- * ADR-035) — this text becomes the task's gateFailureContext, which the
- * existing priorAttemptFailure mechanism carries into the retry agent's brief.
+ * A task branch that does not merge with main: the main commit it was tried against and the files
+ * git could not combine. Two tasks dispatched in one batch start from the same main; once the first
+ * merges, the second's branch can conflict with the main it lands on (w12b D2).
  */
-export function buildMergeAgentBrief(task: TaskDescriptor, conflictFiles: string[]): string {
-  const goal = typeof task.taskSpec?.goal === "string" ? task.taskSpec.goal : task.title;
+export interface MainConflict {
+  readonly mainCommit: string;
+  readonly files: readonly string[];
+}
+
+/**
+ * The next attempt of a task whose branch conflicts with main could not be prepared with that
+ * conflict in its worktree. The branch is never dispatched as it is instead, since it would conflict
+ * again by construction: planning routes the task to plan repair (MERGE_RETRY_UNPREPARED).
+ */
+export class ConflictRetryUnprepared extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly step: string,
+    readonly detail: string,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(`the merge of main into the branch of task ${taskId} could not be prepared: ${step}: ${detail}`, options);
+    this.name = "ConflictRetryUnprepared";
+  }
+}
+
+/**
+ * Whether the task's branch conflicts with main now, asked of git's object store alone
+ * (`merge-tree`, no work tree touched): null when it merges cleanly, else main's commit and the
+ * conflicting files. Any other answer from git throws ConflictRetryUnprepared.
+ */
+export async function conflictWithMain(targetPath: string, taskId: string): Promise<MainConflict | null> {
+  const repo = targetRepo(targetPath);
+  let main: string;
+  try {
+    const { stdout } = await runHostGit(repo, ["rev-parse", "--verify", "--end-of-options", "refs/heads/main^{commit}"]);
+    main = CommitIdSchema.parse(stdout.trim());
+  } catch (e) {
+    throw new ConflictRetryUnprepared(taskId, "rev-parse main", describeErrorChain(e), { cause: e });
+  }
+  try {
+    await runHostGit(repo, ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", main, `refs/heads/${taskBranchName(taskId)}`]);
+    return null;
+  } catch (e) {
+    // A conflicted merge exits 1 and prints the merged tree, then each conflicted path.
+    if (exitCodeOf(e) !== 1) throw new ConflictRetryUnprepared(taskId, "merge-tree", describeErrorChain(e), { cause: e });
+    const files = nulSeparated(stdoutOf(e)).slice(1);
+    if (files.length === 0) throw new ConflictRetryUnprepared(taskId, "merge-tree", "it reported a conflict but named no file");
+    return { mainCommit: main, files: [...new Set(files)].sort() };
+  }
+}
+
+/**
+ * Merges `conflict.mainCommit` into the worktree's branch and leaves the merge staged, git's
+ * conflict markers in the files it could not combine, for the implementer to resolve; the attempt's
+ * commit (commitAllChanges) concludes it. Git must leave unmerged exactly the files `conflict` names
+ * (the files the brief names), or ConflictRetryUnprepared is thrown.
+ */
+export async function startMainMerge(repo: HostRepo, taskId: string, conflict: MainConflict): Promise<void> {
+  let merged = false;
+  try {
+    await runHostGit(repo, ["merge", "--no-ff", "--no-commit", "--end-of-options", conflict.mainCommit]);
+    merged = true;
+  } catch (e) {
+    if (exitCodeOf(e) !== 1) throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
+  }
+  if (merged) throw new ConflictRetryUnprepared(taskId, "merge", `main ${conflict.mainCommit} merged without the conflict merge-tree found`);
+  let unmerged: string[];
+  try {
+    const { stdout } = await runHostGit(repo, ["diff", "--name-only", "-z", "--diff-filter=U"]);
+    unmerged = [...new Set(nulSeparated(stdout))].sort();
+  } catch (e) {
+    throw new ConflictRetryUnprepared(taskId, "diff --diff-filter=U", describeErrorChain(e), { cause: e });
+  }
+  if (unmerged.join("\0") !== conflict.files.join("\0")) {
+    throw new ConflictRetryUnprepared(
+      taskId,
+      "merge",
+      `git left ${unmerged.length === 0 ? "no file" : unmerged.join(", ")} unmerged, but merge-tree named ${conflict.files.join(", ")}`,
+    );
+  }
+}
+
+/** A conflict marker line as git writes one; its length is the conflict-marker-size attribute, 7 by default. */
+const CONFLICT_MARKER = "^(<{7,}|>{7,})( |$)";
+
+/**
+ * Stages everything in the worktree and returns those of `files` whose staged content still holds a
+ * conflict marker line: read from the index, never from the cell-written tree by path.
+ */
+export async function stagedConflictMarkers(repo: HostRepo, files: readonly string[]): Promise<string[]> {
+  await runHostGit(repo, ["add", "-A"]);
+  try {
+    const { stdout } = await runHostGit(repo, ["--literal-pathspecs", "grep", "--cached", "-l", "-z", "-E", "-e", CONFLICT_MARKER, "--", ...files]);
+    return nulSeparated(stdout).sort();
+  } catch (e) {
+    // grep exits 1 with nothing on stderr when no line matched; any other failure is no answer.
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return [];
+    throw e;
+  }
+}
+
+/** The brief's section for an attempt that starts with main merged into its branch and conflicts left. */
+export function formatConflictForBrief(conflict: MainConflict): string {
   return [
-    "# Merge Conflict Resolution",
+    "## Merge with main in progress",
+    "Another task's work reached main after your branch left it, and it changed the same files. Main has been",
+    "merged into your worktree, and git could not combine these files:",
+    ...conflict.files.map((file) => `- ${file}`),
     "",
-    "## Task being merged",
-    `Title: ${task.title}`,
-    `Goal: ${goal}`,
+    "A file both sides changed holds conflict markers (<<<<<<<, =======, >>>>>>>). A file one side deleted, or a",
+    "file git cannot merge line by line, holds no markers: whatever your worktree holds for it when you finish",
+    "is its resolution, so keep it, rewrite it or delete it deliberately.",
     "",
-    "## Conflicting files",
-    ...conflictFiles.map((f) => `- ${f}`),
-    "",
-    "## Rules",
-    '- Preserve BOTH sides\' changes: "ours" (main, previously completed tasks) and "theirs" (this task\'s branch)',
-    "- Import statements, route registrations, and dependency declarations: keep the union of both sides",
-    "- Remove ALL conflict markers (<<<<<<<, =======, >>>>>>>)",
-    "- Do NOT delete working code from either side",
+    "Resolve every one: keep what main's side does and what your task's side does, and remove every conflict",
+    "marker. Then finish your task as usual. Your work is merged only once no marker is left in these files",
+    "and your task's checks pass on the merge.",
   ].join("\n");
 }

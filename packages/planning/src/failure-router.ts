@@ -92,10 +92,15 @@ class FailureContextError extends FailureRouterError {
  * an undecidable input throws rather than silently leaving the item stuck.
  *
  * Rule ladder (first match wins):
+ *   0. a category with a route of its own (categoryRoute): tree regressions and
+ *      merge conflicts.
  *   1. replan  — attempts remain under the bound; retry, carrying the raw
  *      failure context forward so the next attempt is informed (never identical).
  *   2. abandon — the bound is reached; terminate so the item's dependents stop
  *      waiting on a task that will not complete.
+ *
+ * An abandoned task is repaired around by the next plan revision: the
+ * plan_repair_on_abandon trigger (migrations 045, 048) records it in plan_repairs.
  *
  * After `maxReplanAttempts` the router abandons — it can never emit an unbounded
  * run of identical replans.
@@ -131,8 +136,8 @@ export class FailureRouter {
     // more failed dispatches — but it is a real trade-off: we save the cost
     // of doomed retries at the price of not automatically resuming when the
     // tree heals.
-    const abandon = this.categoryRequiresImmediateTermination(input.category, failure, input.priorAttempts);
-    if (abandon) return abandon;
+    const routed = this.categoryRoute(input.category, failure, input.priorAttempts);
+    if (routed) return routed;
 
     if (input.priorAttempts < this.maxReplanAttempts) {
       return { action: "replan", attempt: input.priorAttempts + 1, failure };
@@ -148,11 +153,11 @@ export class FailureRouter {
 
   /**
    * Exhaustive switch over FailureCategory: a new member without a case here
-   * is a compile error, not a silent fall-through. Returns an abandon decision
-   * for categories that must not consume the replan bound; null means "proceed
-   * to the normal replan-or-abandon ladder."
+   * is a compile error, not a silent fall-through. Returns the decision of a
+   * category routed on its own; null means "proceed to the normal
+   * replan-or-abandon ladder."
    */
-  private categoryRequiresImmediateTermination(
+  private categoryRoute(
     category: FailureCategory,
     failure: RawFailureContext,
     priorAttempts: number,
@@ -169,11 +174,42 @@ export class FailureRouter {
           failure,
         };
 
+      // The branch met main's newer work, first or again after a resolved conflict (main moved under
+      // it): the next attempt starts with main merged into its branch and the conflict in its
+      // worktree (development's conflictWithMain), so the replan is never the same attempt again.
+      // Bounded by the replan bound.
+      case "MERGE_CONFLICT":
+        if (priorAttempts < this.maxReplanAttempts) return { action: "replan", attempt: priorAttempts + 1, failure };
+        return {
+          action: "abandon",
+          reason: `the task's branch still conflicts with main after ${priorAttempts} attempt(s); the plan is repaired around it`,
+          attempts: priorAttempts,
+          failure,
+        };
+
+      // Bound: one attempt is handed the conflict. Its finishing done with markers left leaves the
+      // overlap between the work and main to the plan to re-cut (w12b D2: the plan repair is what recovered).
+      case "MERGE_CONFLICT_PERSISTS":
+        return {
+          action: "abandon",
+          reason: "the attempt was handed its conflict with main and left conflict markers in it; the plan is repaired around it",
+          attempts: priorAttempts,
+          failure,
+        };
+
+      // A branch that conflicts with main is never re-dispatched unchanged: it would conflict again.
+      case "MERGE_RETRY_UNPREPARED":
+        return {
+          action: "abandon",
+          reason: "the task's conflict with main could not be prepared for another attempt; the plan is repaired around it",
+          attempts: priorAttempts,
+          failure,
+        };
+
       case "VERIFICATION_GAP":
       case "COMPILATION_ERROR":
       case "AGENT_STUCK":
       case "SPAWN_FAILURE":
-      case "MERGE_CONFLICT":
         return null;
 
       default: {

@@ -8,13 +8,13 @@ import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js
 import { targetRepo } from "../host-git.js";
 import {
   abortMerge,
-  buildMergeAgentBrief,
   commitMerge,
   mergeInProgress,
   recoverOrphanedMerge,
   resetCheckoutToHead,
   taskBranchName,
   tentativeMerge,
+  type MainConflict,
 } from "../merge.js";
 import { ensureTargetGitInit } from "../workspace.js";
 
@@ -44,6 +44,8 @@ export type FinalizeResult =
   | { readonly success: true; readonly mergeCommit: string }
   | {
       readonly success: false;
+      /** Where it failed: merging the branch into main, or checking the merge (no verify runs on a merge that failed). */
+      readonly failedStep: "merge" | "verification";
       readonly gateFailureContext: string;
       readonly errorLayer: ErrorLayer;
       /**
@@ -92,6 +94,13 @@ export interface FinalizeDeps {
    * waits no longer than that (withTargetCheckout).
    */
   readonly postMergeVerify: (targetProjectPath: string, lease: CheckoutLease) => Promise<PostMergeVerdict>;
+  /**
+   * The conflict with main this attempt started with in its worktree (startMainMerge), or null.
+   * A branch that was handed a conflict and conflicts again is recorded under
+   * tentativeMergeAfterConflict: it holds the presented main, so main moved again under the
+   * resolution, and planning hands the newer conflict to the next attempt under the replan bound.
+   */
+  readonly presentedConflict: MainConflict | null;
 }
 
 /**
@@ -123,7 +132,7 @@ async function unrestoredReason(targetProjectPath: string): Promise<string | nul
   const reset = await resetCheckoutToHead(targetProjectPath);
   if (reset.status === "error") return reset.message;
   try {
-    return (await mergeInProgress(targetProjectPath)) ? "a merge is still staged (MERGE_HEAD) after the reset to HEAD" : null;
+    return (await mergeInProgress(targetRepo(targetProjectPath))) ? "a merge is still staged (MERGE_HEAD) after the reset to HEAD" : null;
   } catch (e) {
     return `whether a merge is still staged could not be read: ${describeErrorChain(e)}`;
   }
@@ -154,12 +163,14 @@ async function undoTentativeMerge(taskId: string, targetProjectPath: string, aft
 /** The merge's own failure, unless undoing it failed: then the checkout is the operator's first, whatever the gate said. */
 function unrestoredFailure(
   fault: VerificationInfrastructureFault,
+  failedStep: "merge" | "verification",
   gateFailureContext: string,
   // open-by-design: gateContext carries caller-supplied diagnostic context per gate type
   gate: { operation: string; gateOutput: unknown; gateContext?: Record<string, unknown> },
 ): FinalizeResult {
   return {
     success: false,
+    failedStep,
     gateFailureContext: `${gateFailureContext}\n${fault.message}`,
     errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
       ...gate.gateContext,
@@ -184,12 +195,12 @@ async function abortAndFail(
   console.log(`[${taskId}] ${failedLogMessage}`);
 
   const unrestored = await undoTentativeMerge(taskId, targetProjectPath, errorLayerInfo.operation);
-  if (unrestored !== null) return unrestoredFailure(unrestored, gateFailureContext, errorLayerInfo);
+  if (unrestored !== null) return unrestoredFailure(unrestored, "verification", gateFailureContext, errorLayerInfo);
   console.log(`[${taskId}] tentative merge aborted — main restored, task branch preserved for retry`);
 
   const errorLayer = wrapError("development", errorLayerInfo.operation, errorLayerInfo.gateOutput, errorLayerInfo.gateContext);
 
-  return { success: false, gateFailureContext, errorLayer, environmentFailure, infrastructureFault };
+  return { success: false, failedStep: "verification", gateFailureContext, errorLayer, environmentFailure, infrastructureFault };
 }
 
 /**
@@ -215,12 +226,24 @@ export async function finalizeSuccess(
     const fault = new VerificationInfrastructureFault(task.id, "waiting for the target checkout", { cause: e });
     return {
       success: false,
+      failedStep: "merge",
       gateFailureContext: fault.message,
       errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, { taskId: task.id, attempt, holder: e.holder, boundMs: e.boundMs, heldMs: e.heldMs }),
       environmentFailure: null,
       infrastructureFault: fault,
     };
   }
+}
+
+/** What a conflicted merge tells the task's next attempt: facts only; its brief carries the conflict it is handed. */
+function conflictContext(taskId: string, files: readonly string[], presented: MainConflict | null): string {
+  const listed = files.map((file) => `- ${file}`).join("\n");
+  const head =
+    presented === null
+      ? `The merge of task ${taskId}'s branch into main conflicted; main was not changed. Conflicting files:`
+      : `The merge of task ${taskId}'s branch into main conflicted again after main was merged into it and its conflicts ` +
+        `resolved: main moved on since. Main was not changed. Conflicting files:`;
+  return `${head}\n${listed}`;
 }
 
 async function finalizeHeld(
@@ -245,6 +268,7 @@ async function finalizeHeld(
     console.warn(`[${task.id}] target checkout could not be restored — refusing to merge: ${unrestored}`);
     return {
       success: false,
+      failedStep: "merge",
       gateFailureContext: `Target checkout could not be restored to HEAD before merge: ${unrestored}`,
       errorLayer: wrapError("development", POST_MERGE_CHECK_RUN, fault, {
         taskId: task.id,
@@ -259,24 +283,20 @@ async function finalizeHeld(
   const mergeResult = await tentativeMerge(targetProjectPath, taskBranchName(task.id));
 
   if (mergeResult.status === "conflict") {
-    const mergeContext = buildMergeAgentBrief(task, mergeResult.files);
+    // Handed a conflict with main and still conflicting: main moved again under the resolution.
+    const operation = deps.presentedConflict === null ? "tentativeMerge" : "tentativeMergeAfterConflict";
+    const mergeContext = conflictContext(task.id, mergeResult.files, deps.presentedConflict);
+    const gateContext = { taskId: task.id, attempt, conflictFiles: mergeResult.files };
     const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a merge conflict");
     if (unrestored !== null) {
-      return unrestoredFailure(unrestored, mergeContext, {
-        operation: "tentativeMerge",
-        gateOutput: "merge conflict",
-        gateContext: { taskId: task.id, attempt, conflictFiles: mergeResult.files },
-      });
+      return unrestoredFailure(unrestored, "merge", mergeContext, { operation, gateOutput: "merge conflict", gateContext });
     }
     console.log(`[${task.id}] tentative merge CONFLICT — aborted, branch preserved for retry`);
     return {
       success: false,
+      failedStep: "merge",
       gateFailureContext: mergeContext,
-      errorLayer: wrapError("development", "tentativeMerge", "merge conflict", {
-        taskId: task.id,
-        attempt,
-        conflictFiles: mergeResult.files,
-      }),
+      errorLayer: wrapError("development", operation, "merge conflict", gateContext),
       environmentFailure: null,
       infrastructureFault: null,
     };
@@ -285,7 +305,7 @@ async function finalizeHeld(
   if (mergeResult.status === "error") {
     const unrestored = await undoTentativeMerge(task.id, targetProjectPath, "a failed tentative merge");
     if (unrestored !== null) {
-      return unrestoredFailure(unrestored, `Tentative merge failed: ${mergeResult.message}`, {
+      return unrestoredFailure(unrestored, "merge", `Tentative merge failed: ${mergeResult.message}`, {
         operation: "tentativeMerge",
         gateOutput: mergeResult.message,
         gateContext: { taskId: task.id, attempt },
@@ -294,6 +314,7 @@ async function finalizeHeld(
     console.log(`[${task.id}] tentative merge FAILED — aborted`);
     return {
       success: false,
+      failedStep: "merge",
       gateFailureContext: `Tentative merge failed: ${mergeResult.message}`,
       errorLayer: wrapError("development", "tentativeMerge", mergeResult.message, {
         taskId: task.id,

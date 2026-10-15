@@ -5,6 +5,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { initHostRepo, runHostGit, runOwnRepoGit, type HostRepo } from "@ashara/execution-infra";
 import { canonicalizeAllowingMissing, withTargetCheckout } from "./checkout-lock.js";
 import { freshWorktreeRepo, targetRepo } from "./host-git.js";
+import { mergeInProgress, startMainMerge, taskBranchName, type MainConflict } from "./merge.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
 
 // ---------------------------------------------------------------------------
@@ -61,21 +62,39 @@ async function worktreeWithIdentity(targetProjectPath: string, workDir: string):
   }
 }
 
+/**
+ * The worktree of a task whose branch already exists, checked out as it is. When the branch
+ * conflicts with main (`conflict`, conflictWithMain), main is merged into it and the merge left
+ * staged with the conflicts in the files: re-dispatching the branch unchanged would only conflict
+ * again (w12b D2). A merge that cannot be prepared removes the worktree and throws
+ * ConflictRetryUnprepared.
+ */
 export async function createWorkdirForRetry(
   base: string,
   targetProjectPath: string,
-  taskBranch: string,
+  taskId: string,
+  conflict: MainConflict | null,
 ): Promise<WorkdirInfo> {
   await mkdir(base, { recursive: true });
+  const taskBranch = taskBranchName(taskId);
   const workDir = join(base, taskBranch.replace(/\//g, "-"));
 
   try {
     await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, taskBranch]);
   } catch (e) {
-    throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir }, e);
+    throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir, taskId }, e);
   }
 
-  return { workDir, taskBranch, repo: await worktreeWithIdentity(targetProjectPath, workDir) };
+  const repo = await worktreeWithIdentity(targetProjectPath, workDir);
+  if (conflict !== null) {
+    try {
+      await startMainMerge(repo, taskId, conflict);
+    } catch (e) {
+      await removeWorktree(targetProjectPath, workDir);
+      throw e;
+    }
+  }
+  return { workDir, taskBranch, repo };
 }
 
 async function removeWorktree(targetProjectPath: string, workDir: string, deleteBranch?: string): Promise<void> {
@@ -194,6 +213,8 @@ export async function commitAllChanges(repo: HostRepo, message: string): Promise
 export type PartialCommitOutcome =
   | { readonly committed: true; readonly filesCount: number }
   | { readonly committed: false; readonly reason: "no-changes" }
+  /** Main was merged into the worktree for this attempt (startMainMerge) and its conflicts may still hold markers. */
+  | { readonly committed: false; readonly reason: "merge-in-progress" }
   | { readonly committed: false; readonly reason: "git-error"; readonly message: string };
 
 /**
@@ -209,12 +230,20 @@ export type PartialCommitOutcome =
  * stays visible even though no gate reads it (design point 2). The commit
  * message identifies the work as partial (design point 3) — the caller
  * provides a message containing task ID, dispatch number, and failure path.
+ *
+ * A worktree with main's merge staged is not committed: the commit would conclude the merge with
+ * whatever markers are left on the branch, and the next attempt would no longer see the conflict.
+ * The merge is discarded with the worktree; the next attempt prepares it again from git.
  */
 export async function commitPartialWork(
   repo: HostRepo,
   message: string,
 ): Promise<PartialCommitOutcome> {
   try {
+    if (await mergeInProgress(repo)) {
+      console.warn(`[commitPartialWork] ${repo.workTree} holds an unfinished merge of main; nothing is committed, the next attempt merges main again`);
+      return { committed: false, reason: "merge-in-progress" };
+    }
     const files = await getChangedFiles(repo);
     if (files.length === 0) {
       return { committed: false, reason: "no-changes" };

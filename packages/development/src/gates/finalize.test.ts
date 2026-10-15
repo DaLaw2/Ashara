@@ -51,14 +51,17 @@ function task(): TaskDescriptor {
   };
 }
 
-/** A target with one task branch per task, each adding its own file, built as the dispatcher builds them. */
-async function targetWithBranches(tasks: readonly TaskDescriptor[]): Promise<string> {
+/**
+ * A target with one task branch per task, each from the same main, built as the dispatcher builds them: each adds
+ * its own file, or all write `shared` with their own content (a batch's conflict).
+ */
+async function targetWithBranches(tasks: readonly TaskDescriptor[], shared?: string): Promise<string> {
   const target = join(await makeDir("ashara-finalize-target-"), "project");
   await ensureTargetGitInit(target);
   for (const [i, t] of tasks.entries()) {
     const workDir = join(await makeDir("ashara-finalize-wt-"), "wt");
     await git(target, "worktree", "add", workDir, "-b", taskBranchName(t.id), "main");
-    await writeFile(join(workDir, `file-${i}.txt`), `task ${i}\n`, "utf-8");
+    await writeFile(join(workDir, shared ?? `file-${i}.txt`), `task ${i}\n`, "utf-8");
     await git(workDir, "add", "-A");
     await git(workDir, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", `work ${i}`);
     await git(target, "worktree", "remove", workDir, "--force");
@@ -67,7 +70,7 @@ async function targetWithBranches(tasks: readonly TaskDescriptor[]): Promise<str
 }
 
 function deps(postMergeVerify: FinalizeDeps["postMergeVerify"]): FinalizeDeps {
-  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify };
+  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify, presentedConflict: null };
 }
 
 afterAll(async () => {
@@ -237,6 +240,35 @@ describe("a tentative merge that cannot be undone", () => {
     const restored = await finalizeSuccess(deps(async () => ({ passed: true, details: "ok" })), b, target, 1);
     if (!restored.success) throw new Error(`the finalize after the restore failed: ${JSON.stringify(restored)}`);
     expect(await git(target, "ls-tree", "--name-only", "main")).toBe("file-1.txt");
+    expect(await hasMergeHead(target)).toBe(false);
+  });
+});
+
+describe("a conflicted merge", () => {
+  test("is a failed merge, never a failed verify; one after the attempt was handed its conflict is recorded apart", async () => {
+    const [a, b] = [task(), task()];
+    const target = await targetWithBranches([a, b], "shared.txt");
+    const passed = async (): Promise<PostMergeVerdict> => ({ passed: true, details: "ok" });
+    expect((await finalizeSuccess(deps(passed), a, target, 1)).success).toBe(true);
+
+    let verified = false;
+    const verify = async (): Promise<PostMergeVerdict> => {
+      verified = true;
+      return { passed: true, details: "ok" };
+    };
+    const stale = await finalizeSuccess(deps(verify), b, target, 1);
+    if (stale.success) throw new Error("expected a conflict");
+    expect(stale).toMatchObject({ failedStep: "merge", infrastructureFault: null, environmentFailure: null });
+    expect(stale.errorLayer).toMatchObject({ operation: "tentativeMerge", context: { conflictFiles: ["shared.txt"] } });
+    expect(stale.gateFailureContext).toContain("- shared.txt");
+    expect(stale.gateFailureContext).not.toContain("conflict markers");
+
+    const presented = { mainCommit: await git(target, "rev-parse", "main"), files: ["shared.txt"] };
+    const again = await finalizeSuccess({ ...deps(verify), presentedConflict: presented }, b, target, 2);
+    if (again.success) throw new Error("expected a conflict");
+    expect(again.errorLayer.operation).toBe("tentativeMergeAfterConflict");
+    expect(again.gateFailureContext).toContain("conflicted again");
+    expect(verified).toBe(false);
     expect(await hasMergeHead(target)).toBe(false);
   });
 });

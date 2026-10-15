@@ -90,4 +90,24 @@ describe("FailureRouter", () => {
       expect(decision.action).toBe("replan");
     });
   });
+
+  // w12b D2: a conflict was re-dispatched on an unchanged branch until the generic bound ran out.
+  describe("merge conflicts have a route of their own", () => {
+    test("MERGE_CONFLICT replans under the bound and abandons at it, for plan repair", () => {
+      const router = new FailureRouter(3);
+      expect(router.route(makeInput({ priorAttempts: 1, category: "MERGE_CONFLICT" }))).toMatchObject({ action: "replan", attempt: 2 });
+      const atBound = router.route(makeInput({ priorAttempts: 3, category: "MERGE_CONFLICT" }));
+      expect(atBound).toMatchObject({ action: "abandon", attempts: 3 });
+      if (atBound.action === "abandon") expect(atBound.reason).toContain("conflicts with main");
+    });
+
+    test("MERGE_CONFLICT_PERSISTS and MERGE_RETRY_UNPREPARED abandon at once, whatever budget remains", () => {
+      const router = new FailureRouter(3);
+      for (const category of ["MERGE_CONFLICT_PERSISTS", "MERGE_RETRY_UNPREPARED"] as const) {
+        const decision = router.route(makeInput({ priorAttempts: 1, category }));
+        expect(decision).toMatchObject({ action: "abandon", attempts: 1 });
+        if (decision.action === "abandon") expect(decision.reason).toContain("the plan is repaired around it");
+      }
+    });
+  });
 });

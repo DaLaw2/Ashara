@@ -7,6 +7,10 @@ export type FailureCategory =
   | "AGENT_STUCK"
   | "SPAWN_FAILURE"
   | "MERGE_CONFLICT"
+  /** The attempt was handed its conflict with main and finished done with conflict markers left in it. */
+  | "MERGE_CONFLICT_PERSISTS"
+  /** The conflict with main could not be put in front of the next attempt. */
+  | "MERGE_RETRY_UNPREPARED"
   | "TREE_REGRESSION";
 
 export function classifyFailure(envelope: ErrorEnvelope): FailureCategory {
@@ -33,6 +37,18 @@ function classifyLayer(layer: ErrorLayer, envelope: ErrorEnvelope): FailureCateg
       if (text.includes("conflict")) return "MERGE_CONFLICT";
       return "SPAWN_FAILURE";
     }
+
+    // A branch that holds the presented main and conflicts again met main's newer work, merged
+    // under the resolution by another task: a fresh conflict, not the implementer's failure.
+    case "tentativeMergeAfterConflict":
+      return "MERGE_CONFLICT";
+
+    // Handed the conflict with main and finished done with markers left in it.
+    case "conflictMarkersLeft":
+      return "MERGE_CONFLICT_PERSISTS";
+
+    case "prepareConflictRetry":
+      return "MERGE_RETRY_UNPREPARED";
 
     case "agentExecution":
       return classifyAgentExecution(layer, envelope);
@@ -110,6 +126,8 @@ export function shouldEscalate(
     case "COMPILATION_ERROR":
     case "SPAWN_FAILURE":
     case "MERGE_CONFLICT":
+    case "MERGE_CONFLICT_PERSISTS":
+    case "MERGE_RETRY_UNPREPARED":
     case "TREE_REGRESSION":
       return false;
 
