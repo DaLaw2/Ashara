@@ -247,7 +247,7 @@ function suiteReviewBoundReport(review: BlockingReview): string {
 /** The text a given-up task's stored reason recorded of why: the record's own words, never a sentence per source. */
 function observedCause(cause: StoredBlockedReason): string {
   switch (cause.source) {
-    case "failure_router":
+    case "failure_given_up":
       return [cause.reason, ...(cause.detail === undefined ? [] : [cause.detail])].join(" ");
     case "replan":
       return cause.replanContext.detail;

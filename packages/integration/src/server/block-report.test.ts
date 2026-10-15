@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, postPlanReport, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
+import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
 
 // Story s-loop-never-stop-m1, migrations 040 and 048: every project halt is told to the client
 // once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
@@ -22,7 +23,7 @@ let clientId: string;
 const ourProjects = new Set<string>();
 
 async function newProject(): Promise<ProjectId> {
-  const project = await new ProjectRepository(db).create(`block-report-test-${randomUUID().slice(0, 8)}`, clientId);
+  const project = await new ProjectHaltRepository(db).create(`block-report-test-${randomUUID().slice(0, 8)}`, clientId);
   ourProjects.add(project.id);
   return project.id;
 }
@@ -95,7 +96,7 @@ afterAll(async () => {
 describe("a blocked project is told once; an operator's unblock is recorded and told once", () => {
   test("block, report, unblock, resumed report, block again: one report per episode", async () => {
     const projectId = await newProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
 
     await projects.block(projectId, budgetCap);
     await reports().runPending();
@@ -135,13 +136,13 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
 
   test("unblocking a project that is not blocked throws and writes nothing", async () => {
     const projectId = await newProject();
-    await expect(new ProjectRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not 'blocked'/);
+    await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not 'blocked'/);
     expect(await episodesOf(projectId)).toEqual([]);
   });
 
   test("no way back to work but the recorded unblock: a bare status write is refused", async () => {
     const projectId = await newProject();
-    await new ProjectRepository(db).block(projectId, budgetCap);
+    await new ProjectHaltRepository(db).block(projectId, budgetCap);
 
     await expect(
       db.execute(sql`UPDATE projects SET status = 'active', blocked_category = NULL, blocked_error_class = NULL, blocked_reason = NULL
@@ -161,7 +162,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     expect(await messagesOf(projectId)).toEqual([]);
     expect(await postPlanReport(db, projectId, "planning-stopped", "planning stopped", [])).toBe("posted");
 
-    await new ProjectRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
+    await new ProjectHaltRepository(db).unblock(projectId, "operator-a", "fixed the model routing");
     const reset = await db.execute(sql`SELECT plan_stopped_at, plan_attempts, plan_last_error FROM projects WHERE id = ${projectId}`);
     expect(reset.rows).toEqual([{ plan_stopped_at: null, plan_attempts: 0, plan_last_error: null }]);
     await reports().runPending();
@@ -191,7 +192,7 @@ async function workItem(projectId: ProjectId, title: string, taskSpec: unknown =
 describe("an infrastructure halt is told once with its cause, resumes by itself when the probe passes, and is told once again", () => {
   test("halt, report naming the task, probe resume with evidence, resumed report", async () => {
     const projectId = await newProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const task = await workItem(projectId, "Write the lock checks");
     await db.execute(sql`UPDATE work_items SET infrastructure_faults = 4 WHERE id = ${task}`);
 
@@ -224,7 +225,7 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
 
   test("in the core loop's order, a halt the probe could end at once is still told before it resumes", async () => {
     const projectId = await newProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const task = await workItem(projectId, "Start the task cell");
     await db.execute(sql`UPDATE work_items SET infrastructure_faults = 4 WHERE id = ${task}`);
     await projects.block(projectId, { category: "infrastructure", errorClass: "InfrastructureFaultBudgetSpent", reason: "task cell unavailable" });
@@ -249,7 +250,7 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
 
   test("a probe never ends any other halt", async () => {
     const projectId = await newProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     await projects.block(projectId, budgetCap);
     expect(await projects.listInfrastructureHalted()).not.toContain(projectId);
     expect(await projects.resumeFromInfrastructureHalt(projectId, "probe passed")).toBe("moved");
@@ -272,13 +273,13 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
     const superseded = await workItem(projectId, "Replaced work");
     await giveUp(disputed, { source: "check_disputed", checkTaskId: randomUUID(), checkName: "compacts", reason: "past the bound" });
     await giveUp(review, { source: "suite_review_unresolved", checkTaskIds: [randomUUID()], reason: "past the bound" });
-    await giveUp(attempts, { source: "failure_router", reason: "max_attempts" });
+    await giveUp(attempts, { source: "failure_given_up", reason: "max_attempts" });
     await giveUp(superseded, { source: "superseded", planRevision: 2, requestedBy: null, repairOf: [attempts], reason: "replaced" });
 
     const repairs = await db.execute(sql`SELECT work_item_id FROM plan_repairs WHERE project_id = ${projectId} ORDER BY work_item_id`);
     expect(repairs.rows.map((row) => row["work_item_id"]).sort()).toEqual([disputed, review, attempts].sort());
 
-    await new ProjectRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBoundReached", reason: "repaired twice" });
+    await new ProjectHaltRepository(db).block(projectId, { category: "plan_repair", errorClass: "PlanRepairBoundReached", reason: "repaired twice" });
     await reports().runPending();
     await reports().runPending();
 
@@ -328,7 +329,7 @@ describe("a suite review halt recorded before migration 048 is told once", () =>
       ]),
     );
 
-    await new ProjectRepository(db).block(projectId, { category: "suite_review", errorClass: "SuiteReviewBoundReached", reason: "named 3 times" });
+    await new ProjectHaltRepository(db).block(projectId, { category: "suite_review", errorClass: "SuiteReviewBoundReached", reason: "named 3 times" });
     await reports().runPending();
     await reports().runPending();
 

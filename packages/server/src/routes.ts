@@ -3,14 +3,15 @@ import { z } from "zod";
 import { VisionRepository } from "@ashara/engagement";
 import type { WorkItemId, StoredBlockedReason } from "@ashara/shared";
 import { InvalidId, InvalidStatusTransition, WORK_ITEM_STATUSES, parseProjectId, parseWorkItemId } from "@ashara/shared";
-import { WorkItemRepository, EventStoreRepository, DevSessionRepository, ProjectRepository } from "@ashara/db";
+import { EventStoreRepository, DevSessionRepository, ProjectRepository } from "@ashara/db";
+import { WorkItemRowRepository, rowToWorkItem } from "@ashara/delivery";
 import {
   startWorkItem,
   failWorkItem,
   replanWorkItem,
   abandonWorkItem,
   takeEvents,
-} from "@ashara/planning";
+} from "@ashara/delivery";
 import {
   listClientMessages,
   notJson,
@@ -19,14 +20,13 @@ import {
   submitTender,
 } from "./client-channel.js";
 import type { ChannelCaller, ClientChannelDeps } from "./client-channel.js";
-import { rowToWorkItem } from "./work-item-adapter.js";
 
 // ---------------------------------------------------------------------------
 // App state injected via Hono variables
 // ---------------------------------------------------------------------------
 
 export interface AppDeps extends ClientChannelDeps {
-  readonly workItemRepo: WorkItemRepository;
+  readonly workItemRepo: WorkItemRowRepository;
   readonly eventStore: EventStoreRepository;
   readonly devSessionRepo: DevSessionRepository;
   readonly visionRepo: VisionRepository;

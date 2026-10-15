@@ -5,21 +5,14 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
 import { z } from "zod";
 import type pg from "pg";
-import {
-  createDb,
-  DEFAULT_DATABASE_URL,
-  WorkItemRepository,
-  EventStoreRepository,
-  DevSessionRepository,
-  ProjectRepository,
-  ClientRepository,
-} from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL, EventStoreRepository, DevSessionRepository, ProjectRepository, ClientRepository } from "@ashara/db";
 import { VisionRepository, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { bearerAuth } from "@ashara/server/middleware";
 import { createRoutes } from "@ashara/server/routes";
 import type { AppDeps } from "@ashara/server/routes";
+import { WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -76,7 +69,7 @@ beforeAll(async () => {
   db = createDb(DATABASE_URL);
   pool = db.$client;
 
-  const workItemRepo = new WorkItemRepository(db);
+  const workItemRepo = new WorkItemRowRepository(db);
   const eventStore = new EventStoreRepository(db);
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
@@ -147,7 +140,7 @@ describe("Work Items", () => {
 
   beforeAll(async () => {
     createdId = randomUUID();
-    await new WorkItemRepository(db).create({
+    await new WorkItemRowRepository(db).create({
       id: createdId,
       level: "Epic",
       status: "Pending",

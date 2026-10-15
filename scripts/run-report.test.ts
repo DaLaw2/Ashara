@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, LlmCallRepository, ProjectRepository, readRunEvidence } from "@ashara/db";
-import { toSessionAttempt, withSessionLifecycle } from "@ashara/workplace";
+import { toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
 import type { SessionStore } from "@ashara/workplace";
 import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -12,7 +12,6 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { runAttempt } from "@ashara/workplace";
 import { formatRunReport } from "./run-report-format.js";
 
 // The trace contract of roadmap M2 exit 7, on a scripted run: the real gateway, the Finance ledger
@@ -133,7 +132,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       },
       checkedSources: ["test"],
       clock: () => new Date(),
-    }), new LlmCallLedger(calls, new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })));
+    }), new LlmCallLedger(calls, new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })));
     const repo = new DevSessionRepository(db);
     const store: SessionStore = {
       insert: (sid, tid, brief, version) => repo.insert(sid, tid, brief, version),

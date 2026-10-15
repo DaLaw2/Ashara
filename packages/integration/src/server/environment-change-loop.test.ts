@@ -8,31 +8,18 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  DevSessionRepository,
-  EnvironmentBuildRepository,
-  EventStoreRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, EnvironmentBuildRepository, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService } from "@ashara/orchestrator";
+import { DispatchService, CoreLoop, DEFAULT_CONFIG, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
-import { FailureRouter } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // c-platform-role C2 (ADR-074 d96 c), end to end through the real contractor loop, the real
 // DispatchService, real podman and git, and the recorded gateway with scripted models: an
@@ -118,7 +105,7 @@ interface Harness {
  * marker the prompt holds first, so concurrent or reordered dispatches never take another task's turns.
  */
 async function harness(name: string): Promise<Harness> {
-  const projects = new ProjectRepository(db);
+  const projects = new ProjectHaltRepository(db);
   const clientId = (await new ClientRepository(db).create(`${NAME}-${name}`)).id;
   clientIds.push(clientId);
   const projectId = (await projects.create(`${NAME}-${name}`, clientId)).id;
@@ -142,7 +129,7 @@ async function harness(name: string): Promise<Harness> {
   });
 
   const calls = new LlmCallRepository(db);
-  const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
+  const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
   const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
@@ -154,7 +141,7 @@ async function harness(name: string): Promise<Harness> {
   }), new LlmCallLedger(calls, spendCap));
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
-  const workItems = new WorkItemRepository(db);
+  const workItems = new WorkItemRowRepository(db);
   const sessions = new DevSessionRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const dispatchService = new DispatchService({
@@ -384,7 +371,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     const environment = (await itemsOf(h.projectId)).find((item) => item.origin === "environment-change");
     expect(environment).toMatchObject({ status: "Pending", workKind: "environment", ownerRoleId: h.platformRoleId });
     if (environment === undefined) throw new Error("no environment task was opened");
-    expect(await new WorkItemRepository(db).getDependencies(impl)).toEqual([environment.id]);
+    expect(await new WorkItemRowRepository(db).getDependencies(impl)).toEqual([environment.id]);
     expect((await itemsOf(h.projectId)).find((item) => item.id === impl)).toMatchObject({ status: "Pending" });
 
     // The platform task: only it is admitted; its change builds, passes its probe and the product's build and test, and merges.
@@ -450,7 +437,7 @@ describe("an implementer's environment change, through the contractor loop", () 
     expect(third.results.map((r) => [r.taskId, r.status])).toEqual([[environment.id, "failed"]]);
     const items = await itemsOf(h.projectId);
     // Given up with the reason a plan repair reads (replan.ts abandonedOf), not bare Abandoned.
-    expect(items.find((item) => item.id === environment.id)).toMatchObject({ status: "Abandoned", source: "failure_router" });
+    expect(items.find((item) => item.id === environment.id)).toMatchObject({ status: "Abandoned", source: "failure_given_up" });
     const repairs = await db.execute(sql`SELECT work_item_id AS "id" FROM plan_repairs WHERE project_id = ${h.projectId} AND plan_revision_id IS NULL`);
     expect(z.array(z.object({ id: z.string() })).parse(repairs.rows)).toEqual([{ id: environment.id }]);
 

@@ -3,8 +3,6 @@ import type { ModelConfig } from "@ashara/model-access";
 import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid } from "./errors.js";
 import type { PendingLlmCall } from "./guarded-model-access.js";
 
-type ProjectId = PendingLlmCall["context"]["projectId"];
-
 /**
  * Every token of a byte-level BPE tokenizer (the Claude, GPT, DeepSeek and
  * Gemini families) covers at least one UTF-8 byte, so a request's bytes bound
@@ -35,13 +33,6 @@ type SpendRefusal =
 interface SpendCapDeps {
   /** llm_calls: the spend a cap reads, and the row an admitted call is written to before it is sent. */
   readonly ledger: Pick<LlmCallRepository, "spend" | "admit">;
-  /** The per-project block (migration 025): a project at its cap is blocked, and the loop skips it. */
-  readonly projects: {
-    block(
-      projectId: ProjectId,
-      cause: { readonly category: "budget_cap"; readonly errorClass: string; readonly reason: string },
-    ): Promise<"blocked" | "already-blocked">;
-  };
   readonly caps: SpendCaps;
   /**
    * What an admission awaits the admissions ahead of it through (policy default: as is). The
@@ -101,9 +92,9 @@ export class SpendCap {
   }
 
   /**
-   * Admits a call whose worst case fits under both caps, or throws
-   * `BudgetExceeded`. A project refusal blocks the project first, so whichever
-   * caller catches the refusal, the project ends blocked.
+   * Admits a call whose worst case fits under both caps, or throws `BudgetExceeded`, Finance's
+   * typed refusal. Finance never halts a project itself: the project's halt is Delivery's (O3 c,
+   * ADR-080 d3), which blocks a project its refusal names wherever the refusal surfaces.
    */
   admit(call: PendingLlmCall): Promise<void> {
     const ahead = this.deps.admissionTurn?.(this.admissions) ?? this.admissions;
@@ -156,7 +147,7 @@ export class SpendCap {
    * overcounts.
    */
   private async admitNow(call: PendingLlmCall): Promise<void> {
-    const { ledger, projects, caps } = this.deps;
+    const { ledger, caps } = this.deps;
     const { projectId } = call.context;
     const estimatedCostUsd = worstCaseCostUsd(call.model, call.requestBytes, call.maxOutputTokens);
     const refusal = (scope: BudgetExceeded["scope"], capUsd: number, spentUsd: number, inFlightUsd: number) =>
@@ -181,8 +172,7 @@ export class SpendCap {
     const { recordedUsd: projectSpent, inFlightUsd: projectInFlight } = await ledger.spend({ kind: "project", projectId });
     if (projectSpent + projectInFlight + estimatedCostUsd > caps.perProjectUsd) {
       const refused = refusal({ kind: "project", projectId }, caps.perProjectUsd, projectSpent, projectInFlight);
-      const blocked = await projects.block(projectId, { category: "budget_cap", errorClass: refused.name, reason: refused.message });
-      console.warn(`[SpendCap] project ${projectId} ${blocked}: ${refused.message}`);
+      console.warn(`[SpendCap] project ${projectId} refused at its cap: ${refused.message}`);
       throw refused;
     }
 

@@ -1,5 +1,5 @@
 import { describe, test, expect, expectTypeOf } from "vitest";
-import { BLOCKED_REASON_SOURCES, blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt, withSalvagedResult } from "./blocked-reason.js";
+import { BLOCKED_REASON_SOURCES, blockedReasonToRecord, parseStoredBlockedReason, BlockedReasonCorrupt } from "./blocked-reason.js";
 import type { StoredBlockedReason } from "./blocked-reason.js";
 
 describe("parseStoredBlockedReason", () => {
@@ -77,9 +77,9 @@ describe("source variant round-trips", () => {
     }
   });
 
-  test("failure_router variant round-trips with all optional fields", () => {
+  test("failure_given_up variant round-trips with all optional fields", () => {
     const input = {
-      source: "failure_router",
+      source: "failure_given_up",
       reason: "retry_budget_exhausted",
       attempts: 3,
       lastFailure: { detail: "gate failed", raw: {} },
@@ -87,8 +87,8 @@ describe("source variant round-trips", () => {
     };
     const result = parseStoredBlockedReason(input);
     expect(result).toBeDefined();
-    expect(result!.source).toBe("failure_router");
-    if (result!.source === "failure_router") {
+    expect(result!.source).toBe("failure_given_up");
+    if (result!.source === "failure_given_up") {
       expect(result!.reason).toBe("retry_budget_exhausted");
       expect(result!.attempts).toBe(3);
       expect(result!.detail).toBe("error detail");
@@ -111,36 +111,6 @@ describe("source variant round-trips", () => {
   });
 });
 
-describe("withSalvagedResult helper", () => {
-  test("augments a variant with salvaged fields, preserving source", () => {
-    const original: StoredBlockedReason = {
-      source: "orchestrator_error",
-      reason: "lifecycle route threw",
-    };
-    const augmented = withSalvagedResult(original, "completed", "task completed");
-    expect(augmented.source).toBe("orchestrator_error");
-    expect(augmented.salvagedOutcome).toBe("completed");
-    expect(augmented.salvagedDetail).toBe("task completed");
-    expect(typeof augmented.salvagedAt).toBe("string");
-    // salvagedAt should be a valid ISO timestamp
-    expect(Number.isNaN(Date.parse(augmented.salvagedAt!))).toBe(false);
-  });
-
-  test("round-trips through parse after augmentation", () => {
-    const original: StoredBlockedReason = {
-      source: "task_failed",
-      reason: "agent crashed",
-    };
-    const augmented = withSalvagedResult(original, "failed", "timed out");
-    const parsed = parseStoredBlockedReason(augmented);
-    expect(parsed).toBeDefined();
-    expect(parsed!.salvagedOutcome).toBe("failed");
-    expect(parsed!.salvagedDetail).toBe("timed out");
-    expect(parsed!.salvagedAt).toBeDefined();
-    expect(parsed!.source).toBe("task_failed");
-  });
-});
-
 describe("stored blocked reason schema", () => {
   test("replan variant rejects missing replanContext", () => {
     expect(() => parseStoredBlockedReason({ source: "replan" })).toThrow(BlockedReasonCorrupt);
@@ -148,15 +118,15 @@ describe("stored blocked reason schema", () => {
 });
 
 describe("blockedReasonToRecord", () => {
-  test("preserves all typed fields on failure_router variant", () => {
+  test("preserves all typed fields on failure_given_up variant", () => {
     const reason: StoredBlockedReason = {
-      source: "failure_router",
+      source: "failure_given_up",
       reason: "retry exhausted",
       attempts: 3,
       lastFailure: { detail: "gate failed" },
     };
     const record = blockedReasonToRecord(reason);
-    expect(record["source"]).toBe("failure_router");
+    expect(record["source"]).toBe("failure_given_up");
     expect(record["reason"]).toBe("retry exhausted");
     expect(record["attempts"]).toBe(3);
     expect(record["lastFailure"]).toEqual({ detail: "gate failed" });

@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import { projectBlockCause } from "@ashara/delivery/project-halt";
+import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 
 // The Liaison's report on a project's first plan (story s-liaison-intake-m1,
 // ADR-075): Delivery records the planning outcome on the project, and the

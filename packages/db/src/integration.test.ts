@@ -3,7 +3,6 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
-import { WorkItemRepository } from "./repositories/work-item.js";
 import { DevSessionRepository } from "./repositories/dev-session.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
 import { ConfigRepository } from "./repositories/config.js";
@@ -14,6 +13,7 @@ import {
   domainEvents,
   modelConfigs,
   providerConfigs,
+  workItems,
 } from "./schema/index.js";
 
 // ---------------------------------------------------------------------------
@@ -74,48 +74,7 @@ async function cleanupAll() {
 }
 
 // ---------------------------------------------------------------------------
-// 1. WorkItemRepository
-// ---------------------------------------------------------------------------
-
-describe("WorkItemRepository", () => {
-  let repo: WorkItemRepository;
-  const epicId = randomUUID();
-
-  beforeAll(() => {
-    repo = new WorkItemRepository(db);
-  });
-
-  test("create inserts a work item and findById reads it back", async () => {
-    const item = {
-      id: epicId,
-      level: "Epic",
-      status: "Pending",
-      parentId: null,
-      title: "Integration Test Epic",
-      description: "Epic for integration testing",
-      taskSpec: { type: "test" },
-      northStar: "Verify all repos work",
-      successCriteria: ["tests pass"],
-      blockedReason: null,
-      projectId: testProjectId,
-    };
-    createdWorkItemIds.push(epicId);
-
-    const created = await repo.create(item);
-    expect(created.id).toBe(epicId);
-    expect(created.title).toBe("Integration Test Epic");
-    expect(created.taskSpec).toEqual({ type: "test" });
-
-    const row = await repo.findById(epicId);
-    expect(row).not.toBeNull();
-    expect(row!.id).toBe(epicId);
-    expect(row!.title).toBe("Integration Test Epic");
-    expect(row!.status).toBe("Pending");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 2. DevSessionRepository
+// 1. DevSessionRepository
 // ---------------------------------------------------------------------------
 
 describe("DevSessionRepository", () => {
@@ -126,9 +85,8 @@ describe("DevSessionRepository", () => {
   beforeAll(async () => {
     repo = new DevSessionRepository(db);
 
-    // DevSession requires a valid work_items FK.
-    const wiRepo = new WorkItemRepository(db);
-    await wiRepo.create({
+    // DevSession requires a valid work_items FK; the work item's repository is Delivery's.
+    await db.insert(workItems).values({
       id: taskId,
       level: "Task",
       status: "Pending",
@@ -253,10 +211,9 @@ describe("two projects", () => {
 
   beforeAll(async () => {
     otherProjectId = (await new ProjectRepository(db).create(`db-intg-other-${randomUUID().slice(0, 8)}`, testClientId)).id;
-    const wiRepo = new WorkItemRepository(db);
     for (const projectId of [testProjectId, otherProjectId]) {
       const taskId = randomUUID();
-      await wiRepo.create({ id: taskId, level: "Task", status: "Pending", title: "Scoped Task", projectId });
+      await db.insert(workItems).values({ id: taskId, level: "Task", status: "Pending", title: "Scoped Task", projectId });
       createdWorkItemIds.push(taskId);
       projectTasks.set(projectId, taskId);
     }

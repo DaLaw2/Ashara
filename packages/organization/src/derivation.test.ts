@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ContextualLlm } from "@ashara/finance";
 import { parseProjectId } from "@ashara/shared";
-import type { ProjectBlockCause } from "@ashara/shared";
 import { RosterDerivation } from "./derivation.js";
 import type { RosterStore } from "./derivation.js";
 import type { Roster } from "./roster.js";
@@ -43,10 +42,9 @@ function scripted(...responses: unknown[]) {
 
 function memoryStore() {
   const recorded: Roster[] = [];
-  const blocked: Array<{ projectId: string; cause: ProjectBlockCause }> = [];
   const store: RosterStore = {
     projectsAwaitingRoster: async () =>
-      recorded.length > 0 || blocked.length > 0
+      recorded.length > 0
         ? []
         : [
             {
@@ -66,12 +64,8 @@ function memoryStore() {
       recorded.push(roster);
       return "recorded";
     },
-    blockProject: async (projectId, cause) => {
-      blocked.push({ projectId, cause });
-      return "blocked";
-    },
   };
-  return { store, recorded, blocked };
+  return { store, recorded };
 }
 
 describe("RosterDerivation", () => {
@@ -101,17 +95,19 @@ describe("RosterDerivation", () => {
     expect(recorded[0]?.roles.map((r) => r.name)).toEqual(VALID.roles.map((r) => r.name));
   });
 
-  it("blocks the project with the violations when every attempt breaks a rule, and records no roster", async () => {
+  it("refuses the roster with the violations when every attempt breaks a rule, records none and blocks nothing itself", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { llm, prompts } = scripted(SELF_JUDGING);
-    const { store, recorded, blocked } = memoryStore();
+    const { store, recorded } = memoryStore();
 
     const outcomes = await new RosterDerivation({ llm, store }).runPending();
 
-    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(outcomes.map((o) => o.kind)).toEqual(["refused"]);
     expect(prompts).toHaveLength(6);
     expect(recorded).toEqual([]);
-    expect(blocked[0]?.cause.errorClass).toBe("RosterDerivationExhausted");
-    expect(blocked[0]?.cause.reason).toContain(`Role "Developer" holds both "write-source" and "author-checks"`);
+    const refused = outcomes[0];
+    if (refused?.kind !== "refused") throw new Error("expected a refused roster");
+    expect(refused.refusal.errorClass).toBe("RosterDerivationExhausted");
+    expect(refused.refusal.reason).toContain(`Role "Developer" holds both "write-source" and "author-checks"`);
   });
 });

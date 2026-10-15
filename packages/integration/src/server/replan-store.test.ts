@@ -4,16 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  latestRosterRevision,
-  latestRosterRoles,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, latestRosterRevision, latestRosterRoles, LlmCallRepository } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
 import {
   BlockReports,
@@ -27,20 +18,16 @@ import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { releaseClearedBlocks } from "@ashara/orchestrator";
+import { releaseClearedBlocks, FirstPlanner, PlanningService, Replanner, failWorkItem, giveUpWorkItem, recoverFailedItem, startWorkItem, createReplanStore, createAgentStaffing, adaptWorkItemRepo, createFirstPlanStore, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner, PlanningService, Replanner, failWorkItem, giveUpWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
-import type { FirstPlanStore, ReplanStore } from "@ashara/planning";
+import type { FirstPlanStore, ReplanStore } from "@ashara/delivery";
 import { parseWorkItemId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
-import { createFirstPlanStore, createPlanReportStore } from "@ashara/server/first-plan-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
-import { createReplanStore } from "@ashara/server/replan-store";
 import { createRosterStore } from "@ashara/server/roster-store";
-import { createAgentStaffing } from "@ashara/server/staffing";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
+import { createPlanReportStore } from "@ashara/server/plan-report-store";
 
 // A late client change is planned (t-replan-on-change). Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
@@ -260,7 +247,7 @@ async function itemsOf(projectId: ProjectId) {
 
 /** Starts a task as dispatch does: the task and every Pending ancestor, its Epic, go InProgress. */
 async function startTask(id: string): Promise<void> {
-  const repo = adaptWorkItemRepo(new WorkItemRepository(db));
+  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
   const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
   if (task === null) throw new Error(`task ${id} not found`);
   startWorkItem(task);
@@ -270,7 +257,7 @@ async function startTask(id: string): Promise<void> {
 
 /** Completes a started task as its routed success does, settling its Epic when every child is done. */
 async function completeTask(id: string): Promise<void> {
-  await PlanningService.route(adaptWorkItemRepo(new WorkItemRepository(db)), parseWorkItemId(id, "test"), true);
+  await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(id, "test"), "passed");
 }
 
 async function dependenciesOf(id: string): Promise<string[]> {
@@ -318,7 +305,7 @@ beforeAll(async () => {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
 });
 
@@ -428,7 +415,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     await contradict(projectId, questionId);
     pipelineModel({ environmentChange: false });
     expect((await replanner().runPending()).map((o) => o.kind)).toEqual(["revised"]);
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     await projects.block(projectId, { category: "fault", errorClass: "TestFault", reason: "TestFault: a halt written by the test" });
 
     expect(await planReports().runPending()).toEqual([]);
@@ -527,7 +514,7 @@ describe("a late client change is planned", () => {
     const revisions = await db.execute(sql`SELECT revision, requested_by AS "requestedBy" FROM plan_revisions WHERE project_id = ${projectId}`);
     expect(revisions.rows).toEqual([{ revision: 2, requestedBy: answerId }]);
     expect((await projectRow(projectId)).awaiting).toEqual([]);
-    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
 
     const reportsBefore = (await reportsOf(projectId)).length;
     expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
@@ -637,7 +624,7 @@ describe("a late client change is planned", () => {
 /** Starts, fails and gives up a task as a dispatch's failure and the failure router's abandonment do. */
 async function giveUp(id: string, attempts: number): Promise<void> {
   await startTask(id);
-  const repo = adaptWorkItemRepo(new WorkItemRepository(db));
+  const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
   const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
   if (task === null) throw new Error(`task ${id} not found`);
   failWorkItem(task, { source: "task_failed", reason: "the check author's red run kept failing" });
@@ -651,15 +638,16 @@ async function giveUp(id: string, attempts: number): Promise<void> {
     },
     task,
     failure,
+    { kind: "retryable", ground: "work" },
   );
   expect(decision).toBe("abandon");
 }
 
 /** Pending tasks of our projects only, gated as the core loop gates them. */
 async function gateOurs(): Promise<void> {
-  const projects = new ProjectRepository(db);
+  const projects = new ProjectHaltRepository(db);
   await PlanningService.gate(
-    adaptWorkItemRepo(new WorkItemRepository(db)),
+    adaptWorkItemRepo(new WorkItemRowRepository(db)),
     { listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)), block: (id, cause) => projects.block(id, cause) },
     { publish: async () => {} },
   );
@@ -681,7 +669,7 @@ describe("a task the team gives up is planned around", () => {
 
     await giveUp(check.id, 3);
 
-    expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
     await gateOurs();
     const held = await itemsOf(projectId);
     expect(held.find((i) => i.id === harbour.id)?.status).toBe("Pending");
@@ -694,7 +682,7 @@ describe("a task the team gives up is planned around", () => {
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes(`after 3 attempt(s)`) && p.includes("no check of the set fails on the foundation"))).toBe(true);
     const after = await itemsOf(projectId);
-    expect(after.find((i) => i.id === check.id)).toMatchObject({ status: "Abandoned", reason: { source: "failure_router" } });
+    expect(after.find((i) => i.id === check.id)).toMatchObject({ status: "Abandoned", reason: { source: "failure_given_up" } });
     expect(after.find((i) => i.id === harbour.id)).toMatchObject({
       status: "Abandoned",
       reason: { source: "superseded", planRevision: 2, requestedBy: null, repairOf: [check.id] },
@@ -704,7 +692,7 @@ describe("a task the team gives up is planned around", () => {
     expect(revisions.rows).toEqual([{ revision: 2, kind: "repair", requestedBy: null }]);
     const repairs = await db.execute(sql`SELECT work_item_id AS "id", plan_revision_id IS NOT NULL AS "answered" FROM plan_repairs WHERE project_id = ${projectId}`);
     expect(repairs.rows).toEqual([{ id: check.id, answered: true }]);
-    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
 
     expect(await planReports().runPending()).toEqual([{ kind: "posted", projectId, subject: "plan-revision" }]);
     expect(await planReports().runPending()).toEqual([]);
@@ -729,18 +717,18 @@ describe("a task the team gives up is planned around", () => {
     await db.execute(sql`UPDATE work_items SET merge_commit = ${MERGE_COMMIT} WHERE id = ${sprint0.id}`);
 
     await startTask(check.id);
-    const repo = adaptWorkItemRepo(new WorkItemRepository(db));
+    const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
     const task = await PlanningService.findWorkItem(repo, parseWorkItemId(check.id, "test"));
     if (task === null) throw new Error(`task ${check.id} not found`);
     giveUpWorkItem(task, { source: "check_disputed", checkTaskId: check.id, checkName: "books", reason: "disputed 3 time(s), past the bound of 2: the check reads a file no task writes" });
     await PlanningService.saveWorkItem(repo, task, "InProgress");
 
-    expect(await new ProjectRepository(db).listActiveIds()).not.toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).not.toContain(projectId);
     const mock = pipelineModel();
     expect(await replanner().runPending()).toMatchObject([{ kind: "revised", projectId, revision: 2, cause: "repair" }]);
     const prompts = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt));
     expect(prompts.some((p) => p.includes("the check reads a file no task writes"))).toBe(true);
-    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
   });
 
   test("past the bound of repairs the next abandonment blocks the project with one report naming the task given up", async () => {
@@ -798,7 +786,7 @@ describe("a task no roster role can work is planned around, never left waiting",
     // A task planned before owners were assigned (migration 031): no work kind and no owner.
     await db.execute(sql`UPDATE work_items SET owner_role_id = NULL, work_kind = NULL WHERE id = ${harbour.id}`);
 
-    const workItems = new WorkItemRepository(db);
+    const workItems = new WorkItemRowRepository(db);
     const staffing = createAgentStaffing({
       async ownerOf(taskId) {
         const row = await workItems.findById(taskId);
@@ -823,7 +811,7 @@ describe("a task no roster role can work is planned around, never left waiting",
     const left = await releaseClearedBlocks({
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
-      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectRepository(db).get(id) },
+      projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectHaltRepository(db).get(id) },
       workdirBase: tmpdir(),
     });
 
@@ -839,6 +827,6 @@ describe("a task no roster role can work is planned around, never left waiting",
     const repaired = (await itemsOf(projectId)).find((i) => i.title === "Book a harbour class by its date" && i.status === "Pending");
     if (repaired === undefined) throw new Error("the repair planned no new task");
     expect((await staffOf(repaired.id)).kind).toBe("staffed");
-    expect(await new ProjectRepository(db).listActiveIds()).toContain(projectId);
+    expect(await new ProjectHaltRepository(db).listActiveIds()).toContain(projectId);
   });
 });

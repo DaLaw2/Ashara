@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
-import type { CoreLoopConfig } from "@ashara/orchestrator";
-import { DEFAULT_CONFIG } from "@ashara/orchestrator";
+import type { CoreLoopConfig } from "@ashara/delivery";
+import { DEFAULT_CONFIG } from "@ashara/delivery";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { readCellLimits, type CellResourceLimits } from "@ashara/execution-infra";
 

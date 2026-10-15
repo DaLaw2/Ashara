@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ClientRepository, DEFAULT_DATABASE_URL, ProjectRepository, WorkItemRepository, createDb, failedApproaches, knowledgeEntries } from "@ashara/db";
+import { ClientRepository, DEFAULT_DATABASE_URL, ProjectRepository, createDb, failedApproaches, knowledgeEntries } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { FailedApproachRepository, KnowledgeRepository } from "@ashara/knowledge";
 import type { ProjectId } from "@ashara/shared";
+import { WorkItemRowRepository } from "@ashara/delivery";
 
 // Knowledge's repositories against real Postgres: one insert -> read round trip each, and the
 // project scoping of their reads (migration 051, ADR-074 d92 a).
@@ -56,7 +57,7 @@ describe("KnowledgeRepository", () => {
   beforeAll(async () => {
     repo = new KnowledgeRepository(db);
 
-    const wiRepo = new WorkItemRepository(db);
+    const wiRepo = new WorkItemRowRepository(db);
     await wiRepo.create({
       id: epicId,
       level: "Epic",
@@ -116,7 +117,7 @@ describe("FailedApproachRepository", () => {
   beforeAll(async () => {
     repo = new FailedApproachRepository(db);
 
-    const wiRepo = new WorkItemRepository(db);
+    const wiRepo = new WorkItemRowRepository(db);
     await wiRepo.create({
       id: epicId,
       level: "Epic",
@@ -177,7 +178,7 @@ describe("project-scoped knowledge", () => {
 
   beforeAll(async () => {
     otherProjectId = (await new ProjectRepository(db).create(`knowledge-intg-other-${randomUUID().slice(0, 8)}`, testClientId)).id;
-    const wiRepo = new WorkItemRepository(db);
+    const wiRepo = new WorkItemRowRepository(db);
     for (const projectId of [testProjectId, otherProjectId]) {
       const taskId = randomUUID();
       await wiRepo.create({ id: taskId, level: "Task", status: "Pending", title: "Scoped Task", projectId });

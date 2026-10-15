@@ -18,14 +18,13 @@ import {
   ProjectRepository,
 } from "@ashara/db";
 import { CheckDisputeRepository, TaskCheckRepository } from "@ashara/quality";
-import { DispatchService } from "@ashara/orchestrator";
-import type { TaskDescriptor } from "@ashara/orchestrator";
+import { DispatchService, FailureRouter } from "@ashara/delivery";
+import type { TaskDescriptor } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { FailureRouter, classifyFailure } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
@@ -146,7 +145,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
@@ -491,13 +490,13 @@ describe("independent verification", () => {
     expect(result.detail).toContain("check files belong to the check author");
     if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
     expect(result.errorEnvelope.chain.operation).toBe("ownershipGate");
-    const category = classifyFailure(result.errorEnvelope);
-    expect(category).toBe("VERIFICATION_GAP");
+    if (result.status !== "failed") throw new Error("expected a failed result");
+    expect(result.verdict).toEqual({ kind: "retryable", ground: "work" });
     expect(new FailureRouter(2).route({
       item: { id: goodbye.implementation.id },
       failure: { detail: result.detail, raw: {} },
       priorAttempts: 1,
-      category,
+      verdict: result.verdict,
     })).toMatchObject({ action: "replan", attempt: 2 });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await git("branch", "--list", `task/${goodbye.implementation.id}`)).not.toBe("");
@@ -562,7 +561,8 @@ describe("post-merge regression suite", () => {
     expect(result.detail).toContain('Check "environment test": PASSED');
     expect(events.find((e) => e.event === "post_merge_verify")).toMatchObject({ verdict: "failed", regressionTasks: [hello.implementation.id] });
     if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
-    expect(classifyFailure(result.errorEnvelope)).toBe("VERIFICATION_GAP");
+    if (result.status !== "failed") throw new Error("expected a failed result");
+    expect(result.verdict).toEqual({ kind: "retryable", ground: "work" });
     expect(await git("rev-parse", "main")).toBe(mainBefore);
     expect(await readFile(join(target, "hello.txt"), "utf8")).toBe("hello\n");
     expect(existsSync(join(target, "greet.txt"))).toBe(false);
@@ -826,9 +826,9 @@ describe("post-merge regression suite", () => {
     expect(result.status).toBe("failed");
     if (result.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
     expect(result.errorEnvelope.chain.operation).toBe("postMergeScaffold");
-    const category = classifyFailure(result.errorEnvelope);
-    expect(category).toBe("VERIFICATION_GAP");
-    expect(new FailureRouter(3).route({ item: { id: scaffoldId }, failure: { detail: result.detail, raw: {} }, priorAttempts: 1, category })).toMatchObject({
+    if (result.status !== "failed") throw new Error("expected a failed result");
+    expect(result.verdict).toEqual({ kind: "retryable", ground: "work" });
+    expect(new FailureRouter(3).route({ item: { id: scaffoldId }, failure: { detail: result.detail, raw: {} }, priorAttempts: 1, verdict: result.verdict })).toMatchObject({
       action: "replan",
       attempt: 2,
     });

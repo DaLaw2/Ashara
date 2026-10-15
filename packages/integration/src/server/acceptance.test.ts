@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository, WorkItemRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository } from "@ashara/db";
+import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import {
   ClientAnswers,
   ClientStops,
@@ -13,8 +14,7 @@ import {
 } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
-import type { AcceptanceStore } from "@ashara/orchestrator";
-import { runAcceptanceSweeps } from "@ashara/orchestrator";
+import type { AcceptanceStore } from "@ashara/delivery";
 import { type ProjectId, type VisionSource } from "@ashara/shared";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
@@ -123,7 +123,7 @@ async function deliveredProject(options: { readonly prefixAsked: boolean } = { p
   const checksOfRemove = await task("Checks for Delete keys", { origin: "check", checksFor: remove, ...removeSpec });
   const all = Object.values(options.prefixAsked ? { ...VISION, prefix: { ...VISION.prefix, standing: "asked" } } : VISION);
   await task("Review the plan's checks", { origin: "review", visionItems: all.map((item) => item.text), sources: all });
-  const workItems = new WorkItemRepository(db);
+  const workItems = new WorkItemRowRepository(db);
   await workItems.recordMergeCommit(store, MERGE_A, "merged");
   await workItems.recordMergeCommit(remove, MERGE_A, "already_delivered");
   for (const [taskId, checkTaskId] of [[store, checksOfStore], [remove, checksOfRemove]] as const) {
@@ -163,7 +163,7 @@ function deliveredReports(): DeliveredReports {
 }
 
 function sweepDeps(passed: boolean, details: string, ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] }) {
-  const projects = new ProjectRepository(db);
+  const projects = new ProjectHaltRepository(db);
   return {
     acceptance: acceptanceStore(),
     acceptanceSweeper: {
@@ -221,7 +221,7 @@ afterAll(async () => {
 describe("acceptance on main", () => {
   test("a passing sweep makes the project accepted, stops its dispatch, and posts one delivered report from the records", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     expect(await acceptanceStore().readyForAcceptance()).toEqual([{ projectId, workspacePath: `/tmp/${NAME_PREFIX}`, goalTaskIds: goals }]);
 
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
@@ -261,7 +261,7 @@ describe("acceptance on main", () => {
         VALUES (${randomUUID()}, 'Task', 'Abandoned', ${title}, ${JSON.stringify({ origin: "decomposition" })}::jsonb,
                 ${JSON.stringify(reason)}::jsonb, ${projectId})`);
     };
-    await abandoned("List keys", { source: "failure_router", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
+    await abandoned("List keys", { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
     await abandoned("Watch keys", { source: "superseded", planRevision: 2, requestedBy: null, repairOf: ["x"], reason: "replaced by the repaired plan" });
     const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
     expect(due?.givenUp).toEqual(["List keys"]);
@@ -368,7 +368,7 @@ describe("acceptance on main", () => {
 
   test("a sweep that keeps faulting is counted on the project, durably, and halts it as undeliverable past the budget", async () => {
     const { projectId } = await deliveredProject();
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const fault = Object.assign(new Error("the acceptance sweep could not run: read main failed: fatal: bad object HEAD"), {
       name: "AcceptanceSweepFault",
       projectId,

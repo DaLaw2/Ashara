@@ -10,15 +10,17 @@
 [shared]
 allow = []
 
-[orchestrator]
+[delivery]
+# ADR-075 Delivery: the board, decomposition, routing and the contractor loop (its process manager).
 # Every other context is reachable ONLY through acl/ (enforced by restrict below), except that the
 # dispatcher (src/dispatch/) composes a task's dispatch from Workplace's attempt, Quality's
 # verification, Knowledge's context and lessons, Execution Infrastructure's cells and worktrees and
-# Finance's guarded model port directly.
-# db is infrastructure, not a BC boundary
-# ADR-075 context map: Delivery reads Workplace's Outcome, an attempt's claim, and Quality's verdict.
-allow = ["shared", "db", "planning", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance"]
-restrict.planning = ["src/acl/*.ts"]
+# Finance's guarded model port directly. Model Access is generic: the structured-output ladder.
+# Delivery owns its repositories (O1); db supplies the connection and the schema.
+# ADR-075 context map: Organization is upstream (who owns a WorkKind), Engagement upstream of both
+# (the client vision as its published VisionVersion); Delivery reads Workplace's Outcome, an
+# attempt's claim, and Quality's verdict.
+allow = ["shared", "db", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance", "model-access"]
 restrict.engagement = ["src/acl/*.ts"]
 restrict.organization = ["src/acl/*.ts"]
 restrict.workplace = ["src/acl/*.ts", "src/dispatch/*.ts"]
@@ -26,13 +28,6 @@ restrict.quality = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.knowledge = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.execution-infra = ["src/acl/*.ts", "src/dispatch/*.ts"]
 restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
-
-[planning]
-# ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind), and Engagement
-# of both: each reads the client vision as its published VisionVersion through its ACL (S7, S8).
-allow = ["shared", "finance", "model-access", "organization", "engagement", "quality"]
-restrict.engagement = ["src/acl/*.ts"]
-restrict.quality = ["src/acl/*.ts"]
 
 [quality]
 # ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
@@ -51,7 +46,10 @@ allow = ["shared"]
 
 [engagement]
 # O1 (ADR-080 d3): Engagement owns its repositories; db supplies the connection and the schema.
-allow = ["shared", "finance", "model-access", "db"]
+# O3 c: a project's halt is Delivery's; Engagement's steps that ask for one read its cause in
+# Delivery's published language (project-halt), and only there.
+allow = ["shared", "finance", "model-access", "db", "delivery"]
+restrict.delivery = ["src/answers.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/stack-choice.ts"]
 
 [server]
 allow = ["*"]
@@ -100,7 +98,7 @@ importers = []
 # scripts/check-boundaries.ts holds every file under src/simulator/ to importing from another
 # package only the symbols listed here: composition, a fake's port type, a class the simulator wraps
 # to observe, and the shared vocabulary. No Engagement composer, no acceptance or block-report read
-# model of db, nothing from the orchestrator is listed. Adding a name is a decision to review, not a
+# model of db, nothing from Delivery is listed. Adding a name is a decision to review, not a
 # formality. The cross-package tests (src/server/) are not held to it.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]

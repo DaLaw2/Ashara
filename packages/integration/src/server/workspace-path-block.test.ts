@@ -5,24 +5,13 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  EventStoreRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService } from "@ashara/orchestrator";
+import { DispatchService, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
-import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
-import { FailureRouter } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
@@ -67,13 +56,13 @@ afterAll(async () => {
 describe("a project whose workspace path is refused", () => {
   test("blocks the item environment_unavailable with no dispatch counted, no llm_calls row and no cell", async () => {
     const calls = new LlmCallRepository(db);
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const client = await new ClientRepository(db).create(NAME);
     const projectId = (await projects.create(NAME, client.id)).id;
     // A path inside the Ashara repository, outside the workdir base: the validation refuses it.
     await projects.recordWorkspacePath(projectId, join(process.cwd(), "poisoned-target"));
     const itemId = createWorkItemId();
-    await new WorkItemRepository(db).create({
+    await new WorkItemRowRepository(db).create({
       id: itemId,
       level: "Task",
       status: "Pending",
@@ -93,7 +82,7 @@ describe("a project whose workspace path is refused", () => {
     });
     const mock = new MockLanguageModelV4({ doGenerate: async () => { throw new Error("the provider must not be called"); } });
     stub.model = mock;
-    const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
+    const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
     const gateway = new GuardedModelAccess(buildGateway({
       models: sdkLanguageModels,
       config: {
@@ -147,7 +136,7 @@ describe("a project whose workspace path is refused", () => {
       clock: systemClock,
     });
 
-    const workItems = new WorkItemRepository(db);
+    const workItems = new WorkItemRowRepository(db);
     const loop = new CoreLoop({
       config: { ...DEFAULT_CONFIG, workdirBase },
       workItemRepo: adaptWorkItemRepo(workItems),

@@ -1,6 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { WorkItemRepository, acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projects } from "@ashara/db";
-import type { Database, DbHandle } from "@ashara/db";
+import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projects } from "@ashara/db";
+import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 
 // A delivered project is accepted on one sweep of main HEAD (migration 049; story
@@ -92,11 +92,16 @@ async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
 }
 
 /**
- * A sweep that passed: recorded, and the project moved to 'accepted', in one transaction (the
+ * A sweep that passed: recorded, and the project moved to 'accepted' by `accept` (Engagement's
+ * lifecycle guard, which the composition root supplies), in one transaction (the
  * projects_acceptance_guard trigger refuses the move without the row). "moved" when the project is
  * no longer ready; nothing is written.
  */
-export async function recordAcceptance(db: Database, sweep: AcceptanceSweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved"> {
+export async function recordAcceptance(
+  db: Database,
+  sweep: AcceptanceSweepRecord & { readonly mainCommit: string },
+  accept: (tx: DbTransaction, projectId: ProjectId) => Promise<void>,
+): Promise<"accepted" | "moved"> {
   return db.transaction(async (tx) => {
     if (!(await lockReady(tx, sweep.projectId))) return "moved";
     await tx.insert(acceptanceSweeps).values({
@@ -108,24 +113,24 @@ export async function recordAcceptance(db: Database, sweep: AcceptanceSweepRecor
       passed: true,
       details: sweep.details,
     });
-    await tx.update(projects).set({ status: "accepted" }).where(eq(projects.id, sweep.projectId));
+    await accept(tx, sweep.projectId);
     return "accepted";
   });
 }
 
 /**
- * A sweep that failed: `writeDefect` writes the defect item and gives it up (so migration 048's
- * trigger opens its repair) and returns its id; the sweep is recorded with it, in one transaction.
+ * A sweep that failed: `writeDefect` writes the defect item in the transaction and gives it up (so
+ * migration 048's trigger opens its repair) and returns its id; the sweep is recorded with it, in one transaction.
  * "moved" when the project is no longer ready; nothing is written.
  */
 export async function recordAcceptanceDefect(
   db: Database,
   sweep: AcceptanceSweepRecord,
-  writeDefect: (workItems: WorkItemRepository) => Promise<string>,
+  writeDefect: (tx: DbTransaction) => Promise<string>,
 ): Promise<"recorded" | "moved"> {
   return db.transaction(async (tx) => {
     if (!(await lockReady(tx, sweep.projectId))) return "moved";
-    const defectItemId = await writeDefect(new WorkItemRepository(tx));
+    const defectItemId = await writeDefect(tx);
     await tx.insert(acceptanceSweeps).values({
       projectId: sweep.projectId,
       mainCommit: sweep.mainCommit,

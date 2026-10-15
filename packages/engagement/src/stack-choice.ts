@@ -1,5 +1,6 @@
-import { projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import { projectBlockCause } from "@ashara/delivery/project-halt";
+import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
 import type { StoredVision, VisionAppend } from "./vision.js";
 

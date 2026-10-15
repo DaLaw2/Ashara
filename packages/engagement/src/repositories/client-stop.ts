@@ -3,6 +3,7 @@ import { z } from "zod";
 import { clientMessages, projects, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { PROJECT_STATUSES, parseProjectId, type ProjectId } from "@ashara/shared";
+import { PROJECT_LIFECYCLE } from "../project-lifecycle.js";
 import { ClientMessageRepository } from "./client-message.js";
 
 // The client's stop (migration 028). The Liaison consumes each inbound 'stop',
@@ -26,9 +27,6 @@ class MergeKindUnreadable extends Error {
     this.name = "MergeKindUnreadable";
   }
 }
-
-/** Every status the stop moves to 'stopped'; 'stopped' itself is already stopped. */
-const STOPPABLE_STATUSES = PROJECT_STATUSES.filter((status) => status !== "stopped");
 
 /** A task with a commit on record, and how that commit closed it (null: not recorded). */
 interface MergedTaskRow {
@@ -97,8 +95,8 @@ export async function recordClientStop(
     // An accepted project (migration 049) waits for exactly this.
     const [moved] = await tx
       .update(projects)
-      .set({ status: "stopped" })
-      .where(and(eq(projects.id, stop.projectId), inArray(projects.status, STOPPABLE_STATUSES)))
+      .set({ status: PROJECT_LIFECYCLE.stop.to })
+      .where(and(eq(projects.id, stop.projectId), inArray(projects.status, [...PROJECT_LIFECYCLE.stop.from])))
       .returning({ id: projects.id });
     if (!moved) {
       const [existing] = await tx
@@ -106,7 +104,7 @@ export async function recordClientStop(
         .from(projects)
         .where(eq(projects.id, stop.projectId))
         .limit(1);
-      if (existing?.status === "stopped") return { kind: "already-stopped" };
+      if (existing?.status === PROJECT_LIFECYCLE.stop.to) return { kind: "already-stopped" };
       throw new ProjectStatusUnknown(stop.projectId, existing?.status ?? null);
     }
 

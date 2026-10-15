@@ -11,12 +11,12 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner } from "@ashara/planning";
-import type { FirstPlanStore } from "@ashara/planning";
+import { FirstPlanner, ProjectHaltRepository, createFirstPlanStore } from "@ashara/delivery";
+import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
-import { createFirstPlanStore, createPlanReportStore } from "@ashara/server/first-plan-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
+import { createPlanReportStore } from "@ashara/server/plan-report-store";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -339,7 +339,7 @@ beforeAll(async () => {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
 });
 
@@ -606,14 +606,18 @@ describe("roster", () => {
     expect((await rosterOf(projectId)).map((r) => r.name)).toEqual(["Check author", "Implementer", "Liaison", "Platform"]);
   });
 
-  test("a model that never gives a valid roster blocks the project with the violations, and nothing is planned", async () => {
+  test("a model that never gives a valid roster is refused with the violations; Delivery's halt blocks the project, and nothing is planned", async () => {
     stubModel({ doGenerate: jsonResult(SELF_JUDGING_ROSTER) });
     const projectId = await projectWithVision(false);
 
     const outcomes = await rosterStep().runPending();
 
-    expect(outcomes.map((o) => o.kind)).toEqual(["project-blocked"]);
+    expect(outcomes.map((o) => o.kind)).toEqual(["refused"]);
     expect(await rosterOf(projectId)).toEqual([]);
+    const [refused] = outcomes;
+    if (refused?.kind !== "refused") throw new Error("expected a refused roster");
+    // Organization halts nothing itself (O3 c); the core loop halts the project as a fault, so:
+    await new ProjectHaltRepository(db).block(projectId, { category: "fault", ...refused.refusal });
     const row = await db.execute(
       sql`SELECT status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,
     );

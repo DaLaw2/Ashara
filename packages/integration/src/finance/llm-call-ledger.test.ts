@@ -76,7 +76,7 @@ function gateway(
   }), new LlmCallLedger(
     calls,
     // Caps far above anything a stubbed call can cost: this suite is about the rows, not the cap.
-    new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
+    new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
   ));
 }
 
@@ -644,7 +644,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
         clock: () => PEAK,
       }), new LlmCallLedger(
         calls,
-        new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
+        new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
       ))
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
         .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });

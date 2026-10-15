@@ -59,7 +59,7 @@ function stubModel(usage: { input: number | undefined; output: number | undefine
 
 /** One server process: its own SpendCap, so nothing in memory carries over from another. */
 function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]): { readonly gateway: GuardedModelAccess; readonly cap: SpendCap } {
-  const cap = new SpendCap({ ledger: calls, projects, caps });
+  const cap = new SpendCap({ ledger: calls, caps });
   const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
@@ -156,7 +156,7 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect(mock.doGenerateCalls).toHaveLength(1);
   });
 
-  test("a call whose estimate would cross the project cap is refused before the provider is called, and the project ends blocked budget_cap", async () => {
+  test("a call whose estimate would cross the project cap is refused before the provider is called; Finance only refuses, it halts nothing", async () => {
     const projectId = await newProject();
     const mock = stubModel({ input: 1000, output: 40 });
     const { gateway, cap } = processWithCaps({ deploymentUsd: LARGE, perProjectUsd: 1e-9 });
@@ -167,13 +167,13 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect(cap.refusalOf(refusal)).toMatchObject({ kind: "project", projectId });
     expect(mock.doGenerateCalls).toHaveLength(0);
     expect(await rowsOf(projectId)).toHaveLength(0);
-    const project = await projectRow(projectId);
-    expect(project.status).toBe("blocked");
-    expect(project.blockedErrorClass).toBe("BudgetExceeded");
-    expect(project.blockedReason).toMatch(/^budget_cap: the spend cap of project /);
-    // The stored reason names the one exit migration 040 leaves: a bare status UPDATE is refused.
-    expect(project.blockedReason).toContain(`scripts/project.ts unblock ${projectId}`);
-    expect(project.blockedReason).not.toContain("UPDATE projects");
+    // The project's halt at its cap is Delivery's (O3 c), which blocks with the refusal's reason.
+    expect((await projectRow(projectId)).status).toBe("active");
+    if (!(refusal instanceof BudgetExceeded)) throw new Error("expected a BudgetExceeded refusal");
+    expect(refusal.message).toMatch(/^budget_cap: the spend cap of project /);
+    // The reason names the one exit migration 040 leaves: a bare status UPDATE is refused.
+    expect(refusal.message).toContain(`scripts/project.ts unblock ${projectId}`);
+    expect(refusal.message).not.toContain("UPDATE projects");
   });
 
   test("an unmeasured call (cost_usd NULL) counts at its recorded estimate, never $0, and is logged at warn", async () => {

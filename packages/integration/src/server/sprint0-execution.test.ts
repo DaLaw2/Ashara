@@ -9,21 +9,12 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  DevSessionRepository,
-  EnvironmentBuildRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
-import { DispatchService } from "@ashara/orchestrator";
+import { DispatchService, WorkItemRowRepository } from "@ashara/delivery";
 import { StackChoiceReports, VisionRepository } from "@ashara/engagement";
 import type { StackChoiceStore } from "@ashara/engagement";
-import type { TaskDescriptor } from "@ashara/orchestrator";
+import type { TaskDescriptor } from "@ashara/delivery";
 import type { SessionStore } from "@ashara/workplace";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
@@ -201,11 +192,11 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
-  const workItems = new WorkItemRepository(db);
+  const workItems = new WorkItemRowRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DispatchService({
     config: { workdirBase },
@@ -380,7 +371,7 @@ describe("Sprint 0", () => {
     const mergeCommit = sprint0.result.delivered.mergeCommit;
     const { stdout: mainHead } = await run("git", ["-C", sprint0.target, "rev-parse", "main"]);
     expect(mainHead.trim()).toBe(mergeCommit);
-    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, mergeCommit, "merged");
+    await new WorkItemRowRepository(db).recordMergeCommit(sprint0.taskId, mergeCommit, "merged");
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
 
     // The version Sprint 0's gate tested: earlier tests of this project built other versions.
@@ -516,7 +507,7 @@ describe("Sprint 0", () => {
     ]);
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
     if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
-    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit, "merged");
+    await new WorkItemRowRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit, "merged");
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
     const gated = /Environment version ([0-9a-f]{64})/.exec(String(sprint0.events.find((e) => e.event === "substrate_gate_result")?.["output"]))?.[1];
     if (gated === undefined) throw new Error("the gate reported no environment version");
@@ -555,7 +546,7 @@ describe("Sprint 0", () => {
     expect(carried).toEqual([{ statement: STATEMENT, version }]);
 
     if (changed.result.status !== "completed" || changed.result.delivered.kind !== "merged") throw new Error("the implementation did not merge");
-    await new WorkItemRepository(db).recordMergeCommit(changed.taskId, changed.result.delivered.mergeCommit, "merged");
+    await new WorkItemRowRepository(db).recordMergeCommit(changed.taskId, changed.result.delivered.mergeCommit, "merged");
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${changed.taskId}`);
 
     const next = await runTask(
@@ -581,7 +572,7 @@ describe("Sprint 0", () => {
     ]);
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
     if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
-    await new WorkItemRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit, "merged");
+    await new WorkItemRowRepository(db).recordMergeCommit(sprint0.taskId, sprint0.result.delivered.mergeCommit, "merged");
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${sprint0.taskId}`);
     const change = (): ScriptStep[] => [
       toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\nRUN true\n` }),

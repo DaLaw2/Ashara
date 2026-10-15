@@ -127,7 +127,7 @@ describe("halt reports state the observed cause", () => {
         projectId,
         kind: "plan_repair",
         abandoned: [
-          { title: "Lock the data directory", attempts: 3, cause: { source: "failure_router", reason: "attempts exhausted (3/3)", detail: "flock: lock held by pid 41" } },
+          { title: "Lock the data directory", attempts: 3, cause: { source: "failure_given_up", reason: "attempts exhausted (3/3)", detail: "flock: lock held by pid 41" } },
           { title: "Review the checks", attempts: 1, cause: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "checks 2 and 5 contradict" } },
           {
             title: "Acceptance on main 0123456789ab",

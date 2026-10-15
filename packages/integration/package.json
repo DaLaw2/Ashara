@@ -24,11 +24,10 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@ashara/delivery": "*",
     "@ashara/engagement": "*",
     "@ashara/knowledge": "*",
-    "@ashara/orchestrator": "*",
     "@ashara/organization": "*",
-    "@ashara/planning": "*",
     "@hono/node-server": "2.0.12",
     "@types/pg": "8.20.0",
     "ai": "7.0.128",

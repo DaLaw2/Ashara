@@ -4,7 +4,7 @@ import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository } from "@ashara/db";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -119,7 +119,7 @@ function gatewayWithLedger(spendCap: {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: spendCap.ledger, projects: new ProjectRepository(db), caps: spendCap.caps }),
+    new SpendCap({ ledger: spendCap.ledger, caps: spendCap.caps }),
   ));
 }
 
@@ -179,7 +179,7 @@ beforeAll(async () => {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
 });
 

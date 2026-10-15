@@ -39,7 +39,7 @@ let clientId: string;
 
 /** One server process: its own SpendCap and ledger, nothing in memory shared with another. */
 function serverProcess(perProjectUsd: number): { readonly gateway: GuardedModelAccess; readonly ledger: LlmCallLedger } {
-  const cap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1e6, perProjectUsd } });
+  const cap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1e6, perProjectUsd } });
   const ledger = new LlmCallLedger(calls, cap);
   const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,

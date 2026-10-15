@@ -2,24 +2,13 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  EventStoreRepository,
-  listDuePlanReports,
-  listProjectsAwaitingFirstPlan,
-  listProjectsAwaitingRoster,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, listProjectsAwaitingRoster } from "@ashara/db";
 import { ClientStops, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
-import { PlanningService } from "@ashara/planning";
+import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // Story s-client-channel-m1: a client's stop halts its project. Every row belongs
 // to a project this suite creates under a unique name, and every step is
@@ -53,7 +42,7 @@ async function projectWith(tasks: ReadonlyArray<readonly [string, string, ("merg
       INSERT INTO work_items (id, level, status, parent_id, title, project_id)
       VALUES (${taskId}, 'Task', ${status}, ${epicId}, ${title}, ${project.id})`);
     if (merged === "merged") {
-      await new WorkItemRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"), "merged");
+      await new WorkItemRowRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"), "merged");
       await db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Preparing')`);
     }
     if (merged === "session-only") {
@@ -77,9 +66,9 @@ function liaison(): ClientStops {
 }
 
 function gate() {
-  const projects = new ProjectRepository(db);
+  const projects = new ProjectHaltRepository(db);
   return PlanningService.gate(
-    adaptWorkItemRepo(new WorkItemRepository(db)),
+    adaptWorkItemRepo(new WorkItemRowRepository(db)),
     {
       listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
       block: projects.block.bind(projects),
@@ -201,7 +190,7 @@ describe("a client's stop", () => {
     const gated = async () => (await gate()).map((item) => item.id);
     const tenders = async () => (await createIntakeStore(db).openTenders()).map((tender) => tender.projectId);
     const toStaff = async () => (await listProjectsAwaitingRoster(db)).map((row) => row.projectId);
-    const toPlan = async () => (await listProjectsAwaitingFirstPlan(db)).map((row) => row.projectId);
+    const toPlan = async () => (await createFirstPlanStore(db).projectsAwaitingPlan()).map((row) => row.projectId);
     const toReport = async () => (await listDuePlanReports(db)).map((row) => row.projectId);
     expect(await gated()).toContain(dispatchable.taskIds[0]);
     expect(await tenders()).toContain(awaiting);
@@ -230,7 +219,7 @@ describe("a client's stop", () => {
 
   test("a blocked project the client stops keeps its blocked cause; nothing merged is said plainly", async () => {
     const project = await projectWith([["Set up the studio list", "Pending"]]);
-    await new ProjectRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
+    await new ProjectHaltRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
     await sendStop(project.projectId, "Never mind.");
 
     const [outcome] = await liaison().runPending();

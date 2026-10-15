@@ -1,0 +1,306 @@
+import type { LadderAttemptEvent } from "@ashara/model-access";
+import { describeErrorChain } from "@ashara/shared";
+import type { ProjectId, WorkItemLevel, WorkKind } from "@ashara/shared";
+import { projectBlockCause } from "./project-halt.js";
+import type { ProjectBlockCause } from "./project-halt.js";
+import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
+import { BudgetExceeded } from "./acl/finance-acl.js";
+import type { ContextualLlm } from "./acl/finance-acl.js";
+import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "./acl/organization-acl.js";
+import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
+import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
+import { DecompositionEngine } from "./decomposition.js";
+import type {
+  DecompositionInput,
+  DecompositionResult,
+  DroppedDependency,
+  TaskSpec,
+  WorkItemSpec,
+} from "./decomposition-types.js";
+import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
+
+// Delivery's first plan of a project (story s-liaison-intake-m1, ADR-075): the
+// project's current vision, which Engagement owns and Delivery only reads, is
+// decomposed into an Epic -> Task plan written in one transaction. Delivery never
+// writes to the client; the Liaison reports the outcome from what is recorded here.
+
+/** Failed planning attempts after which Delivery stops and blocks the project. */
+const MAX_PLAN_ATTEMPTS = 3;
+
+/** A project with a current vision and no work items, as the store reads it. */
+interface ProjectAwaitingPlan {
+  readonly projectId: ProjectId;
+  readonly projectName: string;
+  /** The project's current vision as stored; read through Engagement's published reader. */
+  readonly vision: StoredVision;
+  readonly planAttempts: number;
+  readonly planLastError: string | null;
+  /** The rows of the project's latest roster revision as stored; parsed by Organization. */
+  readonly rosterRows: unknown;
+}
+
+/** Who owns a planned task: its kind of work and the roster role holding the capability that kind needs. */
+interface TaskOwnership {
+  readonly tempId: string;
+  readonly workKind: WorkKind;
+  readonly ownerRoleId: string;
+}
+
+export interface FirstPlanWrite {
+  readonly projectId: ProjectId;
+  readonly items: readonly BulkPlanItem[];
+  readonly edges: readonly BulkPlanEdge[];
+  /** One entry per Task item; an Epic has no owner. */
+  readonly owners: readonly TaskOwnership[];
+  /** Ordering hints the decomposition dropped, recorded with the plan so its report states them. */
+  readonly droppedDependencies: readonly DroppedDependency[];
+}
+
+type FirstPlanCommit =
+  | { readonly kind: "written"; readonly created: number }
+  | { readonly kind: "already-planned" };
+
+/** Delivery's persistence port for the first plan. Each method is one transaction. */
+export interface FirstPlanStore {
+  projectsAwaitingPlan(): Promise<readonly ProjectAwaitingPlan[]>;
+  /**
+   * Writes the whole plan and stamps the project planned, or nothing when the
+   * project gained work items or a planning outcome since it was read.
+   */
+  writeFirstPlan(write: FirstPlanWrite): Promise<FirstPlanCommit>;
+  /** Counts a failed attempt with its error; returns the count after it. */
+  recordFailedAttempt(projectId: ProjectId, error: string): Promise<number>;
+  /** Blocks the project and stamps planning stopped. */
+  stopPlanning(projectId: ProjectId): Promise<void>;
+  /**
+   * Blocks the project and records why (migration 025), for a project whose own
+   * record is inconsistent; a project already blocked keeps its first cause.
+   */
+  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
+}
+
+export type FirstPlanOutcome =
+  | { readonly kind: "planned"; readonly projectId: ProjectId; readonly epics: number; readonly tasks: number }
+  | { readonly kind: "already-planned"; readonly projectId: ProjectId }
+  | { readonly kind: "failed"; readonly projectId: ProjectId; readonly attempt: number; readonly error: string }
+  | { readonly kind: "stopped"; readonly projectId: ProjectId; readonly attempts: number }
+  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+
+/** What the core loop asks of Delivery's planning each cycle. */
+export interface FirstPlanning {
+  runPending(): Promise<readonly FirstPlanOutcome[]>;
+}
+
+/**
+ * A project reached its attempt cap with no error on record. Migration 020's
+ * CHECK makes this unrepresentable; meeting it means the store lied.
+ */
+class PlanFailureUnrecorded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly attempts: number,
+  ) {
+    super(`project ${projectId} has ${attempts} failed planning attempts but no recorded error`);
+    this.name = "PlanFailureUnrecorded";
+  }
+}
+
+function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
+  switch (level) {
+    case "epic":
+      return "Epic";
+    case "task":
+      return "Task";
+  }
+}
+
+/** The kinds of work a plan holds, each with the role that owns it. */
+type PlanOwners = Readonly<Record<WorkKind, { readonly id: string }>>;
+
+/**
+ * The owner of each kind of work from the project's latest roster, resolved before any LLM call:
+ * a plan nobody can own is not attempted. Throws RosterUnreadable or WorkKindOwnerUnresolved.
+ */
+export function planOwners(projectId: ProjectId, rosterRows: unknown): PlanOwners {
+  const roster = parseStoredRoster(projectId, rosterRows);
+  return {
+    environment: ownerOf(roster, "environment"),
+    implementation: ownerOf(roster, "implementation"),
+    check: ownerOf(roster, "check"),
+  };
+}
+
+/**
+ * The kind of work a planned task is. Sprint 0 defines the project environment,
+ * the environment role's work; every decomposed task is implementation, and its
+ * check task is the check author's. The review of the plan's suites is the check
+ * author's role too, as a hat (ADR-074 addendum 2 d71 c): a roster holds exactly one
+ * role with author-checks, so no other role could take it, and the review is a separate
+ * dispatch that reads the stored suites and authored none of them.
+ */
+function workKindOf(origin: TaskSpec["origin"]): WorkKind {
+  switch (origin) {
+    case "sprint0":
+      return "environment";
+    case "decomposition":
+    case "product-scaffold":
+      return "implementation";
+    case "check":
+    case "review":
+      return "check";
+  }
+}
+
+/** The decomposition as one bulk plan: the epic first, its tasks after, edges by temp id. */
+export function toWrite(projectId: ProjectId, result: DecompositionResult, owners: PlanOwners): FirstPlanWrite {
+  const items: BulkPlanItem[] = [
+    {
+      tempId: result.epic.id,
+      level: toLevel(result.epic.level),
+      title: result.epic.title,
+      description: result.epic.description,
+      northStar: result.epic.northStar,
+    },
+    ...result.tasks.map((task) => ({
+      tempId: task.id,
+      level: toLevel(task.level),
+      title: task.title,
+      description: task.description,
+      parentId: task.parentId,
+      taskSpec: task.taskSpec,
+    })),
+  ];
+  const edges = result.dependencyEdges.map((edge) => ({ from: edge.from, to: edge.to }));
+  const taskOwners = result.tasks.map((task): TaskOwnership => {
+    const workKind = workKindOf(task.taskSpec.origin);
+    return { tempId: task.id, workKind, ownerRoleId: owners[workKind].id };
+  });
+  return {
+    projectId,
+    items,
+    edges,
+    owners: taskOwners,
+    droppedDependencies: result.droppedDependencies,
+  };
+}
+
+interface FirstPlannerDeps {
+  readonly llm: ContextualLlm;
+  readonly store: FirstPlanStore;
+  readonly onAttempt?: (event: LadderAttemptEvent) => void;
+}
+
+/**
+ * Delivery's first planning step. Each project awaiting a plan is decomposed
+ * through recorded `decomposition` calls; the plan is written whole or not at
+ * all. A failed attempt writes nothing and is counted; at the cap the project is
+ * blocked and planning stops, so the loop does not spin on it.
+ */
+export class FirstPlanner implements FirstPlanning {
+  constructor(private readonly deps: FirstPlannerDeps) {}
+
+  /**
+   * A project whose own record is inconsistent is blocked, and the other
+   * projects are still planned. Any other failure, a store failure included,
+   * throws through and fails the cycle.
+   */
+  async runPending(): Promise<readonly FirstPlanOutcome[]> {
+    const outcomes: FirstPlanOutcome[] = [];
+    for (const project of await this.deps.store.projectsAwaitingPlan()) {
+      try {
+        outcomes.push(await this.plan(project));
+      } catch (err) {
+        // A roster that cannot be read or cannot assign an owner, and a vision that cannot be read,
+        // are the project's own record; planning again would not change it.
+        const projectRecord =
+          err instanceof PlanFailureUnrecorded ||
+          err instanceof RosterUnreadable ||
+          err instanceof WorkKindOwnerUnresolved ||
+          err instanceof VisionUnreadable;
+        if (!projectRecord) throw err;
+        outcomes.push(await this.block(project.projectId, projectBlockCause(err)));
+      }
+    }
+    return outcomes;
+  }
+
+  private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<FirstPlanOutcome> {
+    const result = await this.deps.store.blockProject(projectId, cause);
+    console.warn(`[first-plan] project ${projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
+    return { kind: "project-blocked", projectId, cause };
+  }
+
+  private async plan(project: ProjectAwaitingPlan): Promise<FirstPlanOutcome> {
+    const { projectId } = project;
+
+    // A previous cycle reached the cap but did not stop planning.
+    if (project.planAttempts >= MAX_PLAN_ATTEMPTS) {
+      if (project.planLastError === null) throw new PlanFailureUnrecorded(projectId, project.planAttempts);
+      await this.deps.store.stopPlanning(projectId);
+      return { kind: "stopped", projectId, attempts: project.planAttempts };
+    }
+
+    const owners = planOwners(projectId, project.rosterRows);
+    // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
+    const vision = planningVisionOf(project.vision);
+
+    let write: FirstPlanWrite;
+    let commit: FirstPlanCommit;
+    try {
+      write = toWrite(projectId, await this.decompose(project, vision), owners);
+      commit = await this.deps.store.writeFirstPlan(write);
+    } catch (err) {
+      return this.fail(project, err);
+    }
+    if (commit.kind === "already-planned") return { kind: "already-planned", projectId };
+    for (const dropped of write.droppedDependencies) {
+      console.warn(
+        `[first-plan] project ${projectId}: ordering hint dropped: "${dropped.dependentTaskTitle}" named ` +
+          `"${dropped.unresolvedRef}", which is no task of the plan; no edge was written for it`,
+      );
+    }
+    const epics = write.items.filter((item) => item.level === "Epic").length;
+    return { kind: "planned", projectId, epics, tasks: commit.created - epics };
+  }
+
+  private async decompose(project: ProjectAwaitingPlan, vision: PlanningVision): Promise<DecompositionResult> {
+    const llm = createGatewayDecompositionLLM(
+      this.deps.llm.forCall({ projectId: project.projectId, taskId: null, callSite: "decomposition" }),
+      this.deps.onAttempt,
+    );
+    const input: DecompositionInput = {
+      epicTitle: project.projectName,
+      epicNorthStar: vision.northStar,
+      epicDescription: vision.visionText,
+      environment: { kind: "new" },
+      layout: { kind: "new" },
+      visionItems: vision.items,
+    };
+    return new DecompositionEngine(llm).decompose(input);
+  }
+
+  private async fail(project: ProjectAwaitingPlan, err: unknown): Promise<FirstPlanOutcome> {
+    const { projectId } = project;
+    const error = describeErrorChain(err);
+    const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
+    console.warn(
+      `[first-plan] project ${projectId} (vision v${project.vision.version}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed: ${error}`,
+    );
+    // A refusal of the project's own spend cap is counted as the attempt it ended, then thrown on:
+    // the core loop's step halts the project it names (Finance refuses, Delivery halts: O3 c).
+    if (carriesSpendRefusal(err)) throw err;
+    if (attempt < MAX_PLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
+
+    await this.deps.store.stopPlanning(projectId);
+    console.warn(`[first-plan] project ${projectId}: planning stopped after ${attempt} attempts; project blocked`);
+    return { kind: "stopped", projectId, attempts: attempt };
+  }
+}
+
+/** Whether `err` is, or carries as a cause, a refusal of the project's own spend cap. */
+function carriesSpendRefusal(err: unknown): boolean {
+  for (let current: unknown = err; current instanceof Error; current = current.cause) {
+    if (current instanceof BudgetExceeded && current.scope.kind === "project") return true;
+  }
+  return false;
+}

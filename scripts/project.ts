@@ -12,7 +12,8 @@
  */
 
 import { userInfo } from "node:os";
-import { createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { ProjectHaltRepository } from "@ashara/delivery";
 import { describeErrorChain, parseProjectId, type ProjectId } from "@ashara/shared";
 
 class ProjectCliUsageError extends Error {
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
 
   const db = createDb(process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL);
   try {
-    const { episodeId } = await new ProjectRepository(db).unblock(projectId, by, reason);
+    const { episodeId } = await new ProjectHaltRepository(db).unblock(projectId, by, reason);
     console.log(`project ${projectId}: unblocked by ${by} (block episode ${episodeId}); the client is told on the next cycle`);
   } finally {
     await db.$client.end();

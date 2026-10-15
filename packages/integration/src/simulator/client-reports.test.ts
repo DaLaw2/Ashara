@@ -80,7 +80,7 @@ describe("checkReports, a delivered report", () => {
     const merged = { ...goal, mergeKind: "merged" };
     const close = `- "Goal": built and merged, commit c1.`;
     const abandoned = (title: string, blockedReason: unknown) => ({ ...goal, id: title, title, status: "Abandoned", mergeCommit: null, blockedReason });
-    const gaveUp = abandoned("Hard", { source: "failure_router", reason: "exhausted 2 replan attempt(s) without success" });
+    const gaveUp = abandoned("Hard", { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success" });
     const setAside = abandoned("Old", { source: "superseded", planRevision: 2, requestedBy: null, reason: "replaced" });
     const givenUp = (titles: readonly string[]) => `\n\nThese tasks were given up, and the plan was revised around them:\n${titles.map((title) => `- "${title}"`).join("\n")}${unrecordedTail}`;
     expect(keysOf(delivered(close, {}, givenUp(["Hard"])), "accepted", [merged, gaveUp, setAside])).toEqual([]);

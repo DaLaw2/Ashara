@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { createDb } from "@ashara/db";
 import { loadProjectIntent } from "@ashara/workplace";
 import type { ProjectIntentSource } from "@ashara/workplace";
-import { assignmentIntentOf } from "@ashara/planning";
+import { assignmentIntentOf } from "@ashara/delivery";
 import { parseStoredTaskSpec, parseWorkItemId } from "@ashara/shared";
 import type { RecomposedBrief } from "../simulator/stored-text.js";
 

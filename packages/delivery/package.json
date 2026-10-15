@@ -1,0 +1,26 @@
+{
+  "name": "@ashara/delivery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./project-halt": "./src/project-halt.ts"
+  },
+  "dependencies": {
+    "@ashara/db": "*",
+    "@ashara/engagement": "*",
+    "@ashara/execution-infra": "*",
+    "@ashara/finance": "*",
+    "@ashara/knowledge": "*",
+    "@ashara/model-access": "*",
+    "@ashara/organization": "*",
+    "@ashara/quality": "*",
+    "@ashara/shared": "*",
+    "@ashara/workplace": "*",
+    "drizzle-orm": "0.45.2",
+    "zod": "4.4.3"
+  }
+}

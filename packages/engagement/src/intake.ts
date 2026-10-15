@@ -2,8 +2,10 @@ import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
 import { withStructuredLadder } from "@ashara/model-access";
 import type { LadderAttemptEvent } from "@ashara/model-access";
-import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { AssumptionKind, ProjectBlockCause, ProjectId, ScopeLine } from "@ashara/shared";
+import { AssumptionKindSchema, describeErrorChain } from "@ashara/shared";
+import type { AssumptionKind, ProjectId, ScopeLine } from "@ashara/shared";
+import { projectBlockCause } from "@ashara/delivery/project-halt";
+import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { classifyReadFailure } from "./read-failure.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 

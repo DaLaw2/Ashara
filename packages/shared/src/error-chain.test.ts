@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import { describeErrorChain, serializeError, serializedErrorSchema } from "./error-chain.js";
-import { projectBlockCause } from "./work-item-row.js";
 
 class CellExecFailed extends Error {
   constructor(
@@ -163,11 +162,8 @@ describe("serializeError", () => {
 });
 
 describe("the one-line rendering", () => {
-  test("a project's block reason carries every layer of the chain", () => {
-    const cause = projectBlockCause(threeDeep());
-
-    expect(cause.errorClass).toBe("TypeError");
-    expect(cause.reason).toBe(
+  test("the rendering carries every layer of the chain", () => {
+    expect(describeErrorChain(threeDeep())).toBe(
       "TypeError: gate could not run <- caused by Error: check run failed <- caused by CellExecFailed: exec exited 125",
     );
   });

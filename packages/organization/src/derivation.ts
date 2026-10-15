@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
 import { StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
 import type { LadderAttemptEvent, StructuredValidation } from "@ashara/model-access";
-import { projectBlockCause } from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import { VisionUnreadable, rosterVisionOf } from "./acl/engagement-acl.js";
 import type { RosterVision, StoredVision } from "./acl/engagement-acl.js";
 import { CapabilityClassSchema, describeViolation, nonEmptyOrNull, validateRoster } from "./roster.js";
@@ -14,8 +14,8 @@ import { assignmentViolations } from "./work-kind.js";
 // Roster derivation per tender (story s-team-roster-m1, ADR-075 Organization): the
 // roles a project needs, derived from vision v1 by one structured call on the
 // `roster` site. validateRoster is the ladder's validate hook, so a violating
-// roster is re-asked with its violations named; a ladder that runs out blocks the
-// project with them. No default roster exists: a project without a derived one is
+// roster is re-asked with its violations named; a ladder that runs out is refused with
+// them, and Delivery halts the project on the refusal. No default roster exists: a project without a derived one is
 // never planned.
 
 /** The first revision of a project's roster; later revisions append. */
@@ -37,14 +37,22 @@ export interface RosterStore {
   projectsAwaitingRoster(): Promise<readonly VisionAwaitingRoster[]>;
   /** Appends the roster's rows in one transaction, or nothing when the project already has a roster. */
   recordRoster(roster: Roster): Promise<"recorded" | "roster-exists">;
-  /** Blocks the project and records why (migration 025); a project already blocked keeps its first cause. */
-  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
+}
+
+/**
+ * Why no roster can be derived for the project from what it holds: no valid roster came of the
+ * ladder, or its vision cannot be read. Organization never halts a project itself; the project's
+ * halt is Delivery's (O3 c, ADR-080 d3), which blocks it on this refusal.
+ */
+interface RosterRefusal {
+  readonly errorClass: string;
+  readonly reason: string;
 }
 
 export type RosterOutcome =
   | { readonly kind: "recorded"; readonly projectId: ProjectId; readonly revision: number; readonly roles: readonly string[] }
   | { readonly kind: "roster-exists"; readonly projectId: ProjectId }
-  | { readonly kind: "project-blocked"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
+  | { readonly kind: "refused"; readonly projectId: ProjectId; readonly refusal: RosterRefusal };
 
 /** What the core loop asks of Organization each cycle. */
 export interface RosterDerivationStep {
@@ -161,8 +169,8 @@ interface RosterDerivationDeps {
 
 /**
  * Organization's roster step. Each project with vision v1 and no roster gets one
- * derived and recorded whole, or is blocked with the violations that kept it from
- * being valid. A store or provider failure throws through and fails the cycle.
+ * derived and recorded whole, or is refused with the violations that kept it from
+ * being valid (RosterRefusal). A store or provider failure throws through and fails the cycle.
  */
 export class RosterDerivation implements RosterDerivationStep {
   constructor(private readonly deps: RosterDerivationDeps) {}
@@ -174,16 +182,12 @@ export class RosterDerivation implements RosterDerivationStep {
         outcomes.push(await this.derive({ projectId: awaiting.projectId, ...rosterVisionOf(awaiting.vision) }));
       } catch (err) {
         if (!(err instanceof RosterDerivationExhausted || err instanceof VisionUnreadable)) throw err;
-        outcomes.push(await this.block(awaiting.projectId, projectBlockCause(err)));
+        const refusal: RosterRefusal = { errorClass: err.name, reason: describeErrorChain(err) };
+        console.warn(`[roster] project ${awaiting.projectId}: ${refusal.errorClass}; no roster is derived: ${refusal.reason}`);
+        outcomes.push({ kind: "refused", projectId: awaiting.projectId, refusal });
       }
     }
     return outcomes;
-  }
-
-  private async block(projectId: ProjectId, cause: ProjectBlockCause): Promise<RosterOutcome> {
-    const result = await this.deps.store.blockProject(projectId, cause);
-    console.warn(`[roster] project ${projectId}: ${cause.errorClass}; project ${result}: ${cause.reason}`);
-    return { kind: "project-blocked", projectId, cause };
   }
 
   private async derive(vision: DerivationInput): Promise<RosterOutcome> {
@@ -200,7 +204,7 @@ export class RosterDerivation implements RosterDerivationStep {
       this.deps.llm.forCall({ projectId: vision.projectId, taskId: null, callSite: "roster" }),
       {
         site: "roster",
-        // 3: nothing retries around this ladder; its exhaustion blocks the project.
+        // 3: nothing retries around this ladder; its exhaustion refuses the roster.
         attempts: 3,
         onAttempt: this.deps.onAttempt,
         reask,

@@ -98,6 +98,7 @@ export function wrapError(
   };
 }
 
+/** @testseam error-envelope.test.ts reads a chain's layers in order through it; renderChainForBrief is its production caller */
 export function flattenChain(layer: ErrorLayer): ErrorLayer[] {
   const result: ErrorLayer[] = [];
   let current: ErrorLayer | undefined = layer;

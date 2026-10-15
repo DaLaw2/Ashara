@@ -8,29 +8,18 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  EventStoreRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
-import { DispatchService } from "@ashara/orchestrator";
+import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { ClientStops, ClientMessageRepository } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
-import type { CoreLoopDeps } from "@ashara/orchestrator";
-import { FailureRouter } from "@ashara/planning";
+import type { CoreLoopDeps } from "@ashara/delivery";
 import { SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
@@ -165,7 +154,7 @@ afterAll(async () => {
 describe("the deployment spend cap stops the loop", () => {
   test("a step's call refused at the deployment cap ends the run with the cap's reason, and the provider is never called", async () => {
     const calls = new LlmCallRepository(db);
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const client = await new ClientRepository(db).create(NAME);
     const projectId = (await projects.create(NAME, client.id)).id;
     const mock = new MockLanguageModelV4({ doGenerate: async () => { throw new Error("the provider must not be called"); } });
@@ -173,7 +162,7 @@ describe("the deployment spend cap stops the loop", () => {
 
     // No call fits under this cap, whatever other suites add to or delete from llm_calls meanwhile.
     const capUsd = 1e-9;
-    const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: capUsd, perProjectUsd: capUsd } });
+    const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: capUsd, perProjectUsd: capUsd } });
     const gateway = gatewayOn(spendCap, calls);
 
     const intake = vi.fn(async () => {
@@ -214,7 +203,7 @@ describe("the deployment spend cap stops the loop", () => {
 // smoke1 D3: after the deployment cap stopped the runner, a client's stop returned 201 and was never consumed or answered.
 describe("a stop the client sends after the deployment cap halted the loop", () => {
   test("is recorded and answered by the halted runner, and holds when the halt is lifted", async () => {
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const messages = new ClientMessageRepository(db);
     const client = await new ClientRepository(db).create(`${NAME}-halted-stop`);
     const projectId = (await projects.create(NAME, client.id)).id;
@@ -299,7 +288,7 @@ describe("a turn refused at the project's spend cap", () => {
   // Failed and through the FailureRouter, and a failed_approaches lesson was written.
   test("returns the item to Pending with its dispatch unconsumed and no lesson, and blocks the project budget_cap", async () => {
     const calls = new LlmCallRepository(db);
-    const projects = new ProjectRepository(db);
+    const projects = new ProjectHaltRepository(db);
     const client = await new ClientRepository(db).create(`${NAME}-refused-turn`);
     const projectId = (await projects.create(NAME, client.id)).id;
     const workdirBase = join(root, "work");
@@ -312,7 +301,7 @@ describe("a turn refused at the project's spend cap", () => {
     const baselineCommit = (await run("git", ["rev-parse", "main"], { cwd: target })).stdout.trim();
 
     const itemId = createWorkItemId();
-    await new WorkItemRepository(db).create({
+    await new WorkItemRowRepository(db).create({
       id: itemId,
       level: "Task",
       status: "Pending",
@@ -335,7 +324,7 @@ describe("a turn refused at the project's spend cap", () => {
       }),
     });
     stub.model = mock;
-    const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 5 } });
+    const spendCap = new SpendCap({ ledger: calls, caps: { deploymentUsd: 1_000_000, perProjectUsd: 5 } });
     const gateway = gatewayOn(spendCap, calls);
     const dispatchService = new DispatchService({
       config: { workdirBase },
@@ -368,7 +357,7 @@ describe("a turn refused at the project's spend cap", () => {
       clock: systemClock,
     });
 
-    const workItems = new WorkItemRepository(db);
+    const workItems = new WorkItemRowRepository(db);
     const deps = loopDeps({
       config: { ...DEFAULT_CONFIG, workdirBase },
       workItemRepo: adaptWorkItemRepo(workItems),

@@ -48,9 +48,9 @@ const replanSchema = z.object({
   ...augmentationFields,
 });
 
-/** FailureRouter abandon decisions (failure-recovery.ts). */
-const failureRouterSchema = z.object({
-  source: z.literal("failure_router"),
+/** A task given up after its failed attempts, by the FailureRouter's decision (Delivery's failure-recovery.ts). */
+const failureGivenUpSchema = z.object({
+  source: z.literal("failure_given_up"),
   reason: z.string(),
   attempts: z.number().optional(),
   lastFailure: z.unknown().optional(),
@@ -281,7 +281,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   taskFailedSchema,
   orchestratorErrorSchema,
   replanSchema,
-  failureRouterSchema,
+  failureGivenUpSchema,
   environmentUnavailableSchema,
   environmentUndefinedSchema,
   checksStaleSchema,
@@ -315,7 +315,7 @@ export const BLOCKED_REASON_SOURCES = [
   "task_failed",
   "orchestrator_error",
   "replan",
-  "failure_router",
+  "failure_given_up",
   "environment_unavailable",
   "environment_undefined",
   "checks_stale",
@@ -346,28 +346,6 @@ export class BlockedReasonCorrupt extends Error {
 }
 
 /**
- * Augments any StoredBlockedReason variant with salvaged-result fields. Used by
- * the orchestrator when an agent returns a result for an item that was preempted
- * to Abandoned during execution. The result (outcome + detail) is persisted on
- * the existing blockedReason so cascade-completion can see it without reopening
- * the terminal status. The spread preserves the original variant's `source`
- * discriminator; the type assertion bridges TypeScript's inability to narrow
- * through object spread on discriminated unions.
- */
-export function withSalvagedResult(
-  reason: StoredBlockedReason,
-  salvagedOutcome: "completed" | "failed" | "blocked",
-  salvagedDetail: string,
-): StoredBlockedReason {
-  return {
-    ...reason,
-    salvagedOutcome,
-    salvagedDetail,
-    salvagedAt: new Date().toISOString(),
-  } as StoredBlockedReason;
-}
-
-/**
  * Deliberately widens a typed StoredBlockedReason to Record<string, unknown>.
  * The original shape IS known (StoredBlockedReason), but RawFailureContext.raw
  * needs the wide form. The exhaustive
@@ -379,7 +357,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "task_failed":
     case "orchestrator_error":
     case "replan":
-    case "failure_router":
+    case "failure_given_up":
     case "environment_unavailable":
     case "environment_undefined":
     case "checks_stale":
@@ -420,7 +398,7 @@ export type BlockedExit =
 /**
  * The exit of a Blocked item's stored reason. Only merge_unrecorded and orphan_unreconciled are
  * written on Blocked items now; every other source on a Blocked row was written before migration 048 (or is no Blocked
- * reason at all: task_failed, orchestrator_error, replan, failure_router, superseded), as is a
+ * reason at all: task_failed, orchestrator_error, replan, failure_given_up, superseded), as is a
  * Blocked item with no reason. None of those waits: an infrastructure fault is requeued, anything
  * else is given up.
  */
@@ -445,7 +423,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "task_failed":
     case "orchestrator_error":
     case "replan":
-    case "failure_router":
+    case "failure_given_up":
     case "superseded":
     case "acceptance_failed":
       return { kind: "give-up" };

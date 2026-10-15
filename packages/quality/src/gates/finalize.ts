@@ -14,6 +14,8 @@ import {
   tentativeMerge,
   type MainConflict,
 } from "../merge.js";
+import { MERGE_CONFLICTED, TREE_REGRESSED, WORK_FAILED } from "../task-verdict.js";
+import type { FailureVerdict } from "../task-verdict.js";
 
 /**
  * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
@@ -38,16 +40,23 @@ const POST_MERGE_CHECK_RUN = "postMergeCheckRun";
 
 /**
  * Whose a failed finalize is (fault-class.ts FaultClass): the task's work (a conflict, a failed
- * check on the merge), routed against the task; or the verifier cell's substrate, or Z0's own merge
+ * check on the merge), routed against the task with Quality's verdict on whether another attempt
+ * can succeed; or the verifier cell's substrate, or Z0's own merge
  * and verification machinery (recorded under postMergeCheckRun), each blocked under its class and
  * never routed against a tree no verdict was reached on.
  */
 type FinalizeFault =
-  | { readonly class: "agent_work" }
+  | { readonly class: "agent_work"; readonly verdict: FailureVerdict }
   | { readonly class: "substrate"; readonly error: EnvironmentError }
   | { readonly class: "ashara"; readonly error: VerificationInfrastructureFault };
 
-const AGENT_WORK: FinalizeFault = { class: "agent_work" };
+/**
+ * The verdict on a merge that failed its post-merge check: a tree regression where the task's own
+ * tree already passed that check (postMergeVerify), the task's own work failing otherwise.
+ */
+function postMergeVerdict(operation: PostMergeOperation): FailureVerdict {
+  return operation === "postMergeVerify" ? TREE_REGRESSED : WORK_FAILED;
+}
 
 export type FinalizeResult =
   /** `mergeCommit`: the commit the merge made on main, read back from git; the task's merge record. */
@@ -68,7 +77,7 @@ export interface PostMergeVerdict {
 }
 
 /**
- * The operation a post-merge failure is recorded under, which is what planning routes it by.
+ * The operation a post-merge failure is recorded under, and what Quality's verdict on it is.
  * - "postMergeVerify": the task's own tree already passed this check before the merge (the
  *   substrate gate), so a failure belongs to the merged tree, not the task (a tree regression).
  * - "postMergeTaskChecks": the stored checks are the task's first and only verdict; nothing ran
@@ -308,7 +317,7 @@ async function finalizeHeld(
       failedStep: "merge",
       gateFailureContext: mergeContext,
       errorLayer: wrapError("development", operation, "merge conflict", gateContext),
-      fault: AGENT_WORK,
+      fault: { class: "agent_work", verdict: MERGE_CONFLICTED },
     };
   }
 
@@ -379,7 +388,7 @@ async function finalizeHeld(
         gateOutput: postMergeVerify.details,
         gateContext: { taskId: task.id, attempt },
       },
-      AGENT_WORK,
+      { class: "agent_work", verdict: postMergeVerdict(deps.postMergeOperation) },
     );
   }
 

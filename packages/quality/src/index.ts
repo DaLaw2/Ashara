@@ -46,6 +46,8 @@ export {
 } from "./merge.js";
 export type { MainConflict } from "./merge.js";
 export { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
+export { CONFLICT_MARKERS_LEFT, WORK_FAILED } from "./task-verdict.js";
+export type { FailureVerdict } from "./task-verdict.js";
 export { SuiteReviewer, gitPublicInterface } from "./suite-review.js";
 export type { SuiteReviewSource, SuiteReviewing } from "./suite-review.js";
 export {

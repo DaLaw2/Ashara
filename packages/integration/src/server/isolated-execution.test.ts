@@ -10,7 +10,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { DispatchService } from "@ashara/orchestrator";
+import { DispatchService } from "@ashara/delivery";
 import type { TaskCheckStore } from "@ashara/quality";
 import type { SessionStore } from "@ashara/workplace";
 import { PodmanSubstrate, buildEnvironmentImage, cellInstanceFor, loadBaseCell, pruneEnvironmentImages, reconcileCellsAtStartup } from "@ashara/execution-infra";
@@ -158,7 +158,7 @@ describe("a task runs on cells end to end", () => {
       clock: () => new Date(),
     }), new LlmCallLedger(
       new LlmCallRepository(db),
-      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+      new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
     ));
 
     // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.

@@ -2,10 +2,8 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import {
   createDb,
-  WorkItemRepository as DbWorkItemRepository,
   EventStoreRepository,
   DevSessionRepository,
-  ProjectRepository,
   ConfigRepository,
   SecretRepository,
   LlmCallRepository,
@@ -27,15 +25,20 @@ import {
   CoreLoop,
   ContinuousRunner,
   DispatchService,
-  reconcileWorkItemsOnStartup,
-} from "@ashara/orchestrator";
-import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
-import {
   FailureRouter,
   FirstPlanner,
+  ProjectHaltRepository,
   Replanner,
+  WorkItemRowRepository,
+  adaptWorkItemRepo,
   assignmentIntentOf,
-} from "@ashara/planning";
+  createAgentStaffing,
+  createFirstPlanStore,
+  createReplanStore,
+  gradedCapability,
+  reconcileWorkItemsOnStartup,
+} from "@ashara/delivery";
+import type { AgentStaffing, CoreLoopDeps, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
 import {
   BlockReports,
   ClientAnswers,
@@ -90,8 +93,6 @@ import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
 import type { Clock, ProjectId } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
-import type { WorkItemRepository } from "@ashara/planning";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
 import type { AppDeps } from "./routes.js";
@@ -105,16 +106,13 @@ import { createAnswerStore } from "./answer-store.js";
 import { createClientChangeStore } from "./client-change-store.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
-import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
-import { createReplanStore } from "./replan-store.js";
+import { createPlanReportStore } from "./plan-report-store.js";
 import { createStackChoiceStore } from "./stack-choice-store.js";
 import { createAcceptanceStore, createDeliveredReportStore } from "./acceptance-store.js";
 import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
-import { createAgentStaffing } from "./staffing.js";
-import { determineCapability } from "./task-capability.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -205,11 +203,11 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const secretStore = new SecretStore(new SecretRepository(db), masterKey);
   console.log(`Secret store: master key ${masterKey.id}`);
 
-  const dbWorkItemRepo = new DbWorkItemRepository(db);
+  const dbWorkItemRepo = new WorkItemRowRepository(db);
   const eventStore = new EventStoreRepository(db);
   const devSessionRepo = new DevSessionRepository(db);
   const visionRepo = new VisionRepository(db);
-  const projectRepo = new ProjectRepository(db);
+  const projectRepo = new ProjectHaltRepository(db);
   const configRepo = new ConfigRepository(db);
   const knowledgeRepo = new KnowledgeRepository(db);
   const failedApproachRepo = new FailedApproachRepository(db);
@@ -238,7 +236,6 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const llmCallRepo = new LlmCallRepository(db);
   const spendCap = new SpendCap({
     ledger: llmCallRepo,
-    projects: projectRepo,
     caps: config.spendCaps,
     admissionTurn: (ahead) => contendedWait("spend-admission", ahead),
   });
@@ -320,14 +317,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     },
     latestRosterRows: (projectId) => latestRosterRoles(db, projectId),
     latestRosterRevision: (projectId) => latestRosterRevision(db, projectId),
-    resolveModel(task) {
-      const capability = determineCapability(task);
-      const graded = task.taskSpec?.capability;
-      if (capability !== graded) {
-        console.log(`[${task.id}] model escalated from graded ${graded ?? "(none)"} to ${capability} (attempt ${task.attempt})`);
-      }
-      return modelCalls.resolveModel(capability, "agent-runner");
-    },
+    resolveModel: (task) => modelCalls.resolveModel(gradedCapability(task), "agent-runner"),
   });
 
   const knowledgeSource: KnowledgeSource = {

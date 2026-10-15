@@ -11,11 +11,10 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
-import { FirstPlanner } from "@ashara/planning";
-import type { FirstPlanStore } from "@ashara/planning";
+import { FirstPlanner, createFirstPlanStore } from "@ashara/delivery";
+import type { FirstPlanStore } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
 import { createAnswerStore } from "@ashara/server/answer-store";
-import { createFirstPlanStore } from "@ashara/server/first-plan-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 
@@ -212,7 +211,7 @@ beforeAll(async () => {
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps: TEST_SPEND_CAPS }),
   ));
 });
 

@@ -51,7 +51,6 @@ export type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
 export {
   errorEnvelopeSchema,
   wrapError,
-  flattenChain,
   renderChainForBrief,
 } from "./error-envelope.js";
 
@@ -68,12 +67,11 @@ export { parseStoredTaskSpec, visionSourceLine } from "./task-spec.js";
 
 export type { MergeKind, StoredBlockedReason } from "./blocked-reason.js";
 export { BLOCKED_REASON_SOURCES } from "./blocked-reason.js";
-export { BlockedReasonCorrupt, blockedExitOf, blockedReasonToRecord, parseStoredBlockedReason, withSalvagedResult } from "./blocked-reason.js";
+export { BlockedReasonCorrupt, blockedExitOf, blockedReasonToRecord, parseStoredBlockedReason } from "./blocked-reason.js";
 
 export type { StoredSuccessCriteria } from "./success-criteria.js";
 
-export type { ProjectBlockCause } from "./work-item-row.js";
-export { SPEND_CAP_ERROR_CLASS, WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./work-item-row.js";
+export { SPEND_CAP_ERROR_CLASS, WorkItemRowCorrupt, parseWorkItemJsonb } from "./work-item-row.js";
 
 
 export type { WorkKind } from "./work-kind.js";

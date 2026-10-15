@@ -2,23 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  DevSessionRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository } from "@ashara/db";
 import type { DbTransaction } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
-import { reconcileWorkItemsOnStartup } from "@ashara/orchestrator";
-import { FailureRouter, PlanningService } from "@ashara/planning";
-import type { WorkItemRepository as WorkItemPort } from "@ashara/planning";
+import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import type { WorkItemRepository as WorkItemPort } from "@ashara/delivery";
 import type { ProjectId } from "@ashara/shared";
-import { createPlanReportStore } from "@ashara/server/first-plan-store";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
+import { createPlanReportStore } from "@ashara/server/plan-report-store";
 
 // Story s-loop-never-stop-m1: one project's bad record blocks that project, with
 // the cause on its row, and the other projects proceed. Every row belongs to a
@@ -57,7 +48,7 @@ const jsonb = (value: unknown) => (value === undefined ? sql`NULL` : sql`${JSON.
 
 /** A project with one epic and one task per row given; planned when `planned`. */
 async function projectWith(handle: Handle, tasks: readonly TaskRow[], planned: boolean) {
-  const project = await new ProjectRepository(handle).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
+  const project = await new ProjectHaltRepository(handle).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
   ourProjects.add(project.id);
   const epicId = randomUUID();
   await handle.execute(sql`
@@ -96,7 +87,7 @@ async function statusOf(handle: Handle, itemId: string) {
 
 /** The gate's view of project status, narrowed to this suite's projects. */
 function ourActiveProjects(handle: Handle) {
-  const projects = new ProjectRepository(handle);
+  const projects = new ProjectHaltRepository(handle);
   return {
     listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
     block: projects.block.bind(projects),
@@ -114,7 +105,7 @@ function reports(handle: Handle): PlanReports {
 }
 
 function gate(handle: Handle) {
-  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRepository(handle)), ourActiveProjects(handle), { publish: async () => {} });
+  return PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} });
 }
 
 /** Rolls the probe transaction back once its assertions have run. */
@@ -229,7 +220,7 @@ describe("one project's bad record in a cycle", () => {
     const project = await projectWith(db, [{ taskSpec: { origin: "decomposition" } }], false);
     expect((await gate(db)).map((item) => item.id)).toEqual(project.taskIds);
 
-    await new ProjectRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
+    await new ProjectHaltRepository(db).block(project.projectId, { category: "fault", errorClass: "TestBlock", reason: "blocked by the test" });
 
     expect(await gate(db)).toEqual([]);
   });
@@ -240,7 +231,7 @@ describe("one project's bad record at startup", () => {
     await inRolledBackTransaction(async (tx) => {
       const bad = await projectWith(tx, [{ status: "InProgress" }, { status: "InProgress", successCriteria: { not: "a list" } }], false);
       const healthy = await projectWith(tx, [{ status: "InProgress" }], false);
-      const repo = adaptWorkItemRepo(new WorkItemRepository(tx));
+      const repo = adaptWorkItemRepo(new WorkItemRowRepository(tx));
       const ours: WorkItemPort = {
         ...repo,
         projectIdsWithStatus: async (status) => (await repo.projectIdsWithStatus(status)).filter((id) => ourProjects.has(id)),
@@ -248,7 +239,7 @@ describe("one project's bad record at startup", () => {
 
       const summary = await reconcileWorkItemsOnStartup({
         workItemRepo: ours,
-        projects: new ProjectRepository(tx),
+        projects: new ProjectHaltRepository(tx),
         eventStore: { publish: async () => undefined },
         failureRouter: new FailureRouter(3),
         devSessionStore: { dispatchEvidence: (taskId, by) => new DevSessionRepository(db).dispatchEvidence(taskId, by) },

@@ -14,18 +14,7 @@ import type { Hono } from "hono";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import {
-  ClientLoginFailureRepository,
-  ClientRepository,
-  ClientSessionRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  DevSessionRepository,
-  EventStoreRepository,
-  ProjectRepository,
-  SecretRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientLoginFailureRepository, ClientRepository, ClientSessionRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, EventStoreRepository, ProjectRepository, SecretRepository } from "@ashara/db";
 import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
@@ -36,6 +25,7 @@ import type { AppDeps } from "@ashara/server/routes";
 import type { SecretReader } from "@ashara/server/secrets";
 import { CLIENT_SESSION_COOKIE, loadWebClientAssets } from "@ashara/server/web-client";
 import type { WebClientDeps } from "@ashara/server/web-client";
+import { WorkItemRowRepository } from "@ashara/delivery";
 import type { Database } from "../simulator/database.js";
 
 const DATABASE_URL = process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL;
@@ -74,7 +64,7 @@ function sha256Hex(value: string): string {
 
 function appDeps(): AppDeps {
   return {
-    workItemRepo: new WorkItemRepository(db),
+    workItemRepo: new WorkItemRowRepository(db),
     eventStore: new EventStoreRepository(db),
     devSessionRepo: new DevSessionRepository(db),
     visionRepo: new VisionRepository(db),
@@ -658,8 +648,8 @@ class ListingRefused extends Error {
   }
 }
 
-class RefusingWorkItemRepository extends WorkItemRepository {
-  override async listByProject(): ReturnType<WorkItemRepository["listByProject"]> {
+class RefusingWorkItemRepository extends WorkItemRowRepository {
+  override async listByProject(): ReturnType<WorkItemRowRepository["listByProject"]> {
     throw new ListingRefused();
   }
 }

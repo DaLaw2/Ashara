@@ -1,6 +1,6 @@
 import { ClientMessageRepository, VisionRepository, closeTenderAfterFailedIntake, recordTenderIntake } from "@ashara/engagement";
-import { ProjectRepository } from "@ashara/db";
 import type { createDb } from "@ashara/db";
+import { ProjectHaltRepository } from "@ashara/delivery";
 import type { IntakeStore } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
 
@@ -8,7 +8,7 @@ import { parseProjectId } from "@ashara/shared";
 export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore {
   const messages = new ClientMessageRepository(db);
   const visions = new VisionRepository(db);
-  const projects = new ProjectRepository(db);
+  const projects = new ProjectHaltRepository(db);
   return {
     async openTenders() {
       const rows = await messages.listUnconsumedTenders();

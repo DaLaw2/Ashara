@@ -34,3 +34,4 @@ export { listUnconsumedStops, recordClientStop } from "./repositories/client-sto
 export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
 export { listDueDeliveredReports, postDeliveredReport } from "./repositories/delivered-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
+export { acceptProject } from "./project-lifecycle.js";

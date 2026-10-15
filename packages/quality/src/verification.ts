@@ -92,6 +92,7 @@ import {
   worktreeSnapshotCommit,
 } from "./task-checks.js";
 import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
+import { WORK_FAILED } from "./task-verdict.js";
 
 // Quality's verification of a dispatch's work (ADR-075 §5): the checks a task is decided by, the
 // gates before a merge, the post-merge run and the acceptance sweep. Delivery's dispatcher calls it
@@ -410,6 +411,7 @@ export class TaskVerification {
     const { outcome } = agent;
     return {
       status: "failed",
+      verdict: WORK_FAILED,
       detail: reason,
       outcome,
       sessionId,
@@ -453,6 +455,7 @@ export class TaskVerification {
     await cleanupWorkdir(workDir, targetProjectPath);
     return {
       status: "failed",
+      verdict: WORK_FAILED,
       detail: reason,
       outcome: null,
       sessionId,
@@ -775,6 +778,7 @@ export class TaskVerification {
     eventSink?.emit({ event: "gate_failed", taskId: task.id, attempt: task.attempt, reason: summary });
     return {
       status: "failed",
+      verdict: WORK_FAILED,
       detail: summary,
       outcome,
       sessionId,
@@ -796,7 +800,7 @@ export class TaskVerification {
     const { task, workDir, targetProjectPath, sessionId } = d;
     const fail = (summary: string, chain: ReturnType<typeof wrapError>): SubstrateGateOutcome => ({
       kind: "ended",
-      result: { status: "failed", detail: summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) } },
+      result: { status: "failed", verdict: WORK_FAILED, detail: summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) } },
     });
     if (statement === null) {
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -1474,6 +1478,7 @@ export class TaskVerification {
     const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });
     return {
       status: "failed",
+      verdict: WORK_FAILED,
       detail: summary,
       outcome,
       sessionId,

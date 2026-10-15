@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import type { ProjectBlockCause } from "@ashara/shared";
+import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 

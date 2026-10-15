@@ -10,6 +10,8 @@ import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf } from 
 import type { EnvironmentError, FaultClass } from "./fault-class.js";
 import { VerificationInfrastructureFault } from "./gates/finalize.js";
 import type { CheckRecorder, CompletedTaskChecks, TaskChecks } from "./task-checks.js";
+import { WORK_FAILED } from "./task-verdict.js";
+import type { FailureVerdict } from "./task-verdict.js";
 
 // The result of a dispatch as Quality decides it (ADR-075 §5): every status the dispatcher routes,
 // what a completed task delivered, and the blocks a substrate or Z0 failure ends a dispatch with.
@@ -297,6 +299,7 @@ export function failedBeforeAgent(task: DispatchRef, sessionId: string, operatio
   return {
     status: "failed",
     detail: envelope.summary,
+    verdict: WORK_FAILED,
     outcome: null,
     sessionId,
     attempt: task.attempt,
@@ -623,6 +626,8 @@ export type ExecutionResult =
 interface AgentExecutionResult {
   readonly status: "failed" | "blocked";
   readonly detail: string;
+  /** Whether another attempt can succeed, decided where the failure is: Delivery routes by it. */
+  readonly verdict: FailureVerdict;
   readonly outcome: Outcome | null;
   readonly sessionId: string;
   /**

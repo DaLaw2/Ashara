@@ -8,28 +8,18 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4GenerateResult } from "@ai-sdk/provider";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  ClientRepository,
-  createDb,
-  DEFAULT_DATABASE_URL,
-  EnvironmentBuildRepository,
-  LlmCallRepository,
-  ProjectRepository,
-  WorkItemRepository,
-} from "@ashara/db";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
-import { DispatchService } from "@ashara/orchestrator";
-import type { TaskDescriptor } from "@ashara/orchestrator";
+import { DispatchService, FailureRouter, PlanningService, failWorkItem, recoverFailedItem, startWorkItem, adaptWorkItemRepo, WorkItemRowRepository } from "@ashara/delivery";
+import type { TaskDescriptor } from "@ashara/delivery";
 import { PodmanSubstrate, buildEnvironmentImage, execFileGitRunner, loadBaseCell, pruneEnvironmentImages, withGitRunner } from "@ashara/execution-infra";
 import type { BaseCellReference, GitRunner } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { FailureRouter, PlanningService, classifyFailure, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
 import { createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
-import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // w12b D2 (ADR-074 d96 d, d99): two tasks dispatched in one batch left the same main and changed the
 // same file. The first merged; the second's merge conflicted, and its retry was dispatched on its
@@ -90,7 +80,7 @@ async function git(...args: string[]): Promise<string> {
 }
 
 function workItems() {
-  return adaptWorkItemRepo(new WorkItemRepository(db));
+  return adaptWorkItemRepo(new WorkItemRowRepository(db));
 }
 
 /** An implementation task on record, InProgress as the dispatch seam leaves it, with one stored check of its own. */
@@ -142,7 +132,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     clock: () => new Date(),
   }), new LlmCallLedger(
     new LlmCallRepository(db),
-    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps }),
+    new SpendCap({ ledger: new LlmCallRepository(db), caps }),
   ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
@@ -187,6 +177,7 @@ function promptAt(mock: MockLanguageModelV4, call: number): string {
 
 /** What the orchestrator does with a failed result: the item to Failed, then the failure router on the stored record. */
 async function routeFailure(taskId: WorkItemId, result: TaskRun["result"]): Promise<string> {
+  if (result.status !== "failed" && result.status !== "blocked") throw new Error(`a ${result.status} result is not routed as a failure`);
   const repo = workItems();
   const item = await PlanningService.findWorkItem(repo, taskId);
   if (item === null) throw new Error(`task ${taskId} not found`);
@@ -196,6 +187,7 @@ async function routeFailure(taskId: WorkItemId, result: TaskRun["result"]): Prom
     { workItemRepo: repo, eventPublisher: { publish: async () => {} }, failureRouter: new FailureRouter(3) },
     item,
     { detail: result.detail, raw: result.errorEnvelope === undefined ? {} : { ...result.errorEnvelope } },
+    result.verdict,
   );
 }
 
@@ -207,7 +199,7 @@ async function redispatch(task: TaskDescriptor): Promise<TaskDescriptor> {
   const blockedReason = item.blockedReason;
   startWorkItem(item);
   await PlanningService.saveWorkItem(repo, item, "Pending");
-  const attempt = await new WorkItemRepository(db).incrementDispatchCount(task.id);
+  const attempt = await new WorkItemRowRepository(db).incrementDispatchCount(task.id);
   return { ...task, attempt, dispatchCount: attempt, ...(blockedReason === undefined ? {} : { blockedReason }) };
 }
 
@@ -278,7 +270,8 @@ describe("a merge conflict between two tasks of one batch", () => {
     expect(conflicted.detail).toContain("- notes.txt");
     if (conflicted.errorEnvelope === undefined) throw new Error("a failed task must carry its error envelope");
     expect(conflicted.errorEnvelope.chain.operation).toBe("tentativeMerge");
-    expect(classifyFailure(conflicted.errorEnvelope)).toBe("MERGE_CONFLICT");
+    if (conflicted.status !== "failed") throw new Error("expected a failed result");
+    expect(conflicted.verdict).toEqual({ kind: "retryable", ground: "merge-conflict" });
     expect(await readFile(join(target, "notes.txt"), "utf8")).toBe("alpha\n");
     expect(await routeFailure(second.id, conflicted)).toBe("replan");
 

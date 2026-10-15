@@ -1,9 +1,9 @@
 import type { createDb } from "@ashara/db";
-import { listDueDeliveredReports, postDeliveredReport } from "@ashara/engagement";
+import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
+import type { AcceptanceStore } from "@ashara/delivery";
+import { acceptProject, listDueDeliveredReports, postDeliveredReport } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
-import type { AcceptanceStore } from "@ashara/orchestrator";
 import { listProjectsReadyForAcceptance, recordAcceptance, recordAcceptanceDefect, recordAcceptanceSweepFault } from "@ashara/quality";
-import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 type Db = ReturnType<typeof createDb>;
 
@@ -11,9 +11,10 @@ type Db = ReturnType<typeof createDb>;
 export function createAcceptanceStore(db: Db): AcceptanceStore {
   return {
     readyForAcceptance: () => listProjectsReadyForAcceptance(db),
-    recordAccepted: (sweep) => recordAcceptance(db, sweep),
+    // The move to 'accepted' is Engagement's lifecycle guard, in the sweep's transaction (O3 c).
+    recordAccepted: (sweep) => recordAcceptance(db, sweep, acceptProject),
     recordSweepFault: (projectId) => recordAcceptanceSweepFault(db, projectId),
-    recordDefect: (sweep, writeDefect) => recordAcceptanceDefect(db, sweep, (workItems) => writeDefect(adaptWorkItemRepo(workItems))),
+    recordDefect: (sweep, writeDefect) => recordAcceptanceDefect(db, sweep, (tx) => writeDefect(adaptWorkItemRepo(new WorkItemRowRepository(tx)))),
   };
 }
 

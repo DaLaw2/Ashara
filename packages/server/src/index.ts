@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { createPgPool } from "@ashara/db";
 import { execFileGitRunner, spawnProcess } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured, sdkLanguageModels } from "@ashara/model-access";
-import { concurrentTaskLanes } from "@ashara/orchestrator";
+import { concurrentTaskLanes } from "@ashara/delivery";
 import { systemClock } from "@ashara/shared";
 import { composeAshara } from "./compose.js";
 import type { AsharaInstance } from "./compose.js";
