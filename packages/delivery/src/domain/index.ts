@@ -1,4 +1,4 @@
-export type { WorkItem } from "./work-item.js";
+export type { StoredFailureVerdict, WorkItem } from "./work-item.js";
 export {
   createPendingWorkItem,
   startWorkItem,
@@ -21,6 +21,6 @@ export { salvagedReason } from "./salvaged-result.js";
 
 export { giveUpAcceptanceDefect, openAcceptanceDefect } from "./acceptance.js";
 
-export type { WorkItemRepository } from "./repository.js";
+export type { ActiveProjects, WorkItemRepository } from "./repository.js";
 
 export { PlanningService } from "./service.js";

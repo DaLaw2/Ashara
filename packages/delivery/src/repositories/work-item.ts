@@ -4,6 +4,7 @@ import { workItems, dependencies } from "@ashara/db";
 import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
+import type { FailureVerdict } from "../acl/quality-acl.js";
 
 type WorkItemRow = typeof workItems.$inferSelect;
 
@@ -34,6 +35,17 @@ class DispatchRefundWithoutDispatch extends Error {
   constructor(readonly workItemId: string) {
     super(`cannot refund a dispatch of work item ${workItemId}: its dispatch_count is 0, so no dispatch was counted`);
     this.name = "DispatchRefundWithoutDispatch";
+  }
+}
+
+/** A save moved a work item into Failed with no verdict on its attempt: nothing could route it by one later. */
+class FailedWithoutVerdict extends Error {
+  constructor(
+    readonly workItemId: string,
+    readonly from: string,
+  ) {
+    super(`cannot save work item ${workItemId} as Failed (from ${from}) with no verdict on whether another attempt can succeed`);
+    this.name = "FailedWithoutVerdict";
   }
 }
 
@@ -197,9 +209,12 @@ export class WorkItemRowRepository {
    *     unless it is a same-status metadata write (from === to), which stays legal; or
    *   - the live row no longer holds the claimed pre-image (concurrent modification),
    *     detected by a conditional UPDATE that must affect exactly the targeted row.
+   * Quality's verdict on the attempt (migration 058) is written with every move into Failed, which
+   * fails closed with FailedWithoutVerdict when none is given, and cleared with every move out of
+   * Failed; a write that keeps the status leaves it as it is.
    */
   async save(
-    item: { id: string; status: string; blockedReason?: unknown; updatedAt: Date },
+    item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
     expectedPreviousStatus: string,
   ) {
     const from = parseWorkItemStatus(expectedPreviousStatus);
@@ -207,6 +222,13 @@ export class WorkItemRowRepository {
 
     if (from !== to && !canTransitionTo(from, to)) {
       throw new InvalidStatusTransition(item.id, from, to);
+    }
+    let verdictWrite: { failureVerdict?: FailureVerdict | null } = {};
+    if (from !== to && to === "Failed") {
+      if (item.failureVerdict === null) throw new FailedWithoutVerdict(item.id, from);
+      verdictWrite = { failureVerdict: item.failureVerdict };
+    } else if (from !== to && from === "Failed") {
+      verdictWrite = { failureVerdict: null };
     }
 
     const updated = await this.db
@@ -219,6 +241,7 @@ export class WorkItemRowRepository {
         // stale blockedReason in place. Normalize to `null` here, at the
         // single physical writer, so every caller's clear actually clears.
         blockedReason: item.blockedReason ?? null,
+        ...verdictWrite,
         updatedAt: item.updatedAt,
       })
       .where(and(eq(workItems.id, item.id), eq(workItems.status, expectedPreviousStatus)))

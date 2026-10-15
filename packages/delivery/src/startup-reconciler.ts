@@ -11,11 +11,10 @@ import type { ProjectHaltRepository } from "./repositories/project-halt.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { FailureRouter, RawFailureContext } from "./failure-router.js";
-import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
+import type { ParkedFailureDeps } from "./lifecycle/failure-recovery.js";
 import { blockWorkItem, PlanningService, requeueWorkItem, takeEvents } from "./domain/index.js";
-import { recoverFailedItem } from "./lifecycle/failure-recovery.js";
+import { recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
-import { WORK_FAILED } from "./acl/quality-acl.js";
 import { mergeOnMainOf, OrphanUnreconciled } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 
@@ -49,6 +48,8 @@ interface ReconcileSummary {
   readonly orphansBlocked: number;
   readonly failedReplanned: number;
   readonly failedAbandoned: number;
+  /** Parked Failed items whose stored verdict does not parse: left Failed, their project blocked. */
+  readonly failedHeld: number;
   readonly failedErrored: number;
   /** Projects blocked because one of their rows does not parse; their items are not reconciled. */
   readonly projectsBlocked: number;
@@ -88,6 +89,7 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
   let orphansBlocked = 0;
   let failedReplanned = 0;
   let failedAbandoned = 0;
+  let failedHeld = 0;
   let failedErrored = 0;
   let failedRouted = 0;
   const blockedProjects = new Set<ProjectId>();
@@ -101,21 +103,21 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     }
   }
 
-  const recoveryDeps: FailureRecoveryDeps = {
+  const recoveryDeps: ParkedFailureDeps = {
     workItemRepo: deps.workItemRepo,
     eventPublisher: deps.eventStore,
     failureRouter: deps.failureRouter,
+    projects: deps.projects,
   };
 
   for await (const parkedFailed of itemsByProject(deps, "Failed", blockedProjects)) {
     for (const failed of parkedFailed) {
       failedRouted += 1;
       try {
-        // The verdict on the parked item's last attempt was not kept: it is routed as retryable
-        // work, bounded by the replan bound, never given up on a verdict nobody gave.
-        const action = await recoverFailedItem(recoveryDeps, failed, reconstructFailure(failed), WORK_FAILED);
+        const action = await recoverParkedFailedItem(recoveryDeps, failed, reconstructFailure(failed));
         if (action === "replan") failedReplanned += 1;
-        else failedAbandoned += 1;
+        else if (action === "abandon") failedAbandoned += 1;
+        else failedHeld += 1;
       } catch (error) {
         failedErrored += 1;
         console.warn(
@@ -132,13 +134,14 @@ export async function reconcileWorkItemsOnStartup(deps: StartupReconcilerDeps): 
     orphansBlocked,
     failedReplanned,
     failedAbandoned,
+    failedHeld,
     failedErrored,
     projectsBlocked: blockedProjects.size,
   };
   console.log(
     `[startup-reconciler] orphans requeued=${orphansRequeued} completed=${orphansCompleted} blocked=${orphansBlocked}; ` +
       `parked Failed routed=${failedRouted} (replan=${failedReplanned} abandon=${failedAbandoned} ` +
-      `errored=${failedErrored}); ` +
+      `held=${failedHeld} errored=${failedErrored}); ` +
       `projects blocked on a corrupt row=${blockedProjects.size}`,
   );
   return summary;

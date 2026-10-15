@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
-import type { FailureRouter } from "./failure-router.js";
+import { FailureRouter } from "./failure-router.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 
@@ -82,6 +82,7 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
       status: "InProgress",
       title: "orphan",
       projectId: PROJECT_ID,
+      failureVerdict: { kind: "none" },
       dispatchCount: 2,
       workKind: "implementation",
       createdAt: now,
@@ -184,6 +185,7 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
       status: "InProgress",
       title: "orphan",
       projectId: PROJECT_ID,
+      failureVerdict: { kind: "none" },
       dispatchCount: 1,
       workKind: "implementation",
       createdAt: now,
@@ -328,5 +330,96 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     const world = orphanWorld(createWorkItemId(), null, () => true);
 
     await expect(reconcileWorkItemsOnStartup(world.deps)).rejects.toMatchObject({ name: "OrphanUnreconciled" });
+  });
+});
+
+// G4 across a restart (c-loop-never-stop criterion 3; ADR-080 d5): a parked Failed item is routed by
+// the verdict saved with its Failed transition.
+describe("reconcileWorkItemsOnStartup — a parked Failed item is routed by its stored verdict", () => {
+  const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000cc", "test");
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function parkedWorld(failureVerdict: WorkItem["failureVerdict"]) {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const now = new Date();
+    let row: WorkItem = {
+      id: createWorkItemId(),
+      level: "Task",
+      status: "Failed",
+      title: "parked",
+      projectId: PROJECT_ID,
+      blockedReason: { source: "task_failed", reason: "task_failed" },
+      failureVerdict,
+      dispatchCount: 1,
+      workKind: "implementation",
+      createdAt: now,
+      updatedAt: now,
+      events: [],
+    };
+    const projectBlocks: ProjectBlockCause[] = [];
+    const repo: WorkItemRepository = {
+      ...emptyWorkItemRepo(),
+      projectIdsWithStatus: async (status) => (status === row.status ? [PROJECT_ID] : []),
+      findByProjectAndStatus: async () => [{ ...row, events: [] }],
+      findById: async () => ({ ...row, events: [] }),
+      save: async (item, expected) => {
+        if (row.status !== expected) throw new Error(`save expected ${expected}, the row is ${row.status}`);
+        row = { ...item, events: [] };
+      },
+    };
+    const { deps } = buildDeps({
+      workItemRepo: repo,
+      failureRouter: new FailureRouter(2),
+      projects: {
+        block: async (_id, cause) => {
+          projectBlocks.push(cause);
+          return "blocked";
+        },
+        get: async () => ({ workspacePath: null }),
+      },
+    });
+    return { deps, row: () => row, projectBlocks };
+  }
+
+  test("a non-retryable verdict: given up, no retry spent, never replanned", async () => {
+    const world = parkedWorld({ kind: "recorded", verdict: { kind: "non-retryable", ground: "conflict-markers-left" } });
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ failedReplanned: 0, failedAbandoned: 1, failedHeld: 0 });
+    expect(world.row()).toMatchObject({ status: "Abandoned", dispatchCount: 1, blockedReason: { source: "failure_given_up" } });
+    expect(world.row().blockedReason).toMatchObject({ reason: expect.stringContaining("conflict markers") });
+  });
+
+  test("a retryable verdict under the bound: replanned", async () => {
+    const world = parkedWorld({ kind: "recorded", verdict: { kind: "retryable", ground: "merge-conflict" } });
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ failedReplanned: 1, failedAbandoned: 0, failedHeld: 0 });
+    expect(world.row()).toMatchObject({ status: "Pending", blockedReason: { source: "replan" } });
+  });
+
+  test("a row failed before the verdict was stored: routed as retryable work, replanned under the bound", async () => {
+    const world = parkedWorld({ kind: "none" });
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ failedReplanned: 1, failedAbandoned: 0, failedHeld: 0 });
+    expect(world.row().status).toBe("Pending");
+  });
+
+  test("a stored verdict that does not parse: left Failed, read as neither verdict, its project blocked", async () => {
+    const world = parkedWorld({ kind: "unreadable", detail: '{"kind":"maybe"}: invalid discriminator' });
+
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
+
+    expect(summary).toMatchObject({ failedReplanned: 0, failedAbandoned: 0, failedHeld: 1, failedErrored: 0 });
+    expect(world.row().status).toBe("Failed");
+    expect(world.projectBlocks).toEqual([expect.objectContaining({ category: "fault", errorClass: "StoredFailureVerdictCorrupt" })]);
   });
 });

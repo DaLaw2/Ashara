@@ -30,7 +30,7 @@ export class LifecycleRouter {
         await this.cascadeCompletion(repo, item.parentId, events);
       }
     } else {
-      failWorkItem(item, { source: "task_failed", reason: "task_failed" });
+      failWorkItem(item, { source: "task_failed", reason: "task_failed" }, verdict);
       await repo.save(item, from);
       events.push(...takeEvents(item));
     }

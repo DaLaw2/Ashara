@@ -5,6 +5,18 @@ import { type StoredBlockedReason, blockedReasonToRecord } from "../work-item-la
 import type { StoredSuccessCriteria } from "../work-item-language/success-criteria.js";
 import type { WorkKind } from "../acl/organization-acl.js";
 import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/transitions.js";
+import type { FailureVerdict } from "../acl/quality-acl.js";
+
+/**
+ * Quality's verdict on a Failed item's last attempt as its row holds it (migration 058), read only
+ * while the item is Failed. `none`: no verdict is stored, which on a Failed row means it failed
+ * before migration 058. `unreadable`: the stored value does not parse; it is never read as either
+ * verdict.
+ */
+export type StoredFailureVerdict =
+  | { readonly kind: "recorded"; readonly verdict: FailureVerdict }
+  | { readonly kind: "none" }
+  | { readonly kind: "unreadable"; readonly detail: string };
 
 export interface WorkItem {
   id: WorkItemId;
@@ -17,6 +29,8 @@ export interface WorkItem {
   northStar?: string;
   successCriteria?: StoredSuccessCriteria;
   blockedReason?: StoredBlockedReason;
+  /** Quality's verdict on the last attempt, stored with the Failed transition (migration 058). */
+  failureVerdict: StoredFailureVerdict;
   /** The project (projects.id) this item belongs to. Required: no item exists outside a project. */
   projectId: ProjectId;
   /**
@@ -64,6 +78,7 @@ export function createPendingWorkItem(
     northStar,
     successCriteria,
     projectId,
+    failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: null,
     createdAt: now,
@@ -129,12 +144,18 @@ export function completeRecordedMerge(item: WorkItem): void {
   );
 }
 
-export function failWorkItem(item: WorkItem, reason: StoredBlockedReason): void {
+/**
+ * Fails an item with Quality's verdict on whether another attempt can succeed (G4): the verdict is
+ * saved with the transition, so the item is routed by it whenever it is routed, a restart between
+ * the two included.
+ */
+export function failWorkItem(item: WorkItem, reason: StoredBlockedReason, verdict: FailureVerdict): void {
   if (!canTransitionTo(item.status, "Failed")) {
     throw new InvalidStatusTransition(item.id, item.status, "Failed");
   }
   item.status = "Failed";
   item.blockedReason = reason;
+  item.failureVerdict = { kind: "recorded", verdict };
   item.updatedAt = new Date();
   item.events.push(
     createDomainEvent("work_item.failed", "delivery", {

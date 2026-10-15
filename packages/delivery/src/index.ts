@@ -67,7 +67,7 @@ export { createFirstPlanStore } from "./stores/first-plan-store.js";
 export { createReplanStore } from "./stores/replan-store.js";
 
 export { WorkItemRowRepository } from "./repositories/work-item.js";
-export { adaptWorkItemRepo, rowToWorkItem } from "./repositories/work-item-adapter.js";
+export { adaptWorkItemRepo, rowToWorkItem, workItemSaveRow } from "./repositories/work-item-adapter.js";
 export { ProjectHaltRepository } from "./repositories/project-halt.js";
 export { listDuePlanReports, postPlanReport } from "./repositories/plan-report.js";
 export { listDuePlanRevisionReports, postPlanRevisionReport } from "./repositories/replan.js";

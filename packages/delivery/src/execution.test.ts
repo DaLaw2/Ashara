@@ -60,6 +60,7 @@ function freshPendingItem(): WorkItem {
     status: "Pending",
     title: "test-preempted-task",
     projectId: TEST_PROJECT_ID,
+    failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: "implementation",
     createdAt: now,

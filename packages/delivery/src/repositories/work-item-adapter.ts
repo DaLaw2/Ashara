@@ -2,8 +2,10 @@ import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 import { parseWorkItemLevel, parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
 import { parseWorkKind } from "../acl/organization-acl.js";
+import { failureVerdictSchema } from "../acl/quality-acl.js";
+import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { WorkItemRowRepository } from "./work-item.js";
-import type { WorkItem, WorkItemRepository } from "../domain/index.js";
+import type { StoredFailureVerdict, WorkItem, WorkItemRepository } from "../domain/index.js";
 
 /**
  * Bridges the db persistence repository (Drizzle row shape, nullable columns) to
@@ -14,6 +16,38 @@ import type { WorkItem, WorkItemRepository } from "../domain/index.js";
  */
 
 type DbRow = Awaited<ReturnType<WorkItemRowRepository["findById"]>>;
+
+/**
+ * The failure_verdict column read through Quality's schema (migration 058). A value that does not
+ * parse is kept as `unreadable` with its issues rather than thrown: only the routing of a Failed
+ * item reads the verdict, and it takes that case's fail-closed path; every other read of the row
+ * is unaffected.
+ */
+function storedFailureVerdictOf(raw: unknown): StoredFailureVerdict {
+  if (raw === null) return { kind: "none" };
+  const parsed = failureVerdictSchema.safeParse(raw);
+  if (parsed.success) return { kind: "recorded", verdict: parsed.data };
+  return { kind: "unreadable", detail: `${JSON.stringify(raw)}: ${JSON.stringify(parsed.error.issues)}` };
+}
+
+/** The columns `save` writes, from a domain WorkItem: the one mapping the adapter and the server's status route share. */
+export function workItemSaveRow(item: WorkItem): {
+  id: string;
+  status: string;
+  blockedReason: unknown;
+  failureVerdict: FailureVerdict | null;
+  updatedAt: Date;
+} {
+  return {
+    id: item.id,
+    status: item.status,
+    // `undefined` means the domain method cleared it: Drizzle's `.set()` drops `undefined` keys
+    // rather than writing SQL NULL, so it is normalized to `null` for the clear to clear.
+    blockedReason: item.blockedReason ?? null,
+    failureVerdict: item.failureVerdict.kind === "recorded" ? item.failureVerdict.verdict : null,
+    updatedAt: item.updatedAt,
+  };
+}
 
 export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
   const jsonb = parseWorkItemJsonb(row);
@@ -28,6 +62,7 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     northStar: row.northStar ?? undefined,
     successCriteria: jsonb.successCriteria,
     blockedReason: jsonb.blockedReason,
+    failureVerdict: storedFailureVerdictOf(row.failureVerdict),
     projectId: parseProjectId(row.projectId, "work_items.project_id"),
     dispatchCount: row.dispatchCount,
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
@@ -79,15 +114,7 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
       return ids.map((id) => parseWorkItemId(id, "work_items.id"));
     },
     async save(item, expectedPreviousStatus) {
-      await db.save(
-        {
-          id: item.id,
-          status: item.status,
-          blockedReason: item.blockedReason ?? null,
-          updatedAt: item.updatedAt,
-        },
-        expectedPreviousStatus,
-      );
+      await db.save(workItemSaveRow(item), expectedPreviousStatus);
     },
     async incrementDispatchCount(id) {
       return db.incrementDispatchCount(id);

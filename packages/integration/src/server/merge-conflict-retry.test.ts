@@ -181,7 +181,7 @@ async function routeFailure(taskId: WorkItemId, result: TaskRun["result"]): Prom
   const repo = workItems();
   const item = await PlanningService.findWorkItem(repo, taskId);
   if (item === null) throw new Error(`task ${taskId} not found`);
-  failWorkItem(item, { source: "task_failed", reason: result.detail });
+  failWorkItem(item, { source: "task_failed", reason: result.detail }, result.verdict);
   await PlanningService.saveWorkItem(repo, item, "InProgress");
   return recoverFailedItem(
     { workItemRepo: repo, eventPublisher: { publish: async () => {} }, failureRouter: new FailureRouter(3) },

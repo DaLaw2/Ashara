@@ -49,6 +49,9 @@ export const workItems = pgTable("work_items", {
   // Migration 049: how merge_commit closed the task, 'merged' or 'already_delivered'; NULL when
   // not recorded (a record from before 049).
   mergeKind: text("merge_kind"),
+  // Migration 058: Quality's verdict on the last attempt, written with every entry into Failed and
+  // cleared on every exit from it. NULL on a Failed row that failed before 058.
+  failureVerdict: jsonb("failure_verdict"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });

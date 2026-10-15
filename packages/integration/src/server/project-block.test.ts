@@ -7,8 +7,9 @@ import { DevSessionRepository } from "@ashara/workplace";
 import type { DbTransaction } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
-import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
+import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, failWorkItem, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/delivery";
+import { parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
 
@@ -257,6 +258,80 @@ describe("one project's bad record at startup", () => {
         reason: expect.stringContaining("success_criteria does not parse"),
       });
       expect(await stateOf(tx, healthy.projectId)).toMatchObject({ status: "active" });
+    });
+  });
+});
+
+// G4 across a restart (c-loop-never-stop criterion 3; ADR-080 d5): the verdict is saved with the
+// Failed transition and a parked Failed item is routed by it.
+describe("a parked Failed item at startup is routed by the verdict saved with its Failed transition", () => {
+  const VerdictRowSchema = z.array(z.object({ status: z.string(), dispatchCount: z.number(), failureVerdict: z.unknown() }));
+
+  async function rowOf(handle: Handle, itemId: string) {
+    const result = await handle.execute(sql`
+      SELECT status, dispatch_count AS "dispatchCount", failure_verdict AS "failureVerdict" FROM work_items WHERE id = ${itemId}`);
+    return VerdictRowSchema.parse(result.rows)[0];
+  }
+
+  /** Fails an InProgress task as the dispatch path does, through the repository's save, after one counted dispatch. */
+  async function failWith(handle: Handle, itemId: string, verdict: Parameters<typeof failWorkItem>[2]): Promise<void> {
+    await handle.execute(sql`UPDATE work_items SET dispatch_count = 1 WHERE id = ${itemId}`);
+    const repo = adaptWorkItemRepo(new WorkItemRowRepository(handle));
+    const item = await repo.findById(parseWorkItemId(itemId, "test"));
+    if (item === null) throw new Error(`task ${itemId} not found`);
+    failWorkItem(item, { source: "task_failed", reason: "task_failed" }, verdict);
+    await repo.save(item, "InProgress");
+  }
+
+  test("non-retryable is given up with no retry spent, retryable and pre-058 rows are replanned, an unreadable verdict blocks its project", async () => {
+    await inRolledBackTransaction(async (tx) => {
+      const healthy = await projectWith(tx, [{ status: "InProgress" }, { status: "InProgress" }, { status: "Failed" }], false);
+      const corrupt = await projectWith(tx, [{ status: "InProgress" }], false);
+      const [nonRetryable = "", retryable = "", legacy = ""] = healthy.taskIds;
+      const unreadable = corrupt.taskIds[0] ?? "";
+      await failWith(tx, nonRetryable, { kind: "non-retryable", ground: "conflict-markers-left" });
+      await failWith(tx, retryable, { kind: "retryable", ground: "merge-conflict" });
+      await failWith(tx, unreadable, { kind: "retryable", ground: "work" });
+      await tx.execute(sql`UPDATE work_items SET failure_verdict = '{"kind":"maybe","ground":"work"}'::jsonb WHERE id = ${unreadable}`);
+      expect(await rowOf(tx, nonRetryable)).toEqual({ status: "Failed", dispatchCount: 1, failureVerdict: { kind: "non-retryable", ground: "conflict-markers-left" } });
+      expect((await rowOf(tx, legacy))?.failureVerdict).toBeNull();
+
+      const repo = adaptWorkItemRepo(new WorkItemRowRepository(tx));
+      const summary = await reconcileWorkItemsOnStartup({
+        workItemRepo: { ...repo, projectIdsWithStatus: async (status) => (await repo.projectIdsWithStatus(status)).filter((id) => ourProjects.has(id)) },
+        projects: new ProjectHaltRepository(tx),
+        eventStore: { publish: async () => undefined },
+        failureRouter: new FailureRouter(3),
+        devSessionStore: { dispatchEvidence: (taskId, by) => new DevSessionRepository(db).dispatchEvidence(taskId, by) },
+        workdirBase: `/nonexistent-${NAME_PREFIX}`,
+      });
+
+      expect(summary).toMatchObject({ failedAbandoned: 1, failedReplanned: 2, failedHeld: 1, failedErrored: 0 });
+      // The exit from Failed clears the stored verdict; the dispatch count is the router's, untouched.
+      expect(await rowOf(tx, nonRetryable)).toEqual({ status: "Abandoned", dispatchCount: 1, failureVerdict: null });
+      expect(await rowOf(tx, retryable)).toEqual({ status: "Pending", dispatchCount: 1, failureVerdict: null });
+      expect((await rowOf(tx, legacy))?.status).toBe("Pending");
+      expect((await rowOf(tx, unreadable))?.status).toBe("Failed");
+      expect(await stateOf(tx, corrupt.projectId)).toEqual({
+        status: "blocked",
+        errorClass: "StoredFailureVerdictCorrupt",
+        reason: expect.stringContaining("failure_verdict stored with its Failed transition does not parse"),
+      });
+      expect(await stateOf(tx, healthy.projectId)).toMatchObject({ status: "active" });
+    });
+  });
+
+  test("a save into Failed with no verdict is refused, and the row stays as it was", async () => {
+    await inRolledBackTransaction(async (tx) => {
+      const project = await projectWith(tx, [{ status: "InProgress" }], false);
+      const taskId = project.taskIds[0] ?? "";
+      const save = new WorkItemRowRepository(tx).save(
+        { id: taskId, status: "Failed", blockedReason: { source: "task_failed", reason: "task_failed" }, failureVerdict: null, updatedAt: new Date() },
+        "InProgress",
+      );
+
+      await expect(save).rejects.toMatchObject({ name: "FailedWithoutVerdict" });
+      expect((await rowOf(tx, taskId))?.status).toBe("InProgress");
     });
   });
 });

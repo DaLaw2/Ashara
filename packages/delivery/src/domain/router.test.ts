@@ -41,6 +41,7 @@ function makeItem(overrides: Partial<WorkItem> & { id: WorkItemId; status: WorkI
   return {
     level: "Task",
     projectId: TEST_PROJECT_ID,
+    failureVerdict: { kind: "none" },
     dispatchCount: 0,
     createdAt: new Date(),
     updatedAt: new Date(),

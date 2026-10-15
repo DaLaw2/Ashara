@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { VisionRepository } from "@ashara/engagement";
+import { WORK_FAILED } from "@ashara/quality";
 import type { WorkItemId } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery";
 import { InvalidId, parseProjectId, parseWorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, WORK_ITEM_STATUSES } from "@ashara/delivery";
 import { EventStoreRepository, ProjectRepository } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
-import { WorkItemRowRepository, rowToWorkItem } from "@ashara/delivery";
+import { WorkItemRowRepository, rowToWorkItem, workItemSaveRow } from "@ashara/delivery";
 import {
   startWorkItem,
   failWorkItem,
@@ -121,7 +122,9 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           );
         case "Failed": {
           const failReason: StoredBlockedReason = { ...reason, source: "api" };
-          failWorkItem(item, failReason);
+          // A task failed by hand carries no verdict of Quality's on whether another attempt can
+          // succeed: it is routed as retryable work, within the replan bound.
+          failWorkItem(item, failReason, WORK_FAILED);
           break;
         }
         case "Pending":
@@ -158,21 +161,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
         }
       }
 
-      await workItemRepo.save(
-        {
-          id: item.id,
-          status: item.status,
-          // `undefined` here means "the domain method cleared it" (see
-          // unblockWorkItem/replanWorkItem) -- Drizzle's `.set()` drops
-          // `undefined` keys instead of writing SQL NULL, so an
-          // unnormalized `undefined` would silently leave the stale
-          // blockedReason in place. Normalize to `null` so a clear
-          // actually clears.
-          blockedReason: item.blockedReason ?? null,
-          updatedAt: item.updatedAt,
-        },
-        previousStatus,
-      );
+      await workItemRepo.save(workItemSaveRow(item), previousStatus);
     } catch (e) {
       if (e instanceof InvalidStatusTransition) {
         return c.json({ error: e.message }, 400);

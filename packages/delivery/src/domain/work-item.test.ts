@@ -3,6 +3,7 @@ import { parseProjectId } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/transitions.js";
+import { WORK_FAILED } from "../acl/quality-acl.js";
 import {
   createPendingWorkItem,
   startWorkItem,
@@ -41,7 +42,7 @@ const OWNER_ABANDON_REASON: StoredBlockedReason = { source: "api", note: "abando
 function seedFailed() {
   const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
   startWorkItem(item);
-  failWorkItem(item, FAIL_REASON);
+  failWorkItem(item, FAIL_REASON, WORK_FAILED);
   takeEvents(item);
   return item;
 }
@@ -268,7 +269,7 @@ describe("abandonWorkItem", () => {
   test("throws InvalidStatusTransition from a terminal status", () => {
     const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     startWorkItem(item);
-    failWorkItem(item, FAIL_REASON);
+    failWorkItem(item, FAIL_REASON, WORK_FAILED);
     abandonWorkItem(item, ABANDON_REASON);
     takeEvents(item);
 
@@ -299,7 +300,7 @@ describe("giveUpWorkItem", () => {
   function inStatus(status: "Pending" | "InProgress" | "Blocked" | "Failed") {
     const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     if (status === "InProgress" || status === "Failed") startWorkItem(item);
-    if (status === "Failed") failWorkItem(item, FAIL_REASON);
+    if (status === "Failed") failWorkItem(item, FAIL_REASON, WORK_FAILED);
     if (status === "Blocked") blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     return item;

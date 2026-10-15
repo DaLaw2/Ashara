@@ -8,9 +8,8 @@ import { projectBlockCause, projectCapCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { RawFailureContext } from "./failure-router.js";
 import { PlanningService, salvagedReason, failWorkItem, blockWorkItem, giveUpWorkItem, requeueWorkItem, takeEvents, startWorkItem, exitStaleChecks, exitDisputedCheck, exitSuiteReview, requestEnvironmentChange } from "./domain/index.js";
-import { recoverFailedItem } from "./lifecycle/failure-recovery.js";
+import { recoverFailedItem, recoverParkedFailedItem } from "./lifecycle/failure-recovery.js";
 import { recordFailedApproach } from "./acl/knowledge-acl.js";
-import { WORK_FAILED } from "./acl/quality-acl.js";
 import type { FailureVerdict, FaultClass } from "./acl/quality-acl.js";
 import type { Outcome } from "./acl/workplace-acl.js";
 import { toRecordedOutcome } from "./acl/workplace-acl.js";
@@ -1038,7 +1037,7 @@ async function commitFailure(workItemRepo: WorkItemRepository, taskId: WorkItem[
       return [];
     }
     const previousStatus = item.status;
-    failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" });
+    failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" }, verdict);
     await PlanningService.saveWorkItem(workItemRepo, item, previousStatus);
     return takeEvents(item);
   }
@@ -1345,7 +1344,7 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
       events = [];
     } else {
       const previousStatus = item.status;
-      failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" });
+      failWorkItem(item, { source: "orchestrator_error", reason: "orchestrator error" }, verdict);
       await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
       events = takeEvents(item);
     }
@@ -1395,17 +1394,16 @@ export async function handleProcessingError(
         }
 
         case "Failed":
-          await recoverFailedItem(
+          // Routed by the verdict saved with its Failed transition, which survives the interruption.
+          await recoverParkedFailedItem(
             {
               workItemRepo: deps.workItemRepo,
               eventPublisher: deps.eventStore,
               failureRouter: deps.failureRouter,
+              projects: deps.projectRepo,
             },
             current,
             { detail: `the routing of this task's failed attempt was interrupted by Ashara's own fault: ${fault.reason}`, raw: {} },
-            // The attempt's own verdict did not survive the interruption: routed as retryable work,
-            // bounded by the replan bound, never given up on a verdict nobody gave.
-            WORK_FAILED,
           );
           break;
 

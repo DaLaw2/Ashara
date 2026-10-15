@@ -627,7 +627,7 @@ async function giveUp(id: string, attempts: number): Promise<void> {
   const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
   const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
   if (task === null) throw new Error(`task ${id} not found`);
-  failWorkItem(task, { source: "task_failed", reason: "the check author's red run kept failing" });
+  failWorkItem(task, { source: "task_failed", reason: "the check author's red run kept failing" }, { kind: "retryable", ground: "work" });
   await PlanningService.saveWorkItem(repo, task, "InProgress");
   const failure = { detail: "red run on the foundation: REJECTED, the set: no check of the set fails on the foundation", raw: {} };
   const decision = await recoverFailedItem(

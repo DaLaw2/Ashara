@@ -57,6 +57,7 @@ function task(status: WorkItemStatus, title: string, projectId: ProjectId = PROJ
     status,
     title,
     projectId,
+    failureVerdict: { kind: "none" },
     dispatchCount: 0,
     workKind: null,
     createdAt: new Date(),

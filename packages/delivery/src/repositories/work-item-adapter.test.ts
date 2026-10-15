@@ -28,6 +28,7 @@ function row(overrides: Partial<Row>): Row {
     infrastructureFaults: 0,
     mergeCommit: null,
     mergeKind: null,
+    failureVerdict: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
@@ -47,5 +48,22 @@ describe("rowToWorkItem parses every id column", () => {
   test("a well-formed row keeps its ids", () => {
     const item = rowToWorkItem(row({ parentId: VALID }));
     expect(item).toMatchObject({ id: VALID, parentId: VALID, projectId: VALID });
+  });
+});
+
+describe("rowToWorkItem reads the stored failure verdict through Quality's schema", () => {
+  test("a stored verdict is recorded; no stored verdict is none", () => {
+    const stored = { kind: "non-retryable", ground: "conflict-markers-left" };
+    expect(rowToWorkItem(row({ status: "Failed", failureVerdict: stored })).failureVerdict).toEqual({ kind: "recorded", verdict: stored });
+    expect(rowToWorkItem(row({ status: "Failed" })).failureVerdict).toEqual({ kind: "none" });
+  });
+
+  test.each([
+    ["an unknown ground", { kind: "retryable", ground: "conflict-markers-left" }],
+    ["an unknown kind", { kind: "maybe", ground: "work" }],
+    ["a string", "retryable"],
+  ])("%s is unreadable, never a verdict", (_label, stored) => {
+    const verdict = rowToWorkItem(row({ status: "Failed", failureVerdict: stored })).failureVerdict;
+    expect(verdict.kind).toBe("unreadable");
   });
 });

@@ -1,15 +1,64 @@
 import { describeErrorChain } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
-import type { WorkItem, WorkItemRepository } from "../domain/index.js";
+import type { ActiveProjects, WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
+import { WORK_FAILED } from "../acl/quality-acl.js";
+import { projectBlockCause } from "../project-halt.js";
 import type { EventPublisher } from "./ports.js";
 
 export interface FailureRecoveryDeps {
   readonly workItemRepo: WorkItemRepository;
   readonly eventPublisher: EventPublisher;
   readonly failureRouter: Pick<FailureRouter, "route">;
+}
+
+/** The verdict stored with a Failed item's transition (migration 058) does not parse. */
+class StoredFailureVerdictCorrupt extends Error {
+  constructor(
+    readonly workItemId: string,
+    readonly projectId: string,
+    readonly detail: string,
+  ) {
+    super(`work item ${workItemId} (project ${projectId}): the failure_verdict stored with its Failed transition does not parse: ${detail}`);
+    this.name = "StoredFailureVerdictCorrupt";
+  }
+}
+
+export interface ParkedFailureDeps extends FailureRecoveryDeps {
+  /** Blocks the project of an item whose stored verdict does not parse, for the operator to repair. */
+  readonly projects: Pick<ActiveProjects, "block">;
+}
+
+/**
+ * Routes a parked Failed item, one whose routing a dead process or an orchestrator error cut off
+ * after its Failed transition was saved, by the verdict saved with that transition (migration 058):
+ * a non-retryable failure is given up and spends no retry, a retryable one is replanned within the
+ * bound. A row that failed before 058 holds no verdict and is routed as retryable work within the
+ * bound. A stored verdict that does not parse is read as neither: replanning could spend a retry
+ * the verdict forbids, and abandoning could throw away work another attempt would finish and open a
+ * plan repair on a guess. Its project is blocked as Ashara's own fault, the policy for a work item
+ * row that does not parse (migration 025), and the item is left Failed: `held`.
+ */
+export async function recoverParkedFailedItem(
+  deps: ParkedFailureDeps,
+  item: WorkItem,
+  failure: RawFailureContext,
+): Promise<FailureDecision["action"] | "held"> {
+  const stored = item.failureVerdict;
+  switch (stored.kind) {
+    case "recorded":
+      return recoverFailedItem(deps, item, failure, stored.verdict);
+    case "none":
+      return recoverFailedItem(deps, item, failure, WORK_FAILED);
+    case "unreadable": {
+      const corrupt = new StoredFailureVerdictCorrupt(item.id, item.projectId, stored.detail);
+      const result = await deps.projects.block(item.projectId, projectBlockCause(corrupt));
+      console.warn(`[${item.id}] left Failed, not routed; project ${item.projectId} ${result}: ${corrupt.message}`);
+      return "held";
+    }
+  }
 }
 
 /**
