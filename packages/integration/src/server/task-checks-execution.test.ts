@@ -26,7 +26,8 @@ import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
-import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the

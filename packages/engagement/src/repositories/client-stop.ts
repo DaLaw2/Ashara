@@ -2,7 +2,8 @@ import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { clientMessages, projects, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
-import { PROJECT_STATUSES, parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { PROJECT_STATUSES } from "../project-lifecycle.js";
 import { PROJECT_LIFECYCLE } from "../project-lifecycle.js";
 import { ClientMessageRepository } from "./client-message.js";
 

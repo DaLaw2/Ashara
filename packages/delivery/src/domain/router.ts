@@ -1,5 +1,5 @@
 import type { WorkItemId, DomainEvent } from "@ashara/shared";
-import { WorkItemNotFound } from "@ashara/shared";
+import { WorkItemNotFound } from "../work-item-language/transitions.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { WorkItemRepository } from "./repository.js";
 import type { WorkItem } from "./work-item.js";

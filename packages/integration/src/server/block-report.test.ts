@@ -6,7 +6,7 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
-import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";

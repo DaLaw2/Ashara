@@ -1,4 +1,6 @@
 export { LLMGateway } from "./gateway.js";
+export type { CapabilityLevel } from "./capability-level.js";
+export { CapabilityLevelSchema } from "./capability-level.js";
 export type { ResolvedModel } from "./gateway.js";
 export type { TurnRequest, TurnResult, TurnToolSchema } from "./turn.js";
 export { buildGatewayConfig, toModelConfig } from "./config.js";

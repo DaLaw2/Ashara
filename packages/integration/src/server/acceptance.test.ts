@@ -15,7 +15,8 @@ import {
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/delivery";
-import { type ProjectId, type VisionSource } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";

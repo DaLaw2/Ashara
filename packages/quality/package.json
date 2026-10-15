@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@ashara/db": "*",
+    "@ashara/delivery": "*",
+    "@ashara/engagement": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
     "@ashara/model-access": "*",

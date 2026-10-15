@@ -3,14 +3,14 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, LlmCallRepository, ProjectRepository, readRunEvidence } from "@ashara/db";
-import { toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
+import { DevSessionRepository, createAgentBrief, createSessionId, readRunEvidence, toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
 import type { SessionStore } from "@ashara/workplace";
 import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
-import { createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
+import { parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { formatRunReport } from "./run-report-format.js";
 
@@ -166,7 +166,8 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
           projectId,
           taskId: parseWorkItemId(attemptTaskId, "test"),
           role: { id: "worker", name: "Worker" },
-          workKind: "implementation",
+          toolProfile: "run-and-dispute-checks",
+          charter: { identity: "You are a coding agent.", duties: null },
           model,
           cellImage,
           brief,

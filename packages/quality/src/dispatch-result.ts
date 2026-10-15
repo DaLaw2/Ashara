@@ -1,10 +1,12 @@
 import type { Cell, CellSpec, CurrentEnvironment, PartialCommitOutcome, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
 import { WorktreeCommitFailed, cleanupWorkdir } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
-import type { ErrorEnvelope, ErrorLayer, ProjectId, StoredTaskSpec, WorkItemId } from "@ashara/shared";
+import type { ErrorLayer, ProjectId, WorkItemId } from "@ashara/shared";
+import type { ErrorEnvelope } from "@ashara/workplace";
 import { wrapError } from "@ashara/shared";
 import { outcomeRecord } from "@ashara/workplace";
 import type { Outcome } from "@ashara/workplace";
+import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { EnvironmentDefinition } from "./environment-definition.js";
 import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf } from "./fault-class.js";
 import type { EnvironmentError, FaultClass } from "./fault-class.js";

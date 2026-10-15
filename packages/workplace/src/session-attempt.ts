@@ -1,5 +1,5 @@
 import type { AttemptCellImage } from "@ashara/execution-infra";
-import type { AttemptTerminal } from "@ashara/shared";
+import type { AttemptTerminal } from "./session-vocabulary.js";
 import type { Outcome } from "./outcome.js";
 import { toRecordedOutcome } from "./records.js";
 

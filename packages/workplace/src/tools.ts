@@ -3,7 +3,8 @@ import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, elidedOutput 
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import type { TurnToolSchema } from "@ashara/model-access";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
-import type { ElidedText, WorkKind } from "@ashara/shared";
+import type { ElidedText } from "@ashara/shared";
+import type { ToolProfile } from "./assignment.js";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 import type { CheckDefinitionPort, CheckDefinitionResult, FoundationProbe } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
@@ -143,7 +144,7 @@ const TOOL_SCHEMAS: ToolSchemas = {
   },
 };
 
-/** Only the role that defines the environment can build it (the work kind needing "write-environment"). */
+/** Only an attempt that builds the environment is given it (the "build-environment" tool profile). */
 const BUILD_ENVIRONMENT_SCHEMA: TurnToolSchema = {
   description:
     "Build the environment defined in environment/environment.toml from the workspace's current files, then run " +
@@ -262,20 +263,20 @@ const DISPUTE_CHECK_SCHEMA: TurnToolSchema = {
 };
 
 /**
- * The tools an attempt offers the model: build_environment only for environment work, define_check
- * only for check work, run_checks only when the task's stored checks can be run, and dispute_check
- * only for implementation work that runs them.
+ * The tools an attempt offers the model: build_environment only for the "build-environment" profile,
+ * define_check only for "define-checks", run_checks only when the task's stored checks can be run,
+ * and dispute_check only for "run-and-dispute-checks" when it runs them.
  */
-export function toolSchemasFor(workKind: WorkKind | null, runChecks: boolean): ToolSchemas {
+export function toolSchemasFor(toolProfile: ToolProfile, runChecks: boolean): ToolSchemas {
   const offered = runChecks ? { ...TOOL_SCHEMAS, run_checks: RUN_CHECKS_SCHEMA } : TOOL_SCHEMAS;
-  switch (workKind) {
-    case "environment":
+  switch (toolProfile) {
+    case "build-environment":
       return { ...offered, build_environment: BUILD_ENVIRONMENT_SCHEMA, finish: ENVIRONMENT_FINISH_SCHEMA };
-    case "check":
+    case "define-checks":
       return { ...offered, define_check: DEFINE_CHECK_SCHEMA, probe_foundation: PROBE_FOUNDATION_SCHEMA };
-    case "implementation":
+    case "run-and-dispute-checks":
       return runChecks ? { ...offered, dispute_check: DISPUTE_CHECK_SCHEMA } : offered;
-    case null:
+    case "run-checks":
       return offered;
   }
 }

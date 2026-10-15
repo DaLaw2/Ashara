@@ -2,7 +2,10 @@ import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { acceptanceSweeps, clientMessages, completedGoalTasks, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { parseProjectId, parseStoredTaskSpec, type AcceptedAssumptionStanding, type ProjectId, type VisionSource } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
+import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
+import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
 

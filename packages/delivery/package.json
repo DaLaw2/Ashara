@@ -7,7 +7,8 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./project-halt": "./src/project-halt.ts"
+    "./project-halt": "./src/project-halt.ts",
+    "./work-item": "./src/work-item-language/index.ts"
   },
   "dependencies": {
     "@ashara/db": "*",

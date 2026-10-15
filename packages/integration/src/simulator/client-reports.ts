@@ -1,8 +1,10 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { PROJECT_BLOCK_KINDS } from "@ashara/db";
-import { BlockedReasonCorrupt, SPEND_CAP_ERROR_CLASS, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/shared";
-import type { StoredBlockedReason, VisionSource } from "@ashara/shared";
+import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
+import type { StoredBlockedReason } from "@ashara/delivery";
+import type { VisionSource } from "@ashara/engagement";
 import type { Database } from "./database.js";
 
 /**

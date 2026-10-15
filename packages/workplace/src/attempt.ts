@@ -70,34 +70,35 @@ class RecordWriteFailed extends Error {
  */
 export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Promise<Outcome> {
   const limits = resolveLimits(assignment);
-  const isEnvironmentWork = assignment.workKind === "environment";
-  if (isEnvironmentWork !== (deps.environment !== null)) {
+  const { toolProfile } = assignment;
+  const buildsEnvironment = toolProfile === "build-environment";
+  if (buildsEnvironment !== (deps.environment !== null)) {
     throw new InvalidAssignment(assignment.taskId, [
-      isEnvironmentWork
-        ? "environment: an environment assignment needs Z0's environment check for build_environment"
-        : `environment: only an environment assignment may be given Z0's environment check (work kind ${assignment.workKind ?? "none"})`,
+      buildsEnvironment
+        ? "environment: a build-environment assignment needs Z0's environment check for build_environment"
+        : `environment: only a build-environment assignment may be given Z0's environment check (tool profile ${toolProfile})`,
     ]);
   }
-  const isCheckWork = assignment.workKind === "check";
-  if (isCheckWork !== (deps.checks !== null)) {
+  const definesChecks = toolProfile === "define-checks";
+  if (definesChecks !== (deps.checks !== null)) {
     throw new InvalidAssignment(assignment.taskId, [
-      isCheckWork
-        ? "checks: a check assignment needs Z0's check recorder for define_check"
-        : `checks: only a check assignment may be given Z0's check recorder (work kind ${assignment.workKind ?? "none"})`,
+      definesChecks
+        ? "checks: a define-checks assignment needs Z0's check recorder for define_check"
+        : `checks: only a define-checks assignment may be given Z0's check recorder (tool profile ${toolProfile})`,
     ]);
   }
-  // run_checks is implementation work's: check work writes checks, environment work is decided by its gate.
-  if ((isCheckWork || isEnvironmentWork) && deps.taskChecks !== null) {
+  // run_checks is the work's that the stored checks decide: checks being defined do not exist yet, and an environment is decided by its gate.
+  if ((definesChecks || buildsEnvironment) && deps.taskChecks !== null) {
     throw new InvalidAssignment(assignment.taskId, [
-      `taskChecks: only implementation work runs stored checks (work kind ${assignment.workKind ?? "none"})`,
+      `taskChecks: a ${toolProfile} assignment runs no stored checks`,
     ]);
   }
-  const tools = toolSchemasFor(assignment.workKind, deps.taskChecks !== null);
+  const tools = toolSchemasFor(toolProfile, deps.taskChecks !== null);
   const { clock, signal } = deps;
   const startedAt = clock.now();
   const deadline = startedAt + limits.wallClockMs;
   const llm = deps.llm.forCall({ projectId: assignment.projectId, taskId: assignment.taskId, callSite: AGENT_CALL_SITE });
-  const system = buildSystemPrompt(assignment.brief, assignment.workKind);
+  const system = buildSystemPrompt(assignment.brief, assignment.charter, toolProfile);
   const messages: ModelMessage[] = [{ role: "user", content: FIRST_MESSAGE }];
   // Taken before the loop appends to `messages`: exactly what the first call is sent.
   const digest = promptDigest({ system, messages, tools });

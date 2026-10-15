@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import type { AcceptedAssumptionStanding } from "@ashara/shared";
+import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import { DeliveredReports } from "./delivered-report.js";
 import type { DeliveredReportStore } from "./delivered-report.js";
 

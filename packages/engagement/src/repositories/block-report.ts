@@ -2,7 +2,8 @@ import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzl
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import { BlockedReasonCorrupt, parseProjectId, parseStoredBlockedReason, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an

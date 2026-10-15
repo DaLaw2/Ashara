@@ -3,7 +3,7 @@
  * database, no environment, nothing that could carry a secret.
  */
 
-import type { readRunEvidence } from "@ashara/db";
+import type { readRunEvidence } from "@ashara/workplace";
 
 type RunEvidence = Awaited<ReturnType<typeof readRunEvidence>>;
 type CallTotals = RunEvidence["calls"][number];

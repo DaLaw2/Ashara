@@ -1,7 +1,7 @@
 import { z, type ZodType } from "zod";
-import type { CapabilityLevel } from "@ashara/shared";
-import { visionSourceLine } from "@ashara/shared";
+import type { CapabilityLevel } from "@ashara/model-access";
 import type { StructuredValidation } from "@ashara/model-access";
+import { visionSourceLine } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./acl/quality-acl.js";
 import type {
     DecomposedTaskSpec,

@@ -2,11 +2,10 @@ import { z } from "zod";
 
 export type ProjectId = string & { readonly __brand: "ProjectId" };
 export type WorkItemId = string & { readonly __brand: "WorkItemId" };
-export type SessionId = string & { readonly __brand: "SessionId" };
 
-type IdBrand = "ProjectId" | "WorkItemId" | "SessionId";
+type IdBrand = "ProjectId" | "WorkItemId";
 
-// All three are uuid columns (projects.id, work_items.id, dev_sessions.id) or
+// Both are uuid columns (projects.id, work_items.id) or
 // crypto.randomUUID(). z.guid() is the 8-4-4-4-12 hex shape without RFC 9562
 // version bits: Postgres stores any such value in a uuid column.
 const UuidSchema = z.guid();
@@ -48,8 +47,4 @@ export function parseWorkItemId(raw: unknown, field: string): WorkItemId {
 
 export function createWorkItemId(): WorkItemId {
   return parseWorkItemId(crypto.randomUUID(), "crypto.randomUUID()");
-}
-
-export function createSessionId(): SessionId {
-  return parseUuid("SessionId", crypto.randomUUID(), "crypto.randomUUID()") as SessionId;
 }

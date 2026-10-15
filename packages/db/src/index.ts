@@ -12,6 +12,7 @@ export {
   clientMessages,
   dependencies,
   domainEvents,
+  devSessions,
   failedApproaches,
   knowledgeEntries,
   planRepairs,
@@ -25,8 +26,6 @@ export {
   workItems,
 } from "./schema/index.js";
 
-export { DevSessionRepository } from "./repositories/dev-session.js";
-export { readRunEvidence } from "./repositories/run-report.js";
 export { ProjectRepository, noOpenAnswer, noOpenStop, pendingChange, pendingRepair } from "./repositories/project.js";
 export type { ProjectRecord } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";

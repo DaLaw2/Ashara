@@ -3,8 +3,11 @@ import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { ContextualLlm } from "@ashara/finance";
 import { withStructuredLadder } from "@ashara/model-access";
 import type { LadderAttemptEvent, StructuredValidation } from "@ashara/model-access";
-import type { ProjectId, StoredTaskSpec, VisionSource, WorkItemId } from "@ashara/shared";
-import { describeErrorChain, parseWorkItemId, visionSourceLine } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
+import type { StoredTaskSpec } from "./acl/delivery-acl.js";
+import type { VisionSource } from "./acl/engagement-acl.js";
+import { visionSourceLine } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { TaskChecks } from "./task-checks.js";
 

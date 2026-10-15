@@ -1,5 +1,6 @@
-import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
-import type { ProjectId, StoredBlockedReason } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
+import type { ProjectId } from "@ashara/shared";
+import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
 // s-independent-verify-m1 W7): the client hears, once, that a project is paused, the cause as it

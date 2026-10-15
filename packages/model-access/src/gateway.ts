@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { APICallError, NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
-import { describeErrorChain, extractJson } from "@ashara/shared";
-import type { CapabilityLevel } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import { extractJson } from "./json-utils.js";
+import type { CapabilityLevel } from "./capability-level.js";
 import {
   ProviderConfigurationRejected,
   ProviderError,

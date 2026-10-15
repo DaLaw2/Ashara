@@ -1,5 +1,6 @@
-import { SPEND_CAP_ERROR_CLASS, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";

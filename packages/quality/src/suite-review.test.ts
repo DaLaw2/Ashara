@@ -7,7 +7,7 @@ import { PreCallRefusal } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
 import { StructuredOutputExhausted } from "@ashara/model-access";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
-import type { VisionSource } from "@ashara/shared";
+import type { VisionSource } from "./acl/engagement-acl.js";
 import { SuiteReviewer, gitPublicInterface } from "./suite-review.js";
 import type { SuiteReviewSource } from "./suite-review.js";
 import type { TaskChecks } from "./task-checks.js";

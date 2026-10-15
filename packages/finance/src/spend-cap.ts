@@ -187,3 +187,13 @@ export class SpendCap {
     });
   }
 }
+
+/**
+ * The error class a `budget_cap` block records, which says whose cap it was: the deployment's, which
+ * halts every active project at once (the core loop's halt at the cap), or the project's own (the
+ * spend cap's refusal of one project's call). The Liaison's report names the cap from it (smoke1 D4).
+ */
+export const SPEND_CAP_ERROR_CLASS = {
+  deployment: "DeploymentSpendCapReached",
+  project: "BudgetExceeded",
+} as const;

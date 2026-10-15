@@ -43,6 +43,19 @@ export { FailureRouter } from "./failure-router.js";
 export { recoverFailedItem } from "./lifecycle/failure-recovery.js";
 
 export { assignmentIntentOf } from "./acl/engagement-acl.js";
+/** @testseam the integration attempt-profile.test.ts hands Workplace each kind of work's profile through it; the dispatch is its production caller */
+export { attemptProfileOf } from "./acl/workplace-acl.js";
+
+export type { StoredBlockedReason, WorkItemStatus } from "./work-item-language/index.js";
+export {
+  BLOCKED_REASON_SOURCES,
+  BlockedReasonCorrupt,
+  InvalidStatusTransition,
+  OUTBOUND_TRANSITIONS,
+  WORK_ITEM_STATUSES,
+  parseStoredBlockedReason,
+  parseStoredTaskSpec,
+} from "./work-item-language/index.js";
 
 export { FirstPlanner } from "./first-plan.js";
 /** @testseam the integration first-plan tests type their store through it; createFirstPlanStore is its production supplier */

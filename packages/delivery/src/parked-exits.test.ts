@@ -3,8 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { DomainEvent, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
-import { BLOCKED_REASON_SOURCES, blockedExitOf, createWorkItemId, InvalidStatusTransition, parseProjectId } from "@ashara/shared";
+import type { DomainEvent } from "@ashara/shared";
+import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
+import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { BLOCKED_REASON_SOURCES, blockedExitOf } from "./work-item-language/blocked-reason.js";
+import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 

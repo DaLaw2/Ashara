@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ATTEMPT_TERMINALS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
-import { PROJECT_BLOCK_KINDS } from "./schema/index.js";
+import { createDb, DEFAULT_DATABASE_URL, PROJECT_BLOCK_KINDS } from "@ashara/db";
+import { WORK_ITEM_STATUSES } from "@ashara/delivery";
+import { PROJECT_STATUSES } from "@ashara/engagement";
+import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 
 // The code's lifecycle lists against the CHECK constraints the migrations wrote: a member one
 // side has and the other lacks is either unwritable or unread.

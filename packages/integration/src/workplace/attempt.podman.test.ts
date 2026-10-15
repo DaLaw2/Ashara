@@ -106,7 +106,8 @@ describe("runAttempt on a real cell", () => {
           projectId: parseProjectId("00000000-0000-4000-8000-000000000002", "test"),
           taskId,
           role: { id: "worker", name: "Worker" },
-          workKind: "implementation",
+          toolProfile: "run-and-dispute-checks",
+          charter: { identity: "You are a coding agent.", duties: null },
           model: gateway.resolveModel("Strong", "agent-runner"),
           cellImage: { kind: "base-cell", image: "base@sha256:0000000000000000000000000000000000000000000000000000000000000000", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
           brief: {

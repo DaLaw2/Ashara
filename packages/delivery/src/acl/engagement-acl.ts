@@ -1,13 +1,15 @@
 import { VisionUnreadable, readVisionVersion } from "@ashara/engagement";
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
-import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "@ashara/shared";
-import type { AgentBrief, ScopeSide } from "@ashara/shared";
+import type { AgentBrief } from "@ashara/workplace";
+import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
+import type { ScopeSide } from "./engagement-vision-acl.js";
 import type { VisionItem } from "../decomposition-types.js";
 
 /**
  * Anti-Corruption Layer: Engagement (ADR-044, ADR-075).
  *
- * The ONLY file in @ashara/delivery that imports from @ashara/engagement.
+ * With engagement-vision-acl.ts (Engagement's vision language alone), the only file in @ashara/delivery that
+ * imports from @ashara/engagement.
  * Delivery talks to the client only through Engagement: the loop asks the
  * Liaison to act on the client's stops, to answer the client's changes, to take in pending tenders, to read the
  * client's answers into the vision, to report

@@ -1,5 +1,7 @@
-import type { ProjectId, WorkItemStatus } from "@ashara/shared";
-import { InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
+import { InvalidStatusTransition } from "../work-item-language/transitions.js";
+import { WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
 import type { WorkItem } from "./work-item.js";

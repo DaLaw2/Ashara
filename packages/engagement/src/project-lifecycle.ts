@@ -4,6 +4,12 @@ import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 
 /**
+ * Every status a project can hold: the `projects_status_known` CHECK constraint
+ * (migrations/049_project_accepted.sql) admits exactly these.
+ */
+export const PROJECT_STATUSES = ["active", "blocked", "stopped", "accepted"] as const;
+
+/**
  * Engagement's one guard over projects.status (O3 c, ADR-080 d3): the engagement lifecycle is
  * Engagement's. A project is active from its tender; the client's stop ends work on it from any
  * status but stopped; a passed acceptance sweep accepts an active one. The halt ('blocked') and the

@@ -1,6 +1,9 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, MergeKind, StoredBlockedReason, ErrorEnvelope } from "@ashara/shared";
-import { describeErrorChain, InvalidStatusTransition, InvalidId, canTransitionTo, parseWorkItemId } from "@ashara/shared";
+import type { DomainEvent } from "@ashara/shared";
+import { describeErrorChain, InvalidId, parseWorkItemId } from "@ashara/shared";
+import type { MergeKind, StoredBlockedReason } from "./work-item-language/blocked-reason.js";
+import type { ErrorEnvelope } from "./acl/workplace-acl.js";
+import { InvalidStatusTransition, canTransitionTo } from "./work-item-language/transitions.js";
 import { projectBlockCause, projectCapCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { RawFailureContext } from "./failure-router.js";

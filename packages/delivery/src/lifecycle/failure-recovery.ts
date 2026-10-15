@@ -1,5 +1,5 @@
 import { describeErrorChain } from "@ashara/shared";
-import type { StoredBlockedReason } from "@ashara/shared";
+import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";

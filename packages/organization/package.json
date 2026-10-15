@@ -13,6 +13,7 @@
     "@ashara/finance": "*",
     "@ashara/model-access": "*",
     "@ashara/shared": "*",
+    "@ashara/workplace": "*",
     "zod": "4.4.3"
   }
 }

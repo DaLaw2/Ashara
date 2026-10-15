@@ -12,7 +12,8 @@ export interface ErrorLayer {
   readonly timestamp: string;
 }
 
-const errorLayerSchema: z.ZodType<ErrorLayer> = z.lazy(() =>
+/** An ErrorLayer read back from outside the process: a stored envelope's chain. */
+export const errorLayerSchema: z.ZodType<ErrorLayer> = z.lazy(() =>
   z.object({
     boundary: z.string(),
     operation: z.string(),
@@ -22,15 +23,6 @@ const errorLayerSchema: z.ZodType<ErrorLayer> = z.lazy(() =>
     timestamp: z.string(),
   }),
 );
-
-export const errorEnvelopeSchema = z.object({
-  outcome: z.enum(["failed", "blocked"]),
-  summary: z.string(),
-  chain: errorLayerSchema,
-  agentOutput: z.record(z.string(), z.unknown()).optional(),
-});
-
-export type ErrorEnvelope = z.infer<typeof errorEnvelopeSchema>;
 
 /** A serialized error layer by layer as origin layers: its class as the operation, its own fields and child errors as the context. */
 function originLayer(s: SerializedError, timestamp: string): ErrorLayer {
@@ -98,7 +90,7 @@ export function wrapError(
   };
 }
 
-/** @testseam error-envelope.test.ts reads a chain's layers in order through it; renderChainForBrief is its production caller */
+/** A chain's layers, outermost first. */
 export function flattenChain(layer: ErrorLayer): ErrorLayer[] {
   const result: ErrorLayer[] = [];
   let current: ErrorLayer | undefined = layer;
@@ -107,26 +99,4 @@ export function flattenChain(layer: ErrorLayer): ErrorLayer[] {
     current = current.cause;
   }
   return result;
-}
-
-export function renderChainForBrief(envelope: ErrorEnvelope): string {
-  const layers = flattenChain(envelope.chain);
-  const lines: string[] = [
-    `# Error Chain (${layers.length} layer${layers.length > 1 ? "s" : ""})`,
-    "",
-  ];
-
-  for (let i = 0; i < layers.length; i++) {
-    const layer = layers[i]!;
-    const indent = i === 0 ? "" : "  ".repeat(i);
-    lines.push(`${indent}[${layer.boundary}/${layer.operation}] ${layer.message}`);
-    if (layer.context) {
-      for (const [key, value] of Object.entries(layer.context)) {
-        const valueStr = typeof value === "string" ? value : JSON.stringify(value);
-        lines.push(`${indent}  ${key}: ${valueStr}`);
-      }
-    }
-  }
-
-  return lines.join("\n");
 }

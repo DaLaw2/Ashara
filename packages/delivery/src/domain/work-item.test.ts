@@ -1,10 +1,8 @@
 import { describe, test, expect } from "vitest";
-import type { StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
-import {
-  parseProjectId,
-  canTransitionTo,
-  InvalidStatusTransition,
-} from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
+import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
+import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/transitions.js";
 import {
   createPendingWorkItem,
   startWorkItem,

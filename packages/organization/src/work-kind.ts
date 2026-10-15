@@ -1,7 +1,31 @@
-import { WORK_KINDS } from "@ashara/shared";
-import type { ProjectId, WorkKind } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import type { CapabilityClass, Role, RoleRef, Roster, RosterViolation } from "./roster.js";
 import { ref } from "./roster.js";
+
+// The kinds of work a task can be (migration 031, work_items.work_kind): Organization's language.
+// Delivery reads the kind of a task and maps it, in its ACL, to what Workplace gives the attempt.
+
+/** @testseam the integration attempt-profile.test.ts runs an attempt for every kind of work; assignmentViolations is its production reader */
+export const WORK_KINDS = ["environment", "implementation", "check"] as const;
+
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+/** A stored work_kind that names no kind of work. */
+class WorkKindUnknown extends Error {
+  constructor(readonly value: string) {
+    super(`work kind ${JSON.stringify(value)} is not one of ${WORK_KINDS.join(", ")}`);
+    this.name = "WorkKindUnknown";
+  }
+}
+
+function isWorkKind(value: string): value is WorkKind {
+  return WORK_KINDS.some((kind) => kind === value);
+}
+
+export function parseWorkKind(value: string): WorkKind {
+  if (!isWorkKind(value)) throw new WorkKindUnknown(value);
+  return value;
+}
 
 // Who owns a WorkKind (ADR-075 context map: Organization is upstream of Delivery).
 // The owner is the role holding the capability the kind of work needs; M1 assigns

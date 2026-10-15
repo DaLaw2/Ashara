@@ -6,10 +6,12 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./vision": "./src/vision-language/index.ts"
   },
   "dependencies": {
     "@ashara/db": "*",
+    "@ashara/delivery": "*",
     "@ashara/finance": "*",
     "@ashara/model-access": "*",
     "@ashara/shared": "*",

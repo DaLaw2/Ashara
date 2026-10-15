@@ -1,4 +1,6 @@
-import type { AcceptedAssumptionStanding, ProjectId, VisionSource } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
+import type { VisionSource } from "./vision-language/vision-source.js";
 
 // The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8; eighth run E3):
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:

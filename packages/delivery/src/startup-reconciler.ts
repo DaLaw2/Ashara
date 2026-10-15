@@ -1,6 +1,12 @@
-import type { DomainEvent, ProjectId, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
-import { blockedReasonToRecord, describeErrorChain, TERMINAL_SESSION_PHASES, WorkItemRowCorrupt } from "@ashara/shared";
-import type { DevSessionRepository, EventStoreRepository } from "@ashara/db";
+import type { DomainEvent, ProjectId } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import type { EventStoreRepository } from "@ashara/db";
+import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
+import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
+import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
+import { TERMINAL_SESSION_PHASES } from "./acl/workplace-acl.js";
+import { WorkItemRowCorrupt } from "./work-item-language/work-item-row.js";
+import type { DevSessionRepository } from "./acl/workplace-acl.js";
 import type { ProjectHaltRepository } from "./repositories/project-halt.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";

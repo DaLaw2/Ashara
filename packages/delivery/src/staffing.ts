@@ -1,5 +1,6 @@
 import type { ResolvedModel } from "@ashara/model-access";
-import type { CapabilityLevel, ProjectId, WorkItemId } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { CapabilityLevel } from "@ashara/model-access";
 import { RoleNotInRoster, RosterUnreadable, parseStoredRoster, roleInRoster } from "./acl/organization-acl.js";
 import type { AgentStaffing, TaskDescriptor } from "./dispatch/dispatch-service.js";
 

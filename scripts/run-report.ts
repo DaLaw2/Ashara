@@ -13,8 +13,9 @@
  * exactly $0, which the ledger must never write (an unknown cost is NULL).
  */
 
-import { createDb, DEFAULT_DATABASE_URL, readRunEvidence } from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
 import { describeErrorChain, parseProjectId } from "@ashara/shared";
+import { readRunEvidence } from "@ashara/workplace";
 import { formatRunReport } from "./run-report-format.js";
 
 class RunReportUsageError extends Error {

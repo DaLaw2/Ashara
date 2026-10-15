@@ -1,19 +1,16 @@
-import type { WorkKind } from "@ashara/shared";
-import type { AssignmentBrief } from "./assignment.js";
-import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
-import { environmentDefinitionRules } from "./environment-rules.js";
+import type { AssignmentBrief, AssignmentCharter, ToolProfile } from "./assignment.js";
 
 /**
  * The system prompt of an attempt, ported from the deleted host agent loop's prompt. Differences: no
  * instruction uses git (the cell's .git is a throwaway repository of its own; Z0 commits), no stack
  * literal, the cell's isolation and its non-root user are stated, and the attempt ends only through
- * the finish tool.
+ * the finish tool. Who the agent is and its role's duties are the charter's, which Organization
+ * writes and the caller hands over with the assignment.
  */
-export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | null): string {
-  const sections = [STATIC_PROMPT];
-  if (workKind === "environment") sections.push(ENVIRONMENT_PROMPT);
-  if (workKind === "check") sections.push(CHECK_PROMPT);
-  const protectedPaths = protectedPathsSection(brief, workKind);
+export function buildSystemPrompt(brief: AssignmentBrief, charter: AssignmentCharter, toolProfile: ToolProfile): string {
+  const sections = [staticPrompt(charter.identity)];
+  if (charter.duties !== null) sections.push(charter.duties);
+  const protectedPaths = protectedPathsSection(brief, toolProfile);
   if (protectedPaths !== null) sections.push(protectedPaths);
   sections.push(buildTaskPrompt(brief));
   return sections.join("\n\n");
@@ -21,9 +18,9 @@ export function buildSystemPrompt(brief: AssignmentBrief, workKind: WorkKind | n
 
 export const FIRST_MESSAGE = "Begin the task. Use your tools; call finish when you are done or blocked.";
 
-const STATIC_PROMPT = [
+const staticPrompt = (identity: string): string => [
   [
-    `You are a coding agent. Your ONLY job is to use tools to do the task below.`,
+    `${identity} Your ONLY job is to use tools to do the task below.`,
     `IMPORTANT: You MUST use tools. Every response should contain a tool call. ` +
       `Never describe what you would do; do it by calling tools. ` +
       `The attempt ends only when you call finish: a response without a tool call ends it as a failure.`,
@@ -83,34 +80,13 @@ const STATIC_PROMPT = [
 ].join("\n\n");
 
 /**
- * Environment work writes the recipe of the image every task works in; it names no stack: choosing
- * one is the work. The definition's schema and rules are stated in environment-rules.ts; Quality enforces them.
- * The finish statement is the statement of that choice, which Z0 keeps on the task.
- */
-const ENVIRONMENT_PROMPT = [
-  [
-    `# Defining the environment`,
-    `You write the recipe of the environment every later task of this project works in, and nothing else. The product`,
-    `owns its layout, its manifests, its source and its tests: do not write any of them, not even a placeholder.`,
-    `- Use build_environment to build the image from your recipe and run its probe. Call it again after each change;`,
-    `  finish with status "done" only after it reports PASSED on the files as they are.`,
-    `- The product does not exist yet, and its build and test commands are not run now: the product's first task sets`,
-    `  up its layout so that they pass. State them as that product will be built and tested from the repository root.`,
-    `- Finish with a statement: one paragraph on the stack you chose and why, and how the product is built and tested`,
-    `  with it. The client reads it; it lists no files. The probe only proves the toolchain is present; product`,
-    `  behaviour is verified by the check author's checks.`,
-  ].join("\n"),
-  environmentDefinitionRules(),
-].join("\n\n");
-
-/**
  * The paths Z0 refuses the work for changing, named before work starts (ADR-074 addendum 2 d66 c,
  * d72 B1), for every task that does not write the recipe itself; null when the brief carries none
- * (the BaseCell) or the task is environment work, which may change the recipe and nothing else.
+ * (the BaseCell) or the attempt builds the environment, which may change the recipe and nothing else.
  */
-function protectedPathsSection(brief: AssignmentBrief, workKind: WorkKind | null): string | null {
+function protectedPathsSection(brief: AssignmentBrief, toolProfile: ToolProfile): string | null {
   const paths = brief.protectedPaths;
-  if (paths === undefined || workKind === "environment") return null;
+  if (paths === undefined || toolProfile === "build-environment") return null;
   const recipe = paths.recipe.join(", ");
   const checkFiles = paths.checkFiles.length === 0 ? "none is stored yet" : paths.checkFiles.join(", ");
   const inputs = paths.inputs.length === 0 ? "none is named" : paths.inputs.join(", ");
@@ -121,7 +97,7 @@ function protectedPathsSection(brief: AssignmentBrief, workKind: WorkKind | null
     `- The stored check files belong to the check author who wrote them: ${checkFiles}.`,
     `Every other file is the product's, wherever it lives: its layout, its manifests, its source and its tests.`,
   ];
-  if (workKind === "check") {
+  if (toolProfile === "define-checks") {
     lines.push(
       `None of your check files may be a recipe file or an input the image build reads (${inputs}). Nothing of your`,
       `workspace is merged, so do not change the project's files for your checks either.`,
@@ -139,61 +115,6 @@ function protectedPathsSection(brief: AssignmentBrief, workKind: WorkKind | null
   );
   return lines.join("\n");
 }
-
-/**
- * Check work writes the checks that decide another task, before that task starts. Nothing of it is
- * merged: Z0 keeps the checks and their files, and puts them back in place whenever they run.
- */
-const CHECK_PROMPT = [
-  `# Writing checks`,
-  `You write the checks that decide whether another task is done. Your checks are judged against the plan's`,
-  `foundation: the project as it stood before any task of the plan did its work. Your workspace shows the project as`,
-  `it is now, which may already hold some of that task's behaviour, delivered by other work.`,
-  `- Define each check with define_check: a name and a shell command. ${CHECK_RUNNER}`,
-  `  A check passes when its command exits 0 and prints output, and fails otherwise. ${CHECK_VERDICT}`,
-  `- Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites: a check states`,
-  `  observable behaviour an acceptance line asks for, as its cited items say it, never how it is built. Check nothing`,
-  `  that no cited item asks for: no intermediate output, no format, no file and no message they do not ask for. Before`,
-  `  any work starts, a reviewer reads every check of the plan together with each task's cited items and the public`,
-  `  interface, and sends back any check outside its task's cited items or contradicting another.`,
-  `- For each cited item, check what it says the product accepts and what it says the product must reject. For every`,
-  `  input the task must reject (malformed, out of range, in another form than the item states), write a check that`,
-  `  gives that input and requires it to be refused.`,
-  `- An assumption marked internal design is how the team builds the product, not something the client asked for:`,
-  `  never test it, except as the public interface names it (a command, a file the client reads), in its one form.`,
-  `- Name the files and entry points the project already has (its file tree is in the Project Context Map below),`,
-  `  or the ones the task names; do not invent other names for them.`,
-  `- At least one check must FAIL on the foundation by exiting ${CHECK_MISSING_EXIT}, for the reason the task's work is missing there; a check that`,
-  `  passes on the foundation is kept as a guard of behaviour that already holds. Write each check for the task's`,
-  `  behaviour as its acceptance lines and their cited items state it, never stronger to make it fail: a check that demands more`,
-  `  than the task asks for makes the task's developer build more than the task. A check that times out, whose`,
-  `  command cannot be found or run, or that fails on the foundation with any exit other than ${CHECK_MISSING_EXIT}, is rejected:`,
-  `  it did not reach its verdict there. One that fails only on a syntax error or a missing file of its own can never`,
-  `  pass: it is worse than none.`,
-  `- If the task's behaviour already holds in the project as it is now, still write its checks honestly: they are`,
-  `  judged on the foundation, and the task is then closed as already delivered when they pass on the project.`,
-  `- define_check red-runs the check at once on the foundation, with your files so far written over it, and shows`,
-  `  you its exit code and output. Read them. To fix a check, define it again under the same name: the last`,
-  `  definition of a name is the one kept.`,
-  `- Every check you define is kept as an acceptance check of the task. To look at the foundation (what exists`,
-  `  there, how the product starts or refuses), run the command with probe_foundation, which records nothing; never`,
-  `  define a check only to look around.`,
-  `- Write every file your checks need (test files, fixtures, scripts) in your checks directory, which the Context`,
-  `  below names, with write_file or edit_file: only those are kept with the checks and written over the project`,
-  `  whenever they run. A file you write anywhere else, the product's source included, is discarded: it is never`,
-  `  kept and never placed on the foundation, so a check cannot test a product you wrote. Nothing of this workspace`,
-  `  is merged into the project. Check files are kept as text, without their permissions: run a script through its`,
-  `  interpreter rather than directly.`,
-  `- A check must not change any file the project tracks when it runs: a check run that leaves one changed reaches`,
-  `  no verdict, and the check is rejected. Write what a check produces under your checks directory or a temporary`,
-  `  directory.`,
-  `- Do not change the project environment's own files.`,
-  `- The checks already stored for other tasks of this project, with their files, are in the Context below. Every`,
-  `  check of the project runs on the same product once all its tasks are merged, so yours must not contradict`,
-  `  them: where they fix an output, its format, a file or a name, require the same; do not fix it differently.`,
-  `- When the checks state the task's behaviour and the ones that fail on the foundation fail for the right reason,`,
-  `  finish with status "done": they are all red-run on the foundation again then.`,
-].join("\n");
 
 /**
  * The project's environment, stated in the team's own words: Ashara names no stack, it passes the

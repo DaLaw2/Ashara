@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { SPEND_CAP_ERROR_CLASS, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { BlockReports } from "./block-report.js";
 import type { BlockReportStore } from "./block-report.js";
 

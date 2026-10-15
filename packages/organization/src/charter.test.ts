@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+import { UNKINDED_WORK_CHARTER, charterOf } from "./charter.js";
+
+function duties(kind: Parameters<typeof charterOf>[0]): string {
+  return charterOf(kind).duties ?? "";
+}
+
+describe("role charters", () => {
+  it("every role is a coding agent, and only the environment role and the check author carry duties beyond the task", () => {
+    for (const kind of ["environment", "implementation", "check"] as const) expect(charterOf(kind).identity).toBe("You are a coding agent.");
+    expect(charterOf("implementation").duties).toBeNull();
+    expect(UNKINDED_WORK_CHARTER).toEqual({ identity: "You are a coding agent.", duties: null });
+  });
+
+  it("the environment role's charter states the recipe, the probe gate and that the product is not the environment's (d72)", () => {
+    const text = duties("environment");
+    for (const field of ["- containerfile:", "- recipe:", "- inputs:", "- probe:", "- build:", "- test:"]) expect(text).toContain(field);
+    expect(text).not.toContain("- owned:");
+    expect(text).toContain("Only recipe files may be added, changed or deleted");
+    expect(text).toContain("must not build or test the product");
+    expect(text).toContain("It is not run when the environment is defined");
+    expect(text).toContain("the image builds and probe exits 0 within its");
+    expect(text).toContain("do not write any of them, not even a placeholder");
+    expect(text).not.toContain(".gitignore");
+  });
+
+  it("states the runner exactly to the check author: sh -c from the repository root, in the environment image", () => {
+    const text = duties("check");
+    expect(text).toContain("`sh -c '<command>'`: POSIX sh, not bash");
+    expect(text).toContain("from the repository root of a fresh copy of the project, inside the project environment's image, with no network");
+    expect(text).toContain("in your checks directory");
+    expect(text).toContain("A check must not change any file the project tracks");
+    // The cell's repository never holds the foundation's commit, so nothing names it.
+    expect(text).not.toContain("names its commit");
+    expect(text).toContain("define it again under the same name");
+  });
+
+  it("tells the check author its checks must not contradict the project's stored checks", () => {
+    expect(duties("check")).toContain("The checks already stored for other tasks of this project");
+    expect(duties("check")).toContain("yours must not contradict");
+  });
+
+  it("asks the check author for a check of what each cited item accepts and rejects, judged on the foundation", () => {
+    const text = duties("check");
+    expect(text).toContain("For each cited item, check what it says the product accepts and what it says the product must");
+    expect(text).toContain("gives that input and requires it to be refused");
+    expect(text).toContain("the project as it stood before any task of the plan did its work");
+  });
+
+  it("gives the check author one rule: test the acceptance lines, each against its cited items", () => {
+    const text = duties("check");
+    expect(text).toContain("Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites");
+    expect(text).not.toContain("deliverables and acceptance");
+    expect(text).not.toContain("may test only the vision items");
+    expect(text).toContain("An assumption marked internal design is how the team builds the product");
+  });
+});

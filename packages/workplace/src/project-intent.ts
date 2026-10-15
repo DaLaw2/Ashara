@@ -1,5 +1,6 @@
 import { describeErrorChain } from "@ashara/shared";
-import type { AgentBrief, WorkItemId } from "@ashara/shared";
+import type { WorkItemId } from "@ashara/shared";
+import type { AgentBrief } from "./agent-brief.js";
 
 /**
  * The project's current vision as the Assignment carries it: its version, its text verbatim, and

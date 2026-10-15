@@ -1,19 +1,10 @@
-import {
-  type ProjectId,
-  type WorkItemId,
-  type WorkItemLevel,
-  type WorkItemStatus,
-  type DomainEvent,
-  type StoredTaskSpec,
-  type StoredBlockedReason,
-  type StoredSuccessCriteria,
-  type WorkKind,
-  createWorkItemId,
-  createDomainEvent,
-  blockedReasonToRecord,
-  canTransitionTo,
-  InvalidStatusTransition,
-} from "@ashara/shared";
+import { type ProjectId, type WorkItemId, type DomainEvent, createWorkItemId, createDomainEvent } from "@ashara/shared";
+import type { WorkItemLevel, WorkItemStatus } from "../work-item-language/work-item-status.js";
+import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
+import { type StoredBlockedReason, blockedReasonToRecord } from "../work-item-language/blocked-reason.js";
+import type { StoredSuccessCriteria } from "../work-item-language/success-criteria.js";
+import type { WorkKind } from "../acl/organization-acl.js";
+import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/transitions.js";
 
 export interface WorkItem {
   id: WorkItemId;

@@ -1,5 +1,5 @@
-import type { ErrorLayer, StoredBlockedReason } from "@ashara/shared";
-import { errorEnvelopeSchema, renderChainForBrief } from "@ashara/shared";
+import type { ErrorLayer } from "@ashara/shared";
+import { errorEnvelopeSchema, renderChainForBrief } from "./error-envelope.js";
 
 // Replan context injection: the FailureRouter replans a failed item back to Pending and Delivery
 // persists the raw failure context on WorkItem.blockedReason.replanContext. Surfacing it in the
@@ -21,22 +21,13 @@ function isReplanContext(value: unknown): value is ReplanContext {
 }
 
 /**
- * Fail-safe (Discipline A): blockedReason is untyped jsonb round-tripped
- * through the DB, so a malformed or absent replanContext must never crash
- * brief assembly — it just means the "Prior Attempt Failure" section is
- * omitted. Absence is the normal (non-replanned) case and is silent; a
+ * Fail-safe (Discipline A): the replan context is jsonb round-tripped through the DB, so a
+ * malformed one must never crash brief assembly — it just means the "Prior Attempt Failure"
+ * section is omitted. Absence is the normal (non-replanned) case and is silent; a
  * present-but-malformed shape is unexpected and is logged.
  */
-function extractReplanContext(
-  taskId: string,
-  blockedReason: StoredBlockedReason | undefined,
-): ReplanContext | null {
-  if (!blockedReason) return null;
-  // Only the "replan" variant carries replanContext; other variants do not.
-  if (blockedReason.source !== "replan") return null;
-  const candidate = blockedReason.replanContext;
+function extractReplanContext(taskId: string, candidate: unknown): ReplanContext | null {
   if (candidate === undefined) return null;
-
   if (!isReplanContext(candidate)) {
     console.warn(
       `[${taskId}] malformed blockedReason.replanContext (expected {attempt: number, detail: string, raw}); ` +
@@ -103,8 +94,11 @@ function formatPriorAttemptFailure(ctx: ReplanContext): string {
   ].join("\n");
 }
 
-/** The brief's "Prior Attempt Failure" section for a replanned task; undefined when it was not replanned. */
-export function priorAttemptFailure(taskId: string, blockedReason: StoredBlockedReason | undefined): string | undefined {
-  const replanContext = extractReplanContext(taskId, blockedReason);
+/**
+ * The brief's "Prior Attempt Failure" section for a replanned task, from the replan context Delivery
+ * recorded with its last failure; undefined when it was not replanned (no context given).
+ */
+export function priorAttemptFailure(taskId: string, recordedContext: unknown): string | undefined {
+  const replanContext = extractReplanContext(taskId, recordedContext);
   return replanContext ? formatPriorAttemptFailure(replanContext) : undefined;
 }

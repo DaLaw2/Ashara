@@ -1,5 +1,6 @@
-import type { AgentBrief, ErrorEnvelope } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
+import type { AgentBrief } from "./agent-brief.js";
+import type { ErrorEnvelope } from "./error-envelope.js";
 import type { SessionAttempt } from "./session-attempt.js";
 
 /**

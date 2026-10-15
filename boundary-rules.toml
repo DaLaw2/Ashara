@@ -33,8 +33,12 @@ restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
 # ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
 # acceptance sweep, run on cells (execution-infra). Workplace is upstream: Quality supplies the ports
 # its tools call and the verdicts they show. Quality owns its repositories; db supplies the
-# connection and the schema.
-allow = ["shared", "db", "finance", "model-access", "execution-infra", "workplace"]
+# connection and the schema. It reads the task specification Delivery wrote and the vision items
+# it cites only as their published languages (Delivery's work-item entry, Engagement's vision entry),
+# through its ACL; neither entry loads the services that call Quality.
+allow = ["shared", "db", "finance", "model-access", "execution-infra", "workplace", "delivery", "engagement"]
+restrict.delivery = ["src/acl/*.ts"]
+restrict.engagement = ["src/acl/*.ts"]
 
 [knowledge]
 # ADR-075 Knowledge: findings and failed approaches. It owns its repositories; db supplies the
@@ -49,7 +53,9 @@ allow = ["shared"]
 # O3 c: a project's halt is Delivery's; Engagement's steps that ask for one read its cause in
 # Delivery's published language (project-halt), and only there.
 allow = ["shared", "finance", "model-access", "db", "delivery"]
-restrict.delivery = ["src/answers.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/stack-choice.ts"]
+# Its block and delivered reports read the work item's recorded cause and task specification in
+# Delivery's work-item language.
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
 
 [server]
 allow = ["*"]
@@ -79,14 +85,18 @@ allow = ["shared"]
 
 [workplace]
 # ADR-075 Workplace: the attempt loop in Z0 (each model turn through Finance's guarded port) with every tool on a cell.
-allow = ["shared", "finance", "model-access", "execution-infra"]
+# It owns its session log (dev_sessions); db supplies the connection and the schema.
+allow = ["shared", "db", "finance", "model-access", "execution-infra"]
 
 [organization]
 # ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Roster derivation is
 # Organization's language, so its structured call on the `roster` site lives here, through Finance's
 # guarded port like Engagement's and Delivery's own sites.
-allow = ["shared", "finance", "model-access", "engagement"]
+# Its role charters state the conventions Workplace's tools enforce, read from Workplace's published
+# language through its ACL; Workplace never reads Organization.
+allow = ["shared", "finance", "model-access", "engagement", "workplace"]
 restrict.engagement = ["src/acl/*.ts"]
+restrict.workplace = ["src/acl/*.ts"]
 
 [integration]
 # Story s-independent-verify-m1 L2: the lifecycle simulator and the cross-package integration
@@ -102,10 +112,13 @@ importers = []
 # formality. The cross-package tests (src/server/) are not held to it.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
+names.delivery = ["BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "OUTBOUND_TRANSITIONS", "StoredBlockedReason", "WORK_ITEM_STATUSES", "WorkItemStatus", "parseStoredBlockedReason", "parseStoredTaskSpec"]
+names.engagement = ["PROJECT_STATUSES", "VisionSource"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
+names.finance = ["SPEND_CAP_ERROR_CLASS"]
 names.model-access = ["LanguageModelFactory"]
 names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
-names.shared = ["ATTEMPT_TERMINALS", "BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]
-names.workplace = ["CHECK_MISSING_EXIT"]
+names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "describeErrorChain", "observeContendedWaits"]
+names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT"]

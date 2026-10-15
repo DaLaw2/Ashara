@@ -1,23 +1,6 @@
 import { join } from "node:path";
 import type { Hono } from "hono";
-import {
-  createDb,
-  EventStoreRepository,
-  DevSessionRepository,
-  ConfigRepository,
-  SecretRepository,
-  LlmCallRepository,
-  ClientSessionRepository,
-  ClientRepository,
-  ClientLoginFailureRepository,
-  EnvironmentBuildRepository,
-  latestRosterRevision,
-  latestRosterRoles,
-  assertMigrationsCurrent,
-  claimTargetCheckouts,
-  MIGRATIONS_DIR,
-  MigrationDriftError,
-} from "@ashara/db";
+import { createDb, EventStoreRepository, ConfigRepository, SecretRepository, LlmCallRepository, ClientSessionRepository, ClientRepository, ClientLoginFailureRepository, EnvironmentBuildRepository, latestRosterRevision, latestRosterRoles, assertMigrationsCurrent, claimTargetCheckouts, MIGRATIONS_DIR, MigrationDriftError } from "@ashara/db";
 import type { PoolFactory } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
@@ -88,7 +71,7 @@ import {
 import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig } from "@ashara/model-access";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
-import { terminalizeOrphanedSessions } from "@ashara/workplace";
+import { DevSessionRepository, terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { ProjectIntentSource, SessionStore } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
 import type { Clock, ProjectId } from "@ashara/shared";

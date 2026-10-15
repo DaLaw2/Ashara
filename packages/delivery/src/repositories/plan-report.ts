@@ -1,8 +1,9 @@
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, parseWorkItemJsonb, WorkItemRowCorrupt, type ProjectId } from "@ashara/shared";
+import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
 import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange } from "@ashara/db";
+import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 import type { DroppedPlanDependency } from "./first-plan.js";

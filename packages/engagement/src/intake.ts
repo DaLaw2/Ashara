@@ -2,10 +2,12 @@ import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
 import { withStructuredLadder } from "@ashara/model-access";
 import type { LadderAttemptEvent } from "@ashara/model-access";
-import { AssumptionKindSchema, describeErrorChain } from "@ashara/shared";
-import type { AssumptionKind, ProjectId, ScopeLine } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import type { AssumptionKind, ScopeLine } from "./vision-language/vision-assumption.js";
+import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import { classifyReadFailure } from "./read-failure.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 

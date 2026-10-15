@@ -1,5 +1,5 @@
-import { parseStoredBlockedReason } from "@ashara/shared";
-import type { StoredBlockedReason } from "@ashara/shared";
+import { parseStoredBlockedReason } from "../work-item-language/blocked-reason.js";
+import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 
 /**
  * A reason augmented with a salvaged result: the result of an attempt whose item was preempted to

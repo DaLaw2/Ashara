@@ -1,6 +1,13 @@
 export { runAttempt } from "./attempt.js";
-export type { AssignmentStaff } from "./assignment.js";
-export { CHECK_MISSING_EXIT, CHECK_RUNNER } from "./check-definition.js";
+export type { AssignmentCharter, AssignmentStaff, ToolProfile } from "./assignment.js";
+export type { AgentBrief } from "./agent-brief.js";
+export { createAgentBrief } from "./agent-brief.js";
+export { ATTEMPT_TERMINALS, CONVERSATION_RECORDS_DIR, TERMINAL_SESSION_PHASES, createSessionId } from "./session-vocabulary.js";
+export type { ErrorEnvelope } from "./error-envelope.js";
+export { DevSessionRepository } from "./dev-session-repository.js";
+export { readRunEvidence } from "./run-evidence.js";
+export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
+export { environmentDefinitionRules } from "./environment-rules.js";
 export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe } from "./check-definition.js";
 export type { CheckRun, TaskCheckRunPort } from "./check-run.js";
 export type { EnvironmentCheckPort } from "./environment-check.js";

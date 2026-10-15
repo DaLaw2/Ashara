@@ -76,8 +76,10 @@ import type {
   VerificationCells,
   WorkPlan,
 } from "@ashara/quality";
-import type { AgentBrief, Clock, ErrorEnvelope, ProjectId, StoredBlockedReason, StoredTaskSpec, WorkItemId, WorkKind } from "@ashara/shared";
-import { createAgentBrief, createSessionId, describeErrorChain, parseWorkItemId, wrapError } from "@ashara/shared";
+import type { Clock, ProjectId, WorkItemId } from "@ashara/shared";
+import type { AgentBrief, ErrorEnvelope } from "@ashara/workplace";
+import { describeErrorChain, parseWorkItemId, wrapError } from "@ashara/shared";
+import { createAgentBrief, createSessionId } from "@ashara/workplace";
 import {
   ProjectIntentUnavailable,
   attemptSummary,
@@ -101,6 +103,10 @@ import type {
   SessionStore,
   TaskSpec,
 } from "@ashara/workplace";
+import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
+import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
+import type { WorkKind } from "../acl/organization-acl.js";
+import { attemptProfileOf } from "../acl/workplace-acl.js";
 import { DispatchRecords } from "./dispatch-records.js";
 
 // Delivery's dispatch of one task (ADR-075): it resolves what decides the work, builds the brief,
@@ -715,7 +721,7 @@ export class DispatchService {
   ): Promise<AgentBrief> {
     const taskSpec = task.taskSpec;
 
-    const priorFailure = priorAttemptFailure(task.id, task.blockedReason);
+    const priorFailure = priorAttemptFailure(task.id, task.blockedReason?.source === "replan" ? task.blockedReason.replanContext : undefined);
 
     // A ProjectIntentUnavailable propagates to execute() and blocks the task.
     const projectIntent = await loadProjectIntent(this.deps.intentSource, task.id);
@@ -845,7 +851,7 @@ export class DispatchService {
         projectId: task.projectId,
         taskId: task.id,
         role: staff.role,
-        workKind: task.workKind,
+        ...attemptProfileOf(task.workKind),
         brief,
         cellImage: attemptCellImage(d.environment),
         model: staff.model,

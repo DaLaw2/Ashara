@@ -1,5 +1,6 @@
-import type { ProjectId, WorkItemId, StoredTaskSpec } from "@ashara/shared";
-import { parseWorkItemLevel } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { StoredTaskSpec } from "./work-item-language/task-spec.js";
+import { parseWorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { PlanningService, createPendingWorkItem } from "./domain/index.js";
 

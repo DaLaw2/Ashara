@@ -122,12 +122,16 @@ const model: ResolvedModel = {
   },
 };
 
+/** The charter Organization writes for a role with no duties beyond its task; role duties are Organization's tests. */
+const CHARTER = { identity: "You are a coding agent.", duties: null };
+
 function assignment(limits: Partial<Assignment["limits"]> = {}): Assignment {
   return {
     projectId: parseProjectId("00000000-0000-4000-8000-000000000001", "test"),
     taskId: createWorkItemId(),
     role: { id: "worker", name: "Worker" },
-    workKind: "implementation",
+    toolProfile: "run-and-dispute-checks",
+    charter: CHARTER,
     model,
     cellImage: { kind: "base-cell", image: "base@sha256:0000000000000000000000000000000000000000000000000000000000000000", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" },
     brief: {
@@ -507,7 +511,7 @@ describe("build_environment", () => {
     const { cell } = fakeCell();
     const { environment, timeouts } = port(tested);
 
-    const outcome = await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, cell, { environment }).deps);
+    const outcome = await runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, cell, { environment }).deps);
 
     // The statement is kept apart from the summary: only it reaches the client.
     expect(outcome).toMatchObject({ kind: "finished", status: "done", summary: "Wrote environment/ and .gitignore.", statement: STATEMENT });
@@ -522,7 +526,7 @@ describe("build_environment", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "Done.", statement: STATEMENT } }]),
     ]);
     const { environment } = port(tested);
-    const outcome = await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    const outcome = await runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, fakeCell().cell, { environment }).deps);
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("statement") });
     expect(outcome).toMatchObject({ kind: "finished", status: "done", statement: STATEMENT });
 
@@ -530,22 +534,10 @@ describe("build_environment", () => {
     expect(await runAttempt(assignment(), deps(other.llm, fakeCell().cell).deps)).toMatchObject({ kind: "finished", statement: null });
   });
 
-  it("the environment brief states the recipe, the probe gate and that the product is not the environment's (d72)", () => {
-    const system = buildSystemPrompt(assignment().brief, "environment");
-    for (const field of ["- containerfile:", "- recipe:", "- inputs:", "- probe:", "- build:", "- test:"]) expect(system).toContain(field);
-    expect(system).not.toContain("- owned:");
-    expect(system).toContain("Only recipe files may be added, changed or deleted");
-    expect(system).toContain("must not build or test the product");
-    expect(system).toContain("It is not run when the environment is defined");
-    expect(system).toContain("the image builds and probe exits 0 within its");
-    expect(system).toContain("do not write any of them, not even a placeholder");
-    expect(system).not.toContain(".gitignore");
-  });
-
   it("the environment finish's statement field says the probe only proves the toolchain", async () => {
     const { llm, requests } = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done.", statement: STATEMENT } }])]);
     const { environment } = port(tested);
-    await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, fakeCell().cell, { environment }).deps);
     const finishSchema = JSON.stringify(requests[0]?.tools?.["finish"]?.inputSchema);
     expect(finishSchema).toContain("The probe only proves the toolchain is present; product behaviour is verified by the check author's checks");
   });
@@ -556,7 +548,7 @@ describe("build_environment", () => {
       () => turn([{ name: "finish", input: { status: "blocked", summary: "No.", blockedReason: "It fails." } }]),
     ]);
     const { environment } = port({ passed: false, report: "Environment work refused: it touches paths outside the recipe.\n- src/x" });
-    await runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell, { environment }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, fakeCell().cell, { environment }).deps);
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("- src/x") });
   });
 
@@ -564,7 +556,7 @@ describe("build_environment", () => {
     const { llm } = scriptedLlm([]);
     const { environment } = port(tested);
 
-    await expect(runAttempt({ ...assignment(), workKind: "environment" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+    await expect(runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
     await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { environment }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
   });
 });
@@ -607,9 +599,8 @@ describe("define_check", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "Looked." } }]),
     ]);
     const { checks, defined, probed } = recorder();
-    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("probe_foundation");
-    expect(requests[0]?.system).toContain("never\n  define a check only to look around");
     expect(probed).toEqual(["ls"]);
     expect(defined).toEqual([]);
     const [result] = toolResultsOf(requests[1]?.messages.at(-1));
@@ -625,20 +616,20 @@ describe("define_check", () => {
       () => turn([{ name: "finish", input: { status: "done", summary: "One check file." } }]),
     ]);
     const { checks, written } = recorder();
-    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
     expect(written).toEqual(["checks/run.sh", "checks/run.sh"]);
   });
 
   it("is offered to check work only; implementation and environment attempts never see it", async () => {
-    for (const workKind of ["implementation", "environment", null] as const) {
+    for (const toolProfile of ["run-and-dispute-checks", "build-environment", "run-checks"] as const) {
       const { llm, requests } = scriptedLlm([
         () => turn([{ name: "define_check", input: { name: "x", command: "false" } }]),
         () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool." } }]),
       ]);
       const environment: EnvironmentCheckPort | null =
-        workKind === "environment" ? { check: async () => ({ passed: false, report: "unused" }) } : null;
-      await runAttempt({ ...assignment(), workKind }, deps(llm, fakeCell().cell, { environment }).deps);
-      expect(Object.keys(requests[0]?.tools ?? {}), String(workKind)).not.toContain("define_check");
+        toolProfile === "build-environment" ? { check: async () => ({ passed: false, report: "unused" }) } : null;
+      await runAttempt({ ...assignment(), toolProfile }, deps(llm, fakeCell().cell, { environment }).deps);
+      expect(Object.keys(requests[0]?.tools ?? {}), toolProfile).not.toContain("define_check");
       expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining('Unknown tool "define_check"') });
     }
   });
@@ -667,12 +658,11 @@ describe("define_check", () => {
           },
     );
 
-    const outcome = await runAttempt({ ...assignment({ perCommandTimeoutSeconds: 60 }), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    const outcome = await runAttempt({ ...assignment({ perCommandTimeoutSeconds: 60 }), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
 
     expect(outcome).toMatchObject({ kind: "finished", status: "done" });
     expect(Object.keys(requests[0]?.tools ?? {})).toContain("define_check");
     expect(Object.keys(requests[0]?.tools ?? {})).not.toContain("build_environment");
-    expect(requests[0]?.system).toContain("At least one check must FAIL on the foundation");
     expect(timeouts).toEqual([60, 60]);
     const [first] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(first).toMatchObject({ value: expect.stringContaining('Defined check "greets" (1 defined so far)') });
@@ -700,7 +690,7 @@ describe("define_check", () => {
         : { kind: "files_refused", detail: "check files overlap the environment's owned paths [environment]: environment/x" },
     );
 
-    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
 
     expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({
       type: "error-text",
@@ -724,50 +714,11 @@ describe("define_check", () => {
       ["src/main.src"],
     );
 
-    await runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell, { checks }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
 
     const [answer] = toolResultsOf(requests[1]?.messages.at(-1));
     expect(answer).toMatchObject({ type: "error-text", value: expect.stringContaining("Discarded, outside your checks directory (not kept, not placed on the foundation): src/main.src") });
     expect(answer).toMatchObject({ value: expect.stringContaining('It could not be red-run: on the foundation, check "builds" changed files the project tracks: src/main.src') });
-  });
-
-  it("states the runner exactly to the check author: sh -c from the repository root, in the environment image", () => {
-    const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("`sh -c '<command>'`: POSIX sh, not bash");
-    expect(prompt).toContain("from the repository root of a fresh copy of the project, inside the project environment's image, with no network");
-    expect(prompt).toContain("in your checks directory");
-    expect(prompt).toContain("A check must not change any file the project tracks");
-    // Eighth run E5: the cell's repository never holds the foundation's commit, so nothing names it.
-    expect(prompt).not.toContain("names its commit");
-    expect(prompt).toContain("define it again under the same name");
-  });
-
-  it("tells the check author its checks must not contradict the project's stored checks (third run N8)", () => {
-    const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("The checks already stored for other tasks of this project");
-    expect(prompt).toContain("yours must not contradict");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("must not contradict them");
-  });
-
-  // Fourth run N15: date and amount checks covered only accepted inputs, so a looser parser passed them.
-  it("asks the check author for a check of what each cited item accepts and rejects", () => {
-    const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("For each cited item, check what it says the product accepts and what it says the product must");
-    expect(prompt).toContain("gives that input and requires it to be refused");
-    expect(prompt).toContain("## Assumptions work proceeds on");
-    expect(prompt).toContain("the project as it stood before any task of the plan did its work");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("For each cited item");
-  });
-
-  // Fifth run N21 and W11 (ADR-074 addendum 2 d89 A): one rule, the acceptance lines against their cited items;
-  // W11's author was told both "test the deliverables" and "test only the items", and the two disagreed.
-  it("gives the check author one rule: test the acceptance lines, each against its cited items", () => {
-    const prompt = buildSystemPrompt(assignment().brief, "check");
-    expect(prompt).toContain("Test the task's acceptance lines, listed in the Goal below, each against the vision items it cites");
-    expect(prompt).not.toContain("deliverables and acceptance");
-    expect(prompt).not.toContain("may test only the vision items");
-    expect(prompt).toContain("An assumption marked internal design is how the team builds the product");
-    expect(buildSystemPrompt(assignment().brief, "implementation")).not.toContain("Test the task's acceptance lines");
   });
 
   // W11 (d89 C): the header said the client agreed to every assumption, and to most of them it had agreed to nothing.
@@ -780,7 +731,7 @@ describe("define_check", () => {
         { key: "A4", statement: "The log is wal.log.", note: "Inferred; reported to the client; internal design" },
       ],
     };
-    const prompt = buildSystemPrompt(brief, "implementation");
+    const prompt = buildSystemPrompt(brief, CHARTER, "run-and-dispute-checks");
     expect(prompt).not.toContain("The client agreed");
     expect(prompt).toContain("- A1 (Stated by the client; client-visible behaviour): Values may hold spaces.");
     expect(prompt).toContain("- A4 (Inferred; reported to the client; internal design): The log is wal.log.");
@@ -789,7 +740,7 @@ describe("define_check", () => {
   it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {
     const { llm } = scriptedLlm([]);
     const { checks } = recorder();
-    await expect(runAttempt({ ...assignment(), workKind: "check" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
+    await expect(runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell).deps)).rejects.toBeInstanceOf(InvalidAssignment);
     await expect(runAttempt(assignment(), deps(llm, fakeCell().cell, { checks }).deps)).rejects.toBeInstanceOf(InvalidAssignment);
   });
 });
@@ -848,12 +799,12 @@ describe("run_checks", () => {
       probe: async () => ({ kind: "files_refused", detail: "unused" }),
     };
     await expect(
-      runAttempt({ ...assignment(), workKind: "check" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
+      runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(scriptedLlm([]).llm, fakeCell().cell, { checks, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
     // Environment work is decided by its gate alone: it is never given the stored checks either.
     const environment: EnvironmentCheckPort = { check: async () => ({ passed: false, report: "unused" }) };
     await expect(
-      runAttempt({ ...assignment(), workKind: "environment" }, deps(scriptedLlm([]).llm, fakeCell().cell, { environment, taskChecks: passing.port }).deps),
+      runAttempt({ ...assignment(), toolProfile: "build-environment" }, deps(scriptedLlm([]).llm, fakeCell().cell, { environment, taskChecks: passing.port }).deps),
     ).rejects.toBeInstanceOf(InvalidAssignment);
   });
 
@@ -897,7 +848,7 @@ describe("run_checks", () => {
 
     const { port } = taskChecks([], { passed: false, report: "0 of 0 check(s) pass on your current work." });
     const legacy = scriptedLlm([() => turn([{ name: "finish", input: { status: "done", summary: "Done." } }])]);
-    await runAttempt({ ...assignment(), workKind: null }, deps(legacy.llm, fakeCell().cell, { taskChecks: port }).deps);
+    await runAttempt({ ...assignment(), toolProfile: "run-checks" }, deps(legacy.llm, fakeCell().cell, { taskChecks: port }).deps);
     expect(Object.keys(legacy.requests[0]?.tools ?? {})).not.toContain("dispute_check");
   });
 });
@@ -913,15 +864,22 @@ describe("workplace boundaries", () => {
     }
   });
 
+  it("states the charter it is handed: the identity opens the prompt and the role's duties follow the workspace rules", () => {
+    const prompt = buildSystemPrompt(assignment().brief, { identity: "You are the test role.", duties: "# Test duties\nDo the test role's work." }, "define-checks");
+    expect(prompt.startsWith("You are the test role. Your ONLY job is to use tools to do the task below.")).toBe(true);
+    expect(prompt).toContain("Do not retry the identical failing action. Diagnose first.\n\n# Test duties\nDo the test role's work.");
+    expect(buildSystemPrompt(assignment().brief, CHARTER, "define-checks")).not.toContain("# Test duties");
+  });
+
   it("the system prompt tells the agent nothing about git", () => {
-    const prompt = buildSystemPrompt(assignment().brief, "implementation");
+    const prompt = buildSystemPrompt(assignment().brief, CHARTER, "run-and-dispute-checks");
     expect(prompt).not.toMatch(/\bgit\b/i);
     expect(prompt).toContain("A greeting file");
   });
 
   // ADR-074 addendum 2 d73 (go-run G2): the recipe's author and the implementer both learn the run-as user.
-  it.each(["implementation", "environment"] as const)("the %s brief states that cells run as a non-root user with a writable HOME", (kind) => {
-    const prompt = buildSystemPrompt(assignment().brief, kind);
+  it.each(["run-and-dispute-checks", "build-environment"] as const)("the %s brief states that cells run as a non-root user with a writable HOME", (profile) => {
+    const prompt = buildSystemPrompt(assignment().brief, CHARTER, profile);
     expect(prompt).toContain("non-root user");
     expect(prompt).toMatch(/HOME[^\n]* writable|writable[^\n]*HOME/);
   });

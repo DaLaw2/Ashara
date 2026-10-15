@@ -3,13 +3,11 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { sql } from "drizzle-orm";
 import type { ProjectId } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL, type Database } from "./connection.js";
-import { DevSessionRepository } from "./repositories/dev-session.js";
 import { EventStoreRepository } from "./repositories/event-store.js";
 import { ConfigRepository } from "./repositories/config.js";
 import { ClientRepository } from "./repositories/client.js";
 import { ProjectRepository } from "./repositories/project.js";
 import {
-  devSessions,
   domainEvents,
   modelConfigs,
   providerConfigs,
@@ -26,7 +24,6 @@ import {
 let db: Database;
 
 const createdWorkItemIds: string[] = [];
-const createdDevSessionIds: string[] = [];
 const createdEventIds: string[] = [];
 const createdProviderNames: string[] = [];
 const createdModelIds: string[] = [];
@@ -62,9 +59,6 @@ async function cleanupAll() {
   for (const id of createdEventIds) {
     await db.execute(sql`DELETE FROM domain_events WHERE event_id = ${id}`);
   }
-  for (const id of createdDevSessionIds) {
-    await db.execute(sql`DELETE FROM dev_sessions WHERE id = ${id}`);
-  }
   // Reverse creation order so children are gone before parents.
   for (const id of [...createdWorkItemIds].reverse()) {
     await db.execute(sql`DELETE FROM work_items WHERE id = ${id}`);
@@ -72,52 +66,6 @@ async function cleanupAll() {
   await db.execute(sql`DELETE FROM projects WHERE id = ${testProjectId}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${testClientId}`);
 }
-
-// ---------------------------------------------------------------------------
-// 1. DevSessionRepository
-// ---------------------------------------------------------------------------
-
-describe("DevSessionRepository", () => {
-  let repo: DevSessionRepository;
-  const taskId = randomUUID();
-  const sessionId = randomUUID();
-
-  beforeAll(async () => {
-    repo = new DevSessionRepository(db);
-
-    // DevSession requires a valid work_items FK; the work item's repository is Delivery's.
-    await db.insert(workItems).values({
-      id: taskId,
-      level: "Task",
-      status: "Pending",
-      title: "Task for DevSession test",
-      projectId: testProjectId,
-    });
-    createdWorkItemIds.push(taskId);
-  });
-
-  test("insert creates a session and it can be read back", async () => {
-    const brief = { instructions: "do something" };
-    const environmentVersion = "e".repeat(64);
-    await repo.insert(sessionId, taskId, brief, environmentVersion);
-    createdDevSessionIds.push(sessionId);
-
-    const [row] = await db
-      .select()
-      .from(devSessions)
-      .where(sql`${devSessions.id} = ${sessionId}`)
-      .limit(1);
-
-    expect(row).toBeDefined();
-    expect(row.id).toBe(sessionId);
-    expect(row.taskId).toBe(taskId);
-    expect(row.phase).toBe("Preparing");
-    expect(row.brief).toEqual(brief);
-    expect(row.environmentVersion).toBe(environmentVersion);
-    expect(row.createdAt).toBeInstanceOf(Date);
-    expect(row.updatedAt).toBeInstanceOf(Date);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // 3. EventStoreRepository

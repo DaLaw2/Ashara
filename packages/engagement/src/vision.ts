@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { AssumptionKindSchema, parseProjectId } from "@ashara/shared";
-import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ProjectId, ScopeLine, ScopeSide } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
+import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
+import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
 
 // The Vision (ADR-075 Engagement, engagement review D3): a project's vision, versioned and
 // append-only. Engagement alone writes it: intake writes v1, a client's answer and the team's stack

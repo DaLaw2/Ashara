@@ -1,10 +1,12 @@
-import { SPEND_CAP_ERROR_CLASS, describeErrorChain } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
 
 // Delivery's published language for a project halt (O3 c, ADR-080 d3): Delivery owns the halt
 // (projects.status 'blocked', its episode in project_blocks); Engagement owns the engagement
 // lifecycle (active, stopped, accepted). Every context that asks for a halt, and Engagement's
-// reports of one, read the cause in these words. This module imports nothing but the kernel, so a
-// context Delivery itself reads can read it back without a cycle at load time.
+// reports of one, read the cause in these words. This module imports nothing but the kernel and
+// Finance's spend-cap class names, neither of which reads Delivery, so a context Delivery itself
+// reads can read it back without a cycle at load time.
 
 /**
  * What kind of cause blocked a project (migration 040): the closed vocabulary the Liaison's plain

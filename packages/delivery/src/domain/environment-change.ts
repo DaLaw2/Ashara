@@ -1,4 +1,5 @@
-import { InvalidStatusTransition, canTransitionTo, createDomainEvent } from "@ashara/shared";
+import { createDomainEvent } from "@ashara/shared";
+import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
 import type { WorkItem } from "./work-item.js";
 import { createPendingWorkItem, giveUpWorkItem } from "./work-item.js";
 

@@ -9,7 +9,8 @@ import type {
   TurnRequest,
   TurnResult,
 } from "@ashara/model-access";
-import type { CapabilityLevel, ProjectId, WorkItemId } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { CapabilityLevel } from "@ashara/model-access";
 import type { CostMeasurement } from "./cost.js";
 import { LlmCallCostMissing, LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
 

@@ -1,13 +1,9 @@
 import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
-import {
-  parseWorkItemStatus,
-  canTransitionTo,
-  InvalidStatusTransition,
-  WorkItemNotFound,
-  parseWorkItemJsonb,
-} from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
 import { workItems, dependencies } from "@ashara/db";
+import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
+import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
+import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
 
 type WorkItemRow = typeof workItems.$inferSelect;
 

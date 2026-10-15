@@ -1,9 +1,9 @@
 import { and, asc, eq, max, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { parseWorkItemJsonb } from "@ashara/shared";
-import type { VisionSource } from "@ashara/shared";
 import { dependencies, taskChecks, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
+import { parseWorkItemJsonb } from "../acl/delivery-acl.js";
+import type { VisionSource } from "../acl/engagement-acl.js";
 
 // Quality's task checks (migration 036): the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.

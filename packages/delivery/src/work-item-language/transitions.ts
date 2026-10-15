@@ -1,4 +1,4 @@
-import type { WorkItemStatus } from "./enums.js";
+import type { WorkItemStatus } from "./work-item-status.js";
 
 /**
  * Published Language: the WorkItem state-machine contract.

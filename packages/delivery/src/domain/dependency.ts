@@ -1,4 +1,5 @@
-import type { ProjectId, WorkItemId, WorkItemStatus } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItemRepository } from "./repository.js";
 import { CycleDetected } from "./errors.js";
 

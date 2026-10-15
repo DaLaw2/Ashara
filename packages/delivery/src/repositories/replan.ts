@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { z } from "zod";
-import { InvalidStatusTransition, parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
+import { parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair } from "@ashara/db";
+import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { WorkItemRowRepository } from "./work-item.js";
 

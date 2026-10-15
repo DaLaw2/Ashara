@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { parseCapabilityLevel } from "@ashara/shared";
+import { parseCapabilityLevel } from "./capability-level.js";
 import { InvalidGatewayCatalog } from "./errors.js";
 import { PROVIDER_TYPES } from "./types.js";
 import type {

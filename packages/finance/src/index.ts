@@ -3,7 +3,7 @@ export type { ContextualLlm, ContextualTurnLlm, CostedTurnResult } from "./guard
 /** @testseam the integration attempt.podman.test.ts records a turn through its own recorder; LlmCallLedger is the production one */
 export type { LlmCallRecorder, LlmProviderCall } from "./guarded-model-access.js";
 export { LlmCallLedger } from "./llm-call-ledger.js";
-export { SpendCap } from "./spend-cap.js";
+export { SPEND_CAP_ERROR_CLASS, SpendCap } from "./spend-cap.js";
 export type { CostMeasurement } from "./cost.js";
 export { LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
 /** @testseam the integration model-catalog.test.ts prices catalog models directly; LlmCallLedger.record is its production caller */

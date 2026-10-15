@@ -1,8 +1,8 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "@ashara/shared";
+import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import type { DbHandle } from "../connection.js";
+import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
 
 /** The project named for a run report does not exist. */
 class RunReportProjectMissing extends Error {

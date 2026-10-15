@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { parseStoredBlockedReason } from "@ashara/shared";
-import type { StoredBlockedReason } from "@ashara/shared";
+import { parseStoredBlockedReason } from "../work-item-language/blocked-reason.js";
+import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { salvagedReason } from "./salvaged-result.js";
 
 describe("salvagedReason", () => {

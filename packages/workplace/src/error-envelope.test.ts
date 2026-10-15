@@ -1,11 +1,8 @@
 import { describe, test, expect } from "vitest";
-import {
-  errorEnvelopeSchema,
-  wrapError,
-  flattenChain,
-  renderChainForBrief,
-} from "./error-envelope.js";
-import type { ErrorLayer, ErrorEnvelope } from "./error-envelope.js";
+import { flattenChain, wrapError } from "@ashara/shared";
+import type { ErrorLayer } from "@ashara/shared";
+import { errorEnvelopeSchema, renderChainForBrief } from "./error-envelope.js";
+import type { ErrorEnvelope } from "./error-envelope.js";
 
 // The layer schema is file-local; a layer is exercised as an envelope's chain.
 function envelopeWithChain(chain: unknown): unknown {

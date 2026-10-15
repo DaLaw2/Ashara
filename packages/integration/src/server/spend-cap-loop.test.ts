@@ -18,7 +18,8 @@ import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CoreLoopDeps } from "@ashara/delivery";
-import { SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 

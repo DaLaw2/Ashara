@@ -1,7 +1,7 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { AgentBrief } from "@ashara/shared";
-import { CONVERSATION_RECORDS_DIR } from "@ashara/shared";
+import type { AgentBrief } from "@ashara/workplace";
+import { CONVERSATION_RECORDS_DIR } from "@ashara/workplace";
 import type { AttemptRecord, AttemptRecordSink } from "@ashara/workplace";
 
 /** Record directory names come from ids; anything else could walk out of workdirBase/records. */

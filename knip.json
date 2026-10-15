@@ -15,7 +15,7 @@
     "packages/integration": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,
-      "ignoreDependencies": ["@ashara/finance", "@ashara/engagement", "@ashara/knowledge", "@ashara/organization", "@hono/node-server", "ai", "hono"]
+      "ignoreDependencies": ["@ashara/knowledge", "@ashara/organization", "@hono/node-server", "ai", "hono"]
     },
     "packages/server": {
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],

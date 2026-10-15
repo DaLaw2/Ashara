@@ -2,8 +2,8 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
-import type { CapabilityLevel } from "@ashara/shared";
 import { describeErrorChain } from "@ashara/shared";
+import type { CapabilityLevel } from "./capability-level.js";
 import {
   InvalidGatewayCatalog,
   NoProviderAvailableError,

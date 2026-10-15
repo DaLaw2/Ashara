@@ -24,7 +24,8 @@ import {
 } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
-import { createSessionId, describeErrorChain, parseWorkItemId, renderElided, wrapError } from "@ashara/shared";
+import { describeErrorChain, parseWorkItemId, renderElided, wrapError } from "@ashara/shared";
+import { createSessionId } from "@ashara/workplace";
 import { attemptSummary, outcomeRecord } from "@ashara/workplace";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe, Outcome, TaskCheckRunPort } from "@ashara/workplace";
 import { checkPassed, checkRunVerdict, checkVerdict, describeProductChange, formatCheckRuns } from "./check-verdict.js";

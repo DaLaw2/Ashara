@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, join, parse as parsePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadModelsConfigPathEnvOverride } from "@ashara/shared";
 import { AsharaRootNotFound } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -63,4 +62,11 @@ export function resolveModelsConfigPath(configPath?: string): string {
   return configPath
     ?? loadModelsConfigPathEnvOverride()
     ?? join(resolveAsharaRoot(), "config", "models.toml");
+}
+
+/** Optional operator override for the models.toml config path (`ASHARA_MODELS_CONFIG`). */
+function loadModelsConfigPathEnvOverride(): string | undefined {
+  const value = process.env["ASHARA_MODELS_CONFIG"];
+  if (!value || value.trim() === "") return undefined;
+  return value;
 }

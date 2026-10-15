@@ -1,5 +1,5 @@
 import type { ZodType } from "zod";
-import type { CapabilityLevel } from "@ashara/shared";
+import type { CapabilityLevel } from "./capability-level.js";
 
 /**
  * Per-capability model table for a single site (routing-profiles story). Used

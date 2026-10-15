@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { AttemptCellImage } from "@ashara/execution-infra";
 import type { ResolvedModel } from "@ashara/model-access";
-import type { AgentBrief, ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
+import type { ProjectId, WorkItemId } from "@ashara/shared";
+import type { AgentBrief } from "./agent-brief.js";
 import { InvalidAssignment } from "./errors.js";
 
 /** ADR-074 d56: an attempt's wall clock is 20 minutes unless the caller sets its own. */
@@ -23,6 +24,26 @@ export type AssignmentBrief = Pick<
   | "protectedPaths"
 >;
 
+/**
+ * The tools and Z0 ports an attempt is given, named by what the attempt does with them:
+ * - "build-environment": build_environment and the environment finish, with Z0's environment check;
+ * - "define-checks": define_check and probe_foundation, with Z0's check recorder;
+ * - "run-and-dispute-checks": run_checks and dispute_check when the task's stored checks are supplied;
+ * - "run-checks": run_checks alone when the task's stored checks are supplied.
+ * Every profile has the workspace tools and finish. Neither "build-environment" nor "define-checks"
+ * is given the stored checks.
+ */
+export type ToolProfile = "build-environment" | "define-checks" | "run-and-dispute-checks" | "run-checks";
+
+/**
+ * The charter of the role an attempt works as, as its system prompt states it: who the agent is,
+ * and the duties of its role beyond the task itself (null when it has none).
+ */
+export interface AssignmentCharter {
+  readonly identity: string;
+  readonly duties: string | null;
+}
+
 /** The roster role an attempt works as: the task's owner, by its roster id and name. */
 interface AssignmentRole {
   readonly id: string;
@@ -41,8 +62,9 @@ export interface Assignment {
   readonly projectId: ProjectId;
   readonly taskId: WorkItemId;
   readonly role: AssignmentRole;
-  /** The kind of work the task is; it decides the tools offered (build_environment for environment work only). */
-  readonly workKind: WorkKind | null;
+  /** The tools and Z0 ports the attempt is given. */
+  readonly toolProfile: ToolProfile;
+  readonly charter: AssignmentCharter;
   readonly brief: AssignmentBrief;
   /** The image the attempt's cell was started from; recorded with the attempt. */
   readonly cellImage: AttemptCellImage;

@@ -1,4 +1,4 @@
-import type { CapabilityLevel } from "@ashara/shared";
+import type { CapabilityLevel } from "./capability-level.js";
 
 export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
   Light: 0,

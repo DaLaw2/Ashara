@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { InvalidStatusTransition, parseProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
 import { createPendingWorkItem, startWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";

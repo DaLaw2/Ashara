@@ -1,6 +1,10 @@
 import type { EventStoreRepository } from "@ashara/db";
-import type { DomainEvent, MergeKind, ProjectId } from "@ashara/shared";
-import { blockedExitOf, describeErrorChain, InvalidStatusTransition, WorkItemRowCorrupt } from "@ashara/shared";
+import type { DomainEvent, ProjectId } from "@ashara/shared";
+import { describeErrorChain } from "@ashara/shared";
+import type { MergeKind } from "./work-item-language/blocked-reason.js";
+import { blockedExitOf } from "./work-item-language/blocked-reason.js";
+import { InvalidStatusTransition } from "./work-item-language/transitions.js";
+import { WorkItemRowCorrupt } from "./work-item-language/work-item-row.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { giveUpWorkItem, PlanningService, takeEvents, unblockWorkItem } from "./domain/index.js";
 import { mergeOnMainOf } from "./orphan-merge.js";
