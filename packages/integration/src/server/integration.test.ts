@@ -239,6 +239,45 @@ describe("Work Items", () => {
     expect(res.status).toBe(409);
     expect(await statusOf(id)).toBe("Pending");
   });
+
+  // ADR-075 §5: nothing outside Quality marks work passed.
+  test("a task is not completed by hand: refused, and it stays InProgress", async () => {
+    const id = randomUUID();
+    const projectId = await newProject();
+    await pool.query(
+      `INSERT INTO work_items (id, level, status, title, run_scope, project_id) VALUES ($1, 'Task', 'InProgress', 'Running task', $2, $3)`,
+      [id, RUN_SCOPE_AD_HOC, projectId],
+    );
+    createdWorkItemIds.push(id);
+
+    const res = await req("PATCH", `/work-items/${id}/status`, { status: "Completed" });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("Quality has verified its delivery");
+    expect(await statusOf(id)).toBe("InProgress");
+  });
+
+  test("a body that is not JSON is a typed 400, not a 500", async () => {
+    const res = await app.request(`/work-items/${createdId}/status`, {
+      method: "PATCH",
+      headers: authHeaders(),
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("request body is not valid JSON");
+  });
+
+  test.each([
+    { body: { status: "Done" }, what: "an unknown status" },
+    { body: { reason: { note: "x" } }, what: "no status" },
+    { body: { status: "Failed", reason: "x" }, what: "a reason that is not an object" },
+    { body: { status: "Failed", extra: 1 }, what: "an unknown field" },
+  ])("a body with $what is a 400 naming the issues", async ({ body }) => {
+    const res = await req("PATCH", `/work-items/${createdId}/status`, body);
+    expect(res.status).toBe(400);
+    const parsed = z.object({ error: z.string(), issues: z.array(z.unknown()).min(1) }).parse(await res.json());
+    expect(parsed.error).toBe("invalid status patch body");
+  });
 });
 
 // ===========================================================================

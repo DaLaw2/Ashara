@@ -2,7 +2,6 @@ export type { WorkItem } from "./work-item.js";
 export {
   createPendingWorkItem,
   startWorkItem,
-  completeWorkItem,
   failWorkItem,
   blockWorkItem,
   unblockWorkItem,

@@ -4,7 +4,6 @@ export type {
 } from "./domain/index.js";
 export {
   startWorkItem,
-  completeWorkItem,
   failWorkItem,
   blockWorkItem,
   unblockWorkItem,

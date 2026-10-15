@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { WorkItemId, WorkItemStatus, StoredBlockedReason } from "@ashara/shared";
-import { InvalidId, InvalidStatusTransition, describeErrorChain, parseProjectId, parseWorkItemId, parseWorkItemStatus } from "@ashara/shared";
+import type { WorkItemId, StoredBlockedReason } from "@ashara/shared";
+import { InvalidId, InvalidStatusTransition, WORK_ITEM_STATUSES, parseProjectId, parseWorkItemId } from "@ashara/shared";
 import {
   WorkItemRepository,
   EventStoreRepository,
@@ -11,7 +11,6 @@ import {
 } from "@ashara/db";
 import {
   startWorkItem,
-  completeWorkItem,
   failWorkItem,
   replanWorkItem,
   abandonWorkItem,
@@ -19,6 +18,7 @@ import {
 } from "@ashara/planning";
 import {
   listClientMessages,
+  notJson,
   postClientMessage,
   readJsonBody,
   submitTender,
@@ -40,7 +40,10 @@ export interface AppDeps extends ClientChannelDeps {
 
 type AppEnv = { Variables: { deps: AppDeps } };
 
-const StatusReasonSchema = z.record(z.string(), z.unknown()).optional();
+const StatusPatchSchema = z.strictObject({
+  status: z.enum(WORK_ITEM_STATUSES),
+  reason: z.record(z.string(), z.unknown()).optional(),
+});
 
 export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -75,23 +78,17 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
       if (!(e instanceof InvalidId)) throw e;
       return c.json({ error: e.message }, 400);
     }
-    const body = await c.req.json();
-
-    let newStatus: WorkItemStatus;
-    try {
-      newStatus = parseWorkItemStatus(body.status);
-    } catch (e) {
-      return c.json(
-        { error: describeErrorChain(e) },
-        400,
-      );
+    const json = await readJsonBody(() => c.req.json());
+    if (!json.ok) {
+      const refused = notJson("PATCH /work-items/:id/status", json);
+      return c.json(refused.body, refused.status);
     }
-
-    const reasonParsed = StatusReasonSchema.safeParse(body.reason);
-    if (!reasonParsed.success) {
-      return c.json({ error: "invalid reason", issues: reasonParsed.error.issues }, 400);
+    const bodyParsed = StatusPatchSchema.safeParse(json.value);
+    if (!bodyParsed.success) {
+      return c.json({ error: "invalid status patch body", issues: bodyParsed.error.issues }, 400);
     }
-    const reason = reasonParsed.data ?? {};
+    const newStatus = bodyParsed.data.status;
+    const reason = bodyParsed.data.reason ?? {};
 
     const row = await workItemRepo.findById(id);
     if (!row) return c.json({ error: "work item not found" }, 404);
@@ -106,8 +103,12 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
           startWorkItem(item);
           break;
         case "Completed":
-          completeWorkItem(item);
-          break;
+          // Nothing outside Quality marks work passed (ADR-075 §5): a task is Completed only by the
+          // loop, once its delivery is verified and recorded, never by an operator's say-so.
+          return c.json(
+            { error: `cannot complete ${item.id} by hand: a task is completed only by the loop, once Quality has verified its delivery` },
+            409,
+          );
         case "Blocked":
           // No work item waits on a person (story s-loop-never-stop-m1 W6): a task is Blocked only
           // by the loop, with an exit the loop takes by itself, so nobody parks one by hand.

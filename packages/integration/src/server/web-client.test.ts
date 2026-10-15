@@ -653,6 +653,39 @@ describe("client scoping", () => {
   });
 });
 
+class ListingRefused extends Error {
+  constructor() {
+    super("work item listing refused by the test repository: row 42 holds secret-detail");
+    this.name = "ListingRefused";
+  }
+}
+
+class RefusingWorkItemRepository extends WorkItemRepository {
+  override async listAll(): ReturnType<WorkItemRepository["listAll"]> {
+    throw new ListingRefused();
+  }
+}
+
+describe("unhandled route error", () => {
+  test("is logged with its operation and chain, and answered with a typed 500 that carries no detail", async () => {
+    const failing = buildApp(API_TOKEN, { ...appDeps(), workItemRepo: new RefusingWorkItemRepository(db) }, webClientDeps());
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await failing.request("/work-items", { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+
+      expect(response.status).toBe(500);
+      const text = await response.text();
+      expect(text).not.toContain("secret-detail");
+      expect(JSON.parse(text)).toEqual({ error: "internal server error", errorClass: "InternalServerError", operation: "GET /work-items" });
+      const line = logged.mock.calls.map((call) => String(call[0])).find((first) => first.includes("GET /work-items"));
+      expect(line).toContain("ListingRefused");
+      expect(line).toContain("secret-detail");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
 describe("recorded web-client session", () => {
   let server: ServerType;
   let baseUrl: string;
