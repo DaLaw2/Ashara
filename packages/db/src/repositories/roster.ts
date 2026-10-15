@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { projects, rosterRoles, visionDocuments } from "../schema.js";
+import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
 import { noOpenStop } from "./project.js";
 
 // A project's roster (migration 031): the rows of its latest revision. Derived

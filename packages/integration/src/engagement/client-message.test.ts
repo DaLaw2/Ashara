@@ -4,10 +4,8 @@ import pg from "pg";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
-import { createDb, DEFAULT_DATABASE_URL, type Database } from "../connection.js";
-import { ClientMessageNotConsumable, ClientMessageRepository, createProjectWithTender } from "./client-message.js";
-import { ClientRepository } from "./client.js";
-import { ProjectRepository } from "./project.js";
+import { ClientRepository, ProjectRepository, createDb, DEFAULT_DATABASE_URL, type Database } from "@ashara/db";
+import { ClientMessageNotConsumable, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 
 // Against the shared dev database: every row here belongs to a project this suite
 // creates under a unique name, and is deleted in afterAll.

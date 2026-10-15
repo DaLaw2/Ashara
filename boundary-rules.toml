@@ -20,8 +20,10 @@ restrict.engagement = ["src/acl/*.ts"]
 restrict.organization = ["src/acl/*.ts"]
 
 [planning]
-# ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind).
-allow = ["shared", "llm-gateway", "organization"]
+# ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind), and Engagement
+# of both: each reads the client vision as its published VisionVersion through its ACL (S7, S8).
+allow = ["shared", "llm-gateway", "organization", "engagement"]
+restrict.engagement = ["src/acl/*.ts"]
 
 [development]
 # ADR-075: Execution runs every task on a cell (execution-infra) through the Workplace attempt loop.
@@ -31,7 +33,8 @@ allow = ["shared", "llm-gateway", "execution-infra", "workplace"]
 allow = ["shared"]
 
 [engagement]
-allow = ["shared", "llm-gateway"]
+# O1 (ADR-080 d3): Engagement owns its repositories; db supplies the connection and the schema.
+allow = ["shared", "llm-gateway", "db"]
 
 [server]
 allow = ["*"]
@@ -66,7 +69,8 @@ allow = ["shared", "llm-gateway", "execution-infra"]
 # ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Roster derivation is
 # Organization's language, so its structured call on the `roster` site lives here, through llm-gateway
 # like Engagement's and Delivery's own sites.
-allow = ["shared", "llm-gateway"]
+allow = ["shared", "llm-gateway", "engagement"]
+restrict.engagement = ["src/acl/*.ts"]
 
 [integration]
 # Story s-independent-verify-m1 L2: the lifecycle simulator and the cross-package integration

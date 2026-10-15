@@ -1,15 +1,9 @@
-import { z } from "zod";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
-import {
-  StoredAssumptionDisclosureSchema,
-  StoredAssumptionKindSchema,
-  StoredScopeLineSchema,
-  assumptionStanding,
-  describeErrorChain,
-  projectBlockCause,
-} from "@ashara/shared";
-import type { ProjectBlockCause, ProjectId, ScopeSide, WorkItemLevel, WorkKind } from "@ashara/shared";
+import { describeErrorChain, projectBlockCause } from "@ashara/shared";
+import type { ProjectBlockCause, ProjectId, WorkItemLevel, WorkKind } from "@ashara/shared";
+import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
+import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
 import type { BulkPlanEdge, BulkPlanItem } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type {
@@ -17,7 +11,6 @@ import type {
   DecompositionResult,
   DroppedDependency,
   TaskSpec,
-  VisionItem,
   WorkItemSpec,
 } from "./decomposition-types.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
@@ -34,26 +27,12 @@ const MAX_PLAN_ATTEMPTS = 3;
 interface ProjectAwaitingPlan {
   readonly projectId: ProjectId;
   readonly projectName: string;
-  readonly visionVersion: number;
-  readonly visionText: string;
-  readonly summary: string;
-  /** vision_documents.scope_boundaries as stored; parsed here. */
-  readonly scopeBoundaries: unknown;
-  /** vision_documents.inferences as stored, the client's answers in its Stated assumptions; parsed here. */
-  readonly inferences: unknown;
+  /** The project's current vision as stored; read through Engagement's published reader. */
+  readonly vision: StoredVision;
   readonly planAttempts: number;
   readonly planLastError: string | null;
   /** The rows of the project's latest roster revision as stored; parsed by Organization. */
   readonly rosterRows: unknown;
-}
-
-/** The parts of a stored vision decomposition plans toward, as the store reads them. */
-interface StoredVisionReading {
-  readonly projectId: ProjectId;
-  readonly visionVersion: number;
-  readonly summary: string;
-  readonly scopeBoundaries: unknown;
-  readonly inferences: unknown;
 }
 
 /** Who owns a planned task: its kind of work and the roster role holding the capability that kind needs. */
@@ -120,129 +99,6 @@ class PlanFailureUnrecorded extends Error {
     super(`project ${projectId} has ${attempts} failed planning attempts but no recorded error`);
     this.name = "PlanFailureUnrecorded";
   }
-}
-
-/**
- * The stored vision could not be read as a planning input: the project's own record, which no
- * further planning attempt can change, so the project is blocked with it and no attempt is counted.
- */
-export class VisionUnreadable extends Error {
-  constructor(
-    readonly projectId: ProjectId,
-    readonly visionVersion: number,
-    readonly field: string,
-    readonly issues: string,
-  ) {
-    super(`project ${projectId} vision v${visionVersion}: ${field} is not in a readable shape: ${issues}`);
-    this.name = "VisionUnreadable";
-  }
-}
-
-// Intake writes each scope line with its side; a vision written before sides were recorded holds
-// bare strings, read as unclassified.
-const ScopeBoundariesSchema = z.array(StoredScopeLineSchema);
-
-// The answer a Stated assumption carries (migration 038): the Liaison writes it when
-// the client answers the question that named the assumption.
-const ClientAnswerSchema = z.object({ question: z.string().min(1), answer: z.string().min(1) });
-
-// Intake (migration 019 onward) writes assumptions as Inferred records, and the
-// Liaison makes one Stated, with the client's answer, when the client answers; rows
-// the deleted CLI path (POST /vision) wrote hold a map of direction category to
-// inference and are still in the database. Both are read; a Stated record without
-// its answer, or anything else, stops the attempt rather than planning without them.
-// Each record's key, kind and disclosure are read as stored (ADR-074 addendum 2 d89): a record
-// written before them has no kind, so no line may cite it, and its id is its place in the list; a
-// disclosure that is neither "asked" nor "reported" makes the vision unreadable.
-const RecordFieldsSchema = z.object({
-  key: z.string().min(1).optional(),
-  kind: StoredAssumptionKindSchema,
-  disclosed: StoredAssumptionDisclosureSchema,
-});
-const InferencesSchema = z.union([
-  z.array(
-    z.union([
-      RecordFieldsSchema.extend({ statement: z.string().min(1), status: z.literal("Stated"), clientAnswer: ClientAnswerSchema }),
-      RecordFieldsSchema.extend({ statement: z.string().min(1), status: z.string().min(1).refine((s) => s !== "Stated") }),
-    ]),
-  ),
-  z.record(z.string(), z.string()),
-]);
-
-function parseField<T>(schema: z.ZodType<T>, value: unknown, project: StoredVisionReading, field: string): T {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    throw new VisionUnreadable(project.projectId, project.visionVersion, field, z.prettifyError(parsed.error));
-  }
-  return parsed.data;
-}
-
-const SCOPE_SIDE_LEAD: Readonly<Record<ScopeSide, string>> = { in: "In scope: ", out: "Out of scope: ", unclassified: "" };
-
-/**
- * The north star decomposition plans toward: the vision's summary, its scope, and
- * the assumptions work proceeds on. The decomposition prompt itself stays in
- * DecompositionEngine; this is only its input.
- */
-export function northStarOf(project: StoredVisionReading): string {
-  const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
-  const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
-  const records = Array.isArray(inferences) ? inferences : [];
-  const answers = records.flatMap((a) => ("clientAnswer" in a ? [{ ...a.clientAnswer, decision: a.statement }] : []));
-  const assumptions = Array.isArray(inferences)
-    ? inferences.flatMap((a) => ("clientAnswer" in a ? [] : [`${a.statement} (${a.status})`]))
-    : Object.entries(inferences).map(([category, inference]) => `${category}: ${inference}`);
-
-  const sections = [project.summary];
-  if (scope.length > 0) sections.push(`Scope:\n${scope.map((s) => `- ${SCOPE_SIDE_LEAD[s.side]}${s.text}`).join("\n")}`);
-  if (answers.length > 0) {
-    sections.push(
-      `Client clarifications (Stated by the client; these override any assumption):\n` +
-        answers.map((a) => `- ${a.question} -> ${a.answer} (decision: ${a.decision})`).join("\n"),
-    );
-  }
-  if (assumptions.length > 0) {
-    sections.push(`Assumptions work proceeds on until the client says otherwise:\n${assumptions.map((a) => `- ${a}`).join("\n")}`);
-  }
-  return sections.join("\n\n");
-}
-
-/**
- * Every item of the stored vision a planned task can trace to (ADR-074 addendum 2 d71 d, d89): each
- * scope boundary (S1..), then each assumption work proceeds on, by its key in the vision (A1.., as
- * intake and the stack choice key them; a record without one by its place), a Stated one by the
- * decision the client's answer made, each with its status, standing with the client and kind. The
- * summary is not an item: it restates the whole tender, so a task tracing to it would trace to
- * nothing in particular.
- */
-export function visionItemsOf(project: StoredVisionReading): VisionItem[] {
-  const scope = parseField(ScopeBoundariesSchema, project.scopeBoundaries, project, "scopeBoundaries");
-  const inferences = parseField(InferencesSchema, project.inferences, project, "inferences");
-  const assumptions: VisionItem[] = Array.isArray(inferences)
-    ? inferences.map((a, i) => ({
-        type: "assumption",
-        id: a.key ?? `A${i + 1}`,
-        text: a.statement,
-        status: a.status,
-        standing: assumptionStanding(a),
-        kind: a.kind,
-      }))
-    : Object.entries(inferences).map(([category, inference], i) => ({
-        type: "assumption",
-        id: `A${i + 1}`,
-        text: `${category}: ${inference}`,
-        status: "Inferred",
-        standing: "not-shown",
-        kind: "unclassified",
-      }));
-  const ids = new Set<string>();
-  for (const item of assumptions) {
-    if (ids.has(item.id)) {
-      throw new VisionUnreadable(project.projectId, project.visionVersion, "inferences", `two assumptions share the key ${item.id}`);
-    }
-    ids.add(item.id);
-  }
-  return [...scope.map((line, i): VisionItem => ({ type: "scope", id: `S${i + 1}`, text: line.text, side: line.side })), ...assumptions];
 }
 
 function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
@@ -324,12 +180,6 @@ export function toWrite(projectId: ProjectId, result: DecompositionResult, owner
   };
 }
 
-/** The stored vision read as planning input, before any counted attempt. */
-export interface PlanningVision {
-  readonly northStar: string;
-  readonly items: VisionItem[];
-}
-
 interface FirstPlannerDeps {
   readonly llm: ContextualLlm;
   readonly store: FirstPlanStore;
@@ -388,7 +238,7 @@ export class FirstPlanner implements FirstPlanning {
 
     const owners = planOwners(projectId, project.rosterRows);
     // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
-    const vision: PlanningVision = { northStar: northStarOf(project), items: visionItemsOf(project) };
+    const vision = planningVisionOf(project.vision);
 
     let write: FirstPlanWrite;
     let commit: FirstPlanCommit;
@@ -417,7 +267,7 @@ export class FirstPlanner implements FirstPlanning {
     const input: DecompositionInput = {
       epicTitle: project.projectName,
       epicNorthStar: vision.northStar,
-      epicDescription: project.visionText,
+      epicDescription: vision.visionText,
       environment: { kind: "new" },
       layout: { kind: "new" },
       visionItems: vision.items,
@@ -430,7 +280,7 @@ export class FirstPlanner implements FirstPlanning {
     const error = describeErrorChain(err);
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
     console.warn(
-      `[first-plan] project ${projectId} (vision v${project.visionVersion}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed: ${error}`,
+      `[first-plan] project ${projectId} (vision v${project.vision.version}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed: ${error}`,
     );
     if (attempt < MAX_PLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
 

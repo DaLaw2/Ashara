@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-// Published Language of the vision's assumptions (vision_documents.inferences), as Engagement
-// writes them and Delivery, Quality and Workplace read them (ADR-074 addendum 2 d89).
+// The vocabulary of the vision's assumptions every context words them in (ADR-074 addendum 2 d89).
+// Reading the stored records is Engagement's alone: its published reader is readVisionVersion.
 
 /**
  * What an assumption is about (d89 E): behaviour the client sees and relies on (an output, an
@@ -13,15 +13,6 @@ export const AssumptionKindSchema = z.enum(["client-visible", "internal-design"]
 export type AssumptionKind = z.infer<typeof AssumptionKindSchema>;
 
 /**
- * An assumption's kind as a stored record holds it. A record written before kinds were recorded
- * holds none and reads as "unclassified": not evidence that it is client-visible, so no acceptance
- * line may cite it.
- */
-export const StoredAssumptionKindSchema = AssumptionKindSchema.optional().transform(
-  (kind): AssumptionKind | "unclassified" => kind ?? "unclassified",
-);
-
-/**
  * How the client learned of an Inferred assumption (d89 C): asked about it in an intake question,
  * or told of it in a report that work proceeds on it unless they object.
  */
@@ -30,29 +21,11 @@ const AssumptionDisclosureSchema = z.enum(["asked", "reported"]);
 export type AssumptionDisclosure = z.infer<typeof AssumptionDisclosureSchema>;
 
 /**
- * An assumption's disclosure as a stored record holds it: absent on a record that says neither
- * (written before disclosures were recorded), and otherwise one of the two. Any other value fails
- * the record's parse, so a malformed disclosure is never read as "never shown".
- */
-export const StoredAssumptionDisclosureSchema = AssumptionDisclosureSchema.optional();
-
-/**
  * Where an assumption stands with the client: Stated by them, or Inferred and asked about, or
  * Inferred and reported to them; "not-shown" for an Inferred record that says neither, which the
  * client has no record of seeing.
  */
 export type AssumptionStanding = "stated" | "asked" | "reported" | "not-shown";
-
-export function assumptionStanding(record: { readonly status: string; readonly disclosed?: AssumptionDisclosure }): AssumptionStanding {
-  if (record.status === "Stated") return "stated";
-  return record.disclosed ?? "not-shown";
-}
-
-/**
- * What the client's answer did to the assumption it made Stated, as the Liaison records it on the
- * Stated record's `clientAnswer`. A record written before it was recorded holds none.
- */
-export const ClientAnswerVerdictSchema = z.enum(["confirms", "changes"]);
 
 /**
  * Where an assumption stands with the client when the project is accepted (ADR-074 d95 a), read from
@@ -102,15 +75,6 @@ export interface ScopeLine {
   readonly text: string;
   readonly side: Exclude<ScopeSide, "unclassified">;
 }
-
-/** A stored scope line: an object with its side, or a bare string written before sides were recorded. */
-export const StoredScopeLineSchema = z.union([
-  z.strictObject({ text: z.string().min(1), side: z.enum(["in", "out"]) }),
-  z
-    .string()
-    .min(1)
-    .transform((text): { readonly text: string; readonly side: ScopeSide } => ({ text, side: "unclassified" })),
-]);
 
 /**
  * Where the product scaffold writes down the product's public interface, which every check author

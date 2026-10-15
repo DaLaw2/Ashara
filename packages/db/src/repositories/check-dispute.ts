@@ -1,6 +1,6 @@
 import { count, eq } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { checkDisputes } from "../schema.js";
+import { checkDisputes } from "../schema/index.js";
 
 // Quality's record of an implementer's disputes of its task's checks (migration 039).
 

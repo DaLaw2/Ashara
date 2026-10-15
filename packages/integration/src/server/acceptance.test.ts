@@ -2,23 +2,20 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, ProjectRepository, WorkItemRepository } from "@ashara/db";
 import {
+  ClientAnswers,
+  ClientStops,
+  DeliveredReports,
   ClientMessageRepository,
-  ClientRepository,
-  createDb,
   createProjectWithTender,
-  DEFAULT_DATABASE_URL,
-  EventStoreRepository,
-  ProjectRepository,
   VisionRepository,
-  WorkItemRepository,
-} from "@ashara/db";
-import { ClientAnswers, ClientStops, DeliveredReports } from "@ashara/engagement";
+} from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import type { AcceptanceStore } from "@ashara/orchestrator";
 import { runAcceptanceSweeps } from "@ashara/orchestrator";
-import { RUN_SCOPE_AD_HOC, type ProjectId, type VisionSource } from "@ashara/shared";
+import { type ProjectId, type VisionSource } from "@ashara/shared";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
@@ -110,8 +107,8 @@ async function deliveredProject(options: { readonly prefixAsked: boolean } = { p
   const task = async (title: string, spec: unknown): Promise<string> => {
     const id = randomUUID();
     await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id)
-      VALUES (${id}, 'Task', 'Completed', ${title}, ${JSON.stringify(spec)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
+      INSERT INTO work_items (id, level, status, title, task_spec, project_id)
+      VALUES (${id}, 'Task', 'Completed', ${title}, ${JSON.stringify(spec)}::jsonb, ${project.id})`);
     return id;
   };
   const scaffold = await task("Set up the module root", { origin: "product-scaffold", checkedBy: "substrate" });
@@ -260,9 +257,9 @@ describe("acceptance on main", () => {
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
     const abandoned = async (title: string, reason: unknown): Promise<void> => {
       await db.execute(sql`
-        INSERT INTO work_items (id, level, status, title, task_spec, blocked_reason, run_scope, project_id)
+        INSERT INTO work_items (id, level, status, title, task_spec, blocked_reason, project_id)
         VALUES (${randomUUID()}, 'Task', 'Abandoned', ${title}, ${JSON.stringify({ origin: "decomposition" })}::jsonb,
-                ${JSON.stringify(reason)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+                ${JSON.stringify(reason)}::jsonb, ${projectId})`);
     };
     await abandoned("List keys", { source: "failure_router", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
     await abandoned("Watch keys", { source: "superseded", planRevision: 2, requestedBy: null, repairOf: ["x"], reason: "replaced by the repaired plan" });
@@ -322,7 +319,7 @@ describe("acceptance on main", () => {
     const saved = await db.execute(sql`SELECT inferences FROM vision_documents WHERE project_id = ${projectId} AND version = 2`);
     const inferences = z.array(z.object({ inferences: z.unknown() })).parse(saved.rows)[0]?.inferences;
     await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${projectId} AND version = 2`);
-    await expect(deliveredReports().runPending()).rejects.toThrow(/assumption A3 is Stated but carries no client answer/);
+    await expect(deliveredReports().runPending()).rejects.toThrow(/a Stated assumption carries the client answer that stated it/);
     await db.execute(sql`UPDATE vision_documents SET inferences = ${JSON.stringify(inferences)}::jsonb WHERE project_id = ${projectId} AND version = 2`);
 
     expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });

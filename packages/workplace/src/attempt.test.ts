@@ -793,24 +793,19 @@ describe("define_check", () => {
   });
 
   // W11 (d89 C): the header said the client agreed to every assumption, and to most of them it had agreed to nothing.
-  it("says of each assumption only what the client has seen of it, and whether it is client-visible or internal design", () => {
+  // O9: Delivery words each assumption's note; Workplace renders it and adds nothing of its own.
+  it("renders each assumption by its key with the note Delivery wrote, and claims no agreement", () => {
     const brief = {
       ...assignment().brief,
       assumptions: [
-        { key: "A1", status: "Stated", statement: "Values may hold spaces.", standing: "stated" as const, kind: "client-visible" as const },
-        { key: "A2", status: "Inferred", statement: "Exit code 2 means a missing key.", standing: "asked" as const, kind: "client-visible" as const },
-        { key: "A3", status: "Inferred", statement: "list prints keys sorted.", standing: "reported" as const, kind: "client-visible" as const },
-        { key: "A4", status: "Inferred", statement: "The log is wal.log.", standing: "reported" as const, kind: "internal-design" as const },
-        { key: "A5", status: "Inferred", statement: "Written before kinds.", standing: "not-shown" as const, kind: "unclassified" as const },
+        { key: "A1", statement: "Values may hold spaces.", note: "Stated by the client; client-visible behaviour" },
+        { key: "A4", statement: "The log is wal.log.", note: "Inferred; reported to the client; internal design" },
       ],
     };
     const prompt = buildSystemPrompt(brief, "implementation");
     expect(prompt).not.toContain("The client agreed");
     expect(prompt).toContain("- A1 (Stated by the client; client-visible behaviour): Values may hold spaces.");
-    expect(prompt).toContain("- A2 (Inferred; asked of the client, not yet answered; client-visible behaviour)");
-    expect(prompt).toContain("- A3 (Inferred; reported to the client; client-visible behaviour)");
     expect(prompt).toContain("- A4 (Inferred; reported to the client; internal design): The log is wal.log.");
-    expect(prompt).toContain("- A5 (Inferred; never shown to the client; not classified)");
   });
 
   it("refuses a check assignment without Z0's recorder, and the recorder for any other work", async () => {

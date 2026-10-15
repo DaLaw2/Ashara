@@ -1,6 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import type { DbHandle } from "../connection.js";
-import { clients } from "../schema.js";
+import { clients } from "../schema/index.js";
 
 interface ClientRecord {
   readonly id: string;

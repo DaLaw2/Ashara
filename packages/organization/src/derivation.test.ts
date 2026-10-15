@@ -51,9 +51,15 @@ function memoryStore() {
         : [
             {
               projectId: PROJECT,
-              visionVersion: 1,
-              visionText: "Booking page for my two pottery studios.",
-              inferences: [{ statement: "Bookings need no account.", status: "Inferred" }],
+              vision: {
+                projectId: PROJECT,
+                version: 1,
+                visionText: "Booking page for my two pottery studios.",
+                summary: "Booking page.",
+                scopeBoundaries: [],
+                inferences: [{ statement: "Bookings need no account.", status: "Inferred" }],
+                openQuestions: [],
+              },
             },
           ],
     recordRoster: async (roster) => {

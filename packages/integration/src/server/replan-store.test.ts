@@ -4,10 +4,8 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  ClientMessageRepository,
   ClientRepository,
   createDb,
-  createProjectWithTender,
   DEFAULT_DATABASE_URL,
   latestRosterRevision,
   latestRosterRoles,
@@ -16,7 +14,14 @@ import {
   TaskCheckRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { BlockReports, ClientAnswers, PlanReports, TenderIntake } from "@ashara/engagement";
+import {
+  BlockReports,
+  ClientAnswers,
+  PlanReports,
+  TenderIntake,
+  ClientMessageRepository,
+  createProjectWithTender,
+} from "@ashara/engagement";
 import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";

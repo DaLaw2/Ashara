@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { createDb } from "@ashara/db";
 import { loadProjectIntent } from "@ashara/development";
 import type { ProjectIntentSource } from "@ashara/development";
+import { assignmentIntentOf } from "@ashara/planning";
 import { parseStoredTaskSpec, parseWorkItemId } from "@ashara/shared";
 import type { RecomposedBrief } from "../simulator/stored-text.js";
 
@@ -60,7 +61,15 @@ export async function replayProjects(db: Db): Promise<Array<z.infer<typeof proje
 }
 
 const sessionRow = z.object({ id: z.string(), taskId: z.string(), title: z.string(), taskSpec: z.unknown(), visionAtCreation: z.number().nullable() });
-const visionAt = z.object({ version: z.number(), visionText: z.string(), inferences: z.unknown() });
+const visionAt = z.object({
+  projectId: z.string(),
+  version: z.number(),
+  visionText: z.string(),
+  summary: z.string(),
+  scopeBoundaries: z.unknown(),
+  inferences: z.unknown(),
+  openQuestions: z.unknown(),
+});
 
 /** The vision current when one session was recorded: today's intent composer reads it as the run's composer then would. */
 function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
@@ -69,13 +78,15 @@ function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
       const rows = z.array(visionAt).parse(
         (
           await db.execute(sql`
-            SELECT v.version, v.vision_text AS "visionText", v.inferences
+            SELECT v.project_id AS "projectId", v.version, v.vision_text AS "visionText", v.summary,
+                   v.scope_boundaries AS "scopeBoundaries", v.inferences, v.open_questions AS "openQuestions"
             FROM vision_documents v JOIN work_items w ON w.project_id = v.project_id
             WHERE w.id = ${taskId} AND v.created_at <= (SELECT created_at FROM dev_sessions WHERE id = ${sessionId})
             ORDER BY v.version DESC LIMIT 1`)
         ).rows,
       );
-      return rows[0] ?? null;
+      const [row] = rows;
+      return row === undefined ? null : assignmentIntentOf(row);
     },
   };
 }

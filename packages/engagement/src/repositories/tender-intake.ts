@@ -1,7 +1,8 @@
+import type { Database } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import type { Database } from "../connection.js";
+import type { FirstVision } from "../vision.js";
 import { ClientMessageRepository } from "./client-message.js";
-import { VisionRepository, type VisionInput } from "./vision.js";
+import { VisionRepository } from "./vision.js";
 
 /** The first vision version a tender's intake writes did not come out as version 1. */
 class IntakeVisionNotFirst extends Error {
@@ -26,7 +27,7 @@ interface TenderIntakeWrite {
   /** The report of the assumptions no question carries, posted after the questions; null when there is none. */
   readonly assumptionsReport: string | null;
   /** The vision v1 document, given the ids of the posted questions in the same order. */
-  readonly vision: (questionIds: readonly string[]) => VisionInput;
+  readonly vision: (questionIds: readonly string[]) => FirstVision;
 }
 
 type TenderIntakeCommit =

@@ -5,21 +5,18 @@ import {
   WorkItemRepository as DbWorkItemRepository,
   EventStoreRepository,
   DevSessionRepository,
-  VisionRepository,
   ProjectRepository,
   ConfigRepository,
   KnowledgeRepository,
   FailedApproachRepository,
   SecretRepository,
   LlmCallRepository,
-  ClientMessageRepository,
   ClientSessionRepository,
   ClientRepository,
   ClientLoginFailureRepository,
   EnvironmentBuildRepository,
   CheckDisputeRepository,
   SuiteReviewFindingRepository,
-  createProjectWithTender,
   latestRosterRevision,
   latestRosterRoles,
   assertMigrationsCurrent,
@@ -39,6 +36,7 @@ import {
   FailureRouter,
   FirstPlanner,
   Replanner,
+  assignmentIntentOf,
 } from "@ashara/planning";
 import {
   DevelopmentService,
@@ -47,7 +45,19 @@ import {
   gitPublicInterface,
   pruneStaleEnvironmentImages,
 } from "@ashara/development";
-import { BlockReports, ClientAnswers, ClientChanges, ClientStops, DeliveredReports, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
+import {
+  BlockReports,
+  ClientAnswers,
+  ClientChanges,
+  ClientStops,
+  DeliveredReports,
+  PlanReports,
+  StackChoiceReports,
+  TenderIntake,
+  VisionRepository,
+  ClientMessageRepository,
+  createProjectWithTender,
+} from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
   AgentStaffing,
@@ -344,13 +354,13 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // The brief's intent: the task's project's current vision, its VERBATIM
   // visionText (never the summary: the paraphrase is the step that dropped "Go"
-  // in Run 36) and its assumptions, which Development parses.
+  // in Run 36) and its assumptions, which Delivery renders for the Assignment (O9).
   const intentSource: ProjectIntentSource = {
     async loadIntent(taskId: string) {
       const projectId = await findTaskProjectId(taskId);
       if (!projectId) return null;
       const vision = await visionRepo.getCurrent(projectId);
-      return vision === null ? null : { version: vision.version, visionText: vision.visionText, inferences: vision.inferences };
+      return vision === null ? null : assignmentIntentOf(vision);
     },
   };
 

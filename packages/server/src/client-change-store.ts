@@ -1,4 +1,4 @@
-import { listUnconsumedChanges, recordClientChangeDeferred } from "@ashara/db";
+import { listUnconsumedChanges, recordClientChangeDeferred } from "@ashara/engagement";
 import type { createDb } from "@ashara/db";
 import type { ClientChangeStore } from "@ashara/engagement";
 

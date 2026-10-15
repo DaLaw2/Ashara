@@ -29,7 +29,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
@@ -167,7 +167,7 @@ async function harness(name: string): Promise<Harness> {
     },
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", inferences: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
@@ -251,9 +251,9 @@ async function harness(name: string): Promise<Harness> {
 async function sprint0(h: Harness): Promise<void> {
   const taskSpec = { goal: SPRINT0_GOAL, origin: "sprint0", checkedBy: "substrate" } as const;
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id, work_kind, owner_role_id)
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${createWorkItemId()}, 'Task', 'Pending', ${SPRINT0_GOAL}, ${JSON.stringify(taskSpec)}::jsonb,
-            ${RUN_SCOPE_AD_HOC}, ${h.projectId}, 'environment', ${h.platformRoleId})`);
+            ${h.projectId}, 'environment', ${h.platformRoleId})`);
   h.scripts.set(SPRINT0_GOAL, [
     toolCallTurn("write_file", { path: "environment/environment.toml", content: DEFINITION }),
     toolCallTurn("write_file", { path: "environment/Containerfile", content: `FROM ${base.image}\n` }),
@@ -269,9 +269,9 @@ async function implementationTask(h: Harness, title: string, check: string, vers
   const id = createWorkItemId();
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id)
-    VALUES (${id}, 'Task', 'Pending', ${title}, ${RUN_SCOPE_AD_HOC}, ${h.projectId}, 'implementation', ${randomUUID()}),
-           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, ${RUN_SCOPE_AD_HOC}, ${h.projectId}, 'check', ${randomUUID()})`);
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id)
+    VALUES (${id}, 'Task', 'Pending', ${title}, ${h.projectId}, 'implementation', ${randomUUID()}),
+           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, ${h.projectId}, 'check', ${randomUUID()})`);
   await new TaskCheckRepository(db).append({
     projectId: h.projectId,
     taskId: id,

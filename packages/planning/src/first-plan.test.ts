@@ -3,7 +3,8 @@ import { SchemaValidationError } from "@ashara/llm-gateway";
 import type { ContextualLlm } from "@ashara/llm-gateway";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
-import { FirstPlanner, northStarOf, visionItemsOf } from "./first-plan.js";
+import { planningVisionOf } from "./acl/engagement-acl.js";
+import { FirstPlanner } from "./first-plan.js";
 import type { FirstPlanStore } from "./first-plan.js";
 
 function roleRow(roleId: string, name: string, capabilities: string[]) {
@@ -23,15 +24,12 @@ function awaiting(
   planAttempts = 3,
   rosterRows: unknown = ROSTER_ROWS,
   scopeBoundaries: unknown = ["In: booking a class"],
+  inferences: unknown = [],
 ) {
   return {
     projectId,
     projectName: "Studio booking",
-    visionVersion: 1,
-    visionText: "A booking page.",
-    summary: "A booking page.",
-    scopeBoundaries,
-    inferences: [],
+    vision: { projectId, version: 1, visionText: "A booking page.", summary: "A booking page.", scopeBoundaries, inferences, openQuestions: [] },
     planAttempts,
     planLastError,
     rosterRows,
@@ -116,19 +114,23 @@ describe("FirstPlanner decomposition ladder", () => {
   });
 });
 
+/** A stored vision version, as the store hands it over, with what planning reads of it varied. */
+function stored(projectId: ProjectId, version: number, summary: string, scopeBoundaries: unknown, inferences: unknown) {
+  return { projectId, version, visionText: summary, summary, scopeBoundaries, inferences, openQuestions: [] };
+}
+
+const visionItemsOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).items;
+const northStarOf = (vision: ReturnType<typeof stored>) => planningVisionOf(vision).northStar;
+
 describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
   test("each scope boundary and each assumption is an item; a Stated one by the decision the answer made", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000024", "test");
-    const items = visionItemsOf({
-      projectId,
-      visionVersion: 2,
-      summary: "A booking page.",
-      scopeBoundaries: ["In: booking", "Out: payments"],
-      inferences: [
+    const items = visionItemsOf(
+      stored(projectId, 2, "A booking page.", ["In: booking", "Out: payments"], [
         { statement: "Classes hold twenty", status: "Inferred" },
-        { statement: "Bookings close an hour before", status: "Stated", clientAnswer: { question: "When?", answer: "An hour before" } },
-      ],
-    });
+        { statement: "Bookings close an hour before", status: "Stated", clientAnswer: { messageId: "m1", question: "When?", answer: "An hour before" } },
+      ]),
+    );
 
     // Records written before kinds: placed by order, unclassified, never shown to the client.
     expect(items).toEqual([
@@ -142,7 +144,7 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
   // ADR-074 addendum 2 d89: an assumption is cited by its key in the vision, with its kind and standing.
   test("an assumption is the item of its key, with the kind and standing its record holds; a repeated key is refused", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
-    const reading = (inferences: unknown) => ({ projectId, visionVersion: 3, summary: "A store.", scopeBoundaries: ["In: put"], inferences });
+    const reading = (inferences: unknown) => stored(projectId, 3, "A store.", ["In: put"], inferences);
     expect(
       visionItemsOf(
         reading([
@@ -169,16 +171,8 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
   // is neither value is an unreadable vision, never an assumption the client was not shown.
   test("a scope line carries its recorded side, and a malformed disclosure makes the vision unreadable", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");
-    const reading = (inferences: unknown) => ({
-      projectId,
-      visionVersion: 2,
-      summary: "A store.",
-      scopeBoundaries: [
-        { text: "put and get", side: "in" },
-        { text: "any network service", side: "out" },
-      ],
-      inferences,
-    });
+    const reading = (inferences: unknown) =>
+      stored(projectId, 2, "A store.", [{ text: "put and get", side: "in" }, { text: "any network service", side: "out" }], inferences);
     expect(visionItemsOf(reading([])).map((item) => (item.type === "scope" ? [item.id, item.side] : []))).toEqual([
       ["S1", "in"],
       ["S2", "out"],
@@ -195,7 +189,9 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000026", "test");
     const blocked: Blocked = [];
-    const unreadable = { ...awaiting(projectId, null, 0), inferences: [{ key: "A1", statement: "x", status: "Inferred", kind: "client-visible", disclosed: "emailed" }] };
+    const unreadable = awaiting(projectId, null, 0, ROSTER_ROWS, ["In: booking a class"], [
+      { key: "A1", statement: "x", status: "Inferred", kind: "client-visible", disclosed: "emailed" },
+    ]);
     const store: FirstPlanStore = { ...storeWith([], blocked), projectsAwaitingPlan: async () => [unreadable] };
 
     const outcomes = await new FirstPlanner({ llm, store }).runPending();

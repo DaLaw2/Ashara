@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database, DbHandle } from "../connection.js";
-import { suiteReviewFindings } from "../schema.js";
+import { suiteReviewFindings } from "../schema/index.js";
 
 // Quality's record of the reviews of plan revisions' check suites (migration 044): each review
 // that found problems is one row per check task it named.

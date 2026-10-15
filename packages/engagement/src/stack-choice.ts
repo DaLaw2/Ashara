@@ -1,6 +1,7 @@
-import { z } from "zod";
 import { projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
+import type { StoredVision, VisionAppend } from "./vision.js";
 
 // The stack the team chose in Sprint 0, made visible to the client (story s-platform-role-m1).
 // Engagement owns the vision: the environment role's statement becomes an Inferred assumption in a
@@ -14,14 +15,12 @@ interface DueStackChoice {
   readonly taskId: string;
   readonly statement: string;
   /** The project's current vision, as stored; null when it has none. */
-  readonly vision: { readonly version: number; readonly inferences: unknown } | null;
+  readonly vision: StoredVision | null;
 }
 
 interface StackChoiceWrite {
   readonly projectId: ProjectId;
-  readonly basedOnVersion: number;
-  readonly inferences: readonly unknown[];
-  readonly changeReason: string;
+  readonly vision: VisionAppend;
   readonly report: string;
 }
 
@@ -29,8 +28,8 @@ interface StackChoiceWrite {
 export interface StackChoiceStore {
   dueStackChoices(): Promise<readonly DueStackChoice[]>;
   /**
-   * Posts the report and appends the vision version after `basedOnVersion` together, in one
-   * transaction; a project already reported on gets nothing new.
+   * Posts the report and appends the vision version after the one it was composed against together,
+   * in one transaction; a project already reported on gets nothing new.
    */
   recordStackChoice(write: StackChoiceWrite): Promise<"recorded" | "already-reported">;
   /** Blocks the project and records why; a project already blocked keeps its first cause. */
@@ -47,12 +46,6 @@ export interface LiaisonStackChoices {
   runPending(): Promise<readonly StackChoiceOutcome[]>;
 }
 
-// Intake writes an array of keyed Inferred records. Any other shape (the map rows the deleted CLI
-// path wrote) cannot take a keyed assumption without rewriting what the client was told.
-const StoredInferencesSchema = z.array(
-  z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), status: z.string().min(1) }),
-);
-
 /** The project's vision cannot take the stack choice as an Inferred assumption. */
 class StackChoiceVisionUnusable extends Error {
   constructor(
@@ -62,18 +55,6 @@ class StackChoiceVisionUnusable extends Error {
     super(`project ${projectId}: the stack choice cannot be recorded as an assumption: ${detail}; no report is posted`);
     this.name = "StackChoiceVisionUnusable";
   }
-}
-
-const ASSUMPTION_KEY = /^A(\d+)$/;
-
-/** The next free A<n> key after every key already in the vision. */
-function nextAssumptionKey(inferences: readonly { readonly key?: string | undefined }[]): string {
-  let highest = inferences.length;
-  for (const inference of inferences) {
-    const match = inference.key === undefined ? null : ASSUMPTION_KEY.exec(inference.key);
-    if (match?.[1] !== undefined) highest = Math.max(highest, Number(match[1]));
-  }
-  return `A${highest + 1}`;
 }
 
 /**
@@ -111,36 +92,27 @@ export class StackChoiceReports implements LiaisonStackChoices {
         continue;
       }
       const kind = await this.store.recordStackChoice(write);
-      outcomes.push({ kind, projectId: due.projectId, visionVersion: write.basedOnVersion + 1 });
+      outcomes.push({ kind, projectId: due.projectId, visionVersion: write.vision.basedOnVersion + 1 });
     }
     return outcomes;
   }
 
   private compose(due: DueStackChoice): StackChoiceWrite {
     if (due.vision === null) throw new StackChoiceVisionUnusable(due.projectId, "the project has no vision");
-    const parsed = StoredInferencesSchema.safeParse(due.vision.inferences);
-    if (!parsed.success) {
-      throw new StackChoiceVisionUnusable(
-        due.projectId,
-        `vision v${due.vision.version} inferences are not a list of Inferred records: ${z.prettifyError(parsed.error)}`,
-      );
+    try {
+      const vision = Vision.read(due.vision).appendInferred({
+        statement: due.statement,
+        rationale: `The team chose this when it set up the project environment (Sprint 0 task ${due.taskId}); the client has not confirmed it.`,
+        // How the product is built, not what it does for the client (ADR-074 addendum 2 d89 E); this
+        // choice's own report tells the client of it.
+        kind: "internal-design",
+        disclosed: "reported",
+        changeReason: (key) => `stack chosen by Sprint 0 task ${due.taskId}, recorded as Inferred assumption ${key}`,
+      });
+      return { projectId: due.projectId, vision, report: stackChoiceReport(due.statement) };
+    } catch (err) {
+      if (!(err instanceof VisionUnreadable || err instanceof VisionChangeRefused)) throw err;
+      throw new StackChoiceVisionUnusable(due.projectId, `vision v${due.vision.version}: ${err.message}`);
     }
-    const assumption = {
-      key: nextAssumptionKey(parsed.data),
-      statement: due.statement,
-      rationale: `The team chose this when it set up the project environment (Sprint 0 task ${due.taskId}); the client has not confirmed it.`,
-      status: "Inferred",
-      // How the product is built, not what it does for the client (ADR-074 addendum 2 d89 E); this
-      // choice's own report tells the client of it.
-      kind: "internal-design",
-      disclosed: "reported",
-    };
-    return {
-      projectId: due.projectId,
-      basedOnVersion: due.vision.version,
-      inferences: [...parsed.data, assumption],
-      changeReason: `stack chosen by Sprint 0 task ${due.taskId}, recorded as Inferred assumption ${assumption.key}`,
-      report: stackChoiceReport(due.statement),
-    };
   }
 }

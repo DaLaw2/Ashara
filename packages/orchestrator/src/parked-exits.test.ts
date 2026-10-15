@@ -16,7 +16,6 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
     level: "Task",
     status: "Blocked",
     title: "t",
-    runScope: "test",
     projectId: PROJECT,
     dispatchCount: 1,
     workKind: "implementation",

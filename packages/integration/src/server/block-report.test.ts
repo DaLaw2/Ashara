@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, postPlanReport, ProjectRepository, SuiteReviewFindingRepository } from "@ashara/db";
 import { BlockReports } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
-import { RUN_SCOPE_AD_HOC, SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 
@@ -181,8 +181,8 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
 async function workItem(projectId: ProjectId, title: string, taskSpec: unknown = null): Promise<string> {
   const id = randomUUID();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id)
-    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify(taskSpec)}::jsonb, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id)
+    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify(taskSpec)}::jsonb, ${projectId})`);
   return id;
 }
 

@@ -61,7 +61,6 @@ export interface CreateBulkPlanDeps {
    * caller's transaction, so creation goes through PlanningService.
    */
   readonly workItemRepo: WorkItemRepository;
-  readonly runScope: string;
   /** The project every created item belongs to. */
   readonly projectId: ProjectId;
 }
@@ -90,7 +89,6 @@ export async function createBulkPlan(
     const item = createPendingWorkItem(
       level,
       spec.title,
-      deps.runScope,
       deps.projectId,
       parentRealId,
       spec.description,

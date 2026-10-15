@@ -1,8 +1,8 @@
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
+import { clientMessages, projects, workItems } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { PROJECT_STATUSES, parseProjectId, type ProjectId } from "@ashara/shared";
-import type { Database } from "../connection.js";
-import { clientMessages, projects, workItems } from "../schema.js";
 import { ClientMessageRepository } from "./client-message.js";
 
 // The client's stop (migration 028). The Liaison consumes each inbound 'stop',

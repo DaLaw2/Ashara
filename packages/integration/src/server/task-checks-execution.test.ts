@@ -27,7 +27,7 @@ import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { FailureRouter, classifyFailure } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 
@@ -99,9 +99,9 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
   const checkTitle = `Write the checks for "${title}"`;
   const checkSpec = { goal: checkTitle, origin: "check", checksFor: implementationId } as const;
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec)
-    VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
-           (${checkId}, 'Task', 'InProgress', ${checkTitle}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()},
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
+    VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
+           (${checkId}, 'Task', 'InProgress', ${checkTitle}, ${projectId}, 'check', ${randomUUID()},
             ${JSON.stringify(checkSpec)}::jsonb)`);
   await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${implementationId}, ${checkId}), (${checkId}, ${foundationTaskId})`);
   const descriptor = (id: WorkItemId, taskTitle: string, workKind: WorkKind, taskSpec?: TaskDescriptor["taskSpec"]): TaskDescriptor => ({
@@ -160,7 +160,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", inferences: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", assumptions: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
@@ -243,15 +243,15 @@ beforeAll(async () => {
   await git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
   foundation = await git("rev-parse", "main");
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
-    VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${RUN_SCOPE_AD_HOC}, ${projectId},
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec, merge_commit)
+    VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${projectId},
             'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   // The product's layout here is the environment's own tree, whose build ("true") passes.
   foundationTaskId = createWorkItemId();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
-    VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the product''s layout', ${RUN_SCOPE_AD_HOC}, ${projectId},
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec, merge_commit)
+    VALUES (${foundationTaskId}, 'Task', 'Completed', 'Set up the product''s layout', ${projectId},
             'implementation', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
@@ -815,8 +815,8 @@ describe("post-merge regression suite", () => {
     const scaffoldId = createWorkItemId();
     const taskSpec = { goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" } as const;
     await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec)
-      VALUES (${scaffoldId}, 'Task', 'InProgress', 'Set up the product layout', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation',
+      INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
+      VALUES (${scaffoldId}, 'Task', 'InProgress', 'Set up the product layout', ${projectId}, 'implementation',
               ${randomUUID()}, ${JSON.stringify(taskSpec)}::jsonb)`);
     const mainBefore = await git("rev-parse", "main");
 

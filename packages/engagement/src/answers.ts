@@ -4,6 +4,8 @@ import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import { classifyReadFailure } from "./read-failure.js";
+import { Vision, VisionUnreadable } from "./vision.js";
+import type { StoredVision, VisionAppend, VisionAssumption } from "./vision.js";
 
 // The client's answers to the Liaison's questions (story s-liaison-intake-m1, task
 // t-vision-answers-reach-plan). Each question names the assumption work proceeds on
@@ -33,19 +35,14 @@ interface OpenAnswer {
   /** Whether the project's first plan had been written when the answer was read. */
   readonly planned: boolean;
   /** The project's current vision, as stored; null when it has none. */
-  readonly vision: { readonly version: number; readonly inferences: unknown; readonly openQuestions: unknown } | null;
+  readonly vision: StoredVision | null;
 }
 
 interface AnswerWrite {
   readonly answerId: string;
   readonly projectId: ProjectId;
   readonly planned: boolean;
-  readonly vision: {
-    readonly basedOnVersion: number;
-    readonly inferences: readonly unknown[];
-    readonly openQuestions: readonly unknown[];
-    readonly changeReason: string;
-  } | null;
+  readonly vision: VisionAppend | null;
   readonly replanReport: string | null;
 }
 
@@ -102,16 +99,6 @@ export interface LiaisonAnswers {
   runPending(): Promise<readonly AnswerOutcome[]>;
 }
 
-// Intake writes the assumptions as keyed records and each open question with the key
-// of the assumption it adopted. Other fields of a record (rationale, a stack choice's)
-// are carried over unchanged.
-const StoredInferencesSchema = z.array(
-  z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), status: z.string().min(1) }),
-);
-const StoredOpenQuestionsSchema = z.array(
-  z.looseObject({ messageId: z.string().min(1), text: z.string().min(1), assumptionKey: z.string().min(1) }),
-);
-
 /** The project's record cannot take this answer: the answer is left unconsumed and the project blocked. */
 class AnswerVisionUnusable extends Error {
   constructor(
@@ -161,14 +148,18 @@ const AnswerReadingSchema = z.discriminatedUnion("verdict", [
 
 type AnswerReading = z.infer<typeof AnswerReadingSchema>;
 
+/** The question the answer replies to, as the vision holds it open: it names the assumption it adopted. */
+interface AnsweredQuestion {
+  readonly messageId: string;
+  readonly text: string;
+  readonly assumptionKey: string;
+}
+
 interface AnswerContext {
   readonly answer: OpenAnswer;
-  readonly vision: { readonly version: number };
-  readonly inferences: z.infer<typeof StoredInferencesSchema>;
-  readonly openQuestions: z.infer<typeof StoredOpenQuestionsSchema>;
-  readonly question: z.infer<typeof StoredOpenQuestionsSchema>[number];
-  readonly assumptionIndex: number;
-  readonly assumption: z.infer<typeof StoredInferencesSchema>[number];
+  readonly vision: Vision;
+  readonly question: AnsweredQuestion;
+  readonly assumption: VisionAssumption;
 }
 
 function buildAnswerPrompt(context: AnswerContext): string {
@@ -301,7 +292,7 @@ export class ClientAnswers implements LiaisonAnswers {
       if (!readingStillApplies(context, moved)) {
         console.warn(
           `[liaison-answer] answer ${answer.id} (project ${answer.projectId}): ${recorded.detail}; the question or its ` +
-            `assumption changed, so the answer is read again against vision v${moved.vision.version}`,
+            `assumption changed, so the answer is read again against vision v${moved.vision.current.version}`,
         );
         reading = await this.interpret(moved);
         if (reading.kind === "failed") return reading.outcome;
@@ -371,7 +362,7 @@ function recordedOutcome(context: AnswerContext, reading: AnswerReading, write: 
     ...base,
     assumptionKey: context.question.assumptionKey,
     verdict: reading.verdict,
-    visionVersion: context.vision.version + 1,
+    visionVersion: context.vision.current.version + 1,
     replanRequested: write.replanReport !== null,
   };
 }
@@ -390,30 +381,21 @@ function contextOf(answer: OpenAnswer): AnswerContext {
   const unusable = (detail: string) => new AnswerVisionUnusable(answer.id, answer.projectId, detail);
   if (answer.vision === null) throw unusable("the project has no vision");
   const { version } = answer.vision;
-  const inferences = StoredInferencesSchema.safeParse(answer.vision.inferences);
-  if (!inferences.success) {
-    throw unusable(`vision v${version} inferences are not a list of assumption records: ${z.prettifyError(inferences.error)}`);
+  let vision: Vision;
+  try {
+    vision = Vision.read(answer.vision);
+  } catch (err) {
+    if (!(err instanceof VisionUnreadable)) throw err;
+    throw unusable(`vision v${version} ${err.field} are not readable: ${err.issues}`);
   }
-  const openQuestions = StoredOpenQuestionsSchema.safeParse(answer.vision.openQuestions);
-  if (!openQuestions.success) {
-    throw unusable(`vision v${version} open questions are not readable: ${z.prettifyError(openQuestions.error)}`);
-  }
-  const question = openQuestions.data.find((q) => q.messageId === answer.questionId);
-  if (question === undefined) throw unusable(`question ${answer.questionId} is not open in vision v${version}`);
-  const assumptionIndex = inferences.data.findIndex((a) => a.key === question.assumptionKey);
-  const assumption = inferences.data[assumptionIndex];
+  const open = vision.current.openQuestions.find((q) => q.messageId === answer.questionId);
+  if (open === undefined || open.messageId === null || open.assumptionKey === null) throw unusable(`question ${answer.questionId} is not open in vision v${version}`);
+  const question: AnsweredQuestion = { messageId: open.messageId, text: open.text, assumptionKey: open.assumptionKey };
+  const assumption = vision.current.assumptions.find((a) => a.keyed && a.id === question.assumptionKey);
   if (assumption === undefined) {
     throw unusable(`question ${answer.questionId} names assumption ${question.assumptionKey}, which vision v${version} does not hold`);
   }
-  return {
-    answer,
-    vision: { version },
-    inferences: inferences.data,
-    openQuestions: openQuestions.data,
-    question,
-    assumptionIndex,
-    assumption,
-  };
+  return { answer, vision, question, assumption };
 }
 
 function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWrite {
@@ -422,34 +404,23 @@ function composeWrite(context: AnswerContext, reading: AnswerReading): AnswerWri
   if (reading.verdict === "does-not-answer") return { ...base, vision: null, replanReport: null };
 
   const statement = reading.verdict === "confirms" ? context.assumption.statement : reading.statement;
-  const stated = {
-    ...context.assumption,
-    statement,
-    ...(reading.verdict === "changes" ? { kind: reading.kind } : {}),
-    rationale:
-      reading.verdict === "confirms"
-        ? `The client confirmed this in answer to "${context.question.text}".`
-        : `The client's answer to "${context.question.text}" replaced the assumption "${context.assumption.statement}".`,
-    status: "Stated",
-    clientAnswer: {
+  const key = context.question.assumptionKey;
+  return {
+    ...base,
+    vision: context.vision.stateAssumption(key, {
       messageId: answer.id,
       questionMessageId: answer.questionId,
       question: context.question.text,
       answer: answer.body,
-      // The delivered report says from it whether the client confirmed or changed the assumption (d95 a).
       verdict: reading.verdict,
-    },
-  };
-  const inferences = context.inferences.map((a, i) => (i === context.assumptionIndex ? stated : a));
-  const key = context.question.assumptionKey;
-  return {
-    ...base,
-    vision: {
-      basedOnVersion: context.vision.version,
-      inferences,
-      openQuestions: context.openQuestions.filter((q) => q.messageId !== answer.questionId),
+      statement,
+      kind: reading.verdict === "changes" ? reading.kind : null,
+      rationale:
+        reading.verdict === "confirms"
+          ? `The client confirmed this in answer to "${context.question.text}".`
+          : `The client's answer to "${context.question.text}" replaced the assumption "${context.assumption.statement}".`,
       changeReason: `client answer ${answer.id} ${reading.verdict === "confirms" ? "confirmed" : "changed"} assumption ${key}; now Stated`,
-    },
+    }),
     // A confirmed assumption leaves the plan as it is; a changed one it was built on does not.
     replanReport: answer.planned && reading.verdict === "changes" ? replanReport(context, statement) : null,
   };

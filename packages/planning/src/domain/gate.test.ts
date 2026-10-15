@@ -55,7 +55,6 @@ function task(status: WorkItemStatus, title: string, projectId: ProjectId = PROJ
     level: "Task",
     status,
     title,
-    runScope: "test-run",
     projectId,
     dispatchCount: 0,
     workKind: null,

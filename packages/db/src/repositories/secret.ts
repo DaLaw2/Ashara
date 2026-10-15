@@ -1,6 +1,6 @@
 import { asc, eq, sql } from "drizzle-orm";
 import type { DbHandle } from "../connection.js";
-import { secrets } from "../schema.js";
+import { secrets } from "../schema/index.js";
 
 /** One encrypted secret as stored. Plaintext never reaches this layer. */
 export interface EncryptedSecretRow {

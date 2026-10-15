@@ -1,12 +1,14 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { findPriceColumnDefaults } from "./price-defaults.js";
 
 describe("findPriceColumnDefaults", () => {
-  test("the schema has no default on a price or cost column", () => {
-    const schema = readFileSync(join(import.meta.dirname, "..", "packages", "db", "src", "schema.ts"), "utf-8");
-    expect(findPriceColumnDefaults(schema)).toEqual([]);
+  test("no schema module has a default on a price or cost column", () => {
+    const dir = join(import.meta.dirname, "..", "packages", "db", "src", "schema");
+    const modules = readdirSync(dir).filter((name) => name.endsWith(".ts"));
+    expect(modules).toContain("model-access.ts");
+    for (const name of modules) expect(findPriceColumnDefaults(readFileSync(join(dir, name), "utf-8"))).toEqual([]);
   });
 
   test("reports a default on a price column, also across continuation lines, and ignores other columns", () => {

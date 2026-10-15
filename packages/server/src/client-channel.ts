@@ -1,10 +1,6 @@
 import { z } from "zod";
-import type {
-  ClientMessageRepository,
-  ClientRepository,
-  CreatedTender,
-  ProjectRepository,
-} from "@ashara/db";
+import type { ClientMessageRepository, CreatedTender } from "@ashara/engagement";
+import type { ClientRepository, ProjectRepository } from "@ashara/db";
 import {
   ClientPostSchema,
   TenderSchema,

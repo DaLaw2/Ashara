@@ -3,10 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import {
-  ClientMessageRepository,
   ClientRepository,
   createDb,
-  createProjectWithTender,
   DEFAULT_DATABASE_URL,
   EventStoreRepository,
   listDuePlanReports,
@@ -15,10 +13,9 @@ import {
   ProjectRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { ClientStops } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -46,15 +43,15 @@ async function projectWith(tasks: ReadonlyArray<readonly [string, string, ("merg
   ourProjects.add(project.id);
   const epicId = randomUUID();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, title, run_scope, project_id)
-    VALUES (${epicId}, 'Epic', 'Epic', ${RUN_SCOPE_AD_HOC}, ${project.id})`);
+    INSERT INTO work_items (id, level, title, project_id)
+    VALUES (${epicId}, 'Epic', 'Epic', ${project.id})`);
   const taskIds: string[] = [];
   for (const [title, status, merged] of tasks) {
     const taskId = randomUUID();
     taskIds.push(taskId);
     await db.execute(sql`
-      INSERT INTO work_items (id, level, status, parent_id, title, run_scope, project_id)
-      VALUES (${taskId}, 'Task', ${status}, ${epicId}, ${title}, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
+      INSERT INTO work_items (id, level, status, parent_id, title, project_id)
+      VALUES (${taskId}, 'Task', ${status}, ${epicId}, ${title}, ${project.id})`);
     if (merged === "merged") {
       await new WorkItemRepository(db).recordMergeCommit(taskId, randomBytes(20).toString("hex"), "merged");
       await db.execute(sql`INSERT INTO dev_sessions (id, task_id, phase) VALUES (${randomUUID()}, ${taskId}, 'Preparing')`);

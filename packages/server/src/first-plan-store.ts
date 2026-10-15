@@ -14,7 +14,7 @@ import type { DbTransaction, createDb } from "@ashara/db";
 import type { PlanReportStore } from "@ashara/engagement";
 import { createBulkPlan } from "@ashara/planning";
 import type { FirstPlanStore } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, type ProjectId } from "@ashara/shared";
+import type { ProjectId } from "@ashara/shared";
 import { adaptWorkItemRepo } from "./work-item-adapter.js";
 
 /** An owner was named for a temp id the plan did not write. */
@@ -37,11 +37,7 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
       return Promise.all(rows.map(async (row) => ({
         projectId: row.projectId,
         projectName: row.projectName,
-        visionVersion: row.vision.version,
-        visionText: row.vision.visionText,
-        summary: row.vision.summary,
-        scopeBoundaries: row.vision.scopeBoundaries,
-        inferences: row.vision.inferences,
+        vision: row.vision,
         planAttempts: row.planAttempts,
         planLastError: row.planLastError,
         rosterRows: await latestRosterRoles(db, row.projectId),
@@ -59,10 +55,6 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
           const plan = await createBulkPlan(
             {
               workItemRepo: adaptWorkItemRepo(workItemRepo),
-              // The loop's run id is not handed to planning, so the first plan is written
-              // under RUN_SCOPE_AD_HOC. This is the only work-item writer, and nothing
-              // reads run_scope beyond parsing it.
-              runScope: RUN_SCOPE_AD_HOC,
               projectId: write.projectId,
             },
             write.items,

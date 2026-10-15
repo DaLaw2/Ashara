@@ -1,18 +1,30 @@
 export { DEFAULT_DATABASE_URL, createDb, createPgPool } from "./connection.js";
-export type { DbTransaction, PoolFactory } from "./connection.js";
+export type { Database, DbHandle, DbTransaction, PoolFactory } from "./connection.js";
 
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
 export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-claim.js";
 
+export {
+  PROJECT_BLOCK_KINDS,
+  acceptanceSweeps,
+  checkDisputes,
+  clientMessages,
+  domainEvents,
+  planRepairs,
+  projectBlocks,
+  projects,
+  replanRequests,
+  taskChecks,
+  visionDocuments,
+  workItems,
+} from "./schema/index.js";
+
 export { WorkItemRepository } from "./repositories/work-item.js";
 export { DevSessionRepository } from "./repositories/dev-session.js";
 export { readRunEvidence } from "./repositories/run-report.js";
-export { VisionRepository } from "./repositories/vision.js";
-export { ProjectRepository } from "./repositories/project.js";
-export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
-export type { CreatedTender } from "./repositories/client-message.js";
-export { recordTenderIntake, closeTenderAfterFailedIntake } from "./repositories/tender-intake.js";
+export { ProjectRepository, noOpenStop } from "./repositories/project.js";
+export type { ProjectRecord } from "./repositories/project.js";
 export {
   listProjectsAwaitingFirstPlan,
   withFirstPlanTransaction,
@@ -28,20 +40,13 @@ export {
   recordReplanFailure,
   withPlanRevisionTransaction,
 } from "./repositories/replan.js";
-export { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
-export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
-export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
-export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
-export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
 export {
-  listDueDeliveredReports,
+  completedGoalTasks,
   listProjectsReadyForAcceptance,
-  postDeliveredReport,
   recordAcceptance,
   recordAcceptanceDefect,
   recordAcceptanceSweepFault,
 } from "./repositories/acceptance.js";
-export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { ClientSessionRepository } from "./repositories/client-session.js";
 export { ClientRepository } from "./repositories/client.js";
 export { ClientLoginFailureRepository } from "./repositories/client-login-failure.js";
@@ -56,7 +61,7 @@ export type { LlmCallMeasurement } from "./repositories/llm-call.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
-export { SuiteReviewFindingRepository } from "./repositories/suite-review.js";
+export { SuiteReviewFindingRepository, blockingReview } from "./repositories/suite-review.js";
 export {
   MIGRATIONS_DIR,
   MigrationDriftError,

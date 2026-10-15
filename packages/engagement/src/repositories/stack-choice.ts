@@ -1,20 +1,14 @@
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { clientMessages, noOpenStop, projects, workItems } from "@ashara/db";
+import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { clientMessages, projects, visionDocuments, workItems } from "../schema.js";
-import { noOpenStop } from "./project.js";
+import type { StoredVision, VisionAppend } from "../vision.js";
+import { VisionRepository } from "./vision.js";
 
 // The stack Sprint 0 chose, told to the client once (migration 034): a completed environment task
 // with a statement is due while its project has no 'stack-choice' report.
 
 const SUBJECT = "stack-choice";
-
-/** The vision version a stack choice is appended after, as stored. */
-interface StoredVision {
-  readonly version: number;
-  /** vision_documents.inferences as stored; Engagement parses it. */
-  readonly inferences: unknown;
-}
 
 interface DueStackChoiceRow {
   readonly projectId: ProjectId;
@@ -42,6 +36,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
+  const visions = new VisionRepository(db);
   const due: DueStackChoiceRow[] = [];
   for (const candidate of candidates) {
     const [task] = await db
@@ -61,18 +56,8 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
       .orderBy(desc(workItems.updatedAt), desc(workItems.id))
       .limit(1);
     if (task === undefined || task.statement === null) continue;
-    const [vision] = await db
-      .select({ version: visionDocuments.version, inferences: visionDocuments.inferences })
-      .from(visionDocuments)
-      .where(eq(visionDocuments.projectId, candidate.id))
-      .orderBy(desc(visionDocuments.version))
-      .limit(1);
-    due.push({
-      projectId: parseProjectId(candidate.id, "projects.id"),
-      taskId: task.id,
-      statement: task.statement,
-      vision: vision === undefined ? null : { version: vision.version, inferences: vision.inferences },
-    });
+    const projectId = parseProjectId(candidate.id, "projects.id");
+    due.push({ projectId, taskId: task.id, statement: task.statement, vision: await visions.getCurrent(projectId) });
   }
   return due;
 }
@@ -94,16 +79,14 @@ class StackChoiceVisionMoved extends Error {
 
 interface StackChoiceWrite {
   readonly projectId: ProjectId;
-  /** The vision version the new one is appended after; every field but the inferences is copied from it. */
-  readonly basedOnVersion: number;
-  readonly inferences: unknown;
-  readonly changeReason: string;
+  /** The vision version appended after the one the choice was composed against. */
+  readonly vision: VisionAppend;
   readonly report: string;
 }
 
 /**
  * In one transaction: posts the stack-choice report and appends the next vision version, a copy of
- * `basedOnVersion` with the new inferences. A project already reported on gets nothing new
+ * the one it was composed against with the new inferences. A project already reported on gets nothing new
  * ("already-reported"): the unique index on (project_id, reports_on) admits one report.
  */
 export async function recordStackChoice(db: Database, write: StackChoiceWrite): Promise<"recorded" | "already-reported"> {
@@ -115,26 +98,8 @@ export async function recordStackChoice(db: Database, write: StackChoiceWrite): 
       .returning({ id: clientMessages.id });
     if (inserted.length === 0) return "already-reported";
 
-    const [current] = await tx
-      .select()
-      .from(visionDocuments)
-      .where(eq(visionDocuments.projectId, write.projectId))
-      .orderBy(desc(visionDocuments.version))
-      .limit(1);
-    if (current === undefined || current.version !== write.basedOnVersion) {
-      throw new StackChoiceVisionMoved(write.projectId, write.basedOnVersion, current?.version ?? null);
-    }
-    await tx.insert(visionDocuments).values({
-      projectId: write.projectId,
-      version: current.version + 1,
-      visionText: current.visionText,
-      summary: current.summary,
-      inferences: write.inferences,
-      scopeBoundaries: current.scopeBoundaries,
-      confirmedDirections: current.confirmedDirections,
-      openQuestions: current.openQuestions,
-      changeReason: write.changeReason,
-    });
+    const appended = await new VisionRepository(tx).append(write.projectId, write.vision);
+    if (appended.kind === "moved") throw new StackChoiceVisionMoved(write.projectId, write.vision.basedOnVersion, appended.current);
     return "recorded";
   });
 }

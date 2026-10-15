@@ -26,7 +26,7 @@ import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { FailureRouter, PlanningService, classifyFailure, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
@@ -98,10 +98,10 @@ async function checkedTask(title: string, check: { readonly name: string; readon
   const id = createWorkItemId();
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, dispatch_count)
-    VALUES (${id}, 'Task', 'InProgress', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()},
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec, dispatch_count)
+    VALUES (${id}, 'Task', 'InProgress', ${title}, ${projectId}, 'implementation', ${randomUUID()},
             ${JSON.stringify({ goal: title, capability: "Strong" })}::jsonb, 1),
-           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()},
+           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, ${projectId}, 'check', ${randomUUID()},
             ${JSON.stringify({ goal: "checks", origin: "check", checksFor: id })}::jsonb, 1)`);
   await new TaskCheckRepository(db).append({
     projectId,
@@ -155,7 +155,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", inferences: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", assumptions: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
@@ -234,8 +234,8 @@ beforeAll(async () => {
   await git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
   foundation = await git("rev-parse", "main");
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id, task_spec, merge_commit)
-    VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${RUN_SCOPE_AD_HOC}, ${projectId},
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec, merge_commit)
+    VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Set up the project environment', ${projectId},
             'environment', ${randomUUID()}, ${JSON.stringify({ goal: "Set up the project environment", origin: "sprint0", checkedBy: "substrate" })}::jsonb,
             ${foundation})`);
   substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });

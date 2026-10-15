@@ -26,6 +26,8 @@ export type { RawFailureContext } from "./failure-router.js";
 
 export { createBulkPlan } from "./bulk-plan.js";
 
+export { assignmentIntentOf } from "./acl/engagement-acl.js";
+
 export { FirstPlanner } from "./first-plan.js";
 export type { FirstPlanOutcome, FirstPlanStore, FirstPlanning } from "./first-plan.js";
 

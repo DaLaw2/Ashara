@@ -1,4 +1,4 @@
-import { listUnconsumedStops, recordClientStop } from "@ashara/db";
+import { listUnconsumedStops, recordClientStop } from "@ashara/engagement";
 import type { createDb } from "@ashara/db";
 import type { ClientStopStore } from "@ashara/engagement";
 

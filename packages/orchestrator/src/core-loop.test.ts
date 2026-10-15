@@ -19,12 +19,11 @@ type SpendCapPort = CoreLoopDeps["spendCap"];
 const mockProcessTask = vi.fn<(
   deps: CoreLoopDeps,
   task: WorkItem,
-  runScope: string,
 ) => Promise<TaskResult>>();
 
 vi.mock("./execution.js", () => ({
-  processTask: (deps: CoreLoopDeps, task: WorkItem, runScope: string) =>
-    mockProcessTask(deps, task, runScope),
+  processTask: (deps: CoreLoopDeps, task: WorkItem) =>
+    mockProcessTask(deps, task),
   handleProcessingError: async (_deps: CoreLoopDeps, task: WorkItem) => ({
     taskId: task.id,
     status: "failed" as const,
@@ -58,7 +57,6 @@ function pendingTask(id: WorkItemId, title: string): WorkItem {
     level: "Task",
     status: "Pending",
     title,
-    runScope: "run-parallel-test",
     projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
     workKind: "implementation",

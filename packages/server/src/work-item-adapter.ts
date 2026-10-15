@@ -3,7 +3,6 @@ import {
   parseWorkItemLevel,
   parseWorkItemStatus,
   parseWorkItemJsonb,
-  parseRunScope,
   parseProjectId,
   parseWorkKind,
   parseWorkItemId,
@@ -33,7 +32,6 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     northStar: row.northStar ?? undefined,
     successCriteria: jsonb.successCriteria,
     blockedReason: jsonb.blockedReason,
-    runScope: parseRunScope(row.runScope),
     projectId: parseProjectId(row.projectId, "work_items.project_id"),
     dispatchCount: row.dispatchCount,
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
@@ -57,7 +55,6 @@ export function adaptWorkItemRepo(db: DbWorkItemRepository): WorkItemRepository 
         taskSpec: item.taskSpec ?? null,
         northStar: item.northStar ?? null,
         successCriteria: item.successCriteria ?? null,
-        runScope: item.runScope,
         projectId: item.projectId,
         // Both or neither (work_items_owner_whole): a task created with its owner carries both.
         workKind: item.workKind,

@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ATTEMPT_TERMINALS, PROJECT_STATUSES, WORK_ITEM_STATUSES } from "@ashara/shared";
 import { createDb, DEFAULT_DATABASE_URL } from "./connection.js";
-import { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
+import { PROJECT_BLOCK_KINDS } from "./schema/index.js";
 
 // The code's lifecycle lists against the CHECK constraints the migrations wrote: a member one
 // side has and the other lacks is either unwritable or unread.

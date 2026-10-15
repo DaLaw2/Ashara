@@ -18,11 +18,10 @@ import {
   LlmCallRepository,
   ProjectRepository,
   TaskCheckRepository,
-  VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
-import { StackChoiceReports } from "@ashara/engagement";
+import { StackChoiceReports, VisionRepository } from "@ashara/engagement";
 import type { StackChoiceStore } from "@ashara/engagement";
 import type { SessionStore, TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
@@ -30,7 +29,7 @@ import type { BaseCellReference } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
@@ -111,9 +110,9 @@ async function sprint0Task(): Promise<TaskDescriptor> {
   const id = createWorkItemId();
   const taskSpec = { goal: "Define and commit the project environment", origin: "sprint0", checkedBy: "substrate" } as const;
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id, work_kind, owner_role_id)
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${id}, 'Task', 'InProgress', 'Define and commit the project environment', ${JSON.stringify(taskSpec)}::jsonb,
-            ${RUN_SCOPE_AD_HOC}, ${projectId}, 'environment', ${randomUUID()})`);
+            ${projectId}, 'environment', ${randomUUID()})`);
   return {
     id,
     projectId,
@@ -132,9 +131,9 @@ async function environmentChangeTask(product: "present" | "absent"): Promise<Tas
   const title = `Environment change 1 (${product})`;
   const taskSpec = { goal: "Change the project environment as the requester needs", origin: "environment-change", checkedBy: "substrate", product } as const;
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, task_spec, run_scope, project_id, work_kind, owner_role_id)
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${id}, 'Task', 'InProgress', ${title}, ${JSON.stringify(taskSpec)}::jsonb,
-            ${RUN_SCOPE_AD_HOC}, ${projectId}, 'environment', ${randomUUID()})`);
+            ${projectId}, 'environment', ${randomUUID()})`);
   return { id, projectId, title, taskSpec, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
 }
 
@@ -146,9 +145,9 @@ async function implementationTask(check: string, environmentVersion: string, bas
   const id = createWorkItemId();
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id)
-    VALUES (${id}, 'Task', 'InProgress', 'Write hello.txt', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'implementation', ${randomUUID()}),
-           (${checkTaskId}, 'Task', 'Completed', 'Write the checks for "Write hello.txt"', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'check', ${randomUUID()})`);
+    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id)
+    VALUES (${id}, 'Task', 'InProgress', 'Write hello.txt', ${projectId}, 'implementation', ${randomUUID()}),
+           (${checkTaskId}, 'Task', 'Completed', 'Write the checks for "Write hello.txt"', ${projectId}, 'check', ${randomUUID()})`);
   await new TaskCheckRepository(db).append({
     projectId,
     taskId: id,
@@ -213,7 +212,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     sessionStore: sessions,
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
-    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", inferences: [] }) },
+    intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [] }) },
     cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
     llm: gateway,
     staffing: {
@@ -476,9 +475,9 @@ describe("Sprint 0", () => {
     // A later environment task's statement, recorded for another version.
     const OTHER = "A statement recorded for another environment version.";
     await db.execute(sql`
-      INSERT INTO work_items (id, level, status, title, run_scope, project_id, work_kind, owner_role_id,
+      INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id,
                               environment_statement, environment_statement_version, updated_at)
-      VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Change the environment', ${RUN_SCOPE_AD_HOC}, ${projectId}, 'environment',
+      VALUES (${createWorkItemId()}, 'Task', 'Completed', 'Change the environment', ${projectId}, 'environment',
               ${randomUUID()}, ${OTHER}, ${"f".repeat(64)}, now() + interval '1 hour')`);
 
     const chosen = await runTask(

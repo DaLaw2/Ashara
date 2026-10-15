@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { describeErrorChain } from "@ashara/shared";
-import * as schema from "./schema.js";
+import * as schema from "./schema/index.js";
 
 /**
  * The default DATABASE_URL when the environment does not provide one.

@@ -9,6 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ashara/engagement": "*",
     "@ashara/llm-gateway": "*",
     "@ashara/organization": "*",
     "@ashara/shared": "*",

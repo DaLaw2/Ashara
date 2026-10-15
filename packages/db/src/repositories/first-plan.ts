@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { projects, visionDocuments, workItems } from "../schema.js";
+import { projects, visionDocuments, workItems } from "../schema/index.js";
 import { WorkItemRepository } from "./work-item.js";
 import { noOpenStop } from "./project.js";
 

@@ -117,7 +117,7 @@ function rewriteInsert(table: string, rewrite: (param: string) => string): Query
  * stand-in task's text lists it (the stand-ins' plan cites scope lines only, and the suite review is
  * a structured call with no brief), so text-facts.test.ts holds the assumption-line clause.
  */
-export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"standing":"asked"`, `"standing":"stated"`));
+export const briefMisstatesStanding = rewriteInsert("dev_sessions", (param) => param.replaceAll(`"note":"Inferred; asked of the client, not yet answered;`, `"note":"Stated by the client;`));
 
 /** A delivered report that says the client was told of an assumption it asked them about (smoke2 D1's class). */
 export const deliveredReportMisstatesStanding = rewriteReport(

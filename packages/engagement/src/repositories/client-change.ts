@@ -1,7 +1,7 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
+import { clientMessages, domainEvents } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
-import type { Database } from "../connection.js";
-import { clientMessages, domainEvents } from "../schema.js";
 import { ClientMessageRepository } from "./client-message.js";
 
 // The client's change of direction (migration 016 kind 'change'). Until a change is applied to a

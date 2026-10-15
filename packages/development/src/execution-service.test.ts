@@ -328,13 +328,13 @@ interface Probe {
 /** The roster role the test's tasks are owned by: a UUID id, as roster_roles stores it, and a name. */
 const OWNER_ROLE = { id: "44444444-4444-4444-8444-444444444444", name: "Greeting Developer" };
 
-/** The project's current vision as the intent source returns it: text and keyed assumptions. */
+/** The project's current vision as the intent source returns it: text and keyed assumptions, as Delivery rendered them. */
 const VISION = {
   version: 2,
   visionText: "build the thing",
-  inferences: [
-    { key: "A1", statement: "Greetings are written in lower case.", rationale: "the tender's sample", status: "Inferred", kind: "client-visible", disclosed: "reported" },
-    { key: "A2", statement: "The greeting file is plain text, one line.", rationale: "client answer", status: "Stated", kind: "client-visible", disclosed: "asked" },
+  assumptions: [
+    { key: "A1", statement: "Greetings are written in lower case.", note: "Inferred; reported to the client; client-visible behaviour" },
+    { key: "A2", statement: "The greeting file is plain text, one line.", note: "Stated by the client; client-visible behaviour" },
   ],
 };
 

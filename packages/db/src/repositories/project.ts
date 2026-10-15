@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { parseProjectId, type ProjectBlockCause, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { projectBlocks, projects } from "../schema.js";
+import { projectBlocks, projects } from "../schema/index.js";
 
 export interface ProjectRecord {
   readonly id: ProjectId;

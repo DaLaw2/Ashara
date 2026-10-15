@@ -11,13 +11,11 @@ import {
   WorkItemRepository,
   EventStoreRepository,
   DevSessionRepository,
-  VisionRepository,
   ProjectRepository,
-  ClientMessageRepository,
   ClientRepository,
-  createProjectWithTender,
 } from "@ashara/db";
-import { RUN_SCOPE_AD_HOC, parseProjectId } from "@ashara/shared";
+import { VisionRepository, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
+import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { bearerAuth } from "@ashara/server/middleware";
 import { createRoutes } from "@ashara/server/routes";
@@ -158,7 +156,6 @@ describe("Work Items", () => {
       description: null,
       taskSpec: null,
       northStar: null,
-      runScope: RUN_SCOPE_AD_HOC,
       projectId: await newProject(),
     });
     createdWorkItemIds.push(createdId);
@@ -201,9 +198,9 @@ describe("Work Items", () => {
     const id = randomUUID();
     const projectId = await newProject();
     await pool.query(
-      `INSERT INTO work_items (id, level, status, title, blocked_reason, run_scope, project_id)
-       VALUES ($1, 'Task', 'Blocked', 'Blocked task', $2::jsonb, $3, $4)`,
-      [id, JSON.stringify(blockedReason), RUN_SCOPE_AD_HOC, projectId],
+      `INSERT INTO work_items (id, level, status, title, blocked_reason, project_id)
+       VALUES ($1, 'Task', 'Blocked', 'Blocked task', $2::jsonb, $3)`,
+      [id, JSON.stringify(blockedReason), projectId],
     );
     createdWorkItemIds.push(id);
     return { id, projectId };
@@ -228,8 +225,8 @@ describe("Work Items", () => {
     const id = randomUUID();
     const projectId = await newProject();
     await pool.query(
-      `INSERT INTO work_items (id, level, status, title, run_scope, project_id) VALUES ($1, 'Task', 'Pending', 'Pending task', $2, $3)`,
-      [id, RUN_SCOPE_AD_HOC, projectId],
+      `INSERT INTO work_items (id, level, status, title, project_id) VALUES ($1, 'Task', 'Pending', 'Pending task', $2)`,
+      [id, projectId],
     );
     createdWorkItemIds.push(id);
 
@@ -244,8 +241,8 @@ describe("Work Items", () => {
     const id = randomUUID();
     const projectId = await newProject();
     await pool.query(
-      `INSERT INTO work_items (id, level, status, title, run_scope, project_id) VALUES ($1, 'Task', 'InProgress', 'Running task', $2, $3)`,
-      [id, RUN_SCOPE_AD_HOC, projectId],
+      `INSERT INTO work_items (id, level, status, title, project_id) VALUES ($1, 'Task', 'InProgress', 'Running task', $2)`,
+      [id, projectId],
     );
     createdWorkItemIds.push(id);
 
@@ -335,7 +332,7 @@ describe("Events", () => {
 
 describe("Auth middleware", () => {
   test("request without Bearer token returns 401", async () => {
-    const res = await req("GET", "/work-items", undefined, noAuthHeaders());
+    const res = await req("GET", `/projects/${randomUUID()}/work-items`, undefined, noAuthHeaders());
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
   });
@@ -349,7 +346,7 @@ describe("Auth middleware", () => {
   test("a wrong token of the same length and of another length both return 401", async () => {
     const sameLength = API_TOKEN.slice(0, -1) + (API_TOKEN.endsWith("x") ? "y" : "x");
     for (const token of [sameLength, `${API_TOKEN}-longer`]) {
-      const res = await req("GET", "/work-items", undefined, {
+      const res = await req("GET", `/projects/${randomUUID()}/work-items`, undefined, {
         Authorization: `Bearer ${token}`,
       });
       expect(res.status).toBe(401);

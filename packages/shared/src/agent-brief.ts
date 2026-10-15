@@ -19,20 +19,17 @@ const ProjectEnvironmentSchema = z.discriminatedUnion("kind", [
 
 /**
  * An assumption of the project's current vision: what work proceeds on until the client says
- * otherwise. `key` is its id within the vision (A1, A2, ...); `status` is passed through as the
- * vision records it (Inferred, or Stated); `standing` is what the client has seen of it, and `kind`
- * whether it is behaviour the client sees or the team's own design (ADR-074 addendum 2 d89 C, E).
+ * otherwise. `key` is its id within the vision (A1, A2, ...); `note` is what the vision records of
+ * it, in words Delivery rendered (O9), so the brief carries no other context's vocabulary.
  */
 const VisionAssumptionSchema = z.strictObject({
   key: z.string().min(1),
-  status: z.string().min(1),
   statement: z.string().min(1),
-  standing: z.enum(["stated", "asked", "reported", "not-shown"]),
-  kind: z.enum(["client-visible", "internal-design", "unclassified"]),
+  note: z.string().min(1),
 });
 
 /**
- * AgentBriefSchema: the validated task instruction the Development BC assembles for one dispatch
+ * AgentBriefSchema: the validated task instruction Delivery's dispatch assembles for one attempt
  * (ADR-013; ADR-033 §5). It is built in-process, handed to the Workplace attempt loop as its
  * AssignmentBrief, recorded in dev_sessions and written to workdirBase/records/<task>/. Every field
  * is explicit so a producer field outside the schema is a compile error or a parse error

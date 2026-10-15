@@ -4,13 +4,15 @@ import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "@ashara/organization";
 import { blockedReasonToRecord, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { DomainEvent, ProjectBlockCause, ProjectId, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
+import { VisionUnreadable, planningVisionOf, statedChangeOf } from "./acl/engagement-acl.js";
+import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
 import type { BulkPlanEdge } from "./bulk-plan.js";
 import { DecompositionEngine } from "./decomposition.js";
 import type { DecompositionInput, DecompositionResult, EnvironmentPlanning, LayoutPlanning } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
-import type { FirstPlanWrite, PlanningVision } from "./first-plan.js";
-import { VisionUnreadable, northStarOf, planOwners, toWrite, visionItemsOf } from "./first-plan.js";
+import type { FirstPlanWrite } from "./first-plan.js";
+import { planOwners, toWrite } from "./first-plan.js";
 import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
@@ -75,12 +77,8 @@ interface ProjectAwaitingReplan {
   readonly changesAwaited: readonly string[];
   /** The ids of the tasks given up whose repair the project awaits (plan_repairs), oldest first; empty when none. */
   readonly repairsAwaited: readonly string[];
-  readonly visionVersion: number;
-  readonly visionText: string;
-  readonly summary: string;
-  readonly scopeBoundaries: unknown;
-  /** vision_documents.inferences as stored; the request's Stated assumption is found here. */
-  readonly inferences: unknown;
+  /** The project's current vision as stored; the request's Stated assumption is found in it. */
+  readonly vision: StoredVision;
   readonly rosterRows: unknown;
   readonly replanAttempts: number;
   readonly replanLastError: string | null;
@@ -256,17 +254,6 @@ class ReplanRequestMissing extends Error {
   }
 }
 
-// The answer a Stated assumption carries (migration 038), with the answer's id as its provenance.
-const RequestInferencesSchema = z.array(
-  z.looseObject({
-    statement: z.string().min(1),
-    status: z.string().min(1),
-    clientAnswer: z
-      .looseObject({ messageId: z.string().min(1), question: z.string().min(1), answer: z.string().min(1) })
-      .optional(),
-  }),
-);
-
 /** The client's change a recorded request stands for: the answer, their question, their words and what work now proceeds on. */
 interface ChangeRequest {
   readonly answerId: string;
@@ -276,12 +263,11 @@ interface ChangeRequest {
 }
 
 function changeOf(project: ProjectAwaitingReplan, requestedBy: string): ChangeRequest {
-  const unfounded = (detail: string) => new ReplanRequestUnfounded(project.projectId, requestedBy, project.visionVersion, detail);
-  const parsed = RequestInferencesSchema.safeParse(project.inferences);
-  if (!parsed.success) throw unfounded(`its assumptions do not parse: ${z.prettifyError(parsed.error)}`);
-  const stated = parsed.data.find((a) => a.status === "Stated" && a.clientAnswer?.messageId === requestedBy);
-  if (stated?.clientAnswer === undefined) throw unfounded("no Stated assumption carries that answer");
-  return { answerId: requestedBy, question: stated.clientAnswer.question, answer: stated.clientAnswer.answer, decision: stated.statement };
+  const stated = statedChangeOf(project.vision, requestedBy);
+  if (stated === null) {
+    throw new ReplanRequestUnfounded(project.projectId, requestedBy, project.vision.version, "no Stated assumption carries that answer");
+  }
+  return { answerId: requestedBy, ...stated };
 }
 
 /** An awaited repair names a task that is not an Abandoned task of the project given up for a recorded cause. */
@@ -587,7 +573,7 @@ export class Replanner implements Replanning {
 
     const owners = planOwners(projectId, project.rosterRows);
     // Read before the counted attempt: VisionUnreadable throws through to runPending, which blocks.
-    const vision: PlanningVision = { northStar: northStarOf(project), items: visionItemsOf(project) };
+    const vision = planningVisionOf(project.vision);
     const tasks = project.items.filter(isTask);
     // The store lists a project only with no task in progress; one seen here started since.
     if (tasks.some(({ item }) => item.status === "InProgress")) return { kind: "moved", projectId };
@@ -668,7 +654,7 @@ export class Replanner implements Replanning {
     const input: DecompositionInput = {
       epicTitle: project.projectName,
       epicNorthStar: northStar,
-      epicDescription: project.visionText,
+      epicDescription: vision.visionText,
       priorEpicResults:
         completed.length === 0
           ? []
@@ -716,7 +702,7 @@ export class Replanner implements Replanning {
               planRevision: revision,
               requestedBy: cause.changes[0].answerId,
               reason:
-                `replaced by plan revision ${revision} from vision v${project.visionVersion}: the client's ` +
+                `replaced by plan revision ${revision} from vision v${project.vision.version}: the client's ` +
                 `answer(s) ${answers.join(", ")} changed what is built`,
             }
           : {
@@ -725,7 +711,7 @@ export class Replanner implements Replanning {
               requestedBy: null,
               repairOf,
               reason:
-                `replaced by plan revision ${revision} from vision v${project.visionVersion}: the team gave up ` +
+                `replaced by plan revision ${revision} from vision v${project.vision.version}: the team gave up ` +
                 `${repairOf.join(", ")} and planned the remaining work again around it`,
             },
       );
@@ -746,7 +732,7 @@ export class Replanner implements Replanning {
     return {
       projectId: project.projectId,
       revision,
-      visionVersion: project.visionVersion,
+      visionVersion: project.vision.version,
       answers,
       repaired: repairOf,
       superseded,
@@ -766,7 +752,7 @@ export class Replanner implements Replanning {
     const attempt = await this.deps.store.recordFailedAttempt(projectId, error);
     const asked =
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
-    console.warn(`[replan] project ${projectId} (vision v${project.visionVersion}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
+    console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
     return this.block(projectId, projectBlockCause(new ReplanAttemptsExhausted(projectId, attempt, error)));
   }

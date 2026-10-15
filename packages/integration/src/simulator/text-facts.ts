@@ -210,11 +210,22 @@ function standingOfWords(words: string): Assumption["standing"] | null {
 /** An assumption line of a brief's text: `- <id> (assumption; <standing>; <kind>[, not citable]): <text>`. */
 const ASSUMPTION_LINE = /^- (\S+) \(assumption; (.+); (client-visible behaviour|internal design|not classified)(, not citable)?\): (.*)$/;
 
+/**
+ * A brief's structured assumption: the key, the statement and a note of the record's standing and
+ * kind, in the words above (O9); a brief recorded before the note carried the record's own fields.
+ */
+const briefAssumption = z.union([
+  z.strictObject({ key: z.string(), statement: z.string(), note: z.string() }).transform((a) => ({ form: "noted" as const, ...a })),
+  z
+    .looseObject({ key: z.string(), status: z.string(), statement: z.string(), standing: z.string().optional(), kind: z.string().optional() })
+    .transform((a) => ({ form: "fields" as const, key: a.key, status: a.status, statement: a.statement, standing: a.standing, kind: a.kind })),
+]);
+
 const storedBrief = z.looseObject({
   goal: z.string(),
   context: z.string(),
   visionVersion: z.number().int(),
-  assumptions: z.array(z.looseObject({ key: z.string(), status: z.string(), statement: z.string(), standing: z.string().optional(), kind: z.string().optional() })),
+  assumptions: z.array(briefAssumption),
 });
 
 export interface TextViolation {
@@ -260,9 +271,12 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: ReadonlyMap<number,
   // A brief written before standings and kinds were recorded (d89) states neither: only what it states is judged.
   const expected = vision.assumptions.map((a, i) => {
     const said = brief.assumptions[i];
+    if (said?.form === "noted") return JSON.stringify([a.key, a.statement, `${STANDING_WORDS[a.standing]}; ${KIND_WORDS[a.kind]}`]);
     return JSON.stringify([a.key, a.status, a.statement, said?.standing === undefined ? null : a.standing, said?.kind === undefined ? null : a.kind]);
   });
-  const stated = brief.assumptions.map((a) => JSON.stringify([a.key, a.status, a.statement, a.standing ?? null, a.kind ?? null]));
+  const stated = brief.assumptions.map((a) =>
+    a.form === "noted" ? JSON.stringify([a.key, a.statement, a.note]) : JSON.stringify([a.key, a.status, a.statement, a.standing ?? null, a.kind ?? null]),
+  );
   if (JSON.stringify(expected) !== JSON.stringify(stated)) {
     add(`brief-assumptions:${title}`, `the brief of "${title}" states the assumptions ${stated.join(" ").slice(0, 200)}; vision v${brief.visionVersion} records ${expected.join(" ").slice(0, 200)}`);
   }

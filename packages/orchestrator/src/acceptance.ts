@@ -1,6 +1,6 @@
 import type { EventStoreRepository } from "@ashara/db";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
-import { describeErrorChain, projectBlockCause, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { DevelopmentService } from "./acl/development-acl.js";
 import type { WorkItemRepository } from "./acl/planning-acl.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./acl/planning-acl.js";
@@ -85,7 +85,7 @@ type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcc
 
 /** Records a failed sweep with its defect, given up at once, and publishes the defect's events. */
 async function recordDefect(deps: AcceptanceDeps, record: SweepRecord): Promise<void> {
-  const defect = openAcceptanceDefect({ projectId: record.projectId, runScope: RUN_SCOPE_AD_HOC, mainCommit: record.mainCommit, details: record.details });
+  const defect = openAcceptanceDefect({ projectId: record.projectId, mainCommit: record.mainCommit, details: record.details });
   const outcome = await deps.acceptance.recordDefect(record, async (workItems) => {
     await PlanningService.createWorkItem(workItems, defect);
     giveUpAcceptanceDefect(defect, record);

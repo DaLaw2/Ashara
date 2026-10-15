@@ -9,7 +9,7 @@ import {
   type ProjectId,
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { clientMessages, planRevisions, projects, workItems } from "../schema.js";
+import { clientMessages, planRevisions, projects, workItems } from "../schema/index.js";
 import type { DroppedPlanDependency } from "./first-plan.js";
 import { noOpenStop, pendingChange } from "./project.js";
 import { answersTakenBy, parseAnswersTaken } from "./replan.js";

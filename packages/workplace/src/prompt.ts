@@ -1,5 +1,4 @@
 import { environmentDefinitionRules } from "@ashara/execution-infra";
-import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "@ashara/shared";
 import type { WorkKind } from "@ashara/shared";
 import type { AssignmentBrief } from "./assignment.js";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
@@ -231,7 +230,7 @@ function assumptionsSection(brief: AssignmentBrief): string {
   if (brief.assumptions.length === 0) return [...header, `None are recorded.`].join("\n");
   return [
     ...header,
-    ...brief.assumptions.map((a) => `- ${a.key} (${ASSUMPTION_STANDING_LABEL[a.standing]}; ${ASSUMPTION_KIND_LABEL[a.kind]}): ${a.statement}`),
+    ...brief.assumptions.map((a) => `- ${a.key} (${a.note}): ${a.statement}`),
   ].join("\n");
 }
 

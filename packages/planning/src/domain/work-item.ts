@@ -26,13 +26,6 @@ export interface WorkItem {
   northStar?: string;
   successCriteria?: StoredSuccessCriteria;
   blockedReason?: StoredBlockedReason;
-  /**
-   * Which run created this item: either a runId (a run's UUID),
-   * "pre-scoping" (migration backfill), or RUN_SCOPE_AD_HOC
-   * (created without a run id, today a project's first plan). Every insert site
-   * must supply this explicitly — there is no default (Discipline A).
-   */
-  runScope: string;
   /** The project (projects.id) this item belongs to. Required: no item exists outside a project. */
   projectId: ProjectId;
   /**
@@ -61,7 +54,6 @@ export interface WorkItem {
 export function createPendingWorkItem(
   level: WorkItemLevel,
   title: string,
-  runScope: string,
   projectId: ProjectId,
   parentId?: WorkItemId,
   description?: string,
@@ -80,7 +72,6 @@ export function createPendingWorkItem(
     taskSpec,
     northStar,
     successCriteria,
-    runScope,
     projectId,
     dispatchCount: 0,
     workKind: null,

@@ -16,7 +16,6 @@ import type { PlanReportStore } from "@ashara/engagement";
 import { reconcileOnStartup } from "@ashara/orchestrator";
 import { FailureRouter, PlanningService } from "@ashara/planning";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/first-plan-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
@@ -62,16 +61,16 @@ async function projectWith(handle: Handle, tasks: readonly TaskRow[], planned: b
   ourProjects.add(project.id);
   const epicId = randomUUID();
   await handle.execute(sql`
-    INSERT INTO work_items (id, level, title, run_scope, project_id)
-    VALUES (${epicId}, 'Epic', 'Epic', ${RUN_SCOPE_AD_HOC}, ${project.id})`);
+    INSERT INTO work_items (id, level, title, project_id)
+    VALUES (${epicId}, 'Epic', 'Epic', ${project.id})`);
   const taskIds: string[] = [];
   for (const task of tasks) {
     const taskId = randomUUID();
     taskIds.push(taskId);
     await handle.execute(sql`
-      INSERT INTO work_items (id, level, status, parent_id, title, task_spec, success_criteria, blocked_reason, run_scope, project_id)
+      INSERT INTO work_items (id, level, status, parent_id, title, task_spec, success_criteria, blocked_reason, project_id)
       VALUES (${taskId}, 'Task', ${task.status ?? "Pending"}, ${epicId}, ${`Task ${taskId}`}, ${jsonb(task.taskSpec)},
-              ${jsonb(task.successCriteria)}, ${jsonb(task.blockedReason)}, ${RUN_SCOPE_AD_HOC}, ${project.id})`);
+              ${jsonb(task.successCriteria)}, ${jsonb(task.blockedReason)}, ${project.id})`);
   }
   if (planned) {
     await handle.execute(sql`

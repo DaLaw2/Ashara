@@ -36,6 +36,7 @@ export type {
   AcceptedAssumptionStanding,
   AssumptionDisclosure,
   AssumptionKind,
+  AssumptionStanding,
   ScopeLine,
   ScopeSide,
 } from "./vision-assumption.js";
@@ -43,12 +44,7 @@ export {
   ASSUMPTION_KIND_LABEL,
   ASSUMPTION_STANDING_LABEL,
   AssumptionKindSchema,
-  ClientAnswerVerdictSchema,
   PUBLIC_INTERFACE_FILE,
-  StoredAssumptionDisclosureSchema,
-  StoredAssumptionKindSchema,
-  StoredScopeLineSchema,
-  assumptionStanding,
 } from "./vision-assumption.js";
 
 
@@ -80,7 +76,6 @@ export type { StoredSuccessCriteria } from "./success-criteria.js";
 export type { ProjectBlockCause } from "./work-item-row.js";
 export { SPEND_CAP_ERROR_CLASS, WorkItemRowCorrupt, parseWorkItemJsonb, projectBlockCause } from "./work-item-row.js";
 
-export { RUN_SCOPE_AD_HOC, parseRunScope } from "./run-scope.js";
 
 export type { WorkKind } from "./work-kind.js";
 export { WORK_KINDS, parseWorkKind } from "./work-kind.js";

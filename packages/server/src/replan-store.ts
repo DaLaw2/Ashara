@@ -9,7 +9,7 @@ import {
 import type { createDb } from "@ashara/db";
 import { PlanningService, createBulkPlan } from "@ashara/planning";
 import type { ReplanStore } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, parseWorkItemId, type ProjectId } from "@ashara/shared";
+import { parseWorkItemId, type ProjectId } from "@ashara/shared";
 import { adaptWorkItemRepo, rowToWorkItem } from "./work-item-adapter.js";
 
 /** An owner or an edge names a temp id the revision did not write. */
@@ -37,11 +37,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           projectName: row.projectName,
           changesAwaited: row.changesAwaited,
           repairsAwaited: row.repairsAwaited,
-          visionVersion: row.vision.version,
-          visionText: row.vision.visionText,
-          summary: row.vision.summary,
-          scopeBoundaries: row.vision.scopeBoundaries,
-          inferences: row.vision.inferences,
+          vision: row.vision,
           rosterRows: await latestRosterRoles(db, row.projectId),
           replanAttempts: row.replanAttempts,
           replanLastError: row.replanLastError,
@@ -78,8 +74,6 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
           const plan = await createBulkPlan(
             {
               workItemRepo: domainRepo,
-              // As for the first plan: the loop's run id is not handed to planning.
-              runScope: RUN_SCOPE_AD_HOC,
               projectId: write.projectId,
             },
             write.plan.items,

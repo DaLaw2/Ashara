@@ -1,14 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { VisionRepository } from "@ashara/engagement";
 import type { WorkItemId, StoredBlockedReason } from "@ashara/shared";
 import { InvalidId, InvalidStatusTransition, WORK_ITEM_STATUSES, parseProjectId, parseWorkItemId } from "@ashara/shared";
-import {
-  WorkItemRepository,
-  EventStoreRepository,
-  DevSessionRepository,
-  VisionRepository,
-  ProjectRepository,
-} from "@ashara/db";
+import { WorkItemRepository, EventStoreRepository, DevSessionRepository, ProjectRepository } from "@ashara/db";
 import {
   startWorkItem,
   failWorkItem,
@@ -63,9 +58,14 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
   // Work Items
   // -----------------------------------------------------------------------
 
-  app.get("/work-items", async (c) => {
+  // A work item belongs to one project, and is listed only with it.
+  app.get("/projects/:projectId/work-items", async (c) => {
     const { workItemRepo } = c.get("deps");
-    const items = await workItemRepo.listAll();
+    const parsed = z.string().uuid().safeParse(c.req.param("projectId"));
+    if (!parsed.success) {
+      return c.json({ error: "projectId must be a UUID", issues: parsed.error.issues }, 400);
+    }
+    const items = await workItemRepo.listByProject(parseProjectId(parsed.data, "projectId route param"));
     return c.json(items);
   });
 

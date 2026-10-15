@@ -1,21 +1,15 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { clientMessages, noOpenStop, projects, replanRequests } from "@ashara/db";
+import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { clientMessages, projects, replanRequests, visionDocuments } from "../schema.js";
-import { noOpenStop } from "./project.js";
+import type { StoredVision, VisionAppend } from "../vision.js";
+import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions (migration 038): each inbound
 // 'answer' is consumed once, together with what it changes.
 
 const questions = alias(clientMessages, "question");
-
-/** The project's current vision, as stored; Engagement parses its jsonb. */
-interface StoredVision {
-  readonly version: number;
-  readonly inferences: unknown;
-  readonly openQuestions: unknown;
-}
 
 interface OpenAnswerRow {
   readonly id: string;
@@ -75,27 +69,19 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
     )
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
 
+  const visions = new VisionRepository(db);
   const open: OpenAnswerRow[] = [];
   for (const row of rows) {
-    const [vision] = await db
-      .select({
-        version: visionDocuments.version,
-        inferences: visionDocuments.inferences,
-        openQuestions: visionDocuments.openQuestions,
-      })
-      .from(visionDocuments)
-      .where(eq(visionDocuments.projectId, row.projectId))
-      .orderBy(desc(visionDocuments.version))
-      .limit(1);
+    const projectId = parseProjectId(row.projectId, "client_messages.project_id");
     open.push({
       id: row.id,
-      projectId: parseProjectId(row.projectId, "client_messages.project_id"),
+      projectId,
       body: row.body,
       questionId: row.questionId,
       intakeAttempts: row.intakeAttempts,
       intakeLastError: row.intakeLastError,
       planned: row.firstPlannedAt !== null,
-      vision: vision ?? null,
+      vision: await visions.getCurrent(projectId),
     });
   }
   return open;
@@ -148,12 +134,7 @@ interface AnswerWrite {
   /** Whether the project's first plan existed when the answer was composed. */
   readonly planned: boolean;
   /** The vision version to append after `basedOnVersion`; every other field is copied from it. */
-  readonly vision: {
-    readonly basedOnVersion: number;
-    readonly inferences: unknown;
-    readonly openQuestions: unknown;
-    readonly changeReason: string;
-  } | null;
+  readonly vision: VisionAppend | null;
   /** A planned project's replanning request: the request recorded (replan_requests) and the report posted, in reply to the answer. */
   readonly replanReport: string | null;
 }
@@ -214,30 +195,14 @@ function writeClientAnswer(db: Database, write: AnswerWrite): Promise<"recorded"
     if (consumed.length === 0) return "already-consumed";
 
     if (write.vision !== null) {
-      const [current] = await tx
-        .select()
-        .from(visionDocuments)
-        .where(eq(visionDocuments.projectId, write.projectId))
-        .orderBy(desc(visionDocuments.version))
-        .limit(1);
-      if (current === undefined || current.version !== write.vision.basedOnVersion) {
+      const appended = await new VisionRepository(tx).append(write.projectId, write.vision);
+      if (appended.kind === "moved") {
         throw new AnswerContextMoved(
           write.answerId,
           write.projectId,
-          `composed against vision v${write.vision.basedOnVersion}, current is ${current === undefined ? "none" : `v${current.version}`}`,
+          `composed against vision v${write.vision.basedOnVersion}, current is ${appended.current === null ? "none" : `v${appended.current}`}`,
         );
       }
-      await tx.insert(visionDocuments).values({
-        projectId: write.projectId,
-        version: current.version + 1,
-        visionText: current.visionText,
-        summary: current.summary,
-        inferences: write.vision.inferences,
-        scopeBoundaries: current.scopeBoundaries,
-        confirmedDirections: current.confirmedDirections,
-        openQuestions: write.vision.openQuestions,
-        changeReason: write.vision.changeReason,
-      });
     }
 
     if (write.replanReport !== null) {

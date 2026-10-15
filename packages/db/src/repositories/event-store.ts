@@ -1,6 +1,6 @@
 import { desc } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { domainEvents } from "../schema.js";
+import { domainEvents } from "../schema/index.js";
 
 export class EventStoreRepository {
   constructor(private readonly db: Database) {}

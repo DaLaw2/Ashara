@@ -1,6 +1,6 @@
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { failedApproaches } from "../schema.js";
+import { failedApproaches } from "../schema/index.js";
 
 export class FailedApproachRepository {
   constructor(private readonly db: Database) {}

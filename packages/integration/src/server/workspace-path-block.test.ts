@@ -21,7 +21,7 @@ import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, createWorkItemId, systemClock } from "@ashara/shared";
+import { createWorkItemId, systemClock } from "@ashara/shared";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
@@ -79,7 +79,6 @@ describe("a project whose workspace path is refused", () => {
       status: "Pending",
       title: "Write greet.txt",
       taskSpec: { goal: "write greet.txt", origin: "sprint0" },
-      runScope: RUN_SCOPE_AD_HOC,
       projectId,
     });
 

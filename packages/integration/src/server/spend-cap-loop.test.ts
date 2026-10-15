@@ -9,7 +9,6 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import {
-  ClientMessageRepository,
   ClientRepository,
   createDb,
   DEFAULT_DATABASE_URL,
@@ -20,7 +19,7 @@ import {
   WorkItemRepository,
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
-import { ClientStops } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
@@ -29,7 +28,7 @@ import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
-import { RUN_SCOPE_AD_HOC, SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
+import { SPEND_CAP_ERROR_CLASS, createWorkItemId, systemClock } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { adaptWorkItemRepo } from "@ashara/server/work-item-adapter";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
@@ -321,7 +320,6 @@ describe("a turn refused at the project's spend cap", () => {
       title: "Write greet.txt",
       // Sprint 0 runs on the BaseCell, so no environment has to be resolved for the task.
       taskSpec: { goal: "write greet.txt", origin: "sprint0" },
-      runScope: RUN_SCOPE_AD_HOC,
       projectId,
     });
 
@@ -344,7 +342,7 @@ describe("a turn refused at the project's spend cap", () => {
       config: { workdirBase },
       sessionStore: { insert: async () => {}, complete: async () => {}, fail: async () => {} },
       knowledgeSink: { storeFinding: notExercised("storeFinding") },
-      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
+      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", assumptions: [] }) },
       cells: {
         substrate: scriptedSubstrate(root),
         baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },

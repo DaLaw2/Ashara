@@ -1,7 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "../connection.js";
-import { clientLoginFailures } from "../schema.js";
+import { clientLoginFailures } from "../schema/index.js";
 
 /**
  * Each cap admits this many attempts within the window; the next one is refused.

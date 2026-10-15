@@ -16,20 +16,17 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import {
   ClientLoginFailureRepository,
-  ClientMessageRepository,
   ClientRepository,
   ClientSessionRepository,
   createDb,
-  createProjectWithTender,
   DEFAULT_DATABASE_URL,
   DevSessionRepository,
   EventStoreRepository,
   ProjectRepository,
   SecretRepository,
-  VisionRepository,
   WorkItemRepository,
 } from "@ashara/db";
-import { ClientStops } from "@ashara/engagement";
+import { ClientStops, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import { buildApp } from "@ashara/server/app";
@@ -502,8 +499,9 @@ describe("client session", () => {
 
   test("the operator API still requires the bearer token, and a session cookie does not open it", async () => {
     const token = await loggedIn();
-    expect((await app.request("/work-items", { headers: withSession(token) })).status).toBe(401);
-    const bearer = await app.request("/work-items", { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+    const workItems = `/projects/${randomUUID()}/work-items`;
+    expect((await app.request(workItems, { headers: withSession(token) })).status).toBe(401);
+    const bearer = await app.request(workItems, { headers: { Authorization: `Bearer ${API_TOKEN}` } });
     expect(bearer.status).toBe(200);
   });
 
@@ -661,7 +659,7 @@ class ListingRefused extends Error {
 }
 
 class RefusingWorkItemRepository extends WorkItemRepository {
-  override async listAll(): ReturnType<WorkItemRepository["listAll"]> {
+  override async listByProject(): ReturnType<WorkItemRepository["listByProject"]> {
     throw new ListingRefused();
   }
 }
@@ -671,13 +669,14 @@ describe("unhandled route error", () => {
     const failing = buildApp(API_TOKEN, { ...appDeps(), workItemRepo: new RefusingWorkItemRepository(db) }, webClientDeps());
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      const response = await failing.request("/work-items", { headers: { Authorization: `Bearer ${API_TOKEN}` } });
+      const route = `/projects/${randomUUID()}/work-items`;
+      const response = await failing.request(route, { headers: { Authorization: `Bearer ${API_TOKEN}` } });
 
       expect(response.status).toBe(500);
       const text = await response.text();
       expect(text).not.toContain("secret-detail");
-      expect(JSON.parse(text)).toEqual({ error: "internal server error", errorClass: "InternalServerError", operation: "GET /work-items" });
-      const line = logged.mock.calls.map((call) => String(call[0])).find((first) => first.includes("GET /work-items"));
+      expect(JSON.parse(text)).toEqual({ error: "internal server error", errorClass: "InternalServerError", operation: `GET ${route}` });
+      const line = logged.mock.calls.map((call) => String(call[0])).find((first) => first.includes(`GET ${route}`));
       expect(line).toContain("ListingRefused");
       expect(line).toContain("secret-detail");
     } finally {

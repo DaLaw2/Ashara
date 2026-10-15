@@ -10,7 +10,7 @@ import type { CellBackend } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { RUN_SCOPE_AD_HOC, createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
+import { createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
 import type { AttemptCellImage } from "@ashara/workplace";
@@ -94,8 +94,8 @@ beforeAll(async () => {
     const id = randomUUID();
     taskIds.push(id);
     await db.execute(sql`
-      INSERT INTO work_items (id, level, title, run_scope, project_id)
-      VALUES (${id}, 'Task', ${title}, ${RUN_SCOPE_AD_HOC}, ${projectId})`);
+      INSERT INTO work_items (id, level, title, project_id)
+      VALUES (${id}, 'Task', ${title}, ${projectId})`);
   }
 });
 

@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } f
 import { z } from "zod";
 import { InvalidStatusTransition, parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
-import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems } from "../schema.js";
+import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems } from "../schema/index.js";
 import { noOpenAnswer, tasksWithoutRosterOwner } from "./first-plan.js";
 import { noOpenStop, pendingChange, pendingRepair } from "./project.js";
 import { WorkItemRepository } from "./work-item.js";

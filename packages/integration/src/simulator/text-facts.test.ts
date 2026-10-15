@@ -25,37 +25,37 @@ const keysOf = (records: Partial<TextFactRecords>): string[] => checkTextFacts({
 describe("checkTextFacts, briefs", () => {
   const checkAuthorGoal = (standing: string): string =>
     `Write the checks that decide whether "Lock" is done.\n\nVision items "Lock" cites:\n- S1 (in scope): put a value.\n- A1 (assumption; ${standing}; client-visible behaviour): Commands wait for the lock.`;
-  const brief = (visionVersion: number, standing: string, assumption: { readonly standing: string; readonly status: string }) => ({
+  const brief = (visionVersion: number, standing: string, note: string) => ({
     title: "Write the checks for \"Lock\"",
     visionAtCreation: 2,
     brief: {
       goal: checkAuthorGoal(standing),
       context: "",
       visionVersion,
-      assumptions: [{ key: "A1", status: assumption.status, statement: "Commands wait for the lock.", standing: assumption.standing, kind: "client-visible" }],
+      assumptions: [{ key: "A1", statement: "Commands wait for the lock.", note: `${note}; client-visible behaviour` }],
     },
   });
 
   it("accepts a brief whose every assumption line states the standing of the vision it carries", () => {
-    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", { standing: "stated", status: "Stated" })] })).toEqual([]);
+    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", "Stated by the client")] })).toEqual([]);
   });
 
   // W12a D1: a check author's description is rendered at plan time and dispatched after the client
   // confirmed the assumption; the brief carries the confirming vision and still says "not yet answered".
   it("names a brief that calls an answered assumption unanswered", () => {
-    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Inferred; asked of the client, not yet answered", { standing: "stated", status: "Stated" })] })).toEqual([
+    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Inferred; asked of the client, not yet answered", "Stated by the client")] })).toEqual([
       'brief-standing:Write the checks for "Lock":A1',
     ]);
   });
 
   it("names a brief that carries a vision older than the one current when its session was recorded", () => {
-    expect(keysOf({ visions: [v1, v2], briefs: [brief(1, "Inferred; asked of the client, not yet answered", { standing: "asked", status: "Inferred" })] })).toEqual([
+    expect(keysOf({ visions: [v1, v2], briefs: [brief(1, "Inferred; asked of the client, not yet answered", "Inferred; asked of the client, not yet answered")] })).toEqual([
       'brief-vision:Write the checks for "Lock"',
     ]);
   });
 
   it("names structured assumptions that are not the vision's", () => {
-    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", { standing: "asked", status: "Inferred" })] })).toEqual([
+    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", "Inferred; asked of the client, not yet answered")] })).toEqual([
       'brief-assumptions:Write the checks for "Lock"',
     ]);
   });

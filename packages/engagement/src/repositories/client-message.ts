@@ -1,8 +1,7 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { ProjectRepository, clientMessages, noOpenStop } from "@ashara/db";
+import type { Database, DbHandle, ProjectRecord } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { clientMessages } from "../schema.js";
-import { noOpenStop, ProjectRepository, type ProjectRecord } from "./project.js";
 
 type ClientMessageRow = typeof clientMessages.$inferSelect;
 
@@ -43,9 +42,8 @@ class TenderNotOpen extends Error {
 }
 
 /**
- * The client channel's rows (architecture K1, migration 016). One of two writers
- * of outbound messages; the other is postPlanReport in plan-report.ts. No HTTP
- * route creates one.
+ * The client channel's rows (architecture K1, migration 016). No HTTP route
+ * creates an outbound one.
  */
 export class ClientMessageRepository {
   constructor(private readonly db: DbHandle) {}

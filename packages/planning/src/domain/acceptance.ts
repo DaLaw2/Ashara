@@ -15,7 +15,6 @@ import type { WorkItem } from "./work-item.js";
  */
 interface FailedAcceptance {
   readonly projectId: ProjectId;
-  readonly runScope: string;
   readonly mainCommit: string | null;
   readonly details: string;
 }
@@ -29,7 +28,6 @@ export function openAcceptanceDefect(sweep: FailedAcceptance): WorkItem {
   const defect = createPendingWorkItem(
     "Task",
     `Acceptance on main ${sweep.mainCommit === null ? "(not read)" : sweep.mainCommit.slice(0, 12)}`,
-    sweep.runScope,
     sweep.projectId,
     undefined,
     sweep.mainCommit === null ? "The acceptance run could not read main." : `The acceptance run on main ${sweep.mainCommit} did not pass.`,

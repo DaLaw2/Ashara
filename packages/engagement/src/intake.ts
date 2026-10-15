@@ -2,8 +2,9 @@ import { z } from "zod";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
 import { AssumptionKindSchema, describeErrorChain, projectBlockCause } from "@ashara/shared";
-import type { AssumptionDisclosure, AssumptionKind, ProjectBlockCause, ProjectId, ScopeLine } from "@ashara/shared";
+import type { AssumptionKind, ProjectBlockCause, ProjectId, ScopeLine } from "@ashara/shared";
 import { classifyReadFailure } from "./read-failure.js";
+import type { FirstVision, InferredAssumption } from "./vision.js";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
 // Proceed on silence at once (orchestrator 2026-10-13, on the board): the questions
@@ -77,43 +78,13 @@ interface OpenTender {
   readonly intakeLastError: string | null;
 }
 
-/** An Inferred assumption: what work proceeds on until the client says otherwise. */
-interface InferredAssumption {
-  /** Stable within the vision: the open question adopting it, and a later change request, name it. */
-  readonly key: string;
-  readonly statement: string;
-  readonly rationale: string;
-  readonly status: "Inferred";
-  readonly kind: AssumptionKind;
-  /** How the client learned of it: the question that asked about it, or the assumptions report. */
-  readonly disclosed: AssumptionDisclosure;
-}
-
-interface OpenQuestion {
-  readonly messageId: string;
-  readonly text: string;
-  readonly whyItMatters: string;
-  /** The key of the inference adopted until this question is answered. */
-  readonly assumptionKey: string;
-}
-
-/** Vision v1 as intake writes it. */
-interface IntakeVision {
-  readonly visionText: string;
-  readonly summary: string;
-  /** What the client asked for, then what the tender leaves out, each with its side (W11c D3). */
-  readonly scopeBoundaries: readonly ScopeLine[];
-  readonly inferences: readonly InferredAssumption[];
-  readonly openQuestions: readonly OpenQuestion[];
-}
-
 interface IntakeWrite {
   readonly tender: OpenTender;
   /** Question bodies as posted to the client, most impactful first; the store keeps this order. */
   readonly questions: readonly string[];
   /** The report of the assumptions no question carries; null when every assumption is a question's. */
   readonly assumptionsReport: string | null;
-  readonly vision: (questionMessageIds: readonly string[]) => IntakeVision;
+  readonly vision: (questionMessageIds: readonly string[]) => FirstVision;
 }
 
 type IntakeCommit =

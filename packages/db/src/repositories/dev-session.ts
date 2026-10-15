@@ -1,7 +1,7 @@
 import { and, count, desc, eq, notInArray, sql } from "drizzle-orm";
 import { TERMINAL_SESSION_PHASES, type AttemptTerminal } from "@ashara/shared";
 import type { Database } from "../connection.js";
-import { devSessions } from "../schema.js";
+import { devSessions } from "../schema/index.js";
 
 /** A COUNT over dev_sessions returned no row: the evidence cannot be read, so nothing is decided on it. */
 class DispatchEvidenceUnread extends Error {

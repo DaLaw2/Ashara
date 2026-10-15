@@ -1,4 +1,5 @@
-import { ProjectRepository, listDueStackChoices, recordStackChoice } from "@ashara/db";
+import { listDueStackChoices, recordStackChoice } from "@ashara/engagement";
+import { ProjectRepository } from "@ashara/db";
 import type { createDb } from "@ashara/db";
 import type { StackChoiceStore } from "@ashara/engagement";
 

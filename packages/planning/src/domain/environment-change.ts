@@ -115,7 +115,6 @@ export function requestEnvironmentChange(
     "Task",
     // Unique per request: the gate counts a Completed item with the same parent and title as done.
     `Environment change ${ordinal} for task ${task.id}`,
-    task.runScope,
     task.projectId,
     task.parentId,
     `Requested by implementation task ${task.id}: ${request.paths.join(", ")}`,

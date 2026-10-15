@@ -184,7 +184,7 @@ describe("a task runs on cells end to end", () => {
       sessionStore: sessions,
       knowledgeSink: { storeFinding: async () => {} },
       eventSink: { emit: (event) => void events.push(event) },
-      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", inferences: [] }) },
+      intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting file", assumptions: [] }) },
       cells: { substrate, baseCell: base, instance },
       llm: gateway,
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },

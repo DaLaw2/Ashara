@@ -1,31 +1,14 @@
 import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
+import { PROJECT_BLOCK_KINDS, blockingReview, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import type { Database, DbHandle } from "@ashara/db";
 import { BlockedReasonCorrupt, parseProjectId, parseStoredBlockedReason, type ProjectId, type StoredBlockedReason } from "@ashara/shared";
-import type { Database, DbHandle } from "../connection.js";
-import { checkDisputes, clientMessages, planRepairs, projectBlocks, projects, workItems } from "../schema.js";
-import { noOpenStop } from "./project.js";
-import { blockingReview } from "./suite-review.js";
 
 // The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
 // infrastructure halt). Each is due while its episode (a project_blocks row) has no report, and
 // posting one records it against that episode in the same transaction, so a retried or concurrent
 // post tells the client once.
-
-/**
- * Every kind a project block episode can record.
- */
-export const PROJECT_BLOCK_KINDS = [
-  "budget_cap",
-  "configuration",
-  "fault",
-  "planning_stopped",
-  "check_dispute",
-  "replan_bound",
-  "suite_review",
-  "plan_repair",
-  "infrastructure",
-] as const;
 
 const ProjectBlockKindSchema = z.enum(PROJECT_BLOCK_KINDS);
 type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_dispute" | "suite_review" | "plan_repair">;

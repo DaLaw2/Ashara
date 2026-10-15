@@ -1,6 +1,6 @@
 import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import type { DbHandle } from "../connection.js";
-import { clientSessions } from "../schema.js";
+import { clientSessions } from "../schema/index.js";
 
 type ClientSessionRow = typeof clientSessions.$inferSelect;
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { InvalidId, RUN_SCOPE_AD_HOC } from "@ashara/shared";
+import { InvalidId } from "@ashara/shared";
 import { rowToWorkItem } from "./work-item-adapter.js";
 
 type Row = Parameters<typeof rowToWorkItem>[0];
@@ -19,7 +19,6 @@ function row(overrides: Partial<Row>): Row {
     northStar: null,
     successCriteria: null,
     blockedReason: null,
-    runScope: RUN_SCOPE_AD_HOC,
     projectId: VALID,
     dispatchCount: 0,
     workKind: null,

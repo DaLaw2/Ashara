@@ -2,7 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { llmCalls } from "../schema.js";
+import { llmCalls } from "../schema/index.js";
 
 /** `error` always names its kind; `ok` never carries one (the table's CHECK enforces the same). */
 type LlmCallOutcomeColumns =

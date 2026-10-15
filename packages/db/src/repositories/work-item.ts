@@ -7,7 +7,7 @@ import {
   parseWorkItemJsonb,
 } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { workItems, dependencies } from "../schema.js";
+import { workItems, dependencies } from "../schema/index.js";
 
 type WorkItemRow = typeof workItems.$inferSelect;
 
@@ -285,14 +285,6 @@ export class WorkItemRepository {
       .returning({ infrastructureFaults: workItems.infrastructureFaults });
     if (!row) throw new WorkItemNotFound(id);
     return row.infrastructureFaults;
-  }
-
-  async listAll() {
-    const rows = await this.db
-      .select()
-      .from(workItems)
-      .orderBy(asc(workItems.createdAt));
-    return rows.map((row) => this.validateRow(row));
   }
 
   async addDependency(fromId: string, toId: string) {

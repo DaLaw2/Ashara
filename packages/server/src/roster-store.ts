@@ -10,9 +10,7 @@ export function createRosterStore(db: ReturnType<typeof createDb>): RosterStore 
       const rows = await listProjectsAwaitingRoster(db);
       return rows.map((row) => ({
         projectId: row.projectId,
-        visionVersion: row.vision.version,
-        visionText: row.vision.visionText,
-        inferences: row.vision.inferences,
+        vision: row.vision,
       }));
     },
     recordRoster: (roster) =>

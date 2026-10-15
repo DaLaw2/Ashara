@@ -20,3 +20,17 @@ export {
   parseClientMessage,
   replyTargetProblem,
 } from "./client-message.js";
+export { VisionUnreadable, readVisionVersion } from "./vision.js";
+export type { StoredVision, VisionVersion } from "./vision.js";
+export { VisionRepository } from "./repositories/vision.js";
+export { ClientMessageRepository, createProjectWithTender } from "./repositories/client-message.js";
+/** @testseam the integration client-message.test.ts asserts markConsumed's typed rejection */
+export { ClientMessageNotConsumable } from "./repositories/client-message.js";
+export type { CreatedTender } from "./repositories/client-message.js";
+export { recordTenderIntake, closeTenderAfterFailedIntake } from "./repositories/tender-intake.js";
+export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
+export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
+export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
+export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
+export { listDueDeliveredReports, postDeliveredReport } from "./repositories/delivered-report.js";
+export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";

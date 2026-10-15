@@ -1,7 +1,6 @@
 import { describe, test, expect } from "vitest";
 import type { StoredBlockedReason, WorkItemStatus } from "@ashara/shared";
 import {
-  RUN_SCOPE_AD_HOC,
   parseProjectId,
   canTransitionTo,
   InvalidStatusTransition,
@@ -42,7 +41,7 @@ const ABANDON_REASON: StoredBlockedReason = { source: "failure_router", reason: 
 const OWNER_ABANDON_REASON: StoredBlockedReason = { source: "api", note: "abandoned via API" };
 
 function seedFailed() {
-  const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+  const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
   startWorkItem(item);
   failWorkItem(item, FAIL_REASON);
   takeEvents(item);
@@ -107,7 +106,7 @@ describe("state-machine totality", () => {
 
   test("Blocked -> Completed is merge_unrecorded's alone; such an item never goes back to Pending", () => {
     const merged: StoredBlockedReason = { source: "merge_unrecorded", mergeCommit: "a".repeat(40), reason: "db down" };
-    const item = createPendingWorkItem("Task", "merged-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "merged-task", TEST_PROJECT_ID);
     blockWorkItem(item, merged);
     takeEvents(item);
     expect(() => unblockWorkItem(item)).toThrow(InvalidStatusTransition);
@@ -117,14 +116,14 @@ describe("state-machine totality", () => {
     expect(item.blockedReason).toBeUndefined();
     expect(takeEvents(item).map((e) => e.eventType)).toEqual(["work_item.completed"]);
 
-    const other = createPendingWorkItem("Task", "parked-task", "test-run", TEST_PROJECT_ID);
+    const other = createPendingWorkItem("Task", "parked-task", TEST_PROJECT_ID);
     blockWorkItem(other, BLOCK_REASON);
     expect(() => completeRecordedMerge(other)).toThrow(InvalidStatusTransition);
     expect(() => completeWorkItem(other)).toThrow(InvalidStatusTransition);
   });
 
   test("abandonWorkItem accepts a Blocked item (the owner-parked give-up path)", () => {
-    const item = createPendingWorkItem("Task", "parked-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "parked-task", TEST_PROJECT_ID);
     blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     abandonWorkItem(item, { source: "api", reason: "owner dropped it" });
@@ -134,7 +133,7 @@ describe("state-machine totality", () => {
 
 describe("requeueWorkItem", () => {
   function seedInProgress() {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     startWorkItem(item);
     takeEvents(item);
     return item;
@@ -153,7 +152,7 @@ describe("requeueWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition when the item is not InProgress", () => {
-    const pending = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const pending = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     expect(() => requeueWorkItem(pending)).toThrow(InvalidStatusTransition);
 
     const failed = seedFailed();
@@ -169,14 +168,14 @@ describe("method-level preconditions guard the shared -> Pending edge", () => {
   // shared edge cannot be reached through the wrong intent (e.g. the HTTP unblock
   // path forcing a live-agent InProgress item back to Pending).
   function seedInProgress() {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     startWorkItem(item);
     takeEvents(item);
     return item;
   }
 
   function seedBlocked() {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     blockWorkItem(item, BLOCK_REASON);
     takeEvents(item);
     return item;
@@ -224,7 +223,7 @@ describe("replanWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition when the item is not Failed", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
 
     expect(() => replanWorkItem(item)).toThrow(InvalidStatusTransition);
   });
@@ -245,7 +244,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("moves a Pending item directly to Abandoned (owner abandon via API)", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
 
     abandonWorkItem(item, OWNER_ABANDON_REASON);
     const events = takeEvents(item);
@@ -256,7 +255,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("moves an InProgress item directly to Abandoned (owner abandon via API)", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     startWorkItem(item);
     takeEvents(item);
 
@@ -269,7 +268,7 @@ describe("abandonWorkItem", () => {
   });
 
   test("throws InvalidStatusTransition from a terminal status", () => {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     startWorkItem(item);
     failWorkItem(item, FAIL_REASON);
     abandonWorkItem(item, ABANDON_REASON);
@@ -295,29 +294,12 @@ describe("Completed re-entry", () => {
   });
 });
 
-describe("createPendingWorkItem stamps the caller-supplied runScope", () => {
-  // This test would FAIL against the pre-fix code: before the fix,
-  // createPendingWorkItem did not accept a runScope parameter, and WorkItem
-  // did not carry one. The Drizzle $defaultFn silently wrote "pre-scoping"
-  // for every row, making the column uniformly meaningless.
-  test("the returned WorkItem carries the exact runScope the caller passed", () => {
-    const runId = "550e8400-e29b-41d4-a716-446655440000";
-    const item = createPendingWorkItem("Task", "test-task", runId, TEST_PROJECT_ID);
-    expect(item.runScope).toBe(runId);
-  });
-
-  test("ad-hoc scope is preserved, not collapsed to pre-scoping", () => {
-    const item = createPendingWorkItem("Task", "api-created", RUN_SCOPE_AD_HOC, TEST_PROJECT_ID);
-    expect(item.runScope).toBe(RUN_SCOPE_AD_HOC);
-  });
-});
-
 // Story s-loop-never-stop-m1 W6: a give-up is the one way a work item leaves without a person.
 describe("giveUpWorkItem", () => {
   const CAUSE: StoredBlockedReason = { source: "check_disputed", checkTaskId: "c1", checkName: "put", reason: "past the bound" };
 
   function inStatus(status: "Pending" | "InProgress" | "Blocked" | "Failed") {
-    const item = createPendingWorkItem("Task", "leaf-task", "test-run", TEST_PROJECT_ID);
+    const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
     if (status === "InProgress" || status === "Failed") startWorkItem(item);
     if (status === "Failed") failWorkItem(item, FAIL_REASON);
     if (status === "Blocked") blockWorkItem(item, BLOCK_REASON);

@@ -12,7 +12,6 @@ import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps } from "./types.js";
 import { processTask } from "./execution.js";
 
-const RUN_SCOPE = "run-test-preemption";
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 // Stable ID shared by every item copy the mock repo returns, so the domain
 // service, lifecycle router, and processTask itself all operate on what looks
@@ -59,7 +58,6 @@ function freshPendingItem(): WorkItem {
     level: "Task",
     status: "Pending",
     title: "test-preempted-task",
-    runScope: RUN_SCOPE,
     projectId: TEST_PROJECT_ID,
     dispatchCount: 0,
     workKind: "implementation",

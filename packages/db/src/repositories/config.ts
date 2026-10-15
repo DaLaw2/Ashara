@@ -1,6 +1,6 @@
 import { asc } from "drizzle-orm";
 import type { Database } from "../connection.js";
-import { modelConfigs, modelPriceTiers, modelPriceWindows, providerConfigs } from "../schema.js";
+import { modelConfigs, modelPriceTiers, modelPriceWindows, providerConfigs } from "../schema/index.js";
 
 type PriceWindowRow = typeof modelPriceWindows.$inferSelect;
 type PriceTierRow = typeof modelPriceTiers.$inferSelect;

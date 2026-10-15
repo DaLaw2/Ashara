@@ -4,6 +4,8 @@ import { StructuredOutputExhausted, withStructuredLadder } from "@ashara/llm-gat
 import type { ContextualLlm, LadderAttemptEvent, StructuredValidation } from "@ashara/llm-gateway";
 import { projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
+import { VisionUnreadable, rosterVisionOf } from "./acl/engagement-acl.js";
+import type { RosterVision, StoredVision } from "./acl/engagement-acl.js";
 import { CapabilityClassSchema, describeViolation, nonEmptyOrNull, validateRoster } from "./roster.js";
 import type { Role, Roster } from "./roster.js";
 import { assignmentViolations } from "./work-kind.js";
@@ -18,13 +20,15 @@ import { assignmentViolations } from "./work-kind.js";
 /** The first revision of a project's roster; later revisions append. */
 const FIRST_REVISION = 1;
 
-/** Vision v1 of a project with no roster, as the store reads it. */
+/** Vision v1 of a project with no roster, as the store reads it; read through Engagement's published reader. */
 interface VisionAwaitingRoster {
   readonly projectId: ProjectId;
-  readonly visionVersion: number;
-  readonly visionText: string;
-  /** vision_documents.inferences as stored; parsed here. */
-  readonly inferences: unknown;
+  readonly vision: StoredVision;
+}
+
+/** What derivation reads of the project: its vision v1, read. */
+interface DerivationInput extends RosterVision {
+  readonly projectId: ProjectId;
 }
 
 /** Organization's persistence port for the roster. */
@@ -63,25 +67,6 @@ class RosterDerivationExhausted extends Error {
   }
 }
 
-/** The stored vision's inferences could not be read as a derivation input. */
-class RosterVisionUnreadable extends Error {
-  constructor(
-    readonly projectId: ProjectId,
-    readonly visionVersion: number,
-    readonly issues: string,
-  ) {
-    super(`project ${projectId} vision v${visionVersion}: inferences are not in a readable shape: ${issues}`);
-    this.name = "RosterVisionUnreadable";
-  }
-}
-
-// Intake writes Inferred records; rows the deleted CLI path wrote hold a map of
-// direction category to inference. Both are read, as first planning reads them.
-const InferencesSchema = z.union([
-  z.array(z.object({ statement: z.string().min(1), status: z.string().min(1) })),
-  z.record(z.string(), z.string()),
-]);
-
 // Plain arrays with a minimum, not tuples: this schema goes to the provider as JSON
 // Schema, and a role id is Ashara's to mint, not the model's.
 const DerivationResponseSchema = z.strictObject({
@@ -109,17 +94,7 @@ class RosterResponseEmpty extends Error {
 
 type DerivationResponse = z.infer<typeof DerivationResponseSchema>;
 
-function assumptionsOf(vision: VisionAwaitingRoster): string[] {
-  const parsed = InferencesSchema.safeParse(vision.inferences);
-  if (!parsed.success) {
-    throw new RosterVisionUnreadable(vision.projectId, vision.visionVersion, z.prettifyError(parsed.error));
-  }
-  return Array.isArray(parsed.data)
-    ? parsed.data.map((a) => `${a.statement} (${a.status})`)
-    : Object.entries(parsed.data).map(([category, inference]) => `${category}: ${inference}`);
-}
-
-function buildPrompt(vision: VisionAwaitingRoster, assumptions: readonly string[]): string {
+function buildPrompt(vision: DerivationInput): string {
   return [
     `You staff a software contractor's team for one client project. Read the project's vision and`,
     `name the roles the team needs, each with what it is responsible for and the capability classes`,
@@ -129,7 +104,7 @@ function buildPrompt(vision: VisionAwaitingRoster, assumptions: readonly string[
     JSON.stringify(vision.visionText),
     ``,
     `Assumptions work proceeds on until the client says otherwise:`,
-    ...(assumptions.length > 0 ? assumptions.map((a) => `- ${a}`) : [`- (none recorded)`]),
+    ...(vision.assumptions.length > 0 ? vision.assumptions.map((a) => `- ${a}`) : [`- (none recorded)`]),
     ``,
     `Capability classes:`,
     `- "client-comms": talks to the client: questions, reports, change requests.`,
@@ -161,7 +136,7 @@ function reask(ctx: { readonly errors: readonly string[] }): string {
   );
 }
 
-function toRoster(vision: VisionAwaitingRoster, response: DerivationResponse, id: (index: number) => string): Roster {
+function toRoster(vision: DerivationInput, response: DerivationResponse, id: (index: number) => string): Roster {
   const roles = nonEmptyOrNull(
     response.roles.map((role, index): Role => {
       const capabilities = nonEmptyOrNull(role.capabilities);
@@ -170,7 +145,7 @@ function toRoster(vision: VisionAwaitingRoster, response: DerivationResponse, id
     }),
   );
   if (roles === null) throw new RosterResponseEmpty(vision.projectId, "roles");
-  return { projectId: vision.projectId, visionVersion: vision.visionVersion, revision: FIRST_REVISION, roles };
+  return { projectId: vision.projectId, visionVersion: vision.version, revision: FIRST_REVISION, roles };
 }
 
 function violationsOf(roster: Roster): readonly string[] {
@@ -193,12 +168,12 @@ export class RosterDerivation implements RosterDerivationStep {
 
   async runPending(): Promise<readonly RosterOutcome[]> {
     const outcomes: RosterOutcome[] = [];
-    for (const vision of await this.deps.store.projectsAwaitingRoster()) {
+    for (const awaiting of await this.deps.store.projectsAwaitingRoster()) {
       try {
-        outcomes.push(await this.derive(vision));
+        outcomes.push(await this.derive({ projectId: awaiting.projectId, ...rosterVisionOf(awaiting.vision) }));
       } catch (err) {
-        if (!(err instanceof RosterDerivationExhausted || err instanceof RosterVisionUnreadable)) throw err;
-        outcomes.push(await this.block(vision.projectId, projectBlockCause(err)));
+        if (!(err instanceof RosterDerivationExhausted || err instanceof VisionUnreadable)) throw err;
+        outcomes.push(await this.block(awaiting.projectId, projectBlockCause(err)));
       }
     }
     return outcomes;
@@ -210,7 +185,7 @@ export class RosterDerivation implements RosterDerivationStep {
     return { kind: "project-blocked", projectId, cause };
   }
 
-  private async derive(vision: VisionAwaitingRoster): Promise<RosterOutcome> {
+  private async derive(vision: DerivationInput): Promise<RosterOutcome> {
     const { projectId } = vision;
     const response = await this.ask(vision);
     const roster = toRoster(vision, response, () => randomUUID());
@@ -219,7 +194,7 @@ export class RosterDerivation implements RosterDerivationStep {
     return { kind: "recorded", projectId, revision: roster.revision, roles: roster.roles.map((role) => role.name) };
   }
 
-  private async ask(vision: VisionAwaitingRoster): Promise<DerivationResponse> {
+  private async ask(vision: DerivationInput): Promise<DerivationResponse> {
     const provider = withStructuredLadder(
       this.deps.llm.forCall({ projectId: vision.projectId, taskId: null, callSite: "roster" }),
       {
@@ -238,7 +213,7 @@ export class RosterDerivation implements RosterDerivationStep {
     try {
       const response = await provider.generateStructured({
         capability: "Strong",
-        prompt: buildPrompt(vision, assumptionsOf(vision)),
+        prompt: buildPrompt(vision),
         schema: DerivationResponseSchema,
         maxTokens: 2048,
         validate,
@@ -246,7 +221,7 @@ export class RosterDerivation implements RosterDerivationStep {
       return response.data;
     } catch (err) {
       if (err instanceof StructuredOutputExhausted) {
-        throw new RosterDerivationExhausted(vision.projectId, vision.visionVersion, err.validationErrors, { cause: err });
+        throw new RosterDerivationExhausted(vision.projectId, vision.version, err.validationErrors, { cause: err });
       }
       throw err;
     }

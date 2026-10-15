@@ -3,7 +3,7 @@ import { z } from "zod";
 import { parseWorkItemJsonb } from "@ashara/shared";
 import type { VisionSource } from "@ashara/shared";
 import type { Database } from "../connection.js";
-import { dependencies, taskChecks, workItems } from "../schema.js";
+import { dependencies, taskChecks, workItems } from "../schema/index.js";
 
 // Quality's task checks (migration 036): the checks that decide an implementation
 // task, written by the check author in its check task. Append-only by revision.
