@@ -1,5 +1,5 @@
 import type { ZodType } from "zod";
-import type { CapabilityLevel, ProjectId, WorkItemId } from "@ashara/shared";
+import type { CapabilityLevel } from "@ashara/shared";
 
 /**
  * Per-capability model table for a single site (routing-profiles story). Used
@@ -192,35 +192,12 @@ export interface ReportedTokens {
   readonly cacheWriteTokens: number | null;
 }
 
-/** A token class that enters a call's price. */
-export type PricedTokenClass = keyof ReportedTokens;
-
-/**
- * A call's cost in USD, or why it is unmeasured: the classes whose count the
- * provider did not report though the model bills them, and the classes with
- * reported tokens the model has no rate for. An unmeasured cost carries no
- * number, so no consumer can read it as 0.
- */
-export type CostMeasurement =
-  | {
-      readonly measured: true;
-      readonly inputCost: number;
-      readonly outputCost: number;
-      readonly cacheSavings: number;
-      readonly totalCost: number;
-    }
-  | {
-      readonly measured: false;
-      readonly missingCounts: readonly PricedTokenClass[];
-      readonly missingRates: readonly PricedTokenClass[];
-    };
-
 export interface StructuredRequest<T> {
   capability: CapabilityLevel;
   prompt: string;
   schema: ZodType<T>;
   systemPrompt?: string;
-  /** The output bound sent with the request; Finance prices the call's worst case from it. */
+  /** The output bound sent with the request; the gate prices the call's worst case from it. */
   maxTokens: number;
   /** Call-site tag for static per-site routing. Optional — a site-less request always uses capability logic. */
   site?: KnownLLMSite;
@@ -229,17 +206,8 @@ export interface StructuredRequest<T> {
 export interface StructuredResponse<T> {
   data: T;
   usage: TokenUsage;
-  cost: CostMeasurement;
   provider: string;
   model: string;
-}
-
-/** Required on every recorded call: the project the spend belongs to, and the work item when one is served. */
-export interface LlmCallContext {
-  readonly projectId: ProjectId;
-  readonly taskId: WorkItemId | null;
-  /** Who the recorded call serves: always a routing site. */
-  readonly callSite: KnownLLMSite;
 }
 
 export type LlmCallOperation = "generateObject" | "generateText:structured-fallback" | "generateText:turn";
@@ -268,13 +236,12 @@ export type LlmFinishReason =
   | `unrecognized:${string}`;
 
 /**
- * One provider request about to be sent, as the pre-call check sees it. Finance
+ * One provider request about to be sent, as the gate sees it. The gate
  * estimates its worst-case cost from `requestBytes` and `maxOutputTokens`.
  */
-export interface PendingLlmCall {
-  /** Unique per provider request; the recorded call carries the same id. */
+export interface ProviderRequest {
+  /** Unique per provider request; the settled request carries the same id. */
   readonly callId: string;
-  readonly context: LlmCallContext;
   readonly provider: string;
   readonly model: ModelConfig;
   readonly operation: LlmCallOperation;
@@ -285,34 +252,26 @@ export interface PendingLlmCall {
 }
 
 /** One provider request as the gateway saw it; `usage` is `null` when the request produced no usage report. */
-export interface LlmProviderCall extends PendingLlmCall {
-  /**
-   * The instant the request was sent. The one instant per call: the cost
-   * ledger prices the call at the rates in force here, and so does the cost the
-   * gateway returns, so a call that straddles a price-window edge is priced once.
-   */
+export interface SentProviderRequest extends ProviderRequest {
+  /** The instant the request was sent, the one instant per request: the gate prices it at the rates in force here. */
   readonly requestedAt: Date;
   readonly usage: ExtractedUsage | null;
   readonly finishReason: LlmFinishReason;
   readonly outcome: LlmCallOutcome;
+  /** The request's own error when it failed; `undefined` when it returned a response. */
+  readonly providerError: unknown;
 }
 
 /**
- * Supplied by the composition root. `assertPriced` is the pre-call check: it
- * runs before every provider request and throws a `PreCallRefusal` to refuse
- * it (Finance refuses an unpriced model, and a call whose worst-case cost would
- * cross a spend cap). `record` runs once after every admitted request, success
- * or failure, with the same `callId`; a throw from it fails the call.
+ * What every provider request passes through. Finance's guarded port supplies
+ * it, and the gateway has no entry point without one. `admit` runs before the
+ * request: whatever it throws refuses the request, which is then never sent and
+ * never retried on a fallback model, and the throw reaches the caller as itself.
+ * `settle` runs once after every admitted request, success or failure: whatever
+ * it throws fails the call, unretried, as itself.
  */
-export interface LlmCallRecorder {
-  assertPriced(call: PendingLlmCall): Promise<void> | void;
-  record(call: LlmProviderCall): Promise<void>;
+export interface ProviderRequestGate {
+  admit(request: ProviderRequest): Promise<void>;
+  settle(request: SentProviderRequest): Promise<void>;
 }
 
-/**
- * Whether a gateway records its calls. `unrecorded` names why, so a process
- * that skips the ledger says so at its construction site instead of by omission.
- */
-export type CallRecording =
-  | { readonly kind: "recorded"; readonly recorder: LlmCallRecorder }
-  | { readonly kind: "unrecorded"; readonly reason: string };

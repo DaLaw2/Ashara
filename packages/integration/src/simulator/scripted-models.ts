@@ -6,7 +6,7 @@ import type {
 } from "@ai-sdk/provider";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import type { LanguageModelFactory } from "@ashara/llm-gateway";
+import type { LanguageModelFactory } from "@ashara/model-access";
 import {
   CheckSpecSchema,
   LAYOUT_FILE,

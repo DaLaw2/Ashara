@@ -1,7 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
 import { PUBLIC_INTERFACE_FILE, visionSourceLine } from "@ashara/shared";
-import type { StructuredValidation } from "@ashara/llm-gateway";
+import type { StructuredValidation } from "@ashara/model-access";
 import type {
     DecomposedTaskSpec,
     DecompositionConfig,

@@ -85,7 +85,7 @@ function notExercised(label: string): () => never {
  * compile error here, never a runtime TypeError. The loop's steps are never run by processTask.
  */
 function coreLoopDeps(
-  parts: Pick<CoreLoopDeps, "workItemRepo" | "developmentService"> & Partial<Omit<CoreLoopDeps, "eventLogger">>,
+  parts: Pick<CoreLoopDeps, "workItemRepo" | "developmentService"> & Partial<CoreLoopDeps>,
 ): CoreLoopDeps {
   return {
     // Every target here is made under the temporary directory.

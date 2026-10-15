@@ -4,7 +4,7 @@ import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { TurnToolExecutable } from "./errors.js";
 import type { ResolvedModel } from "./gateway.js";
-import type { CostMeasurement, ProviderType, TokenUsage } from "./types.js";
+import type { ProviderType, TokenUsage } from "./types.js";
 
 /**
  * One tool as the model sees it: its description and input schema, nothing
@@ -56,12 +56,11 @@ export interface TurnResult {
   readonly usage: TokenUsage;
   /** The output token count the provider reported, `null` when it reported none. */
   readonly reportedOutputTokens: number | null;
-  readonly cost: CostMeasurement;
   readonly provider: string;
   readonly model: string;
 }
 
-/** One single-step recorded call per agent turn. Never executes a tool, never loops. */
+/** One single-step gated call per agent turn. Never executes a tool, never loops. */
 export interface TurnLlm {
   generateTurn(request: TurnRequest): Promise<TurnResult>;
 }

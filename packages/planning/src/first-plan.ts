@@ -1,4 +1,5 @@
-import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/finance";
+import type { LadderAttemptEvent } from "@ashara/model-access";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import { describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId, WorkItemLevel, WorkKind } from "@ashara/shared";

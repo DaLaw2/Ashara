@@ -201,7 +201,9 @@ export class CoreLoop {
     const failed = results.filter((r) => r.status === "failed").length;
     const refused = results.filter((r) => r.status === "refused").length;
     const interrupted = results.filter((r) => r.status === "interrupted").length;
-    deps.eventLogger?.emit({ event: "cycle_complete", tasksProcessed: batch.length, completed, failed, refused, interrupted });
+    console.log(
+      `[cycle] ${batch.length} task(s): ${completed} completed, ${failed} failed, ${refused} refused, ${interrupted} interrupted`,
+    );
 
     const stop = refusedAtDeployment ?? (await deps.spendCap.deploymentStop());
     if (stop) return { ...(await this.haltAtCap(stop)), tasksProcessed: batch.length, results };

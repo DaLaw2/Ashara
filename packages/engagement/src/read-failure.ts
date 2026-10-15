@@ -1,12 +1,10 @@
+import { LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "@ashara/finance";
 import {
   GatewayError,
-  LlmCallNotAdmitted,
-  LlmCallNotRecorded,
-  PreCallRefusal,
   ProviderConfigurationRejected,
   ProviderError,
   StructuredOutputExhausted,
-} from "@ashara/llm-gateway";
+} from "@ashara/model-access";
 
 /**
  * Whose failure a failed model read of client input is (task t-intake-failure-classes, ADR-080 d5).

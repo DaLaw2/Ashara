@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@ashara/engagement": "*",
-    "@ashara/llm-gateway": "*",
+    "@ashara/finance": "*",
+    "@ashara/model-access": "*",
     "@ashara/organization": "*",
     "@ashara/shared": "*",
     "zod": "4.4.3"

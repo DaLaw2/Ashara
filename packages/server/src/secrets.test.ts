@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { buildGatewayConfig } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { buildGatewayConfig } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { createKeyFile } from "@ashara/security";
 import {
   ServerStartupRefused,

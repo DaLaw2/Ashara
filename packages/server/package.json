@@ -15,7 +15,7 @@
     "@ashara/engagement": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
-    "@ashara/llm-gateway": "*",
+    "@ashara/model-access": "*",
     "@ashara/orchestrator": "*",
     "@ashara/organization": "*",
     "@ashara/planning": "*",

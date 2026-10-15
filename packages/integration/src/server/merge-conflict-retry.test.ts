@@ -22,9 +22,9 @@ import { DevelopmentService } from "@ashara/development";
 import type { TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, execFileGitRunner, loadBaseCell, pruneEnvironmentImages, withGitRunner } from "@ashara/execution-infra";
 import type { BaseCellReference, GitRunner } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { FailureRouter, PlanningService, classifyFailure, failWorkItem, recoverFailedItem, startWorkItem } from "@ashara/planning";
 import { createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
@@ -130,7 +130,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     },
   });
   stub.model = mock;
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -139,15 +139,11 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
       defaultProvider: "anthropic",
     },
     checkedSources: ["test"],
-    recording: {
-      kind: "recorded",
-      recorder: new LlmCallLedger(
-        new LlmCallRepository(db),
-        new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps }),
-      ),
-    },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps }),
+  ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DevelopmentService({

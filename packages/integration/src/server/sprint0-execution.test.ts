@@ -26,9 +26,9 @@ import type { StackChoiceStore } from "@ashara/engagement";
 import type { SessionStore, TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
@@ -188,7 +188,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     },
   });
   stub.model = mock;
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -197,12 +197,11 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
       defaultProvider: "anthropic",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(
-      new LlmCallRepository(db),
-      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-    ) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRepository(db);

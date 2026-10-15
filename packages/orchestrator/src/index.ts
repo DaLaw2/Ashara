@@ -17,6 +17,5 @@ export { resolveTargetProjectPath } from "./task-helpers.js";
 export { ContinuousRunner } from "./runner.js";
 export type { CycleRunner } from "./runner.js";
 
-export { EventLogger } from "./event-logger.js";
 
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";

@@ -18,7 +18,7 @@
 # on its own data-gated track; this is a hand-authored template per combo.
 #
 # Site keys reuse the EXACT string each call site already tags its request
-# with (llm-gateway KNOWN_LLM_SITES). That list is the single registry: a key
+# with (model-access KNOWN_LLM_SITES). That list is the single registry: a key
 # outside it is rejected when this file loads, and a non-empty table below
 # that omits one of its entries makes the gateway refuse to start.
 # "escalation" is not a call site of its own: the reliability ladder stamps
@@ -116,7 +116,7 @@
 # reasoning and returned no text (StructuredOutputTruncated); the W5 trial
 # (2026-10-14) repeated it in 7 of 12 calls. Since then the gateway sends a
 # request with thinking on with a reasoning allowance added to its bound
-# (llm-gateway thinking.ts outputBudget), priced into its worst-case cost. A
+# (model-access thinking.ts outputBudget), priced into its worst-case cost. A
 # site-less call keeps the default, off. suite-review is off because all three
 # of its DeepSeek calls on record (W11c twice, smoke2 once) spent their whole
 # output bound on reasoning and returned no answer, smoke2's at the 32,768-token

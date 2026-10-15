@@ -1,10 +1,10 @@
 import { LLMGateway } from "./gateway.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
 import { NoLLMProvidersConfigured, RoutingProfileIncomplete, RoutingProfileModelMissing } from "./errors.js";
-import { resolveModelsConfigPath } from "./pricing.js";
+import { resolveModelsConfigPath } from "./paths.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import { KNOWN_LLM_SITES } from "./types.js";
-import type { CallRecording, GatewayConfig } from "./types.js";
+import type { GatewayConfig } from "./types.js";
 
 const HOW_TO_FIX =
   "Store an API key for at least one provider listed in provider_configs: " +
@@ -93,13 +93,8 @@ export interface BuildGatewayOptions {
    */
   readonly checkedSources: readonly string[];
   /**
-   * Whether every structured call writes a ledger row. Required: a process
-   * that does not record says why, at its own construction site.
-   */
-  readonly recording: CallRecording;
-  /**
    * Read once per provider request, before it is sent; that instant prices the
-   * call in the recorder's row and in the cost the gateway returns. Required: the rate
+   * request where the gate settles it. Required: the rate
    * of a time-windowed model depends on it.
    */
   readonly clock: () => Date;
@@ -128,5 +123,5 @@ export function buildGateway(options: BuildGatewayOptions): LLMGateway {
 
   assertRoutingProfileComplete(config);
   assertRoutingProfileModelsPresent(config);
-  return new LLMGateway(config, options.recording, options.clock, options.models);
+  return new LLMGateway(config, options.clock, options.models);
 }

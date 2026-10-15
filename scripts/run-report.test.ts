@@ -7,9 +7,9 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository,
 import { toSessionAttempt, withSessionLifecycle } from "@ashara/development";
 import type { SessionStore } from "@ashara/development";
 import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
@@ -125,19 +125,15 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       },
     });
     const calls = new LlmCallRepository(db);
-    const gateway = buildGateway({
+    const gateway = new GuardedModelAccess(buildGateway({
       models: sdkLanguageModels,
       config: {
         providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [deepseek], enabled: true }],
         defaultProvider: "deepseek",
       },
       checkedSources: ["test"],
-      recording: {
-        kind: "recorded",
-        recorder: new LlmCallLedger(calls, new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })),
-      },
       clock: () => new Date(),
-    });
+    }), new LlmCallLedger(calls, new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } })));
     const repo = new DevSessionRepository(db);
     const store: SessionStore = {
       insert: (sid, tid, brief, version) => repo.insert(sid, tid, brief, version),

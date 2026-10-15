@@ -28,7 +28,6 @@ import type { PoolFactory } from "@ashara/db";
 import {
   CoreLoop,
   ContinuousRunner,
-  EventLogger,
   reconcileWorkItemsOnStartup,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
@@ -84,9 +83,9 @@ import {
   loadThinkingPolicyFromToml,
   resolveModelsConfigPath,
   toModelConfig,
-} from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
+} from "@ashara/model-access";
+import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig } from "@ashara/model-access";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
 import { terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
@@ -224,19 +223,16 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const config = loadServerConfig(databaseUrl, apiToken);
 
-  // Single composition-root call for the LLM gateway (ADR-030). There is no
-  // silent fallback here: zero providers -> NoLLMProvidersConfigured
-  // propagates to the caller and the server refuses to start.
-  const pipelineLogPath = join(config.coreLoop.workdirBase, "pipeline.jsonl");
-  const eventLogger = new EventLogger(pipelineLogPath);
-  console.log(`Pipeline event log: ${pipelineLogPath}`);
-
-  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => {
-    eventLogger.emit({ event: "ladder_attempt", ...attempt });
+  // Ladder attempts and execution events go to the server log. A ladder attempt's capability,
+  // attempt number, validation errors and raw excerpt are in no llm_calls column, and an attempt
+  // the ladder judged invalid can be an ok provider call there.
+  const logEvent = (event: Readonly<Record<string, unknown>> & { readonly event: string }): void => {
+    console.log(`[event] ${JSON.stringify(event)}`);
   };
+  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => logEvent({ event: "ladder_attempt", ...attempt });
 
   // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
-  // every provider request the gateway refuses an unpriced model and a call whose
+  // every provider request Finance's guarded port refuses an unpriced model and a call whose
   // worst case would cross the project's or the deployment's cap and writes the
   // admitted call's llm_calls row as pending; after it, the call's record completes
   // that row. The loop reads the same cap to stop at the deployment's.
@@ -252,7 +248,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   );
   const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
   // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).
-  // Load from DB, convert to the llm-gateway ModelConfig shape, and build the
+  // Load from DB, convert to the model-access ModelConfig shape, and build the
   // gateway config. Routing profiles remain deployment-specific TOML config.
   const dbModelRows = await configRepo.listModelConfigs();
   const models: Record<string, ModelConfig> = {};
@@ -267,13 +263,17 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const routingProfiles = loadRoutingProfilesFromToml(resolveModelsConfigPath());
   const gwConfig = buildGatewayConfig(models, routingProfiles, credentials);
   gwConfig.thinking = loadThinkingPolicyFromToml(resolveModelsConfigPath());
+  // Single composition-root call for the LLM gateway (ADR-030). There is no
+  // silent fallback here: zero providers -> NoLLMProvidersConfigured
+  // propagates to the caller and the server refuses to start.
   const llmGateway: LLMGateway = buildGateway({
     config: gwConfig,
     checkedSources: ["secret store provider/<name>/api_key for each provider_configs row"],
-    recording: { kind: "recorded", recorder: llmCallLedger },
     clock: () => new Date(ports.clock.now()),
     models: ports.models,
   });
+  // Finance in front of Model Access: every model call below goes through this guarded port.
+  const modelCalls = new GuardedModelAccess(llmGateway, llmCallLedger);
   console.log("LLM gateway initialized");
   console.log(`Model catalog: ${dbModelRows.length} models loaded from DB`);
 
@@ -327,7 +327,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       if (capability !== graded) {
         console.log(`[${task.id}] model escalated from graded ${graded ?? "(none)"} to ${capability} (attempt ${task.attempt})`);
       }
-      return llmGateway.resolveModel(capability, "agent-runner");
+      return modelCalls.resolveModel(capability, "agent-runner");
     },
   });
 
@@ -339,7 +339,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   const devEventSink: ExecutionEventSink = {
-    emit: (event) => eventLogger.emit(event),
+    emit: logEvent,
   };
 
   // A task's project is the project_id on its own row (migration 014): the
@@ -384,7 +384,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     eventSink: devEventSink,
     intentSource,
     cells: { substrate: cellSubstrate, baseCell, instance: cellInstance },
-    llm: llmGateway,
+    llm: modelCalls,
     staffing,
     attemptPolicy: ATTEMPT_POLICY,
     environment: {
@@ -396,7 +396,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     },
     checks: createTaskCheckStore(db),
     suiteReview: new SuiteReviewer({
-      llm: llmGateway,
+      llm: modelCalls,
       source: createSuiteReviewSource(db),
       publicInterface: gitPublicInterface,
       onAttempt: ladderAttemptSink,
@@ -417,33 +417,32 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     acceptanceSweeper: developmentService,
     acceptance: createAcceptanceStore(db),
     deliveredReports: new DeliveredReports(createDeliveredReportStore(db)),
-    eventLogger,
     failureRouter,
     spendCap,
     clientStops: new ClientStops(createClientStopStore(db)),
     clientChanges: new ClientChanges(createClientChangeStore(db)),
     liaisonIntake: new TenderIntake({
-      llm: llmGateway,
+      llm: modelCalls,
       store: createIntakeStore(db),
       onAttempt: ladderAttemptSink,
     }),
     liaisonAnswers: new ClientAnswers({
-      llm: llmGateway,
+      llm: modelCalls,
       store: createAnswerStore(db),
       onAttempt: ladderAttemptSink,
     }),
     rosterDerivation: new RosterDerivation({
-      llm: llmGateway,
+      llm: modelCalls,
       store: createRosterStore(db),
       onAttempt: ladderAttemptSink,
     }),
     firstPlanning: new FirstPlanner({
-      llm: llmGateway,
+      llm: modelCalls,
       store: createFirstPlanStore(db),
       onAttempt: ladderAttemptSink,
     }),
     replanning: new Replanner({
-      llm: llmGateway,
+      llm: modelCalls,
       store: createReplanStore(db),
       onAttempt: ladderAttemptSink,
     }),

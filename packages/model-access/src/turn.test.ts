@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { parseProjectId } from "@ashara/shared";
 import { LLMGateway } from "./gateway.js";
 import { cachedTurnPrompt, mapFinishReason, parseToolCalls } from "./turn.js";
-import type { LlmProviderCall, ModelConfig } from "./types.js";
+import type { ModelConfig, SentProviderRequest } from "./types.js";
 
 describe("Anthropic prompt caching on agent turns", () => {
   const SONNET: ModelConfig = {
@@ -46,19 +44,18 @@ describe("Anthropic prompt caching on agent turns", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
     });
-    const recorded: LlmProviderCall[] = [];
+    const recorded: SentProviderRequest[] = [];
     const gateway = new LLMGateway(
       {
         providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "k", models: [SONNET], enabled: true }],
         defaultProvider: "anthropic",
       },
-      { kind: "recorded", recorder: { assertPriced: () => {}, record: async (call) => void recorded.push(call) } },
       () => new Date("2026-10-14T12:00:00Z"),
       (provider, modelConfig) => createAnthropic({ apiKey: provider.apiKey, fetch: fetchStub })(modelConfig.apiModelId),
     );
 
     await gateway
-      .forCall({ projectId: parseProjectId(randomUUID(), "projectId"), taskId: null, callSite: "agent-runner" })
+      .gated("agent-runner", { admit: async () => {}, settle: async (request) => void recorded.push(request) })
       .generateTurn({
         model: gateway.resolveModel("Strong", "agent-runner"),
         system: "You are a worker.",

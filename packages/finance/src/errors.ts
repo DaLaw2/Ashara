@@ -1,4 +1,107 @@
-import { PreCallRefusal } from "@ashara/llm-gateway";
+import { describeErrorChain } from "@ashara/shared";
+
+/**
+ * Base for a refusal Finance raises BEFORE a provider request (UnpricedModel,
+ * BudgetExceeded, SpendEstimateInvalid). Model Access never retries one on a
+ * fallback model: the request was never sent, and another model would meet the
+ * same price list and the same cap.
+ */
+export class PreCallRefusal extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "PreCallRefusal";
+  }
+}
+
+interface LlmCallNotRecordedContext {
+  readonly projectId: string;
+  readonly callSite: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly operation: string;
+  /** The provider call's own outcome, which the failed write was recording. */
+  readonly callOutcome: string;
+  /** The provider call's error when it failed too; `undefined` for a successful call. */
+  readonly providerError: unknown;
+}
+
+/**
+ * The recorder could not write the row for a provider call. The call fails:
+ * a spend that reached the provider but not the ledger must not be returned
+ * as a success. The write error is `cause`; the provider's own error, when the
+ * call failed as well, is `context.providerError`.
+ */
+export class LlmCallNotRecorded extends Error {
+  readonly context: LlmCallNotRecordedContext;
+
+  constructor(context: LlmCallNotRecordedContext, options: ErrorOptions) {
+    const writeError = describeErrorChain(options.cause);
+    super(
+      `llm_calls row not written for provider="${context.provider}" model="${context.model}" ` +
+        `operation="${context.operation}" callSite="${context.callSite}" project=${context.projectId} ` +
+        `(call outcome: ${context.callOutcome}): ${writeError}`,
+      options,
+    );
+    this.name = "LlmCallNotRecorded";
+    this.context = context;
+  }
+}
+
+interface LlmCallNotAdmittedContext {
+  readonly projectId: string;
+  readonly callSite: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly operation: string;
+}
+
+/**
+ * The recorder's pre-call check broke instead of answering: its spend read or its
+ * pending-row write failed. That is not a refusal (`PreCallRefusal`), and the request was
+ * never sent. A fallback model would meet the same ledger, so it is never retried; the
+ * recorder's own error is `cause`.
+ */
+export class LlmCallNotAdmitted extends Error {
+  readonly context: LlmCallNotAdmittedContext;
+
+  constructor(context: LlmCallNotAdmittedContext, options: ErrorOptions) {
+    super(
+      `llm_calls admission failed before any request for provider="${context.provider}" model="${context.model}" ` +
+        `operation="${context.operation}" callSite="${context.callSite}" project=${context.projectId}: ` +
+        describeErrorChain(options.cause),
+      options,
+    );
+    this.name = "LlmCallNotAdmitted";
+    this.context = context;
+  }
+}
+
+interface LlmCallCostMissingContext {
+  readonly projectId: string;
+  readonly callSite: string;
+  readonly provider: string;
+  readonly model: string;
+  /** How many costs the turn's gate recorded; exactly one is expected. */
+  readonly recorded: number;
+}
+
+/**
+ * A turn returned without exactly one recorded cost. A turn is one provider
+ * request, so its gate records once; any other count means a request went
+ * unrecorded or was recorded twice, and the turn is not returned as a success.
+ */
+export class LlmCallCostMissing extends Error {
+  readonly context: LlmCallCostMissingContext;
+
+  constructor(context: LlmCallCostMissingContext) {
+    super(
+      `a turn for provider="${context.provider}" model="${context.model}" callSite="${context.callSite}" ` +
+        `project=${context.projectId} returned with ${context.recorded} recorded cost(s); exactly one is expected`,
+    );
+    this.name = "LlmCallCostMissing";
+    this.context = context;
+  }
+}
 
 interface UnpricedModelContext {
   readonly provider: string;

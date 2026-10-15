@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PodmanSubstrate, createCellBackend, loadBaseCell } from "@ashara/execution-infra";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LlmCallRecorder, LlmProviderCall, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, measureCost } from "@ashara/finance";
+import type { LlmCallRecorder, LlmProviderCall } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
 import type { AttemptRecord } from "@ashara/workplace";
@@ -74,8 +76,15 @@ describe("runAttempt on a real cell", () => {
     stub.model = mock;
 
     const rows: LlmProviderCall[] = [];
-    const recorder: LlmCallRecorder = { assertPriced: () => {}, record: async (call) => void rows.push(call) };
-    const gateway = buildGateway({
+    const recorder: LlmCallRecorder = {
+      admit: async () => {},
+      record: async (call) => {
+        rows.push(call);
+        if (call.usage === null) return { measured: false, missingCounts: [], missingRates: [] };
+        return measureCost(call.usage.reported, call.model, call.requestedAt);
+      },
+    };
+    const gateway = new GuardedModelAccess(buildGateway({
       models: sdkLanguageModels,
       config: {
         providers: [
@@ -84,9 +93,8 @@ describe("runAttempt on a real cell", () => {
         defaultProvider: "anthropic",
       },
       checkedSources: ["test"],
-      recording: { kind: "recorded", recorder },
       clock: () => new Date(),
-    });
+    }), recorder);
 
     const base = await loadBaseCell();
     const taskId = createWorkItemId();

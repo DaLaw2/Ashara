@@ -24,9 +24,9 @@ import {
   createProjectWithTender,
 } from "@ashara/engagement";
 import type { AnswerStore, BlockReportStore, IntakeStore, PlanReportStore } from "@ashara/engagement";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { releaseClearedBlocks } from "@ashara/orchestrator";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
@@ -56,7 +56,7 @@ const NAME_PREFIX = `replan-test-${randomUUID().slice(0, 8)}`;
 const MERGE_COMMIT = "a".repeat(40);
 
 let db: ReturnType<typeof createDb>;
-let gateway: LLMGateway;
+let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();
 
@@ -299,7 +299,7 @@ async function reportsOf(projectId: ProjectId) {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  gateway = buildGateway({
+  gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -315,15 +315,11 @@ beforeAll(async () => {
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: {
-      kind: "recorded",
-      recorder: new LlmCallLedger(
-        new LlmCallRepository(db),
-        new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-      ),
-    },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
 });
 
 beforeEach(() => {

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, parse as parsePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadModelsConfigPathEnvOverride } from "@ashara/shared";
 import { AsharaRootNotFound } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +14,7 @@ import { AsharaRootNotFound } from "./errors.js";
 //
 // Anchoring to THIS module's on-disk location (import.meta.url) instead of
 // process.cwd() makes those defaults correct by construction whatever the cwd.
-// The @ashara/llm-gateway package always resolves into the same repo checkout
+// The @ashara/model-access package always resolves into the same repo checkout
 // the server runs from (workspace/symlinked node_modules), so import.meta.url
 // points inside that checkout.
 // ---------------------------------------------------------------------------
@@ -28,7 +29,7 @@ import { AsharaRootNotFound } from "./errors.js";
  * outside the repo): the cwd would be an evidence default, a directory that
  * merely happens to be where the process started.
  */
-export function resolveAsharaRoot(): string {
+function resolveAsharaRoot(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   const { root } = parsePath(dir);
   const searched: string[] = [];
@@ -46,4 +47,20 @@ export function resolveAsharaRoot(): string {
   }
 
   throw new AsharaRootNotFound(searched);
+}
+
+/**
+ * Resolves the models.toml path the same way for every reader of that file
+ * (routing profiles, thinking policy). Precedence, highest first:
+ *   1. an explicit `configPath` argument (test/caller override),
+ *   2. the `ASHARA_MODELS_CONFIG` env var (operator override),
+ *   3. the module-anchored repo default `<ashara-root>/config/models.toml`.
+ * The default is anchored to the Ashara checkout via `resolveAsharaRoot()`, not
+ * to process.cwd(): a process whose cwd is elsewhere silently fails to find a
+ * cwd-relative default.
+ */
+export function resolveModelsConfigPath(configPath?: string): string {
+  return configPath
+    ?? loadModelsConfigPathEnvOverride()
+    ?? join(resolveAsharaRoot(), "config", "models.toml");
 }

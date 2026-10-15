@@ -13,9 +13,9 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepos
 import { DevelopmentService } from "@ashara/development";
 import type { SessionStore, TaskCheckStore } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, cellInstanceFor, loadBaseCell, pruneEnvironmentImages, reconcileCellsAtStartup } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 
@@ -145,7 +145,7 @@ describe("a task runs on cells end to end", () => {
     });
     stub.model = mock;
 
-    const gateway = buildGateway({
+    const gateway = new GuardedModelAccess(buildGateway({
       models: sdkLanguageModels,
       config: {
         providers: [
@@ -154,12 +154,11 @@ describe("a task runs on cells end to end", () => {
         defaultProvider: "anthropic",
       },
       checkedSources: ["test"],
-      recording: { kind: "recorded", recorder: new LlmCallLedger(
+      clock: () => new Date(),
+    }), new LlmCallLedger(
       new LlmCallRepository(db),
       new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-    ) },
-      clock: () => new Date(),
-    });
+    ));
 
     // The environment a merged Sprint 0 leaves on main: the BaseCell image, unchanged.
     const base = await loadBaseCell();

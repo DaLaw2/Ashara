@@ -42,7 +42,7 @@ function parseProviderType(source: string, providerName: string, raw: string): P
  *
  * The caller owns the credential source: the server resolves each key from
  * its secret store (`provider/<name>/api_key`). The spend cap is Finance's,
- * applied by the call recorder before every request.
+ * applied by its guarded port before every request.
  *
  * A row with no catalog model, or with no key (no base URL for a local one),
  * is left out: storing a key is how the owner enables a provider (policy). It

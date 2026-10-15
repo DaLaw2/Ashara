@@ -6,9 +6,9 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { PlanReports, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner } from "@ashara/planning";
@@ -34,7 +34,7 @@ const NONCE = randomUUID().slice(0, 8);
 const NAME_PREFIX = `first-plan-test-${NONCE}`;
 
 let db: ReturnType<typeof createDb>;
-let gateway: LLMGateway;
+let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();
 
@@ -332,16 +332,15 @@ beforeAll(async () => {
     ],
     defaultProvider: "deepseek",
   };
-  gateway = buildGateway({
+  gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(
-      new LlmCallRepository(db),
-      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-    ) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
 });
 
 beforeEach(() => {

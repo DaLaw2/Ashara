@@ -16,7 +16,6 @@ import type {
 import type { AcceptanceStore } from "./acceptance.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
-import type { EventLogger } from "./event-logger.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
@@ -131,7 +130,6 @@ export interface CoreLoopDeps {
   readonly acceptance: AcceptanceStore;
   /** The Liaison's one delivered report per accepted project; run every cycle (no LLM call). */
   readonly deliveredReports: LiaisonDeliveredReports;
-  readonly eventLogger?: EventLogger;
   readonly failureRouter: FailureRecoveryDeps["failureRouter"];
   /** The one spend cap, read from llm_calls: checked before every cycle's work and between its steps. */
   readonly spendCap: SpendCapPort;

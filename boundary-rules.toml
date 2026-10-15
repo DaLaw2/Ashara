@@ -24,19 +24,19 @@ restrict.workplace = ["src/acl/*.ts"]
 [planning]
 # ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind), and Engagement
 # of both: each reads the client vision as its published VisionVersion through its ACL (S7, S8).
-allow = ["shared", "llm-gateway", "organization", "engagement"]
+allow = ["shared", "finance", "model-access", "organization", "engagement"]
 restrict.engagement = ["src/acl/*.ts"]
 
 [development]
 # ADR-075: Execution runs every task on a cell (execution-infra) through the Workplace attempt loop.
-allow = ["shared", "llm-gateway", "execution-infra", "workplace"]
+allow = ["shared", "finance", "model-access", "execution-infra", "workplace"]
 
 [db]
 allow = ["shared"]
 
 [engagement]
 # O1 (ADR-080 d3): Engagement owns its repositories; db supplies the connection and the schema.
-allow = ["shared", "llm-gateway", "db"]
+allow = ["shared", "finance", "model-access", "db"]
 
 [server]
 allow = ["*"]
@@ -44,7 +44,7 @@ allow = ["*"]
 # startup secrets loaded, plus the web-client login's secret-name vocabulary.
 restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
 
-[llm-gateway]
+[model-access]
 allow = ["shared"]
 
 [security]
@@ -55,23 +55,24 @@ allow = ["db"]
 importers = ["server", "integration"]
 
 [finance]
-# ADR-075 S2 (story s-cost-ledger-m1): llm_calls rows go through db; prices and the
-# recorder port come from llm-gateway's public API (calculateCost is not moved here).
-allow = ["db", "llm-gateway"]
+# ADR-075 Finance in front of Model Access: llm_calls rows go through db; Finance measures cost,
+# owns the recorder port and guards every model call; the model catalog and the gate it supplies
+# come from model-access's public API.
+allow = ["db", "shared", "model-access"]
 
 [execution-infra]
 # ADR-075 Execution Infrastructure: cells on the container substrate. Imports no other context.
 allow = ["shared"]
 
 [workplace]
-# ADR-075 Workplace: the attempt loop in Z0 (each model turn through llm-gateway) with every tool on a cell.
-allow = ["shared", "llm-gateway", "execution-infra"]
+# ADR-075 Workplace: the attempt loop in Z0 (each model turn through Finance's guarded port) with every tool on a cell.
+allow = ["shared", "finance", "model-access", "execution-infra"]
 
 [organization]
 # ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Roster derivation is
-# Organization's language, so its structured call on the `roster` site lives here, through llm-gateway
-# like Engagement's and Delivery's own sites.
-allow = ["shared", "llm-gateway", "engagement"]
+# Organization's language, so its structured call on the `roster` site lives here, through Finance's
+# guarded port like Engagement's and Delivery's own sites.
+allow = ["shared", "finance", "model-access", "engagement"]
 restrict.engagement = ["src/acl/*.ts"]
 
 [integration]
@@ -90,7 +91,7 @@ named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]
 names.development = ["DevelopmentService", "EXECUTION_STATUSES"]
 names.execution-infra = ["GitRunner", "ProcessRunner", "execFileGitRunner", "loadBaseCell"]
-names.llm-gateway = ["LanguageModelFactory"]
+names.model-access = ["LanguageModelFactory"]
 names.security = ["MasterKey", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
 names.shared = ["ATTEMPT_TERMINALS", "BLOCKED_REASON_SOURCES", "BlockedReasonCorrupt", "Clock", "ContendedWaitKind", "ContendedWaitObserver", "OUTBOUND_TRANSITIONS", "PROJECT_STATUSES", "SPEND_CAP_ERROR_CLASS", "StoredBlockedReason", "VisionSource", "WORK_ITEM_STATUSES", "WorkItemStatus", "describeErrorChain", "observeContendedWaits", "parseStoredBlockedReason", "parseStoredTaskSpec"]

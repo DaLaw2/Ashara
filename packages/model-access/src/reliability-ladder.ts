@@ -1,7 +1,7 @@
 import type { ZodType } from "zod";
 import type { CapabilityLevel } from "@ashara/shared";
 import { GatewayError, NoProviderAvailableError, SchemaValidationError } from "./errors.js";
-import { CAPABILITY_RANK } from "./pricing.js";
+import { CAPABILITY_RANK } from "./capability-rank.js";
 import type { KnownLLMSite } from "./types.js";
 
 /**
@@ -34,7 +34,7 @@ const ESCALATION_SITE: KnownLLMSite = "escalation";
 // The ladder never invokes an LLM directly: the caller injects the per-attempt
 // executor (`call` + `validate`, or a whole `attempt` for the structured wrap).
 // This keeps it a pure combinator — unit-testable with a fake caller
-// (llm-gateway never imports development/planning; consumers depend on it).
+// (model-access never imports development/planning; consumers depend on it).
 // ---------------------------------------------------------------------------
 
 const RAW_EXCERPT_LENGTH = 400;
@@ -286,7 +286,7 @@ async function runLadderCore<T>(
  * Returning `ok:false` makes the ladder treat the attempt as failed and (with a
  * `reask`) feed the errors back into the retry prompt, so a single malformed LLM
  * emission is CORRECTED on retry instead of exploding the caller (the Run-10
- * phantom-ref failure). It is not a throw so it crosses the llm-gateway boundary
+ * phantom-ref failure). It is not a throw so it crosses the model-access boundary
  * without the caller's error type leaking into this package.
  */
 export type StructuredValidation =

@@ -4,18 +4,18 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ConfigRepository, createDb, DEFAULT_DATABASE_URL } from "@ashara/db";
+import { measureCost } from "@ashara/finance";
 import {
   buildGateway,
   LLMGateway,
   loadRoutingProfilesFromToml,
-  measureCost,
   resolveModelsConfigPath,
   sdkLanguageModels,
   StructuredOutputExhausted,
   toModelConfig,
   withStructuredLadder,
-} from "@ashara/llm-gateway";
-import type { LanguageModelFactory } from "@ashara/llm-gateway";
+} from "@ashara/model-access";
+import type { LanguageModelFactory } from "@ashara/model-access";
 
 // Against the shared dev database (in CI, the freshly migrated one). The routing
 // check only reads the catalog; the price-window test creates one model row with
@@ -89,7 +89,6 @@ describe("the model catalog", () => {
         providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "unused", models, enabled: true }],
         defaultProvider: "anthropic",
       },
-      { kind: "unrecorded", reason: "resolution only: no request is sent" },
       () => new Date(),
       sdkLanguageModels,
     );
@@ -224,7 +223,6 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
         routingProfiles: withProfiles ? loadRoutingProfilesFromToml(resolveModelsConfigPath()) : {},
       },
       checkedSources: ["test"],
-      recording: { kind: "unrecorded", reason: "resolution only, or a scripted model: nothing is charged" },
       clock: () => new Date(),
       models,
     });
@@ -260,7 +258,11 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
         warnings: [],
       },
     });
-    const ladder = withStructuredLadder(await gatewayFor(["deepseek"], true, () => scripted), { site: "roster", attempts: 2 });
+    const ladder = withStructuredLadder(
+      // Nothing is charged: the scripted model is no provider, and this test is about the ladder's tiers.
+      (await gatewayFor(["deepseek"], true, () => scripted)).gated("roster", { admit: async () => {}, settle: async () => {} }),
+      { site: "roster", attempts: 2 },
+    );
 
     const failure = await ladder
       .generateStructured({ capability: "Strong", prompt: "p", schema: z.object({ roles: z.array(z.string()) }), maxTokens: 100 })

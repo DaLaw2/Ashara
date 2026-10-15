@@ -1,7 +1,7 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
-import type { ContextualTurnLlm, TurnResult } from "@ashara/llm-gateway";
-import { PreCallRefusal } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/finance";
+import type { ContextualTurnLlm, CostedTurnResult } from "@ashara/finance";
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Clock } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
@@ -19,7 +19,7 @@ import type { AttemptRecord, AttemptRecordSink } from "./records.js";
 import { executeTool, toolSchemasFor } from "./tools.js";
 
 /**
- * The routing site agent work is tagged with today (llm-gateway KNOWN_LLM_SITES, config/models.toml):
+ * The routing site agent work is tagged with today (model-access KNOWN_LLM_SITES, config/models.toml):
  * the llm_calls rows of an attempt carry it, and the caller resolves the pinned model with it.
  */
 const AGENT_CALL_SITE = "agent-runner";
@@ -183,7 +183,7 @@ export async function runAttempt(assignment: Assignment, deps: AttemptDeps): Pro
     // only bounds a model call that would otherwise outlive the attempt.
     const wallClock = new AbortController();
     const timer = setTimeout(() => wallClock.abort(new AttemptWallClockExhausted(turn, limits.wallClockMs)), Math.max(0, deadline - clock.now()));
-    let result: TurnResult;
+    let result: CostedTurnResult;
     try {
       result = await llm.generateTurn({
         model: assignment.model,

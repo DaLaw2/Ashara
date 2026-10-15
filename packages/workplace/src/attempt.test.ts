@@ -4,8 +4,9 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, EnvironmentCheckReport, EnvironmentTestRun, ExecResult } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/llm-gateway";
-import type { ContextualTurnLlm, CostMeasurement, ResolvedModel, TurnResult } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/finance";
+import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
+import type { ResolvedModel } from "@ashara/model-access";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
@@ -20,13 +21,13 @@ import type { AttemptRecord } from "./records.js";
 
 type TurnRequest = Parameters<ReturnType<ContextualTurnLlm["forCall"]>["generateTurn"]>[0];
 type Call = { readonly name: string; readonly input: unknown; readonly invalid?: string };
-type Step = (request: TurnRequest) => Promise<TurnResult> | TurnResult;
+type Step = (request: TurnRequest) => Promise<CostedTurnResult> | CostedTurnResult;
 
 const MEASURED: CostMeasurement = { measured: true, inputCost: 0.001, outputCost: 0.002, cacheSavings: 0, totalCost: 0.003 };
 
 let callCounter = 0;
 
-function turn(calls: readonly Call[], options: { text?: string; finishReason?: TurnResult["finishReason"]; cost?: CostMeasurement } = {}): TurnResult {
+function turn(calls: readonly Call[], options: { text?: string; finishReason?: CostedTurnResult["finishReason"]; cost?: CostMeasurement } = {}): CostedTurnResult {
   const toolCalls = calls.map((call) => {
     callCounter += 1;
     const toolCallId = `tc-${callCounter}`;
@@ -290,7 +291,7 @@ describe("runAttempt", () => {
     let abortReason: unknown;
     const { llm } = scriptedLlm([
       (request) =>
-        new Promise<TurnResult>((_resolve, reject) => {
+        new Promise<CostedTurnResult>((_resolve, reject) => {
           request.abortSignal.addEventListener("abort", () => {
             abortReason = request.abortSignal.reason;
             reject(new Error("aborted by signal"));
@@ -446,7 +447,7 @@ describe("runAttempt", () => {
     const controller = new AbortController();
     const { llm } = scriptedLlm([
       (request) =>
-        new Promise<TurnResult>((_resolve, reject) => {
+        new Promise<CostedTurnResult>((_resolve, reject) => {
           request.abortSignal.addEventListener("abort", () => reject(new Error("aborted")));
           controller.abort(new Error("owner cancelled the task"));
         }),

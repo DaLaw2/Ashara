@@ -23,9 +23,9 @@ import { DevelopmentService } from "@ashara/development";
 import type { TaskDescriptor } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { FailureRouter, classifyFailure } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
@@ -135,7 +135,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     },
   });
   stub.model = mock;
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -144,15 +144,11 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
       defaultProvider: "anthropic",
     },
     checkedSources: ["test"],
-    recording: {
-      kind: "recorded",
-      recorder: new LlmCallLedger(
-        new LlmCallRepository(db),
-        new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-      ),
-    },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
   const builds = new EnvironmentBuildRepository(db);
   const events: Array<Record<string, unknown> & { readonly event: string }> = [];
   const service = new DevelopmentService({

@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { runHostGit, targetRepo } from "@ashara/execution-infra";
-import { withStructuredLadder } from "@ashara/llm-gateway";
-import type { ContextualLlm, LadderAttemptEvent, StructuredValidation } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/finance";
+import { withStructuredLadder } from "@ashara/model-access";
+import type { LadderAttemptEvent, StructuredValidation } from "@ashara/model-access";
 import type { ProjectId, StoredTaskSpec, VisionSource, WorkItemId } from "@ashara/shared";
 import { PUBLIC_INTERFACE_FILE, describeErrorChain, parseWorkItemId, visionSourceLine } from "@ashara/shared";
 import type { TaskChecks } from "./task-checks.js";

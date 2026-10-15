@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { PreCallRefusal, withStructuredLadder } from "@ashara/llm-gateway";
-import type { ContextualLlm, LadderAttemptEvent } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/finance";
+import type { ContextualLlm } from "@ashara/finance";
+import { withStructuredLadder } from "@ashara/model-access";
+import type { LadderAttemptEvent } from "@ashara/model-access";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "@ashara/organization";
 import { blockedReasonToRecord, describeErrorChain, projectBlockCause } from "@ashara/shared";
 import type { DomainEvent, ProjectBlockCause, ProjectId, StoredBlockedReason, WorkItemStatus } from "@ashara/shared";

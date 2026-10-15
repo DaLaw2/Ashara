@@ -43,8 +43,9 @@ import {
   targetRepo,
   withTargetCheckout,
 } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/llm-gateway";
-import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/finance";
+import type { ContextualTurnLlm } from "@ashara/finance";
+import type { ResolvedModel } from "@ashara/model-access";
 import type { ProjectId, WorkItemId, AgentBrief, Clock, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, describeErrorChain, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief, renderElided } from "@ashara/shared";
 import type {

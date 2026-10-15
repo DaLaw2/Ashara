@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, elidedOutput } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
-import type { TurnToolSchema } from "@ashara/llm-gateway";
+import type { TurnToolSchema } from "@ashara/model-access";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText, WorkKind } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";

@@ -1,6 +1,7 @@
 import type { LlmCallRepository } from "@ashara/db";
-import type { ModelConfig, PendingLlmCall } from "@ashara/llm-gateway";
+import type { ModelConfig } from "@ashara/model-access";
 import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid } from "./errors.js";
+import type { PendingLlmCall } from "./guarded-model-access.js";
 
 type ProjectId = PendingLlmCall["context"]["projectId"];
 

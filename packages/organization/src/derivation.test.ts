@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ContextualLlm } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/finance";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "@ashara/shared";
 import { RosterDerivation } from "./derivation.js";

@@ -24,9 +24,9 @@ import {
 import { DevelopmentService } from "@ashara/development";
 import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
 import type { BaseCellReference } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { CoreLoop, DEFAULT_CONFIG } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
@@ -143,16 +143,15 @@ async function harness(name: string): Promise<Harness> {
 
   const calls = new LlmCallRepository(db);
   const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [{ name: "anthropic", providerType: "anthropic", apiKey: "test-key", baseUrl: "https://stub.invalid/v1", models: [modelConfig], enabled: true }],
       defaultProvider: "anthropic",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls, spendCap) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(calls, spendCap));
   const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
   const builds = new EnvironmentBuildRepository(db);
   const workItems = new WorkItemRepository(db);

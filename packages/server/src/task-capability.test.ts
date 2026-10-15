@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { TaskDescriptor } from "@ashara/development";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { ModelConfig } from "@ashara/llm-gateway";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import type { CapabilityLevel, StoredTaskSpec } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { determineCapability } from "./task-capability.js";
@@ -31,7 +31,6 @@ const gateway = buildGateway({
     defaultProvider: "deepseek",
   },
   checkedSources: ["test"],
-  recording: { kind: "unrecorded", reason: "resolution only: no call is made" },
   clock: () => new Date(),
 });
 

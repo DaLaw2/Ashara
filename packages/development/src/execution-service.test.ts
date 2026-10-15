@@ -7,8 +7,9 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import { EnvironmentBuildFailed, PodmanSubstrate, ensureTargetGitInit, environmentVersion } from "@ashara/execution-infra";
-import { PreCallRefusal } from "@ashara/llm-gateway";
-import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
+import { PreCallRefusal } from "@ashara/finance";
+import type { CostedTurnResult } from "@ashara/finance";
+import type { ResolvedModel } from "@ashara/model-access";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
@@ -364,7 +365,7 @@ function checkStore(stored: TaskChecks | null, checkedTasks: readonly string[] =
 function serviceOn(
   substrate: PodmanSubstrate,
   workdirBase: string,
-  turns?: (probe: Probe) => TurnResult,
+  turns?: (probe: Probe) => CostedTurnResult,
   checks: TaskCheckStore | ((probe: Probe) => TaskCheckStore) = checkStore(STORED_CHECKS),
   shutdownSignal: AbortSignal = new AbortController().signal,
   staffing: "owned" | { readonly kind: "owner-unresolved"; readonly ownerRoleId: string | null; readonly rosterRevision: number | null; readonly reason: string } = "owned",
@@ -767,7 +768,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
   const roleOf = (id: string | undefined): Role | undefined =>
     id === ids.developer ? "developer" : id === ids.verifier ? "verifier" : id === ids.ci ? "ci" : undefined;
 
-  function turn(name: string, input: unknown): TurnResult {
+  function turn(name: string, input: unknown): CostedTurnResult {
     return {
       assistant: { role: "assistant", content: [{ type: "tool-call", toolCallId: `tc-${name}`, toolName: name, input }] },
       text: "",

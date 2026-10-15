@@ -1,5 +1,5 @@
 import type { AgentStaffing, TaskDescriptor } from "@ashara/development";
-import type { ResolvedModel } from "@ashara/llm-gateway";
+import type { ResolvedModel } from "@ashara/model-access";
 import { RoleNotInRoster, RosterUnreadable, parseStoredRoster, roleInRoster } from "@ashara/organization";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 

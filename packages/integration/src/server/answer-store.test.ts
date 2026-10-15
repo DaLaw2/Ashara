@@ -6,9 +6,9 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { RosterDerivation } from "@ashara/organization";
 import type { RosterStore } from "@ashara/organization";
 import { FirstPlanner } from "@ashara/planning";
@@ -31,7 +31,7 @@ const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NAME_PREFIX = `client-answer-test-${randomUUID().slice(0, 8)}`;
 
 let db: ReturnType<typeof createDb>;
-let gateway: LLMGateway;
+let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();
 
@@ -193,7 +193,7 @@ async function awaitedChangesOf(projectId: ProjectId): Promise<string[]> {
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
   clientId = (await new ClientRepository(db).create(`${NAME_PREFIX}-client`)).id;
-  gateway = buildGateway({
+  gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -209,12 +209,11 @@ beforeAll(async () => {
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(
-      new LlmCallRepository(db),
-      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-    ) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
 });
 
 beforeEach(() => {

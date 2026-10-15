@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { StructuredOutputExhausted, withStructuredLadder } from "@ashara/llm-gateway";
-import type { ContextualLlm, LadderAttemptEvent, StructuredValidation } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/finance";
+import { StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
+import type { LadderAttemptEvent, StructuredValidation } from "@ashara/model-access";
 import { projectBlockCause } from "@ashara/shared";
 import type { ProjectBlockCause, ProjectId } from "@ashara/shared";
 import { VisionUnreadable, rosterVisionOf } from "./acl/engagement-acl.js";

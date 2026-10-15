@@ -1,32 +1,27 @@
-import { join } from "node:path";
-import type { CapabilityLevel } from "@ashara/shared";
-import { loadModelsConfigPathEnvOverride } from "@ashara/shared";
-import { resolveAsharaRoot } from "./paths.js";
-import type { CostMeasurement, ModelConfig, PricedTokenClass, ReportedTokens, TokenRates } from "./types.js";
+import type { ModelConfig, ReportedTokens, TokenRates } from "@ashara/model-access";
 
-export const CAPABILITY_RANK: Record<CapabilityLevel, number> = {
-  Light: 0,
-  Medium: 1,
-  Strong: 2,
-  Frontier: 3,
-};
+/** A token class that enters a call's price. */
+type PricedTokenClass = keyof ReportedTokens;
 
 /**
- * Resolves the models.toml path the same way for every reader of that file
- * (routing profiles). Precedence, highest first:
- *   1. an explicit `configPath` argument (test/caller override),
- *   2. the `ASHARA_MODELS_CONFIG` env var (operator override),
- *   3. the module-anchored repo default `<ashara-root>/config/models.toml`.
- * The default is anchored to the Ashara checkout via `resolveAsharaRoot()`, NOT
- * to process.cwd(): a process whose cwd is elsewhere silently fails to find a
- * cwd-relative default (rp-t2 -- see paths.ts). Shared so routing-profile loading looks at the exact same file
- * pricing does -- one source of truth per config load.
+ * A call's cost in USD, or why it is unmeasured: the classes whose count the
+ * provider did not report though the model bills them, and the classes with
+ * reported tokens the model has no rate for. An unmeasured cost carries no
+ * number, so no consumer can read it as 0.
  */
-export function resolveModelsConfigPath(configPath?: string): string {
-  return configPath
-    ?? loadModelsConfigPathEnvOverride()
-    ?? join(resolveAsharaRoot(), "config", "models.toml");
-}
+export type CostMeasurement =
+  | {
+      readonly measured: true;
+      readonly inputCost: number;
+      readonly outputCost: number;
+      readonly cacheSavings: number;
+      readonly totalCost: number;
+    }
+  | {
+      readonly measured: false;
+      readonly missingCounts: readonly PricedTokenClass[];
+      readonly missingRates: readonly PricedTokenClass[];
+    };
 
 /**
  * The rates a call is billed at: the highest prompt-length tier its input

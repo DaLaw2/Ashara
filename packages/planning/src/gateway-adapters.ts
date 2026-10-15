@@ -1,6 +1,6 @@
 import type { ZodType } from "zod";
-import { withStructuredLadder } from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "@ashara/llm-gateway";
+import { withStructuredLadder } from "@ashara/model-access";
+import type { LadderAttemptEvent, StructuredProvider, StructuredValidation } from "@ashara/model-access";
 import type { DecompositionLLM } from "./decomposition.js";
 
 type ZodSchema<T> = ZodType<T>;

@@ -1,4 +1,4 @@
-import type { CostMeasurement, PreCallRefusal } from "@ashara/llm-gateway";
+import type { CostMeasurement, PreCallRefusal } from "@ashara/finance";
 
 /** A turn whose cost is not known, and why. */
 export interface UnmeasuredTurn {

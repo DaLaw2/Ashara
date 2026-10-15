@@ -17,8 +17,8 @@ import {
 } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import { PodmanSubstrate } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import { CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
 import { createWorkItemId, systemClock } from "@ashara/shared";
@@ -94,7 +94,7 @@ describe("a project whose workspace path is refused", () => {
     const mock = new MockLanguageModelV4({ doGenerate: async () => { throw new Error("the provider must not be called"); } });
     stub.model = mock;
     const spendCap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 } });
-    const gateway = buildGateway({
+    const gateway = new GuardedModelAccess(buildGateway({
       models: sdkLanguageModels,
       config: {
         providers: [
@@ -121,9 +121,8 @@ describe("a project whose workspace path is refused", () => {
         defaultProvider: "deepseek",
       },
       checkedSources: ["test"],
-      recording: { kind: "recorded", recorder: new LlmCallLedger(calls, spendCap) },
       clock: () => new Date(),
-    });
+    }), new LlmCallLedger(calls, spendCap));
     const workdirBase = join(root, "work");
     const developmentService = new DevelopmentService({
       config: { workdirBase },

@@ -4,9 +4,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { BudgetExceeded, LlmCallLedger, SpendCap, UnpricedModel } from "@ashara/finance";
-import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LadderAttemptEvent, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, SpendCap, UnpricedModel } from "@ashara/finance";
+import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
+import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -53,7 +53,7 @@ function gateway(
   modelConfig: ModelConfig,
   clock: () => Date = () => PEAK,
   thinking?: Parameters<typeof buildGateway>[0]["config"]["thinking"],
-): LLMGateway {
+): GuardedModelAccess {
   const config: Parameters<typeof buildGateway>[0]["config"] = {
     providers: [
       {
@@ -68,20 +68,16 @@ function gateway(
     defaultProvider: providerName,
     thinking,
   };
-  return buildGateway({
+  return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config,
     checkedSources: ["test"],
-    recording: {
-      kind: "recorded",
-      recorder: new LlmCallLedger(
-        calls,
-        // Caps far above anything a stubbed call can cost: this suite is about the rows, not the cap.
-        new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
-      ),
-    },
     clock,
-  });
+  }), new LlmCallLedger(
+    calls,
+    // Caps far above anything a stubbed call can cost: this suite is about the rows, not the cap.
+    new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1e6 } }),
+  ));
 }
 
 function stubModel(doGenerate: ConstructorParameters<typeof MockLanguageModelV4>[0]): MockLanguageModelV4 {
@@ -338,8 +334,9 @@ describe("one llm_calls row per provider call", () => {
     const [row] = await rowsOfThisProject();
     expect(row?.cacheReadTokens).toBeNull();
     expect(row?.costUsd).toBeNull();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[LLMGateway\] cost unmeasured: .*counts=\[cacheReadTokens\]/));
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^\[LlmCallLedger\] cost unmeasured: .*counts=\[cacheReadTokens\]/));
+    // Measured once, by Finance: one warn, from the ledger.
+    const unmeasured = warn.mock.calls.map((args) => String(args[0])).filter((line) => line.includes("cost unmeasured"));
+    expect(unmeasured).toEqual([expect.stringMatching(/^\[LlmCallLedger\] cost unmeasured: .*counts=\[cacheReadTokens\]/)]);
   });
 
   test("a provider error writes one 'error' row per provider request and no success row", async () => {
@@ -399,16 +396,14 @@ describe("refusals", () => {
     expect(await rowsOfThisProject()).toHaveLength(0);
   });
 
-  test("a recording gateway refuses a call with no project", async () => {
+  test("the guarded port has no call without a project", () => {
     const mock = stubModel({ doGenerate: textResult('{"greeting":"hi"}', { input: 1, output: 1 }) });
-    const recorded = gateway("anthropic", model({}));
+    const guarded = gateway("anthropic", model({}));
 
-    await expect(
-      recorded.generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 }),
-    ).rejects.toThrow(/without a call context/);
+    expect("generateStructured" in guarded).toBe(false);
     const contextWithoutProject = { taskId: null, callSite: "liaison-intake" } as const;
     // @ts-expect-error LlmCallContext requires projectId: a call with no project does not typecheck
-    recorded.forCall(contextWithoutProject);
+    guarded.forCall(contextWithoutProject);
     expect(mock.doGenerateCalls).toHaveLength(0);
   });
 });
@@ -432,7 +427,7 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
     };
   }
 
-  async function turnOn(gw: LLMGateway) {
+  async function turnOn(gw: GuardedModelAccess) {
     const pinned = gw.resolveModel("Strong", "agent-runner");
     return gw.forCall({ projectId, taskId: null, callSite: "agent-runner" }).generateTurn({
       model: pinned,
@@ -469,6 +464,48 @@ describe("generateTurn: one recorded single-step call per agent turn", () => {
     // The system prompt and the conversation's last message carry Anthropic cache breakpoints.
     const breakpoint = { anthropic: { cacheControl: { type: "ephemeral" } } };
     expect(mock.doGenerateCalls[0]?.prompt.map((message) => message.providerOptions)).toEqual([breakpoint, breakpoint]);
+  });
+
+  test("a turn's cost is the ledger's one measurement: the figure the row records, at the catalog's rates", async () => {
+    await clearRows();
+    const warn = vi.mocked(console.warn);
+    warn.mockClear();
+    // A Wednesday peak call to a windowed model with a cache-read class: every pricing input is in play.
+    const windowed = model({
+      id: "turn-windowed",
+      cacheWriteCostPer1M: null,
+      priceWindows: [{
+        isoWeekday: 3,
+        utcStartMinute: 600,
+        utcEndMinute: 1440,
+        rates: { inputCostPer1M: 1.5, outputCostPer1M: 7.5, cacheReadCostPer1M: 0.15, cacheWriteCostPer1M: null },
+      }],
+    });
+    stubModel({ doGenerate: toolCallResult({ input_tokens: 1000, cache_read_input_tokens: 400 }) });
+
+    const peak = await turnOn(gateway("anthropic", windowed, () => PEAK));
+    const [peakRow] = await rowsOfThisProject();
+    // The formula as it stood before the move: 600 plain input at 3, 400 cache reads at 0.30, 50 output at 15.
+    const peakCost = (600 * 3 + 400 * 0.3 + 50 * 15) / 1_000_000;
+    expect(peak.cost).toEqual(measureCost({ inputTokens: 1000, outputTokens: 50, cacheReadTokens: 400, cacheWriteTokens: null }, windowed, PEAK));
+    expect(peak.cost.measured && peak.cost.totalCost).toBeCloseTo(peakCost, 12);
+    expect(peakRow?.costUsd).toBeCloseTo(peakCost, 12);
+
+    await clearRows();
+    const offPeak = await turnOn(gateway("anthropic", windowed, () => OFF_PEAK));
+    const [offPeakRow] = await rowsOfThisProject();
+    const offPeakCost = (600 * 1.5 + 400 * 0.15 + 50 * 7.5) / 1_000_000;
+    expect(offPeak.cost.measured && offPeak.cost.totalCost).toBeCloseTo(offPeakCost, 12);
+    expect(offPeakRow?.costUsd).toBeCloseTo(offPeakCost, 12);
+
+    await clearRows();
+    stubModel({ doGenerate: toolCallResult() });
+    const unmeasured = await turnOn(gateway("anthropic", model({ id: "turn-unreported" })));
+    const [unmeasuredRow] = await rowsOfThisProject();
+    expect(unmeasured.cost).toEqual({ measured: false, missingCounts: ["cacheReadTokens", "cacheWriteTokens"], missingRates: [] });
+    expect(unmeasuredRow?.costUsd).toBeNull();
+    const warned = warn.mock.calls.map((args) => String(args[0])).filter((line) => line.includes("cost unmeasured"));
+    expect(warned).toEqual([expect.stringMatching(/^\[LlmCallLedger\] cost unmeasured: provider=anthropic, model=turn-unreported/)]);
   });
 
   test("a call to an undeclared tool comes back as an invalid call for the loop to answer, in one ok row", async () => {
@@ -560,7 +597,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
   const DEEPSEEK_RAW = { prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1000 };
 
   test("a deepseek-type request carries thinking disabled by default and enabled where the policy says; others carry none", async () => {
-    const ask = (gw: LLMGateway, callSite: "decomposition" | "liaison-intake") =>
+    const ask = (gw: GuardedModelAccess, callSite: "decomposition" | "liaison-intake") =>
       gw.forCall({ projectId, taskId: null, callSite }).generateStructured({
         capability: "Strong",
         prompt: "greet",
@@ -594,7 +631,7 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
     // $1,000 per 1M output tokens: 512 answer tokens fit a $1 project cap; 512 plus a reasoning allowance do not.
     const deepseek = model({ id: "ds-bound", provider: "deepseek", outputCostPer1M: 1_000, cacheWriteCostPer1M: null });
     const underCap = (thinking: "on" | "off") =>
-      buildGateway({
+      new GuardedModelAccess(buildGateway({
         models: sdkLanguageModels,
         config: {
           providers: [
@@ -604,15 +641,11 @@ describe("one ladder attempt is one recorded, charged provider request", () => {
           thinking: { default: thinking, sites: {} },
         },
         checkedSources: ["test"],
-        recording: {
-          kind: "recorded",
-          recorder: new LlmCallLedger(
-            calls,
-            new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
-          ),
-        },
         clock: () => PEAK,
-      })
+      }), new LlmCallLedger(
+        calls,
+        new SpendCap({ ledger: calls, projects: new ProjectRepository(db), caps: { deploymentUsd: 1e6, perProjectUsd: 1 } }),
+      ))
         .forCall({ projectId, taskId: null, callSite: "decomposition" })
         .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 });
 

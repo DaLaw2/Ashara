@@ -6,7 +6,7 @@ import {
   resolveKeyFilePath,
 } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
-import type { ProviderCredential } from "@ashara/llm-gateway";
+import type { ProviderCredential } from "@ashara/model-access";
 
 /** The subset of SecretStore the server reads through; SecretStore satisfies it. */
 export interface SecretReader {

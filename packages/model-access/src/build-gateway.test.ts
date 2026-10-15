@@ -36,7 +36,6 @@ function build(routingProfiles: RoutingProfiles): ReturnType<typeof buildGateway
     models: sdkLanguageModels,
     config: makeConfig(routingProfiles),
     checkedSources: ["test"],
-    recording: { kind: "unrecorded", reason: "routing-profile boot checks make no call" },
     clock: () => new Date(),
   });
 }

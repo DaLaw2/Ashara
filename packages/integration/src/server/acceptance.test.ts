@@ -12,7 +12,7 @@ import {
   VisionRepository,
 } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
-import type { ContextualLlm } from "@ashara/llm-gateway";
+import type { ContextualLlm } from "@ashara/finance";
 import type { AcceptanceStore } from "@ashara/orchestrator";
 import { runAcceptanceSweeps } from "@ashara/orchestrator";
 import { type ProjectId, type VisionSource } from "@ashara/shared";

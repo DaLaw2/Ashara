@@ -4,9 +4,9 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 
 // An admitted call's estimate is durable (migration 053): a process that dies between a call's
 // admission and its record leaves a row the next process still counts. Against Postgres; no real
@@ -38,10 +38,10 @@ let projects: ProjectRepository;
 let clientId: string;
 
 /** One server process: its own SpendCap and ledger, nothing in memory shared with another. */
-function serverProcess(perProjectUsd: number): { readonly gateway: LLMGateway; readonly ledger: LlmCallLedger } {
+function serverProcess(perProjectUsd: number): { readonly gateway: GuardedModelAccess; readonly ledger: LlmCallLedger } {
   const cap = new SpendCap({ ledger: calls, projects, caps: { deploymentUsd: 1e6, perProjectUsd } });
   const ledger = new LlmCallLedger(calls, cap);
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -50,13 +50,12 @@ function serverProcess(perProjectUsd: number): { readonly gateway: LLMGateway; r
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: ledger },
     clock: () => new Date(),
-  });
+  }), ledger);
   return { gateway, ledger };
 }
 
-function greet(gateway: LLMGateway, projectId: Awaited<ReturnType<ProjectRepository["create"]>>["id"]) {
+function greet(gateway: GuardedModelAccess, projectId: Awaited<ReturnType<ProjectRepository["create"]>>["id"]) {
   return gateway
     .forCall({ projectId, taskId: null, callSite: "decomposition" })
     .generateStructured({ capability: "Strong", prompt: "greet", schema: z.object({ greeting: z.string() }), maxTokens: 64 });

@@ -7,9 +7,9 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { IntakeStore } from "@ashara/engagement";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import type { ProjectId } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 
@@ -29,7 +29,7 @@ const NONCE = randomUUID().slice(0, 8);
 const NAME_PREFIX = `liaison-intake-test-${NONCE}`;
 
 let db: ReturnType<typeof createDb>;
-let gateway: LLMGateway;
+let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();
 
@@ -99,8 +99,8 @@ function intake(): TenderIntake {
 function gatewayWithLedger(spendCap: {
   readonly ledger: ConstructorParameters<typeof SpendCap>[0]["ledger"];
   readonly caps: ConstructorParameters<typeof SpendCap>[0]["caps"];
-}): LLMGateway {
-  return buildGateway({
+}): GuardedModelAccess {
+  return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -116,15 +116,11 @@ function gatewayWithLedger(spendCap: {
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: {
-      kind: "recorded",
-      recorder: new LlmCallLedger(
-        new LlmCallRepository(db),
-        new SpendCap({ ledger: spendCap.ledger, projects: new ProjectRepository(db), caps: spendCap.caps }),
-      ),
-    },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: spendCap.ledger, projects: new ProjectRepository(db), caps: spendCap.caps }),
+  ));
 }
 
 async function tender(body: string): Promise<{ projectId: ProjectId; tenderId: string }> {
@@ -176,16 +172,15 @@ beforeAll(async () => {
     ],
     defaultProvider: "deepseek",
   };
-  gateway = buildGateway({
+  gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config,
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(
-      new LlmCallRepository(db),
-      new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
-    ) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(
+    new LlmCallRepository(db),
+    new SpendCap({ ledger: new LlmCallRepository(db), projects: new ProjectRepository(db), caps: TEST_SPEND_CAPS }),
+  ));
 });
 
 beforeEach(() => {

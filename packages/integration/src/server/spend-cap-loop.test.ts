@@ -22,9 +22,9 @@ import { DevelopmentService } from "@ashara/development";
 import { ClientStops, ClientMessageRepository } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
-import { LlmCallLedger, SpendCap } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 import { ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes } from "@ashara/orchestrator";
 import type { CoreLoopDeps } from "@ashara/orchestrator";
 import { FailureRouter } from "@ashara/planning";
@@ -64,8 +64,8 @@ function notExercised(label: string): () => never {
   };
 }
 
-function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): LLMGateway {
-  return buildGateway({
+function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): GuardedModelAccess {
+  return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -74,16 +74,15 @@ function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): LLMGateway {
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls, spendCap) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(calls, spendCap));
 }
 
 /**
  * Every dep the loop takes, fully typed: a dep CoreLoopDeps gains and this omits is a compile
  * error here, never a TypeError the runner retries forever (a missing stackChoices did that).
  */
-function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreLoopDeps, "spendCap">): CoreLoopDeps {
+function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">): CoreLoopDeps {
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
     workItemRepo: {

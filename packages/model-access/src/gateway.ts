@@ -5,18 +5,12 @@ import { z } from "zod";
 import { describeErrorChain, extractJson } from "@ashara/shared";
 import type { CapabilityLevel } from "@ashara/shared";
 import {
-  LlmCallContextMissing,
-  LlmCallNotAdmitted,
-  LlmCallNotRecorded,
-  LlmCallRecorderMissing,
-  PreCallRefusal,
   ProviderConfigurationRejected,
   ProviderError,
   SchemaValidationError,
   StructuredOutputTruncated,
   TurnResponseInvalid,
 } from "./errors.js";
-import { describeUnmeasuredCost, measureCost } from "./pricing.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
@@ -26,18 +20,15 @@ import type { OutputBudget } from "./thinking.js";
 import { assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
 import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
-  CallRecording,
-  CostMeasurement,
   ExtractedUsage,
   GatewayConfig,
   KnownLLMSite,
-  LlmCallContext,
   LlmCallOperation,
   LlmFinishReason,
   LlmCallOutcome,
-  LlmCallRecorder,
   ModelConfig,
-  PendingLlmCall,
+  ProviderRequest,
+  ProviderRequestGate,
   ProviderType,
   StructuredRequest,
   StructuredResponse,
@@ -53,21 +44,36 @@ export interface ResolvedModel {
   effectiveCapability: CapabilityLevel;
 }
 
-/** A structured provider scoped to one call context: every provider request it makes is recorded against it. */
-export interface ContextualLlm {
-  forCall(context: LlmCallContext): StructuredProvider;
+/** The gate every provider request of one call passes through, and the routing site the call serves. */
+interface CallScope {
+  readonly gate: ProviderRequestGate;
+  readonly site: KnownLLMSite;
 }
 
-/** The turn port of the same gateway: one recorded single-step call per agent turn (ADR-074 d7). */
-export interface ContextualTurnLlm {
-  forCall(context: LlmCallContext): TurnLlm;
+/** A provider request the gate admitted, to be settled under the same id. */
+interface AdmittedCall {
+  readonly gate: ProviderRequestGate;
+  readonly request: ProviderRequest;
 }
 
-/** The recorder and context of one recorded call; `null` on an unrecorded gateway. */
-type CallScope = { readonly recorder: LlmCallRecorder; readonly context: LlmCallContext } | null;
+/**
+ * Carries whatever the gate threw past the fallback path, which never retries
+ * it, and is unwrapped before the call returns, so the caller sees the gate's
+ * own throw.
+ */
+class GateThrew extends Error {
+  readonly thrown: unknown;
 
-/** A provider request the recorder admitted, to be recorded under the same id; `null` on an unrecorded gateway. */
-type AdmittedCall = { readonly recorder: LlmCallRecorder; readonly pending: PendingLlmCall } | null;
+  constructor(thrown: unknown) {
+    super(`the provider request gate threw: ${describeErrorChain(thrown)}`, { cause: thrown });
+    this.name = "GateThrew";
+    this.thrown = thrown;
+  }
+}
+
+function unwrapGateThrow(error: unknown): unknown {
+  return error instanceof GateThrew ? error.thrown : error;
+}
 
 /** What Finance prices a request's worst case from: its input size and its output bound. */
 interface RequestSize {
@@ -112,16 +118,14 @@ function recordedFinishReason(sdkFinishReason: unknown): LlmFinishReason {
   return parsed.success ? parsed.data : `unrecognized:${String(sdkFinishReason)}`;
 }
 
-export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
+export class LLMGateway {
   private readonly registry: ProviderRegistry;
-  private readonly recording: CallRecording;
-  /** Read once per provider request, before it is sent: that instant prices the call everywhere. */
+  /** Read once per provider request, before it is sent: that instant prices the call. */
   private readonly clock: () => Date;
   private readonly thinking: ThinkingPolicy | undefined;
 
-  constructor(config: GatewayConfig, recording: CallRecording, clock: () => Date, models: LanguageModelFactory) {
+  constructor(config: GatewayConfig, clock: () => Date, models: LanguageModelFactory) {
     this.registry = new ProviderRegistry(config, models);
-    this.recording = recording;
     this.clock = clock;
     this.thinking = config.thinking;
   }
@@ -140,34 +144,12 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   }
 
   /**
-   * The cost of a completed call, priced at `requestedAt`. An unmeasured cost
-   * is logged at `warn`: its llm_calls row counts against the spend cap at the
-   * call's pre-call estimate, never at $0.
-   */
-  private measuredCost(
-    extraction: ExtractedUsage,
-    resolved: CallTarget,
-    site: string,
-    operation: LlmCallOperation,
-    requestedAt: Date,
-  ): CostMeasurement {
-    const cost = measureCost(extraction.reported, resolved.modelConfig, requestedAt);
-    if (!cost.measured) {
-      console.warn(
-        `[LLMGateway] ${describeUnmeasuredCost(cost, resolved.providerName, resolved.modelConfig.id)}, ` +
-          `site=${site}, operation=${operation}; the spend cap counts this call at its pre-call estimate`,
-      );
-    }
-    return cost;
-  }
-
-  /**
    * Shared "resolve → try → catch → fallback → retry once" shape for
    * structured calls: run `execute` against `resolved`; on failure, resolve
    * one fallback provider and retry once, or throw a typed ProviderError if
    * none is available. `shouldRethrow` lets a caller opt an error class out of
    * the fallback retry and propagate it immediately instead —
-   * SchemaValidationError, a pre-call refusal and a failed ledger read or write.
+   * SchemaValidationError and whatever the gate throws.
    */
   private async withFallback<TRequest extends { capability: CapabilityLevel; site?: KnownLLMSite }, TResult>(
     request: TRequest,
@@ -212,47 +194,47 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
   }
 
   /**
-   * The unrecorded entry point, for a process built with
-   * `recording: { kind: "unrecorded" }`. A recording gateway refuses it: its
-   * calls go through `forCall`, which carries the project they are charged to.
+   * The only entry point: every provider request made through the returned
+   * ports passes through `gate`, and `site` is the routing site they serve.
+   * Finance's guarded port is its production caller.
    */
-  async generateStructured<T>(request: StructuredRequest<T>): Promise<StructuredResponse<T>> {
-    if (this.recording.kind === "recorded") {
-      throw new LlmCallContextMissing("generateStructured");
-    }
-    return this.structured(request, null);
-  }
-
-  /** The recorded entry point: every provider request made for `context` writes one row through the recorder. */
-  forCall(context: LlmCallContext): StructuredProvider & TurnLlm {
-    if (this.recording.kind === "unrecorded") {
-      throw new LlmCallRecorderMissing(this.recording.reason);
-    }
-    const scope = { recorder: this.recording.recorder, context };
+  gated(site: KnownLLMSite, gate: ProviderRequestGate): StructuredProvider & TurnLlm {
+    const scope: CallScope = { gate, site };
     return {
-      generateStructured: <T>(request: StructuredRequest<T>) => this.structured(request, scope),
-      generateTurn: (request: TurnRequest) => this.turn(request, scope),
+      generateStructured: async <T>(request: StructuredRequest<T>) => {
+        try {
+          return await this.structured(request, scope);
+        } catch (error) {
+          throw unwrapGateThrow(error);
+        }
+      },
+      generateTurn: async (request: TurnRequest) => {
+        try {
+          return await this.turn(request, scope);
+        } catch (error) {
+          throw unwrapGateThrow(error);
+        }
+      },
     };
   }
 
   /**
-   * One agent turn: exactly one provider request, one step, one llm_calls row.
+   * One agent turn: exactly one provider request, one step, one settlement through the gate.
    * Tools go out as schemas and come back as calls; nothing is executed and
    * nothing loops (ADR-074 d7). The model is the caller's pinned resolution:
    * no re-routing, no fallback (ADR-074 d44), and no SDK
-   * retry, so every provider request is the row the caller sees.
+   * retry, so every provider request is the one the gate settles.
    *
-   * Called by @ashara/workplace runAttempt, whose own production caller is
-   * t-isolated-switchover (s-isolated-worker-m1).
+   * Called through Finance's guarded port by @ashara/workplace runAttempt.
    */
-  private async turn(request: TurnRequest, scope: NonNullable<CallScope>): Promise<TurnResult> {
+  private async turn(request: TurnRequest, scope: CallScope): Promise<TurnResult> {
     const operation: LlmCallOperation = "generateText:turn";
     const target: CallTarget = {
       providerName: request.model.provider,
       modelConfig: request.model.modelConfig,
       providerType: this.registry.providerTypeOf(request.model.provider),
     };
-    const site = scope.context.callSite;
+    const site = scope.site;
     const tools = toSdkTools(request.tools);
     const { providerOptions, budget } = this.thinkingFor(target, site, TURN_MAX_OUTPUT_TOKENS, 0);
     const prompt = cachedTurnPrompt(target.providerType, request.system, request.messages);
@@ -272,7 +254,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
       maxOutputTokens: budget.maxOutputTokens,
     };
-    const { result, requestedAt, admitted } = await this.send(scope, target, site, operation, size, () =>
+    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, () =>
       generateText(params),
     );
 
@@ -280,7 +262,6 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const [onlyStep] = result.steps;
     const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
     const recordedReason = recordedFinishReason(result.finishReason);
-    const cost = this.measuredCost(extraction, target, site, operation, requestedAt);
 
     const parsedCalls = parseToolCalls(result.toolCalls, request.tools);
     const invalidCallIds = new Set(parsedCalls.toolCalls.filter((c) => c.kind === "invalid").map((c) => c.toolCallId));
@@ -292,7 +273,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     ];
     if (issues.length > 0 || !("assistant" in message)) {
       const invalid = new TurnResponseInvalid({ provider: target.providerName, model: target.modelConfig.id, issues });
-      await this.record(admitted, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
+      await this.settle(admitted, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
       throw invalid;
     }
 
@@ -302,7 +283,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       finishReason === "provider_error"
         ? { kind: "error", errorKind: `FinishReason:${String(result.finishReason ?? "missing")}` }
         : OK;
-    await this.record(admitted, requestedAt, extraction, recordedReason, outcome);
+    await this.settle(admitted, requestedAt, extraction, recordedReason, outcome);
 
     return {
       assistant: message.assistant,
@@ -312,7 +293,6 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       rawFinishReason,
       usage: extraction.usage,
       reportedOutputTokens: extraction.reported.outputTokens,
-      cost,
       provider: target.providerName,
       model: target.modelConfig.id,
     };
@@ -325,8 +305,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       resolved,
       (req, r) => this.executeStructuredCall(req, r, scope),
       "structured request",
-      (error) =>
-        error instanceof SchemaValidationError || isNeverRetried(error),
+      (error) => error instanceof SchemaValidationError || error instanceof GateThrew,
     );
   }
 
@@ -347,68 +326,47 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
 
   /**
    * Sends ONE provider request and returns its result with the instant it was
-   * sent, which prices it. The recorder's pre-call check runs first, so a
-   * refused call (an unpriced model, or a worst-case cost over a spend cap)
-   * never reaches the network. A request that throws is recorded as an error
-   * before the throw continues.
+   * sent, which prices it. The gate admits it first, so a refused request (an
+   * unpriced model, or a worst-case cost over a spend cap) never reaches the
+   * network. A request that throws is settled as an error before the throw
+   * continues.
    */
   private async send<R>(
     scope: CallScope,
     resolved: CallTarget,
-    site: string,
     operation: LlmCallOperation,
     size: RequestSize,
     request: () => Promise<R>,
   ): Promise<{ readonly result: R; readonly requestedAt: Date; readonly admitted: AdmittedCall }> {
-    const admitted: AdmittedCall = scope
-      ? {
-          recorder: scope.recorder,
-          pending: {
-            callId: randomUUID(),
-            context: scope.context,
-            provider: resolved.providerName,
-            model: resolved.modelConfig,
-            operation,
-            requestBytes: size.requestBytes,
-            maxOutputTokens: size.maxOutputTokens,
-          },
-        }
-      : null;
-    if (admitted) await this.admit(admitted);
+    const admitted: AdmittedCall = {
+      gate: scope.gate,
+      request: {
+        callId: randomUUID(),
+        provider: resolved.providerName,
+        model: resolved.modelConfig,
+        operation,
+        requestBytes: size.requestBytes,
+        maxOutputTokens: size.maxOutputTokens,
+      },
+    };
+    try {
+      await admitted.gate.admit(admitted.request);
+    } catch (error) {
+      throw new GateThrew(error);
+    }
     const requestedAt = this.clock();
     try {
       return { result: await request(), requestedAt, admitted };
     } catch (error) {
       const usage = usageOfFailedRequest(error);
-      if (usage) this.measuredCost(usage, resolved, site, operation, requestedAt);
       const failure = failureOfRequest(error);
-      await this.record(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
+      await this.settle(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
       throw configurationRejectionOf(error, resolved) ?? error;
     }
   }
 
-  /** The recorder's pre-call check: a refusal throws as itself, a check that broke as `LlmCallNotAdmitted`. */
-  private async admit(admitted: NonNullable<AdmittedCall>): Promise<void> {
-    const { recorder, pending } = admitted;
-    try {
-      await recorder.assertPriced(pending);
-    } catch (error) {
-      if (error instanceof PreCallRefusal) throw error;
-      throw new LlmCallNotAdmitted(
-        {
-          projectId: pending.context.projectId,
-          callSite: pending.context.callSite,
-          provider: pending.provider,
-          model: pending.model.id,
-          operation: pending.operation,
-        },
-        { cause: error },
-      );
-    }
-  }
-
-  /** Writes the one row for an admitted provider request. A failed write fails the call (Discipline A). */
-  private async record(
+  /** Settles an admitted provider request through its gate. A throw from the gate fails the call (Discipline A). */
+  private async settle(
     admitted: AdmittedCall,
     requestedAt: Date,
     usage: ExtractedUsage | null,
@@ -416,23 +374,10 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     outcome: LlmCallOutcome,
     providerError?: unknown,
   ): Promise<void> {
-    if (!admitted) return;
-    const { recorder, pending } = admitted;
     try {
-      await recorder.record({ ...pending, requestedAt, usage, finishReason, outcome });
-    } catch (writeError) {
-      throw new LlmCallNotRecorded(
-        {
-          projectId: pending.context.projectId,
-          callSite: pending.context.callSite,
-          provider: pending.provider,
-          model: pending.model.id,
-          operation: pending.operation,
-          callOutcome: outcome.kind === "ok" ? "ok" : `error (${outcome.errorKind})`,
-          providerError,
-        },
-        { cause: writeError },
-      );
+      await admitted.gate.settle({ ...admitted.request, requestedAt, usage, finishReason, outcome, providerError });
+    } catch (error) {
+      throw new GateThrew(error);
     }
   }
 
@@ -448,7 +393,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     scope: CallScope,
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateObject";
-    const site = request.site ?? scope?.context.callSite;
+    const site = request.site ?? scope.site;
     const requestBytes = utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema));
     const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
     const params: Parameters<typeof generateObject>[0] = {
@@ -467,7 +412,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       readonly admitted: AdmittedCall;
     };
     try {
-      sent = await this.send(scope, resolved, site ?? "unknown", operation, size, () => generateObject(params));
+      sent = await this.send(scope, resolved, operation, size, () => generateObject(params));
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       throw structuredFailureOf(error, resolved, budget);
@@ -475,13 +420,12 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const { result, requestedAt, admitted } = sent;
 
     const extraction = extractUsage(result.usage);
-    const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
     const finishReason = recordedFinishReason(result.finishReason);
 
     // An object the SDK parsed from output cut off at maxTokens is still cut
     // off: the text happened to close, the model did not finish.
     if (finishReason === "length") {
-      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      await this.settle(admitted, requestedAt, extraction, finishReason, TRUNCATED);
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
@@ -494,12 +438,11 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       });
     }
 
-    await this.record(admitted, requestedAt, extraction, finishReason, OK);
+    await this.settle(admitted, requestedAt, extraction, finishReason, OK);
 
     return {
       data: result.object as T,
       usage: extraction.usage,
-      cost,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,
     };
@@ -516,7 +459,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     scope: CallScope,
   ): Promise<StructuredResponse<T>> {
     const operation: LlmCallOperation = "generateText:structured-fallback";
-    const site = request.site ?? scope?.context.callSite;
+    const site = request.site ?? scope.site;
     const prompt = request.prompt + "\n\nRespond with valid JSON only. No markdown, no explanation.";
     const requestBytes = utf8Bytes(prompt, request.systemPrompt);
     const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
@@ -529,7 +472,7 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       providerOptions,
     };
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };
-    const { result, requestedAt, admitted } = await this.send(scope, resolved, site ?? "unknown", operation, size, () =>
+    const { result, requestedAt, admitted } = await this.send(scope, resolved, operation, size, () =>
       generateText(params),
     );
 
@@ -538,12 +481,11 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
     const [onlyStep] = result.steps;
     const extraction = extractUsage(result.steps.length === 1 && onlyStep ? onlyStep.usage : result.usage);
     const finishReason = recordedFinishReason(result.finishReason);
-    const cost = this.measuredCost(extraction, resolved, site ?? "unknown", operation, requestedAt);
 
     // Checked before any parse: a value cut off at maxTokens is never parsed,
     // even when the text that arrived happens to be valid JSON.
     if (finishReason === "length") {
-      await this.record(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      await this.settle(admitted, requestedAt, extraction, finishReason, TRUNCATED);
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
@@ -557,17 +499,16 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
 
     const parsed = parseStructuredText(result.text, request.schema);
     if (parsed.ok) {
-      await this.record(admitted, requestedAt, extraction, finishReason, OK);
+      await this.settle(admitted, requestedAt, extraction, finishReason, OK);
       return {
         data: parsed.data,
         usage: extraction.usage,
-        cost,
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
       };
     }
 
-    await this.record(admitted, requestedAt, extraction, finishReason, {
+    await this.settle(admitted, requestedAt, extraction, finishReason, {
       kind: "error",
       errorKind: parsed.errorKind,
     });
@@ -584,11 +525,6 @@ export class LLMGateway implements ContextualLlm, ContextualTurnLlm {
       effectiveCapability: resolved.modelConfig.capabilityLevel,
     };
   }
-}
-
-/** A pre-call refusal or a failed ledger read or write: a fallback model would hit the same wall. */
-function isNeverRetried(error: unknown): boolean {
-  return error instanceof PreCallRefusal || error instanceof LlmCallNotAdmitted || error instanceof LlmCallNotRecorded;
 }
 
 /**
@@ -746,7 +682,7 @@ function reportedCache(raw: unknown): ReportedCache {
  * per the AI SDK's types, guarded across the trust boundary) reports nothing.
  * Never throws: a throw here was caught by `withFallback`, which discarded a
  * successful completion and paid for a second call. An unreported count leaves
- * the cost unmeasured, which `measureCost` names and every caller logs.
+ * the cost unmeasured, which Finance names and logs.
  * @testseam gateway.test.ts asserts the split directly
  */
 export function extractUsage(

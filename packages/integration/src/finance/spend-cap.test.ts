@@ -4,9 +4,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { BudgetExceeded, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
-import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
-import type { LLMGateway, ModelConfig } from "@ashara/llm-gateway";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
+import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
+import type { ModelConfig } from "@ashara/model-access";
 
 // Against Postgres: every row belongs to a project this suite creates under a
 // unique name, and afterAll deletes exactly those rows. No real LLM call is made.
@@ -58,9 +58,9 @@ function stubModel(usage: { input: number | undefined; output: number | undefine
 }
 
 /** One server process: its own SpendCap, so nothing in memory carries over from another. */
-function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]): { readonly gateway: LLMGateway; readonly cap: SpendCap } {
+function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]): { readonly gateway: GuardedModelAccess; readonly cap: SpendCap } {
   const cap = new SpendCap({ ledger: calls, projects, caps });
-  const gateway = buildGateway({
+  const gateway = new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
     config: {
       providers: [
@@ -69,13 +69,12 @@ function processWithCaps(caps: ConstructorParameters<typeof SpendCap>[0]["caps"]
       defaultProvider: "deepseek",
     },
     checkedSources: ["test"],
-    recording: { kind: "recorded", recorder: new LlmCallLedger(calls, cap) },
     clock: () => new Date(),
-  });
+  }), new LlmCallLedger(calls, cap));
   return { gateway, cap };
 }
 
-function greet(gateway: LLMGateway, projectId: ProjectId) {
+function greet(gateway: GuardedModelAccess, projectId: ProjectId) {
   return gateway
     .forCall({ projectId, taskId: null, callSite: "decomposition" })
     .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 64 });

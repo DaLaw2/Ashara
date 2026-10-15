@@ -3,7 +3,7 @@ import pg from "pg";
 import { z } from "zod";
 import type { PoolFactory } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
-import type { LanguageModelFactory } from "@ashara/llm-gateway";
+import type { LanguageModelFactory } from "@ashara/model-access";
 import type { Clock } from "@ashara/shared";
 import type { AdmissionLedger } from "./admissions.js";
 import type { CheckoutWatch } from "./checkout-watch.js";

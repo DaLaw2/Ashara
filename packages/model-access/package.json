@@ -1,5 +1,5 @@
 {
-  "name": "@ashara/llm-gateway",
+  "name": "@ashara/model-access",
   "version": "0.1.0",
   "private": true,
   "type": "module",

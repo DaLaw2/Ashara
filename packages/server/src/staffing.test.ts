@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { TaskDescriptor } from "@ashara/development";
-import type { ResolvedModel } from "@ashara/llm-gateway";
+import type { ResolvedModel } from "@ashara/model-access";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { createAgentStaffing } from "./staffing.js";
 

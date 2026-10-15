@@ -11,7 +11,7 @@ import {
   RoutingProfileUnresolved,
   UnknownProvider,
 } from "./errors.js";
-import { CAPABILITY_RANK } from "./pricing.js";
+import { CAPABILITY_RANK } from "./capability-rank.js";
 import { computeProviderCombo } from "./routing-profiles.js";
 import type {
   GatewayConfig,

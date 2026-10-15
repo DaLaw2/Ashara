@@ -77,7 +77,7 @@ function collectUnknownSiteKeys(
 const INVALID_PROFILES_HOW_TO_FIX =
   `Site keys must be one of: ${KNOWN_LLM_SITES.map((s) => `"${s}"`).join(", ")}. ` +
   "Delete the offending key, or register the site in KNOWN_LLM_SITES " +
-  "(packages/llm-gateway/src/types.ts) if it is a real call site.";
+  "(packages/model-access/src/types.ts) if it is a real call site.";
 
 /**
  * Parses `[routing.profiles."<combo>"]` tables from a models.toml file.

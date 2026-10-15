@@ -14,7 +14,7 @@
     "@ashara/development": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
-    "@ashara/llm-gateway": "*",
+    "@ashara/model-access": "*",
     "@ashara/security": "*",
     "@ashara/server": "*",
     "@ashara/shared": "*",
