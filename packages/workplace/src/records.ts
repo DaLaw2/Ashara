@@ -1,5 +1,5 @@
 import type { AttemptCellImage } from "@ashara/execution-infra";
-import type { TokenUsage } from "@ashara/model-access";
+import type { TokenUsage } from "@ashara/finance";
 import { cutText, keepEnds, renderElided, serializeError } from "@ashara/shared";
 import type { ElidedText, SerializedError } from "@ashara/shared";
 import type { Outcome } from "./outcome.js";

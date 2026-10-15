@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AttemptCellImage } from "@ashara/execution-infra";
-import type { ResolvedModel } from "@ashara/model-access";
+import type { ResolvedModel } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { AgentBrief } from "./agent-brief.js";
 import { InvalidAssignment } from "./errors.js";

@@ -13,7 +13,6 @@
     "@ashara/db": "*",
     "@ashara/delivery": "*",
     "@ashara/finance": "*",
-    "@ashara/model-access": "*",
     "@ashara/shared": "*",
     "drizzle-orm": "0.45.2",
     "zod": "4.4.3"

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
-import { SchemaValidationError } from "@ashara/model-access";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { SchemaValidationError } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { planningVisionOf } from "./acl/engagement-acl.js";

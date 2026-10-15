@@ -6,7 +6,7 @@ import { CellExecFailed, CellToolFailed } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/finance";
 import type { ContextualTurnLlm, CostedTurnResult, CostMeasurement } from "@ashara/finance";
-import type { ResolvedModel } from "@ashara/model-access";
+import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";

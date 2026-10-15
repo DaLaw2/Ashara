@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { ContextualLlm } from "@ashara/finance";
-import { withStructuredLadder } from "@ashara/model-access";
-import type { LadderAttemptEvent, StructuredValidation } from "@ashara/model-access";
+import { withStructuredLadder } from "@ashara/finance";
+import type { LadderAttemptEvent, StructuredValidation } from "@ashara/finance";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";

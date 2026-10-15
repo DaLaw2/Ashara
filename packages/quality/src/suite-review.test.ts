@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { PreCallRefusal } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
-import { StructuredOutputExhausted } from "@ashara/model-access";
+import { StructuredOutputExhausted } from "@ashara/finance";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { VisionSource } from "./acl/engagement-acl.js";
 import { SuiteReviewer, gitPublicInterface } from "./suite-review.js";

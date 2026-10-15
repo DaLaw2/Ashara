@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { CapabilityLevel } from "@ashara/model-access";
-import { CapabilityLevelSchema } from "@ashara/model-access";
+import type { CapabilityLevel } from "./acl/finance-acl.js";
+import { CapabilityLevelSchema } from "./acl/finance-acl.js";
 import type { VisionSource } from "./acl/engagement-vision-acl.js";
 
 export interface WorkItemSpec {

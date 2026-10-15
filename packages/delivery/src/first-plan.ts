@@ -1,6 +1,6 @@
-import type { LadderAttemptEvent } from "@ashara/model-access";
 import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import type { WorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkKind } from "./acl/organization-acl.js";
 import { projectBlockCause } from "./project-halt.js";

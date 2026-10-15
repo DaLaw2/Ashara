@@ -4,7 +4,7 @@ import {
   ProviderConfigurationRejected,
   ProviderError,
   StructuredOutputExhausted,
-} from "@ashara/model-access";
+} from "@ashara/finance";
 
 /**
  * Whose failure a failed model read of client input is (task t-intake-failure-classes, ADR-080 d5).

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { withStructuredLadder } from "@ashara/model-access";
-import type { LadderAttemptEvent } from "@ashara/model-access";
 import { describeErrorChain } from "@ashara/shared";
 import type { DomainEvent, ProjectId } from "@ashara/shared";
+import { withStructuredLadder } from "./acl/finance-acl.js";
+import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";

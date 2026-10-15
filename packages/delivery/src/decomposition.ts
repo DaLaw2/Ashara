@@ -1,6 +1,6 @@
 import { z, type ZodType } from "zod";
-import type { CapabilityLevel } from "@ashara/model-access";
-import type { StructuredValidation } from "@ashara/model-access";
+import type { CapabilityLevel } from "./acl/finance-acl.js";
+import type { StructuredValidation } from "./acl/finance-acl.js";
 import { visionSourceLine } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./acl/quality-acl.js";
 import type {

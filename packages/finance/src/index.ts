@@ -13,3 +13,19 @@ export { worstCaseCostUsd } from "./spend-cap.js";
 export { BudgetExceeded } from "./errors.js";
 /** @testseam the integration llm-call-ledger.test.ts asserts the refusal class; LlmCallLedger throws it */
 export { UnpricedModel } from "./errors.js";
+// Finance is Model Access's only customer (ADR-075 context map): every other context reads the model
+// language its calls through the guarded port speak (the structured-output ladder, the capability
+// tier, a resolved model, the provider failures) here, never from model-access itself.
+export { CapabilityLevelSchema, StructuredOutputExhausted, withStructuredLadder } from "@ashara/model-access";
+export type {
+  CapabilityLevel,
+  LadderAttemptEvent,
+  ResolvedModel,
+  StructuredProvider,
+  StructuredValidation,
+  TokenUsage,
+  TurnToolSchema,
+} from "@ashara/model-access";
+export { GatewayError, ProviderConfigurationRejected, ProviderError } from "@ashara/model-access";
+/** @testseam a scripted model in a caller's test fails a ladder attempt with it, to count the caller's attempts */
+export { SchemaValidationError } from "@ashara/model-access";

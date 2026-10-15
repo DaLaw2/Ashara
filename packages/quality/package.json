@@ -14,7 +14,6 @@
     "@ashara/engagement": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
-    "@ashara/model-access": "*",
     "@ashara/shared": "*",
     "@ashara/workplace": "*",
     "drizzle-orm": "0.45.2",

@@ -16,7 +16,6 @@
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
     "@ashara/knowledge": "*",
-    "@ashara/model-access": "*",
     "@ashara/organization": "*",
     "@ashara/quality": "*",
     "@ashara/shared": "*",

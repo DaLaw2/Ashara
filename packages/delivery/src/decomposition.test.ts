@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach } from "vitest";
 import type { ZodType } from "zod";
-import { SchemaValidationError, StructuredOutputExhausted } from "@ashara/model-access";
-import type { StructuredProvider, StructuredValidation } from "@ashara/model-access";
+import { SchemaValidationError, StructuredOutputExhausted } from "./acl/finance-acl.js";
+import type { StructuredProvider, StructuredValidation } from "./acl/finance-acl.js";
 import { DEFAULT_DECOMPOSITION_CONFIG, TaskCapExceededError, UntraceableTaskError, VisionItemsMissing } from "./decomposition-types.js";
 import type { DecompositionInput } from "./decomposition-types.js";
 import { DecompositionEngine, resetIdCounter } from "./decomposition.js";

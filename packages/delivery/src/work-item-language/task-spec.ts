@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CapabilityLevelSchema } from "@ashara/model-access";
+import { CapabilityLevelSchema } from "../acl/finance-acl.js";
 import { VisionSourceSchema } from "../acl/engagement-vision-acl.js";
 
 /** An acceptance line of a decomposed task with the ids of the vision items it serves (d89 A). */

@@ -12,7 +12,6 @@
     "@ashara/db": "*",
     "@ashara/execution-infra": "*",
     "@ashara/finance": "*",
-    "@ashara/model-access": "*",
     "@ashara/shared": "*",
     "ai": "7.0.128",
     "drizzle-orm": "0.45.2",

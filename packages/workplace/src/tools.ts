@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { CellToolFailed, InvalidCellRequest, PathOutsideWorkspace, elidedOutput } from "@ashara/execution-infra";
 import type { CellBackend, ExecResult } from "@ashara/execution-infra";
-import type { TurnToolSchema } from "@ashara/model-access";
+import type { TurnToolSchema } from "@ashara/finance";
 import { joinElided, uncutText, wholeText } from "@ashara/shared";
 import type { ElidedText } from "@ashara/shared";
 import type { ToolProfile } from "./assignment.js";

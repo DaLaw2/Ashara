@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ContextualLlm } from "@ashara/finance";
-import { withStructuredLadder } from "@ashara/model-access";
-import type { LadderAttemptEvent } from "@ashara/model-access";
+import { withStructuredLadder } from "@ashara/finance";
+import type { LadderAttemptEvent } from "@ashara/finance";
 import { describeErrorChain } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";

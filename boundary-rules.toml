@@ -1,70 +1,44 @@
-# ADR-044: Import boundary rules
-# Each BC declares which @ashara/* packages it may import from.
-# Composition root (server) is exempt — it wires everything.
-# "shared" is the Published Language / Shared Kernel.
+# Import boundary rules: ADR-075's context map, one section per package (ADR-044 mechanism).
+# scripts/check-boundaries.ts enforces them in `just check`; scripts/boundary-probes.test.ts plants
+# one violating import per forbidden package pair and per restrict rule and asserts the checker
+# reports each, and holds this file's edges to the list it states. An edge added here without
+# changing that list fails the test: a new edge is a decision about the map, not a lint fix.
 #
-# allow          = [...]        packages this package may import
-# restrict.<pkg> = [glob, ...]  package-relative files that may import <pkg>;
-#                               every other file in the package is a violation.
+# allow          = [...]        packages this package may import; only edges the map draws, plus the
+#                               shared kernel (conformist) and db (generic persistence) for a
+#                               context that owns tables
+# restrict.<pkg> = [glob, ...]  package-relative files that may import <pkg>; every other file in
+#                               the package is a violation (a downstream context reads an upstream
+#                               one through its src/acl/)
+# importers      = [...]        the only packages that may import this one, checked even against a
+#                               wildcard `allow`; `[]` means none may
+# named-only, names.<pkg>       see [integration]
+
+# --- Kernel and generic persistence -----------------------------------------------------------
 
 [shared]
+# The shared kernel: identifiers and the vocabulary every context conforms to. Imports nothing.
 allow = []
 
-[delivery]
-# ADR-075 Delivery: the board, decomposition, routing and the contractor loop (its process manager).
-# Every other context is reachable ONLY through acl/ (enforced by restrict below), except that the
-# dispatcher (src/dispatch/) composes a task's dispatch from Workplace's attempt, Quality's
-# verification, Knowledge's context and lessons, Execution Infrastructure's cells and worktrees and
-# Finance's guarded model port directly. Model Access is generic: the structured-output ladder.
-# Delivery owns its repositories (O1); db supplies the connection and the schema.
-# ADR-075 context map: Organization is upstream (who owns a WorkKind), Engagement upstream of both
-# (the client vision as its published VisionVersion); Delivery reads Workplace's Outcome, an
-# attempt's claim, and Quality's verdict.
-allow = ["shared", "db", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance", "model-access"]
-restrict.engagement = ["src/acl/*.ts"]
-restrict.organization = ["src/acl/*.ts"]
-restrict.workplace = ["src/acl/*.ts", "src/dispatch/*.ts"]
-restrict.quality = ["src/acl/*.ts", "src/dispatch/*.ts"]
-restrict.knowledge = ["src/acl/*.ts", "src/dispatch/*.ts"]
-restrict.execution-infra = ["src/acl/*.ts", "src/dispatch/*.ts"]
-restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
-
-[quality]
-# ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
-# acceptance sweep, run on cells (execution-infra). Workplace is upstream: Quality supplies the ports
-# its tools call and the verdicts they show. Quality owns its repositories; db supplies the
-# connection and the schema. It reads the task specification Delivery wrote and the vision items
-# it cites only as their published languages (Delivery's work-item entry, Engagement's vision entry),
-# through its ACL; neither entry loads the services that call Quality.
-allow = ["shared", "db", "finance", "model-access", "execution-infra", "workplace", "delivery", "engagement"]
-restrict.delivery = ["src/acl/*.ts"]
-restrict.engagement = ["src/acl/*.ts"]
-
-[knowledge]
-# ADR-075 Knowledge: findings and failed approaches. It owns its repositories; db supplies the
-# connection and the schema.
-allow = ["shared", "db"]
-
 [db]
+# Generic persistence: connection, listener, migrations, event store and the schema per context.
 allow = ["shared"]
 
-[engagement]
-# O1 (ADR-080 d3): Engagement owns its repositories; db supplies the connection and the schema.
-# O3 c: a project's halt is Delivery's; Engagement's steps that ask for one read its cause in
-# Delivery's published language (project-halt), and only there.
-allow = ["shared", "finance", "model-access", "db", "delivery"]
-# Its block and delivered reports read the work item's recorded cause and task specification in
-# Delivery's work-item language.
-restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
-
-[server]
-allow = ["*"]
-# The master key and the secret store are reached only where the server is composed and its
-# startup secrets loaded, plus the web-client login's secret-name vocabulary.
-restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
+# --- Generic and supporting contexts ----------------------------------------------------------
 
 [model-access]
+# ADR-075 Model Access (generic): providers, models, the structured-output ladder. Finance is its
+# only customer, so every model call goes through Finance's guarded port; the composition root
+# builds the gateway and the integration harness composes it as the root does. Every other context
+# reads the model language Finance re-publishes.
 allow = ["shared"]
+importers = ["finance", "server", "integration"]
+
+[finance]
+# ADR-075 Finance in front of Model Access: llm_calls rows go through db; Finance measures cost,
+# owns the recorder port and guards every model call; the model catalog and the gate it supplies
+# come from model-access's public API, whose language Finance re-publishes to the other contexts.
+allow = ["shared", "db", "model-access"]
 
 [security]
 # ADR-075 S1: db holds the ciphertext rows; the master key stays outside it.
@@ -73,42 +47,94 @@ allow = ["db"]
 # tools in scripts/ also import it; this checker does not scan scripts/.
 importers = ["server", "integration"]
 
-[finance]
-# ADR-075 Finance in front of Model Access: llm_calls rows go through db; Finance measures cost,
-# owns the recorder port and guards every model call; the model catalog and the gate it supplies
-# come from model-access's public API.
-allow = ["db", "shared", "model-access"]
-
 [execution-infra]
 # ADR-075 Execution Infrastructure: cells on the container substrate. Imports no other context.
 allow = ["shared"]
 
+[knowledge]
+# ADR-075 Knowledge: findings and failed approaches. It owns its repositories; db supplies the
+# connection and the schema.
+allow = ["shared", "db"]
+
 [workplace]
-# ADR-075 Workplace: the attempt loop in Z0 (each model turn through Finance's guarded port) with every tool on a cell.
-# It owns its session log (dev_sessions); db supplies the connection and the schema.
-allow = ["shared", "db", "finance", "model-access", "execution-infra"]
+# ADR-075 Workplace, upstream of every role: the attempt loop in Z0, each model turn through
+# Finance's guarded port, every tool on a cell (Workplace -> Execution Infrastructure). It owns its
+# session log (dev_sessions); db supplies the connection and the schema.
+allow = ["shared", "db", "finance", "execution-infra"]
+
+# --- Core contexts ----------------------------------------------------------------------------
+
+[engagement]
+# ADR-075 Engagement, upstream of Delivery; its structured reads of client input go through
+# Finance's guarded port. O1 (ADR-080 d3): it owns its repositories; db supplies the connection and
+# the schema. O3 c (ADR-080 d3): a project's halt is Delivery's; Engagement's steps that ask for one
+# read its cause in Delivery's published language (project-halt), and its block and delivered
+# reports read the work item's recorded cause and task specification in Delivery's work-item
+# language, only in the files listed.
+allow = ["shared", "db", "finance", "delivery"]
+restrict.delivery = ["src/answers.ts", "src/block-report.ts", "src/intake.ts", "src/plan-report.ts", "src/plan-report.test.ts", "src/repositories/block-report.ts", "src/repositories/delivered-report.ts", "src/stack-choice.ts"]
 
 [organization]
-# ADR-075 Organization (S3): roster, role and the capability-class vocabulary. Roster derivation is
-# Organization's language, so its structured call on the `roster` site lives here, through Finance's
-# guarded port like Engagement's and Delivery's own sites.
-# Its role charters state the conventions Workplace's tools enforce, read from Workplace's published
-# language through its ACL; Workplace never reads Organization.
-allow = ["shared", "finance", "model-access", "engagement", "workplace"]
+# ADR-075 Organization (S3): roster, role and the capability-class vocabulary, upstream of Delivery.
+# Roster derivation is Organization's language, so its structured call on the `roster` site lives
+# here, through Finance's guarded port. It reads the client vision in Engagement's published
+# language, and the conventions Workplace's tools enforce (stated in its role charters) in
+# Workplace's published language, each through its ACL; Workplace never reads Organization.
+allow = ["shared", "finance", "engagement", "workplace"]
 restrict.engagement = ["src/acl/*.ts"]
 restrict.workplace = ["src/acl/*.ts"]
 
+[quality]
+# ADR-075 Quality: the checks, the gates, the merge and its verification, the suite review and the
+# acceptance sweep, run on cells (Quality -> Execution Infrastructure). Workplace is upstream:
+# Quality supplies the ports its tools call and the verdicts they show. Its suite review calls a
+# model through Finance's guarded port. It owns its repositories; db supplies the connection and
+# the schema. It reads the task specification Delivery wrote and the vision items it cites only as
+# their published languages (Delivery's work-item entry, Engagement's vision entry), through its
+# ACL; neither entry loads the services that call Quality.
+allow = ["shared", "db", "finance", "execution-infra", "workplace", "delivery", "engagement"]
+restrict.delivery = ["src/acl/*.ts"]
+restrict.engagement = ["src/acl/*.ts"]
+
+[delivery]
+# ADR-075 Delivery: the board, decomposition, routing and the contractor loop (its process manager).
+# Engagement and Organization are upstream; Delivery reads Workplace's Outcome, an attempt's claim,
+# and Quality's verdict, reads and writes Knowledge, and makes its planning calls through Finance's
+# guarded port. Every other context is reachable only through src/acl/, except that the dispatcher
+# (src/dispatch/) composes a task's dispatch from Workplace's attempt, Quality's verification,
+# Knowledge's context and lessons, Execution Infrastructure's cells and worktrees and Finance's
+# guarded model port directly. Delivery owns its repositories (O1); db supplies the connection and
+# the schema.
+allow = ["shared", "db", "engagement", "organization", "workplace", "quality", "knowledge", "execution-infra", "finance"]
+restrict.engagement = ["src/acl/*.ts"]
+restrict.organization = ["src/acl/*.ts"]
+restrict.workplace = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.quality = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.knowledge = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.execution-infra = ["src/acl/*.ts", "src/dispatch/*.ts"]
+restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
+
+# --- Infrastructure and the test harness ------------------------------------------------------
+
+[server]
+# The composition root and the client's only interface (ADR-076): it wires every context.
+allow = ["*"]
+# The master key and the secret store are reached only where the server is composed and its
+# startup secrets loaded, plus the web-client login's secret-name vocabulary.
+restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
+
 [integration]
 # Story s-independent-verify-m1 L2: the lifecycle simulator and the cross-package integration
-# tests compose the real system, so they may import whatever the composition root wires. Nothing
-# may import them back: test harness code never becomes a production dependency.
-allow = ["*"]
+# tests compose the real system as the composition root does, so the list is every package; a new
+# package is added here by decision, never reached through a wildcard. Nothing may import them back:
+# test harness code never becomes a production dependency.
+allow = ["shared", "db", "model-access", "finance", "security", "execution-infra", "knowledge", "workplace", "engagement", "organization", "quality", "delivery", "server"]
 importers = []
 # ADR-081: a simulator oracle never imports the production predicate or report composer it judges.
 # scripts/check-boundaries.ts holds every file under src/simulator/ to importing from another
 # package only the symbols listed here: composition, a fake's port type, a class the simulator wraps
 # to observe, and the shared vocabulary. No Engagement composer, no acceptance or block-report read
-# model of db, nothing from Delivery is listed. Adding a name is a decision to review, not a
+# model of db, and from Delivery only its work-item vocabulary is listed. Adding a name is a decision to review, not a
 # formality. The cross-package tests (src/server/) are not held to it.
 named-only = ["src/simulator/**"]
 names.db = ["ClientRepository", "DEFAULT_DATABASE_URL", "MIGRATIONS_DIR", "PROJECT_BLOCK_KINDS", "PoolFactory", "SecretRepository", "TargetCheckoutClaimedElsewhere", "createDb", "runMigrations"]

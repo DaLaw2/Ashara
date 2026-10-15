@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { PreCallRefusal } from "@ashara/finance";
 import type { ContextualLlm } from "@ashara/finance";
-import { SchemaValidationError } from "@ashara/model-access";
+import { SchemaValidationError } from "@ashara/finance";
 import { parseProjectId } from "@ashara/shared";
 import { TenderIntake } from "./intake.js";
 import type { IntakeStore } from "./intake.js";
