@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyCoverage, modelPathOf, sample } from "./coverage.js";
+import { RARE_UNDER_OWN_PROFILES, behavioursBelowFloor, countBehaviours, emptyBehaviourCounts, emptyCoverage, modelPathOf, sample } from "./coverage.js";
 import type { Snapshot } from "./invariants.js";
 
 function snapshotWith(events: Snapshot["events"]): Snapshot {
@@ -64,5 +64,30 @@ describe("modelPathOf", () => {
     expect(row("decomposition", "stop", "ok", 200, null)).toBeNull();
     // A turn that stopped with output but no tool call is a refusal or a plain stop, not one of these.
     expect(row("agent-runner", "stop", "ok", 200, null)).toBeNull();
+  });
+});
+
+describe("behaviour counts", () => {
+  it("counts the seeds reaching each behaviour key and names every floored key no seed reached", () => {
+    const counts = emptyBehaviourCounts();
+    const first = emptyCoverage();
+    first.faults.add("db:crash-before");
+    first.concurrency.add("contended:spend-admission");
+    const second = emptyCoverage();
+    second.faults.add("db:crash-before");
+    second.plants.add("skip-merge-record");
+    countBehaviours(counts, first);
+    countBehaviours(counts, second);
+    expect(counts.get("faults db:crash-before")).toBe(2);
+    expect(counts.get("concurrency contended:spend-admission")).toBe(1);
+    const own = behavioursBelowFloor(counts, "own");
+    expect(own).not.toContain("plants skip-merge-record");
+    expect(own).toContain("plants no-admission-queue");
+    expect(own).toContain("models turn:reasoning-exhausted");
+    // Rare under the seeds' own profiles: the directed tier forces it, the adversarial soak floors it.
+    expect(own).not.toContain("models turn:empty");
+    expect(behavioursBelowFloor(counts, "adversarial")).toEqual(expect.arrayContaining(["models turn:empty", "concurrency batch-of-two"]));
+    expect(behavioursBelowFloor(counts, "adversarial").some((key) => key.startsWith("faults ") || key.startsWith("plants "))).toBe(false);
+    for (const key of RARE_UNDER_OWN_PROFILES.keys()) expect(counts.has(key)).toBe(true);
   });
 });

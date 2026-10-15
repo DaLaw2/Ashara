@@ -1,17 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
+import { RARE_UNDER_OWN_PROFILES } from "./coverage.js";
 import { dropStaleRunDatabases, prepareTemplate } from "./database.js";
 import { diffExpected } from "./expected-failures.js";
+import type { FaultKind, SeamKind } from "./faults.js";
 import { minimize } from "./minimize.js";
 import { profileOfSeed } from "./profile.js";
+import type { Profile } from "./profile.js";
 import { runSeed } from "./run.js";
-import type { Mutation, RunOptions, RunResult } from "./run.js";
+import type { RunOptions, RunResult } from "./run.js";
+import type { Direction } from "./tape.js";
 
 /**
  * The fast tier (design §4.13): fixed seeds on today's code, each judged against
  * expected-failures.ts. A seed listed there must fail exactly the violation keys listed; any
  * other seed must pass every invariant. The soak tier is `just simulate`. Every run is a batch of
- * two (production's MAX_BATCH_SIZE default); seed 11 is judged in the checkout-lock test below.
+ * two (production's MAX_BATCH_SIZE default). A test that needs one behaviour forces it on a directed
+ * tape (the directed tier below), never by a seed found to reach it.
  */
 const FAST_SEEDS = [1, 2, 4, 10, 14, 41] as const;
 const MAX_CYCLES = 120;
@@ -29,7 +34,7 @@ afterAll(async () => {
   await dropStaleRunDatabases(databaseUrl);
 });
 
-function seeded(seed: number, mutation?: Mutation, scenario: Pick<RunOptions, "projects" | "capUsd" | "cellOutage"> = {}): Promise<RunResult> {
+function seeded(seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> = {}): Promise<RunResult> {
   return runSeed({
     seed,
     profile: profileOfSeed(seed),
@@ -38,7 +43,6 @@ function seeded(seed: number, mutation?: Mutation, scenario: Pick<RunOptions, "p
     template,
     maxCycles: MAX_CYCLES,
     timeoutMs: SEED_TIMEOUT_MS,
-    ...(mutation === undefined ? {} : { mutation }),
     ...scenario,
   });
 }
@@ -51,11 +55,15 @@ function failed(result: RunResult): string[] {
   return [...new Set(result.violations.map((v) => v.invariant))].sort();
 }
 
+function statements(result: RunResult): string {
+  return result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n");
+}
+
 describe("lifecycle simulator, fast tier", () => {
   for (const seed of FAST_SEEDS) {
     it(`seed ${seed} fails exactly its listed violations`, async () => {
       const result = await seeded(seed);
-      expect(diffExpected(result, {}), result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
+      expect(diffExpected(result, {}), statements(result)).toEqual({ unexpected: [], missing: [] });
     }, 90_000);
   }
 
@@ -87,169 +95,178 @@ describe("lifecycle simulator, fast tier", () => {
   ];
   for (const [seed, scenario] of twice) {
     it(`runs seed ${seed}${scenario.projects === 2 ? " with two projects" : ""} twice to the same trace`, async () => {
-      const first = await seeded(seed, undefined, scenario);
-      const second = await seeded(seed, undefined, scenario);
+      const first = await seeded(seed, scenario);
+      const second = await seeded(seed, scenario);
       expect(second.trace.join("\n")).toBe(first.trace.join("\n"));
     }, 120_000);
   }
+});
 
-  // B8 (baseline §3; task t-begin-failure-leaks-connection) has no seed on the keyed tape, so it is pinned by its two decisions: the
-  // first BEGIN fails with a 40001. Before the leak was named, its teardown waited on the pool's end forever.
-  it("names a connection production leaves checked out instead of hanging on it", async () => {
-    const result = await runSeed({
-      seed: 89,
+/**
+ * The directed tier (t-simulator-directed-plants): each fault, plant and misbehaviour a test judges
+ * is forced by name on a directed tape (tape.ts Direction), every other draw benign, rather than
+ * reached by a seed found by scanning. A seed is re-rolled by any change that adds a seam call on
+ * its path (the I5 test's seed went 50 -> 4 -> 47 -> 63 -> 81 over five merges); a direction is
+ * not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of letting the
+ * test judge a run that never met its behaviour. The forced behaviour flows through the same code
+ * as a seeded one: the same seams, stand-ins and interleaver; only the choice is named.
+ */
+describe("lifecycle simulator, directed", () => {
+  type Scenario = Pick<RunOptions, "mutation" | "projects" | "capUsd" | "cellOutage"> & { readonly profile?: Profile };
+
+  function directed(directions: readonly Direction[], scenario: Scenario = {}): Promise<RunResult> {
+    return runSeed({
+      seed: 1,
       profile: "typical",
-      tape: { kind: "replay", decisions: [{ key: "fault.db:begin#1", value: 1 }, { key: "fault.db:begin.kind#1", value: 3 }] },
+      tape: { kind: "directed", directions },
       databaseUrl,
       template,
       maxCycles: MAX_CYCLES,
       timeoutMs: SEED_TIMEOUT_MS,
+      ...scenario,
     });
-    // The kind is an index into the call's offered faults: pinned here, so a catalogue change fails loudly.
+  }
+
+  const draw = (site: string | RegExp, nth: number | "every", value = 1, scope?: string): Direction => ({
+    kind: "draw",
+    site,
+    nth,
+    value,
+    ...(scope === undefined ? {} : { scope }),
+  });
+  /** The plan is two tasks that depend on none of each other, so their implementations run as one batch. */
+  const BATCH_OF_TWO: readonly Direction[] = [draw("universe.extra-tasks", 1), draw("universe.independent-tasks", 1)];
+  /** The running task hands the turn to the other at every matching seam call where it can (interleave.ts). */
+  const switchAtEvery = (site: RegExp): Direction => draw(site, "every");
+  /** An implementation attempt's draw, counted over implementation attempts only. */
+  const implementation = (site: string, nth: number | "every"): Direction => draw(site, nth, 1, "implementation");
+
+  // B8 (baseline §3; task t-begin-failure-leaks-connection): the first BEGIN fails with a 40001.
+  // Before the leak was named, its teardown waited on the pool's end forever.
+  it("names a connection production leaves checked out instead of hanging on it", async () => {
+    const result = await directed([{ kind: "fault", seam: "db", label: "begin", nth: 1, fault: "db-query-failed" }]);
     expect(result.faults.map((f) => `${f.label}:${f.fault}`)).toEqual(["begin:db-query-failed"]);
-    expect(result.violations.map((v) => v.key)).toEqual(["I1:leaked-connection:begin"]);
+    expect(keys(result)).toEqual(["I1:leaked-connection:begin"]);
   }, 90_000);
 
-  // B3 (baseline §3; task t-orphan-requeue-failure), minimized from chaos seed 6: a crash, a crash right after the task is set
-  // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read. Until
-  // t-reconcile-merged-work the orphan was left InProgress while the process lived (I1, I7, I8); the
-  // reconciler now retries the requeue within its bound.
+  // B3 (baseline §3; task t-orphan-requeue-failure): a crash, a crash right after the task is set
+  // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read. The
+  // reconciler retries the requeue within its bound, so the orphan is never left InProgress.
   it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async () => {
-    const result = await runSeed({
-      seed: 6,
-      profile: "chaos",
-      tape: {
-        kind: "replay",
-        decisions: [
-          { key: "fault.git:ls-tree#2", value: 1 },
-          { key: 'fault.db:update "work_items" set "status" = $1, "blocked_reason" = $2#5', value: 1 },
-          { key: 'fault.db:update "work_items" set "status" = $1, "blocked_reason" = $2.kind#1', value: 1 },
-          { key: 'fault.db:select count(*) from "dev_sessions" where ("dev_sessions"."t#3', value: 1 },
-          { key: 'fault.db:select count(*) from "dev_sessions" where ("dev_sessions"."t.kind#1', value: 3 },
-        ],
-      },
-      databaseUrl,
-      template,
-      maxCycles: MAX_CYCLES,
-      timeoutMs: SEED_TIMEOUT_MS,
-    });
-    // Kinds are indexes into each call's offered faults: pinned, so a catalogue change fails loudly.
+    const result = await directed([
+      { kind: "fault", seam: "git", label: "ls-tree", nth: 2, fault: "crash-before" },
+      { kind: "fault", seam: "db", label: /^update "work_items" set "status" = \$1, "blocked_reason" = \$2/, nth: 5, fault: "crash-after" },
+      { kind: "fault", seam: "db", label: /^select count\(\*\) from "dev_sessions"/, nth: 3, fault: "db-query-failed" },
+    ]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:crash-before", "db:crash-after", "db:db-query-failed"]);
     expect(result.log.some((line) => line.includes("requeue the task failed on attempt 1 of 3; retrying"))).toBe(true);
-    expect(result.violations.map((v) => v.key)).toEqual([]);
+    expect(keys(result)).toEqual([]);
   }, 90_000);
 
   // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window): the process dies on the
   // merge-record write right after the merge commit landed on main (development merge.ts
-  // commitMerge, then orchestrator execution.ts writes the record). Until t-reconcile-merged-work the
-  // startup reconciler requeued the orphan without looking on main, so the merged work was dispatched
-  // again and main held a merge no record named (I7:unrecorded). It now reads main first, and records
-  // the merge it finds.
+  // commitMerge, then orchestrator execution.ts writes the record). The startup reconciler reads
+  // main before it requeues an orphan, and records the merge it finds instead of dispatching the
+  // merged work again.
   it("records a merge on main whose record a crash lost, never re-dispatching it (B5)", async () => {
-    const label = 'fault.db:update "work_items" set "merge_commit" = $1, "merge_kind" = ';
-    const result = await runSeed({
-      seed: 10,
-      profile: "typical",
-      tape: { kind: "replay", decisions: [{ key: `${label}#1`, value: 1 }, { key: `${label}.kind#1`, value: 0 }] },
-      databaseUrl,
-      template,
-      maxCycles: MAX_CYCLES,
-      timeoutMs: SEED_TIMEOUT_MS,
-    });
+    const result = await directed([{ kind: "fault", seam: "db", label: /^update "work_items" set "merge_commit" = \$1/, nth: 1, fault: "crash-before" }]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["db:crash-before"]);
     expect(result.log.some((line) => line.includes("was merged on main as") && line.includes("merge recorded, Completed, not re-dispatched"))).toBe(true);
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // B4 (baseline §3), seed 14's tape minimized on a9f781ce: two simulated git index.lock failures
-  // fail the substrate gate's cell start. Before W6 the environment task was parked at Blocked
-  // (environment_unavailable) for an operator: I1, I2 and I8. Now the fault is requeued uncharged
-  // and the next dispatch completes it.
+  // B4 (baseline §3): two simulated git index.lock failures fail the substrate gate's cell start.
+  // Before W6 the environment task was parked at Blocked (environment_unavailable) for an operator:
+  // I1, I2 and I8. Now the fault is requeued uncharged and the next dispatch completes it.
   it("requeues a task whose cell could not start, never parks it for a person", async () => {
-    const result = await runSeed({
-      seed: 14,
-      profile: "typical",
-      tape: {
-        kind: "replay",
-        decisions: [
-          { key: "fault.git:add#6", value: 1 },
-          { key: "fault.git:add.kind#1", value: 2 },
-          { key: "fault.git:commit-tree#4", value: 1 },
-          { key: "fault.git:commit-tree.kind#1", value: 2 },
-        ],
-      },
-      databaseUrl,
-      template,
-      maxCycles: MAX_CYCLES,
-      timeoutMs: SEED_TIMEOUT_MS,
-    });
-    expect(result.faults.length).toBe(2);
+    const result = await directed([
+      { kind: "fault", seam: "git", label: "add", nth: 6, fault: "git-failed" },
+      { kind: "fault", seam: "git", label: "commit-tree", nth: 4, fault: "git-failed" },
+    ]);
+    expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["git:git-failed", "git:git-failed"]);
     expect(result.trace).toContain("cycle 1: 1 task(s) [interrupted]");
-    expect(result.violations.map((v) => v.key)).toEqual([]);
+    expect(keys(result)).toEqual([]);
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // ADR-074 d82 W3: seed 11 runs two implementations in one batch, and one finalize waits on the
-  // other's checkout. Skipping that wait lets the second finalize's recovery abort the first's
-  // staged merge, which I7's merge-queue clause names. Seed 30 stopped contending on the checkout
-  // when the knowledge-graph call was deleted (t-ddd-r1-contract-out): a scan of seeds 1-60 found
-  // 11, 13, 24 and 40 passing clean with both contentions covered and failing the merge --abort
-  // clause planted (observed 2026-10-15).
+  /*
+   * The fault kinds the seeded soak reaches too seldom to floor (coverage.ts
+   * RARE_UNDER_OWN_PROFILES), each forced on the first call that can carry it: production answers
+   * each without breaking an invariant (observed 2026-10-15, one directed run each). A key marked
+   * rare that no entry here forces fails the first test.
+   */
+  const fault = (seam: SeamKind, label: string | RegExp, kind: FaultKind): Direction => ({ kind: "fault", seam, label, nth: 1, fault: kind });
+  const RARE_FAULTS: readonly Direction[] = [
+    fault("db", "connect", "db-unreachable"),
+    fault("podman", "run", "cell-start-failed"),
+    fault("podman", "exec", "cell-exec-failed"),
+    fault("podman", "rm", "cell-teardown-failed"),
+    fault("podman", "info", "substrate-down"),
+    fault("podman", "build", "image-build-failed"),
+    fault("model", /./, "crash-before"),
+    fault("model", /./, "sigterm"),
+    fault("model", /./, "provider-error"),
+    fault("model", /./, "clock-jump"),
+  ];
+  const pairOf = (direction: Direction): string => (direction.kind === "fault" ? `${direction.seam}:${direction.fault}` : "");
+
+  it("forces every fault kind the soak reaches too seldom to floor", () => {
+    const rare = [...RARE_UNDER_OWN_PROFILES.keys()].filter((key) => key.startsWith("faults ")).map((key) => key.slice("faults ".length));
+    expect(RARE_FAULTS.map(pairOf).sort()).toEqual(rare.sort());
+  });
+
+  for (const direction of RARE_FAULTS) {
+    const pair = pairOf(direction);
+    it(`carries ${pair} on the first call that can carry it`, async () => {
+      const result = await directed([direction]);
+      expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual([pair]);
+      expect(keys(result), statements(result)).toEqual([]);
+    }, 90_000);
+  }
+
+  // ADR-074 d82 W3: two implementations run in one batch and one finalize waits on the other's
+  // checkout. Skipping that wait lets the second finalize's recovery abort the first's staged merge,
+  // which I7's merge-queue clause names. The turn is handed on at every host git call, so each
+  // finalize is entered while the other is part way through its own. A directed run is a function
+  // of its directions alone: run twice, its trace is byte-identical.
   it("catches two finalizes overlapping on one checkout when the checkout lock is skipped", async () => {
-    const clean = await seeded(11);
-    expect(diffExpected(clean, {}), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual({ unexpected: [], missing: [] });
+    const race = [...BATCH_OF_TWO, switchAtEvery(/^interleave:git:/)];
+    const clean = await directed(race);
+    expect(keys(clean), statements(clean)).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:target-checkout");
-    expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(11, "no-checkout-lock");
-    expect(planted.violations.map((v) => v.key)).toContain("I7:checkout-overlap:merge --abort");
-  }, 90_000);
+    const again = await directed(race);
+    expect(again.trace.join("\n")).toBe(clean.trace.join("\n"));
+    const planted = await directed(race, { mutation: "no-checkout-lock" });
+    expect(keys(planted)).toContain("I7:checkout-overlap:merge --abort");
+  }, 120_000);
 
   // ADR-074 d84 b. With one project the admission queue's absence admits nothing more (baseline
-  // §7.6), so here two projects share one deployment cap of $10: skipping the queue lets one task's
-  // admission pass the deployment's check while the other's stands between its check and its
-  // in-flight estimate (observed: still caught with the in-flight read moved before the spend read,
-  // B9's fix, so it is the queue's race and not B9's). It needs two admissions to meet near the cap,
-  // so the seed is re-picked whenever a change moves the seams a run passes through. Seed 50 stopped
-  // catching it when migration 053 (an admission is two spend reads and a pending-row insert, each a
-  // seam) merged with the batch's other seam changes; neither alone moved it. Observed 2026-10-15,
-  // scan of seeds 1-40 at $10 with two projects, planted: seeds 4 and 21 fail I5:over-committed
-  // alone, and both pass clean with contended:spend-admission covered. Seed 4 stopped catching it on
-  // t-ddd-fix-own-faults (a fault of Z0 is requeued uncharged, not replanned): its scan of 2026-10-15
-  // over seeds 1-120, the same mode, found none in 1-40 and seeds 47, 60, 63, 68, 81 and 84 failing
-  // I5:over-committed alone, planted, and passing clean with contended:spend-admission covered.
-  // Seed 47 (hostile) stopped catching it at the merge of t-adversarial-models, which draws hostile
-  // and chaos rates per seed: of that scan's seeds, 63 and 81 (typical) still fail I5:over-committed
-  // alone, planted, and pass clean with contended:spend-admission covered (observed 2026-10-15, each
-  // run serially at $10 with two projects on the merged tree). Seed 63 stopped catching it at the
-  // merge of t-intake-failure-classes (the gateway's pre-call check moved into its own admit step):
-  // a serial scan of seeds 1-120 in the same mode, planted, found 60, 81, 84 and 100 failing
-  // I5:over-committed alone and each passing clean with contended:spend-admission covered
-  // (observed 2026-10-15). Seed 81 stopped catching it when the knowledge-graph call was deleted
-  // (t-ddd-r1-contract-out): a scan of seeds 1-120 in the same mode, planted, found 16, 50, 58, 80, 104
-  // and 114 failing I5:over-committed alone and each passing clean with contended:spend-admission
-  // covered (observed 2026-10-15).
+  // §7.6), so here two projects share one deployment cap of $10, spent to the cap. The turn is
+  // handed on after every database call returns, so an admission's spend read is followed by the
+  // other task's: skipping the queue lets both pass on one headroom smaller than their two
+  // estimates (observed: still caught with the in-flight read moved before the spend read, B9's
+  // fix, so it is the queue's race and not B9's).
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
+    const race = [...BATCH_OF_TWO, switchAtEvery(/^interleave:db:.*:returned$/)];
     const shared = { projects: 2, capUsd: 10 } as const;
-    const clean = await seeded(16, undefined, shared);
-    expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
+    const clean = await directed(race, shared);
+    expect(keys(clean), statements(clean)).toEqual([]);
     expect([...clean.coverage.concurrency]).toContain("contended:spend-admission");
-    const planted = await seeded(16, "no-admission-queue", shared);
+    const planted = await directed(race, { ...shared, mutation: "no-admission-queue" });
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
   // Migration 053: an admitted call's estimate is its llm_calls row, pending until the call is
   // recorded, and the spend read counts it. Planted (pending-uncounted), the read leaves the pending
-  // rows out, as an in-memory in-flight set is left out by the next process: an admission made while
-  // another call is in flight sees only the recorded spend. It needs two admissions to meet near the
-  // cap (observed, scan of 2026-10-15 over seeds 1-20 at $6 with two projects: seeds 14 and 19 fail
-  // I5:over-committed alone and pass clean). Seed 14 stopped catching it when the knowledge-graph
-  // call was deleted (t-ddd-r1-contract-out): a scan of seeds 1-30 in the same mode found 6, 16, 27
-  // and 29 failing I5:over-committed alone, planted, and passing clean (observed 2026-10-15).
+  // rows out, as an in-memory in-flight set is left out by the next process. The turn is handed on
+  // at every model call, after its admission and before its record: the other task's admission is
+  // made while the call is in flight, up to the two projects' shared cap of $6.
   it("catches an admission that leaves out the calls admitted and not yet recorded", async () => {
+    const inFlight = [...BATCH_OF_TWO, switchAtEvery(/^interleave:model:/)];
     const shared = { projects: 2, capUsd: 6 } as const;
-    const clean = await seeded(6, undefined, shared);
-    expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
-    const planted = await seeded(6, "pending-uncounted", shared);
+    const clean = await directed(inFlight, shared);
+    expect(keys(clean), statements(clean)).toEqual([]);
+    const planted = await directed(inFlight, { ...shared, mutation: "pending-uncounted" });
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
@@ -260,151 +277,144 @@ describe("lifecycle simulator, fast tier", () => {
   // halt episode, and nothing reached that was not reached before.
   it("catches a halt and resumption that repeat with no progress", async () => {
     const outage = { cellOutage: true } as const;
-    const clean = await seeded(10, undefined, outage);
+    const clean = await directed([], outage);
     expect(keys(clean)).toEqual([]);
     expect(clean.outcome.kind).toBe("halted");
-    const planted = await seeded(10, "infrastructure-fault-pinned", outage);
+    const planted = await directed([], { ...outage, mutation: "infrastructure-fault-pinned" });
     expect(planted.trace.filter((line) => line.endsWith("1 task(s) [interrupted]")).length).toBeGreaterThan(4);
     expect(keys(planted)).toEqual(["I1:open", "I8:Pending"]);
     expect(planted.outcome.kind).toBe("open");
   }, 90_000);
 
-  // ADR-074 d84 b, W7: the stand-ins drive seed 10 to Accepted on one passed sweep of main; the
-  // delivered report is judged against the goal tasks' merge records and the task and check
-  // records, so a report that drops a goal's close, misstates what no stored check covers, leaves
-  // out an asked-for item no acceptance line cites, or is posted with no record of it (and so
+  // ADR-074 d84 b, W7: with no adversary the stand-ins drive the project to Accepted on one passed
+  // sweep of main; the delivered report is judged against the goal tasks' merge records and the task
+  // and check records, so a report that drops a goal's close, misstates what no stored check covers,
+  // leaves out an asked-for item no acceptance line cites, or is posted with no record of it (and so
   // posted again) is named.
   it("accepts a project on a passed sweep and catches a delivered report that misstates its records", async () => {
-    const clean = await seeded(10);
+    const clean = await directed([]);
     expect(clean.outcome.kind).toBe("accepted");
     expect(keys(clean)).toEqual([]);
     expect([...clean.coverage.projectStatuses]).toContain("accepted");
     expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
-    expect(keys(await seeded(10, "delivered-report-omits-goal"))).toEqual(["I4:delivered-close"]);
-    expect(keys(await seeded(10, "delivered-report-misstates-unchecked"))).toEqual(["I4:delivered-unchecked"]);
+    expect(keys(await directed([], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
+    expect(keys(await directed([], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
     // W11c D3: the stand-ins' assumption is cited by no acceptance line, so the report lists it; dropped, it is named.
-    expect(keys(await seeded(10, "delivered-report-omits-uncovered"))).toEqual(["I4:delivered-coverage"]);
-    expect(keys(await seeded(10, "delivered-report-unrecorded"))).toContain("I4:unrecorded-report");
+    expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage"]);
+    expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
   }, 120_000);
 
   // I9 (text against fact): what a composer states is what the store held when it composed it. The
   // stand-ins' one assumption is asked about and cited by no acceptance line, so every brief carries
   // its standing, the delivered report lists it, and the question states it.
   it("catches a brief, a question and a delivered report that state what their records do not hold", async () => {
-    const briefs = keys(await seeded(10, "brief-misstates-standing"));
+    const briefs = keys(await directed([], { mutation: "brief-misstates-standing" }));
     expect(briefs).toContain("I9:brief-assumptions:Define and commit the project environment");
     expect(briefs.every((key) => key.startsWith("I9:brief-assumptions:"))).toBe(true);
-    expect(keys(await seeded(10, "delivered-report-misstates-standing"))).toEqual(["I9:delivered-standing:A1"]);
-    expect(keys(await seeded(10, "question-misstates-assumption"))).toEqual(["I9:question:A1"]);
+    expect(keys(await directed([], { mutation: "delivered-report-misstates-standing" }))).toEqual(["I9:delivered-standing:A1"]);
+    expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 
-  // W6/W7: a halt's report quotes the cause recorded on its episode. Seed 10 under a cell outage
-  // halts on infrastructure and then undeliverable (plan_repair); seed 1 halts at the spend cap.
+  // W6/W7: a halt's report quotes the cause recorded on its episode. Under a cell outage the project
+  // halts on infrastructure and then undeliverable (plan_repair); at the low cap it halts at once.
   it("catches a halt report that states a fixed cause instead of the recorded one", async () => {
-    const outage = await seeded(10, "halt-report-fixed-cause", { cellOutage: true });
+    const outage = await directed([], { cellOutage: true, mutation: "halt-report-fixed-cause" });
     expect(keys(outage)).toEqual(["I4:halt-cause:infrastructure", "I4:halt-cause:plan_repair"]);
-    const spend = await seeded(1, "halt-report-fixed-cause");
+    const spend = await directed([draw("finance.low-budget", 1)], { mutation: "halt-report-fixed-cause" });
     expect(spend.outcome).toMatchObject({ kind: "halted", cause: "spend_cap" });
     expect(keys(spend)).toEqual(["I4:halt-cause:budget_cap"]);
   }, 120_000);
 
-  // The stop report names exactly the merges recorded. A tape of two decisions: the client stops
-  // the project at cycle 5, after three tasks merged (seed 10's ids, no fault).
+  // The stop report names exactly the merges recorded: the client stops the project at cycle 5
+  // (2 plus the stop-cycle draw), after three tasks merged.
   it("catches a stop report that leaves out a merge on record", async () => {
-    const stop = (mutation?: Mutation): Promise<RunResult> =>
-      runSeed({
-        seed: 10,
-        profile: "typical",
-        tape: { kind: "replay", decisions: [{ key: "client.stop#1", value: 1 }, { key: "client.stop-cycle#1", value: 3 }] },
-        databaseUrl,
-        template,
-        maxCycles: MAX_CYCLES,
-        timeoutMs: SEED_TIMEOUT_MS,
-        ...(mutation === undefined ? {} : { mutation }),
-      });
-    const clean = await stop();
+    const stop = [draw("client.stop", 1), draw("client.stop-cycle", 1, 3)];
+    const clean = await directed(stop);
     expect(clean.outcome.kind).toBe("stopped");
     expect(clean.trace).toContain("client stop at cycle 5");
     expect(keys(clean)).toEqual([]);
-    expect(keys(await stop("stop-report-omits-merge"))).toEqual(["I4:stop-merges"]);
+    expect(keys(await directed(stop, { mutation: "stop-report-omits-merge" }))).toEqual(["I4:stop-merges"]);
   }, 90_000);
 
   // A plant whose query production never sends planted nothing: the run says so instead of
   // reporting the mutation as not caught. At a cap of $0.02 nothing merges, so no merge record is written.
   it("throws for a plant that rewrote no query", async () => {
-    await expect(seeded(1, "skip-merge-record", { capUsd: 0.02 })).rejects.toThrow(/plant of mutation skip-merge-record rewrote no query/);
+    await expect(directed([], { capUsd: 0.02, mutation: "skip-merge-record" })).rejects.toThrow(/plant of mutation skip-merge-record rewrote no query/);
   }, 90_000);
 
   it("catches a merge recorded under a commit main does not hold", async () => {
-    const clean = await seeded(10);
+    const clean = await directed([]);
     expect(failed(clean)).toEqual([]);
-    const planted = await seeded(10, "skip-merge-record");
+    const planted = await directed([], { mutation: "skip-merge-record" });
     expect(failed(planted)).toContain("I7");
   }, 90_000);
-});
 
-/**
- * The adversarial profile (test retro 2026-10-15 pattern 2; ADR-081): one pinned seed per
- * response-level misbehaviour, each judged twice: the stand-in's trace says it misbehaved, and
- * production's own records (coverage.ts MODEL_PATHS, the attempt terminals of dev_sessions) say the
- * gateway, the attempt loop and the routers met it; and the seed passes every invariant. Observed
- * 2026-10-15 over adversarial seeds 1-40 (`simulate.ts --seeds 40 --profile adversarial`): no
- * violation. A change that moves a seed off its misbehaviour fails here: then re-pick the seed.
- */
-describe("lifecycle simulator, adversarial models", () => {
-  function adversarial(seed: number): Promise<RunResult> {
-    return runSeed({ seed, profile: "adversarial", tape: { kind: "seeded", seed }, databaseUrl, template, maxCycles: MAX_CYCLES, timeoutMs: SEED_TIMEOUT_MS });
+  /*
+   * The adversarial behaviours (test retro 2026-10-15 pattern 2; ADR-081), each judged twice: the
+   * stand-in's trace says it misbehaved, and production's own records (coverage.ts MODEL_PATHS, the
+   * attempt terminals of dev_sessions) say the gateway, the attempt loop and the routers met it; and
+   * the run passes every invariant.
+   */
+  function adversarial(directions: readonly Direction[]): Promise<RunResult> {
+    return directed(directions, { profile: "adversarial" });
   }
 
   function expectReached(result: RunResult, injected: readonly string[], models: readonly string[], attempts: readonly string[]): void {
-    expect(keys(result), result.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
+    expect(keys(result), statements(result)).toEqual([]);
     for (const line of injected) expect(result.trace).toContain(`model ${line}`);
     expect([...result.coverage.models]).toEqual(expect.arrayContaining([...models]));
     expect([...result.coverage.attempts]).toEqual(expect.arrayContaining([...attempts]));
   }
 
-  // (a) w12b D2: two tasks of a batch both write product/INDEX; the second's retry is handed the conflict.
+  // (a) w12b D2: both tasks of a batch write product/INDEX, each branched before the other merged;
+  // the second's retry is handed its conflict with main.
+  const SAME_FILE = [...BATCH_OF_TWO, switchAtEvery(/^interleave:git:/), implementation("agent.shared-file", "every")];
+
   it("hands the second of two same-file edits its conflict with main, which it resolves", async () => {
-    const result = await adversarial(12);
+    const result = await adversarial(SAME_FILE);
     expectReached(result, ["agent-runner handed a conflict in product/INDEX: resolves it"], ["merge:conflict-presented"], ["finished:done"]);
   }, 90_000);
 
   it("hands a conflict to an implementer that leaves its markers in", async () => {
-    const result = await adversarial(17);
+    const result = await adversarial([...SAME_FILE, implementation("agent.conflict.markers-left", 1)]);
     expectReached(result, ["agent-runner handed a conflict in product/INDEX: leaves its markers"], ["merge:conflict-presented"], []);
   }, 90_000);
 
-  // (b) and (d) on agent turns: cut at the output limit mid tool call, and all reasoning; neither turn's calls run.
+  // (b) and (d) on agent turns: the first implementation attempt's first turn is cut at the output
+  // limit mid tool call, the next one's is all reasoning; neither turn's calls run.
   it("ends an attempt whose turn is cut at the output limit, mid tool call or all reasoning", async () => {
-    const result = await adversarial(31);
+    const result = await adversarial([implementation("agent.truncated-turn", 1), implementation("agent.reasoning-exhausted", 1)]);
     expectReached(result, ["agent-runner truncated", "agent-runner reasoning-exhausted"], ["turn:truncated", "turn:reasoning-exhausted"], ["output_truncated"]);
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
   // (c) on an agent turn. The gateway refuses a turn with no message (TurnResponseInvalid), so the
-  // attempt ends as transport_exhausted, not model_stopped_without_finish (observed: seed 23's records).
+  // attempt ends as transport_exhausted, not model_stopped_without_finish.
   it("ends an attempt whose turn answers nothing", async () => {
-    const result = await adversarial(23);
+    const result = await adversarial([implementation("agent.empty-turn", 1)]);
     expectReached(result, ["agent-runner empty"], ["turn:empty"], ["transport_exhausted"]);
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // (e) I11, S2: the turn cap ends an attempt after some of its edits; the task still completes.
+  // (e) I11, S2: the turn cap ends an attempt after its first edit; the task still completes.
   it("ends an attempt at its turn cap in the middle of its edits", async () => {
-    const result = await adversarial(36);
+    const result = await adversarial([implementation("agent.turn-cap-mid-edit", 1)]);
     expectReached(result, ["agent-runner stall-mid-edit"], [], ["turn_cap"]);
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // (b), (c), (d) on one-shot structured calls: each is a failed ladder attempt, never an answer.
-  // (g), the wrong shape, was modelled only on the knowledge-graph call, deleted with the contract
-  // path (t-ddd-r1-contract-out); seed 8 then still reached the other three (observed 2026-10-15).
-  it("retries structured calls that are cut, empty or all reasoning", async () => {
-    const result = await adversarial(8);
+  // (b), (c), (d), (g) on one-shot structured calls: each is a failed ladder attempt, never an answer.
+  it("retries structured calls that are cut, empty, all reasoning or of the wrong shape", async () => {
+    const result = await adversarial([
+      draw("model.liaison-intake.empty", 1),
+      draw("model.roster.invalid", 1),
+      draw("model.decomposition.tasks.truncated", 1),
+      draw("model.suite-review.reasoning-exhausted", 1),
+    ]);
     expectReached(
       result,
-      ["liaison-intake empty", "decomposition.tasks truncated", "suite-review reasoning-exhausted"],
-      ["structured:empty", "structured:truncated", "structured:reasoning-exhausted"],
+      ["liaison-intake empty", "roster invalid-output", "decomposition.tasks truncated", "suite-review reasoning-exhausted"],
+      ["structured:empty", "structured:invalid", "structured:truncated", "structured:reasoning-exhausted"],
       [],
     );
     expect(result.outcome.kind).toBe("accepted");

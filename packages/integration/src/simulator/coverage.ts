@@ -9,6 +9,7 @@ import { APPLICABLE_FAULTS, SEAM_KINDS } from "./faults.js";
 import type { FaultRecord } from "./faults.js";
 import { haltCauseOf, sourceOf } from "./invariants.js";
 import type { Snapshot } from "./invariants.js";
+import { MUTATIONS } from "./plants.js";
 
 /**
  * What a run reached, against the code's own iterable lifecycle lists (design §4.12, S7): every
@@ -33,6 +34,8 @@ export interface Coverage {
   readonly attempts: Set<string>;
   /** Each response-level misbehaviour as production recorded meeting it (MODEL_PATHS), read at the run's end. */
   readonly models: Set<string>;
+  /** Each mutation whose seam the run reached (plants.ts): a query it would rewrite, or a wait it would skip. */
+  readonly plants: Set<string>;
 }
 
 type AcceptanceSweep = Awaited<ReturnType<DevelopmentService["sweepForAcceptance"]>>;
@@ -90,6 +93,7 @@ export function emptyCoverage(): Coverage {
     halts: new Set(),
     attempts: new Set(),
     models: new Set(),
+    plants: new Set(),
   };
 }
 
@@ -105,6 +109,7 @@ const COVERAGE_KEYS = [
   "halts",
   "attempts",
   "models",
+  "plants",
 ] as const satisfies ReadonlyArray<keyof Coverage>;
 
 const coverageSet = z.set(z.string());
@@ -122,6 +127,7 @@ export const CoverageSchema = z.strictObject({
   halts: coverageSet,
   attempts: coverageSet,
   models: coverageSet,
+  plants: coverageSet,
 }) satisfies z.ZodType<Coverage>;
 
 export function mergeCoverage(into: Coverage, from: Coverage): void {
@@ -297,5 +303,85 @@ export function coverageReport(coverage: Coverage): MachineCoverage[] {
     split("halts by cause (project block kinds)", PROJECT_BLOCK_KINDS.map((kind) => `${haltCauseOf(kind)}:${kind}`), coverage.halts),
     split("attempt terminals (ATTEMPT_TERMINALS)", ATTEMPT_TERMINALS, coverage.attempts),
     split("model misbehaviour met (MODEL_PATHS)", MODEL_PATHS, coverage.models),
+    split("plant seams reached (MUTATIONS)", MUTATIONS, coverage.plants),
   ];
+}
+
+type BehaviourSet = "faults" | "models" | "concurrency" | "plants";
+
+/**
+ * The behaviour keys a soak counts (scripts/simulate.ts): every fault kind at every seam it applies
+ * to, every response-level misbehaviour met, every contended wait and every plant's seam. Each is
+ * forced directly by a test of the directed tier (simulator.test.ts); the floor keeps the seeded
+ * soak exploring it too, so a change that stops the soak reaching one is named, not silent.
+ */
+const BEHAVIOURS: ReadonlyArray<readonly [set: BehaviourSet, members: readonly string[]]> = [
+  ["faults", SEAM_KINDS.flatMap((seam) => APPLICABLE_FAULTS[seam].map((fault) => `${seam}:${fault}`))],
+  ["models", MODEL_PATHS],
+  ["concurrency", CONCURRENCY],
+  ["plants", MUTATIONS],
+];
+
+/**
+ * The soaks that have a coverage floor, by the profile their seeds run under, and the sets each
+ * floors. Under the seeds' own profiles (profile.ts profileOfSeed) a soak draws seam faults, and the
+ * hostile and chaos profiles' misbehaviour at low rates. The adversarial profile draws no seam fault
+ * (profile.ts FAULTS) and every misbehaviour at high rates: observed 2026-10-15, `simulate.ts
+ * --seeds 80 --profile adversarial --jobs 6`, every MODEL_PATHS key reached by 12 to 57 of the 80
+ * seeds and every CONCURRENCY key by 28 to 50, no fault key by any.
+ */
+const FLOORS = {
+  own: ["faults", "models", "concurrency", "plants"],
+  adversarial: ["models", "concurrency"],
+} as const satisfies Record<string, readonly BehaviourSet[]>;
+export type Floor = keyof typeof FLOORS;
+
+/**
+ * The keys a soak under its seeds' own profiles reaches too seldom to floor, each with the seeds of
+ * 400 that reached it: under 5% of seeds, so at 80 seeds each is expected under 4 times and is at
+ * zero more than once in 55 soaks (e^-4), which a re-roll alone would cause, not a lost behaviour.
+ * Observed 2026-10-15 with `simulate.ts --seeds 200 --start 1 --jobs 6` and `--start 201`, one
+ * project. Every key at 5% or more is floored; the least, db:db-transaction-killed at 24 of 400, was
+ * reached by 5 and 6 of the 80-seed soaks of one and of two projects. Each key here is forced by the
+ * directed tier instead (simulator.test.ts), and every MODEL_PATHS key is floored in the adversarial soak.
+ */
+export const RARE_UNDER_OWN_PROFILES: ReadonlyMap<string, number> = new Map([
+  ["faults db:db-unreachable", 1],
+  ["faults podman:cell-start-failed", 14],
+  ["faults podman:cell-exec-failed", 12],
+  ["faults podman:cell-teardown-failed", 4],
+  ["faults podman:substrate-down", 4],
+  ["faults podman:image-build-failed", 1],
+  ["faults model:crash-before", 17],
+  ["faults model:sigterm", 12],
+  ["faults model:provider-error", 15],
+  ["faults model:clock-jump", 15],
+  ["models turn:truncated", 16],
+  ["models turn:empty", 8],
+  ["models merge:conflict-presented", 0],
+  ["plants stop-report-omits-merge", 8],
+]);
+
+/** How many seeds of a soak reached each behaviour key, every key present from zero, in BEHAVIOURS' order. */
+export function emptyBehaviourCounts(): Map<string, number> {
+  return new Map(BEHAVIOURS.flatMap(([set, members]) => members.map((member) => [`${set} ${member}`, 0] as const)));
+}
+
+/** One seed's coverage added to the counts. */
+export function countBehaviours(counts: Map<string, number>, coverage: Coverage): void {
+  for (const [set, members] of BEHAVIOURS) {
+    for (const member of members) {
+      if (!coverage[set].has(member)) continue;
+      const key = `${set} ${member}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+}
+
+/** The floored keys no seed of the soak reached: each fails it. */
+export function behavioursBelowFloor(counts: ReadonlyMap<string, number>, floor: Floor): string[] {
+  const sets: readonly BehaviourSet[] = FLOORS[floor];
+  return [...counts]
+    .filter(([key, seeds]) => seeds === 0 && sets.some((set) => key.startsWith(`${set} `)) && !(floor === "own" && RARE_UNDER_OWN_PROFILES.has(key)))
+    .map(([key]) => key);
 }

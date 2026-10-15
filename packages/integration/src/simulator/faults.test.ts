@@ -27,10 +27,19 @@ describe("Scheduler", () => {
     expect([...kinds].sort()).toEqual(["cell-start-failed", "crash-after", "crash-before", "sigterm"]);
   });
 
-  it("turns a forced fault the call cannot carry into a crash, recorded as one", async () => {
-    const tape = new Tape({ kind: "seeded", seed: 7 });
-    const scheduler = new Scheduler(tape, { perSeamCall: 0, budget: 1 }, outsideBatches(tape), new Map([[1, "substrate-down"]]));
-    await expect(scheduler.enter(instance(), "podman", "run", ["cell-start-failed"])).rejects.toBeInstanceOf(SimulatedCrash);
-    expect(scheduler.faults().map((f) => f.fault)).toEqual(["crash-before"]);
+  it("injects a directed fault on its nth matching call only, and leaves one its call cannot carry untaken", async () => {
+    const tape = new Tape({
+      kind: "directed",
+      directions: [
+        { kind: "fault", seam: "podman", label: "run", nth: 2, fault: "cell-start-failed" },
+        { kind: "fault", seam: "podman", label: "exec", nth: 1, fault: "substrate-down" },
+      ],
+    });
+    const scheduler = new Scheduler(tape, { perSeamCall: 0, budget: 0 }, outsideBatches(tape));
+    const fates: Array<string | null> = [];
+    for (const label of ["run", "exec", "run", "run"]) fates.push((await scheduler.enter(instance(), "podman", label, [label === "run" ? "cell-start-failed" : "cell-exec-failed"])).fault);
+    expect(fates).toEqual([null, null, "cell-start-failed", null]);
+    expect(scheduler.faults().map((f) => `${f.ticket}:${f.fault}`)).toEqual(["3:cell-start-failed"]);
+    expect(tape.untaken()).toEqual([expect.stringMatching(/^fault podman exec #1 substrate-down: its call "exec" offered only/)]);
   });
 });

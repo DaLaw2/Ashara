@@ -7,7 +7,9 @@
  * the server of SIM_DATABASE_URL (default DATABASE_URL, default local). The shared database is
  * never touched: every database it creates or drops is named `ashara_sim_*`. A failing seed is
  * written as a replay file; `--minimize` reduces it to the decisions it needs first. Exits 1 when
- * any seed fails an invariant it is not listed as failing, or never reports.
+ * any seed fails an invariant it is not listed as failing, or never reports, or when a soak of at
+ * least FLOOR_SEEDS seeds leaves a floored behaviour key (coverage.ts behavioursBelowFloor) reached
+ * by no seed. Every soak prints how many seeds reached each key.
  *
  * `--jobs J` runs the seeds on J worker processes, each this script with `--worker`, one seed at a
  * time per worker (default: the host's cores, at most DEFAULT_JOBS; `--jobs 1` runs every seed in
@@ -31,12 +33,16 @@ import {
   PROFILES,
   ReplayFileSchema,
   SeedRequestSchema,
+  RARE_UNDER_OWN_PROFILES,
   WorkerReplySchema,
+  behavioursBelowFloor,
+  countBehaviours,
   describeCoverage,
   describeRun,
   diffExpected,
   dropRunDatabasesOf,
   dropStaleRunDatabases,
+  emptyBehaviourCounts,
   emptyCoverage,
   mergeCoverage,
   minimize,
@@ -44,7 +50,7 @@ import {
   profileOfSeed,
   runSeed,
 } from "@ashara/integration";
-import type { Decision, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
+import type { Decision, Floor, Profile, RunMode, RunOptions, RunResult, SeedReport } from "@ashara/integration";
 import { describeErrorChain } from "@ashara/shared";
 
 const USAGE = "Usage: npx tsx scripts/simulate.ts [--seeds N] [--start S] [--jobs J] [--profile P] [--projects 1|2] [--cap USD] [--minimize] [--trace] [--replay FILE]";
@@ -153,6 +159,23 @@ function parseArgs(argv: readonly string[]): Args {
     else throw new SimulateUsageError(`Unknown argument ${flag ?? ""}.`);
   }
   return { seeds, start, jobs, profile, minimize: shouldMinimize, trace, replay, projects, capUsd, worker };
+}
+
+/**
+ * The soak size from which every floored behaviour key must be reached by at least one seed
+ * (coverage.ts behavioursBelowFloor): the size of the soaks the floor was measured at.
+ */
+const FLOOR_SEEDS = 80;
+
+/**
+ * The floor this soak is judged against, or null: only a soak of its seeds' own profiles or of the
+ * adversarial profile has one. Benign draws no fault and no misbehaviour, and typical, hostile and
+ * chaos by name draw only part of what the seeds' own mix does.
+ */
+function floorOf(args: Args): Floor | null {
+  if (args.seeds < FLOOR_SEEDS) return null;
+  if (args.profile === null) return "own";
+  return args.profile === "adversarial" ? "adversarial" : null;
 }
 
 /** The minimiser's predicate: the replay fails at least one of the original run's violation keys. */
@@ -394,10 +417,12 @@ async function main(): Promise<void> {
 
   const seeds = Array.from({ length: args.seeds }, (_, index) => args.start + index);
   const coverage = emptyCoverage();
+  const counts = emptyBehaviourCounts();
   let unexpected = 0;
   const emit = (report: SeedReport): void => {
     for (const line of report.lines) console.log(line);
     mergeCoverage(coverage, report.coverage);
+    countBehaviours(counts, report.coverage);
     if (report.unexpected) unexpected += 1;
   };
   if (args.jobs === 1) {
@@ -408,8 +433,20 @@ async function main(): Promise<void> {
   }
   console.log("");
   for (const line of describeCoverage(coverage)) console.log(line);
+  console.log("\nseeds reaching each behaviour key:");
+  for (const [key, reached] of counts) {
+    const rare = RARE_UNDER_OWN_PROFILES.get(key);
+    console.log(`  ${String(reached).padStart(4)}  ${key}${rare === undefined ? "" : `  (rare under the seeds' own profiles: ${rare} of 400 seeds)`}`);
+  }
+  const floor = floorOf(args);
+  const atZero = floor === null ? [] : behavioursBelowFloor(counts, floor);
+  if (floor === null) {
+    console.log(`coverage floor: not judged (it needs at least ${FLOOR_SEEDS} seeds under their own profiles or the adversarial profile)`);
+  } else {
+    console.log(`coverage floor (${floor}): ${atZero.length === 0 ? "every floored behaviour key reached" : `${atZero.length} floored behaviour key(s) reached by no seed: ${atZero.join(", ")}`}`);
+  }
   console.log(`\n${args.seeds} seed(s), ${unexpected} with an unexpected failure`);
-  process.exitCode = unexpected > 0 ? 1 : 0;
+  process.exitCode = unexpected > 0 || atZero.length > 0 ? 1 : 0;
 }
 
 main().catch((err: unknown) => {

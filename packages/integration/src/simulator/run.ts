@@ -15,15 +15,14 @@ import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
-import type { ContendedWaitKind } from "@ashara/shared";
-import { AdmissionLedger, pendingUncounted } from "./admissions.js";
+import { AdmissionLedger } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
 import { FakePodman } from "./fake-podman.js";
 import type { FakeCell, PodmanEvent } from "./fake-podman.js";
-import { GitDates, Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools, pinInfrastructureFaults, skipMergeRecord } from "./faults.js";
-import type { FaultKind, FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
+import { GitDates, Scheduler, SimClock, SimulatedCrash, faultingGit, faultingModels, faultingPodman, faultingPools } from "./faults.js";
+import type { FaultRecord, InstanceHandle, QueryPlant } from "./faults.js";
 import { GitBroker } from "./git-broker.js";
 import { Interleaver } from "./interleave.js";
 import type { InterleaveEvent } from "./interleave.js";
@@ -32,94 +31,15 @@ import type { Outcome, Snapshot, Violation } from "./invariants.js";
 import { emptyCoverage, observeAcceptanceSweeps, sample, sampleModelPaths } from "./coverage.js";
 import type { Coverage } from "./coverage.js";
 import { behaviourPath, drawUniverse } from "./product.js";
+import { PLANTED, plantSeamsOf, plantsBypassing } from "./plants.js";
+import type { Mutation } from "./plants.js";
 import { FAULTS, drawRates } from "./profile.js";
-import {
-  briefMisstatesStanding,
-  deliveredReportMisstatesStanding,
-  deliveredReportMisstatesUnchecked,
-  deliveredReportOmitsGoal,
-  deliveredReportOmitsUncovered,
-  deliveredReportUnrecorded,
-  haltReportFixedCause,
-  questionMisstatesAssumption,
-  stopReportOmitsMerge,
-} from "./report-plants.js";
 import type { Profile } from "./profile.js";
 import { StandIns } from "./scripted-models.js";
 import { SimulatedClient } from "./simulated-client.js";
 import type { ClientReply, ClientRoutes } from "./simulated-client.js";
 import { Tape } from "./tape.js";
 import type { Decision, TapeMode } from "./tape.js";
-
-/**
- * A plant at a seam (L3 acceptance): the run must catch it, so a green invariant is not a blind one.
- * - skip-merge-record: every merge recorded under a commit main does not hold (I7, records clause);
- * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
- * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,
- *   admission clause). Planted on a run of two projects, where only the deployment's check stands
- *   between them (baseline §7.6). Since migration 053 an admission's own estimate is a row written
- *   after the project's check, an await later; whether one project now catches it too: unverified;
- * - pending-uncounted: a spend-cap admission's read leaves out the pending rows of calls admitted
- *   and not yet recorded, so it counts the recorded spend alone (I5, admission clause);
- * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8);
- * - halt-report-fixed-cause: a halt's report states a fixed cause, not the recorded one (I4);
- * - stop-report-omits-merge: the stop report leaves out a merge on record (I4);
- * - delivered-report-omits-goal, delivered-report-misstates-unchecked: the delivered report leaves
- *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
- * - delivered-report-omits-uncovered: the delivered report leaves out an asked-for item no
- *   acceptance line of a swept check task cites (I4, W11c D3);
- * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
- *   it is posted again (I4, exactly once);
- * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
- *   (I9, W12a D1's class);
- * - delivered-report-misstates-standing: the delivered report says an assumption the client was
- *   asked about was reported to them (I9, smoke2 D1's class);
- * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
- *   not record (I9).
- */
-const MUTATIONS = [
-  "skip-merge-record",
-  "no-checkout-lock",
-  "no-admission-queue",
-  "pending-uncounted",
-  "infrastructure-fault-pinned",
-  "halt-report-fixed-cause",
-  "stop-report-omits-merge",
-  "delivered-report-omits-goal",
-  "delivered-report-misstates-unchecked",
-  "delivered-report-omits-uncovered",
-  "delivered-report-unrecorded",
-  "brief-misstates-standing",
-  "delivered-report-misstates-standing",
-  "question-misstates-assumption",
-] as const;
-/** @testseam simulator.test.ts plants each to prove I5, I7 and I8 are not blind */
-export type Mutation = (typeof MUTATIONS)[number];
-
-interface Plant {
-  readonly bypassed: readonly ContendedWaitKind[];
-  readonly queries: QueryPlant | null;
-  /** Patches production code for the run; returns what undoes it. */
-  readonly code: (() => () => void) | null;
-}
-
-/** The contended wait each mutation skips, the queries it rewrites, and the code it patches. */
-const PLANTED: Readonly<Record<Mutation, Plant>> = {
-  "skip-merge-record": { bypassed: [], queries: skipMergeRecord, code: null },
-  "no-checkout-lock": { bypassed: ["target-checkout"], queries: null, code: null },
-  "no-admission-queue": { bypassed: ["spend-admission"], queries: null, code: null },
-  "pending-uncounted": { bypassed: [], queries: pendingUncounted, code: null },
-  "infrastructure-fault-pinned": { bypassed: [], queries: pinInfrastructureFaults, code: null },
-  "halt-report-fixed-cause": { bypassed: [], queries: haltReportFixedCause, code: null },
-  "stop-report-omits-merge": { bypassed: [], queries: stopReportOmitsMerge, code: null },
-  "delivered-report-omits-goal": { bypassed: [], queries: deliveredReportOmitsGoal, code: null },
-  "delivered-report-misstates-unchecked": { bypassed: [], queries: deliveredReportMisstatesUnchecked, code: null },
-  "delivered-report-omits-uncovered": { bypassed: [], queries: deliveredReportOmitsUncovered, code: null },
-  "delivered-report-unrecorded": { bypassed: [], queries: deliveredReportUnrecorded, code: null },
-  "brief-misstates-standing": { bypassed: [], queries: briefMisstatesStanding, code: null },
-  "delivered-report-misstates-standing": { bypassed: [], queries: deliveredReportMisstatesStanding, code: null },
-  "question-misstates-assumption": { bypassed: [], queries: questionMisstatesAssumption, code: null },
-};
 
 export interface RunOptions {
   readonly seed: number;
@@ -129,8 +49,6 @@ export interface RunOptions {
   readonly databaseUrl: string;
   readonly template: string;
   readonly maxCycles: number;
-  /** Faults forced at seam tickets, every other ticket clean: the S-min enumeration. */
-  readonly forcedFaults?: ReadonlyMap<number, FaultKind>;
   readonly mutation?: Mutation;
   /** Hard wall clock of the run; past it the run ends as an I1 violation (design §4.14). */
   readonly timeoutMs: number;
@@ -211,6 +129,20 @@ class BootsExhausted extends Error {
   ) {
     super(`seed ${seed}: composition ${compositions} of the simulated process failed to boot, past the bound of ${MAX_BOOTS}: ${describeErrorChain(lastError)}`, { cause: lastError });
     this.name = "BootsExhausted";
+  }
+}
+
+/**
+ * A directed run (TapeMode directed) that never took one of its directions: the behaviour it was
+ * asked to force never happened, so nothing it judged is about that behaviour.
+ */
+class DirectionsNotTaken extends Error {
+  constructor(
+    readonly seed: number,
+    readonly untaken: readonly string[],
+  ) {
+    super(`seed ${seed}: the directed run never took ${untaken.length} of its direction(s): ${untaken.join("; ")}`);
+    this.name = "DirectionsNotTaken";
   }
 }
 
@@ -535,6 +467,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         break;
       case "contended":
         coverage.concurrency.add(`contended:${event.wait}`);
+        for (const mutation of plantsBypassing(event.wait)) coverage.plants.add(mutation);
         trace.push(`task ${event.lane} waits on another task (${event.wait})`);
         break;
       case "bypassed":
@@ -561,7 +494,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
           return sent;
         };
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
-  const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
+  const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver);
   const admissions = new AdmissionLedger();
   const gitDates = new GitDates();
   let longestQuiet = 0;
@@ -689,7 +622,21 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
         const handle: InstanceHandle = { name: `sim-${generation}`, dead: false, abort: null, sigtermed: false, fatal: null, checkouts: new Map(), pools: [] };
         // A new process stages nothing yet: the dead one's staged merge is an orphan its recovery clears.
         checkouts = new CheckoutWatch(report);
-        const seam = { scheduler, instance: handle, clock, terminateBackend, interleaver, checkouts, cycle: () => cycles, admissions, cellOutage: options.cellOutage === true, gitDates };
+        const seam = {
+          scheduler,
+          instance: handle,
+          clock,
+          terminateBackend,
+          interleaver,
+          checkouts,
+          cycle: () => cycles,
+          admissions,
+          cellOutage: options.cellOutage === true,
+          gitDates,
+          queried: (args: readonly unknown[]) => {
+            for (const mutation of plantSeamsOf(args, coverage.plants)) coverage.plants.add(mutation);
+          },
+        };
         try {
           const ashara = await composeAshara({
             masterKey,
@@ -1030,6 +977,8 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     restoreIds();
     await rm(workdir, { recursive: true, force: true });
   }
+  const untaken = tape.untaken();
+  if (untaken.length > 0) throw new DirectionsNotTaken(options.seed, untaken);
   return {
     seed: options.seed,
     profile: options.profile,

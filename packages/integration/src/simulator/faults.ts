@@ -40,7 +40,7 @@ export type FaultKind = (typeof FAULT_KINDS)[number];
 /**
  * Which faults each seam can carry: the catalogue the coverage report counts against. A call is
  * offered only the faults that take effect on it (see `Scheduler.enter`), so a recorded fault is
- * one that happened; a forced fault that cannot take effect on its call becomes a crash.
+ * one that happened.
  */
 export const APPLICABLE_FAULTS: Readonly<Record<SeamKind, readonly FaultKind[]>> = {
   db: ["crash-before", "crash-after", "sigterm", "db-unreachable", "db-query-failed", "db-transaction-killed"],
@@ -126,23 +126,20 @@ function offeredFaults(instance: InstanceHandle, seam: SeamKind, label: string, 
 /**
  * Every seam call takes a ticket here (design §4.10), after its task's turn (Interleaver.turn):
  * tickets are taken one task at a time, in the order the seed's interleaving gives. A ticket may
- * carry one fault from the seed's tape while the fault budget lasts; a crash marks the instance dead.
+ * carry one fault from the seed's tape while the fault budget lasts, or the one a directed tape
+ * forces on it (Tape.directedFault); a crash marks the instance dead.
  */
 export class Scheduler {
   private ticket = 0;
   private budgetLeft: number;
   private readonly records: FaultRecord[] = [];
-  /** Forced faults by ticket (the S-min enumeration): every other ticket runs clean. */
-  private readonly forced: ReadonlyMap<number, FaultKind>;
 
   constructor(
     private readonly tape: Tape,
     private readonly rates: FaultRates,
     private readonly interleaver: Interleaver,
-    forced: ReadonlyMap<number, FaultKind> = new Map(),
   ) {
     this.budgetLeft = rates.budget;
-    this.forced = forced;
   }
 
   faults(): readonly FaultRecord[] {
@@ -164,8 +161,7 @@ export class Scheduler {
     this.ticket += 1;
     const ticket = this.ticket;
     const choices = offeredFaults(instance, seam, label, effective);
-    let fault: FaultKind | null = this.forced.get(ticket) ?? null;
-    if (fault !== null && !choices.includes(fault)) fault = "crash-before";
+    let fault: FaultKind | null = this.tape.directedFault(seam, label, choices);
     // Keyed by the call's label, not the seam alone: a call production adds shifts the
     // occurrences of its own label only, not every later fault of the seam.
     const site = `fault.${seam}:${label}`;
@@ -272,6 +268,8 @@ interface SeamContext {
    */
   readonly cellOutage: boolean;
   readonly gitDates: GitDates;
+  /** Sees every query an instance sends, as production sent it (before a plant rewrites it). */
+  readonly queried: (args: readonly unknown[]) => void;
 }
 
 /**
@@ -334,6 +332,7 @@ export function faultingPools(context: SeamContext, applicationName: string, pla
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
     context.instance.pools.push(pool);
     const query = async (given: readonly unknown[], send: (args: unknown[]) => Promise<unknown>, kill: (() => Promise<void>) | null): Promise<unknown> => {
+      context.queried(given);
       const args = plant?.(given) ?? [...given];
       const run = (): Promise<unknown> => send(args);
       const label = labelOfQuery(args);

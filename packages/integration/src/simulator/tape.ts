@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { FaultKind, SeamKind } from "./faults.js";
 import { PROFILES } from "./profile.js";
 
 /**
@@ -29,10 +30,69 @@ function seededUniform(seed: number, key: string): number {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
+/** A site named exactly, or every site a pattern matches. */
+type SiteMatch = string | RegExp;
+
+/**
+ * One behaviour a directed run forces (simulator.test.ts), named by what it is rather than by a
+ * seed that happens to reach it, so a production change that adds or moves a seam call cannot
+ * move it off its behaviour:
+ * - draw: the `nth` draw (or `every` draw) of a matching site takes `value`; `scope` narrows the
+ *   count to the draws made for one kind of work (the stand-ins pass `implementation`,
+ *   `environment`, `checks` or `scaffold`). The interleaver's draws are sites too: a draw on
+ *   `interleave:<seam>:<label>` valued 1 hands the turn to the other task of the batch there;
+ * - fault: the `nth` seam call of `seam` whose label matches carries `fault` (Scheduler.enter), in
+ *   no budget's count; a fault the call cannot carry is not injected and the direction stays untaken.
+ * @testseam simulator.test.ts writes the directions of each behaviour it forces
+ */
+export type Direction =
+  | {
+      readonly kind: "draw";
+      readonly site: SiteMatch;
+      readonly scope?: string;
+      readonly nth: number | "every";
+      readonly value: number;
+    }
+  | { readonly kind: "fault"; readonly seam: SeamKind; readonly label: SiteMatch; readonly nth: number; readonly fault: FaultKind };
+
 export type TapeMode =
   | { readonly kind: "seeded"; readonly seed: number }
   /** Every decision not listed takes its benign value: the minimiser and `--replay` run this way. */
-  | { readonly kind: "replay"; readonly decisions: readonly Decision[] };
+  | { readonly kind: "replay"; readonly decisions: readonly Decision[] }
+  /** Every draw benign but the directions: the fast tier forces each behaviour it judges this way. */
+  | { readonly kind: "directed"; readonly directions: readonly Direction[] };
+
+/** A replayed or directed value its draw cannot take: the tape and the site it met disagree. */
+class DrawOutOfRange extends Error {
+  constructor(
+    readonly site: string,
+    readonly value: number,
+    readonly n: number,
+  ) {
+    super(`the tape gives ${site} the value ${value}, but that draw takes 0..${n - 1}`);
+    this.name = "DrawOutOfRange";
+  }
+}
+
+function matches(match: SiteMatch, site: string): boolean {
+  return typeof match === "string" ? match === site : match.test(site);
+}
+
+/** What one direction met while the run went on. */
+interface DirectionState {
+  readonly direction: Direction;
+  seen: number;
+  taken: number;
+  /** Why its nth match did not take it, when it did not. */
+  refused: string | null;
+}
+
+/** How a direction is named in an error and the trace. */
+function describeDirection(direction: Direction): string {
+  const at = direction.kind === "draw" ? `${String(direction.site)}${direction.scope === undefined ? "" : ` (${direction.scope})`}` : `${direction.seam} ${String(direction.label)}`;
+  const what = direction.kind === "draw" ? `= ${direction.value}` : direction.fault;
+  return `${direction.kind} ${at} #${direction.nth} ${what}`;
+}
 
 /**
  * Every random choice of a run (adversary event, fault, crash point) is read here. Value 0 is the
@@ -43,35 +103,78 @@ export class Tape {
   private readonly taken: Decision[] = [];
   private readonly seed: number | null;
   private readonly fixed: ReadonlyMap<string, number> | null;
+  private readonly directions: readonly DirectionState[];
 
   constructor(readonly mode: TapeMode) {
-    if (mode.kind === "seeded") {
-      this.seed = mode.seed;
-      this.fixed = null;
-    } else {
-      this.seed = null;
-      this.fixed = new Map(mode.decisions.map((decision) => [decision.key, decision.value]));
-    }
+    this.seed = mode.kind === "seeded" ? mode.seed : null;
+    this.fixed = mode.kind === "replay" ? new Map(mode.decisions.map((decision) => [decision.key, decision.value])) : null;
+    this.directions = mode.kind === "directed" ? mode.directions.map((direction) => ({ direction, seen: 0, taken: 0, refused: null })) : [];
   }
 
-  private draw(site: string, choose: (u: number) => number): number {
+  private draw(site: string, scope: string | undefined, choose: (u: number) => number, n: number): number {
     const occurrence = (this.counts.get(site) ?? 0) + 1;
     this.counts.set(site, occurrence);
     const key = `${site}#${occurrence}`;
-    const value = this.seed === null ? (this.fixed?.get(key) ?? 0) : choose(seededUniform(this.seed, key));
+    let value: number;
+    if (this.seed !== null) value = choose(seededUniform(this.seed, key));
+    else if (this.fixed !== null) value = this.fixed.get(key) ?? 0;
+    else value = this.directedDraw(site, scope) ?? 0;
+    if (value < 0 || value >= n) throw new DrawOutOfRange(key, value, n);
     if (value !== 0) this.taken.push({ key, value });
     return value;
   }
 
-  /** True with probability `p`; false is benign. */
-  chance(site: string, p: number): boolean {
-    return this.draw(site, (u) => (u < p ? 1 : 0)) === 1;
+  private directedDraw(site: string, scope: string | undefined): number | null {
+    let value: number | null = null;
+    for (const state of this.directions) {
+      const { direction } = state;
+      if (direction.kind !== "draw" || !matches(direction.site, site)) continue;
+      if (direction.scope !== undefined && direction.scope !== scope) continue;
+      state.seen += 1;
+      if (direction.nth !== "every" && direction.nth !== state.seen) continue;
+      state.taken += 1;
+      value ??= direction.value;
+    }
+    return value;
+  }
+
+  /** True with probability `p`; false is benign. `scope` names the work the draw is made for (Direction). */
+  chance(site: string, p: number, scope?: string): boolean {
+    return this.draw(site, scope, (u) => (u < p ? 1 : 0), 2) === 1;
   }
 
   /** 0..n-1, uniform; 0 is benign. */
-  pick(site: string, n: number): number {
+  pick(site: string, n: number, scope?: string): number {
     if (!Number.isInteger(n) || n < 1) throw new RangeError(`Tape.pick(${site}): n must be a positive integer, got ${n}`);
-    return this.draw(site, (u) => Math.min(n - 1, Math.floor(u * n)));
+    return this.draw(site, scope, (u) => Math.min(n - 1, Math.floor(u * n)), n);
+  }
+
+  /**
+   * The fault a direction forces on this seam call, if any: only one `offered` lists, so a forced
+   * fault always takes effect on its call. Outside a directed run, null.
+   */
+  directedFault(seam: SeamKind, label: string, offered: readonly FaultKind[]): FaultKind | null {
+    let fault: FaultKind | null = null;
+    for (const state of this.directions) {
+      const { direction } = state;
+      if (direction.kind !== "fault" || direction.seam !== seam || !matches(direction.label, label)) continue;
+      state.seen += 1;
+      if (direction.nth !== state.seen) continue;
+      if (!offered.includes(direction.fault)) {
+        state.refused = `its call "${label}" offered only ${offered.join(", ")}`;
+        continue;
+      }
+      state.taken += 1;
+      fault ??= direction.fault;
+    }
+    return fault;
+  }
+
+  /** The directions the run never took, each with why: a directed run that misses one did not run its behaviour. */
+  untaken(): string[] {
+    return this.directions
+      .filter((state) => state.taken === 0)
+      .map((state) => `${describeDirection(state.direction)}: ${state.refused ?? `${state.seen} matching draw(s) or call(s), none its #${state.direction.nth}`}`);
   }
 
   /** The non-benign decisions taken so far, in order. */

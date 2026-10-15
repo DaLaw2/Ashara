@@ -187,6 +187,9 @@ type ToolStep = readonly [toolName: string, input: unknown];
  */
 type AttemptEnd = "complete" | "refusal" | "stall" | "stall-mid-edit" | "truncated" | "empty" | "reasoning-exhausted";
 
+/** What an attempt is for, as its tools and its task's origin show: the scope of its draws (Tape Direction). */
+type WorkKind = "environment" | "checks" | "scaffold" | "implementation";
+
 /** One attempt's scripted turns, emitted one per model call. */
 interface AttemptScript {
   readonly steps: readonly ToolStep[];
@@ -442,13 +445,23 @@ export class StandIns {
     const spec = taskSpecShape.safeParse(task.taskSpec);
     const origin = spec.success ? spec.data.origin : undefined;
     let steps: ToolStep[];
-    if (tools.has("build_environment")) steps = this.environmentWork();
-    else if (tools.has("define_check")) steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
-    else if (origin === "product-scaffold") steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], finished("Set up the product layout.")];
-    else steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
-    if (tape.chance("agent.timeout", rates.timeout)) return { steps: steps.slice(0, -1), end: "stall", cut: null };
-    if (tape.chance("agent.refusal", rates.refusal)) return { steps: steps.slice(0, -1), end: "refusal", cut: null };
-    return this.misbehaved(steps);
+    let work: WorkKind;
+    if (tools.has("build_environment")) {
+      work = "environment";
+      steps = this.environmentWork();
+    } else if (tools.has("define_check")) {
+      work = "checks";
+      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
+    } else if (origin === "product-scaffold") {
+      work = "scaffold";
+      steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], finished("Set up the product layout.")];
+    } else {
+      work = "implementation";
+      steps = await this.implementationWork(task, tools, conflictFilesOf(prompt));
+    }
+    if (tape.chance("agent.timeout", rates.timeout, work)) return { steps: steps.slice(0, -1), end: "stall", cut: null };
+    if (tape.chance("agent.refusal", rates.refusal, work)) return { steps: steps.slice(0, -1), end: "refusal", cut: null };
+    return this.misbehaved(steps, work);
   }
 
   /**
@@ -458,26 +471,26 @@ export class StandIns {
    * - one turn cut at the output limit mid tool call, empty, or all reasoning, where the attempt's
    *   steps would have gone on.
    */
-  private misbehaved(steps: ToolStep[]): AttemptScript {
+  private misbehaved(steps: ToolStep[], work: WorkKind): AttemptScript {
     const { tape, rates } = this.context;
-    const work = steps.length - 1;
-    if (work >= 1 && tape.chance("agent.turn-cap-mid-edit", rates.turnCapMidEdit)) {
-      return { steps: steps.slice(0, 1 + tape.pick("agent.turn-cap-mid-edit.after", work)), end: "stall-mid-edit", cut: null };
+    const edits = steps.length - 1;
+    if (edits >= 1 && tape.chance("agent.turn-cap-mid-edit", rates.turnCapMidEdit, work)) {
+      return { steps: steps.slice(0, 1 + tape.pick("agent.turn-cap-mid-edit.after", edits, work)), end: "stall-mid-edit", cut: null };
     }
-    const end: AttemptEnd | null = tape.chance("agent.truncated-turn", rates.truncatedTurn)
+    const end: AttemptEnd | null = tape.chance("agent.truncated-turn", rates.truncatedTurn, work)
       ? "truncated"
-      : tape.chance("agent.empty-turn", rates.emptyTurn)
+      : tape.chance("agent.empty-turn", rates.emptyTurn, work)
         ? "empty"
-        : tape.chance("agent.reasoning-exhausted", rates.reasoningExhausted)
+        : tape.chance("agent.reasoning-exhausted", rates.reasoningExhausted, work)
           ? "reasoning-exhausted"
           : null;
     if (end === null) return { steps, end: "complete", cut: null };
-    const at = tape.pick("agent.misbehaving-turn", steps.length);
+    const at = tape.pick("agent.misbehaving-turn", steps.length, work);
     return { steps: steps.slice(0, at), end, cut: end === "truncated" ? (steps[at] ?? null) : null };
   }
 
   private environmentWork(): ToolStep[] {
-    const defect = this.context.tape.chance("agent.recipe-defect", this.context.rates.recipeDefect);
+    const defect = this.context.tape.chance("agent.recipe-defect", this.context.rates.recipeDefect, "environment");
     const definition = [
       'containerfile = "environment/Containerfile"',
       "recipe = []",
@@ -514,22 +527,22 @@ export class StandIns {
     }));
     const other = universe.tasks.find((t) => t.ref !== checked.ref);
     const extra = (name: string, spec: CheckSpec): void => void checks.push({ name, spec });
-    if (tape.chance("agent.check.wrong", rates.wrongCheck)) extra("wrong", { kind: "wrong", requires: ["b-never"], forbids: [], harness: [] });
-    if (other !== undefined && tape.chance("agent.check.contradictory", rates.contradictoryCheck)) {
+    if (tape.chance("agent.check.wrong", rates.wrongCheck, "checks")) extra("wrong", { kind: "wrong", requires: ["b-never"], forbids: [], harness: [] });
+    if (other !== undefined && tape.chance("agent.check.contradictory", rates.contradictoryCheck, "checks")) {
       extra("contradicts", { kind: "contradictory", requires: [], forbids: [...other.behaviours], harness: [] });
     }
-    if (tape.chance("agent.check.vacuous", rates.vacuousCheck)) extra("vacuous", { kind: "vacuous", requires: [], forbids: [], harness: [] });
-    if (tape.chance("agent.check.out-of-vision", rates.outOfVisionCheck)) {
+    if (tape.chance("agent.check.vacuous", rates.vacuousCheck, "checks")) extra("vacuous", { kind: "vacuous", requires: [], forbids: [], harness: [] });
+    if (tape.chance("agent.check.out-of-vision", rates.outOfVisionCheck, "checks")) {
       extra("extra", { kind: "out_of_vision", requires: [universe.outOfVision], forbids: [], harness: [] });
     }
-    if (tape.chance("agent.check.flaky", rates.flakyCheck)) extra("flaky", { kind: "flaky", requires: [...checked.behaviours], forbids: [], harness: [] });
-    if (tape.chance("agent.check.unrunnable", rates.unrunnableCheck)) {
-      extra("unrunnable", { kind: tape.pick("agent.check.unrunnable-kind", 2) === 0 ? "unrunnable" : "slow", requires: [], forbids: [], harness: [] });
+    if (tape.chance("agent.check.flaky", rates.flakyCheck, "checks")) extra("flaky", { kind: "flaky", requires: [...checked.behaviours], forbids: [], harness: [] });
+    if (tape.chance("agent.check.unrunnable", rates.unrunnableCheck, "checks")) {
+      extra("unrunnable", { kind: tape.pick("agent.check.unrunnable-kind", 2, "checks") === 0 ? "unrunnable" : "slow", requires: [], forbids: [], harness: [] });
     }
-    if (tape.chance("agent.check.harness", rates.flakyCheck)) {
+    if (tape.chance("agent.check.harness", rates.flakyCheck, "checks")) {
       extra("harness", { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [{ path: `product/harness/${checked.ref}`, content: "harness\n" }] });
     }
-    const allGuard = tape.chance("agent.check.all-guard", rates.allGuardSet);
+    const allGuard = tape.chance("agent.check.all-guard", rates.allGuardSet, "checks");
     const kept = allGuard ? checks.map((check) => ({ name: check.name, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
     const steps: ToolStep[] = [];
     for (const check of kept) {
@@ -539,7 +552,7 @@ export class StandIns {
       steps.push(["define_check", { name: check.name, command: `sim check ${path}` }]);
     }
     // Run 8 E1, E2: the author also writes the product it checks, in its own workspace.
-    if (tape.chance("agent.check.writes-product", rates.authorWritesProduct)) {
+    if (tape.chance("agent.check.writes-product", rates.authorWritesProduct, "checks")) {
       for (const b of checked.behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b} by the check author\n` }]);
     }
     steps.push(finished(`Defined ${kept.length} check(s).`));
@@ -558,26 +571,26 @@ export class StandIns {
     const index = universe.tasks.indexOf(mine);
     const steps: ToolStep[] = [];
     for (const file of conflicted) {
-      const leaves = tape.chance("agent.conflict.markers-left", rates.conflictMarkersLeft);
+      const leaves = tape.chance("agent.conflict.markers-left", rates.conflictMarkersLeft, "implementation");
       this.context.onModelCall({ site: "agent-runner", action: `handed a conflict in ${file}: ${leaves ? "leaves its markers" : "resolves it"}` });
       if (!leaves) steps.push(["run_command", { command: `sim resolve ${file}` }]);
     }
     let behaviours = [...mine.behaviours];
-    const underDelivers = behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery);
+    const underDelivers = behaviours.length > 0 && tape.chance("agent.under-delivery", rates.underDelivery, "implementation");
     if (underDelivers) behaviours = behaviours.slice(0, -1);
     const later: SimTask[] = universe.tasks.slice(index + 1);
-    if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery)) behaviours.push(...(later[0]?.behaviours ?? []));
+    if (later.length > 0 && tape.chance("agent.over-delivery", rates.overDelivery, "implementation")) behaviours.push(...(later[0]?.behaviours ?? []));
     for (const b of behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b}\n` }]);
     const earlier = universe.tasks.slice(0, index).flatMap((t) => t.behaviours);
     const victim = earlier[0];
-    if (victim !== undefined && tape.chance("agent.regression", rates.regression)) {
+    if (victim !== undefined && tape.chance("agent.regression", rates.regression, "implementation")) {
       steps.push(["run_command", { command: `sim rm ${behaviourPath(victim)}` }]);
     }
-    if (tape.chance("agent.manifest", rates.overDelivery / 3) && !conflicted.includes(MANIFEST_FILE)) {
+    if (tape.chance("agent.manifest", rates.overDelivery / 3, "implementation") && !conflicted.includes(MANIFEST_FILE)) {
       steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
     }
     // w12b D2: one file two tasks of a batch both write, so the second merge conflicts.
-    if (tape.chance("agent.shared-file", rates.sharedFileEdit) && !conflicted.includes(SHARED_INDEX_FILE)) {
+    if (tape.chance("agent.shared-file", rates.sharedFileEdit, "implementation") && !conflicted.includes(SHARED_INDEX_FILE)) {
       steps.push(["write_file", { path: SHARED_INDEX_FILE, content: `${mine.ref}: ${behaviours.join(", ")}\n` }]);
     }
     if (tools.has("dispute_check")) {
@@ -599,10 +612,10 @@ export class StandIns {
     for (const row of own) {
       for (const spec of specsOf(row.files)) {
         const bad = spec.kind === "wrong" || spec.kind === "contradictory" || spec.kind === "out_of_vision" || spec.kind === "unrunnable" || spec.kind === "slow";
-        if (bad && tape.chance("agent.dispute.right", rates.disputeRight)) {
+        if (bad && tape.chance("agent.dispute.right", rates.disputeRight, "implementation")) {
           return { name: row.name, reason: `The check ${spec.kind === "out_of_vision" ? "asks for behaviour the vision does not name" : "cannot pass on correct work"}.` };
         }
-        if (!bad && underDelivered && tape.chance("agent.dispute.wrong", rates.disputeWrong)) {
+        if (!bad && underDelivered && tape.chance("agent.dispute.wrong", rates.disputeWrong, "implementation")) {
           return { name: row.name, reason: "The check is too strict." };
         }
       }
