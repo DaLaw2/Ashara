@@ -18,6 +18,7 @@ import {
   spawnProcess,
   type ProcessRunner,
 } from "@ashara/execution-infra";
+import { testCellInstance } from "../test-cells.js";
 
 // Real podman, no skip: CI rejects skipped tests, and a substrate test that skips when podman is
 // absent reports the same green as one that ran.
@@ -33,7 +34,7 @@ async function ps(filter: string): Promise<z.infer<typeof psSchema>> {
 const ALPINE_IMAGE = "docker.io/library/alpine:3.20@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e";
 /** An image with a git client and no entrypoint, pinned; .github/workflows/ci.yml pulls it by this reference. */
 const GIT_IMAGE = "docker.io/library/buildpack-deps:bookworm-scm@sha256:17923645546d74acef88727bce62c23bbaed953fc7097c41a8b777bba3ca98de";
-const instance = `test-${randomUUID()}`;
+const instance = testCellInstance();
 const task = `task-${randomUUID()}`;
 const strayIds: string[] = [];
 let mountRoot = "";
@@ -49,9 +50,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.ASHARA_PROBE_SECRET;
-  await substrate.teardownAll();
-  if (strayIds.length > 0) await run("podman", ["rm", "-f", "-t", "0", ...strayIds]);
-  await rm(mountRoot, { recursive: true, force: true });
+  // The strays go whether or not the substrate's own teardown completes.
+  try {
+    await substrate.teardownAll();
+  } finally {
+    if (strayIds.length > 0) await run("podman", ["rm", "-f", "--ignore", "-t", "0", ...strayIds]);
+    await rm(mountRoot, { recursive: true, force: true });
+  }
 }, 60_000);
 
 describe("cell on real podman", () => {
@@ -218,8 +223,11 @@ describe("cell on real podman", () => {
       expect((await probeCell.exec(["sh", "-c", whoami], { timeoutSeconds: 10 })).stdout).toBe(expected);
       expect((await probeCell.exec(["id", "-u"], { timeoutSeconds: 10 })).stdout).not.toBe("0\n");
     } finally {
-      await taskCell.teardown();
-      await probeCell.teardown();
+      try {
+        await taskCell.teardown();
+      } finally {
+        await probeCell.teardown();
+      }
     }
   });
 
@@ -401,8 +409,12 @@ describe("cell on real podman", () => {
     });
     strayIds.push(leaked.id);
 
-    const unlabelled = (await run("podman", ["run", "-d", "--pull=never", "--network=none", base.image, "sleep", "infinity"])).stdout.trim();
-    strayIds.push(unlabelled);
+    // This instance's label without ashara.managed: the reconciler selects on both. The instance
+    // label lets the run's leak guard find it should this test's own removal never run.
+    const unmanaged = (
+      await run("podman", ["run", "-d", "--pull=never", "--network=none", "--label", `ashara.instance=${instance}`, base.image, "sleep", "infinity"])
+    ).stdout.trim();
+    strayIds.push(unmanaged);
     const otherInstance = (
       await run("podman", [
         "run", "-d", "--pull=never", "--network=none",
@@ -414,7 +426,7 @@ describe("cell on real podman", () => {
 
     expect(await substrate.reconcileOrphans(instance)).toEqual([leaked.id]);
     expect(await ps(`id=${leaked.id}`)).toHaveLength(0);
-    expect(await ps(`id=${unlabelled}`)).toHaveLength(1);
+    expect(await ps(`id=${unmanaged}`)).toHaveLength(1);
     expect(await ps(`id=${otherInstance}`)).toHaveLength(1);
     strayIds.splice(strayIds.indexOf(leaked.id), 1);
   });

@@ -21,6 +21,7 @@ import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { testCellInstance } from "../test-cells.js";
 
 // c-platform-role C2 (ADR-074 d96 c), end to end through the real contractor loop, the real
 // DispatchService, real podman and git, and the recorded gateway with scripted models: an
@@ -155,7 +156,7 @@ async function harness(name: string): Promise<Harness> {
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [] }) },
-    cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
+    cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
       staff: async (staffed) => ({

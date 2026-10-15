@@ -29,6 +29,7 @@ import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import type { WorkKind } from "@ashara/organization";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { testCellInstance } from "../test-cells.js";
 
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
@@ -156,7 +157,7 @@ async function runTask(task: TaskDescriptor, script: Array<ReturnType<typeof too
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A greeting page", assumptions: [] }) },
-    cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
+    cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
       staff: async (staffed) => ({

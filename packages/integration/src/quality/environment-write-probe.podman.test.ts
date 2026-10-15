@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { probeEnvironmentWrite } from "@ashara/quality";
 import { PodmanSubstrate } from "@ashara/execution-infra";
+import { testCellInstance } from "../test-cells.js";
 
 // Roadmap M2 exit 6, the third probe (ADR-074 d82 W9): real podman, real git, no skip.
 
@@ -26,7 +26,7 @@ afterAll(async () => {
 
 describe("environment-file write without the grant", () => {
   it("lands in the cell's tree, and the ownership gate keeps it from main", async () => {
-    const verdict = await probeEnvironmentWrite({ substrate, image: ALPINE_IMAGE, instance: `test-${randomUUID()}`, workRoot: mountRoot });
+    const verdict = await probeEnvironmentWrite({ substrate, image: ALPINE_IMAGE, instance: testCellInstance(), workRoot: mountRoot });
 
     expect(verdict.evidence).toMatch(/^the in-cell write exited 0; the ownership gate returned environment_change \(/);
     expect(verdict.evidence).toContain("main's environment/Containerfile is unchanged");

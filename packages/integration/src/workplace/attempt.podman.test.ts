@@ -12,6 +12,7 @@ import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
 import type { AttemptRecord } from "@ashara/workplace";
+import { testCellInstance } from "../test-cells.js";
 
 // Real podman cell from the BaseCell image, real gateway, mock model: no real LLM call, no skip
 // (CI rejects skipped tests). The recorder is in memory: it counts the rows the gateway would write.
@@ -45,7 +46,7 @@ function toolCallTurn(toolName: string, input: unknown) {
   };
 }
 
-const instance = `test-${randomUUID()}`;
+const instance = testCellInstance();
 let workspace = "";
 let substrate: PodmanSubstrate;
 

@@ -12,6 +12,7 @@ import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
+import { testCellInstance } from "../test-cells.js";
 
 // t-workspace-path-fail-closed: a project whose recorded workspace path is refused blocks its
 // item before the dispatch is counted, any model call or any cell; it is never run in some other
@@ -121,7 +122,7 @@ describe("a project whose workspace path is refused", () => {
       cells: {
         substrate,
         baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
-        instance: `test-${randomUUID()}`,
+        instance: testCellInstance(),
       },
       llm: gateway,
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },

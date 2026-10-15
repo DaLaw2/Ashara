@@ -11,6 +11,7 @@ import {
   probeResourceCaps,
   type Cell,
 } from "@ashara/execution-infra";
+import { testCellInstance } from "../test-cells.js";
 
 // Roadmap M2 exit 6 (ADR-074 d82 W9), from inside a real cell on real podman, no skip. The
 // environment-file write probe needs the ownership gate and lives in packages/quality.
@@ -39,7 +40,7 @@ beforeAll(async () => {
     project: "proj-exit-probes",
     task: `task-${randomUUID()}`,
     role: "worker",
-    instance: `test-${randomUUID()}`,
+    instance: testCellInstance(),
     mount: { hostPath: tree },
   });
 }, 120_000);

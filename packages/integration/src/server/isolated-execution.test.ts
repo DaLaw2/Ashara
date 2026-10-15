@@ -19,6 +19,7 @@ import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
+import { testCellInstance } from "../test-cells.js";
 
 // Real podman cells from the BaseCell image, the real recorded gateway writing llm_calls, a mock
 // model: no real LLM call, and no skip (CI rejects skipped tests).
@@ -173,7 +174,7 @@ describe("a task runs on cells end to end", () => {
     await run("git", ["add", "environment"], { cwd: target });
     await run("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment"], { cwd: target });
 
-    const instance = `test-${randomUUID()}`;
+    const instance = testCellInstance();
     const substrate = new PodmanSubstrate({ podmanPath: "podman", mountRoot: workdirBase });
     const builds = new EnvironmentBuildRepository(db);
     const events: Array<Record<string, unknown> & { readonly event: string }> = [];

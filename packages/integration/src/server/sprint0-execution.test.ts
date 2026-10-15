@@ -26,6 +26,7 @@ import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createStackChoiceStore } from "@ashara/server/stack-choice-store";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { testCellInstance } from "../test-cells.js";
 
 // Sprint 0 end to end on real podman, real git and the real recorded gateway, with a scripted
 // model: no real LLM call and no skip. The environment role writes a minimal environment, calls
@@ -205,7 +206,7 @@ async function runTask(name: string, task: TaskDescriptor, script: ScriptStep[],
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A studio booking site", assumptions: [] }) },
-    cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
+    cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
       staff: async (staffed) => ({

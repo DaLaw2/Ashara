@@ -22,6 +22,7 @@ import { createWorkItemId, systemClock } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
+import { testCellInstance } from "../test-cells.js";
 import { projectState } from "../simulator/project-state.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
@@ -336,7 +337,7 @@ describe("a turn refused at the project's spend cap", () => {
       cells: {
         substrate: scriptedSubstrate(root),
         baseCell: { image: `docker.io/library/debian:12-slim@sha256:${"a".repeat(64)}`, digest: `sha256:${"a".repeat(64)}` },
-        instance: `test-${randomUUID()}`,
+        instance: testCellInstance(),
       },
       llm: gateway,
       staffing: { staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }) },

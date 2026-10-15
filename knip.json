@@ -13,6 +13,7 @@
       "vitest": false
     },
     "packages/integration": {
+      "entry": ["src/cell-leak-guard.ts", "src/test-cells.ts"],
       "project": ["src/**/*.ts", "!src/**/*.test.ts"],
       "vitest": false,
       "ignoreDependencies": ["@ashara/knowledge", "@ashara/organization", "@hono/node-server", "ai", "hono"]

@@ -20,6 +20,7 @@ import type { ModelConfig } from "@ashara/model-access";
 import { createWorkItemId, parseWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
+import { testCellInstance } from "../test-cells.js";
 
 // w12b D2 (ADR-074 d96 d, d99): two tasks dispatched in one batch left the same main and changed the
 // same file. The first merged; the second's merge conflicted, and its retry was dispatched on its
@@ -142,7 +143,7 @@ async function runTask(task: TaskDescriptor, script: Turn[], caps: typeof TEST_S
     knowledgeSink: { storeFinding: async () => {} },
     eventSink: { emit: (event) => void events.push(event) },
     intentSource: { loadIntent: async () => ({ version: 1, visionText: "A shared notes file", assumptions: [] }) },
-    cells: { substrate, baseCell: base, instance: `test-${randomUUID()}` },
+    cells: { substrate, baseCell: base, instance: testCellInstance() },
     llm: gateway,
     staffing: {
       staff: async () => ({ kind: "staffed", staff: { role: { id: "developer", name: "Developer" }, model: gateway.resolveModel("Strong", "agent-runner") } }),

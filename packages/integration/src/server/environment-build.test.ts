@@ -16,6 +16,7 @@ import {
 } from "@ashara/execution-infra";
 import { readEnvironmentDefinition } from "@ashara/quality";
 import type { ProjectId } from "@ashara/shared";
+import { testCellInstance } from "../test-cells.js";
 
 // Real git, real podman, real Postgres: the build path from a committed build context to a row and a
 // cell. No network is needed (the base image is local, the Containerfile has no RUN), and no skip.
@@ -132,7 +133,7 @@ describe("environment image build", () => {
       project: projectId,
       task: `task-${NONCE}`,
       role: "worker",
-      instance: `env-build-test-${NONCE}`,
+      instance: testCellInstance(),
       mount: { hostPath: workspace },
     });
     const recipe = await cell.exec(["cat", "/opt/ctx/environment/recipe.txt"], { timeoutSeconds: 30 });
