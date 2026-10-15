@@ -85,8 +85,8 @@ describe("lifecycle simulator, fast tier", () => {
 
   // A seed is a function of itself alone (owner 2026-10-15, fixed seeds and replay): run twice in
   // one process, the second after the first moved every counter a run can leave behind, its trace
-  // (what it did, ids and commits canonical, its violations last) is byte-identical. Seed 6 once
-  // flaked one project (I7:unrecorded); seeds 18 and 59 are two-project runs at the soak's cap.
+  // (what it did, ids and commits canonical, its violations last) is byte-identical. Seeds 6 and 21
+  // run one project; seeds 18 and 59 are two-project runs at the soak's cap.
   const twice: ReadonlyArray<readonly [number, Pick<RunOptions, "projects" | "capUsd">]> = [
     [6, {}],
     [21, {}],
@@ -106,8 +106,7 @@ describe("lifecycle simulator, fast tier", () => {
  * The directed tier (t-simulator-directed-plants): each fault, plant and misbehaviour a test judges
  * is forced by name on a directed tape (tape.ts Direction), every other draw benign, rather than
  * reached by a seed found by scanning. A seed is re-rolled by any change that adds a seam call on
- * its path (the I5 test's seed went 50 -> 4 -> 47 -> 63 -> 81 over five merges); a direction is
- * not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of letting the
+ * its path; a direction is not, and one the run never takes fails the run (run.ts DirectionsNotTaken) instead of letting the
  * test judge a run that never met its behaviour. The forced behaviour flows through the same code
  * as a seeded one: the same seams, stand-ins and interleaver; only the choice is named.
  */
@@ -192,8 +191,8 @@ describe("lifecycle simulator, directed", () => {
   /*
    * The fault kinds the seeded soak reaches too seldom to floor (coverage.ts
    * RARE_UNDER_OWN_PROFILES), each forced on the first call that can carry it: production answers
-   * each without breaking an invariant (observed 2026-10-15, one directed run each). A key marked
-   * rare that no entry here forces fails the first test.
+   * each without breaking an invariant. A key marked rare that no entry here forces fails the first
+   * test.
    */
   const fault = (seam: SeamKind, label: string | RegExp, kind: FaultKind): Direction => ({ kind: "fault", seam, label, nth: 1, fault: kind });
   const RARE_FAULTS: readonly Direction[] = [
@@ -244,8 +243,8 @@ describe("lifecycle simulator, directed", () => {
   // §7.6), so here two projects share one deployment cap of $10, spent to the cap. The turn is
   // handed on after every database call returns, so an admission's spend read is followed by the
   // other task's: skipping the queue lets both pass on one headroom smaller than their two
-  // estimates (observed: still caught with the in-flight read moved before the spend read, B9's
-  // fix, so it is the queue's race and not B9's).
+  // estimates. The in-flight read precedes the spend read (B9's fix), so what this catches is the
+  // queue's race, not B9's.
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const race = [...BATCH_OF_TWO, switchAtEvery(/^interleave:db:.*:returned$/)];
     const shared = { projects: 2, capUsd: 10 } as const;

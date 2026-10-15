@@ -95,9 +95,9 @@ const CONTESTS = 2;
 const DEFAULT_CAP_USD = 25;
 /**
  * The adversarial profile's cap. Every stand-in call is unpriced and counts at its worst-case
- * estimate (about $0.35 at a turn's bound), and misbehaving responses are retried: at $25, 17 of
- * adversarial seeds 1-30 halted at the cap (observed 2026-10-15), seed 9 with its conflict retry
- * refused, so the paths after a misbehaviour went unreached. At $100, 7 of seeds 1-40 do.
+ * estimate (about $0.35 at a turn's bound), and misbehaving responses are retried, so at the
+ * default cap most adversarial seeds halt at the cap before the paths after a misbehaviour are
+ * reached.
  */
 const ADVERSARIAL_CAP_USD = 100;
 const LOW_CAP_USD = 0.02;
@@ -108,8 +108,8 @@ const LOW_CAP_USD = 0.02;
  * loop's own bookkeeping: a parked exit taken on the next cycle's sweep, a replan waiting one cycle
  * for its project's tasks to settle, a halt's report and the probe's resumption, each one cycle. A
  * cycle that carried an injected fault or a restart does not count: the fault budget bounds those
- * (design §4.9). Observed (baseline §7.7): the longest such stretch in seeds 1-80 was 2 cycles, so
- * the bound is three times what any seed that progressed needed.
+ * (design §4.9). The longest such stretch the baseline measured is 2 cycles
+ * (docs/investigations/simulator-baseline-2026-10-14.md §7.7), so the bound is three times that.
  */
 const NO_PROGRESS_CYCLES = 6;
 const SETTLE_CYCLES = 2;

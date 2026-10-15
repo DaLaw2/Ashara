@@ -3,7 +3,7 @@ import type { Profile } from "./profile.js";
 import type { RunMode, RunResult } from "./run.js";
 
 /**
- * The fast tier's seeds that fail on today's code, each with the violation keys it fails (the
+ * The seeds that fail on today's code, each with the violation keys it fails (the
  * invariant and its subject, invariants.ts Violation.key) and the baseline entry naming the
  * defect (docs/investigations/simulator-baseline-2026-10-14.md). A seed here must fail exactly
  * these keys: a new violation in a known-failing seed, even of an invariant it already fails, is
@@ -24,39 +24,11 @@ interface ExpectedFailure {
 }
 
 /*
- * Re-chosen after the hardening of 31aefa1d (docs/investigations/simulator-baseline-2026-10-14.md
- * §7.5). No listed defect was fixed by it: replayed from their pre-hardening decisions on the new
- * code, seeds 1 (B1), 41 (B4) and 89 (B8) fail their old keys again, and seed 18 (B3) does once
- * its database fault is moved two occurrences later, past the boot query each of its two boots
- * now sends first. They stopped failing because the draws were one stream, so that one query
- * re-rolled every seed; the tape now draws per key (tape.ts) and the fast tier was re-chosen on
- * it: B1 seed 1 -> 4, B4 seed 41 -> 14. B8 has no seed in 1-300 on the keyed tape and is pinned
- * by a two-decision tape in simulator.test.ts instead of seed 89. B3 was seed 119 until the rebase
- * onto 4d40d185: model fault keys carry the model id, migration 047 replaced the catalog's models
- * (gpt-4-1, which the stand-ins were routed to, is deleted), and seed 119 lost its orphan. A seed whose failure needs a crash and then a fault on one reconciler query is re-rolled
- * by any such change, so B3 is pinned by its minimized three-decision tape there too. B1 (seed 4)
- * is removed: a check set keeps only the files under checks/<checked task id>/ (MVP W4), and seed 4
- * then fails none of its I3 product-file keys (observed: its listed keys were reported missing).
- * B4 (seed 14) is removed: no work item waits on a person (MVP W6), and an infrastructure fault is
- * requeued uncharged instead of parked at Blocked(environment_unavailable). Observed: seed 14's
- * decisions recorded on a9f781ce (simulate.ts --seeds 1 --start 14 --minimize: four git fault
- * decisions) fail I1:open, I2 environment_unavailable, I8:Blocked(environment_unavailable) and
- * I8:Pending there, and replayed on W6 end accepted with no violation, cycle 1 "interrupted". That
- * tape pins it in simulator.test.ts.
- *
- * The soak's known production failures (baseline §7.8, the triage of §7.7's two-project scans):
- * none is in the fast tier, which pins B5 and B8 by their tapes in simulator.test.ts instead; these
- * keep `just simulate` from counting them as unexpected until they are fixed, and a fix shows each
- * as listed-but-not-failed.
- */
-/*
- * B3 and B5 are fixed by t-reconcile-merged-work (2026-10-15): the startup reconciler reads main
- * for an orphan's merge before it requeues it, retries a requeue that failed within a bound, and
- * blocks an orphan it cannot settle under a typed cause; a Completed update that fails after a
- * recorded merge is retried and then parked merge_unrecorded, never requeued. Observed on that
- * change: every B3 and B5 entry listed here before it was reported listed but not failed by
- * `simulate.ts --seeds 90` at `--projects 1`, `--projects 2` and `--projects 2 --cap 10`, and by
- * `--seeds 1 --start 10 --profile typical`; the entries are removed.
+ * The soak's known production failures. An entry keeps `just simulate` from counting its seed as
+ * unexpected until the defect is fixed; a fix shows the entry as listed-but-not-failed, and the
+ * entry is then removed. A change that adds a seam call on a seed's path re-rolls that seed, so the
+ * list is re-derived from a soak whenever such a change lands; simulator.test.ts forces each
+ * defect on a directed tape instead of pinning a seed.
  */
 const B8 =
   "B8 (baseline §3; task t-begin-failure-leaks-connection): a BEGIN that fails leaves its pool client checked out: drizzle-orm " +
