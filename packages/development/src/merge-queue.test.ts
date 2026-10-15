@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeEach, describe, expect, test } from "vitest";
+import { ensureTargetGitInit } from "@ashara/execution-infra";
 import { commitMerge, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
-import { ensureTargetGitInit } from "./workspace.js";
 
 // ---------------------------------------------------------------------------
 // Run 39: post-merge verify runs the project's own build inside the MAIN
@@ -47,8 +47,9 @@ async function commitOnTaskBranch(
 }
 
 beforeEach(async () => {
-  target = join(await makeDir("ashara-merge-target-"), "project");
-  await ensureTargetGitInit(target);
+  const base = await makeDir("ashara-merge-target-");
+  target = join(base, "project");
+  await ensureTargetGitInit(target, base);
 });
 
 afterAll(async () => {

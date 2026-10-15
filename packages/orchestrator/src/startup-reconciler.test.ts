@@ -6,14 +6,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ProjectBlockCause } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { FailureRouter, WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
-import type { StartupReconcilerDeps } from "./startup-reconciler.js";
-import { reconcileOnStartup } from "./startup-reconciler.js";
+import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 
-interface FailStaleCall {
-  readonly reason: unknown;
-}
+type StartupReconcilerDeps = Parameters<typeof reconcileWorkItemsOnStartup>[0];
 
-/** No work items to reconcile — these tests are about the session pass only. */
+/** A repository with no work items; each test overrides what it exercises. */
 function emptyWorkItemRepo(): WorkItemRepository {
   const unused = (method: string) => (): never => {
     throw new Error(`WorkItemRepository.${method} is not exercised by this test`);
@@ -42,12 +39,7 @@ async function unusedBlock(): Promise<never> {
   throw new Error("ProjectRepository.block is not exercised by this test");
 }
 
-function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
-  deps: StartupReconcilerDeps;
-  failStaleCalls: FailStaleCall[];
-} {
-  const failStaleCalls: FailStaleCall[] = [];
-
+function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): { deps: StartupReconcilerDeps } {
   const deps: StartupReconcilerDeps = {
     workItemRepo: emptyWorkItemRepo(),
     projects: { block: unusedBlock, get: async () => ({ workspacePath: null }) },
@@ -62,69 +54,21 @@ function buildDeps(overrides: Partial<StartupReconcilerDeps> = {}): {
       },
     } as unknown as FailureRouter,
     devSessionStore: {
-      failStale: async (reason: unknown) => {
-        failStaleCalls.push({ reason });
-        return 6;
-      },
       dispatchEvidence: async () => {
         throw new Error("dispatchEvidence is not exercised: no item is InProgress");
       },
     },
-    // Required: an empty repo returns no dirs, so the sweep is a no-op.
-    workdirBase: "/nonexistent-test-workdir",
+    // Every target here is made under the temporary directory.
+    workdirBase: tmpdir(),
     ...overrides,
   };
 
-  return { deps, failStaleCalls };
+  return { deps };
 }
-
-// E2E Run 39 left 6 dev_sessions rows in "Preparing" for two abandoned tasks.
-// Nothing in the process that created them survived to close them, so the only
-// place the invariant can be restored is the next process start.
-describe("reconcileOnStartup — dev_session crash orphans", () => {
-  test("terminalizes every non-terminal session and reports the count", async () => {
-    const { deps, failStaleCalls } = buildDeps();
-
-    const summary = await reconcileOnStartup(deps);
-
-    expect(failStaleCalls).toHaveLength(1);
-    expect(summary.sessionsTerminalized).toBe(6);
-  });
-
-  test("the recorded reason says why the session was closed, not just that it was", async () => {
-    const { deps, failStaleCalls } = buildDeps();
-
-    await reconcileOnStartup(deps);
-
-    expect(failStaleCalls[0]?.reason).toMatchObject({
-      outcome: "abandoned",
-      resolvedBy: "startup-reconciler",
-    });
-  });
-
-  // Fail-soft on its own error: the rows are already stranded, so retrying next
-  // start beats refusing to boot.
-  test("a store failure does not block startup reconciliation", async () => {
-    const { deps } = buildDeps({
-      devSessionStore: {
-        failStale: async () => {
-          throw new Error("db unreachable");
-        },
-        dispatchEvidence: async () => {
-          throw new Error("dispatchEvidence is not exercised: no item is InProgress");
-        },
-      },
-    });
-
-    const summary = await reconcileOnStartup(deps);
-
-    expect(summary.sessionsTerminalized).toBe(0);
-  });
-});
 
 // The review of t-shutdown-cancel-not-failure: a hard kill left the dispatch counted, so a task
 // the operator's kill stopped was one attempt nearer its abandon bound.
-describe("reconcileOnStartup — the dispatch a dead process counted", () => {
+describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", () => {
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000aa", "test");
 
   function orphanDeps(evidence: { readonly latestPhase: string | null; readonly orphanedBefore: number }) {
@@ -160,7 +104,6 @@ describe("reconcileOnStartup — the dispatch a dead process counted", () => {
     const { deps } = buildDeps({
       workItemRepo: repo,
       devSessionStore: {
-        failStale: async () => 1,
         dispatchEvidence: async (_taskId, resolvedBy) => {
           evidenceAsked.push(resolvedBy);
           return evidence;
@@ -177,11 +120,11 @@ describe("reconcileOnStartup — the dispatch a dead process counted", () => {
   test("its latest session never got a terminal write: requeued and the dispatch given back", async () => {
     const { deps, row, evidenceAsked } = orphanDeps({ latestPhase: "Preparing", orphanedBefore: 0 });
 
-    const summary = await reconcileOnStartup(deps);
+    const summary = await reconcileWorkItemsOnStartup(deps);
 
     expect(summary.orphansRequeued).toBe(1);
     expect(row()).toMatchObject({ status: "Pending", dispatchCount: 1 });
-    // Counted by the very name failStale records, read before failStale closes this start's orphans.
+    // Counted by the very name Workplace's session reconcile records, read before it closes this start's sessions.
     expect(evidenceAsked).toEqual(["startup-reconciler"]);
   });
 
@@ -192,7 +135,7 @@ describe("reconcileOnStartup — the dispatch a dead process counted", () => {
   ])("%s: requeued, the dispatch stays counted", async (_label, evidence) => {
     const { deps, row } = orphanDeps(evidence);
 
-    await reconcileOnStartup(deps);
+    await reconcileWorkItemsOnStartup(deps);
 
     expect(row()).toMatchObject({ status: "Pending", dispatchCount: 2 });
   });
@@ -211,7 +154,7 @@ function targetWithMain(subjects: readonly string[]): { readonly path: string; r
 
 // The 400-seed deep soak (2026-10-15): B5, a merge committed on main and a crash before the task's
 // Completed update, requeued and redone; B3, a requeue that failed once left the orphan InProgress.
-describe("reconcileOnStartup — a crash orphan is settled from main, within a bound, never left InProgress", () => {
+describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, within a bound, never left InProgress", () => {
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000bb", "test");
   const dirs: string[] = [];
 
@@ -268,7 +211,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
         },
         get: async () => ({ workspacePath }),
       },
-      devSessionStore: { failStale: async () => 0, dispatchEvidence: async () => ({ latestPhase: null, orphanedBefore: 0 }) },
+      devSessionStore: { dispatchEvidence: async () => ({ latestPhase: null, orphanedBefore: 0 }) },
     });
     return { deps, row: () => row, records, projectBlocks };
   }
@@ -278,7 +221,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     const main = target([`merge: task ${createWorkItemId()}`, `merge: task ${id}`, "later work"]);
     const world = orphanWorld(id, main.path);
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 0, orphansCompleted: 1, orphansBlocked: 0 });
     const merged = execFileSync("git", ["rev-parse", "HEAD~1"], { cwd: main.path, encoding: "utf8" }).trim();
@@ -290,7 +233,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     const id = createWorkItemId();
     const world = orphanWorld(id, target([`merge: task ${createWorkItemId()}`]).path);
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 1, orphansCompleted: 0 });
     expect(world.records).toEqual([]);
@@ -302,7 +245,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     dirs.push(parent);
     const world = orphanWorld(createWorkItemId(), join(parent, "never-created"));
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 1, orphansBlocked: 0 });
     expect(world.projectBlocks).toEqual([]);
@@ -315,7 +258,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     mkdirSync(join(unreadable, ".git"));
     const world = orphanWorld(createWorkItemId(), unreadable);
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 0, orphansBlocked: 1 });
     expect(world.row()).toMatchObject({
@@ -325,11 +268,25 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
     expect(world.projectBlocks).toEqual([expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" })]);
   });
 
+  test("a stored target outside the workdir base: git never reads it, and the orphan is Blocked, never requeued", async () => {
+    const id = createWorkItemId();
+    const main = target([`merge: task ${id}`]);
+    const world = orphanWorld(id, main.path);
+    const elsewhere = mkdtempSync(join(tmpdir(), "ashara-orphan-base-"));
+    dirs.push(elsewhere);
+
+    const summary = await reconcileWorkItemsOnStartup({ ...world.deps, workdirBase: elsewhere });
+
+    expect(summary).toMatchObject({ orphansRequeued: 0, orphansCompleted: 0, orphansBlocked: 1 });
+    expect(world.records).toEqual([]);
+    expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled" } });
+  });
+
   test("a requeue that fails once is retried, and the task requeued", async () => {
     let failed = 0;
     const world = orphanWorld(createWorkItemId(), null, (status) => status === "Pending" && failed++ === 0);
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 1, orphansBlocked: 0 });
     expect(world.row().status).toBe("Pending");
@@ -338,7 +295,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
   test("a requeue that keeps failing: Blocked with its step and the project blocked, never left InProgress", async () => {
     const world = orphanWorld(createWorkItemId(), null, (status) => status === "Pending");
 
-    const summary = await reconcileOnStartup(world.deps);
+    const summary = await reconcileWorkItemsOnStartup(world.deps);
 
     expect(summary).toMatchObject({ orphansRequeued: 0, orphansBlocked: 1 });
     expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "orphan_unreconciled", step: "requeue the task" } });
@@ -359,7 +316,7 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
       },
     };
 
-    const summary = await reconcileOnStartup(failing);
+    const summary = await reconcileWorkItemsOnStartup(failing);
 
     expect(summary).toMatchObject({ orphansBlocked: 1 });
     expect(world.row()).toMatchObject({ status: "Blocked", blockedReason: { source: "merge_unrecorded", mergeCommit: main.head, mergeKind: "merged" } });
@@ -369,6 +326,6 @@ describe("reconcileOnStartup — a crash orphan is settled from main, within a b
   test("no write reaches the store at all: the start is refused, the orphan is never left behind silently", async () => {
     const world = orphanWorld(createWorkItemId(), null, () => true);
 
-    await expect(reconcileOnStartup(world.deps)).rejects.toMatchObject({ name: "OrphanUnreconciled" });
+    await expect(reconcileWorkItemsOnStartup(world.deps)).rejects.toMatchObject({ name: "OrphanUnreconciled" });
   });
 });

@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { SubstrateUnavailable } from "@ashara/execution-infra";
-import type { PodmanSubstrate } from "@ashara/execution-infra";
-import type { InfrastructureProbe } from "@ashara/orchestrator";
 import { describeErrorChain } from "@ashara/shared";
+import { SubstrateUnavailable } from "./errors.js";
+import type { PodmanSubstrate } from "./podman.js";
+
+/** Whether the substrate answers now, with what it answered or why it did not. */
+export interface SubstrateProbe {
+  probe(): Promise<{ readonly passed: true; readonly evidence: string } | { readonly passed: false; readonly evidence: string }>;
+}
 
 /**
  * The ashara.instance label of this deployment's cells: a stable digest of workdirBase, so a
@@ -33,7 +37,7 @@ export async function reconcileCellsAtStartup(substrate: Pick<PodmanSubstrate, "
  * The probe an infrastructure halt waits on (story s-loop-never-stop-m1 W6): the substrate answers
  * `info`. A probe that throws, for any reason, did not pass.
  */
-export function substrateProbe(substrate: Pick<PodmanSubstrate, "probeSubstrate">): InfrastructureProbe {
+export function substrateProbe(substrate: Pick<PodmanSubstrate, "probeSubstrate">): SubstrateProbe {
   return {
     async probe() {
       try {

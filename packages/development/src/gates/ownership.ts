@@ -1,5 +1,4 @@
-import { runHostGit } from "@ashara/execution-infra";
-import { targetRepo } from "../host-git.js";
+import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import type { StoredCheckFile } from "../task-checks.js";
 
 // Separation of duties held by Z0, not by the model (story s-platform-role-m1, sprint0-run D5;

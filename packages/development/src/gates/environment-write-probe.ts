@@ -2,16 +2,18 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   ENVIRONMENT_DEFINITION_PATH,
+  commitAllChanges,
+  createWorkdir,
+  ensureTargetGitInit,
   readEnvironmentDefinition,
   recipePaths,
   runHostGit,
+  targetRepo,
   type Cell,
   type CellSpec,
   type ProbeVerdict,
 } from "@ashara/execution-infra";
-import { targetRepo } from "../host-git.js";
 import { taskBranchName } from "../merge.js";
-import { commitAllChanges, createWorkdir, ensureTargetGitInit } from "../workspace.js";
 import { checkBranchOwnership } from "./ownership.js";
 
 const PROBE_TASK_ID = "probe-environment-write";
@@ -32,7 +34,7 @@ export interface EnvironmentWriteProbeRequest {
   /** The image the cell starts from. */
   readonly image: string;
   readonly instance: string;
-  /** An empty directory under the substrate's mount root and outside any git working tree. */
+  /** An empty directory under the substrate's mount root: the probe's workdir base, holding its target and its worktree. */
   readonly workRoot: string;
 }
 
@@ -49,12 +51,12 @@ export async function probeEnvironmentWrite(request: EnvironmentWriteProbeReques
   await mkdir(join(target, "environment"), { recursive: true });
   await writeFile(join(target, ENVIRONMENT_DEFINITION_PATH), DEFINITION);
   await writeFile(join(target, CONTAINERFILE), CONTAINERFILE_TEXT);
-  await ensureTargetGitInit(target);
+  await ensureTargetGitInit(target, request.workRoot);
   const repo = targetRepo(target);
   const recipe = recipePaths(await readEnvironmentDefinition(repo.gitDir, "main"));
 
   const branch = taskBranchName(PROBE_TASK_ID);
-  const work = await createWorkdir(join(request.workRoot, "work"), target, branch);
+  const work = await createWorkdir(request.workRoot, target, branch);
   const cell = await request.substrate.createCell({
     image: request.image,
     project: "probe",

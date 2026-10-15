@@ -22,8 +22,44 @@ export { CellExecFailed } from "./errors.js";
 export { BaseCellConfigInvalid } from "./errors.js";
 /** @testseam the integration exit-probes.podman.test.ts plants a control file under it; the cell's own paths are its production callers */
 export { WORKSPACE_ROOT } from "./workspace-path.js";
-export { execFileGitRunner, initHostRepo, runHostGit, runOwnRepoGit, withGitRunner } from "./host-git.js";
+export { execFileGitRunner, runHostGit, withGitRunner } from "./host-git.js";
 export type { GitRunner, HostRepo } from "./host-git.js";
+export { freshWorktreeRepo, targetRepo } from "./target-repo.js";
+export { TreePathRefused, listTreeDir, readTreeFile, treeHasEntry, writeTreeFile } from "./tree-read.js";
+export type { TreeFileRead } from "./tree-read.js";
+export { CheckoutHolderOverran, canonicalizeAllowingMissing, withTargetCheckout } from "./checkout-lock.js";
+export type { CheckoutLease } from "./checkout-lock.js";
+export {
+  InvalidTargetProjectPath,
+  WorktreeCommitFailed,
+  WorktreeCommitIncomplete,
+  assertValidTargetProjectPath,
+  buildFileTree,
+  cleanupWorkdir,
+  clearWorktreeSlot,
+  commitAllChanges,
+  commitPartialWork,
+  createWorkdir,
+  createWorkdirForRetry,
+  ensureTargetGitInit,
+  getChangedFiles,
+  mergeInProgress,
+  sweepOrphanedWorktrees,
+} from "./worktree.js";
+export type { PartialCommitOutcome, WorkdirInfo } from "./worktree.js";
+export { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
+export type { CurrentEnvironment, EnvironmentImages, EnvironmentStatementSource } from "./current-environment.js";
+export type { AttemptCellImage, EnvironmentCheckReport, EnvironmentTestRun } from "./environment-report.js";
+export {
+  buildAndProbe,
+  commitForCheck,
+  runEnvironmentCommand,
+  runProbeOnCheckout,
+  withCheckoutCell,
+  worktreeCommitLine,
+} from "./checkout-cell.js";
+export type { EnvironmentCheckScope } from "./checkout-cell.js";
+export { cellInstanceFor, reconcileCellsAtStartup, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
 export { elidedOutput, spawnProcess } from "./process-runner.js";
 export type { ProcessRunner } from "./process-runner.js";
 export {
@@ -37,5 +73,5 @@ export {
 export type { EnvironmentDefinition } from "./environment.js";
 export { environmentVersion } from "./environment.js";
 export { ENVIRONMENT_BUILD_TIMEOUT_MS, buildEnvironmentImage, pruneEnvironmentImages } from "./environment-build.js";
-export type { BuiltEnvironment, EnvironmentBuildRequest, EnvironmentImagePrune } from "./environment-build.js";
+export type { BuiltEnvironment } from "./environment-build.js";
 export { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved, PodmanCommandFailed } from "./errors.js";

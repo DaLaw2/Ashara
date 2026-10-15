@@ -1,22 +1,19 @@
-import { runHostGit } from "@ashara/execution-infra";
+import { CheckoutHolderOverran, ensureTargetGitInit, mergeInProgress, runHostGit, targetRepo, withTargetCheckout } from "@ashara/execution-infra";
+import type { CheckoutLease } from "@ashara/execution-infra";
 import type { ErrorLayer } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
-import { CheckoutHolderOverran, withTargetCheckout, type CheckoutLease } from "../checkout-lock.js";
 import { environmentErrorOf } from "../fault-class.js";
 import type { EnvironmentError } from "../fault-class.js";
 import type { ExecutionEventSink, TaskDescriptor } from "../execution-service.js";
-import { targetRepo } from "../host-git.js";
 import {
   abortMerge,
   commitMerge,
-  mergeInProgress,
   recoverOrphanedMerge,
   resetCheckoutToHead,
   taskBranchName,
   tentativeMerge,
   type MainConflict,
 } from "../merge.js";
-import { ensureTargetGitInit } from "../workspace.js";
 
 /**
  * Z0's own machinery around a run of checks failed (a git worktree, a commit, a check file written
@@ -105,6 +102,8 @@ export interface FinalizeDeps {
    * resolution, and planning hands the newer conflict to the next attempt under the replan bound.
    */
   readonly presentedConflict: MainConflict | null;
+  /** The workdir base: the target checkout is never initialised outside it (assertValidTargetProjectPath). */
+  readonly workdirBase: string;
 }
 
 /**
@@ -267,7 +266,7 @@ async function finalizeHeld(
   lease: CheckoutLease,
 ): Promise<FinalizeResult> {
   await recoverOrphanedMerge(targetProjectPath);
-  await ensureTargetGitInit(targetProjectPath);
+  await ensureTargetGitInit(targetProjectPath, deps.workdirBase);
 
   // Ordered after ensureTargetGitInit so HEAD is guaranteed to exist, and before the tentative merge.
   // This is also where a checkout an earlier finalize could not restore (TargetCheckoutUnrestored)

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
+import { commitPartialWork, createWorkdir, ensureTargetGitInit, getChangedFiles } from "@ashara/execution-infra";
 import { commitMerge, tentativeMerge } from "./merge.js";
-import { commitPartialWork, createWorkdir, ensureTargetGitInit, getChangedFiles } from "./workspace.js";
 
 const run = promisify(execFile);
 const scratch: string[] = [];
@@ -18,7 +18,7 @@ async function setup(name: string): Promise<{ root: string; target: string; mark
   const root = await mkdtemp(join(tmpdir(), `ashara-host-git-${name}-`));
   scratch.push(root);
   const target = join(root, "project");
-  await ensureTargetGitInit(target);
+  await ensureTargetGitInit(target, root);
   return { root, target, marker: (tag) => join(root, `PWNED_${tag}`) };
 }
 
@@ -30,7 +30,7 @@ async function pwned(root: string): Promise<string[]> {
 describe("Z0's git never runs code a cell planted", () => {
   test("a rewritten gitlink and a nested repository in the worktree", async () => {
     const { root, target, marker } = await setup("worktree");
-    const { workDir, repo } = await createWorkdir(join(root, "work"), target, "task/probe");
+    const { workDir, repo } = await createWorkdir(root, target, "task/probe");
 
     // The gitlink now names a git dir the cell planted, whose config runs a program.
     const planted = join(workDir, "planted");
@@ -60,7 +60,7 @@ describe("Z0's git never runs code a cell planted", () => {
 
   test("a hook in the target repository does not run on the merge commit", async () => {
     const { root, target, marker } = await setup("hooks");
-    const { workDir, repo } = await createWorkdir(join(root, "work"), target, "task/hooked");
+    const { workDir, repo } = await createWorkdir(root, target, "task/hooked");
     await writeFile(join(workDir, "work.txt"), "agent output\n");
     await commitPartialWork(repo, "work");
 

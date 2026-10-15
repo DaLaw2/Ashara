@@ -1,16 +1,6 @@
+import type { EnvironmentCheckReport, EnvironmentTestRun } from "@ashara/execution-infra";
 import { renderElided, shownText } from "@ashara/shared";
 import type { ElidedText } from "@ashara/shared";
-
-/** One of the definition's commands (`probe`, `build` or `test`), run in a cell from the built image. */
-export interface EnvironmentTestRun {
-  readonly command: string;
-  /** null when the host had to kill the podman client (timedOut is then true) or the command's exit status was lost in the cell. */
-  readonly exitCode: number | null;
-  readonly timedOut: boolean;
-  /** Each stream with its middle cut to a bound; every cut is counted. */
-  readonly stdout: ElidedText;
-  readonly stderr: ElidedText;
-}
 
 /**
  * The product's `build` then `test` (ADR-074 addendum 2 d72), run in one cell from the built image on a
@@ -26,25 +16,6 @@ export type EnvironmentCommandsRun =
       readonly test: EnvironmentTestRun;
       /** The checkout's untracked or modified paths after both (porcelain status); empty when clean. */
       readonly leftOver: readonly string[];
-    };
-
-/**
- * What a check of the environment definition found. A definition, scope, image build or probe that
- * fails is a report, never a throw: it is the environment role's work, which the model can fix. A
- * substrate that cannot run the check throws instead.
- */
-export type EnvironmentCheckReport =
-  /** The definition is absent, unreadable or invalid, or its build context cannot be versioned. */
-  | { readonly kind: "definition_refused"; readonly detail: string }
-  /** The work adds, changes or deletes paths outside the recipe. */
-  | { readonly kind: "out_of_scope"; readonly recipe: readonly string[]; readonly paths: readonly string[] }
-  | { readonly kind: "build_failed"; readonly version: string; readonly detail: string; readonly log: ElidedText }
-  | {
-      readonly kind: "tested";
-      readonly version: string;
-      readonly imageRef: string;
-      readonly build: { readonly kind: "reused" } | { readonly kind: "built"; readonly log: ElidedText };
-      readonly probe: EnvironmentTestRun;
     };
 
 /**

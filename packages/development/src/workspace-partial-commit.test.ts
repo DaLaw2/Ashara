@@ -12,8 +12,9 @@ import {
   createWorkdirForRetry,
   ensureTargetGitInit,
   WorktreeCommitFailed,
-} from "./workspace.js";
+} from "@ashara/execution-infra";
 import { thrownFaultOf } from "./fault-class.js";
+import { mainMergedForRetry } from "./merge.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
@@ -44,10 +45,10 @@ describe("commitPartialWork — ADR-036 point 6", () => {
   test("after a failure, the task branch has a commit containing the agent's files and a retry sees them", async () => {
     const base = await makeDir("ashara-partial-");
     const target = join(base, "project");
-    await ensureTargetGitInit(target);
+    await ensureTargetGitInit(target, base);
 
     const branch = "task/test-partial";
-    const workdirBase = join(base, "work");
+    const workdirBase = base;
 
     // First dispatch: create worktree, simulate agent producing files, then fail
     const { workDir, repo } = await createWorkdir(workdirBase, target, branch);
@@ -68,7 +69,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     await cleanupWorkdir(workDir, target);
 
     // Retry: new worktree from the same branch
-    const retry = await createWorkdirForRetry(workdirBase, target, branch.slice("task/".length), null);
+    const retry = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null));
 
     // The agent's files survive the worktree destruction
     const handler = await readFile(join(retry.workDir, "handler.ts"), "utf-8");
@@ -87,10 +88,10 @@ describe("commitPartialWork — ADR-036 point 6", () => {
   test("nothing to commit returns no-changes, not an error", async () => {
     const base = await makeDir("ashara-partial-empty-");
     const target = join(base, "project");
-    await ensureTargetGitInit(target);
+    await ensureTargetGitInit(target, base);
 
     const branch = "task/test-empty";
-    const workdirBase = join(base, "work");
+    const workdirBase = base;
     const { workDir, repo } = await createWorkdir(workdirBase, target, branch);
 
     // Agent produced nothing — normal case
@@ -106,10 +107,10 @@ describe("commitPartialWork — ADR-036 point 6", () => {
   test("a partial commit on a prior dispatch does not break the finalize commit on a successful retry", async () => {
     const base = await makeDir("ashara-partial-then-success-");
     const target = join(base, "project");
-    await ensureTargetGitInit(target);
+    await ensureTargetGitInit(target, base);
 
     const branch = "task/test-success-after-partial";
-    const workdirBase = join(base, "work");
+    const workdirBase = base;
 
     // First dispatch: agent writes files, fails, partial commit preserved
     const { workDir: w1, repo: r1 } = await createWorkdir(workdirBase, target, branch);
@@ -118,7 +119,7 @@ describe("commitPartialWork — ADR-036 point 6", () => {
     await cleanupWorkdir(w1, target);
 
     // Second dispatch (retry): agent adds more work, then finalizeSuccess commits
-    const { workDir: w2, repo: r2 } = await createWorkdirForRetry(workdirBase, target, branch.slice("task/".length), null);
+    const { workDir: w2, repo: r2 } = await createWorkdirForRetry(workdirBase, target, branch, mainMergedForRetry(branch.slice("task/".length), null));
     await writeFile(join(w2, "v2.ts"), "export const v = 2;", "utf-8");
     // This is what finalizeSuccess calls
     await commitAllChanges(r2, "ashara: agent output for task x");
@@ -157,9 +158,9 @@ describe("commitAllChanges fails closed", () => {
   test("a git refusal throws WorktreeCommitFailed, Ashara's own fault and not the substrate's, and the branch gains no commit", async () => {
     const base = await makeDir("ashara-commit-refused-");
     const target = join(base, "project");
-    await ensureTargetGitInit(target);
+    await ensureTargetGitInit(target, base);
     const branch = "task/test-commit-refused";
-    const { workDir, repo } = await createWorkdir(join(base, "work"), target, branch);
+    const { workDir, repo } = await createWorkdir(base, target, branch);
     await writeFile(join(workDir, "work.ts"), "export const w = 1;", "utf-8");
     const before = await git(workDir, "rev-parse", "HEAD");
     // A held index lock is a host git that cannot record anything, whatever the work is.

@@ -1,7 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, posix } from "node:path";
-import type { Cell, CellSpec, HostRepo } from "@ashara/execution-infra";
-import { elidedOutput, runHostGit } from "@ashara/execution-infra";
+import type { Cell, CellSpec, EnvironmentTestRun, HostRepo } from "@ashara/execution-infra";
+import {
+  TreePathRefused,
+  cleanupWorkdir,
+  elidedOutput,
+  freshWorktreeRepo,
+  readTreeFile,
+  runHostGit,
+  targetRepo,
+  writeTreeFile,
+} from "@ashara/execution-infra";
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, describeProductChange } from "@ashara/workplace";
@@ -10,13 +19,9 @@ import type {
   CheckRedRunPreview,
   CheckRun,
   CheckRunReport,
-  EnvironmentTestRun,
   FoundationProbe,
   ProductChangedReport,
 } from "@ashara/workplace";
-import { freshWorktreeRepo, targetRepo } from "./host-git.js";
-import { TreePathRefused, readTreeFile, writeTreeFile } from "./tree-read.js";
-import { cleanupWorkdir } from "./workspace.js";
 
 // Independent verification (story s-independent-verify-m1, ADR-074 addendum 2 d63): the check
 // author writes an implementation task's checks in its check task, before the implementation

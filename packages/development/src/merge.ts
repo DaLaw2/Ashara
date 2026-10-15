@@ -1,9 +1,7 @@
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
-import { runHostGit } from "@ashara/execution-infra";
+import { mergeInProgress, runHostGit, targetRepo, treeHasEntry } from "@ashara/execution-infra";
 import type { HostRepo } from "@ashara/execution-infra";
-import { targetRepo } from "./host-git.js";
-import { treeHasEntry } from "./tree-read.js";
 
 /** execFile's rejection carries the child's stderr as a string; anything else carries none. */
 function stderrOf(e: unknown): string {
@@ -223,21 +221,6 @@ export async function abortMerge(targetPath: string): Promise<void> {
   await runHostGit(targetRepo(targetPath), ["merge", "--abort"]);
 }
 
-/**
- * Whether the checkout holds a staged merge (MERGE_HEAD). Asked of git rather than of the
- * filesystem: Z0 reads a target by path only through tree-read.ts. `rev-parse -q --verify` exits 1
- * with no output for a missing ref; any other failure is no answer and throws.
- */
-export async function mergeInProgress(repo: HostRepo): Promise<boolean> {
-  try {
-    await runHostGit(repo, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
-    return true;
-  } catch (e) {
-    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
-    throw e;
-  }
-}
-
 /** Crash recovery: an orphaned --no-commit merge or a stranded non-main checkout, left by a process that died mid-finalize. */
 export async function recoverOrphanedMerge(targetPath: string): Promise<void> {
   if (await mergeInProgress(targetRepo(targetPath))) {
@@ -326,7 +309,7 @@ export async function conflictWithMain(targetPath: string, taskId: string): Prom
  * commit (commitAllChanges) concludes it. Git must leave unmerged exactly the files `conflict` names
  * (the files the brief names), or ConflictRetryUnprepared is thrown.
  */
-export async function startMainMerge(repo: HostRepo, taskId: string, conflict: MainConflict): Promise<void> {
+async function startMainMerge(repo: HostRepo, taskId: string, conflict: MainConflict): Promise<void> {
   let merged = false;
   try {
     await runHostGit(repo, ["merge", "--no-ff", "--no-commit", "--end-of-options", conflict.mainCommit]);
@@ -361,7 +344,7 @@ export async function startMainMerge(repo: HostRepo, taskId: string, conflict: M
  * holds main. Any git failure, a conflict included (main moved since conflictWithMain), aborts the
  * merge and throws ConflictRetryUnprepared: the branch is never dispatched without main.
  */
-export async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"merged" | "already"> {
+async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"merged" | "already"> {
   try {
     await runHostGit(repo, ["merge-base", "--is-ancestor", "refs/heads/main", "HEAD"]);
     return "already";
@@ -379,6 +362,18 @@ export async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promi
     throw new ConflictRetryUnprepared(taskId, "merge", describeErrorChain(e), { cause: e });
   }
   return "merged";
+}
+
+/**
+ * How a resumed task branch's worktree is made ready before its next attempt (createWorkdirForRetry).
+ * When the branch conflicts with main, main's merge is left staged with the conflicts in the files
+ * (startMainMerge): re-dispatching the branch unchanged would only conflict again (w12b D2).
+ * Otherwise main's newer work is merged into it as a commit (mergeMainIntoBranch, P6): the attempt
+ * works on the tree its merge will be verified as. Either throws ConflictRetryUnprepared when the
+ * merge cannot be prepared.
+ */
+export function mainMergedForRetry(taskId: string, conflict: MainConflict | null): (repo: HostRepo) => Promise<unknown> {
+  return (repo) => (conflict !== null ? startMainMerge(repo, taskId, conflict) : mergeMainIntoBranch(repo, taskId));
 }
 
 /** A conflict marker line as git writes one; its length is the conflict-marker-size attribute, 7 by default. */

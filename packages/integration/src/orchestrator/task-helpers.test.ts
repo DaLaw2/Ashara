@@ -37,21 +37,30 @@ afterAll(async () => {
 });
 
 describe("resolveTargetProjectPath", () => {
-  test("mints a path under workdirBase, records it on the project, and reuses it after workdirBase changes", async () => {
+  test("mints a path under workdirBase, records it on the project, and reuses it", async () => {
     const p = await projects.create(`${PREFIX}-mint`, clientId);
     const minted = join(workdirBase, "projects", p.id);
     expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toEqual({ kind: "resolved", path: minted });
     expect((await projects.get(p.id))?.workspacePath).toBe(minted);
-
-    const elsewhere = join(workdirBase, "moved");
-    expect(await resolveTargetProjectPath(projects, p.id, elsewhere)).toEqual({ kind: "resolved", path: minted });
+    expect(await resolveTargetProjectPath(projects, p.id, workdirBase)).toEqual({ kind: "resolved", path: minted });
   });
 
-  test("a stored path inside the Ashara repository is refused, never reused", async () => {
+  test("after workdirBase moves, the stored path outside it is refused, never re-minted or overwritten", async () => {
+    const p = await projects.create(`${PREFIX}-moved`, clientId);
+    const minted = join(workdirBase, "projects", p.id);
+    await resolveTargetProjectPath(projects, p.id, workdirBase);
+
+    const resolved = await resolveTargetProjectPath(projects, p.id, join(workdirBase, "moved"));
+
+    expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("not inside the workdir base") });
+    expect((await projects.get(p.id))?.workspacePath).toBe(minted);
+  });
+
+  test("a stored path outside the workdir base, the Ashara repository's included, is refused, never reused", async () => {
     const p = await projects.create(`${PREFIX}-poisoned`, clientId);
     await projects.recordWorkspacePath(p.id, join(process.cwd(), "poisoned-target"));
     const resolved = await resolveTargetProjectPath(projects, p.id, workdirBase);
-    expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("Ashara repository root") });
+    expect(resolved).toMatchObject({ kind: "rejected", reason: expect.stringContaining("not inside the workdir base") });
   });
 
   test("an unknown project is rejected and records nothing", async () => {

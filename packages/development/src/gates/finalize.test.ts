@@ -4,11 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
+import { CheckoutHolderOverran, ensureTargetGitInit, withTargetCheckout } from "@ashara/execution-infra";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
 import type { TaskDescriptor } from "../execution-service.js";
-import { CheckoutHolderOverran, withTargetCheckout } from "../checkout-lock.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
-import { ensureTargetGitInit } from "../workspace.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 
@@ -20,9 +19,12 @@ import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
+/** The workdir base of every target here: finalize initialises a target only inside it. */
+const WORKDIR_BASE = await mkdtemp(join(tmpdir(), "ashara-finalize-"));
+tempDirs.push(WORKDIR_BASE);
 
 async function makeDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
+  const dir = await mkdtemp(join(WORKDIR_BASE, prefix));
   tempDirs.push(dir);
   return dir;
 }
@@ -57,7 +59,7 @@ function task(): TaskDescriptor {
  */
 async function targetWithBranches(tasks: readonly TaskDescriptor[], shared?: string): Promise<string> {
   const target = join(await makeDir("ashara-finalize-target-"), "project");
-  await ensureTargetGitInit(target);
+  await ensureTargetGitInit(target, WORKDIR_BASE);
   for (const [i, t] of tasks.entries()) {
     const workDir = join(await makeDir("ashara-finalize-wt-"), "wt");
     await git(target, "worktree", "add", workDir, "-b", taskBranchName(t.id), "main");
@@ -70,7 +72,7 @@ async function targetWithBranches(tasks: readonly TaskDescriptor[], shared?: str
 }
 
 function deps(postMergeVerify: FinalizeDeps["postMergeVerify"]): FinalizeDeps {
-  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify, presentedConflict: null };
+  return { postMergeOperation: "postMergeTaskChecks", postMergeVerify, presentedConflict: null, workdirBase: WORKDIR_BASE };
 }
 
 afterAll(async () => {
@@ -281,7 +283,7 @@ describe("Z0's faults in the merge are blocked under class ashara", () => {
   test("a merge git refuses without a conflict: class ashara under postMergeCheckRun; no check runs", async () => {
     const t = task();
     const target = join(await makeDir("ashara-finalize-nobranch-"), "project");
-    await ensureTargetGitInit(target);
+    await ensureTargetGitInit(target, WORKDIR_BASE);
     let verified = false;
 
     // The task branch does not exist: git refuses the merge, and no file is left unmerged.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { initHostRepo, runHostGit, runOwnRepoGit, withGitRunner } from "./host-git.js";
+import { initHostRepo, runHostGit, withGitRunner } from "./host-git.js";
 import type { GitRunner } from "./host-git.js";
 
 type Invocation = Parameters<GitRunner["text"]>[0];
@@ -40,12 +40,6 @@ describe("the git runner port", () => {
     expect(initCall?.args.slice(-4)).toEqual(["-b", "main", "--", "/target"]);
   });
 
-  test("git on Ashara's own checkout inherits the process environment", async () => {
-    const calls: Invocation[] = [];
-    await withGitRunner(recordingRunner(calls), () => runOwnRepoGit("/ashara", ["rev-parse", "--show-toplevel"]));
-    expect(calls).toEqual([{ args: ["rev-parse", "--show-toplevel"], cwd: "/ashara" }]);
-  });
-
   // Two processes composed in one Node process (a crashed one and its restart) keep their own runners,
   // even with calls of both in flight at once.
   test("two scopes interleaved keep their own runners", async () => {
@@ -57,9 +51,9 @@ describe("the git runner port", () => {
     });
     const slow = withGitRunner(recordingRunner(first), async () => {
       await gate;
-      await runOwnRepoGit("/one", ["status"]);
+      await runHostGit({ gitDir: "/one/.git", workTree: "/one" }, ["status"]);
     });
-    await withGitRunner(recordingRunner(second), () => runOwnRepoGit("/two", ["status"]));
+    await withGitRunner(recordingRunner(second), () => runHostGit({ gitDir: "/two/.git", workTree: "/two" }, ["status"]));
     release();
     await slow;
     expect(first.map((call) => call.cwd)).toEqual(["/one"]);

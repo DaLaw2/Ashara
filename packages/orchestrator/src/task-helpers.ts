@@ -37,19 +37,20 @@ export async function resolveTargetProjectPath(
 
   try {
     if (project.workspacePath) {
-      // The DB is a trust boundary: a stale/poisoned row (e.g. a path inside
-      // the Ashara repo left over from earlier runs) must be rejected and
-      // fail closed, never reused for destructive git sync/reset.
-      await assertValidTargetProjectPath(project.workspacePath);
+      // The DB is a trust boundary: a stored path outside the workdir base (a
+      // poisoned row, or one recorded under a base since moved) is rejected and
+      // fails closed, never reused for destructive git sync/reset.
+      await assertValidTargetProjectPath(project.workspacePath, workdirBase);
       return { kind: "resolved", path: project.workspacePath };
     }
 
     const minted = join(workdirBase, "projects", projectId);
-    await assertValidTargetProjectPath(minted);
+    await assertValidTargetProjectPath(minted, workdirBase);
     // Recorded at minting time, so a workdirBase change across a restart cannot
-    // re-mint a divergent path. A racing dispatch that recorded first wins.
+    // re-mint a divergent path: the stored one is refused instead. A racing
+    // dispatch that recorded first wins.
     const stored = await store.recordWorkspacePath(projectId, minted);
-    if (stored !== minted) await assertValidTargetProjectPath(stored);
+    if (stored !== minted) await assertValidTargetProjectPath(stored, workdirBase);
     console.log(`[project ${projectId}] target workspace path: ${stored}`);
     return { kind: "resolved", path: stored };
   } catch (e) {

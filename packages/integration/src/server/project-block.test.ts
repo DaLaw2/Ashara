@@ -13,7 +13,7 @@ import {
 import type { DbTransaction } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
-import { reconcileOnStartup } from "@ashara/orchestrator";
+import { reconcileWorkItemsOnStartup } from "@ashara/orchestrator";
 import { FailureRouter, PlanningService } from "@ashara/planning";
 import type { WorkItemRepository as WorkItemPort } from "@ashara/planning";
 import type { ProjectId } from "@ashara/shared";
@@ -246,12 +246,12 @@ describe("one project's bad record at startup", () => {
         projectIdsWithStatus: async (status) => (await repo.projectIdsWithStatus(status)).filter((id) => ourProjects.has(id)),
       };
 
-      const summary = await reconcileOnStartup({
+      const summary = await reconcileWorkItemsOnStartup({
         workItemRepo: ours,
         projects: new ProjectRepository(tx),
         eventStore: { publish: async () => undefined },
         failureRouter: new FailureRouter(3),
-        devSessionStore: { failStale: async () => 0, dispatchEvidence: (taskId, by) => new DevSessionRepository(db).dispatchEvidence(taskId, by) },
+        devSessionStore: { dispatchEvidence: (taskId, by) => new DevSessionRepository(db).dispatchEvidence(taskId, by) },
         workdirBase: `/nonexistent-${NAME_PREFIX}`,
       });
 

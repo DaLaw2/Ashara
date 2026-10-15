@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
@@ -827,6 +828,7 @@ describe("a task no roster role can work is planned around, never left waiting",
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: { publish: async (event: DomainEvent) => void published.push(event) },
       projects: { listActiveIds: async () => [projectId], get: (id) => new ProjectRepository(db).get(id) },
+      workdirBase: tmpdir(),
     });
 
     expect(left).toBe(1);

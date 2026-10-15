@@ -65,6 +65,7 @@ function run(
     workItemRepo,
     eventStore: { publish: async (event) => void published.push(event) },
     projects: { listActiveIds: async () => [PROJECT], get: async () => ({ workspacePath }) },
+    workdirBase: tmpdir(),
   });
   return { released, saves, published };
 }

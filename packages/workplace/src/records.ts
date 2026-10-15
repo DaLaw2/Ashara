@@ -1,3 +1,4 @@
+import type { AttemptCellImage } from "@ashara/execution-infra";
 import type { TokenUsage } from "@ashara/llm-gateway";
 import { cutText, keepEnds, renderElided, serializeError } from "@ashara/shared";
 import type { ElidedText, SerializedError } from "@ashara/shared";
@@ -20,20 +21,6 @@ export function describeInput(input: unknown): string {
   const json = JSON.stringify(input);
   return truncateText(json === undefined ? String(input) : json);
 }
-
-/**
- * What the attempt's cell was started from: the BaseCell (only the task that defines the
- * environment runs on it) or the image of the project's environment version.
- */
-export type AttemptCellImage =
-  | { readonly kind: "base-cell"; readonly image: string; readonly digest: string }
-  | {
-      readonly kind: "environment";
-      readonly version: string;
-      readonly commit: string;
-      readonly imageId: string;
-      readonly imageRef: string;
-    };
 
 /**
  * One entry of an attempt's conversation record. Written Z0-side through the sink, never into the

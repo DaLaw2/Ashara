@@ -1,16 +1,10 @@
-import { dirname, isAbsolute, join, relative } from "node:path";
-import { access, mkdir, realpath, rm } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { readdir, access, mkdir, rm } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { describeErrorChain } from "@ashara/shared";
-import { initHostRepo, runHostGit, runOwnRepoGit, type HostRepo } from "@ashara/execution-infra";
 import { canonicalizeAllowingMissing, withTargetCheckout } from "./checkout-lock.js";
-import { freshWorktreeRepo, targetRepo } from "./host-git.js";
-import { mergeInProgress, mergeMainIntoBranch, startMainMerge, taskBranchName, type MainConflict } from "./merge.js";
+import { initHostRepo, runHostGit, type HostRepo } from "./host-git.js";
+import { freshWorktreeRepo, targetRepo } from "./target-repo.js";
 import { listTreeDir, treeHasDirectory } from "./tree-read.js";
-
-// ---------------------------------------------------------------------------
-// Pure utility functions (no BC dependencies)
-// ---------------------------------------------------------------------------
 
 export interface WorkdirInfo {
   readonly workDir: string;
@@ -22,12 +16,22 @@ export interface WorkdirInfo {
 class WorkspaceError extends Error {
   constructor(
     public readonly operation: string,
-    public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskId?: string },
+    public readonly context: { readonly targetPath?: string; readonly workDir?: string; readonly taskBranch?: string },
     cause?: unknown,
   ) {
     super(`workspace ${operation} failed: ${cause === undefined ? "no cause given" : describeErrorChain(cause)}`, { cause });
     this.name = "WorkspaceError";
   }
+}
+
+/** execFile's rejection carries the child's stderr as a string; anything else carries none. */
+function stderrOf(e: unknown): string {
+  return typeof e === "object" && e !== null && "stderr" in e && typeof e.stderr === "string" ? e.stderr : "";
+}
+
+/** execFile's rejection carries the child's exit status as a number `code`; a spawn failure's is a string. */
+function exitCodeOf(e: unknown): number | null {
+  return typeof e === "object" && e !== null && "code" in e && typeof e.code === "number" ? e.code : null;
 }
 
 /** The directory a branch's worktree is created at under `base`. */
@@ -48,6 +52,10 @@ export async function clearWorktreeSlot(base: string, targetProjectPath: string,
   await runHostGit(targetRepo(targetProjectPath), ["worktree", "prune"]);
 }
 
+/**
+ * A fresh worktree of `taskBranch`, created from main under `base`, the workdir base: the target
+ * must lie inside it (assertValidTargetProjectPath).
+ */
 export async function createWorkdir(
   base: string,
   targetProjectPath: string,
@@ -55,7 +63,7 @@ export async function createWorkdir(
 ): Promise<WorkdirInfo> {
   // A fresh target's first commit is staged in its main checkout: two first dispatches, or one
   // racing a finalize, must not share that index.
-  await withTargetCheckout(targetProjectPath, `the git init before ${taskBranch}'s worktree`, () => ensureTargetGitInit(targetProjectPath));
+  await withTargetCheckout(targetProjectPath, `the git init before ${taskBranch}'s worktree`, () => ensureTargetGitInit(targetProjectPath, base));
   await mkdir(base, { recursive: true });
   const workDir = workdirOf(base, taskBranch);
   await clearWorktreeSlot(base, targetProjectPath, taskBranch);
@@ -82,34 +90,29 @@ async function worktreeWithIdentity(targetProjectPath: string, workDir: string):
 }
 
 /**
- * The worktree of a task whose branch already exists, checked out as it is. When the branch
- * conflicts with main (`conflict`, conflictWithMain), main is merged into it and the merge left
- * staged with the conflicts in the files: re-dispatching the branch unchanged would only conflict
- * again (w12b D2). Otherwise main's newer work is merged into it as a commit (mergeMainIntoBranch,
- * P6): the attempt works on the tree its merge will be verified as. A merge that cannot be prepared
- * removes the worktree and throws ConflictRetryUnprepared.
+ * The worktree of a branch that already exists, checked out as it is, then made ready by `prepare`
+ * before anything else touches it (the caller's merge of main into it). A `prepare` that throws
+ * removes the worktree, and its error is rethrown as it is.
  */
 export async function createWorkdirForRetry(
   base: string,
   targetProjectPath: string,
-  taskId: string,
-  conflict: MainConflict | null,
+  taskBranch: string,
+  prepare: (repo: HostRepo) => Promise<unknown>,
 ): Promise<WorkdirInfo> {
   await mkdir(base, { recursive: true });
-  const taskBranch = taskBranchName(taskId);
   const workDir = workdirOf(base, taskBranch);
   await clearWorktreeSlot(base, targetProjectPath, taskBranch);
 
   try {
     await runHostGit(targetRepo(targetProjectPath), ["worktree", "add", workDir, taskBranch]);
   } catch (e) {
-    throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir, taskId }, e);
+    throw new WorkspaceError("createWorktreeRetry", { targetPath: targetProjectPath, workDir, taskBranch }, e);
   }
 
   const repo = await worktreeWithIdentity(targetProjectPath, workDir);
   try {
-    if (conflict !== null) await startMainMerge(repo, taskId, conflict);
-    else await mergeMainIntoBranch(repo, taskId);
+    await prepare(repo);
   } catch (e) {
     await removeWorktree(targetProjectPath, workDir);
     throw e;
@@ -142,6 +145,21 @@ export async function getChangedFiles(repo: HostRepo): Promise<string[]> {
     .map((line) => line.slice(3).trim());
 }
 
+/**
+ * Whether the checkout holds a staged merge (MERGE_HEAD). Asked of git rather than of the
+ * filesystem: Z0 reads a target by path only through tree-read.ts. `rev-parse -q --verify` exits 1
+ * with no output for a missing ref; any other failure is no answer and throws.
+ */
+export async function mergeInProgress(repo: HostRepo): Promise<boolean> {
+  try {
+    await runHostGit(repo, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+    return true;
+  } catch (e) {
+    if (exitCodeOf(e) === 1 && stderrOf(e).trim() === "") return false;
+    throw e;
+  }
+}
+
 async function hasGitCommits(dir: string): Promise<boolean> {
   try {
     await runHostGit(targetRepo(dir), ["rev-parse", "HEAD"]);
@@ -163,13 +181,17 @@ class GitEntryProbeFailed extends Error {
   }
 }
 
+function errnoOf(err: unknown): string | undefined {
+  return typeof err === "object" && err !== null && "code" in err && typeof err.code === "string" ? err.code : undefined;
+}
+
 /** Only ENOENT and ENOTDIR mean "no .git"; any other failure is unknown and throws. */
 async function hasGitEntry(dir: string): Promise<boolean> {
   try {
     await access(join(dir, ".git"));
     return true;
   } catch (err: unknown) {
-    const code = typeof err === "object" && err !== null && "code" in err && typeof err.code === "string" ? err.code : undefined;
+    const code = errnoOf(err);
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw new GitEntryProbeFailed(dir, code, err);
   }
@@ -178,7 +200,7 @@ async function hasGitEntry(dir: string): Promise<boolean> {
 /**
  * Idempotent `git init` + identity config for `targetProjectPath` if it
  * doesn't already have a `.git`. Initializes on branch `main` explicitly —
- * the task-branch merge queue (merge.ts) always branches from and merges
+ * the task-branch merge queue always branches from and merges
  * into `main` by name, which plain `git init` would otherwise name `master`.
  */
 async function ensureGitInitialized(targetProjectPath: string): Promise<void> {
@@ -253,7 +275,7 @@ export async function commitAllChanges(repo: HostRepo, message: string): Promise
 export type PartialCommitOutcome =
   | { readonly committed: true; readonly filesCount: number }
   | { readonly committed: false; readonly reason: "no-changes" }
-  /** Main was merged into the worktree for this attempt (startMainMerge) and its conflicts may still hold markers. */
+  /** Main was merged into the worktree for this attempt and its conflicts may still hold markers. */
   | { readonly committed: false; readonly reason: "merge-in-progress" }
   | { readonly committed: false; readonly reason: "git-error"; readonly message: string };
 
@@ -367,10 +389,13 @@ export async function buildFileTree(
   return paths.join("\n");
 }
 
-export async function ensureTargetGitInit(targetProjectPath: string): Promise<void> {
-  // GIT-SAFETY (path minting): refuse before creating/initialising anything
-  // inside the repo or under a git working tree (defense in depth).
-  await assertValidTargetProjectPath(targetProjectPath);
+/**
+ * Creates the target if it is missing and makes it a repository with a first commit on main. The
+ * path is checked against `workdirBase` first (assertValidTargetProjectPath): nothing is created or
+ * initialised outside Ashara's own file area.
+ */
+export async function ensureTargetGitInit(targetProjectPath: string, workdirBase: string): Promise<void> {
+  await assertValidTargetProjectPath(targetProjectPath, workdirBase);
   await mkdir(targetProjectPath, { recursive: true });
   await ensureGitInitialized(targetProjectPath);
 
@@ -384,55 +409,6 @@ export async function ensureTargetGitInit(targetProjectPath: string): Promise<vo
   }
 }
 
-async function resolveAsharaRepoRoot(): Promise<string> {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  try {
-    const { stdout } = await runOwnRepoGit(moduleDir, ["rev-parse", "--show-toplevel"]);
-    return await realpath(stdout.trim());
-  } catch (err) {
-    // Fail closed: if the repo root can't be determined, refuse rather than
-    // proceed as if the target were safe.
-    throw new Error(
-      `could not determine the Ashara repository root (git rev-parse failed) from "${moduleDir}": ${describeErrorChain(err)}`,
-    );
-  }
-}
-
-// `relative(from, to)` yields "" when the two paths are equal, and a value
-// that neither starts with ".." nor is absolute exactly when `to` is `from`
-// or a descendant of `from`. So `isInsideOrEqual(relative(a, b))` is true iff
-// `b` is inside or equal to `a`.
-function isInsideOrEqual(rel: string): boolean {
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-/**
- * Describes how `canonical` violates the Ashara-root boundary relative to
- * `asharaRoot` — "equals", "contains" (canonical is an ancestor of the repo
- * root), or "is inside" (canonical is a descendant) — or `null` if there is
- * no violation. Used by the path-minting guard below (ADR-032 §6).
- */
-function describeAsharaRootViolation(canonical: string, asharaRoot: string): string | null {
-  const relRootToTarget = relative(asharaRoot, canonical);
-  const relTargetToRoot = relative(canonical, asharaRoot);
-  const targetInsideOrEqualsRoot = isInsideOrEqual(relRootToTarget);
-  const targetContainsRoot = isInsideOrEqual(relTargetToRoot);
-
-  if (!targetInsideOrEqualsRoot && !targetContainsRoot) return null;
-  return relRootToTarget === "" ? "equals" : targetContainsRoot ? "contains" : "is inside";
-}
-
-// ---------------------------------------------------------------------------
-// GIT-SAFETY (path minting): a generated target project must never live inside
-// the Ashara repo, and its PARENT directory must not sit inside any git
-// working tree. Generated projects belong in standalone locations (e.g.
-// /tmp/ashara-work/projects/<uuid>) whose parent is not a git repo. This is
-// enforced at the path-MINTING boundary (where a target path is chosen or
-// loaded from the DB). The target growing its OWN .git after
-// ensureTargetGitInit is fine — the parent-chain check is about creation
-// time, before any init.
-// ---------------------------------------------------------------------------
-
 /** A refused target workspace: the orchestrator blocks the project's item on it before dispatch. */
 export class InvalidTargetProjectPath extends Error {
   constructor(
@@ -444,64 +420,80 @@ export class InvalidTargetProjectPath extends Error {
   }
 }
 
-// Walk startDir and its ancestors looking for a `.git` entry (dir or file).
-// Returns the directory that holds the `.git`, or null if none up to the
-// filesystem root.
-async function findGitWorkingTreeAncestor(startDir: string): Promise<string | null> {
-  let current = startDir;
-  for (;;) {
-    if (await hasGitEntry(current)) return current;
-    const parent = dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
-}
-
-export async function assertValidTargetProjectPath(targetProjectPath: string): Promise<void> {
+/**
+ * Discipline B: a target workspace is used only strictly inside the workdir base, Ashara's own
+ * file area. Both paths are canonicalized first (the realpath of the nearest existing ancestor),
+ * so a symbolic link on the way is followed before the prefix check: a link that leads out of the
+ * base is refused like any other path outside it. A path that cannot be canonicalized is refused
+ * too (fail-closed). The database is a trust boundary, so a stored path is checked like a minted one.
+ */
+export async function assertValidTargetProjectPath(targetProjectPath: string, workdirBase: string): Promise<void> {
   let canonical: string;
+  let base: string;
   try {
     canonical = await canonicalizeAllowingMissing(targetProjectPath);
+    base = await canonicalizeAllowingMissing(workdirBase);
   } catch (err) {
-    throw new InvalidTargetProjectPath(
-      targetProjectPath,
-      `path could not be canonicalized (fail-closed): ${describeErrorChain(err)}`,
-    );
+    throw new InvalidTargetProjectPath(targetProjectPath, `the path or the workdir base could not be canonicalized (fail-closed): ${describeErrorChain(err)}`);
   }
-
-  let asharaRoot: string;
-  try {
-    asharaRoot = await resolveAsharaRepoRoot();
-  } catch (err) {
-    throw new InvalidTargetProjectPath(
-      canonical,
-      `could not resolve the Ashara repository root (fail-closed): ${describeErrorChain(err)}`,
-    );
-  }
-
-  // 1. Must not equal, contain, or be inside the Ashara repo root.
-  const relation = describeAsharaRootViolation(canonical, asharaRoot);
-  if (relation !== null) {
-    throw new InvalidTargetProjectPath(
-      canonical,
-      `path ${relation} the Ashara repository root (${asharaRoot}); generated projects must live in a standalone location`,
-    );
-  }
-
-  // 2. The PARENT chain must not sit inside any git working tree.
-  let gitAncestor: string | null;
-  try {
-    gitAncestor = await findGitWorkingTreeAncestor(dirname(canonical));
-  } catch (err) {
-    throw new InvalidTargetProjectPath(
-      canonical,
-      `parent git-worktree inspection failed (fail-closed): ${describeErrorChain(err)}`,
-    );
-  }
-  if (gitAncestor !== null) {
-    throw new InvalidTargetProjectPath(
-      canonical,
-      `parent directory is inside a git working tree (found .git at "${gitAncestor}"); generated projects must be created outside any git repo`,
-    );
+  const fromBase = relative(base, canonical);
+  if (fromBase === "" || fromBase === ".." || fromBase.startsWith(`..${sep}`) || isAbsolute(fromBase)) {
+    throw new InvalidTargetProjectPath(canonical, `the path is not inside the workdir base ${base}; every target workspace lives under it`);
   }
 }
 
+/**
+ * Worktree directories are named after their branch (workdirOf): a task's `task/<id>` branch is
+ * `task-<id>` under the workdir base. Only directories with this prefix are the sweep's to delete;
+ * every other entry (projects/, records/, checkouts/) is left alone by construction.
+ */
+const TASK_WORKTREE_PREFIX = "task-";
+
+/** What the startup sweep of task worktrees did: how many it removed, or why it could not run. */
+export type WorktreeSweep =
+  | { readonly kind: "swept"; readonly removed: number }
+  /** The workdir base does not exist yet: no worktree was ever created, so there is nothing to clean. */
+  | { readonly kind: "no-workdir-base" }
+  | { readonly kind: "failed"; readonly step: string; readonly error: unknown };
+
+/**
+ * Startup (Discipline B): removes the task worktrees a previous process left whose task is no
+ * longer active. `activeTaskIds` names the tasks whose worktree is kept; it is read only when a
+ * task worktree is present. One directory that cannot be removed is logged and the rest are
+ * still swept.
+ */
+export async function sweepOrphanedWorktrees(workdirBase: string, activeTaskIds: () => Promise<readonly string[]>): Promise<WorktreeSweep> {
+  let names: string[];
+  try {
+    names = (await readdir(workdirBase, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch (err) {
+    if (errnoOf(err) === "ENOENT") {
+      console.log(`[worktree-sweep] workdir base ${workdirBase} does not exist yet; no task worktree to clean`);
+      return { kind: "no-workdir-base" };
+    }
+    console.warn(`[worktree-sweep] the workdir base ${workdirBase} could not be listed; no worktree was cleaned:`, err);
+    return { kind: "failed", step: "list the workdir base", error: err };
+  }
+  const taskDirs = names.filter((d) => d.startsWith(TASK_WORKTREE_PREFIX)).map((d) => ({ dirName: d, taskId: d.slice(TASK_WORKTREE_PREFIX.length) }));
+  if (taskDirs.length === 0) return { kind: "swept", removed: 0 };
+
+  let active: Set<string>;
+  try {
+    active = new Set(await activeTaskIds());
+  } catch (err) {
+    console.warn("[worktree-sweep] the active tasks could not be read; no worktree was cleaned:", err);
+    return { kind: "failed", step: "read the active tasks", error: err };
+  }
+  let removed = 0;
+  for (const { dirName, taskId } of taskDirs) {
+    if (active.has(taskId)) continue;
+    try {
+      await rm(join(workdirBase, dirName), { recursive: true, force: true });
+      removed += 1;
+    } catch (err) {
+      console.warn(`[worktree-sweep] failed to remove orphaned worktree ${dirName}:`, err);
+    }
+  }
+  console.log(`[worktree-sweep] removed ${removed} orphaned task worktree(s)`);
+  return { kind: "swept", removed };
+}

@@ -19,6 +19,8 @@ interface ParkedExitDeps {
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   /** `get` names the target whose main an orphan_unreconciled task's merge is read from. */
   readonly projects: { listActiveIds(): Promise<ProjectId[]> } & TargetPathSource;
+  /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
+  readonly workdirBase: string;
 }
 
 /**
@@ -95,7 +97,7 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
 async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   let merge: string | null;
   try {
-    merge = await mergeOnMainOf(deps.projects, item);
+    merge = await mergeOnMainOf(deps.projects, deps.workdirBase, item);
   } catch (err) {
     console.warn(`[parked-exits] task ${item.id}: main still cannot be read for its merge; it stays Blocked:`, err);
     return false;

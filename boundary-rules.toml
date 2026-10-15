@@ -11,13 +11,15 @@
 allow = []
 
 [orchestrator]
-# planning + development + engagement reachable ONLY through acl/ (enforced by restrict below)
+# planning + development + engagement + organization + workplace reachable ONLY through acl/ (enforced by restrict below)
 # db is infrastructure, not a BC boundary
-allow = ["shared", "db", "planning", "development", "engagement", "organization"]
+# ADR-075 context map: Delivery reads Workplace's Outcome, an attempt's claim.
+allow = ["shared", "db", "planning", "development", "engagement", "organization", "workplace"]
 restrict.planning = ["src/acl/*.ts"]
 restrict.development = ["src/acl/*.ts"]
 restrict.engagement = ["src/acl/*.ts"]
 restrict.organization = ["src/acl/*.ts"]
+restrict.workplace = ["src/acl/*.ts"]
 
 [planning]
 # ADR-075 context map: Organization is upstream of Delivery (who owns a WorkKind), and Engagement

@@ -1,7 +1,7 @@
+import { buildFileTree } from "@ashara/execution-infra";
 import { describeErrorChain } from "@ashara/shared";
 import { EMPTY_WORKDIR_CONTEXT_MAP } from "./brief-assembly.js";
 import { readManifestContext } from "./dispatch-utils.js";
-import { buildFileTree } from "./workspace.js";
 
 /**
  * Renders what can be OBSERVED about the target tree. An empty tree returns an

@@ -166,6 +166,7 @@ export class CoreLoop {
       workItemRepo: deps.workItemRepo,
       eventStore: deps.eventStore,
       projects: deps.projectRepo,
+      workdirBase: deps.config.workdirBase,
     });
 
     // A project with every task settled and a goal task done is swept on main (no LLM call): Accepted
@@ -179,7 +180,7 @@ export class CoreLoop {
     const weights = await PlanningService.unlockWeights(deps.workItemRepo, eligible);
     const batch = PlanningService.select(eligible, deps.config.maxBatchSize, weights);
 
-    // Each task gets its own worktree (workspace.ts creates per-task branches),
+    // Each task gets its own worktree (execution-infra's worktree.ts creates per-task branches),
     // so concurrent execution is safe at the process boundary. Every LLM call a
     // task makes is admitted by the spend cap; a refused call ends that task's
     // attempt and returns the item to Pending: a project refusal has already

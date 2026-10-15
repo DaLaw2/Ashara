@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { ProjectBlockCause, StoredBlockedReason, WorkItemId } from "@ashara/shared";
 import { InvalidStatusTransition, createWorkItemId, parseProjectId, parseWorkItemJsonb } from "@ashara/shared";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import { startWorkItem, takeEvents } from "./acl/planning-acl.js";
 import type { WorkItem, WorkItemRepository } from "./acl/planning-acl.js";
+import { toRecordedOutcome } from "./acl/workplace-acl.js";
+import type { Outcome } from "./acl/workplace-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps } from "./types.js";
 import { processTask } from "./execution.js";
@@ -18,18 +19,14 @@ const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "
 // like the same row.
 const ITEM_ID: WorkItemId = createWorkItemId();
 const MERGE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
-const COMPLETED_OUTPUT: AgentOutputJson = {
-  status: "done",
-  summary: "done",
-  findings: [],
-  error: null,
-  error_detail: null,
-  total_tokens: { input: 1, output: 1 },
-  total_cost: 0,
-  cost_measured: true,
-  turn_count: 1,
-  finish_reason: "completed",
+const OUTCOME_BASE = {
+  turnsUsed: 1,
+  cost: { measured: true as const, totalUsd: 0, turns: 1 },
+  lastToolCall: null,
+  promptDigest: "0".repeat(64),
+  detail: "finished done",
 };
+const COMPLETED_OUTCOME: Outcome = { ...OUTCOME_BASE, kind: "finished", status: "done", summary: "done", blockedReason: null, statement: null };
 
 const targets: string[] = [];
 afterAll(() => {
@@ -91,7 +88,8 @@ function coreLoopDeps(
   parts: Pick<CoreLoopDeps, "workItemRepo" | "developmentService"> & Partial<Omit<CoreLoopDeps, "eventLogger">>,
 ): CoreLoopDeps {
   return {
-    config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-workdir" },
+    // Every target here is made under the temporary directory.
+    config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
     projectRepo: {
@@ -197,14 +195,14 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
               status: agentOutcome,
               delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
               detail: "task completed and verified successfully",
-              output: COMPLETED_OUTPUT,
+              outcome: COMPLETED_OUTCOME,
               sessionId: "test-session",
               attempt: 1,
             }
           : {
               status: agentOutcome,
               detail: "agent hit turn limit",
-              output: null,
+              outcome: null,
               sessionId: "test-session",
               attempt: 1,
             },
@@ -334,7 +332,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     fault: "substrate",
     unavailable: "podman",
     detail: "execution substrate \"podman\" unavailable; no agent ran: podman binary not found on PATH",
-    output: null,
+    outcome: null,
     sessionId: "test-session",
     attempt: 1,
     errorEnvelope: { outcome: "blocked", summary: "podman unavailable", chain: { boundary: "development", operation: "provision", message: "podman unavailable", timestamp: new Date().toISOString() } },
@@ -486,7 +484,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       fault: "ashara",
       unavailable: "host git (add of the task worktree)",
       detail,
-      output: null,
+      outcome: null,
       sessionId: "test-session",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: detail, chain: { boundary: "development", operation: "commitWork", message: detail, timestamp: new Date().toISOString() } },
@@ -565,18 +563,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   // The isolated-worker run's finding 1: the verifier cell refused after the agent's work passed.
   // Before, operation postMergeVerify reached the classifier as TREE_REGRESSION and was abandoned.
   test("a verifier cell refused after the agent ran: an infrastructure fault, never the failure router", async () => {
-    const output: AgentOutputJson = {
-      status: "done",
-      summary: "wrote greet.sh",
-      findings: [],
-      error: null,
-      error_detail: null,
-      total_tokens: { input: 100, output: 10 },
-      total_cost: 0.0006,
-      cost_measured: true,
-      turn_count: 4,
-      finish_reason: "completed",
-    };
+    const outcome: Outcome = { ...COMPLETED_OUTCOME, summary: "wrote greet.sh", turnsUsed: 4, cost: { measured: true, totalUsd: 0.0006, turns: 4 } };
     const detail =
       "environment failed at stage postMergeVerify (MountPathRejected): Mount of \"/x/target\" refused: it is not strictly inside the mount root; " +
       "task t blocked, the agent's work is kept on the task branch";
@@ -585,14 +572,14 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       fault: "substrate",
       unavailable: "verifier cell mount (/x/target)",
       detail,
-      output,
+      outcome,
       sessionId: "test-session",
       attempt: 1,
       errorEnvelope: {
         outcome: "blocked",
         summary: detail,
         chain: { boundary: "development", operation: "postMergeVerify", message: "Post-merge verify could not run", timestamp: new Date().toISOString() },
-        agentOutput: output,
+        agentOutput: { ...toRecordedOutcome(outcome) },
       },
     });
 
@@ -613,7 +600,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       status: "environment_undefined",
       reason: "no environment is defined on main at abc",
       detail,
-      output: null,
+      outcome: null,
       sessionId: "test-session",
       attempt: 1,
       errorEnvelope: {
@@ -647,7 +634,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       rosterRevision: 1,
       reason: "the work item has no owner role",
       detail,
-      output: null,
+      outcome: null,
       sessionId: "test-session",
       attempt: 1,
       errorEnvelope: {
@@ -739,7 +726,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
           checkTaskId: CHECK_ID,
           revision: options.revision,
           detail,
-          output: null,
+          outcome: null,
           sessionId: "test-session",
           attempt: 1,
           errorEnvelope: {
@@ -893,7 +880,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
           reason,
           evidence,
           detail: `check "lists" disputed: ${reason}`,
-          output: { status: "blocked", summary: "disputed", findings: [], error: null, error_detail: null, total_tokens: { input: 0, output: 0 }, total_cost: 0, cost_measured: true, turn_count: 2, finish_reason: "error" },
+          outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "disputed", checkName: "lists", ofTask: whose === "own" ? null : mergedTaskId, reason, evidence },
           sessionId: "test-session",
           attempt: 1,
           errorEnvelope: {
@@ -1051,7 +1038,7 @@ describe("an environment change requested: an environment task is opened and the
           need,
           diff,
           detail,
-          output: { ...COMPLETED_OUTPUT, summary: need },
+          outcome: { ...COMPLETED_OUTCOME, summary: need },
           sessionId: "test-session",
           attempt: 1,
           errorEnvelope: {
@@ -1176,18 +1163,6 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     }
   }
 
-  const output: AgentOutputJson = {
-    status: "blocked",
-    summary: "attempt ended as refused",
-    findings: [],
-    error: null,
-    error_detail: { model: "m", turn_count: 2, last_tool_call: "run_command", message: "refused" },
-    total_tokens: { input: 100, output: 10 },
-    total_cost: 0.001,
-    cost_measured: true,
-    turn_count: 2,
-    finish_reason: "error",
-  };
 
   /** Stands for Finance's UnpricedModel: a refusal no spend cap made. */
   class StubUnpricedModel extends Error {
@@ -1251,8 +1226,8 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         execute: async (task) => {
           attempts.push(task.attempt);
           return scope === "shutdown"
-            ? { status: "interrupted", detail: "attempt interrupted by shutdown after 2 turn(s)", output, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope }
-            : { status: "refused", refusal, detail: `attempt stopped after 2 turn(s): ${refusal.message}`, output, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope };
+            ? { status: "interrupted", detail: "attempt interrupted by shutdown after 2 turn(s)", outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "cancelled", reason: new Error("shutdown") }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope }
+            : { status: "refused", refusal, detail: `attempt stopped after 2 turn(s): ${refusal.message}`, outcome: { ...OUTCOME_BASE, turnsUsed: 2, kind: "refused", error: refusal }, sessionId: "test-session", attempt: task.attempt, errorEnvelope: envelope };
         },
       },
       failedApproachRepo: { record: async () => { approaches++; } },
@@ -1381,7 +1356,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     status: "completed",
     delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
     detail: "task completed and verified successfully",
-    output: COMPLETED_OUTPUT,
+    outcome: COMPLETED_OUTCOME,
     sessionId: "test-session",
     attempt: 1,
   };
@@ -1529,7 +1504,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
   // ADR-074 addendum 2 d71 c: a clean review completes, which releases the plan's implementations.
   test("a clean review of the plan's suites merges nothing and completes the review task", async () => {
     const { deps, stored, writes } = buildMergeDeps(
-      { ...merged, output: null, delivered: { kind: "suites-reviewed", reviewed: ["check-a", "check-b"] } },
+      { ...merged, outcome: null, delivered: { kind: "suites-reviewed", reviewed: ["check-a", "check-b"] } },
       notExercised("recordMergeCommit"),
     );
 
@@ -1617,7 +1592,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
           status: "suite_review_problems",
           problems,
           detail: "the review found 1 problem(s)",
-          output: null,
+          outcome: null,
           sessionId: "test-session",
           attempt: 1,
           errorEnvelope: {

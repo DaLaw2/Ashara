@@ -29,7 +29,7 @@ import {
   CoreLoop,
   ContinuousRunner,
   EventLogger,
-  reconcileOnStartup,
+  reconcileWorkItemsOnStartup,
 } from "@ashara/orchestrator";
 import type { CoreLoopDeps, CycleRunner, TaskLanes } from "@ashara/orchestrator";
 import {
@@ -38,13 +38,7 @@ import {
   Replanner,
   assignmentIntentOf,
 } from "@ashara/planning";
-import {
-  DevelopmentService,
-  SuiteReviewer,
-  canonicalizeAllowingMissing,
-  gitPublicInterface,
-  pruneStaleEnvironmentImages,
-} from "@ashara/development";
+import { DevelopmentService, SuiteReviewer, gitPublicInterface } from "@ashara/development";
 import {
   BlockReports,
   ClientAnswers,
@@ -66,17 +60,23 @@ import type {
   KnowledgeSource,
   ExecutionEventSink,
   ProjectIntentSource,
-  EnvironmentImages,
 } from "@ashara/development";
 import {
   ENVIRONMENT_BUILD_TIMEOUT_MS,
   PodmanSubstrate,
   buildEnvironmentImage,
+  canonicalizeAllowingMissing,
+  cellInstanceFor,
   loadBaseCell,
   pruneEnvironmentImages,
+  pruneStaleEnvironmentImages,
+  reconcileCellsAtStartup,
+  substrateProbe,
+  sweepOrphanedWorktrees,
+  teardownCellsAtShutdown,
   withGitRunner,
 } from "@ashara/execution-infra";
-import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
+import type { EnvironmentImages, GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import {
   buildGateway,
   buildGatewayConfig,
@@ -88,6 +88,7 @@ import {
 import type { LadderAttemptEvent, LanguageModelFactory, LLMGateway, ModelConfig } from "@ashara/llm-gateway";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { SecretStore } from "@ashara/security";
+import { terminalizeOrphanedSessions } from "@ashara/workplace";
 import type { MasterKey } from "@ashara/security";
 import type { Clock, ProjectId } from "@ashara/shared";
 import { contendedWait, parseWorkItemId } from "@ashara/shared";
@@ -96,7 +97,6 @@ import { adaptWorkItemRepo } from "./work-item-adapter.js";
 import { buildApp } from "./app.js";
 import { loadServerConfig } from "./config.js";
 import type { AppDeps } from "./routes.js";
-import { cellInstanceFor, reconcileCellsAtStartup, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
 import {
   ServerStartupRefused,
   loadApiToken,
@@ -533,7 +533,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       // throws, an orphan it could not even block included, refuses the start.
       await reconcileOrRefuse(
         () =>
-          reconcileOnStartup({
+          reconcileWorkItemsOnStartup({
             workItemRepo,
             projects: projectRepo,
             eventStore,
@@ -543,6 +543,14 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
           }),
         `work items in ${redactedDatabaseUrl(databaseUrl)}, workdir ${config.coreLoop.workdirBase}`,
       );
+
+      // Each context reconciles its own resources, in this order. Workplace's sessions after
+      // Delivery's work items: a session a crash left open is Delivery's evidence that a dispatch
+      // never finished. Execution Infrastructure's task worktrees after both, kept for every task
+      // still active once its orphans are settled. Neither refuses the start; each logs its result.
+      await terminalizeOrphanedSessions(devSessionRepo);
+      // Ids only: a row whose jsonb does not parse still keeps its worktree.
+      await sweepOrphanedWorktrees(config.coreLoop.workdirBase, () => workItemRepo.listIdsByStatus(["Pending", "InProgress", "Blocked"]));
 
       // Cells a previous process of this instance leaked, removed before any dispatch.
       await reconcileCellsAtStartup(cellSubstrate, cellInstance);

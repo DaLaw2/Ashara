@@ -167,11 +167,3 @@ export async function snapshotRepository(workTree: string, gitDir: string): Prom
 export async function initHostRepo(path: string): Promise<void> {
   await gitRunner().text({ args: [...HARDENING, "init", "-b", "main", "--", path], cwd: path, env: hostGitEnv() });
 }
-
-/**
- * git in a directory of Ashara's own checkout, never a target's: unhardened and with the process
- * environment, as a developer's own `git` there runs.
- */
-export async function runOwnRepoGit(cwd: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
-  return gitRunner().text({ args, cwd });
-}

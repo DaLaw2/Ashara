@@ -1,5 +1,4 @@
 import type { ProjectId } from "@ashara/shared";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { TaskDescriptor, ExecutionResult } from "./execution-service.js";
 import type { TaskSpec } from "./types.js";
 
@@ -59,47 +58,11 @@ export function buildKnowledgeQueryText(title: string, spec: TaskSpec): string {
 }
 
 /**
- * Persists the agent's findings as knowledge entries of the task's project. The
- * summary and changed files are not stored: git already records them (lessons
- * H3), and a note restating them only crowded the brief.
- */
-export async function storeKnowledge(
-  knowledgeSink: KnowledgeSink,
-  task: TaskDescriptor,
-  output: AgentOutputJson,
-): Promise<void> {
-  // task.epicId is the true walked-up Epic id the orchestrator resolves
-  // (kl-t2/Q5); task.parentId is a fallback for
-  // callers that never set epicId (e.g. tests constructing TaskDescriptor
-  // directly), not a substitute in production.
-  const epicId = task.epicId ?? task.parentId ?? null;
-
-  for (const finding of output.findings) {
-    if (finding.length > 0) {
-      try {
-        await knowledgeSink.storeFinding(
-          task.projectId,
-          task.id,
-          epicId,
-          finding.slice(0, 100),
-          finding,
-          ["agent-finding"],
-        );
-      } catch (e) {
-        console.warn(`[${task.id}] failed to store finding:`, e);
-      }
-    }
-  }
-}
-
-/**
  * Captures a deterministic lesson for a non-completed terminal outcome (kl-t4):
  * `result.detail` already carries the blocking/failure reason (an agent-reported
  * failure/block, a gate/smoke failure, or a verification failure), so no LLM
  * distillation is needed to make it a usable lesson (deferred by story decision).
- * Stored as a
- * `finding` tagged distinctly from `storeKnowledge`'s success-path agent findings
- * so it can be filtered separately. Fail-soft: a write failure is logged and must
+ * Stored as a `finding` tagged `task-failure`, so it can be filtered separately. Fail-soft: a write failure is logged and must
  * never affect the ExecutionResult already being returned to the caller.
  */
 export async function storeFailureKnowledge(

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
+import { targetRepo } from "@ashara/execution-infra";
 import type { Cell } from "@ashara/execution-infra";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { CheckRun } from "@ashara/workplace";
-import { targetRepo } from "./host-git.js";
 import {
   CheckRecorder,
   checkAreaOf,

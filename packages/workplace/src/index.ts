@@ -13,6 +13,8 @@ export {
   formatEnvironmentCommands,
   formatEnvironmentProbe,
 } from "./environment-check.js";
-export type { EnvironmentCheckPort, EnvironmentCheckReport, EnvironmentCommandsRun, EnvironmentTestRun } from "./environment-check.js";
+export type { EnvironmentCheckPort, EnvironmentCommandsRun } from "./environment-check.js";
 export type { Outcome } from "./outcome.js";
-export type { AttemptCellImage, AttemptRecord, AttemptRecordSink } from "./records.js";
+export { toRecordedOutcome } from "./records.js";
+export { ORPHANED_SESSION_RESOLVER, terminalizeOrphanedSessions } from "./session-reconcile.js";
+export type { AttemptRecord, AttemptRecordSink } from "./records.js";

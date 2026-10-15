@@ -1,9 +1,10 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { AttemptCellImage } from "@ashara/execution-infra";
 import type { AgentBrief, AttemptTerminal } from "@ashara/shared";
 import { CONVERSATION_RECORDS_DIR } from "@ashara/shared";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
-import type { AttemptCellImage, AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
+import { toRecordedOutcome } from "@ashara/workplace";
+import type { AttemptRecord, AttemptRecordSink, Outcome } from "@ashara/workplace";
 
 /** Record directory names come from ids; anything else could walk out of workdirBase/records. */
 const RECORD_SEGMENT = /^[A-Za-z0-9._-]{1,128}$/;
@@ -19,19 +20,12 @@ class InvalidRecordPath extends Error {
   }
 }
 
-export interface TokenTally {
-  readonly input: number;
-  readonly output: number;
-}
-
 /**
  * The records of one dispatch, Z0-side under `workdirBase/records/<task>/<session>/`: the brief and
  * the attempt's conversation. Nothing is written into the worktree.
  */
 export class DispatchRecords implements AttemptRecordSink {
   readonly dir: string;
-  private inputTokens = 0;
-  private outputTokens = 0;
 
   constructor(workdirBase: string, taskId: string, sessionId: string) {
     for (const segment of [taskId, sessionId]) {
@@ -48,54 +42,21 @@ export class DispatchRecords implements AttemptRecordSink {
   async append(record: AttemptRecord): Promise<void> {
     await mkdir(this.dir, { recursive: true });
     await appendFile(join(this.dir, "conversation.jsonl"), `${JSON.stringify(record)}\n`);
-    if (record.kind === "turn") {
-      this.inputTokens += record.usage.inputTokens;
-      this.outputTokens += record.usage.outputTokens;
-    }
-  }
-
-  /** Token counts summed over the turns recorded so far. */
-  tokens(): TokenTally {
-    return { input: this.inputTokens, output: this.outputTokens };
   }
 }
 
 /**
- * The M1 adapter (story s-isolated-worker-m1): an attempt's Outcome in the shape the orchestrator's
- * budget and failure routing read today. Only finished(done) is "done"; every other terminal is
- * named in the summary and is never read as success.
+ * How the attempt ended, in one line: a finished attempt's own summary (with its blocked reason),
+ * every other terminal named with its detail. A claim of the agent's, never a verdict.
  */
-export function toAgentOutput(outcome: Outcome, modelId: string, tokens: TokenTally): AgentOutputJson {
-  const cost = outcome.cost;
-  const totalCost = cost.measured ? cost.totalUsd : cost.measuredUsd;
-  const lastToolCall = outcome.lastToolCall?.toolName ?? null;
-  const done = outcome.kind === "finished" && outcome.status === "done";
-  // A refused call stopped the attempt from outside, and a disputed check is the check author's to
-  // answer: in neither did the agent's approach fail.
-  const status: AgentOutputJson["status"] = done
-    ? "done"
-    : outcome.kind === "finished" || outcome.kind === "refused" || outcome.kind === "disputed"
-      ? "blocked"
-      : "failed";
-  const summary =
-    outcome.kind === "finished"
-      ? outcome.status === "blocked"
-        ? `${outcome.summary} (blocked: ${outcome.blockedReason ?? "no reason given"})`
-        : outcome.summary
-      : `attempt ended as ${outcome.kind}: ${outcome.detail}`;
-  const message = outcome.kind === "finished" && outcome.blockedReason !== null ? outcome.blockedReason : outcome.detail;
-  return {
-    status,
-    summary,
-    findings: [],
-    error: status === "failed" ? outcome.detail : null,
-    error_detail: done ? null : { model: modelId, turn_count: outcome.turnsUsed, last_tool_call: lastToolCall, message },
-    total_tokens: tokens,
-    total_cost: totalCost,
-    cost_measured: cost.measured,
-    turn_count: outcome.turnsUsed,
-    finish_reason: outcome.kind === "finished" ? "completed" : outcome.kind === "turn_cap" ? "turn_limit" : "error",
-  };
+export function attemptSummary(outcome: Outcome): string {
+  if (outcome.kind !== "finished") return `attempt ended as ${outcome.kind}: ${outcome.detail}`;
+  return outcome.status === "blocked" ? `${outcome.summary} (blocked: ${outcome.blockedReason ?? "no reason given"})` : outcome.summary;
+}
+
+/** The Outcome as plain data for an error envelope, its error (or cancellation reason) serialized with its chain. */
+export function outcomeRecord(outcome: Outcome): Record<string, unknown> {
+  return { ...toRecordedOutcome(outcome) };
 }
 
 /** An attempt as the session's terminal write records it (migration 046). */

@@ -8,12 +8,10 @@ export { withSessionLifecycle } from "./execution-service.js";
 export { toSessionAttempt } from "./cell-execution.js";
 export { EXECUTION_STATUSES } from "./execution-service.js";
 export type { FaultClass } from "./fault-class.js";
-export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "./workspace.js";
 export { taskMergeOnMain } from "./merge.js";
-export { canonicalizeAllowingMissing } from "./checkout-lock.js";
+/** Delivery has no Execution Infrastructure edge (ADR-075): it checks a target workspace through Quality's merge reader. */
+export { assertValidTargetProjectPath, InvalidTargetProjectPath } from "@ashara/execution-infra";
 export { probeEnvironmentWrite } from "./gates/environment-write-probe.js";
-export { pruneStaleEnvironmentImages } from "./current-environment.js";
-export type { EnvironmentImages } from "./environment-check.js";
 export type { KnowledgeSink, KnowledgeSource } from "./knowledge-writer.js";
 export type { TaskCheckStore } from "./task-checks.js";
 export { SuiteReviewer, gitPublicInterface } from "./suite-review.js";

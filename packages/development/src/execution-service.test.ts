@@ -6,20 +6,19 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
-import { EnvironmentBuildFailed, PodmanSubstrate, environmentVersion } from "@ashara/execution-infra";
+import { EnvironmentBuildFailed, PodmanSubstrate, ensureTargetGitInit, environmentVersion } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ResolvedModel, TurnResult } from "@ashara/llm-gateway";
 import type { AgentBrief } from "@ashara/shared";
 import { createAgentBrief, createWorkItemId, parseProjectId, wrapError, systemClock } from "@ashara/shared";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import type { Outcome } from "@ashara/workplace";
-import { toAgentOutput } from "./cell-execution.js";
+import { attemptSummary, outcomeRecord } from "./cell-execution.js";
 import type { ExecutionResult, SessionStore } from "./execution-service.js";
 import { DevelopmentService, EXECUTION_STATUSES, suitesVerdict, withSessionLifecycle } from "./execution-service.js";
 import { taskBranchName } from "./merge.js";
 import { checkBranchName } from "./task-checks.js";
 import type { CheckSuite, StoredCheckFile, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
-import { ensureTargetGitInit } from "./workspace.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -74,7 +73,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       status,
       reason: "no environment",
       detail: `${status} detail`,
-      output: null,
+      outcome: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "no environment", chain: wrapError("development", "resolveCurrentEnvironment", "no environment") },
@@ -86,7 +85,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       fault: "substrate",
       unavailable: "task cell",
       detail: `${status} detail`,
-      output: null,
+      outcome: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "cell failed", chain: wrapError("development", "agentAttempt", "cell failed") },
@@ -98,7 +97,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       checkTaskId: "check-task",
       revision: 1,
       detail: `${status} detail`,
-      output: null,
+      outcome: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "stale", chain: wrapError("development", "revalidateTaskChecks", "stale") },
@@ -111,7 +110,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       need: "s",
       diff: "",
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null }, "m", { input: 0, output: 0 }),
+      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null },
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "environment change", chain: wrapError("development", "ownershipGate", "environment change") },
@@ -123,7 +122,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       status,
       refusal,
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "refused", error: refusal }, "m", { input: 0, output: 0 }),
+      outcome: { ...base, kind: "refused", error: refusal },
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "refused", chain: wrapError("development", "agentAttempt", refusal) },
@@ -139,7 +138,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       reason: "the check cannot pass",
       evidence: null,
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "disputed", checkName: "greets", ofTask: null, reason: "the check cannot pass", evidence: null }, "m", { input: 0, output: 0 }),
+      outcome: { ...base, kind: "disputed", checkName: "greets", ofTask: null, reason: "the check cannot pass", evidence: null },
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "disputed", chain: wrapError("development", "agentAttempt", "disputed") },
@@ -152,7 +151,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       rosterRevision: 1,
       reason: "the work item has no owner role",
       detail: `${status} detail`,
-      output: null,
+      outcome: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "no owner", chain: wrapError("development", "assignAgent", "no owner") },
@@ -163,7 +162,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       status,
       problems: [{ checkTaskIds: ["check-task"], kind: "contradiction", problem: "p", evidence: "e" }],
       detail: `${status} detail`,
-      output: null,
+      outcome: null,
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "review", chain: wrapError("development", "reviewSuites", "review") },
@@ -174,7 +173,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
       status,
       delivered: { kind: "merged", mergeCommit: "0123456789abcdef0123456789abcdef01234567" },
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null }, "m", { input: 0, output: 0 }),
+      outcome: { ...base, kind: "finished", status: "done", summary: "s", blockedReason: null, statement: null },
       sessionId: "s",
       attempt: 1,
     };
@@ -183,7 +182,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
     return {
       status,
       detail: `${status} detail`,
-      output: toAgentOutput({ ...base, kind: "cancelled", reason: "shutdown" }, "m", { input: 0, output: 0 }),
+      outcome: { ...base, kind: "cancelled", reason: "shutdown" },
       sessionId: "s",
       attempt: 1,
       errorEnvelope: { outcome: "blocked", summary: "interrupted", chain: wrapError("development", "agentAttempt", "shutdown") },
@@ -192,7 +191,7 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
   return {
     status,
     detail: `${status} detail`,
-    output: null,
+    outcome: null,
     sessionId: "s",
     attempt: 1,
   };
@@ -495,9 +494,9 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
   test("a missing podman binary: environment_blocked at the probe; no model, no session, no worktree, no records", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-envblk-")));
     scratch.push(root);
-    const target = join(root, "target");
     const workdirBase = join(root, "work");
-    await mkdir(target);
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
     const missing = join(root, "no-such-podman");
     const { service, probe } = serviceOn(new PodmanSubstrate({ podmanPath: missing, mountRoot: root }), workdirBase);
 
@@ -514,8 +513,8 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(probe.sessions.phases.size).toBe(0);
     // Blocked before the worktree: the target and the workdir base are untouched.
     expect(existsSync(join(target, ".git"))).toBe(false);
-    expect(existsSync(workdirBase)).toBe(false);
-    expect(await readdir(root)).toEqual(["target"]);
+    expect(await readdir(workdirBase)).toEqual(["projects"]);
+    expect(await readdir(root)).toEqual(["work"]);
   });
 
   // s-platform-role-m1 C2: a task after Sprint 0 never falls back to the BaseCell.
@@ -523,10 +522,10 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noenv-")));
     scratch.push(root);
-    const target = join(root, "target");
     const workdirBase = join(root, "work");
-    await mkdir(target);
-    await ensureTargetGitInit(target);
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
+    await ensureTargetGitInit(target, workdirBase);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
     const substrate = new PodmanSubstrate({
       podmanPath: "podman",
@@ -550,7 +549,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
-    expect(existsSync(workdirBase)).toBe(false);
+    expect(await readdir(workdirBase)).toEqual(["projects"]);
     vi.restoreAllMocks();
   });
 
@@ -559,10 +558,10 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-noowner-")));
     scratch.push(root);
-    const target = join(root, "target");
     const workdirBase = join(root, "work");
-    await mkdir(target);
-    await ensureTargetGitInit(target);
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
+    await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
     const substrate = new PodmanSubstrate({
@@ -607,9 +606,10 @@ describe("a task nothing could decide ends before the agent", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nochecks-")));
     scratch.push(root);
-    const target = join(root, "target");
-    await mkdir(target);
-    await ensureTargetGitInit(target);
+    const workdirBase = join(root, "work");
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
+    await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target);
     const info = JSON.stringify({ version: { Version: "5.0.0" }, host: { security: { rootless: true } } });
     const substrate = new PodmanSubstrate({
@@ -620,7 +620,6 @@ describe("a task nothing could decide ends before the agent", () => {
         return { exitCode: 0, signal: null, stdout: info, stdoutCut: null, stderr: "", stderrCut: null, killedByHost: false, stdinError: null, statusReport: null };
       },
     });
-    const workdirBase = join(root, "work");
     const { service, probe } = serviceOn(substrate, workdirBase, undefined, checks);
     const result = await service.execute({ ...someTask(), workKind }, target);
     return { result, probe, workdirBase };
@@ -635,7 +634,7 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
-    expect(existsSync(workdirBase)).toBe(false);
+    expect(await readdir(workdirBase)).toEqual(["projects"]);
   });
 
   // ADR-080 d3 c (development #1): a store that throws is Ashara's own fault, never the task's work.
@@ -655,7 +654,7 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(result.detail).toContain("connection terminated");
     expect(probe.findings).toBe(0);
     expect(probe.modelCalls).toBe(0);
-    expect(existsSync(workdirBase)).toBe(false);
+    expect(await readdir(workdirBase)).toEqual(["projects"]);
   });
 
   test("an environment task's images are pruned when it ends, however it ends, keeping main's version (third run N12)", async () => {
@@ -791,12 +790,12 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     scratch.push(root);
     const mountRoot = join(root, faults.mountRoot ?? ".");
     await mkdir(mountRoot, { recursive: true });
-    const target = join(root, "target");
-    await mkdir(target);
-    await ensureTargetGitInit(target);
+    const workdirBase = join(root, "cells", "work");
+    const target = join(workdirBase, "projects", "target");
+    await mkdir(target, { recursive: true });
+    await ensureTargetGitInit(target, workdirBase);
     await commitEnvironment(target, faults.inputs);
     const mainBefore = await git(target, "rev-parse", "main");
-    const workdirBase = join(root, "cells", "work");
     const started: Array<{ readonly role: Role; readonly image: string | undefined }> = [];
     /** Every `podman run`'s argv, as the substrate built it, but the delivered sweep's. */
     const runs: string[][] = [];
@@ -1028,7 +1027,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     if (result.status !== "refused") return;
     expect(result.refusal).toBe(refusal);
     expect(result.detail).toContain("turn 2");
-    expect(result.output?.status).toBe("blocked");
+    expect(result.outcome?.kind).toBe("refused");
     expect(probe.modelCalls).toBe(2);
     expect(probe.findings).toBe(0);
     expect(events.filter((e) => e.event === "task_refused")).toEqual([expect.objectContaining({ errorClass: "PreCallRefusal" })]);
@@ -1116,7 +1115,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.status, result.detail).toBe("completed");
     if (result.status !== "completed") return;
     expect(result.delivered).toEqual({ kind: "already-delivered", mainCommit: mainBefore });
-    expect(result.output).toBeNull();
+    expect(result.outcome).toBeNull();
     expect(probe.modelCalls).toBe(0);
     expect(events.some((e) => e.event === "agent_launched" || e.event === "task_blocked")).toBe(false);
     expect(events.find((e) => e.event === "delivered_on_main_verify")).toMatchObject({ verdict: "passed", mainCommit: mainBefore });
@@ -1222,7 +1221,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(started.map((s) => s.role)).toEqual(["developer", "ci", "verifier"]);
     expect(events.filter((e) => e.event === "task_checks_run")).toEqual([expect.objectContaining({ run: 1, passed: ["greets"] })]);
     expect(JSON.stringify(probe.requests[1])).toContain('Check \\"greets\\": PASSED');
-    expect(result.output?.summary).toBe("check files in the worktree: 0");
+    expect(result.outcome !== null ? attemptSummary(result.outcome) : null).toBe("check files in the worktree: 0");
   });
 
   // Sprint 0 run D2: a SIGTERM mid-attempt was "failed", and the FailureRouter abandoned the item.
@@ -1515,50 +1514,27 @@ function terminal(kind: FailedKind): Outcome {
   }
 }
 
-// The M1 adapter: only finished(done) may read as done; every other terminal is named.
-describe("toAgentOutput", () => {
-  test("finished(done) is done with the measured cost and the recorded tokens", () => {
-    const output = toAgentOutput({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null, statement: null }, "m", { input: 10, output: 5 });
-    expect(output).toMatchObject({ status: "done", summary: "did it", total_cost: 0.25, cost_measured: true, total_tokens: { input: 10, output: 5 }, finish_reason: "completed", error_detail: null });
+// Delivery reads the Outcome itself; these are only how it is worded and recorded in an envelope.
+describe("attemptSummary and outcomeRecord", () => {
+  test("finished(done) is its summary; finished(blocked) carries the reason", () => {
+    expect(attemptSummary({ ...base, kind: "finished", status: "done", summary: "did it", blockedReason: null, statement: null })).toBe("did it");
+    expect(attemptSummary({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key", statement: null })).toBe(
+      "stuck (blocked: needs a key)",
+    );
   });
 
-  test("finished(blocked) is blocked and carries the reason", () => {
-    const output = toAgentOutput({ ...base, kind: "finished", status: "blocked", summary: "stuck", blockedReason: "needs a key", statement: null }, "m", { input: 0, output: 0 });
-    expect(output.status).toBe("blocked");
-    expect(output.error_detail?.message).toBe("needs a key");
-  });
-
-  test.each(["turn_cap", "wall_clock", "model_stopped_without_finish", "output_truncated", "transport_exhausted", "cancelled", "environment_failure"] as const)(
-    "%s is failed, never done, and names the terminal",
+  test.each(["turn_cap", "wall_clock", "model_stopped_without_finish", "output_truncated", "transport_exhausted", "cancelled", "environment_failure", "refused", "disputed"] as const)(
+    "%s is named with its detail, never worded as a finish",
     (kind) => {
-      const output = toAgentOutput(terminal(kind), "m", { input: 0, output: 0 });
-      expect(output.status).toBe("failed");
-      expect(output.summary).toContain(kind);
-      expect(output.error_detail).toMatchObject({ model: "m", turn_count: 3, last_tool_call: "run_command" });
+      expect(attemptSummary(terminal(kind))).toBe(`attempt ended as ${kind}: why it ended`);
     },
   );
 
-  test.each(["refused", "disputed"] as const)("%s is blocked, never failed or done, and names the terminal", (kind) => {
-    const output = toAgentOutput(terminal(kind), "m", { input: 0, output: 0 });
-    expect(output.status).toBe("blocked");
-    expect(output.summary).toContain(kind);
-  });
-
-  test("an unmeasured attempt reports only the lower bound and says so", () => {
-    const output = toAgentOutput(
-      {
-        ...base,
-        kind: "finished",
-        status: "done",
-        summary: "did it",
-        blockedReason: null,
-        statement: null,
-        cost: { measured: false, measuredUsd: 0.1, unmeasuredTurns: [{ turn: 2, reason: "no usage" }] },
-      },
-      "m",
-      { input: 0, output: 0 },
-    );
-    expect(output).toMatchObject({ total_cost: 0.1, cost_measured: false });
+  test("an error or cancellation reason is recorded with its message, never as an empty object", () => {
+    const record = outcomeRecord(terminal("transport_exhausted"));
+    expect(record).toMatchObject({ kind: "transport_exhausted", turnsUsed: 3, error: expect.objectContaining({ message: "provider down" }) });
+    expect(outcomeRecord(terminal("cancelled"))).toMatchObject({ kind: "cancelled", error: expect.objectContaining({ message: "shutdown" }) });
+    expect(JSON.parse(JSON.stringify(record))).toEqual(record);
   });
 });
 

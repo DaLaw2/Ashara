@@ -1,10 +1,11 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { initHostRepo, runHostGit } from "@ashara/execution-infra";
+import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import { buildContextMap } from "./context-map.js";
-import { targetRepo } from "./host-git.js";
 
 const SECRET = "HOST-ONLY-CONTENT-7f3a";
 
@@ -45,7 +46,7 @@ describe("buildContextMap on a cell-written target", () => {
   });
 
   test("in a git repository the tree is what git lists: its ignore rules apply, links are not followed", async () => {
-    await initHostRepo(target);
+    await promisify(execFile)("git", ["init", "-q", "-b", "main"], { cwd: target });
     await writeFile(join(target, ".gitignore"), "out/\n");
     await mkdir(join(target, "out"));
     await writeFile(join(target, "out", "artifact.bin"), "x");

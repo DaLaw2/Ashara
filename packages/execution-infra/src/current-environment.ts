@@ -1,16 +1,12 @@
-import { describeErrorChain } from "@ashara/shared";
-import type { BuiltEnvironment, EnvironmentDefinition, HostRepo } from "@ashara/execution-infra";
-import {
-  EnvironmentBuildFailed,
-  EnvironmentDefinitionInvalid,
-  EnvironmentVersionUnresolved,
-  environmentVersion,
-  readEnvironmentDefinition,
-  runHostGit,
-} from "@ashara/execution-infra";
 import type { ProjectId } from "@ashara/shared";
-import type { EnvironmentImages, EnvironmentStatementStore } from "./environment-check.js";
-import { targetRepo as hostRepoOf } from "./host-git.js";
+import { describeErrorChain } from "@ashara/shared";
+import type { BuiltEnvironment, EnvironmentBuildRequest, EnvironmentImagePrune } from "./environment-build.js";
+import { environmentVersion, readEnvironmentDefinition } from "./environment.js";
+import type { EnvironmentDefinition } from "./environment.js";
+import { EnvironmentBuildFailed, EnvironmentDefinitionInvalid, EnvironmentVersionUnresolved } from "./errors.js";
+import { runHostGit } from "./host-git.js";
+import type { HostRepo } from "./host-git.js";
+import { targetRepo as hostRepoOf } from "./target-repo.js";
 
 // Every task after Sprint 0 runs in cells built from the project's CURRENT environment version:
 // the build context (recipe and inputs) of environment/environment.toml as committed on main. There is no
@@ -18,6 +14,19 @@ import { targetRepo as hostRepoOf } from "./host-git.js";
 
 const MAIN = "main";
 const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Builds (or reuses) the image of an environment version; the composition root wires buildEnvironmentImage. */
+export interface EnvironmentImages {
+  build(request: EnvironmentBuildRequest): Promise<BuiltEnvironment>;
+  /** Removes the project's images of every version but `keepVersion` that no container uses; only images labelled ashara.managed are touched. */
+  prune(projectId: ProjectId, keepVersion: string): Promise<EnvironmentImagePrune>;
+}
+
+/** The team's statement of the stack, read for the environment version a cell is built from. */
+export interface EnvironmentStatementSource {
+  /** The statement recorded for `version` in the project, or null when none was. */
+  forVersion(projectId: ProjectId, version: string): Promise<string | null>;
+}
 
 /** The project's current environment: its version, the image built from it, and the team's statement. */
 export interface CurrentEnvironment {
@@ -123,7 +132,7 @@ export async function resolveCurrentEnvironment(
   projectId: ProjectId,
   targetRepo: HostRepo,
   images: EnvironmentImages,
-  statements: EnvironmentStatementStore,
+  statements: EnvironmentStatementSource,
 ): Promise<EnvironmentResolution> {
   const undefinedBecause = (reason: string): EnvironmentResolution => ({ kind: "undefined", reason });
 

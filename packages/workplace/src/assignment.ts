@@ -1,8 +1,8 @@
 import { z } from "zod";
+import type { AttemptCellImage } from "@ashara/execution-infra";
 import type { ResolvedModel } from "@ashara/llm-gateway";
 import type { AgentBrief, ProjectId, WorkItemId, WorkKind } from "@ashara/shared";
 import { InvalidAssignment } from "./errors.js";
-import type { AttemptCellImage } from "./records.js";
 
 /** ADR-074 d56: an attempt's wall clock is 20 minutes unless the caller sets its own. */
 const DEFAULT_WALL_CLOCK_MS = 20 * 60 * 1000;

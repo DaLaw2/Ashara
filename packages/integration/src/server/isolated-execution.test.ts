@@ -12,13 +12,12 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, LlmCallRepository, ProjectRepository } from "@ashara/db";
 import { DevelopmentService } from "@ashara/development";
 import type { SessionStore, TaskCheckStore } from "@ashara/development";
-import { PodmanSubstrate, buildEnvironmentImage, loadBaseCell, pruneEnvironmentImages } from "@ashara/execution-infra";
+import { PodmanSubstrate, buildEnvironmentImage, cellInstanceFor, loadBaseCell, pruneEnvironmentImages, reconcileCellsAtStartup } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { createWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { cellInstanceFor, reconcileCellsAtStartup } from "@ashara/server/cells";
 
 // Real podman cells from the BaseCell image, the real recorded gateway writing llm_calls, a mock
 // model: no real LLM call, and no skip (CI rejects skipped tests).
@@ -214,7 +213,7 @@ describe("a task runs on cells end to end", () => {
       );
 
       expect(result.status, result.detail).toBe("completed");
-      expect(result.output).toMatchObject({ status: "done", turn_count: 3, cost_measured: true, total_tokens: { input: 3000, output: 150 } });
+      expect(result.outcome).toMatchObject({ kind: "finished", status: "done", turnsUsed: 3, cost: { measured: true } });
       expect([...sessions.phases.values()]).toEqual(["Completed"]);
 
       // The files the agent wrote in its cell reached the worktree and were merged into main.

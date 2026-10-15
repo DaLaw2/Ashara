@@ -70,7 +70,7 @@ describe("a project whose workspace path is refused", () => {
     const projects = new ProjectRepository(db);
     const client = await new ClientRepository(db).create(NAME);
     const projectId = (await projects.create(NAME, client.id)).id;
-    // A path inside the Ashara repository: the validation refuses it.
+    // A path inside the Ashara repository, outside the workdir base: the validation refuses it.
     await projects.recordWorkspacePath(projectId, join(process.cwd(), "poisoned-target"));
     const itemId = createWorkItemId();
     await new WorkItemRepository(db).create({
@@ -190,7 +190,7 @@ describe("a project whose workspace path is refused", () => {
 
     // An uncharged infrastructure fault (story s-loop-never-stop-m1 W6): back to Pending, no dispatch counted.
     expect(cycle.results).toEqual([
-      expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("Ashara repository root") }),
+      expect.objectContaining({ taskId: itemId, status: "interrupted", detail: expect.stringContaining("not inside the workdir base") }),
     ]);
     const item = await workItems.findById(itemId);
     expect(item).toMatchObject({ status: "Pending", dispatchCount: 0, infrastructureFaults: 1 });

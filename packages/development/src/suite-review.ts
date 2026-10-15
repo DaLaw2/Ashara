@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { runHostGit } from "@ashara/execution-infra";
+import { runHostGit, targetRepo } from "@ashara/execution-infra";
 import { withStructuredLadder } from "@ashara/llm-gateway";
 import type { ContextualLlm, LadderAttemptEvent, StructuredValidation } from "@ashara/llm-gateway";
 import type { ProjectId, StoredTaskSpec, VisionSource, WorkItemId } from "@ashara/shared";
 import { PUBLIC_INTERFACE_FILE, describeErrorChain, parseWorkItemId, visionSourceLine } from "@ashara/shared";
-import { targetRepo } from "./host-git.js";
 import type { TaskChecks } from "./task-checks.js";
 
 // Quality's review of a plan revision's check suites (ADR-074 addendum 2 d71 c; fifth run N20: 36

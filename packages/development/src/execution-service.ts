@@ -1,32 +1,58 @@
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import type { BaseCellReference, BuiltEnvironment, Cell, CellSpec, EnvironmentDefinition, SubstrateInfo } from "@ashara/execution-infra";
+import type {
+  AttemptCellImage,
+  BaseCellReference,
+  BuiltEnvironment,
+  Cell,
+  CellSpec,
+  CheckoutLease,
+  CurrentEnvironment,
+  EnvironmentCheckScope,
+  EnvironmentDefinition,
+  EnvironmentImages,
+  EnvironmentTestRun,
+  PartialCommitOutcome,
+  SubstrateInfo,
+  WorkdirInfo,
+} from "@ashara/execution-infra";
 import {
   CellTeardownFailed,
   ENVIRONMENT_BUILD_TIMEOUT_MS,
   EnvironmentBuildFailed,
   EnvironmentDefinitionInvalid,
   EnvironmentVersionUnresolved,
+  WorktreeCommitFailed,
+  WorktreeCommitIncomplete,
   cellRunBoundMs,
+  cleanupWorkdir,
+  clearWorktreeSlot,
+  commitAllChanges,
+  commitPartialWork,
   createCellBackend,
+  createWorkdir,
+  createWorkdirForRetry,
   buildContextPaths,
+  ensureTargetGitInit,
   environmentVersion,
+  getChangedFiles,
+  pruneStaleEnvironmentImages,
   readEnvironmentDefinition,
   recipePaths,
+  resolveCurrentEnvironment,
+  targetRepo,
+  withTargetCheckout,
 } from "@ashara/execution-infra";
 import { PreCallRefusal } from "@ashara/llm-gateway";
 import type { ContextualTurnLlm, ResolvedModel } from "@ashara/llm-gateway";
 import type { ProjectId, WorkItemId, AgentBrief, Clock, ErrorEnvelope, ErrorLayer, StoredTaskSpec, StoredBlockedReason, WorkKind } from "@ashara/shared";
 import { createSessionId, createAgentBrief, describeErrorChain, parseWorkItemId, wrapError, errorEnvelopeSchema, renderChainForBrief, renderElided } from "@ashara/shared";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type {
   AssignmentRole,
-  AttemptCellImage,
   CheckDefinition,
   CheckDefinitionPort,
   CheckRedRunPreview,
   CheckRunReport,
-  EnvironmentTestRun,
   FoundationProbe,
   Outcome,
   TaskCheckRunPort,
@@ -46,23 +72,18 @@ import {
   runAttempt,
 } from "@ashara/workplace";
 import { formatAcceptanceCriteria, formatTaskSpec } from "./brief-assembly.js";
-import { DispatchRecords, toAgentOutput, toSessionAttempt } from "./cell-execution.js";
+import { DispatchRecords, attemptSummary, outcomeRecord, toSessionAttempt } from "./cell-execution.js";
 import type { SessionAttempt } from "./cell-execution.js";
 import { buildContextMap } from "./context-map.js";
-import { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
-import type { CurrentEnvironment } from "./current-environment.js";
 import { environmentCheckPort, runFoundationBuild, runPostMergeEnvironmentCommands, runPostMergeProbe, runSubstrateGate } from "./environment-check.js";
-import type { EnvironmentCheckScope, EnvironmentImages, EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
+import type { EnvironmentStatementStore, SubstrateGateRun, TestedEnvironment } from "./environment-check.js";
 import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf } from "./fault-class.js";
 import type { EnvironmentError, FaultClass } from "./fault-class.js";
-import { targetRepo } from "./host-git.js";
 import { ProjectIntentUnavailable, loadProjectIntent } from "./project-intent.js";
 import type { ProjectIntentSource } from "./project-intent.js";
 import type { TaskSpec } from "./types.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./gates/finalize.js";
 import type { FinalizeDeps, PostMergeVerdict } from "./gates/finalize.js";
-import { withTargetCheckout } from "./checkout-lock.js";
-import type { CheckoutLease } from "./checkout-lock.js";
 import { branchChangedPaths, checkBranchOwnership } from "./gates/ownership.js";
 import {
   CheckRecorder,
@@ -93,31 +114,19 @@ import {
 } from "./task-checks.js";
 import type { CheckCells, CheckSuite, CompletedTaskChecks, SuiteRun, TaskCheckStore, TaskChecks } from "./task-checks.js";
 import {
-  cleanupWorkdir,
-  clearWorktreeSlot,
-  commitAllChanges,
-  commitPartialWork,
-  createWorkdir,
-  createWorkdirForRetry,
-  ensureTargetGitInit,
-  getChangedFiles,
-  WorktreeCommitFailed,
-  WorktreeCommitIncomplete,
-} from "./workspace.js";
-import type { PartialCommitOutcome, WorkdirInfo } from "./workspace.js";
-import {
   ConflictRetryUnprepared,
   branchExists,
   conflictWithMain,
   discardTaskBranch,
   formatConflictForBrief,
+  mainMergedForRetry,
   stagedConflictMarkers,
   taskBranchName,
 } from "./merge.js";
 import type { MainConflict } from "./merge.js";
 import type { KnowledgeSection, KnowledgeSink, KnowledgeScope, KnowledgeSource } from "./knowledge-writer.js";
 import type { SuiteReviewing } from "./suite-review.js";
-import { buildKnowledgeQueryText, renderKnowledgeContext, storeFailureKnowledge, storeKnowledge } from "./knowledge-writer.js";
+import { buildKnowledgeQueryText, renderKnowledgeContext, storeFailureKnowledge } from "./knowledge-writer.js";
 
 async function pathExists(path: string): Promise<boolean> {
   return access(path).then(
@@ -175,11 +184,11 @@ type EnvironmentStage =
 type AgentWork = "none" | "kept" | "discarded" | "merge-discarded" | "unknown" | { readonly lost: string };
 
 interface AgentPart {
-  readonly output: AgentOutputJson | null;
+  readonly outcome: Outcome | null;
   readonly agentWork: AgentWork;
 }
 
-const NO_AGENT: AgentPart = { output: null, agentWork: "none" };
+const NO_AGENT: AgentPart = { outcome: null, agentWork: "none" };
 
 /** The agent's work as the partial commit left it: stated by what git did, never by the kind of work. */
 function agentWorkOf(partial: PartialCommitOutcome): Exclude<AgentWork, "none" | "discarded"> {
@@ -244,7 +253,7 @@ function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSi
     outcome: "blocked",
     summary: `${failed} at stage ${stage} (${errorClass}): ${block.message}; task ${taskId} blocked, ${kept}`,
     chain: block.chain,
-    ...(block.output !== null ? { agentOutput: block.output } : {}),
+    ...(block.outcome !== null ? { agentOutput: outcomeRecord(block.outcome) } : {}),
   };
   console.warn(`[${taskId}] ${envelope.summary}`);
   eventSink?.emit({ event: "task_blocked", taskId, attempt: task.attempt, stage, errorClass, reason: envelope.summary });
@@ -253,7 +262,7 @@ function environmentBlocked(block: EnvironmentBlock, eventSink: ExecutionEventSi
     fault: block.fault,
     unavailable: block.unavailable,
     detail: envelope.summary,
-    output: block.output,
+    outcome: block.outcome,
     sessionId: block.sessionId,
     attempt: task.attempt,
     errorEnvelope: envelope,
@@ -471,7 +480,7 @@ function failedBeforeAgent(task: DispatchRef, sessionId: string, operation: stri
   return {
     status: "failed",
     detail: envelope.summary,
-    output: null,
+    outcome: null,
     sessionId,
     attempt: task.attempt,
     errorEnvelope: envelope,
@@ -582,7 +591,7 @@ function environmentUndefined(
     status: "environment_undefined",
     reason,
     detail: summary,
-    output: null,
+    outcome: null,
     sessionId,
     attempt: task.attempt,
     errorEnvelope: { outcome: "blocked", summary, chain },
@@ -610,7 +619,7 @@ function ownerUnresolved(
     rosterRevision: unresolved.rosterRevision,
     reason: unresolved.reason,
     detail: summary,
-    output: null,
+    outcome: null,
     sessionId,
     attempt: task.attempt,
     errorEnvelope: { outcome: "blocked", summary, chain },
@@ -784,8 +793,8 @@ interface EnvironmentBlockedResult {
   /** What was unavailable, named for the operator (e.g. "container substrate (podman)"). */
   readonly unavailable: string;
   readonly detail: string;
-  /** null when no agent ran; the attempt's output when a cell failed under it. */
-  readonly output: AgentOutputJson | null;
+  /** null when no agent ran; the attempt's Outcome when a cell failed under it. */
+  readonly outcome: Outcome | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -800,7 +809,7 @@ interface EnvironmentUndefinedResult {
   readonly status: "environment_undefined";
   readonly reason: string;
   readonly detail: string;
-  readonly output: null;
+  readonly outcome: null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -820,7 +829,7 @@ interface RefusedResult {
   readonly refusal: PreCallRefusal;
   readonly detail: string;
   /** null for a review of a plan's suites, whose one structured call ran without an agent. */
-  readonly output: AgentOutputJson | null;
+  readonly outcome: Outcome | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -836,7 +845,7 @@ interface RefusedResult {
 interface InterruptedResult {
   readonly status: "interrupted";
   readonly detail: string;
-  readonly output: AgentOutputJson;
+  readonly outcome: Outcome;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -856,7 +865,7 @@ interface ChecksStaleResult {
   /** The stale revision of the task's checks: how many times they were written. */
   readonly revision: number;
   readonly detail: string;
-  readonly output: null;
+  readonly outcome: null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -886,7 +895,7 @@ interface DisputedResult {
   /** The output of the attempt's last run_checks; null when it never ran them. */
   readonly evidence: string | null;
   readonly detail: string;
-  readonly output: AgentOutputJson;
+  readonly outcome: Outcome;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -910,7 +919,7 @@ interface EnvironmentChangeRequestedResult {
   /** The branch's diff of those files against where it left main; a cut is marked. */
   readonly diff: string;
   readonly detail: string;
-  readonly output: AgentOutputJson;
+  readonly outcome: Outcome;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -927,7 +936,7 @@ interface OwnerUnresolvedResult {
   readonly rosterRevision: number | null;
   readonly reason: string;
   readonly detail: string;
-  readonly output: null;
+  readonly outcome: null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -950,7 +959,7 @@ interface SuiteReviewProblemsResult {
     readonly evidence: string;
   }>;
   readonly detail: string;
-  readonly output: null;
+  readonly outcome: null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope: ErrorEnvelope;
@@ -991,7 +1000,7 @@ export type ExecutionResult =
 interface AgentExecutionResult {
   readonly status: "failed" | "blocked";
   readonly detail: string;
-  readonly output: AgentOutputJson | null;
+  readonly outcome: Outcome | null;
   readonly sessionId: string;
   /**
    * The item's dispatch ordinal (TaskDescriptor.attempt). execute() makes exactly one agent
@@ -1064,7 +1073,7 @@ interface CompletedResult {
   readonly delivered: Delivery;
   readonly detail: string;
   /** null for work found already delivered before any model was called, and for a review of the plan's suites (no agent). */
-  readonly output: AgentOutputJson | null;
+  readonly outcome: Outcome | null;
   readonly sessionId: string;
   readonly attempt: number;
   readonly errorEnvelope?: undefined;
@@ -1184,7 +1193,7 @@ export class DevelopmentService {
   /**
    * `targetProjectPath` is the project's validated target checkout: a project without one is
    * blocked by the caller before dispatch, since only that checkout gives the worktree a git dir
-   * Z0 owns (host-git.ts) and the merge a place to land.
+   * Z0 owns (execution-infra's host-git.ts) and the merge a place to land.
    */
   async execute(task: TaskDescriptor, targetProjectPath: string): Promise<ExecutionResult> {
     try {
@@ -1298,7 +1307,7 @@ export class DevelopmentService {
       if (plan.kind !== "check-authoring") {
         // A fresh target has no repository yet: initialised first (as createWorkdir does), so git
         // is asked of a repository and its answer is never "no repository" read as "no branch".
-        await withTargetCheckout(targetProjectPath, `the git init before task ${task.id}'s branch is looked up`, () => ensureTargetGitInit(targetProjectPath));
+        await withTargetCheckout(targetProjectPath, `the git init before task ${task.id}'s branch is looked up`, () => ensureTargetGitInit(targetProjectPath, base));
         resumesBranch = await branchExists(targetProjectPath, taskBranchName(task.id));
       }
     } catch (e) {
@@ -1359,7 +1368,7 @@ export class DevelopmentService {
         }
       } else {
         workdir = resumesBranch
-          ? await createWorkdirForRetry(base, targetProjectPath, task.id, conflict)
+          ? await createWorkdirForRetry(base, targetProjectPath, taskBranchName(task.id), mainMergedForRetry(task.id, conflict))
           : await createWorkdir(base, targetProjectPath, taskBranchName(task.id));
         work = plan;
       }
@@ -1421,7 +1430,7 @@ export class DevelopmentService {
       // A throw no stage caught: never the agent's work, so blocked under its class, no lesson.
       eventSink?.emit({ event: "error", location: "DevelopmentService:execute", taskId: task.id, attempt: task.attempt, error: describeErrorChain(e) });
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "a throw out of the dispatch");
-      return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { output: null, agentWork: "unknown" }, eventSink);
+      return thrownBlocked(task, sessionId, "runExecution", e, { step: "run the dispatch", cell: "task cell" }, { outcome: null, agentWork: "unknown" }, eventSink);
     } finally {
       await this.teardownCell(task.id, cell);
     }
@@ -1447,7 +1456,7 @@ export class DevelopmentService {
           status: "refused",
           refusal,
           detail: summary,
-          output: null,
+          outcome: null,
           sessionId,
           attempt: task.attempt,
           errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", e, { taskId: task.id }) },
@@ -1466,7 +1475,7 @@ export class DevelopmentService {
         status: "completed",
         delivered: { kind: "suites-reviewed", reviewed: outcome.reviewed },
         detail,
-        output: null,
+        outcome: null,
         sessionId,
         attempt: task.attempt,
       };
@@ -1482,7 +1491,7 @@ export class DevelopmentService {
       status: "suite_review_problems",
       problems: outcome.problems,
       detail: summary,
-      output: null,
+      outcome: null,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: { outcome: "blocked", summary, chain: wrapError("development", "reviewSuites", summary, { taskId: task.id, checkTasks: named }) },
@@ -1761,31 +1770,29 @@ export class DevelopmentService {
       },
     );
     slot.attempt = toSessionAttempt(outcome, staff.model, attemptCellImage(d.environment));
-    const output = toAgentOutput(outcome, staff.model.modelId, d.records.tokens());
     // Observe the workdir BEFORE cleanup: after cleanupWorkdir the worktree is gone.
     const filesChanged = await getChangedFiles(d.repo);
     eventSink?.emit({
       event: "agent_completed",
       taskId: task.id,
       attempt: task.attempt,
-      status: output.status,
       outcome: outcome.kind,
       turns: outcome.turnsUsed,
-      cost: output.total_cost,
-      costMeasured: output.cost_measured,
-      summary: output.summary,
+      cost: outcome.cost.measured ? outcome.cost.totalUsd : outcome.cost.measuredUsd,
+      costMeasured: outcome.cost.measured,
+      summary: attemptSummary(outcome),
       filesChanged,
     });
 
     if (!(outcome.kind === "finished" && outcome.status === "done")) {
-      return this.endWithoutDone(d, outcome, output);
+      return this.endWithoutDone(d, outcome);
     }
 
     // A check may need no file of its own, so a check task is judged by its checks, not its diff.
-    if (d.work.kind === "check-authoring") return this.keepChecks(d, d.work, output);
+    if (d.work.kind === "check-authoring") return this.keepChecks(d, d.work, outcome);
 
     if (d.conflict !== null) {
-      const unresolved = await this.conflictResolution(d, d.conflict, output);
+      const unresolved = await this.conflictResolution(d, d.conflict, outcome);
       if (unresolved !== null) return unresolved;
     }
 
@@ -1794,11 +1801,11 @@ export class DevelopmentService {
     // dispatch (endWithoutDone's partial-work commit) and rightly finish done without editing.
     let workChanged: readonly string[] = filesChanged;
     if (filesChanged.length === 0) {
-      const onBranch = await this.branchWork(d, output);
+      const onBranch = await this.branchWork(d, outcome);
       if (onBranch.kind === "ended") return onBranch.result;
       workChanged = onBranch.paths;
       // Work already on main (ADR-074 addendum 2 d67 b) is decided by its checks on main, never by the word of an implementer that changed nothing.
-      if (workChanged.length === 0 && d.work.kind === "stored-checks") return this.deliveredOnMain(d, d.work.stored, { output, agentWork: "kept" }, outcome.turnsUsed);
+      if (workChanged.length === 0 && d.work.kind === "stored-checks") return this.deliveredOnMain(d, d.work.stored, { outcome, agentWork: "kept" }, outcome.turnsUsed);
       if (workChanged.length === 0) {
         const reason = NO_CHANGE_REASON;
         eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
@@ -1807,26 +1814,26 @@ export class DevelopmentService {
         return {
           status: "failed",
           detail: reason,
-          output,
+          outcome,
           sessionId,
           attempt: task.attempt,
-          errorEnvelope: { outcome: "failed", summary: reason, chain, agentOutput: output },
+          errorEnvelope: { outcome: "failed", summary: reason, chain, agentOutput: outcomeRecord(outcome) },
         };
       }
       eventSink?.emit({ event: "branch_work_found", taskId: task.id, attempt: task.attempt, paths: workChanged });
     } else {
-      const uncommitted = await this.commitWork(d, output);
+      const uncommitted = await this.commitWork(d, outcome);
       if (uncommitted !== null) return uncommitted;
     }
 
     if (d.work.kind === "stored-checks" || d.work.kind === "scaffold") {
-      const refused = await this.ownershipGate(d, output);
+      const refused = await this.ownershipGate(d, outcome);
       if (refused !== null) return refused;
     }
 
-    let finalizeDeps: Omit<FinalizeDeps, "presentedConflict">;
+    let finalizeDeps: Omit<FinalizeDeps, "presentedConflict" | "workdirBase">;
     if (d.work.kind === "substrate") {
-      const gate = await this.substrateGate(d, outcome.statement, output);
+      const gate = await this.substrateGate(d, outcome.statement, outcome);
       if (gate.kind === "ended") return gate.result;
       finalizeDeps = {
         eventSink,
@@ -1850,7 +1857,12 @@ export class DevelopmentService {
       };
     }
 
-    const finalizeResult = await finalizeSuccess({ ...finalizeDeps, presentedConflict: d.conflict }, task, targetProjectPath, task.attempt);
+    const finalizeResult = await finalizeSuccess(
+      { ...finalizeDeps, presentedConflict: d.conflict, workdirBase: this.deps.config.workdirBase },
+      task,
+      targetProjectPath,
+      task.attempt,
+    );
     if (!finalizeResult.success && finalizeResult.fault.class === "substrate") {
       // The merge was aborted and the branch kept: the verifier cell's substrate
       // failed, which is the operator's to fix, not a regression of the tree.
@@ -1861,7 +1873,7 @@ export class DevelopmentService {
         "postMergeVerify",
         finalizeResult.fault.error,
         "verifier cell",
-        { output, agentWork: "kept" },
+        { outcome, agentWork: "kept" },
         eventSink,
         finalizeResult.errorLayer,
       );
@@ -1870,7 +1882,7 @@ export class DevelopmentService {
       // No verdict was reached, so nothing is known of the task's work: blocked for the operator,
       // the merge aborted and the branch kept, never a failure the task is replanned against.
       await cleanupWorkdir(workDir, targetProjectPath);
-      return asharaBlocked(task, sessionId, "postMergeCheckRun", finalizeResult.fault.error, { output, agentWork: "kept" }, eventSink, finalizeResult.errorLayer);
+      return asharaBlocked(task, sessionId, "postMergeCheckRun", finalizeResult.fault.error, { outcome, agentWork: "kept" }, eventSink, finalizeResult.errorLayer);
     }
     if (!finalizeResult.success) {
       const gateChain = finalizeResult.errorLayer;
@@ -1879,7 +1891,7 @@ export class DevelopmentService {
         outcome: "failed",
         summary: `${finalizeResult.failedStep === "merge" ? "merge into main failed" : "post-merge verify failed"} for ${task.id}:\n${finalizeResult.gateFailureContext}`,
         chain: gateChain,
-        agentOutput: output,
+        agentOutput: outcomeRecord(outcome),
       };
       eventSink?.emit({
         event: "gate_failed",
@@ -1891,7 +1903,7 @@ export class DevelopmentService {
       return {
         status: "failed",
         detail: envelope.summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
         errorEnvelope: envelope,
@@ -1906,12 +1918,11 @@ export class DevelopmentService {
       console.log(`[${task.id}] task completed — worktree ${workDir} removed after the merge`);
     }
     eventSink?.emit({ event: "task_completed", taskId: task.id, attempt: task.attempt, result: "completed" });
-    await storeKnowledge(this.deps.knowledgeSink, task, output);
     return {
       status: "completed",
       delivered: { kind: "merged", mergeCommit: finalizeResult.mergeCommit },
       detail: "task completed and verified successfully",
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
     };
@@ -1935,18 +1946,18 @@ export class DevelopmentService {
     const reason = `${NO_CHANGE_REASON}, and its checks do not all pass on main, so its work is not already delivered:\n${onMain.verdict.details}`;
     eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason });
     await cleanupWorkdir(workDir, targetProjectPath);
-    const { output } = agent;
+    const { outcome } = agent;
     return {
       status: "failed",
       detail: reason,
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: {
         outcome: "failed",
         summary: reason,
         chain: wrapError("development", "agentExecution", reason, { taskId: task.id, turnCount }),
-        ...(output === null ? {} : { agentOutput: output }),
+        ...(outcome === null ? {} : { agentOutput: outcomeRecord(outcome) }),
       },
     };
   }
@@ -1982,7 +1993,7 @@ export class DevelopmentService {
     return {
       status: "failed",
       detail: reason,
-      output: null,
+      outcome: null,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: {
@@ -2086,7 +2097,7 @@ export class DevelopmentService {
       status: "completed",
       delivered: { kind: "already-delivered", mainCommit: main },
       detail: `task already delivered on main at ${main}: its checks revision ${stored.revision} and every suite pass there; nothing merged`,
-      output: agent.output,
+      outcome: agent.outcome,
       sessionId,
       attempt: task.attempt,
     };
@@ -2242,7 +2253,7 @@ export class DevelopmentService {
    * conflictMarkersLeft with nothing committed (the merge is discarded with the worktree). Z0's git
    * failing blocks for the operator. Null when the conflict is resolved.
    */
-  private async conflictResolution(d: Dispatch, conflict: MainConflict, output: AgentOutputJson): Promise<ExecutionResult | null> {
+  private async conflictResolution(d: Dispatch, conflict: MainConflict, outcome: Outcome): Promise<ExecutionResult | null> {
     const { task, workDir, targetProjectPath, sessionId } = d;
     let left: string[];
     try {
@@ -2251,7 +2262,7 @@ export class DevelopmentService {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the conflict markers could not be read");
       const fault = new VerificationInfrastructureFault(task.id, "conflict marker read of the task worktree", { cause: e });
       const chain = wrapError("development", "conflictResolution", fault, { taskId: task.id, errorClass: fault.name });
-      return asharaBlocked(task, sessionId, "conflictResolution", fault, { output, agentWork: "merge-discarded" }, this.deps.eventSink, chain);
+      return asharaBlocked(task, sessionId, "conflictResolution", fault, { outcome, agentWork: "merge-discarded" }, this.deps.eventSink, chain);
     }
     this.deps.eventSink?.emit({ event: "merge_conflict_resolution", taskId: task.id, attempt: task.attempt, files: conflict.files, markersLeft: left });
     if (left.length === 0) return null;
@@ -2259,7 +2270,7 @@ export class DevelopmentService {
     const summary = `the conflict of ${task.id} with main is not resolved: conflict markers are left in ${left.join(", ")}; nothing was committed or merged`;
     const chain = wrapError("development", "conflictMarkersLeft", summary, { taskId: task.id, mainCommit: conflict.mainCommit, conflictFiles: conflict.files, markersLeft: left });
     this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary });
-    return { status: "failed", detail: summary, output, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output } };
+    return { status: "failed", detail: summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) } };
   }
 
   /**
@@ -2268,7 +2279,7 @@ export class DevelopmentService {
    * Null when the commit holds all of it. A host git that refuses the commit blocks the task for
    * the operator; changes the commit left behind fail it.
    */
-  private async commitWork(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
+  private async commitWork(d: Dispatch, outcome: Outcome): Promise<ExecutionResult | null> {
     const { task, workDir, targetProjectPath, sessionId } = d;
     try {
       await commitAllChanges(d.repo, `ashara: agent output for task ${task.id}`);
@@ -2277,17 +2288,17 @@ export class DevelopmentService {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the agent's work could not be committed");
       if (!(e instanceof WorktreeCommitIncomplete)) {
         // Z0's git refused to record the work (WorktreeCommitFailed), or anything else failed: never the agent's.
-        return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { output, agentWork: "kept" }, this.deps.eventSink);
+        return thrownBlocked(task, sessionId, "commitWork", e, { step: "commit the agent's work on the task branch", cell: "host git" }, { outcome, agentWork: "kept" }, this.deps.eventSink);
       }
       const chain = wrapError("development", "commitWork", e, { taskId: task.id });
       const envelope: ErrorEnvelope = {
         outcome: "failed",
         summary: `the agent's work on ${task.id} was committed only in part, nothing merged: ${chain.message}`,
         chain,
-        agentOutput: output,
+        agentOutput: outcomeRecord(outcome),
       };
       this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: envelope.summary });
-      return { status: "failed", detail: envelope.summary, output, sessionId, attempt: task.attempt, errorEnvelope: envelope };
+      return { status: "failed", detail: envelope.summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: envelope };
     }
   }
 
@@ -2298,7 +2309,7 @@ export class DevelopmentService {
    */
   private async branchWork(
     d: Dispatch,
-    output: AgentOutputJson,
+    outcome: Outcome,
   ): Promise<{ readonly kind: "paths"; readonly paths: readonly string[] } | { readonly kind: "ended"; readonly result: ExecutionResult }> {
     const { task, workDir, targetProjectPath, sessionId } = d;
     try {
@@ -2309,12 +2320,12 @@ export class DevelopmentService {
       if (environmentFailure !== null) {
         return {
           kind: "ended",
-          result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { output, agentWork: "kept" }, this.deps.eventSink),
+          result: substrateBlocked(task, sessionId, "branchWork", environmentFailure, "host git", { outcome, agentWork: "kept" }, this.deps.eventSink),
         };
       }
       const fault = new VerificationInfrastructureFault(task.id, "task branch diff against main", { cause: e });
       const chain = wrapError("development", "branchWork", fault, { taskId: task.id, errorClass: fault.name });
-      return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { output, agentWork: "kept" }, this.deps.eventSink, chain) };
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "branchWork", fault, { outcome, agentWork: "kept" }, this.deps.eventSink, chain) };
     }
   }
 
@@ -2328,17 +2339,17 @@ export class DevelopmentService {
    * file: failed with the paths and the rule, the branch kept. Nothing is merged either way. Z0's
    * own git failing blocks for the operator. Null when clean.
    */
-  private async ownershipGate(d: Dispatch, output: AgentOutputJson): Promise<ExecutionResult | null> {
+  private async ownershipGate(d: Dispatch, outcome: Outcome): Promise<ExecutionResult | null> {
     const { eventSink } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
     const blockOn = (e: unknown, step: string): ExecutionResult => {
       const environmentFailure = environmentErrorOf(e);
       if (environmentFailure !== null) {
-        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { output, agentWork: "kept" }, eventSink);
+        return substrateBlocked(task, sessionId, "ownershipGate", environmentFailure, "host git", { outcome, agentWork: "kept" }, eventSink);
       }
       const fault = new VerificationInfrastructureFault(task.id, step, { cause: e });
       const chain = wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name });
-      return asharaBlocked(task, sessionId, "ownershipGate", fault, { output, agentWork: "kept" }, eventSink, chain);
+      return asharaBlocked(task, sessionId, "ownershipGate", fault, { outcome, agentWork: "kept" }, eventSink, chain);
     };
     let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
     try {
@@ -2364,7 +2375,7 @@ export class DevelopmentService {
       } catch (e) {
         return blockOn(e, "discard the task branch for an environment change");
       }
-      const need = output.summary.trim() === "" ? "(the implementer's finish summary is empty: it stated no need)" : output.summary;
+      const need = attemptSummary(outcome).trim() === "" ? "(the implementer's finish summary is empty: it stated no need)" : attemptSummary(outcome);
       const chain = wrapError("development", "ownershipGate", verdict.reason, { taskId: task.id, environmentPaths: verdict.paths });
       console.warn(`[${task.id}] ${summary}`);
       eventSink?.emit({ event: "environment_change_requested", taskId: task.id, attempt: task.attempt, paths: verdict.paths, reason: summary });
@@ -2374,10 +2385,10 @@ export class DevelopmentService {
         need,
         diff: verdict.diff,
         detail: summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
-        errorEnvelope: { outcome: "blocked", summary, chain, agentOutput: output },
+        errorEnvelope: { outcome: "blocked", summary, chain, agentOutput: outcomeRecord(outcome) },
       };
     }
     const chain = wrapError("development", "ownershipGate", verdict.reason, {
@@ -2389,10 +2400,10 @@ export class DevelopmentService {
     return {
       status: "failed",
       detail: summary,
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
-      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output },
+      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) },
     };
   }
 
@@ -2404,12 +2415,12 @@ export class DevelopmentService {
    * the gate blocks the task. On a pass the finish statement (the stack statement only, never the
    * summary) is kept on the work item; a done without one fails the task before the gate runs.
    */
-  private async substrateGate(d: Dispatch, statement: string | null, output: AgentOutputJson): Promise<SubstrateGateOutcome> {
+  private async substrateGate(d: Dispatch, statement: string | null, outcome: Outcome): Promise<SubstrateGateOutcome> {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
     const fail = (summary: string, chain: ReturnType<typeof wrapError>): SubstrateGateOutcome => ({
       kind: "ended",
-      result: { status: "failed", detail: summary, output, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output } },
+      result: { status: "failed", detail: summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) } },
     });
     if (statement === null) {
       await cleanupWorkdir(workDir, targetProjectPath);
@@ -2424,7 +2435,7 @@ export class DevelopmentService {
     } catch (e) {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the substrate gate could not run");
       const fault = environmentErrorOf(e) ?? new VerificationInfrastructureFault(task.id, "substrate gate run", { cause: e });
-      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { output, agentWork: "kept" }, eventSink) };
+      return { kind: "ended", result: thrownBlocked(task, sessionId, "substrateGate", fault, { step: "substrate gate run", cell: "CI cell" }, { outcome, agentWork: "kept" }, eventSink) };
     }
 
     const passed = environmentCheckPassed(run.report);
@@ -2442,7 +2453,7 @@ export class DevelopmentService {
       // The gate passed; only Z0's store failed to keep its statement, as recordRebuiltStatement's write.
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the stack statement could not be recorded");
       const fault = new VerificationInfrastructureFault(task.id, `record the environment statement for version ${run.tested.version}`, { cause: e });
-      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { output, agentWork: "kept" }, eventSink) };
+      return { kind: "ended", result: asharaBlocked(task, sessionId, "substrateGate", fault, { outcome, agentWork: "kept" }, eventSink) };
     }
     return { kind: "passed", tested: run.tested };
   }
@@ -2810,7 +2821,7 @@ export class DevelopmentService {
       status: "environment_undefined",
       reason: unbuildable.message,
       detail: summary,
-      output: null,
+      outcome: null,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: {
@@ -3052,7 +3063,7 @@ export class DevelopmentService {
       checkTaskId: stored.checkTaskId,
       revision: stored.revision,
       detail: stale.message,
-      output: null,
+      outcome: null,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: {
@@ -3073,7 +3084,7 @@ export class DevelopmentService {
   /** A check task's work that cannot be kept: failed with the reason, nothing stored, nothing merged. */
   private checksRejected(
     d: Dispatch,
-    output: AgentOutputJson,
+    outcome: Outcome,
     reason: string,
     // open-by-design: what the operator needs beyond the author's reason, per rejection
     operator: Record<string, unknown>,
@@ -3088,10 +3099,10 @@ export class DevelopmentService {
     return {
       status: "failed",
       detail: summary,
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
-      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: output },
+      errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) },
     };
   }
 
@@ -3105,13 +3116,13 @@ export class DevelopmentService {
    * to Quality's task_checks for the implementation task with the foundation as its baseline; the
    * throwaway branch is discarded either way.
    */
-  private async keepChecks(d: Dispatch, work: CheckAuthoring, output: AgentOutputJson): Promise<ExecutionResult> {
+  private async keepChecks(d: Dispatch, work: CheckAuthoring, outcome: Outcome): Promise<ExecutionResult> {
     const { eventSink } = this.deps;
     const { task, sessionId, targetProjectPath } = d;
     const { foundation } = work;
     try {
       const defined = work.recorder.checks();
-      if (defined.length === 0) return this.checksRejected(d, output, "no check was defined with define_check", {});
+      if (defined.length === 0) return this.checksRejected(d, outcome, "no check was defined with define_check", {});
       const harvest = await harvestCheckFiles(
         d.repo,
         task.id,
@@ -3120,7 +3131,7 @@ export class DevelopmentService {
         work.recorder.writtenFiles(),
         checkAreaOf(work.checkedTaskId),
       );
-      if (harvest.kind === "rejected") return this.checksRejected(d, output, harvest.reason, {});
+      if (harvest.kind === "rejected") return this.checksRejected(d, outcome, harvest.reason, {});
       if (harvest.discarded.length > 0) {
         eventSink?.emit({ event: "check_files_discarded", taskId: task.id, attempt: task.attempt, area: checkAreaOf(work.checkedTaskId), paths: harvest.discarded });
       }
@@ -3137,13 +3148,13 @@ export class DevelopmentService {
           harvest.files,
         );
       } catch (e) {
-        return mainRunBlocked(task, sessionId, e, { output, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on the foundation");
+        return mainRunBlocked(task, sessionId, e, { outcome, agentWork: "discarded" }, eventSink, "checkRedRun", "red run on the foundation");
       }
       const atFoundation = { baselineCommit: foundation.commit, foundationTaskId: foundation.taskId };
       if (redRun.kind === "files_refused") {
         return this.checksRejected(
           d,
-          output,
+          outcome,
           `the check files cannot be placed on the foundation (the merge of task ${foundation.taskId}): ${redRun.detail}`,
           atFoundation,
         );
@@ -3151,7 +3162,7 @@ export class DevelopmentService {
       if (redRun.kind === "product_changed") {
         return this.checksRejected(
           d,
-          output,
+          outcome,
           `red run on the foundation (the merge of task ${foundation.taskId}): ${describeProductChange(redRun)}`,
           atFoundation,
         );
@@ -3172,7 +3183,7 @@ export class DevelopmentService {
         report,
       });
       if (problems.length > 0 || setProblem !== null) {
-        return this.checksRejected(d, output, `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`, atFoundation);
+        return this.checksRejected(d, outcome, `red run on the foundation (the merge of task ${foundation.taskId}):\n${report}`, atFoundation);
       }
 
       const revision = await this.deps.checks.append({
@@ -3200,7 +3211,7 @@ export class DevelopmentService {
         detail:
           `${defined.length} check(s) recorded as revision ${revision} for task ${work.checkedTaskId}, red-run on the ` +
           `foundation ${foundation.commit}`,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
       };
@@ -3218,13 +3229,13 @@ export class DevelopmentService {
    * implementer is dispatched. Otherwise null: the blocked result stands, with what the evaluation
    * found. The check task's worktree is already discarded.
    */
-  private async checkedTaskOnMain(d: Dispatch, work: CheckAuthoring, output: AgentOutputJson): Promise<ExecutionResult | { readonly kind: "not-delivered"; readonly why: string }> {
+  private async checkedTaskOnMain(d: Dispatch, work: CheckAuthoring, outcome: Outcome): Promise<ExecutionResult | { readonly kind: "not-delivered"; readonly why: string }> {
     const { task, sessionId } = d;
     if (work.prior === null) {
       return { kind: "not-delivered", why: `task ${work.checkedTaskId} has no stored checks to run on main, so nothing shows it is delivered` };
     }
     const checkedTaskId = parseWorkItemId(work.checkedTaskId, "CheckAuthoring.checkedTaskId");
-    const onMain = await this.mainSuitesRun(d, work.prior, { output, agentWork: "discarded" }, { taskId: checkedTaskId, cleanWorkdir: false });
+    const onMain = await this.mainSuitesRun(d, work.prior, { outcome, agentWork: "discarded" }, { taskId: checkedTaskId, cleanWorkdir: false });
     if (onMain.kind === "blocked") return onMain.result;
     if (!onMain.verdict.passed) {
       return {
@@ -3238,10 +3249,10 @@ export class DevelopmentService {
       status: "completed",
       delivered: { kind: "checked-task-delivered", checkedTaskId: work.checkedTaskId, mainCommit: onMain.main, revision: work.prior.revision },
       detail:
-        `the check author finished blocked (${output.summary}); task ${work.checkedTaskId}'s checks revision ` +
+        `the check author finished blocked (${attemptSummary(outcome)}); task ${work.checkedTaskId}'s checks revision ` +
         `${work.prior.revision}, the environment's test and the regression suite all pass on main ${onMain.main}, so no ` +
         `new revision is written: its delivered sweep closes it`,
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
     };
@@ -3254,7 +3265,7 @@ export class DevelopmentService {
    * with the terminal named. None of them is read as completed on the agent's word: only a check
    * author's `blocked` whose checked task Z0 finds delivered on main completes (checkedTaskOnMain).
    */
-  private async endWithoutDone(d: Dispatch, outcome: Outcome, output: AgentOutputJson): Promise<ExecutionResult> {
+  private async endWithoutDone(d: Dispatch, outcome: Outcome): Promise<ExecutionResult> {
     const { task, staff, workDir, targetProjectPath, sessionId } = d;
     let agentWork: Exclude<AgentWork, "none">;
     if (d.work.kind === "check-authoring") {
@@ -3308,7 +3319,7 @@ export class DevelopmentService {
           message: `the attempt's environment failed (${outcome.source}) after ${outcome.turnsUsed} turn(s): ${outcome.detail}`,
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, source: outcome.source, errorClass }),
           unavailable,
-          output,
+          outcome,
           agentWork,
         },
         this.deps.eventSink,
@@ -3323,14 +3334,14 @@ export class DevelopmentService {
         status: "refused",
         refusal: outcome.error,
         detail: summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
         errorEnvelope: {
           outcome: "blocked",
           summary,
           chain: wrapError("development", "agentAttempt", outcome.error, { ...context, errorClass: outcome.error.name }),
-          agentOutput: output,
+          agentOutput: outcomeRecord(outcome),
         },
       };
     }
@@ -3345,14 +3356,14 @@ export class DevelopmentService {
       return {
         status: "interrupted",
         detail: summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
         errorEnvelope: {
           outcome: "blocked",
           summary,
           chain: wrapError("development", "agentAttempt", outcome.reason, context),
-          agentOutput: output,
+          agentOutput: outcomeRecord(outcome),
         },
       };
     }
@@ -3387,21 +3398,21 @@ export class DevelopmentService {
         reason: outcome.reason,
         evidence: outcome.evidence,
         detail: summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
         errorEnvelope: {
           outcome: "blocked",
           summary,
           chain: wrapError("development", "agentAttempt", outcome.reason, { ...context, checksOf, checkTaskId: stored.checkTaskId, check: check.name }),
-          agentOutput: output,
+          agentOutput: outcomeRecord(outcome),
         },
       };
     }
 
     let notDelivered = "";
     if (outcome.kind === "finished" && d.work.kind === "check-authoring") {
-      const evaluated = await this.checkedTaskOnMain(d, d.work, output);
+      const evaluated = await this.checkedTaskOnMain(d, d.work, outcome);
       if ("status" in evaluated) return evaluated;
       notDelivered = `; Z0 does not find it delivered: ${evaluated.why}`;
     }
@@ -3410,14 +3421,14 @@ export class DevelopmentService {
       const chain = wrapError("development", "agentAttempt", `${outcome.blockedReason ?? outcome.summary}${notDelivered}`, context);
       const envelope: ErrorEnvelope = {
         outcome: "blocked",
-        summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${output.summary}${notDelivered}`,
+        summary: `agent reported blocked after ${outcome.turnsUsed} turns: ${attemptSummary(outcome)}${notDelivered}`,
         chain,
-        agentOutput: output,
+        agentOutput: outcomeRecord(outcome),
       };
       return {
         status: "blocked",
         detail: envelope.summary,
-        output,
+        outcome,
         sessionId,
         attempt: task.attempt,
         errorEnvelope: envelope,
@@ -3431,12 +3442,12 @@ export class DevelopmentService {
       outcome: "failed",
       summary: `attempt ended as ${outcome.kind} after ${outcome.turnsUsed} turn(s) on ${staff.model.provider}/${staff.model.modelId}: ${outcome.detail}`,
       chain,
-      agentOutput: output,
+      agentOutput: outcomeRecord(outcome),
     };
     return {
       status: "failed",
       detail: envelope.summary,
-      output,
+      outcome,
       sessionId,
       attempt: task.attempt,
       errorEnvelope: envelope,

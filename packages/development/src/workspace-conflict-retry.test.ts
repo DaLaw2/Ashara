@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
-import { ConflictRetryUnprepared, conflictWithMain, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
-import { cleanupWorkdir, commitAllChanges, commitPartialWork, createWorkdir, createWorkdirForRetry, ensureTargetGitInit } from "./workspace.js";
+import { cleanupWorkdir, commitAllChanges, commitPartialWork, createWorkdir, createWorkdirForRetry, ensureTargetGitInit } from "@ashara/execution-infra";
+import type { WorkdirInfo } from "@ashara/execution-infra";
+import { ConflictRetryUnprepared, conflictWithMain, mainMergedForRetry, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
+import type { MainConflict } from "./merge.js";
 
 // w12b D2: two tasks of one batch leave the same main and change the same file. Once the first is
 // merged, the second's branch conflicts with main; its retry must start with that conflict in its
@@ -19,6 +21,11 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+/** A retry's worktree of `taskId`'s branch, made ready as a dispatch makes it (mainMergedForRetry). */
+function retryWorkdir(workdirBase: string, target: string, taskId: string, conflict: MainConflict | null): Promise<WorkdirInfo> {
+  return createWorkdirForRetry(workdirBase, target, taskBranchName(taskId), mainMergedForRetry(taskId, conflict));
+}
+
 afterAll(async () => {
   for (const dir of tempDirs) await rm(dir, { recursive: true, force: true }).catch(() => {});
 });
@@ -28,8 +35,8 @@ async function sameBaseConflict(): Promise<{ readonly target: string; readonly w
   const base = await mkdtemp(join(tmpdir(), "ashara-conflict-retry-"));
   tempDirs.push(base);
   const target = join(base, "project");
-  const workdirBase = join(base, "work");
-  await ensureTargetGitInit(target);
+  const workdirBase = base;
+  await ensureTargetGitInit(target, workdirBase);
   await writeFile(join(target, "shared.txt"), "base\n");
   await git(target, "add", "-A");
   await git(target, "commit", "-q", "-m", "base");
@@ -54,7 +61,7 @@ describe("a retry of a branch that conflicts with main", () => {
     expect(conflict).toEqual({ mainCommit: await git(target, "rev-parse", "main"), files: ["shared.txt"] });
     if (conflict === null) return;
 
-    const retry = await createWorkdirForRetry(workdirBase, target, "second", conflict);
+    const retry = await retryWorkdir(workdirBase, target, "second", conflict);
     expect(await readFile(join(retry.workDir, "shared.txt"), "utf8")).toMatch(/^<{7} [^\n]*\nsecond\n={7}\nfirst\n>{7} /);
     expect(await readFile(join(retry.workDir, "first.txt"), "utf8")).toBe("first\n");
     expect(await stagedConflictMarkers(retry.repo, conflict.files)).toEqual(["shared.txt"]);
@@ -83,7 +90,7 @@ describe("a retry of a branch that conflicts with main", () => {
     await git(target, "merge", "-q", "--no-ff", "-m", "merge second", "-X", "theirs", taskBranchName("second"));
     expect(await conflictWithMain(target, "third")).toBeNull();
 
-    const retry = await createWorkdirForRetry(workdirBase, target, "third", null);
+    const retry = await retryWorkdir(workdirBase, target, "third", null);
     expect(await readFile(join(retry.workDir, "second.txt"), "utf8")).toBe("second\n");
     expect(await readFile(join(retry.workDir, "third.txt"), "utf8")).toBe("third\n");
     expect(await git(retry.workDir, "status", "--porcelain")).toBe("");
@@ -92,7 +99,7 @@ describe("a retry of a branch that conflicts with main", () => {
     await cleanupWorkdir(retry.workDir, target);
 
     // Main has not moved since: the branch already holds it, and nothing more is merged.
-    const again = await createWorkdirForRetry(workdirBase, target, "third", null);
+    const again = await retryWorkdir(workdirBase, target, "third", null);
     expect(await git(again.workDir, "rev-parse", "HEAD")).toBe(head);
     await cleanupWorkdir(again.workDir, target);
   });
@@ -103,7 +110,7 @@ describe("a retry of a branch that conflicts with main", () => {
     if (conflict === null) throw new Error("expected a conflict");
 
     const stale = { ...conflict, files: ["other.txt"] };
-    await expect(createWorkdirForRetry(workdirBase, target, "second", stale)).rejects.toBeInstanceOf(ConflictRetryUnprepared);
+    await expect(retryWorkdir(workdirBase, target, "second", stale)).rejects.toBeInstanceOf(ConflictRetryUnprepared);
     expect(await git(target, "worktree", "list", "--porcelain")).not.toContain("task-second");
     await expect(conflictWithMain(target, "no-such-task")).rejects.toBeInstanceOf(ConflictRetryUnprepared);
   });
@@ -115,15 +122,15 @@ describe("a retry of a branch that conflicts with main", () => {
 describe("a worktree slot left by a crash or a faulted cleanup", () => {
   test("a registration whose directory is gone, or a directory left whole, never stops the next worktree", async () => {
     const { target, workdirBase } = await sameBaseConflict();
-    const left = await createWorkdirForRetry(workdirBase, target, "first", null);
+    const left = await retryWorkdir(workdirBase, target, "first", null);
     await rm(left.workDir, { recursive: true, force: true });
 
-    const again = await createWorkdirForRetry(workdirBase, target, "first", null);
+    const again = await retryWorkdir(workdirBase, target, "first", null);
     expect(again.workDir).toBe(left.workDir);
     await writeFile(join(again.workDir, "residue.txt"), "uncommitted\n");
 
     // The directory left whole, still registered.
-    const third = await createWorkdirForRetry(workdirBase, target, "first", null);
+    const third = await retryWorkdir(workdirBase, target, "first", null);
     expect(await readFile(join(third.workDir, "first.txt"), "utf8")).toBe("first\n");
     await expect(readFile(join(third.workDir, "residue.txt"), "utf8")).rejects.toThrow();
     await cleanupWorkdir(third.workDir, target);

@@ -10,7 +10,6 @@ import {
   parseWorkItemId,
 } from "@ashara/shared";
 import type { ErrorEnvelope } from "@ashara/shared";
-import type { AgentOutputJson } from "@ashara/shared/agent-output";
 import type { WorkItem, WorkItemRepository, RawFailureContext } from "./acl/planning-acl.js";
 import {
   PlanningService,
@@ -27,6 +26,8 @@ import {
   requestEnvironmentChange,
 } from "./acl/planning-acl.js";
 import type { FaultClass, TaskDescriptor } from "./acl/development-acl.js";
+import type { Outcome } from "./acl/workplace-acl.js";
+import { toRecordedOutcome } from "./acl/workplace-acl.js";
 import type { TaskResult, CoreLoopDeps, TaskRefusal } from "./types.js";
 import { completedResult, failedResult, blockedResult } from "./types.js";
 import { findEpicId, resolveTargetProjectPath, recordFailedApproach, composeRoutedLesson } from "./task-helpers.js";
@@ -137,6 +138,8 @@ interface ExecutionRoutingDeps {
   readonly checkDisputes: CoreLoopDeps["checkDisputes"];
   readonly suiteReviewFindings: CoreLoopDeps["suiteReviewFindings"];
   readonly environmentOwner: CoreLoopDeps["environmentOwner"];
+  /** The workdir base every target workspace lies in (assertValidTargetProjectPath). */
+  readonly workdirBase: string;
 }
 
 async function executeTask(
@@ -147,7 +150,7 @@ async function executeTask(
   attempt: number,
 ): Promise<{
   result: TaskResult;
-  output: AgentOutputJson | null;
+  outcome: Outcome | null;
   errorEnvelope?: ErrorEnvelope;
   /**
    * The item was routed here: parked at Blocked (a merge unrecorded), given up (an environment
@@ -158,7 +161,7 @@ async function executeTask(
   routedHere: boolean;
 }> {
   // Walked up here (not inside @ashara/development, which has no dependency on
-  // @ashara/planning) so storeKnowledge/storeFailureKnowledge scope
+  // @ashara/planning) so storeFailureKnowledge scopes
   // knowledge_entries by the true Epic, not whatever task.parentId points at
   // (kl-t2/Q5 — the epic_id mis-write that made recentFindings effectively
   // globally scoped across projects).
@@ -191,7 +194,7 @@ async function executeTask(
     await routeAsEnvironmentChange(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -203,7 +206,7 @@ async function executeTask(
     await routeAsStaleChecks(deps, task.id, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -216,7 +219,7 @@ async function executeTask(
     await routeAsDisputed(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -230,7 +233,7 @@ async function executeTask(
     await routeAsSuiteReview(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -243,7 +246,7 @@ async function executeTask(
     await routeAsInfrastructureFault(deps, task, { class: execResult.fault, unavailable: execResult.unavailable, reason: execResult.detail }, "counted");
     return {
       result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -256,7 +259,7 @@ async function executeTask(
     await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail });
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -274,7 +277,7 @@ async function executeTask(
     });
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -287,7 +290,7 @@ async function executeTask(
     await requeueAndRefund(deps, task.id, "a shutdown interrupted its attempt", "execution.routeAsInterrupted");
     return {
       result: { taskId: task.id, status: "interrupted", detail: execResult.detail },
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -315,7 +318,7 @@ async function executeTask(
     await requeueAndRefund(deps, task.id, `a refusal at ${cap}: ${refusal.reason}`, "execution.routeAsRefused");
     return {
       result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: true,
     };
@@ -337,7 +340,7 @@ async function executeTask(
       if (unrecorded !== null) {
         const detail = `${what}, but the merge record could not be written: ${unrecorded}`;
         await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit, mergeKind, reason: detail });
-        return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
+        return { result: blockedResult(task.id, detail), outcome: execResult.outcome, routedHere: true };
       }
       onMain = { mergeCommit, mergeKind, what };
     }
@@ -355,7 +358,7 @@ async function executeTask(
         if (onMain === null) throw e;
         const detail = `${onMain.what} and recorded, but the task could not be Completed: ${describeErrorChain(e)}`;
         await routeAsParked(deps, task.id, { source: "merge_unrecorded", mergeCommit: onMain.mergeCommit, mergeKind: onMain.mergeKind, reason: detail });
-        return { result: blockedResult(task.id, detail), output: execResult.output, routedHere: true };
+        return { result: blockedResult(task.id, detail), outcome: execResult.outcome, routedHere: true };
       }
       console.warn(
         `[${task.id}] completion route rejected (${e.from} -> Completed); ` +
@@ -364,7 +367,7 @@ async function executeTask(
     }
     return {
       result: completedResult(task.id),
-      output: execResult.output,
+      outcome: execResult.outcome,
       routedHere: false,
     };
   }
@@ -374,7 +377,7 @@ async function executeTask(
   if (execResult.status === "blocked") {
     return {
       result: blockedResult(task.id, execResult.detail),
-      output: execResult.output,
+      outcome: execResult.outcome,
       errorEnvelope: execResult.errorEnvelope,
       routedHere: false,
     };
@@ -382,7 +385,7 @@ async function executeTask(
 
   return {
     result: failedResult(task.id, execResult.detail),
-    output: execResult.output,
+    outcome: execResult.outcome,
     errorEnvelope: execResult.errorEnvelope,
     routedHere: false,
   };
@@ -575,7 +578,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
   let last: unknown = null;
   for (let attempt = 1; attempt <= MERGE_RECORD_BACKOFF_MS.length + 1 && merge === undefined; attempt++) {
     try {
-      merge = await mergeOnMainOf(deps.projects, task);
+      merge = await mergeOnMainOf(deps.projects, deps.workdirBase, task);
     } catch (e) {
       last = e;
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
@@ -1118,6 +1121,7 @@ export async function processTask(
     checkDisputes: deps.checkDisputes,
     suiteReviewFindings: deps.suiteReviewFindings,
     environmentOwner: deps.environmentOwner,
+    workdirBase: deps.config.workdirBase,
   };
 
   // Before the dispatch seam nothing of the task ran: a throw here is Ashara's own (a store, the
@@ -1166,7 +1170,7 @@ export async function processTask(
     await routeAsInfrastructureFault(routingDeps, workItem, fault, "counted");
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
   }
-  const { result, output, errorEnvelope: execEnvelope, routedHere } = executed;
+  const { result, outcome, errorEnvelope: execEnvelope, routedHere } = executed;
 
   // The target project path is minted, validated, and recorded on the project
   // inside resolveTargetProjectPath, its single writer.
@@ -1217,7 +1221,8 @@ export async function processTask(
         case "Failed": {
           const failure: RawFailureContext = {
             detail: result.detail,
-            raw: execEnvelope ? { ...execEnvelope } : (output ?? {}),
+            // With no envelope, the attempt's Outcome as plain data: its claim, read as no verdict.
+            raw: execEnvelope ? { ...execEnvelope } : outcome !== null ? { ...toRecordedOutcome(outcome) } : {},
           };
           // dispatchCount was already incremented for this attempt at the dispatch
           // seam above and is not mutated by recoverFailedItem, so it is the exact
@@ -1363,6 +1368,7 @@ export async function handleProcessingError(
             checkDisputes: deps.checkDisputes,
             suiteReviewFindings: deps.suiteReviewFindings,
             environmentOwner: deps.environmentOwner,
+            workdirBase: deps.config.workdirBase,
           };
           await routeAsInfrastructureFault(routingDeps, current, fault, "not-counted");
           break;

@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { HostRepo } from "@ashara/execution-infra";
+import type { HostRepo } from "./host-git.js";
 
 class HostRepoUnresolved extends Error {
   constructor(

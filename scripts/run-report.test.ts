@@ -6,14 +6,13 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, DevSessionRepository, LlmCallRepository, ProjectRepository, readRunEvidence } from "@ashara/db";
 import { toSessionAttempt, withSessionLifecycle } from "@ashara/development";
 import type { SessionStore } from "@ashara/development";
-import type { CellBackend } from "@ashara/execution-infra";
+import type { AttemptCellImage, CellBackend } from "@ashara/execution-infra";
 import { LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
 import { createAgentBrief, createSessionId, parseWorkItemId, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { runAttempt } from "@ashara/workplace";
-import type { AttemptCellImage } from "@ashara/workplace";
 import { formatRunReport } from "./run-report-format.js";
 
 // The trace contract of roadmap M2 exit 7, on a scripted run: the real gateway, the Finance ledger
@@ -190,14 +189,14 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
         },
       );
       slot.attempt = toSessionAttempt(outcome, model, cellImage);
-      return { status: "blocked", detail: "scripted run: nothing is merged", output: null, sessionId: attemptSession, attempt: 1 };
+      return { status: "blocked", detail: "scripted run: nothing is merged", outcome: null, sessionId: attemptSession, attempt: 1 };
     });
     // A session that ended before the model (stale checks, work already on main) records no attempt.
     const idleSession = createSessionId();
     await withSessionLifecycle(store, { sessionId: idleSession, taskId: idleTaskId, brief: { ...brief, taskId: idleTaskId }, environmentVersion: null }, async () => ({
       status: "failed",
       detail: "scripted run: ended before the model",
-      output: null,
+      outcome: null,
       sessionId: idleSession,
       attempt: 1,
     }));
@@ -208,7 +207,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       status: "completed",
       delivered: { kind: "already-delivered", mainCommit: "a".repeat(40) },
       detail: deliveredDetail,
-      output: null,
+      outcome: null,
       sessionId: deliveredSession,
       attempt: 1,
     }));

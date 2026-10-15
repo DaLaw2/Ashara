@@ -4,7 +4,6 @@ export type {
   TaskLanes,
 } from "./types.js";
 export { DEFAULT_CONFIG } from "./types.js";
-export type { InfrastructureProbe } from "./infrastructure-halts.js";
 export type { AcceptanceStore } from "./acceptance.js";
 /** @testseam the integration acceptance.test.ts drives the sweep's records against Postgres through it; CoreLoop.runCycle is its production caller */
 export { runAcceptanceSweeps } from "./acceptance.js";
@@ -20,4 +19,4 @@ export type { CycleRunner } from "./runner.js";
 
 export { EventLogger } from "./event-logger.js";
 
-export { reconcileOnStartup } from "./startup-reconciler.js";
+export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";

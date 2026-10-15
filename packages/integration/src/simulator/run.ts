@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
@@ -268,33 +265,6 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
 }
 
 /**
- * The simulator runs outside an Ashara git checkout. Production then refuses every target workspace
- * (development workspace.ts resolves its own repository root with git and fails closed without one),
- * so a seed would end in a different outcome than in a checkout: not a result, a wrong place to run.
- */
-class SimulatorOutsideCheckout extends Error {
-  constructor(
-    readonly moduleDir: string,
-    readonly detail: string,
-  ) {
-    super(
-      `the simulator must run inside an Ashara git checkout (production resolves its repository root with git from its own ` +
-        `source and refuses every target workspace without one); git rev-parse --show-toplevel failed from ${moduleDir}: ${detail}`,
-    );
-    this.name = "SimulatorOutsideCheckout";
-  }
-}
-
-async function assertGitCheckout(): Promise<void> {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  try {
-    await promisify(execFile)("git", ["rev-parse", "--show-toplevel"], { cwd: moduleDir });
-  } catch (err) {
-    throw new SimulatorOutsideCheckout(moduleDir, describeErrorChain(err));
-  }
-}
-
-/**
  * Replaces each id, commit and hex digest by its kind and order of first appearance (design §4.3),
  * and the run's own working directory, drawn by mkdtemp, by a fixed name.
  */
@@ -434,7 +404,6 @@ function standing(snapshot: Snapshot): string {
  * after every cycle; crashes and SIGTERMs answered by composing a new instance on the same workdir.
  */
 export async function runSeed(options: RunOptions): Promise<RunResult> {
-  await assertGitCheckout();
   const started = Date.now();
   const tape = new Tape(options.tape);
   const rates = drawRates(options.profile, tape);
