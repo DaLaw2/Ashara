@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
@@ -10,7 +10,7 @@ import type { PoolFactory } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured } from "@ashara/llm-gateway";
 import type { LanguageModelFactory } from "@ashara/llm-gateway";
-import { API_TOKEN_SECRET_NAME, SecretStore, generateKeyFileContent, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
+import { API_TOKEN_SECRET_NAME, SecretStore, createKeyFile, loadMasterKey, providerApiKeySecretName } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import { createIntakeStore } from "@ashara/server/intake-store";
@@ -68,8 +68,7 @@ beforeAll(async () => {
   template = await prepareTemplate(BASE_URL);
   workdir = await mkdtemp(join(tmpdir(), "ashara-gateway-unbuildable-"));
   const keyFile = join(workdir, "master.key");
-  await writeFile(keyFile, generateKeyFileContent().content, { mode: 0o600 });
-  await chmod(keyFile, 0o600);
+  createKeyFile(keyFile);
   masterKey = loadMasterKey(keyFile);
   savedEnv = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
   process.env["WORKDIR_BASE"] = join(workdir, "work");

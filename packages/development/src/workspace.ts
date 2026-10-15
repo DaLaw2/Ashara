@@ -131,6 +131,30 @@ async function hasGitCommits(dir: string): Promise<boolean> {
   }
 }
 
+/** The `.git` probe could not tell whether the entry exists (EACCES, EIO, ...): never read as absent. */
+class GitEntryProbeFailed extends Error {
+  constructor(
+    public readonly dir: string,
+    public readonly code: string | undefined,
+    cause: unknown,
+  ) {
+    super(`could not tell whether "${join(dir, ".git")}" exists (${code ?? "unknown error"}): ${describeErrorChain(cause)}`, { cause });
+    this.name = "GitEntryProbeFailed";
+  }
+}
+
+/** Only ENOENT and ENOTDIR mean "no .git"; any other failure is unknown and throws. */
+async function hasGitEntry(dir: string): Promise<boolean> {
+  try {
+    await access(join(dir, ".git"));
+    return true;
+  } catch (err: unknown) {
+    const code = typeof err === "object" && err !== null && "code" in err && typeof err.code === "string" ? err.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw new GitEntryProbeFailed(dir, code, err);
+  }
+}
+
 /**
  * Idempotent `git init` + identity config for `targetProjectPath` if it
  * doesn't already have a `.git`. Initializes on branch `main` explicitly —
@@ -138,11 +162,7 @@ async function hasGitCommits(dir: string): Promise<boolean> {
  * into `main` by name, which plain `git init` would otherwise name `master`.
  */
 async function ensureGitInitialized(targetProjectPath: string): Promise<void> {
-  const isGitRepo = await access(join(targetProjectPath, ".git")).then(
-    () => true,
-    () => false,
-  );
-  if (!isGitRepo) {
+  if (!(await hasGitEntry(targetProjectPath))) {
     await initHostRepo(targetProjectPath);
     const repo = targetRepo(targetProjectPath);
     await runHostGit(repo, ["config", "user.email", "ashara-agent@local"]);
@@ -410,11 +430,7 @@ export class InvalidTargetProjectPath extends Error {
 async function findGitWorkingTreeAncestor(startDir: string): Promise<string | null> {
   let current = startDir;
   for (;;) {
-    const hasGit = await access(join(current, ".git")).then(
-      () => true,
-      () => false,
-    );
-    if (hasGit) return current;
+    if (await hasGitEntry(current)) return current;
     const parent = dirname(current);
     if (parent === current) return null;
     current = parent;

@@ -9,34 +9,12 @@
  * Usage: npx tsx scripts/secret-key-init.ts
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { SecretKeyFileExists, generateKeyFileContent, resolveKeyFilePath } from "@ashara/security";
+import { createKeyFile, resolveKeyFilePath } from "@ashara/security";
 import { describeErrorChain } from "@ashara/shared";
 
 function main(): void {
   const keyFilePath = resolveKeyFilePath(process.env);
-  fs.mkdirSync(path.dirname(keyFilePath), { recursive: true, mode: 0o700 });
-
-  const { content, keyId } = generateKeyFileContent();
-  let fd: number;
-  try {
-    // "wx" makes existence check and creation one atomic step.
-    fd = fs.openSync(keyFilePath, "wx", 0o600);
-  } catch (err: unknown) {
-    if (typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST") {
-      throw new SecretKeyFileExists(keyFilePath);
-    }
-    throw err;
-  }
-  try {
-    // The umask can only narrow the mode; set it explicitly anyway so the result is exact.
-    fs.fchmodSync(fd, 0o600);
-    fs.writeSync(fd, content);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
+  const { keyId } = createKeyFile(keyFilePath);
   console.log(`Wrote secret key file ${keyFilePath} (key id ${keyId}, mode 0600).`);
 }
 

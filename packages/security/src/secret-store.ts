@@ -4,7 +4,11 @@ import { EmptySecretValue, SecretNotFound } from "./errors.js";
 import type { MasterKey } from "./master-key.js";
 import { parseSecretName } from "./secret-name.js";
 
-/** Secret values in, ciphertext to Postgres; the master key never leaves the process. */
+/**
+ * Secret values in, ciphertext to Postgres; the master key never leaves the process.
+ * The store is the only gate to the `secrets` table: construct it over a repository
+ * bound to a transaction to make its writes part of that transaction.
+ */
 export class SecretStore {
   constructor(
     private readonly repository: SecretRepository,
@@ -30,6 +34,11 @@ export class SecretStore {
 
   async has(name: string): Promise<boolean> {
     return this.repository.exists(parseSecretName(name));
+  }
+
+  /** Whether a secret of that name existed and is now gone. */
+  async delete(name: string): Promise<boolean> {
+    return this.repository.delete(parseSecretName(name));
   }
 
   async listNames(): Promise<string[]> {

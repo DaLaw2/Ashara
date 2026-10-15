@@ -35,6 +35,9 @@ allow = ["shared", "llm-gateway"]
 
 [server]
 allow = ["*"]
+# The master key and the secret store are reached only where the server is composed and its
+# startup secrets loaded, plus the web-client login's secret-name vocabulary.
+restrict.security = ["src/compose.ts", "src/secrets.ts", "src/secrets.test.ts", "src/web-client.ts"]
 
 [llm-gateway]
 allow = ["shared"]
@@ -42,6 +45,9 @@ allow = ["shared"]
 [security]
 # ADR-075 S1: db holds the ciphertext rows; the master key stays outside it.
 allow = ["db"]
+# Only the composition root and the integration harness may hold a key or a store. The operator
+# tools in scripts/ also import it; this checker does not scan scripts/.
+importers = ["server", "integration"]
 
 [finance]
 # ADR-075 S2 (story s-cost-ledger-m1): llm_calls rows go through db; prices and the

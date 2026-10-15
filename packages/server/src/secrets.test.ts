@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { buildGatewayConfig } from "@ashara/llm-gateway";
 import type { ModelConfig } from "@ashara/llm-gateway";
-import { generateKeyFileContent } from "@ashara/security";
+import { createKeyFile } from "@ashara/security";
 import {
   ServerStartupRefused,
   loadApiToken,
@@ -55,8 +55,7 @@ describe("server startup secrets", () => {
 
   test("loads the key from a temp key file", () => {
     const keyFile = path.join(dir, "secret.key");
-    const { content, keyId } = generateKeyFileContent();
-    fs.writeFileSync(keyFile, content, { mode: 0o600 });
+    const { keyId } = createKeyFile(keyFile);
     expect(loadServerMasterKey({ ASHARA_SECRET_KEY_FILE: keyFile }).id).toBe(keyId);
   });
 

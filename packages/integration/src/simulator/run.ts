@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import pg from "pg";
 import { z } from "zod";
 import { ClientMessageRepository, ClientRepository, SecretRepository, createDb, createProjectWithTender } from "@ashara/db";
 import { loadBaseCell } from "@ashara/execution-infra";
-import { SecretStore, generateKeyFileContent, loadMasterKey } from "@ashara/security";
+import { SecretStore, createKeyFile, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
@@ -485,8 +485,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
     observer = observing;
     const keyDir = await mkdtemp(join(tmpdir(), "ashara-sim-key-"));
     const keyFile = join(keyDir, "master.key");
-    await writeFile(keyFile, generateKeyFileContent().content, { mode: 0o600 });
-    await chmod(keyFile, 0o600);
+    createKeyFile(keyFile);
     const masterKey: MasterKey = loadMasterKey(keyFile);
     await rm(keyDir, { recursive: true, force: true });
     const secrets = new SecretStore(new SecretRepository(observing), masterKey);

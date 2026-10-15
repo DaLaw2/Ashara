@@ -1,12 +1,13 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
 
-/** Constant-time for equal lengths; a length mismatch rejects without comparing. */
+function sha256(value: string): Buffer {
+  return createHash("sha256").update(value, "utf8").digest();
+}
+
+/** Digests have equal length, so the comparison leaks neither content nor length. */
 function tokenMatches(presented: string, expected: string): boolean {
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  return timingSafeEqual(sha256(presented), sha256(expected));
 }
 
 export function bearerAuth(apiToken: string): MiddlewareHandler {

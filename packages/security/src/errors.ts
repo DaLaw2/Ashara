@@ -49,6 +49,26 @@ export class SecretKeyFileExists extends SecurityError {
   }
 }
 
+/** A new key file could not be created or written. Carries the path and errno code only. */
+export class SecretKeyFileCreateFailed extends SecurityError {
+  readonly path: string;
+  readonly step: "create" | "write";
+  readonly code: string | undefined;
+
+  constructor(path: string, step: "create" | "write", code: string | undefined, options?: ErrorOptions) {
+    super(
+      `Could not ${step} secret key file "${path}" (${code ?? "unknown error"}). Check that its parent ` +
+        `directory is writable by this user.` +
+        (step === "write" ? " A partially written file is left in place; inspect and remove it before retrying." : ""),
+      options,
+    );
+    this.name = "SecretKeyFileCreateFailed";
+    this.path = path;
+    this.step = step;
+    this.code = code;
+  }
+}
+
 /** Key material of the wrong length reached the MasterKey constructor. Carries lengths only. */
 export class InvalidMasterKeyLength extends SecurityError {
   readonly expectedBytes: number;

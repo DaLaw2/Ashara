@@ -17,7 +17,10 @@ import { describe, test, expect, vi, beforeEach, afterAll } from "vitest";
 // exercised deterministically without a real fault.
 // ---------------------------------------------------------------------------
 
-const hoisted = vi.hoisted(() => ({ failRealpath: false }));
+const hoisted = vi.hoisted((): { failRealpath: boolean; gitAccessCode: string | null } => ({
+  failRealpath: false,
+  gitAccessCode: null,
+}));
 
 vi.mock("node:child_process", () => {
   const execFileMock: unknown = () => {
@@ -45,6 +48,12 @@ vi.mock("node:fs/promises", async (importActual) => {
       }
       return actual.realpath(path);
     },
+    access: async (path: Parameters<typeof actual.access>[0], mode?: number): Promise<void> => {
+      if (hoisted.gitAccessCode !== null && String(path).endsWith("/.git")) {
+        throw Object.assign(new Error(`simulated ${hoisted.gitAccessCode} on ${String(path)}`), { code: hoisted.gitAccessCode });
+      }
+      return actual.access(path, mode);
+    },
   };
 });
 
@@ -63,6 +72,7 @@ async function makeDir(prefix: string): Promise<string> {
 
 beforeEach(async () => {
   hoisted.failRealpath = false;
+  hoisted.gitAccessCode = null;
   fakeRepoRoot = await makeDir("ashara-target-path-fakeroot-");
 });
 
@@ -100,6 +110,21 @@ describe("assertValidTargetProjectPath", () => {
     const cleanBase = await makeDir("ashara-target-path-clean-");
     const target = join(cleanBase, "ashara-work", "projects", "vision-123");
     await expect(assertValidTargetProjectPath(target)).resolves.toBeUndefined();
+  });
+
+  test("a .git probe that errors other than ENOENT/ENOTDIR fails closed, never reads as no .git", async () => {
+    const cleanBase = await makeDir("ashara-target-path-eacces-");
+    const target = join(cleanBase, "projects", "vision-1");
+    hoisted.gitAccessCode = "EACCES";
+    const refusal: unknown = await assertValidTargetProjectPath(target).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(InvalidTargetProjectPath);
+    expect(refusal).toMatchObject({ reason: expect.stringContaining("EACCES") });
+  });
+
+  test("a path component that is a file (ENOTDIR) reads as no .git", async () => {
+    const cleanBase = await makeDir("ashara-target-path-enotdir-");
+    hoisted.gitAccessCode = "ENOTDIR";
+    await expect(assertValidTargetProjectPath(join(cleanBase, "projects", "vision-2"))).resolves.toBeUndefined();
   });
 
   test("canonicalization failure fails closed with a typed error", async () => {

@@ -24,10 +24,20 @@ const EncryptedSecretSchema = z.object({
   authTag: bufferOfLength(TAG_BYTES),
 });
 
+/** createCipheriv/createDecipheriv copy the key into their own context, so the copy is zeroed at once. */
+function withKeyBytes<T>(key: MasterKey, use: (bytes: Buffer) => T): T {
+  const bytes = key.bytes();
+  try {
+    return use(bytes);
+  } finally {
+    bytes.fill(0);
+  }
+}
+
 /** The secret name is the AAD, so a ciphertext moved to another name fails authentication. */
 export function encryptSecret(key: MasterKey, name: string, value: string): EncryptedSecret {
   const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv(ALGORITHM, key.bytes(), iv, { authTagLength: TAG_BYTES });
+  const cipher = withKeyBytes(key, (bytes) => createCipheriv(ALGORITHM, bytes, iv, { authTagLength: TAG_BYTES }));
   cipher.setAAD(Buffer.from(name, "utf-8"));
   const ciphertext = Buffer.concat([cipher.update(value, "utf-8"), cipher.final()]);
   return { keyId: key.id, iv, ciphertext, authTag: cipher.getAuthTag() };
@@ -45,7 +55,9 @@ export function decryptSecret(key: MasterKey, name: string, stored: EncryptedSec
   if (record.keyId !== key.id) {
     throw new SecretKeyMismatch(name, record.keyId, key.id);
   }
-  const decipher = createDecipheriv(ALGORITHM, key.bytes(), record.iv, { authTagLength: TAG_BYTES });
+  const decipher = withKeyBytes(key, (bytes) =>
+    createDecipheriv(ALGORITHM, bytes, record.iv, { authTagLength: TAG_BYTES }),
+  );
   decipher.setAAD(Buffer.from(name, "utf-8"));
   decipher.setAuthTag(record.authTag);
   try {

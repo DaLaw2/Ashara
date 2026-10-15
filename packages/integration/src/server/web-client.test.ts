@@ -30,7 +30,7 @@ import {
   WorkItemRepository,
 } from "@ashara/db";
 import { ClientStops } from "@ashara/engagement";
-import { clientAccessCodeSecretName, generateKeyFileContent, loadMasterKey, SecretStore } from "@ashara/security";
+import { clientAccessCodeSecretName, createKeyFile, loadMasterKey, SecretStore } from "@ashara/security";
 import { parseProjectId } from "@ashara/shared";
 import { buildApp } from "@ashara/server/app";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
@@ -208,7 +208,7 @@ beforeAll(async () => {
   // A throwaway master key; every secret written is named by a client id this run created.
   keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-web-client-key-"));
   keyFile = path.join(keyDir, "secret.key");
-  fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
+  createKeyFile(keyFile);
   secretStore = new SecretStore(new SecretRepository(db), loadMasterKey(keyFile));
   alice = await newClient("alice");
   bob = await newClient("bob");

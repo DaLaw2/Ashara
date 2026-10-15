@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
 import { z } from "zod";
-import { InvalidMasterKeyLength, SecretKeyFileInvalid } from "./errors.js";
+import { InvalidMasterKeyLength, SecretKeyFileCreateFailed, SecretKeyFileExists, SecretKeyFileInvalid } from "./errors.js";
 
 const KEY_BYTES = 32;
 const KEY_FILE_ENV = "ASHARA_SECRET_KEY_FILE";
@@ -29,8 +29,9 @@ export class MasterKey {
     this.id = keyIdOf(this.#bytes);
   }
 
+  /** A fresh copy each call: no holder can mutate or zero the live key. The caller owns, and should zero, the copy. */
   bytes(): Buffer {
-    return this.#bytes;
+    return Buffer.from(this.#bytes);
   }
 
   toJSON(): { id: string } {
@@ -69,10 +70,37 @@ export function resolveKeyFilePath(env: NodeJS.ProcessEnv): string {
   return path.resolve(configured);
 }
 
-/** New key file content: 32 random bytes, base64, one line. */
-export function generateKeyFileContent(): { content: string; keyId: string } {
+/**
+ * Creates a new key file: 32 random bytes, base64, one line, mode 0600, parent
+ * directories 0700. Opening with "wx" makes the existence check and the creation
+ * one atomic step, so an existing key (which may still encrypt stored secrets) is
+ * never replaced and the file is never readable by anyone else, even briefly.
+ */
+export function createKeyFile(keyFilePath: string): { keyId: string } {
+  let fd: number;
+  try {
+    fs.mkdirSync(path.dirname(keyFilePath), { recursive: true, mode: 0o700 });
+    fd = fs.openSync(keyFilePath, "wx", 0o600);
+  } catch (err: unknown) {
+    const code = errnoCode(err);
+    if (code === "EEXIST") {
+      throw new SecretKeyFileExists(keyFilePath);
+    }
+    throw new SecretKeyFileCreateFailed(keyFilePath, "create", code, { cause: err });
+  }
   const bytes = randomBytes(KEY_BYTES);
-  return { content: `${bytes.toString("base64")}\n`, keyId: keyIdOf(bytes) };
+  try {
+    // The umask can only narrow the mode; set it explicitly anyway so the result is exact.
+    fs.fchmodSync(fd, 0o600);
+    fs.writeSync(fd, `${bytes.toString("base64")}\n`);
+    fs.fsyncSync(fd);
+    return { keyId: keyIdOf(bytes) };
+  } catch (err: unknown) {
+    throw new SecretKeyFileCreateFailed(keyFilePath, "write", errnoCode(err), { cause: err });
+  } finally {
+    bytes.fill(0);
+    fs.closeSync(fd);
+  }
 }
 
 const INIT_HINT = "Create one with `npx tsx scripts/secret-key-init.ts`.";

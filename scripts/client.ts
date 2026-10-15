@@ -133,8 +133,9 @@ async function main(): Promise<void> {
       case "remove-code": {
         const client = await requireClient(new ClientRepository(db), parseClientName(name, command));
         const secretName = clientAccessCodeSecretName(client.id);
+        const key = loadMasterKey(resolveKeyFilePath(process.env));
         const { removed, ended } = await db.transaction(async (tx) => ({
-          removed: await new SecretRepository(tx).delete(secretName),
+          removed: await new SecretStore(new SecretRepository(tx), key).delete(secretName),
           ended: await new ClientSessionRepository(tx).deleteByClient(client.id),
         }));
         console.log(

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { createDb, DEFAULT_DATABASE_URL, SecretRepository } from "@ashara/db";
 import type { DbTransaction } from "@ashara/db";
-import { SecretStore, generateKeyFileContent, loadMasterKey, resolveKeyFilePath } from "@ashara/security";
+import { SecretStore, createKeyFile, loadMasterKey, resolveKeyFilePath } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 import { LegacyImportConflict, importLegacyCredentials } from "./import-legacy-credentials.js";
 
@@ -51,7 +51,7 @@ async function query(text: string): Promise<unknown[]> {
 beforeAll(async () => {
   keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-legacy-key-"));
   const keyFile = path.join(keyDir, "secret.key");
-  fs.writeFileSync(keyFile, generateKeyFileContent().content, { mode: 0o600 });
+  createKeyFile(keyFile);
   key = loadMasterKey(resolveKeyFilePath({ ASHARA_SECRET_KEY_FILE: keyFile }));
   await db.$client.query(`CREATE SCHEMA "${SCHEMA}"`);
   await db.$client.query(`CREATE TABLE "${SCHEMA}".secrets (LIKE secrets INCLUDING ALL)`);
