@@ -70,7 +70,12 @@ async function statusOf(projectId: ProjectId): Promise<string | undefined> {
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status;
 }
 
-const budgetCap = { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: "project cap $5 reached" } as const;
+const budgetCap = {
+  category: "budget_cap",
+  errorClass: SPEND_CAP_ERROR_CLASS.project,
+  reason: "project cap $5 reached",
+  spend: { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 },
+} as const;
 
 beforeAll(async () => {
   db = createDb(DATABASE_URL);
@@ -104,7 +109,14 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await reports().runPending();
 
     // The cause told is the recorded kind in the client's words; the chain stays in the record (W11b D3).
-    expect(await messagesOf(projectId)).toEqual([expect.stringContaining("Ashara recorded the cause as this: the spending limit set for this project was reached")]);
+    expect(await messagesOf(projectId)).toEqual([
+      expect.stringContaining("Ashara recorded the cause as this: the spending limit set for this project left no room for the next step of the work"),
+    ]);
+    // smoke3 D1: the amounts the halt recorded, read back from project_blocks.spend, never a limit "reached".
+    expect((await messagesOf(projectId))[0]).toContain(
+      "When it stopped the work, $0.412203 had been spent and $0.298540 was set aside for work under way, and the next step needed up to $0.304642 set aside",
+    );
+    expect((await messagesOf(projectId))[0]).not.toContain("was reached");
     expect((await messagesOf(projectId))[0]).not.toMatch(/BudgetExceeded|project cap \$5 reached/);
     expect((await messagesOf(projectId))[0]).toContain("The budget set for this project has to be raised");
 
@@ -293,10 +305,14 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
     const bodies = await messagesOf(projectId);
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toContain("cannot deliver it as planned");
-    // Each cause as its blocked_reason recorded it (story s-independent-verify-m1 W7).
-    expect(bodies[0]).toContain(`"Compact the log", after 0 attempts. As recorded: check "compacts" disputed: past the bound`);
-    expect(bodies[0]).toContain(`"Review the plan's checks", after 0 attempts. As recorded: past the bound`);
-    expect(bodies[0]).toContain(`"Lock the data directory", after 0 attempts. As recorded: max_attempts`);
+    // Each cause as its blocked_reason's source records it, in the client's words, naming the task's record.
+    const told = (title: string, words: string, id: string) =>
+      `- "${title}", after 0 attempts counted against it. Ashara recorded why it was given up as this: ${words}. ` +
+      `Ashara keeps the detail in its own record of that task, record ${id}.`;
+    expect(bodies[0]).toContain(told("Compact the log", "its developer found that a check written for it cannot be passed by correct work, and that could not be settled", disputed));
+    expect(bodies[0]).toContain(told("Review the plan's checks", "the review of the plan's checks found problems that could not be settled", review));
+    expect(bodies[0]).toContain(told("Lock the data directory", "its attempts at the work did not succeed", attempts));
+    for (const stored of ["past the bound", "max_attempts"]) expect(bodies[0]).not.toContain(stored);
     expect(bodies[0]).not.toContain("Replaced work");
   });
 });

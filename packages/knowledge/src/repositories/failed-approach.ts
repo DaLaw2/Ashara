@@ -10,20 +10,16 @@ export class FailedApproachRepository {
     taskId: string | null,
     epicId: string | null,
     title: string,
-    description: string,
     reason: string,
     learned: string,
-    affectedArea: string,
   ) {
     await this.db.insert(failedApproaches).values({
       projectId,
       taskId,
       epicId,
       title,
-      approachDescription: description,
       failureReason: reason,
       learned,
-      affectedArea,
     });
   }
 
@@ -51,7 +47,6 @@ export class FailedApproachRepository {
         title: failedApproaches.title,
         failureReason: failedApproaches.failureReason,
         learned: failedApproaches.learned,
-        affectedArea: failedApproaches.affectedArea,
       })
       .from(failedApproaches)
       .where(and(eq(failedApproaches.projectId, projectId), epicScope))

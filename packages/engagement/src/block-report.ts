@@ -1,5 +1,6 @@
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
+import type { SpendAtCap } from "@ashara/delivery/project-halt";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
@@ -8,18 +9,23 @@ import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 // as observed fact (M2 trial M3: a fixed sentence told the client a false cause): a halt recorded
 // with an error chain is told as Ashara's record of its kind, in the client's words, naming the
 // record that holds the chain, which stays with the operator (W11b D3: the raw chain told the
-// client internal class names); a bound halt quotes what its review, dispute or given-up tasks
-// recorded; and a halt with none recorded says so. Reports are read from recorded block
+// client internal class names); a plan-repair halt tells each given-up task's recorded reason as its
+// category in the client's words, naming the task's record, which holds the stored text (stored
+// reasons are Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
 // each at most once. No task is reported on its own: no task waits on a person (W6).
 
 /** What paused a project, as recorded on its block episode; the kinds below carry their own detail. */
-type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound" | "infrastructure";
+type ProjectBlockKind = "budget_cap" | "configuration" | "fault" | "planning_stopped" | "replan_bound" | "infrastructure" | "replan_stopped";
 
-/** The cause recorded on a block episode: the error's class and its described chain, each null when none was written. */
+/**
+ * The cause recorded on a block episode: the error's class and its described chain, each null when
+ * none was written, and on a budget_cap halt the amounts its cap was judged on, null when not recorded.
+ */
 interface RecordedCause {
   readonly errorClass: string | null;
   readonly reason: string | null;
+  readonly spend: SpendAtCap | null;
 }
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it (before migration 048). */
@@ -41,8 +47,14 @@ interface BlockingReview {
 
 /** A task the team gave up again after the plan was repaired its bound of times, as recorded when the project halted. */
 interface BlockingAbandonment {
+  /** The task's work item: the record that holds why it was given up, in Ashara's own words. */
+  readonly workItemId: string;
   readonly title: string;
-  /** Its dispatches, the failed ones that led to it being given up. */
+  /**
+   * Its dispatch count: the attempts charged to its retry bound. A dispatch refunded because it did
+   * no chargeable work (a model call refused before it was sent, stale checks, a dispute, an
+   * environment change) is not counted, though its session is on record.
+   */
   readonly attempts: number;
   /** Why it was given up, its blocked_reason as stored. */
   readonly cause: StoredBlockedReason;
@@ -99,13 +111,6 @@ export interface LiaisonBlockReports {
   runPending(): Promise<readonly BlockReportOutcome[]>;
 }
 
-/** Longest part of one recorded cause the client is shown; the rest is cut, and the cut is stated. */
-const MAX_CAUSE_CHARS = 2000;
-
-function cut(text: string): string {
-  return text.length <= MAX_CAUSE_CHARS ? text : `${text.slice(0, MAX_CAUSE_CHARS)} [${text.length - MAX_CAUSE_CHARS} more characters not shown]`;
-}
-
 /**
  * Whose spending limit a budget_cap halt records, from its recorded error class (SPEND_CAP_ERROR_CLASS),
  * never from its message: the deployment's, binding every project, or the project's own (smoke1 D4).
@@ -124,22 +129,46 @@ function spendLimitOf(cause: RecordedCause): SpendLimit {
   }
 }
 
-/** The halt as the report tells it: its recorded kind, and for a budget_cap halt whose limit was reached. */
-type ToldHalt = { readonly kind: Exclude<ProjectBlockKind, "budget_cap"> } | { readonly kind: "budget_cap"; readonly limit: SpendLimit };
+/** The halt as the report tells it: its recorded kind, and for a budget_cap halt whose limit stopped the work and the amounts it was judged on. */
+type ToldHalt =
+  | { readonly kind: Exclude<ProjectBlockKind, "budget_cap"> }
+  | { readonly kind: "budget_cap"; readonly limit: SpendLimit; readonly spend: SpendAtCap | null };
 
 function toldHalt(kind: ProjectBlockKind, cause: RecordedCause): ToldHalt {
-  return kind === "budget_cap" ? { kind, limit: spendLimitOf(cause) } : { kind };
+  return kind === "budget_cap" ? { kind, limit: spendLimitOf(cause), spend: cause.spend } : { kind };
 }
 
-function spendLimitReached(limit: SpendLimit): string {
+/**
+ * A spend cap refuses a call whose worst case would cross it, so the limit stops the work before
+ * the recorded spend reaches it: the report says the limit left no room, never that it was reached.
+ */
+function spendLimitStopped(limit: SpendLimit): string {
+  const stopped = "left no room for the next step of the work, so that step was not paid for";
   switch (limit) {
     case "deployment":
-      return "the spending limit set for all of Ashara's work, across every project it runs, was reached, so the next step of the work was not paid for";
+      return `the spending limit set for all of Ashara's work, across every project it runs, ${stopped}`;
     case "project":
-      return "the spending limit set for this project was reached, so the next step of the work was not paid for";
+      return `the spending limit set for this project ${stopped}`;
     case "unrecorded":
-      return "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record";
+      return `a spending limit set for this work ${stopped}; which limit it was is not on record`;
   }
+}
+
+function usd(amount: number): string {
+  return `$${amount.toFixed(6)}`;
+}
+
+/** The amounts the limit was judged on, as recorded, or that they are not on record. */
+function spendFigures(spend: SpendAtCap | null): string {
+  if (spend === null) return "How much had been spent and set aside against that limit when it stopped the work is not on record.";
+  const next =
+    spend.nextCallUsd === null
+      ? "which together had reached the limit"
+      : `and the next step needed up to ${usd(spend.nextCallUsd)} set aside, more than the limit had room for`;
+  return (
+    `When it stopped the work, ${usd(spend.spentUsd)} had been spent and ${usd(spend.inFlightUsd)} was set aside for work ` +
+    `under way, ${next}; the limit is ${usd(spend.capUsd)}.`
+  );
 }
 
 /**
@@ -150,7 +179,7 @@ function spendLimitReached(limit: SpendLimit): string {
 function recordedKind(halt: ToldHalt): string {
   switch (halt.kind) {
     case "budget_cap":
-      return spendLimitReached(halt.limit);
+      return spendLimitStopped(halt.limit);
     case "configuration":
       return "a step of the work needed something Ashara's own setup does not provide, for a reason other than a spending limit";
     case "fault":
@@ -161,6 +190,8 @@ function recordedKind(halt: ToldHalt): string {
       return "the plan has been revised for your changes as many times as the team revises it before its operator looks the project over";
     case "infrastructure":
       return "the machines Ashara runs the work on kept failing while they ran this project's work";
+    case "replan_stopped":
+      return "every attempt to revise the plan failed, the last because the model planning it gave no usable answer";
   }
 }
 
@@ -173,13 +204,14 @@ function recordedCause(episodeId: string, halt: ToldHalt, cause: RecordedCause):
   if (cause.reason === null && cause.errorClass === null) return "No cause was recorded for this pause.";
   return (
     `Ashara recorded the cause as this: ${recordedKind(halt)}. ` +
+    (halt.kind === "budget_cap" ? `${spendFigures(halt.spend)} ` : "") +
     `Ashara keeps the technical detail in its own record of this pause, record ${episodeId}.`
   );
 }
 
 const WAITS_ON_OPERATOR = "Until then nothing more is done on this project. The team is waiting on its operator for this, and you will be told when work resumes.";
 
-/** What has to be raised for a budget_cap halt to end: the limit that was reached, as recorded. */
+/** What has to be raised for a budget_cap halt to end: the limit that stopped the work, as recorded. */
 function limitToRaise(limit: SpendLimit): string {
   switch (limit) {
     case "deployment":
@@ -187,7 +219,7 @@ function limitToRaise(limit: SpendLimit): string {
     case "project":
       return "The budget set for this project has to be raised before more is spent.";
     case "unrecorded":
-      return "The spending limit that was reached has to be raised before more is spent.";
+      return "The spending limit that stopped the work has to be raised before more is spent.";
   }
 }
 
@@ -202,6 +234,8 @@ function nextStep(halt: ToldHalt): string {
       return `The team has to repair it. ${WAITS_ON_OPERATOR}`;
     case "planning_stopped":
       return `The team has to look into it before planning is tried again. ${WAITS_ON_OPERATOR}`;
+    case "replan_stopped":
+      return `The team has to look into it before the plan is revised again. ${WAITS_ON_OPERATOR}`;
     case "replan_bound":
       return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${WAITS_ON_OPERATOR}`;
     case "infrastructure":
@@ -245,43 +279,47 @@ function suiteReviewBoundReport(review: BlockingReview): string {
   ].join("\n\n");
 }
 
-/** The text a given-up task's stored reason recorded of why: the record's own words, never a sentence per source. */
-function observedCause(cause: StoredBlockedReason): string {
+/**
+ * Why a task was given up, as its stored reason's source records it, in the client's words: only
+ * what every reason of that source is by definition. The reason's own text is Ashara's internal
+ * wording and stays on the task's record, which the report names.
+ */
+function givenUpCategory(cause: StoredBlockedReason): string {
   switch (cause.source) {
     case "failure_given_up":
-      return [cause.reason, ...(cause.detail === undefined ? [] : [cause.detail])].join(" ");
-    case "replan":
-      return cause.replanContext.detail;
-    case "environment_unavailable":
-      return `${cause.unavailable} unavailable: ${cause.reason}`;
-    case "environment_change_needed":
-      return `${cause.reason} (recipe files: ${cause.paths.join(", ")})`;
-    case "check_disputed":
-      return `check "${cause.checkName}" disputed: ${cause.reason}`;
-    case "orphan_unreconciled":
-      return `${cause.step} failed: ${cause.reason}`;
-    case "acceptance_failed":
-      return cause.mainCommit === null
-        ? `the acceptance run could not read main: ${cause.reason}`
-        : `the acceptance run on main ${cause.mainCommit} did not pass: ${cause.reason}`;
-    case "api": {
-      // The route stores the caller's own fields beside `source` (passthrough): quoted as written.
-      const written = Object.fromEntries(Object.entries(cause).filter(([key]) => key !== "source"));
-      return Object.keys(written).length === 0
-        ? "it was moved by hand through Ashara's API; no cause beyond that is recorded"
-        : `it was moved by hand through Ashara's API, with this recorded: ${JSON.stringify(written)}`;
-    }
     case "task_failed":
+    case "replan":
+      return "its attempts at the work did not succeed";
     case "orchestrator_error":
+    case "orphan_unreconciled":
+      return "a step of Ashara's own work on it failed";
+    case "merge_unrecorded":
+      return "its work is on the project's main line, but Ashara could not record that";
+    case "environment_unavailable":
+      return "the machines Ashara runs the work on were not available for it";
     case "environment_undefined":
+      return "the project's environment, in which it is built and tested, was not defined or could not be built";
+    case "environment_change_needed":
+      return "it needed a change to how the project is built and tested, and no such change was made for it";
     case "checks_stale":
     case "checks_rewrite_bound":
+      return "the checks that decide it no longer held on the project's environment and could not be written again";
+    case "check_disputed":
+      return "its developer found that a check written for it cannot be passed by correct work, and that could not be settled";
     case "suite_review_unresolved":
+      return "the review of the plan's checks found problems that could not be settled";
     case "owner_unresolved":
+      return "no member of the team is assigned to do it";
     case "dependency_unsatisfiable":
-    case "merge_unrecorded":
+      return "it depends on work that can never be finished";
+    case "acceptance_failed":
+      return cause.mainCommit === null
+        ? "the final check of the whole project could not read the project's main line"
+        : "the final check of the whole project did not pass on the project's main line";
     case "superseded":
-      return cause.reason;
+      return "a revision of the plan replaced it";
+    case "api":
+      return "it was moved by hand through Ashara's API";
   }
 }
 
@@ -290,7 +328,13 @@ function planRepairBoundReport(abandoned: readonly BlockingAbandonment[]): strin
   return [
     `Work on this project has stopped: the team cannot deliver it as planned. The plan has already been revised around ` +
       `work it gave up as many times as the team revises it on its own, and it gave up again:`,
-    abandoned.map((task) => `- "${task.title}", after ${plural(task.attempts, "attempt")}. As recorded: ${cut(observedCause(task.cause))}`).join("\n"),
+    abandoned
+      .map(
+        (task) =>
+          `- "${task.title}", after ${plural(task.attempts, "attempt")} counted against it. Ashara recorded why it was given up as this: ` +
+          `${givenUpCategory(task.cause)}. Ashara keeps the detail in its own record of that task, record ${task.workItemId}.`,
+      )
+      .join("\n"),
     `Nothing more is built until the scope changes or the operator looks the project over; you will be told when work ` +
       `resumes. If you can say more about what this part should do, or what can be left out, send a change describing it.`,
   ].join("\n\n");

@@ -48,9 +48,7 @@ export const failedApproaches = pgTable("failed_approaches", {
     .notNull()
     .references(() => projects.id),
   title: text().notNull(),
-  approachDescription: text("approach_description").notNull(),
   failureReason: text("failure_reason").notNull(),
   learned: text().notNull().default(""),
-  affectedArea: text("affected_area").notNull().default(""),
   recordedAt: timestamptz("recorded_at").notNull().defaultNow(),
 });

@@ -67,7 +67,7 @@ describe("LifecycleRouter cascade-completion with salvaged results", () => {
       blockedReason: salvagedReason(
         { source: "api", note: "abandoned via API" },
         "completed",
-        "task completed and verified successfully",
+        "merged on main, after its post-merge checks passed on the merged tree",
       ),
     });
 

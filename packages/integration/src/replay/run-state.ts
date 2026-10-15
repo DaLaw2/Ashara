@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import pg from "pg";
 import { z } from "zod";
 import type { createDb } from "@ashara/db";
-import { loadProjectIntent } from "@ashara/workplace";
+import { formatTaskSpec, loadProjectIntent } from "@ashara/workplace";
 import type { ProjectIntentSource } from "@ashara/workplace";
 import { assignmentIntentOf } from "@ashara/delivery";
 import { parseWorkItemId } from "@ashara/shared";
@@ -93,10 +93,12 @@ function visionWhenRecorded(db: Db, sessionId: string): ProjectIntentSource {
 }
 
 /**
- * Today's statement of each recorded session's brief facts: the goal Delivery's buildBrief takes
- * from the task's task_spec (the title when it holds none), and the intent today's loadProjectIntent
- * states. Its other sections need the run's checkout and are not composed. A session whose intent
- * cannot be composed throws ProjectIntentUnavailable: the replay fails, never judges less.
+ * Today's statement of each recorded session's brief facts: the goal and task section Delivery's
+ * buildBrief takes from the task's task_spec, and the intent today's loadProjectIntent states. Its
+ * other sections need the run's checkout and are not composed. A task_spec without a goal, end
+ * state, scope or deliverables gets no task section, as today's dispatch refuses it: I9 names that
+ * brief. A session whose intent cannot be composed throws ProjectIntentUnavailable: the replay
+ * fails, never judges less.
  */
 export async function recomposeBriefs(db: Db, projectId: string): Promise<RecomposedBrief[]> {
   const sessions = z.array(sessionRow).parse(
@@ -112,11 +114,16 @@ export async function recomposeBriefs(db: Db, projectId: string): Promise<Recomp
   const briefs: RecomposedBrief[] = [];
   for (const session of sessions) {
     const intent = await loadProjectIntent(visionWhenRecorded(db, session.id), parseWorkItemId(session.taskId, "dev_sessions.task_id"));
-    const goal = parseStoredTaskSpec(session.taskSpec)?.goal ?? session.title;
+    const { goal, endState, scope, deliverables } = parseStoredTaskSpec(session.taskSpec) ?? {};
+    const context =
+      goal === undefined || endState === undefined || scope === undefined || deliverables === undefined
+        ? ""
+        : formatTaskSpec({ goal, endState, scope, deliverables });
     briefs.push({
       title: session.title,
       visionAtCreation: session.visionAtCreation,
-      brief: { goal, context: "", visionVersion: intent.visionVersion, assumptions: intent.assumptions },
+      taskSpec: session.taskSpec,
+      brief: { goal: goal ?? "", context, visionVersion: intent.visionVersion, assumptions: intent.assumptions },
     });
   }
   return briefs;

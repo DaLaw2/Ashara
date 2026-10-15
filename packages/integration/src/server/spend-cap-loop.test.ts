@@ -230,7 +230,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
           return outcomes;
         },
       },
-      spendCap: { deploymentStop: async () => ({ reason: capReason }), refusalOf: () => null },
+      spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null },
     });
     let stopId = "";
 
@@ -241,7 +241,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
       stopId = (await messages.insertInbound({ projectId, kind: "stop", body: "Please stop.", inReplyTo: null })).id;
     });
 
-    expect(ended).toEqual({ reason: capReason });
+    expect(ended).toEqual({ reason: capReason, spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } });
     const stopRow = await messages.findById(stopId);
     expect(stopRow?.consumedAt).not.toBeNull();
     const reports = (await messages.listByProject(projectId)).filter((m) => m.inReplyTo === stopId);
@@ -310,7 +310,7 @@ describe("a turn refused at the project's spend cap", () => {
       status: "Pending",
       title: "Write greet.txt",
       // Sprint 0 runs on the BaseCell, so no environment has to be resolved for the task.
-      taskSpec: { goal: "write greet.txt", origin: "sprint0" },
+      taskSpec: { goal: "write greet.txt", endState: "greet.txt exists", scope: "greet.txt", deliverables: ["greet.txt"], origin: "sprint0" },
       projectId,
     });
 

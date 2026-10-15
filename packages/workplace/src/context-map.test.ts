@@ -38,6 +38,22 @@ describe("buildContextMap on a cell-written target", () => {
     expect(map).not.toContain(SECRET);
   });
 
+  test("a tree it cannot read is said as unavailable, never as an empty working directory", async () => {
+    const notADirectory = join(base, "file-not-dir");
+    await writeFile(notADirectory, "x");
+
+    const map = await buildContextMap(notADirectory);
+
+    expect(map).not.toContain("The working directory is empty");
+    expect(map).toContain("## Not Available");
+    expect(map).toContain("- the file tree: reading it failed");
+    expect(map).toContain("- the top-level files: reading them failed");
+  });
+
+  test("an empty tree, read without failure, is said as empty", async () => {
+    expect(await buildContextMap(target)).toContain("The working directory is empty");
+  });
+
   test("knows no manifest format: package.json is one more top-level file", async () => {
     await writeFile(join(target, "package.json"), JSON.stringify({ name: "app", dependencies: { left: "1" } }));
     const map = await buildContextMap(target);

@@ -30,7 +30,7 @@ const model: ResolvedModel = {
 };
 
 const task = (): TaskDescriptor => ({
-  id: createWorkItemId(), projectId, title: "t", dispatchCount: 0, attempt: 1, successCriteria: [], workKind: "implementation",
+  id: createWorkItemId(), projectId, title: "t", dispatchCount: 0, attempt: 1, successCriteria: [], workKind: "implementation", epicId: null,
 });
 
 function staffingWith(ownerRoleId: string | null | "absent", rows: unknown = LATEST_ROSTER) {

@@ -22,6 +22,7 @@ import type {
 import type { AcceptanceStore } from "./acceptance.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
+import type { SpendAtCap } from "./project-halt.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
@@ -45,9 +46,10 @@ export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   verifyTimeoutMs: 120_000,
 };
 
-/** Why the loop must stop for good; the runner ends on it instead of cycling again. */
+/** Why the loop must stop for good, the deployment's spend cap; the runner ends on it instead of cycling again. */
 export interface LoopStop {
   readonly reason: string;
+  readonly spend: SpendAtCap;
 }
 
 export interface CycleResult {
@@ -59,8 +61,8 @@ export interface CycleResult {
 
 /** A spend cap refusing an LLM call, as the loop routes it. */
 type SpendRefusal =
-  | { readonly kind: "project"; readonly projectId: string; readonly reason: string }
-  | { readonly kind: "deployment"; readonly reason: string };
+  | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
+  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap };
 
 /**
  * Finance's spend cap, as the loop reads it. Finance only refuses: the loop halts a project its
@@ -97,8 +99,9 @@ export type TaskResult =
   /** The process's shutdown interrupted the attempt: the item is back at Pending with its dispatch refunded. */
   | { readonly taskId: string; readonly status: "interrupted"; readonly detail: string };
 
-export function completedResult(taskId: string): TaskResult {
-  return { taskId, status: "completed", detail: "task completed and verified successfully" };
+/** `detail` is the dispatch's own account of what it delivered, which claims no verification it did not run. */
+export function completedResult(taskId: string, detail: string): TaskResult {
+  return { taskId, status: "completed", detail };
 }
 
 export function failedResult(taskId: string, detail: string): TaskResult {

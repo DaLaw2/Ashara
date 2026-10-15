@@ -53,7 +53,11 @@ const CGROUP_SCRIPT = [
   "done",
 ].join("\n");
 
-/** The cell's own cgroup (v2) shows the configured memory, swap, CPU and pids caps. */
+/**
+ * The cell's own cgroup (v2) shows the configured memory, swap, CPU and pids caps. A cap read with
+ * another value is breached; a cap the cell could not read shows nothing either way, so with no
+ * mismatch among those read the probe is unverifiable, never breached for a cause it did not see.
+ */
 export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits): Promise<ProbeVerdict> {
   const probe = "resource caps";
   const result = await inCell(cell, CGROUP_SCRIPT);
@@ -70,13 +74,20 @@ export async function probeResourceCaps(cell: Cell, limits: CellResourceLimits):
     ["cpu.max", expectedCpuMax(limits)],
     ["pids.max", String(limits.pids)],
   ];
-  const mismatches = expected.filter(([file, value]) => seen.get(file) !== value);
+  const read = (file: string): string | null => {
+    const value = seen.get(file);
+    return value === undefined || value === "unreadable" ? null : value;
+  };
+  const unobservedCaps = expected.filter(([file]) => read(file) === null);
+  const mismatches = expected.filter(([file, value]) => read(file) !== null && read(file) !== value);
+  const outcome: ProbeOutcome = mismatches.length > 0 ? "breached" : unobservedCaps.length > 0 ? "unverifiable" : "held";
   return {
     probe,
-    outcome: mismatches.length === 0 ? "held" : "breached",
+    outcome,
     evidence:
       expected.map(([file]) => `${file}=${seen.get(file) ?? "(not printed)"}`).join(", ") +
-      (mismatches.length === 0 ? "" : `; expected ${mismatches.map(([file, value]) => `${file}=${value}`).join(", ")}`),
+      (mismatches.length === 0 ? "" : `; expected ${mismatches.map(([file, value]) => `${file}=${value}`).join(", ")}`) +
+      (unobservedCaps.length === 0 ? "" : `; not observed: ${unobservedCaps.map(([file]) => file).join(", ")}`),
   };
 }
 
@@ -112,9 +123,13 @@ const CREDENTIAL_SCRIPT = [
 export async function probeCredentialRead(cell: Cell, canaries: CredentialCanaries): Promise<ProbeVerdict> {
   const probe = "credential read";
   const unsendable = canaries.paths.filter((path) => path === "" || /[\r\n]/.test(path));
-  if (unsendable.length > 0) {
-    throw new InvalidCellRequest(probe, unsendable.map((path) => `a probed path must be one non-empty line: ${JSON.stringify(path)}`));
-  }
+  const problems = [
+    ...unsendable.map((path) => `a probed path must be one non-empty line: ${JSON.stringify(path)}`),
+    ...canaries.values.filter(({ value }) => value === "").map(({ name }) => `the value ${name} is empty, and an empty value can be searched for in nothing`),
+    // With nothing to probe, nothing is observed: the empty set must not read as held.
+    ...(canaries.paths.length === 0 && canaries.values.length === 0 ? ["no path and no value to probe"] : []),
+  ];
+  if (problems.length > 0) throw new InvalidCellRequest(probe, problems);
   const result = await inCell(cell, CREDENTIAL_SCRIPT, [], canaries.paths.map((path) => `${path}\n`).join(""));
   if (result.exitCode !== 0) return unobserved(probe, result);
   // The script's own report lines name the probed paths, which a value may contain: they are not searched.
@@ -123,7 +138,7 @@ export async function probeCredentialRead(cell: Cell, canaries: CredentialCanari
   const pathLines = lines.filter((line) => headers.has(line));
   const readable = pathLines.filter((line) => line.endsWith(" readable"));
   const searched = lines.filter((line) => !headers.has(line)).join("\n");
-  const leaked = canaries.values.filter(({ value }) => value !== "" && searched.includes(value)).map(({ name }) => name);
+  const leaked = canaries.values.filter(({ value }) => searched.includes(value)).map(({ name }) => name);
   const complete = result.stdoutCut === null && pathLines.length === canaries.paths.length;
   const outcome: ProbeOutcome = leaked.length > 0 ? "breached" : complete ? "held" : "unverifiable";
   return {

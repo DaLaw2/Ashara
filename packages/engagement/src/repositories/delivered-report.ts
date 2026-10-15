@@ -277,7 +277,7 @@ async function assumptionsAtAcceptance(
       if (assumption.clientAnswer.verdict === null) return "stated";
       return assumption.clientAnswer.verdict === "confirms" ? "confirmed" : "changed";
     }
-    if (assumption.disclosed === null) return "not-shown";
+    if (assumption.disclosed === null) return "unrecorded";
     if (assumption.disclosed === "reported") return "reported";
     const question = asked.find((open) => open.assumptionKey === assumption.id);
     if (question === undefined) throw unreadable(`assumption ${assumption.id} was asked about and is not Stated, yet no open question names it`);

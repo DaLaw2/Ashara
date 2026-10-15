@@ -251,10 +251,10 @@ export interface TaskDescriptor {
   /**
    * The task's true Epic ancestor id, walked up by the core loop (which reads the
    * WorkItem hierarchy) before constructing this descriptor (kl-t2/Q5). `null`
-   * means the walk ran and found no Epic ancestor; `undefined` (callers that don't
-   * set it, e.g. unit tests) falls back to `parentId` at the knowledge write.
+   * means the walk ran and found no Epic ancestor. Required: a parent is not an Epic, so no
+   * other field may stand in for it at the knowledge write.
    */
-  readonly epicId?: string | null;
+  readonly epicId: string | null;
   /**
    * Number of times this task has been dispatched. The DB column is NOT NULL
    * with default 0, `createPendingWorkItem` always sets it, and the sole
@@ -485,16 +485,21 @@ export class DispatchService {
     }
 
     // Before the brief and any model call: what decides the work. An implementation task with no
-    // stored checks, or a check task that decides no single task, is not dispatched.
+    // stored checks, or a check task that decides no single task, is not dispatched; neither is a
+    // task whose stored spec lacks a field the brief states, since the brief would have to invent it.
+    const unplannable = async (refused: Unplannable): Promise<ExecutionResult> => {
+      const result = failedBeforeAgent(task, sessionId, refused.operation, refused.reason, `no work plan for ${task.id}`);
+      eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
+      await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
+      return result;
+    };
+    const read = briefSpecOf(task);
+    if (read.kind === "unplannable") return unplannable(read);
+    const { spec } = read;
     let plan: WorkPlan;
     try {
       const planned = await this.planWork(task, environment);
-      if (planned.kind === "unplannable") {
-        const result = failedBeforeAgent(task, sessionId, planned.operation, planned.reason, `no work plan for ${task.id}`);
-        eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: result.detail });
-        await storeFailureKnowledge(this.deps.knowledgeSink, task, result);
-        return result;
-      }
+      if (planned.kind === "unplannable") return await unplannable(planned);
       plan = planned;
     } catch (e) {
       return thrownBlocked(task, sessionId, "planWork", e, { step: "read the checks that decide the work", cell: "CI cell" }, NO_AGENT, eventSink);
@@ -531,7 +536,7 @@ export class DispatchService {
 
     let brief: AgentBrief;
     try {
-      brief = await this.buildBrief(task, targetProjectPath, environment, plan, conflict);
+      brief = await this.buildBrief(task, spec, targetProjectPath, environment, plan, conflict);
     } catch (e) {
       // A missing or unreadable intent (ProjectIntentUnavailable) is Ashara's own record, as is any
       // other throw building the brief: never the agent's work, so blocked under class ashara.
@@ -714,24 +719,16 @@ export class DispatchService {
 
   private async buildBrief(
     task: TaskDescriptor,
+    spec: TaskSpec,
     targetProjectPath: string,
     environment: DispatchEnvironment,
     plan: WorkPlan,
     conflict: MainConflict | null,
   ): Promise<AgentBrief> {
-    const taskSpec = task.taskSpec;
-
     const priorFailure = priorAttemptFailure(task.id, task.blockedReason?.source === "replan" ? task.blockedReason.replanContext : undefined);
 
     // A ProjectIntentUnavailable propagates to execute() and blocks the task.
     const projectIntent = await loadProjectIntent(this.deps.intentSource, task.id);
-
-    const spec: TaskSpec = {
-      goal: (typeof taskSpec?.goal === "string" ? taskSpec.goal : task.title),
-      endState: (typeof taskSpec?.endState === "string" ? taskSpec.endState : `Implement: ${task.title}`),
-      scope: (typeof taskSpec?.scope === "string" ? taskSpec.scope : ""),
-      deliverables: stringArrayOrEmpty(taskSpec?.deliverables),
-    };
 
     const contextMap = await buildContextMap(targetProjectPath);
     const knowledgeContext = await this.buildKnowledgeContext(task, spec);
@@ -782,7 +779,7 @@ export class DispatchService {
 
     const scope: KnowledgeScope = {
       projectId: task.projectId,
-      epicId: task.epicId ?? null,
+      epicId: task.epicId,
       queryText: buildKnowledgeQueryText(task.title, spec),
     };
 
@@ -802,7 +799,7 @@ export class DispatchService {
       const approaches = await source.failedApproaches(scope, 10);
       sections.push({
         heading: "## Failed Approaches — do not repeat",
-        entries: approaches.map((a) => `- "${a.title}" — Failed: ${a.failureReason} (affected: ${a.affectedArea})\n  Learned: ${a.learned}`),
+        entries: approaches.map((a) => `- "${a.title}" — Failed: ${a.failureReason}\n  Learned: ${a.learned}`),
       });
     } catch (e: unknown) {
       console.warn(`[buildKnowledgeContext] Failed to retrieve failed approaches: ${describeErrorChain(e)}`);
@@ -1024,7 +1021,7 @@ export class DispatchService {
     return {
       status: "completed",
       delivered: { kind: "merged", mergeCommit: finalizeResult.mergeCommit },
-      detail: "task completed and verified successfully",
+      detail: `merged on main as ${finalizeResult.mergeCommit}, after its post-merge checks passed on the merged tree`,
       outcome,
       sessionId,
       attempt: task.attempt,
@@ -1329,8 +1326,26 @@ export class DispatchService {
   }
 }
 
-/** Narrows an untyped jsonb value to a `string[]`, dropping non-string members. */
-function stringArrayOrEmpty(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((v): v is string => typeof v === "string");
+/**
+ * The task as its brief states it, read from the stored spec only. Every producer of a dispatched
+ * task writes the goal, end state, scope and deliverables; a row without one is refused rather than
+ * given an end state or scope the plan never recorded.
+ */
+function briefSpecOf(task: TaskDescriptor): { readonly kind: "spec"; readonly spec: TaskSpec } | Unplannable {
+  const stored = task.taskSpec;
+  const { goal, endState, scope, deliverables } = stored ?? {};
+  if (goal === undefined || endState === undefined || scope === undefined || deliverables === undefined) {
+    const missing = Object.entries({ goal, endState, scope, deliverables })
+      .filter(([, value]) => value === undefined)
+      .map(([name]) => name);
+    return {
+      kind: "unplannable",
+      operation: "readTaskSpec",
+      reason:
+        stored === undefined
+          ? `task ${task.id} has no stored task_spec, so its brief would state a goal, end state, scope and deliverables no plan recorded`
+          : `task ${task.id}'s stored task_spec has no ${missing.join(", ")}, so its brief would state what no plan recorded`,
+    };
+  }
+  return { kind: "spec", spec: { goal, endState, scope, deliverables } };
 }

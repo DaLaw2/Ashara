@@ -22,7 +22,10 @@ import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
  * the remaining work re-planned around them as many times as Delivery repairs the plan (migration
  * 045): the project halts as undeliverable. `infrastructure`: the machines a task runs on kept
  * failing past its fault budget (migration 048); the project resumes by itself once the substrate
- * probe passes.
+ * probe passes. `replan_stopped`: every attempt to revise the plan failed, the last because the
+ * planning model gave no usable answer (its structured output never validated, or its provider
+ * failed the request) (migration 060): the model's failure, not Ashara's machinery, which a
+ * revision exhausted by any other error is (`fault`).
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -32,21 +35,42 @@ type ProjectBlockCategory =
   | "replan_bound"
   | "suite_review"
   | "plan_repair"
-  | "infrastructure";
+  | "infrastructure"
+  | "replan_stopped";
 
-/** Why a project was blocked (migration 025): the cause's category, the error's class and its full chain. */
-export interface ProjectBlockCause {
-  readonly category: ProjectBlockCategory;
-  readonly errorClass: string;
-  readonly reason: string;
+/**
+ * The amounts a spend cap was judged on when it stopped work, as Finance read them from its ledger
+ * (migration 060): the cap, the spend recorded, the worst case set aside for calls in flight, and the
+ * worst case of the call it refused, null when no call was refused (spend had already reached the cap).
+ */
+export interface SpendAtCap {
+  readonly capUsd: number;
+  readonly spentUsd: number;
+  readonly inFlightUsd: number;
+  readonly nextCallUsd: number | null;
 }
 
+/**
+ * Why a project was blocked (migration 025): the cause's category, the error's class and its full
+ * chain; a budget_cap halt also carries the amounts its cap was judged on, so a report states them
+ * rather than a limit "reached" that the recorded spend had not reached.
+ */
+export type ProjectBlockCause = UnpricedBlockCause | { readonly category: "budget_cap"; readonly errorClass: string; readonly reason: string; readonly spend: SpendAtCap };
+
+/** A halt whose cause carries no spend: every category but budget_cap. */
+type UnpricedBlockCause = { readonly category: Exclude<ProjectBlockCategory, "budget_cap">; readonly errorClass: string; readonly reason: string };
+
 /** A project's own spend cap refused one of its calls: the project halts at its cap until the owner raises it. */
-export function projectCapCause(reason: string): ProjectBlockCause {
-  return { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.project, reason };
+export function projectCapCause(refusal: { readonly reason: string; readonly spend: SpendAtCap }): ProjectBlockCause {
+  return { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: refusal.reason, spend: refusal.spend };
+}
+
+/** The deployment's spend cap stopped the loop: every project at work halts at it. */
+export function deploymentCapCause(stop: { readonly reason: string; readonly spend: SpendAtCap }): ProjectBlockCause {
+  return { category: "budget_cap", errorClass: SPEND_CAP_ERROR_CLASS.deployment, reason: stop.reason, spend: stop.spend };
 }
 
 /** A project's own record or step failed: Ashara's fault, which the team must repair. */
-export function projectBlockCause(err: Error): ProjectBlockCause {
+export function projectBlockCause(err: Error): UnpricedBlockCause {
   return { category: "fault", errorClass: err.name, reason: describeErrorChain(err) };
 }

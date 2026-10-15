@@ -6,4 +6,4 @@
  */
 
 export type { VisionSource } from "@ashara/engagement/vision";
-export { visionSourceLine } from "@ashara/engagement/vision";
+export { visionSourceCitation } from "@ashara/engagement/vision";

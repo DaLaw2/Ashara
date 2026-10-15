@@ -209,7 +209,17 @@ describe("a task runs on cells end to end", () => {
 
     try {
       const result = await service.execute(
-        { id: taskId, projectId, title: "Write hello.txt", dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
+        {
+          id: taskId,
+          projectId,
+          title: "Write hello.txt",
+          taskSpec: { goal: "Write hello.txt", endState: "hello.txt holds a greeting", scope: "hello.txt", deliverables: ["hello.txt"] },
+          epicId: null,
+          dispatchCount: 0,
+          attempt: 1,
+          workKind: "implementation",
+          successCriteria: [],
+        },
         target,
       );
 

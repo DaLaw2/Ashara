@@ -22,17 +22,19 @@ export type AssumptionDisclosure = z.infer<typeof AssumptionDisclosureSchema>;
 
 /**
  * Where an assumption stands with the client: Stated by them, or Inferred and asked about, or
- * Inferred and reported to them; "not-shown" for an Inferred record that says neither, which the
- * client has no record of seeing.
+ * Inferred and reported to them; "unrecorded" for an Inferred record that says neither. Every writer
+ * records how the client learned of an Inferred assumption, so a record without it was written
+ * before disclosures were: whether the client saw it is not on record, which is not evidence that
+ * they never did.
  */
-export type AssumptionStanding = "stated" | "asked" | "reported" | "not-shown";
+export type AssumptionStanding = "stated" | "asked" | "reported" | "unrecorded";
 
 /**
  * Where an assumption stands with the client when the project is accepted (ADR-074 d95 a), read from
  * the vision version current at acceptance and the client's replies, never from a plan's copy of the
  * vision: Stated by an answer that confirmed it, or changed it, or one whose effect was not recorded
  * ("stated"); Inferred and asked, with a reply read that settled nothing ("answered"), a reply not
- * yet read ("answer-unread") or none ("asked"); reported; or never shown.
+ * yet read ("answer-unread") or none ("asked"); reported; or, on a record that does not say, unrecorded.
  */
 export type AcceptedAssumptionStanding =
   | "stated"
@@ -42,7 +44,7 @@ export type AcceptedAssumptionStanding =
   | "answer-unread"
   | "asked"
   | "reported"
-  | "not-shown";
+  | "unrecorded";
 
 /**
  * The one wording of an assumption's standing and kind in Ashara's own prompts (a planner's vision
@@ -52,7 +54,7 @@ export const ASSUMPTION_STANDING_LABEL: Readonly<Record<AssumptionStanding, stri
   stated: "Stated by the client",
   asked: "Inferred; asked of the client, not yet answered",
   reported: "Inferred; reported to the client",
-  "not-shown": "Inferred; never shown to the client",
+  unrecorded: "Inferred; whether the client was shown it is not on record",
 };
 
 export const ASSUMPTION_KIND_LABEL: Readonly<Record<AssumptionKind | "unclassified", string>> = {

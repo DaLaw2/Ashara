@@ -7,7 +7,7 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { describeErrorChain, parseWorkItemId } from "@ashara/shared";
 import type { StoredTaskSpec } from "./acl/delivery-acl.js";
 import type { VisionSource } from "./acl/engagement-acl.js";
-import { visionSourceLine } from "./acl/engagement-acl.js";
+import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { TaskChecks } from "./task-checks.js";
 
@@ -146,11 +146,11 @@ function fileText(content: string): string {
   return `${content.slice(0, FILE_CHARS)}\n[cut: ${content.length - FILE_CHARS} more characters not shown]`;
 }
 
-/** The items as the review shows them: with id, status and kind, or the bare texts of a row written before those. */
+/** The items as the review shows them: with id and kind (never a standing the plan recorded, which answers change), or the bare texts of a row written before those. */
 function itemLines(sources: readonly VisionSource[] | null | undefined, texts: readonly string[]): string[] {
   return sources === null || sources === undefined || sources.length === 0
     ? texts.map((text) => `${text} (its id, status and kind are not recorded)`)
-    : sources.map(visionSourceLine);
+    : sources.map(visionSourceCitation);
 }
 
 function suiteSection(suite: ReviewedSuite): string {

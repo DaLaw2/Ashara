@@ -66,7 +66,9 @@ async function credentialCanaries(): Promise<CredentialCanaries> {
     { name: "DATABASE_URL", value: process.env["DATABASE_URL"] ?? DEFAULT_DATABASE_URL },
   ];
   try {
-    values.push({ name: `the secret key file ${keyFile}`, value: (await readFile(keyFile, "utf8")).trim() });
+    const key = (await readFile(keyFile, "utf8")).trim();
+    if (key === "") console.log(`(the secret key file ${keyFile} is empty, so there is no content to search for)`);
+    else values.push({ name: `the secret key file ${keyFile}`, value: key });
   } catch (err) {
     console.log(`(the secret key file ${keyFile} is not readable here, so its content is not searched for: ${describeErrorChain(err)})`);
   }

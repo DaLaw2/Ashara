@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { probeCredentialRead, probeOutboundHost, summarizeProbes } from "./cell-probes.js";
+import { expectedCpuMax } from "./cell-limits.js";
+import { probeCredentialRead, probeOutboundHost, probeResourceCaps, summarizeProbes } from "./cell-probes.js";
 import { InvalidCellRequest } from "./errors.js";
 import type { Cell, ExecResult } from "./podman.js";
 
@@ -36,6 +37,30 @@ describe("probeCredentialRead", () => {
 
   it("refuses a path that cannot be sent as one line rather than probe something else", async () => {
     await expect(probeCredentialRead(cellPrinting(""), { paths: ["/a\n/b"], values: [] })).rejects.toThrow(InvalidCellRequest);
+  });
+
+  it("refuses an empty canary set and an empty value: nothing probed must never read as held", async () => {
+    await expect(probeCredentialRead(cellPrinting(""), { paths: [], values: [] })).rejects.toThrow(InvalidCellRequest);
+    await expect(probeCredentialRead(cellPrinting(""), { paths: ["/a"], values: [{ name: "EMPTY", value: "" }] })).rejects.toThrow(InvalidCellRequest);
+  });
+});
+
+describe("probeResourceCaps", () => {
+  const limits = { memoryBytes: 1024, cpus: 1, pids: 64 };
+  const printed = (memory: string): string => `memory.max=${memory}\nmemory.swap.max=0\ncpu.max=${expectedCpuMax(limits)}\npids.max=64\n`;
+
+  it("holds when every cap reads as configured", async () => {
+    expect((await probeResourceCaps(cellPrinting(printed("1024")), limits)).outcome).toBe("held");
+  });
+
+  it("is unverifiable, not breached, when a cap file could not be read and no read cap differs", async () => {
+    const verdict = await probeResourceCaps(cellPrinting(printed("unreadable")), limits);
+    expect(verdict.outcome).toBe("unverifiable");
+    expect(verdict.evidence).toContain("not observed: memory.max");
+  });
+
+  it("is breached when a cap reads with another value", async () => {
+    expect((await probeResourceCaps(cellPrinting(printed("max")), limits)).outcome).toBe("breached");
   });
 });
 

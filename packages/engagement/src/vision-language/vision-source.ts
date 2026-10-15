@@ -20,7 +20,9 @@ export const VisionSourceSchema = z.discriminatedUnion("type", [
     id: z.string().min(1),
     text: z.string().min(1),
     status: z.string().min(1),
-    standing: z.enum(["stated", "asked", "reported", "not-shown"]),
+    // "not-shown" is how a plan written before "unrecorded" stored the same reading: a record that
+    // said neither asked nor reported.
+    standing: z.union([z.enum(["stated", "asked", "reported", "unrecorded"]), z.literal("not-shown").transform(() => "unrecorded" as const)]),
     kind: z.enum(["client-visible", "internal-design", "unclassified"]),
   }),
 ]);
@@ -29,9 +31,27 @@ export type VisionSource = z.infer<typeof VisionSourceSchema>;
 
 const SIDE: Readonly<Record<ScopeSide, string>> = { in: "in scope", out: "out of scope", unclassified: "scope" };
 
-/** A vision item as the plan's prompts and descriptions name it: its id, what it is, and its text. */
+/**
+ * A vision item as a prompt read at once names it: its id, what it is, where it stands with the client
+ * and its text. Only for text used when it is written (the planner's prompt): the standing is the
+ * one the item recorded then, and an answer later changes it.
+ */
 export function visionSourceLine(item: VisionSource): string {
   if (item.type === "scope") return `${item.id} (${SIDE[item.side]}): ${item.text}`;
-  const citability = item.kind === "client-visible" ? "" : ", not citable";
-  return `${item.id} (assumption; ${ASSUMPTION_STANDING_LABEL[item.standing]}; ${ASSUMPTION_KIND_LABEL[item.kind]}${citability}): ${item.text}`;
+  return `${item.id} (assumption; ${ASSUMPTION_STANDING_LABEL[item.standing]}; ${ASSUMPTION_KIND_LABEL[item.kind]}${citability(item.kind)}): ${item.text}`;
+}
+
+/**
+ * A vision item as text stored now and read later names it (a task's description, the items a stored
+ * plan cites): its id, what it is and its text, never its standing with the client, which an answer
+ * changes after the plan is written. Where it stands when the work starts is the brief's own
+ * assumptions section, read from the vision current at dispatch.
+ */
+export function visionSourceCitation(item: VisionSource): string {
+  if (item.type === "scope") return `${item.id} (${SIDE[item.side]}): ${item.text}`;
+  return `${item.id} (assumption; ${ASSUMPTION_KIND_LABEL[item.kind]}${citability(item.kind)}): ${item.text}`;
+}
+
+function citability(kind: Extract<VisionSource, { readonly type: "assumption" }>["kind"]): string {
+  return kind === "client-visible" ? "" : ", not citable";
 }

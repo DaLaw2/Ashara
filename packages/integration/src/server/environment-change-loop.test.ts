@@ -237,7 +237,14 @@ async function harness(name: string): Promise<Harness> {
 
 /** Sprint 0 as a first plan writes it: Pending environment work. */
 async function sprint0(h: Harness): Promise<void> {
-  const taskSpec = { goal: SPRINT0_GOAL, origin: "sprint0", checkedBy: "substrate" } as const;
+  const taskSpec = {
+    goal: SPRINT0_GOAL,
+    endState: "environment/environment.toml parses",
+    scope: "environment/environment.toml and the recipe files it names",
+    deliverables: ["environment/environment.toml"],
+    origin: "sprint0",
+    checkedBy: "substrate",
+  } as const;
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${createWorkItemId()}, 'Task', 'Pending', ${SPRINT0_GOAL}, ${JSON.stringify(taskSpec)}::jsonb,
@@ -257,9 +264,10 @@ async function implementationTask(h: Harness, title: string, check: string, vers
   const id = createWorkItemId();
   const checkTaskId = createWorkItemId();
   await db.execute(sql`
-    INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id)
-    VALUES (${id}, 'Task', 'Pending', ${title}, ${h.projectId}, 'implementation', ${randomUUID()}),
-           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, ${h.projectId}, 'check', ${randomUUID()})`);
+    INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
+    VALUES (${id}, 'Task', 'Pending', ${title}, ${JSON.stringify({ goal: title, endState: `${title} is done`, scope: title, deliverables: [] })}::jsonb,
+            ${h.projectId}, 'implementation', ${randomUUID()}),
+           (${checkTaskId}, 'Task', 'Completed', ${`Write the checks for "${title}"`}, NULL, ${h.projectId}, 'check', ${randomUUID()})`);
   await new TaskCheckRepository(db).append({
     projectId: h.projectId,
     taskId: id,

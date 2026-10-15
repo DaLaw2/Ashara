@@ -54,7 +54,7 @@ const ClientAnswerRecordSchema = z.looseObject({
 /**
  * One assumption as vision_documents.inferences stores it. A record written before keys, kinds or
  * disclosures were recorded holds none of them: it is keyed by its place, its kind reads
- * "unclassified" (not evidence that it is client-visible) and, Inferred, it reads "not shown". A
+ * "unclassified" (not evidence that it is client-visible) and, Inferred, its standing reads "unrecorded". A
  * Stated record carries the client's answer that stated it. Fields this schema does not name (a
  * rationale, the answered question's id) are kept as stored.
  */
@@ -120,7 +120,7 @@ export interface VisionAssumption {
   readonly status: "Inferred" | "Stated" | null;
   readonly kind: AssumptionKind | "unclassified";
   readonly disclosed: AssumptionDisclosure | null;
-  /** What the client has seen of it: Stated by them, asked, reported, or never shown. */
+  /** What the client has seen of it: Stated by them, asked, reported, or not on record. */
   readonly standing: AssumptionStanding;
   /** The client's answer that stated it; null on an Inferred assumption. */
   readonly clientAnswer: ClientAnswer | null;
@@ -147,7 +147,7 @@ export interface VisionVersion {
 
 function standingOf(record: AssumptionRecord): AssumptionStanding {
   if (record.status === "Stated") return "stated";
-  return record.disclosed ?? "not-shown";
+  return record.disclosed ?? "unrecorded";
 }
 
 function assumptionOf(record: AssumptionRecord, index: number): VisionAssumption {
@@ -179,7 +179,7 @@ function legacyAssumptionOf([category, inference]: [string, string], index: numb
     status: null,
     kind: "unclassified",
     disclosed: null,
-    standing: "not-shown",
+    standing: "unrecorded",
     clientAnswer: null,
   };
 }

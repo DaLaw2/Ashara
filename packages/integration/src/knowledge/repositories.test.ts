@@ -144,10 +144,8 @@ describe("FailedApproachRepository", () => {
       taskId,
       epicId,
       "Bad Architecture Choice",
-      "Tried microservices for a single-user app",
       "Over-engineering, latency issues",
       "Keep it simple for solo projects",
-      "architecture",
     );
     createdFailedApproachTaskIds.push(taskId);
 
@@ -160,10 +158,8 @@ describe("FailedApproachRepository", () => {
     const row = rows[0];
     expect(row.epicId).toBe(epicId);
     expect(row.title).toBe("Bad Architecture Choice");
-    expect(row.approachDescription).toBe("Tried microservices for a single-user app");
     expect(row.failureReason).toBe("Over-engineering, latency issues");
     expect(row.learned).toBe("Keep it simple for solo projects");
-    expect(row.affectedArea).toBe("architecture");
     expect(row.projectId).toBe(testProjectId);
   });
 });
@@ -209,7 +205,7 @@ describe("project-scoped knowledge", () => {
     for (const projectId of projectTasks.keys()) {
       const taskId = taskOf(projectId);
       await knowledge.storeKnowledgeFinding(projectId, taskId, null, `finding of ${projectId}`, "shared words", []);
-      await approaches.record(projectId, taskId, null, `approach of ${projectId}`, "d", "shared words", "l", "a");
+      await approaches.record(projectId, taskId, null, `approach of ${projectId}`, "shared words", "l");
     }
 
     for (const projectId of projectTasks.keys()) {

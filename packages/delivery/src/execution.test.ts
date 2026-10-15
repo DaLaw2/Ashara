@@ -199,7 +199,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
           ? {
               status: agentOutcome,
               delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
-              detail: "task completed and verified successfully",
+              detail: "merged on main, after its post-merge checks passed on the merged tree",
               outcome: COMPLETED_OUTCOME,
               sessionId: "test-session",
               attempt: 1,
@@ -1255,8 +1255,8 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         refusalOf: (error) =>
           error instanceof StubCapRefusal
             ? error.scope === "project"
-              ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message }
-              : { kind: "deployment", reason: error.message }
+              ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message, spend: { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 } }
+              : { kind: "deployment", reason: error.message, spend: { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 } }
             : null,
       },
     });
@@ -1361,7 +1361,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
   const merged: ExecutionResult = {
     status: "completed",
     delivered: { kind: "merged", mergeCommit: MERGE_COMMIT },
-    detail: "task completed and verified successfully",
+    detail: "merged on main, after its post-merge checks passed on the merged tree",
     outcome: COMPLETED_OUTCOME,
     sessionId: "test-session",
     attempt: 1,

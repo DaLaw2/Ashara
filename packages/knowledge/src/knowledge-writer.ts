@@ -35,7 +35,6 @@ export interface KnowledgeSource {
       title: string;
       failureReason: string;
       learned: string;
-      affectedArea: string;
     }>
   >;
 }
@@ -64,12 +63,11 @@ interface FailedTask {
   readonly id: string;
   readonly projectId: ProjectId;
   readonly title: string;
-  readonly parentId?: string;
   /**
    * The task's true Epic ancestor, walked up by Delivery, which owns the work-item hierarchy:
-   * `null` when the walk found none; `undefined` when the caller did not walk it.
+   * `null` when the walk found none. Required: the parent is not the Epic and never stands in for it.
    */
-  readonly epicId?: string | null;
+  readonly epicId: string | null;
 }
 
 /** How the dispatch ended: its status, its ordinal and the reason it carries. */
@@ -92,11 +90,10 @@ export async function storeFailureKnowledge(
   task: FailedTask,
   result: FailedDispatch,
 ): Promise<void> {
-  const epicId = task.epicId ?? task.parentId ?? null;
   const title = `${task.title} — ${result.status}`.slice(0, 100);
   const content = `Task '${task.title}' ${result.status} on attempt ${result.attempt}: ${result.detail}`;
   try {
-    await knowledgeSink.storeFinding(task.projectId, task.id, epicId, title, content, [
+    await knowledgeSink.storeFinding(task.projectId, task.id, task.epicId, title, content, [
       "task-failure",
       `outcome:${result.status}`,
     ]);

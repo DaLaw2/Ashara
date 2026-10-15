@@ -101,7 +101,7 @@ describe("ContinuousRunner wakePending", () => {
 describe("ContinuousRunner stop", () => {
   // smoke1 D3: after the deployment cap stopped the runner, a client's stop was accepted and never answered.
   test("a cycle that reports a stop halts the work for good; from then on only the client's stops are taken in, until shutdown", async () => {
-    const stop = { reason: "budget_cap: deployment cap reached" };
+    const stop = { reason: "budget_cap: deployment cap reached", spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } };
     const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
     const runner = new ContinuousRunner(cycles.loop, { idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);

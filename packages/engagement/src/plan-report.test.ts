@@ -226,6 +226,20 @@ describe("plan revision report", () => {
     expect(body).toContain("set aside and will not be done as planned:\n- Open harbour studio bookings");
     expect(body).toContain("1 task already finished stays done");
     expect(body).not.toContain("sets up the project environment again");
+    // Recorded before review tasks were counted: the review is told as not on record, never asserted.
+    expect(body).toContain("The record of this revision does not say whether a team member who wrote none of those checks reviews them");
+    expect(body).not.toContain("reads them all together");
+  });
+
+  test("states the review of the checks only when the revision records its review task", async () => {
+    const summary = { ...CHANGE_SUMMARY, newEnvironmentTask: false };
+    const reviewed = revisionReports({ ...summary, newReviewTasks: 1 });
+    await reviewed.reports.runPending();
+    expect(reviewed.posted[0]?.body).toContain("Then a team member who wrote none of those checks reads them all together");
+
+    const unreviewed = revisionReports({ ...summary, newReviewTasks: 0 });
+    await unreviewed.reports.runPending();
+    expect(unreviewed.posted[0]?.body).toContain("No team member reviews those checks together before building starts.");
   });
 
   test("a summary that does not parse is not reported and blocks the project", async () => {

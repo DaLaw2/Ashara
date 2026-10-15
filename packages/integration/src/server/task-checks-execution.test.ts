@@ -97,7 +97,7 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
   const implementationId = createWorkItemId();
   const checkId = createWorkItemId();
   const checkTitle = `Write the checks for "${title}"`;
-  const checkSpec = { goal: checkTitle, origin: "check", checksFor: implementationId } as const;
+  const checkSpec = { goal: checkTitle, endState: "every check is defined", scope: `the checks of "${title}"`, deliverables: [] as string[], origin: "check", checksFor: implementationId } as const;
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
     VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
@@ -109,13 +109,14 @@ async function plannedPair(title: string): Promise<{ readonly implementation: Ta
     projectId,
     title: taskTitle,
     taskSpec,
+    epicId: null,
     dispatchCount: 0,
     attempt: 1,
     workKind,
     successCriteria: [],
   });
   return {
-    implementation: descriptor(implementationId, title, "implementation"),
+    implementation: descriptor(implementationId, title, "implementation", { goal: title, endState: `${title} is done`, scope: title, deliverables: [] }),
     check: descriptor(checkId, checkTitle, "check", checkSpec),
   };
 }
@@ -810,7 +811,14 @@ describe("post-merge regression suite", () => {
   // tree regression and abandoned at once; it is the scaffold's own work, retried.
   it("a product scaffold whose merge fails the build and test is a verification gap the router retries, never a tree regression", async () => {
     const scaffoldId = createWorkItemId();
-    const taskSpec = { goal: "Set up the product's layout", origin: "product-scaffold", checkedBy: "substrate" } as const;
+    const taskSpec = {
+      goal: "Set up the product's layout",
+      endState: "the environment's build and test pass",
+      scope: "the product's module root",
+      deliverables: [] as string[],
+      origin: "product-scaffold",
+      checkedBy: "substrate",
+    } as const;
     await db.execute(sql`
       INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
       VALUES (${scaffoldId}, 'Task', 'InProgress', 'Set up the product layout', ${projectId}, 'implementation',
@@ -818,7 +826,7 @@ describe("post-merge regression suite", () => {
     const mainBefore = await git("rev-parse", "main");
 
     const { result } = await runTask(
-      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
+      { id: scaffoldId, projectId, title: "Set up the product layout", taskSpec, epicId: null, dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] },
       [
         toolCallTurn("write_file", { path: "BROKEN", content: "a layout whose test fails\n" }),
         toolCallTurn("finish", { status: "done", summary: "Layout set up." }),

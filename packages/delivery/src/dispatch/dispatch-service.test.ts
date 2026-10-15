@@ -17,6 +17,7 @@ import type { ExecutionResult, TaskCheckStore, TaskChecks } from "@ashara/qualit
 import { CHECK_MISSING_EXIT, attemptSummary, withSessionLifecycle } from "@ashara/workplace";
 import type { AssignmentStaff, SessionStore } from "@ashara/workplace";
 import { DispatchService } from "./dispatch-service.js";
+import type { TaskDescriptor } from "./dispatch-service.js";
 
 // The dev_sessions phases the DB CHECK constraint allows; "Preparing" is the
 // only non-terminal one, so anything still holding it after a dispatch is a leak.
@@ -480,6 +481,8 @@ const someTask = () => ({
   attempt: 1,
   successCriteria: [],
   workKind: "implementation" as const,
+  epicId: null,
+  taskSpec: { goal: "t", endState: "t is done", scope: "t", deliverables: [] as string[] },
 });
 
 describe("a dispatch that cannot run in a cell ends before anything runs", () => {
@@ -601,7 +604,7 @@ describe("a task nothing could decide ends before the agent", () => {
     for (const dir of scratch.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check" | "environment") {
+  async function dispatchWith(checks: TaskCheckStore, workKind: "implementation" | "check" | "environment", taskSpec: TaskDescriptor["taskSpec"] = someTask().taskSpec) {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nochecks-")));
     scratch.push(root);
@@ -620,7 +623,7 @@ describe("a task nothing could decide ends before the agent", () => {
       },
     });
     const { service, probe } = serviceOn(substrate, workdirBase, undefined, checks);
-    const result = await service.execute({ ...someTask(), workKind }, target);
+    const result = await service.execute({ ...someTask(), workKind, taskSpec }, target);
     return { result, probe, workdirBase };
   }
 
@@ -633,6 +636,18 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(probe.staffed).toBe(0);
     expect(probe.modelCalls).toBe(0);
     expect(probe.sessions.phases.size).toBe(0);
+    expect(await readdir(workdirBase)).toEqual(["projects"]);
+  });
+
+  test("a task whose stored spec has no end state: failed before its brief, never given an invented one", async () => {
+    const { endState: _dropped, ...withoutEndState } = someTask().taskSpec;
+    const { result, probe, workdirBase } = await dispatchWith(checkStore(STORED_CHECKS), "implementation", withoutEndState);
+
+    expect(result.status).toBe("failed");
+    expect(result.errorEnvelope?.chain.operation).toBe("readTaskSpec");
+    expect(result.detail).toContain("has no endState");
+    expect(probe.staffed).toBe(0);
+    expect(probe.modelCalls).toBe(0);
     expect(await readdir(workdirBase)).toEqual(["projects"]);
   });
 
@@ -860,7 +875,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       ...someTask(),
       attempt: faults.attempt ?? 1,
       workKind: checkWork ? ("check" as const) : ("implementation" as const),
-      ...(faults.scaffold === true ? { taskSpec: { origin: "product-scaffold" as const, checkedBy: "substrate" as const } } : {}),
+      ...(faults.scaffold === true ? { taskSpec: { ...someTask().taskSpec, origin: "product-scaffold" as const, checkedBy: "substrate" as const } } : {}),
     };
     const workDir = join(workdirBase, (checkWork ? checkBranchName(task.id) : taskBranchName(task.id)).replace(/\//g, "-"));
     const shutdown = faults.shutdownDuringSecondTurn;

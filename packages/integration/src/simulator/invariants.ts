@@ -294,6 +294,7 @@ const HALT_CAUSES = {
   suite_review: "undeliverable",
   plan_repair: "undeliverable",
   infrastructure: "infrastructure",
+  replan_stopped: "undeliverable",
 } as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], HaltCause>;
 const HALT_CAUSE_OF: ReadonlyMap<string, HaltCause> = new Map(Object.entries(HALT_CAUSES));
 

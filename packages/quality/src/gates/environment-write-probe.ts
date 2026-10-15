@@ -6,7 +6,6 @@ import {
   createWorkdir,
   ensureTargetGitInit,
   recipePaths,
-  runHostGit,
   targetRepo,
   type Cell,
   type CellSpec,
@@ -43,7 +42,9 @@ export interface EnvironmentWriteProbeRequest {
  * work (the grant) changes the recipe from inside its cell, as an agent's tool call would; Z0
  * commits the tree to the task branch as after every attempt, and the ownership gate runs as
  * before every merge. The write itself lands in the cell's tree: the protection is that nothing of
- * it reaches main. Held when the gate does not pass the branch clean and main's recipe is unchanged.
+ * it reaches main, and what keeps it from main is the gate, since every merge runs it first. The
+ * probe runs no merge, so the gate's verdict is all it observes: held when the gate does not pass
+ * the branch clean, breached when it does, unverifiable when the write did not land in the cell.
  */
 export async function probeEnvironmentWrite(request: EnvironmentWriteProbeRequest): Promise<ProbeVerdict> {
   const probe = "environment-file write without the grant";
@@ -65,24 +66,25 @@ export async function probeEnvironmentWrite(request: EnvironmentWriteProbeReques
     instance: request.instance,
     mount: { hostPath: work.workDir },
   });
-  let write: string;
+  let exitCode: number | null;
   try {
-    const result = await cell.exec(["sh", "-c", `printf 'RUN echo probe\\n' >> ${CONTAINERFILE}`], { timeoutSeconds: 30 });
-    write = `the in-cell write exited ${result.exitCode ?? "none"}`;
+    exitCode = (await cell.exec(["sh", "-c", `printf 'RUN echo probe\\n' >> ${CONTAINERFILE}`], { timeoutSeconds: 30 })).exitCode;
   } finally {
     await cell.teardown();
+  }
+  const write = `the in-cell write exited ${exitCode ?? "none"}`;
+  if (exitCode !== 0) {
+    return { probe, outcome: "unverifiable", evidence: `${write}, so no recipe change reached the branch for the ownership gate to judge` };
   }
 
   await commitAllChanges(work.repo, `probe: task ${PROBE_TASK_ID} writes the recipe`);
   const verdict = await checkBranchOwnership(target, PROBE_TASK_ID, branch, recipe, []);
-  const { stdout: mainContainerfile } = await runHostGit(repo, ["show", `refs/heads/main:${CONTAINERFILE}`]);
-  const mainUnchanged = mainContainerfile === CONTAINERFILE_TEXT;
   return {
     probe,
-    outcome: verdict.kind !== "clean" && mainUnchanged ? "held" : "breached",
+    outcome: verdict.kind !== "clean" ? "held" : "breached",
     evidence:
       `${write}; the ownership gate returned ${verdict.kind}` +
       (verdict.kind === "clean" ? "" : ` (${verdict.reason})`) +
-      `; main's ${CONTAINERFILE} ${mainUnchanged ? "is unchanged" : `changed to ${JSON.stringify(mainContainerfile)}`}`,
+      "; the probe runs no merge, so this verdict is all it observed",
   };
 }

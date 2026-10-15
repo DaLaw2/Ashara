@@ -9,7 +9,14 @@ import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf, statedChangeOf } from "./acl/engagement-acl.js";
-import { PreCallRefusal } from "./acl/finance-acl.js";
+import {
+  LlmCallNotAdmitted,
+  LlmCallNotRecorded,
+  PreCallRefusal,
+  ProviderConfigurationRejected,
+  ProviderError,
+  StructuredOutputExhausted,
+} from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved } from "./acl/organization-acl.js";
 import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
@@ -107,6 +114,8 @@ type RevisionCause =
 interface PlanRevisionWork {
   readonly newTasks: readonly string[];
   readonly newCheckTasks: number;
+  /** Review tasks of the revision, each reading every suite its check tasks store together before building starts. */
+  readonly newReviewTasks: number;
   /** Whether the revision sets up the project environment again (an environment change). */
   readonly newEnvironmentTask: boolean;
   readonly supersededTasks: readonly string[];
@@ -223,6 +232,23 @@ class PlanRepairBoundReached extends Error {
     );
     this.name = "PlanRepairBoundReached";
   }
+}
+
+/**
+ * Whether a failed revision attempt failed because the planning model gave no usable answer: its
+ * structured output never validated, or its provider failed the request, with none of Ashara's own
+ * refusals or faults in the chain (engagement read-failure.ts draws the same line for a read of
+ * client input). Only then is an exhausted revision the model's failure rather than Ashara's.
+ */
+function modelGaveNoUsableAnswer(err: unknown): boolean {
+  let modelFailed = false;
+  for (let current: unknown = err; current instanceof Error; current = current.cause) {
+    if (current instanceof PreCallRefusal || current instanceof LlmCallNotAdmitted || current instanceof LlmCallNotRecorded || current instanceof ProviderConfigurationRejected) {
+      return false;
+    }
+    if (current instanceof StructuredOutputExhausted || current instanceof ProviderError) modelFailed = true;
+  }
+  return modelFailed;
 }
 
 /** Revising the plan failed on every attempt: the change is not planned, and the old plan is not dispatched past it. */
@@ -731,6 +757,7 @@ export class Replanner implements Replanning {
     const work: PlanRevisionWork = {
       newTasks: decomposition.tasks.filter((task) => task.taskSpec.origin === "decomposition").map((task) => task.title),
       newCheckTasks: origins.filter((origin) => origin === "check").length,
+      newReviewTasks: origins.filter((origin) => origin === "review").length,
       newEnvironmentTask: environment.kind === "new",
       supersededTasks: supersededTasks.filter(({ item }) => isGoalTask(item)).map(({ item }) => item.title),
       supersededOther: supersededTasks.filter(({ item }) => !isGoalTask(item)).length,
@@ -761,6 +788,7 @@ export class Replanner implements Replanning {
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
     console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
-    return this.block(projectId, projectBlockCause(new ReplanAttemptsExhausted(projectId, attempt, error)));
+    const exhausted = projectBlockCause(new ReplanAttemptsExhausted(projectId, attempt, error));
+    return this.block(projectId, modelGaveNoUsableAnswer(err) ? { ...exhausted, category: "replan_stopped" } : exhausted);
   }
 }

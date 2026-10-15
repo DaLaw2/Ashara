@@ -25,12 +25,15 @@ const keysOf = (records: Partial<TextFactRecords>): string[] => checkTextFacts({
 describe("checkTextFacts, briefs", () => {
   const checkAuthorGoal = (standing: string): string =>
     `Write the checks that decide whether "Lock" is done.\n\nVision items "Lock" cites:\n- S1 (in scope): put a value.\n- A1 (assumption; ${standing}; client-visible behaviour): Commands wait for the lock.`;
-  const brief = (visionVersion: number, standing: string, note: string) => ({
+  const taskSpec = { goal: "Write the checks", endState: "every check is defined", scope: "the checks of Lock", deliverables: ["checks of Lock"] };
+  const taskSection = "# Task\n\n## Goal\nWrite the checks\n\n## End State\nevery check is defined\n\n## Scope\nthe checks of Lock\n\n## Deliverables\n1. checks of Lock";
+  const brief = (visionVersion: number, standing: string, note: string, context = `${taskSection}\n\n## Acceptance Criteria`) => ({
     title: "Write the checks for \"Lock\"",
     visionAtCreation: 2,
+    taskSpec,
     brief: {
       goal: checkAuthorGoal(standing),
-      context: "",
+      context,
       visionVersion,
       assumptions: [{ key: "A1", statement: "Commands wait for the lock.", note: `${note}; client-visible behaviour` }],
     },
@@ -52,6 +55,16 @@ describe("checkTextFacts, briefs", () => {
     expect(keysOf({ visions: [v1, v2], briefs: [brief(1, "Inferred; asked of the client, not yet answered", "Inferred; asked of the client, not yet answered")] })).toEqual([
       'brief-vision:Write the checks for "Lock"',
     ]);
+  });
+
+  // development #3: a brief stated an end state its task_spec never recorded ("Implement: <title>").
+  it("names a brief whose task section is not the task its work item records, and one with no task on record", () => {
+    const invented = taskSection.replace("every check is defined", 'Implement: Write the checks for "Lock"');
+    expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", "Stated by the client", invented)] })).toEqual([
+      'brief-spec:Write the checks for "Lock"',
+    ]);
+    const unrecorded = { ...brief(2, "Stated by the client", "Stated by the client"), taskSpec: { goal: "Write the checks" } };
+    expect(keysOf({ visions: [v1, v2], briefs: [unrecorded] })).toEqual(['brief-spec-unrecorded:Write the checks for "Lock"']);
   });
 
   it("names structured assumptions that are not the vision's", () => {

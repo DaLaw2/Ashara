@@ -3,6 +3,7 @@ import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import type { SpendAtCap } from "@ashara/delivery/project-halt";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
@@ -16,6 +17,7 @@ type ProjectBlockKind = Exclude<z.infer<typeof ProjectBlockKindSchema>, "check_d
 
 /** A task given up whose repair a plan_repair block left awaited, with the reason it was given up for, as stored. */
 interface BlockingAbandonmentRow {
+  readonly workItemId: string;
   readonly title: string;
   readonly attempts: number;
   readonly cause: StoredBlockedReason;
@@ -66,13 +68,40 @@ async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: 
     .where(and(eq(planRepairs.projectId, projectId), isNull(planRepairs.planRevisionId), lte(planRepairs.createdAt, blockedAt)))
     .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
   if (rows.length === 0) throw new BlockingRepairMissing(episodeId, projectId);
-  return rows.map((row) => ({ title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.id, row.reason) }));
+  return rows.map((row) => ({ workItemId: row.id, title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.id, row.reason) }));
 }
 
-/** The cause recorded on a block episode (migration 040): the error's class and its described chain. */
+/** The cause recorded on a block episode (migration 040): the error's class, its described chain, and on a budget_cap halt the amounts its cap was judged on (migration 060). */
 interface RecordedCauseRow {
   readonly errorClass: string | null;
   readonly reason: string | null;
+  /** null on every kind but budget_cap, and on a budget_cap halt recorded before the amounts were. */
+  readonly spend: SpendAtCap | null;
+}
+
+const SpendAtCapSchema = z.strictObject({
+  capUsd: z.number().nonnegative(),
+  spentUsd: z.number().nonnegative(),
+  inFlightUsd: z.number().nonnegative(),
+  nextCallUsd: z.number().nonnegative().nullable(),
+});
+
+/** A block episode's recorded spend does not parse: the amounts cannot be told, and are never told as absent. */
+class BlockSpendUnreadable extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly detail: string,
+  ) {
+    super(`project_blocks row ${episodeId}: spend does not parse: ${detail}`);
+    this.name = "BlockSpendUnreadable";
+  }
+}
+
+function recordedSpend(episodeId: string, raw: unknown): SpendAtCap | null {
+  if (raw === null) return null;
+  const parsed = SpendAtCapSchema.safeParse(raw);
+  if (!parsed.success) throw new BlockSpendUnreadable(episodeId, z.prettifyError(parsed.error));
+  return parsed.data;
 }
 
 /** The review a suite_review block was written on: the last one recorded before the block. */
@@ -228,6 +257,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       blockedAt: projectBlocks.blockedAt,
       errorClass: projectBlocks.errorClass,
       reason: projectBlocks.reason,
+      spend: projectBlocks.spend,
     })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
@@ -255,7 +285,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
       due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned });
     } else {
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause: { errorClass: row.errorClass, reason: row.reason } });
+      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause: { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend) } });
     }
   }
 

@@ -24,7 +24,7 @@ describe("project block reports", () => {
   test.each(["budget_cap", "configuration", "fault", "planning_stopped"] as const)(
     "%s: one report saying work is paused, the recorded cause, and that the operator is awaited",
     async (kind) => {
-      const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded` };
+      const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded`, spend: null };
       const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }]);
 
       expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
@@ -43,27 +43,47 @@ describe("project block reports", () => {
   test.each([
     [
       SPEND_CAP_ERROR_CLASS.deployment,
-      "the spending limit set for all of Ashara's work, across every project it runs, was reached",
+      "the spending limit set for all of Ashara's work, across every project it runs, left no room for the next step of the work",
       "The spending limit for all of Ashara's work has to be raised before more is spent on any project, this one included.",
     ],
-    [SPEND_CAP_ERROR_CLASS.project, "the spending limit set for this project was reached", "The budget set for this project has to be raised before more is spent."],
-    ["SomethingElse", "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record", "The spending limit that was reached has to be raised before more is spent."],
+    [SPEND_CAP_ERROR_CLASS.project, "the spending limit set for this project left no room for the next step of the work", "The budget set for this project has to be raised before more is spent."],
+    [
+      "SomethingElse",
+      "a spending limit set for this work left no room for the next step of the work, so that step was not paid for; which limit it was is not on record",
+      "The spending limit that stopped the work has to be raised before more is spent.",
+    ],
   ])("a budget_cap halt recorded as %s names the limit its record names", async (errorClass, cause, next) => {
     // The message names the other cap: the report is chosen by the recorded class, never by the message's words.
     const reason = "budget_cap: the spend cap of project p is $1; Raise ASHARA_PROJECT_BUDGET_LIMIT_USD (the deployment cap)";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass, reason } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass, reason, spend: null } },
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain(`Ashara recorded the cause as this: ${cause}`);
+    expect(posted[0].body).not.toContain("was reached");
+    expect(posted[0].body).toContain("How much had been spent and set aside against that limit when it stopped the work is not on record.");
     expect(posted[0].body).toContain(next);
     expect(posted[0].body).not.toContain(errorClass);
     if (errorClass !== SPEND_CAP_ERROR_CLASS.project) expect(posted[0].body).not.toContain("The budget set for this project");
   });
 
+  // smoke3 D1: $0.41 of $1 was spent when the cap refused a call whose worst case would cross it.
+  test("a budget_cap halt states the spent, set-aside and limit amounts its record holds, never a limit reached", async () => {
+    const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass: SPEND_CAP_ERROR_CLASS.deployment, reason: "r", spend } },
+    ]);
+    await reports.runPending();
+    expect(posted[0].body).toContain(
+      "When it stopped the work, $0.412203 had been spent and $0.298540 was set aside for work under way, and the next step " +
+        "needed up to $0.304642 set aside, more than the limit had room for; the limit is $1.000000.",
+    );
+    expect(posted[0].body).not.toContain("was reached");
+  });
+
   test("a halt with no cause recorded says so, and claims none", async () => {
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "fault", cause: { errorClass: null, reason: null } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "fault", cause: { errorClass: null, reason: null, spend: null } },
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain("No cause was recorded for this pause.");
@@ -75,7 +95,7 @@ describe("project block reports", () => {
       "PlanReportUnfounded: project 00000000-0000-4000-8000-000000000020 is recorded as planned with 2 epic(s), 13 decomposed task(s); " +
       "no report is posted\n    at PlanReports.compose (packages/engagement/src/plan-report.ts:289:13)";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "ep-7", projectId, kind: "fault", cause: { errorClass: "PlanReportUnfounded", reason } },
+      { subject: "project-blocked", episodeId: "ep-7", projectId, kind: "fault", cause: { errorClass: "PlanReportUnfounded", reason, spend: null } },
     ]);
     await reports.runPending();
     const body = posted[0].body;
@@ -102,7 +122,7 @@ describe("halt reports state the observed cause", () => {
       "task t1 met 4 infrastructure fault(s), past the budget of 3 uncharged requeues; the project halts until the " +
       "substrate probe passes. The last fault: task cell unavailable: exec wrapper killed by the command's own kill -9";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", cause: { errorClass: "InfrastructureFaultBudgetSpent", reason } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", cause: { errorClass: "InfrastructureFaultBudgetSpent", reason, spend: null } },
     ]);
     await reports.runPending();
     expect(posted).toHaveLength(1);
@@ -120,7 +140,7 @@ describe("halt reports state the observed cause", () => {
     expect(posted).toEqual([{ key: "e1:resumed", body: expect.stringContaining("the machines Ashara runs the work on work again") }]);
   });
 
-  test("an undeliverable halt names each task given up with the cause its record holds", async () => {
+  test("an undeliverable halt names each task given up with its recorded category and record, never the stored text", async () => {
     const { reports, posted } = reportsFor([
       {
         subject: "project-blocked",
@@ -128,13 +148,15 @@ describe("halt reports state the observed cause", () => {
         projectId,
         kind: "plan_repair",
         abandoned: [
-          { title: "Lock the data directory", attempts: 3, cause: { source: "failure_given_up", reason: "attempts exhausted (3/3)", detail: "flock: lock held by pid 41" } },
-          { title: "Review the checks", attempts: 1, cause: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "checks 2 and 5 contradict" } },
+          { workItemId: "w1", title: "Lock the data directory", attempts: 3, cause: { source: "failure_given_up", reason: "attempts exhausted (3/3)", detail: "flock: lock held by pid 41" } },
+          { workItemId: "w2", title: "Review the checks", attempts: 1, cause: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "checks 2 and 5 contradict" } },
           {
+            workItemId: "w3",
             title: "Acceptance on main 0123456789ab",
             attempts: 0,
             cause: { source: "acceptance_failed", mainCommit: "0123456789abcdef0123456789abcdef01234567", reason: `check "get" exited 1` },
           },
+          { workItemId: "w4", title: "Write the importer", attempts: 2, cause: { source: "orchestrator_error", reason: "orchestrator error" } },
         ],
       },
     ]);
@@ -142,29 +164,30 @@ describe("halt reports state the observed cause", () => {
     expect(posted).toHaveLength(1);
     const body = posted[0].body;
     expect(body).toContain("cannot deliver it as planned");
-    expect(body).toContain(`"Lock the data directory", after 3 attempts. As recorded: attempts exhausted (3/3) flock: lock held by pid 41`);
-    expect(body).toContain(`"Review the checks", after 1 attempt. As recorded: checks 2 and 5 contradict`);
-    expect(body).toContain(`the acceptance run on main 0123456789abcdef0123456789abcdef01234567 did not pass: check "get" exited 1`);
-    // The fixed per-source sentences are gone (Discipline D).
-    expect(body).not.toContain("every attempt at it failed");
+    expect(body).toContain(
+      `- "Lock the data directory", after 3 attempts counted against it. Ashara recorded why it was given up as this: its attempts at the work did not succeed. ` +
+        `Ashara keeps the detail in its own record of that task, record w1.`,
+    );
+    expect(body).toContain(`"Review the checks", after 1 attempt counted against it. Ashara recorded why it was given up as this: the review of the plan's checks found problems`);
+    expect(body).toContain("the final check of the whole project did not pass on the project's main line. Ashara keeps the detail in its own record of that task, record w3.");
+    expect(body).toContain("a step of Ashara's own work on it failed. Ashara keeps the detail in its own record of that task, record w4.");
+    // The stored reasons are Ashara's internal wording: none reaches the client.
+    for (const stored of ["attempts exhausted", "flock", "checks 2 and 5", "exited 1", "orchestrator error"]) expect(body).not.toContain(stored);
   });
 
-  test("a task given up through the API quotes the reason its caller stored, and says when none was", async () => {
+  test("a task given up through the API is told as moved by hand, whatever its caller stored", async () => {
     const { reports, posted } = reportsFor([
       {
         subject: "project-blocked",
         episodeId: "e1",
         projectId,
         kind: "plan_repair",
-        abandoned: [
-          { title: "Port the importer", attempts: 2, cause: { source: "api", reason: "superseded by the new importer" } },
-          { title: "Drop the cache", attempts: 0, cause: { source: "api" } },
-        ],
+        abandoned: [{ workItemId: "w1", title: "Port the importer", attempts: 2, cause: { source: "api", reason: "superseded by the new importer" } }],
       },
     ]);
     await reports.runPending();
     const body = posted[0].body;
-    expect(body).toContain(`"Port the importer", after 2 attempts. As recorded: it was moved by hand through Ashara's API, with this recorded: {"reason":"superseded by the new importer"}`);
-    expect(body).toContain(`"Drop the cache", after 0 attempts. As recorded: it was moved by hand through Ashara's API; no cause beyond that is recorded`);
+    expect(body).toContain(`"Port the importer", after 2 attempts counted against it. Ashara recorded why it was given up as this: it was moved by hand through Ashara's API.`);
+    expect(body).not.toContain("superseded by the new importer");
   });
 });

@@ -133,11 +133,11 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
       ]),
     );
 
-    // Records written before kinds: placed by order, unclassified, never shown to the client.
+    // Records written before kinds: placed by order, unclassified, standing with the client unrecorded.
     expect(items).toEqual([
       { type: "scope", id: "S1", text: "In: booking", side: "unclassified" },
       { type: "scope", id: "S2", text: "Out: payments", side: "unclassified" },
-      { type: "assumption", id: "A1", text: "Classes hold twenty", status: "Inferred", standing: "not-shown", kind: "unclassified" },
+      { type: "assumption", id: "A1", text: "Classes hold twenty", status: "Inferred", standing: "unrecorded", kind: "unclassified" },
       { type: "assumption", id: "A2", text: "Bookings close an hour before", status: "Stated", standing: "stated", kind: "unclassified" },
     ]);
   });

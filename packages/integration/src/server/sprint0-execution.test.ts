@@ -102,7 +102,14 @@ function definition(probe: string, options: DefinitionOptions = {}): string {
 /** A Sprint 0 work item on record, owned as environment work, as a first plan writes it. */
 async function sprint0Task(): Promise<TaskDescriptor> {
   const id = createWorkItemId();
-  const taskSpec = { goal: "Define and commit the project environment", origin: "sprint0", checkedBy: "substrate" } as const;
+  const taskSpec = {
+    goal: "Define and commit the project environment",
+    endState: "environment/environment.toml parses",
+    scope: "environment/environment.toml and the recipe files it names",
+    deliverables: ["environment/environment.toml"],
+    origin: "sprint0",
+    checkedBy: "substrate",
+  } as const;
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${id}, 'Task', 'InProgress', 'Define and commit the project environment', ${JSON.stringify(taskSpec)}::jsonb,
@@ -111,7 +118,8 @@ async function sprint0Task(): Promise<TaskDescriptor> {
     id,
     projectId,
     title: "Define and commit the project environment",
-    taskSpec,
+    taskSpec: { ...taskSpec, deliverables: [...taskSpec.deliverables] },
+    epicId: null,
     dispatchCount: 0,
     attempt: 1,
     workKind: "environment",
@@ -123,12 +131,20 @@ async function sprint0Task(): Promise<TaskDescriptor> {
 async function environmentChangeTask(product: "present" | "absent"): Promise<TaskDescriptor> {
   const id = createWorkItemId();
   const title = `Environment change 1 (${product})`;
-  const taskSpec = { goal: "Change the project environment as the requester needs", origin: "environment-change", checkedBy: "substrate", product } as const;
+  const taskSpec = {
+    goal: "Change the project environment as the requester needs",
+    endState: "the recipe provides what the requester needs",
+    scope: "recipe files only",
+    deliverables: [] as string[],
+    origin: "environment-change",
+    checkedBy: "substrate",
+    product,
+  } as const;
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, task_spec, project_id, work_kind, owner_role_id)
     VALUES (${id}, 'Task', 'InProgress', ${title}, ${JSON.stringify(taskSpec)}::jsonb,
             ${projectId}, 'environment', ${randomUUID()})`);
-  return { id, projectId, title, taskSpec, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
+  return { id, projectId, title, taskSpec, epicId: null, dispatchCount: 0, attempt: 1, workKind: "environment", successCriteria: [] };
 }
 
 /**
@@ -151,7 +167,17 @@ async function implementationTask(check: string, environmentVersion: string, bas
     checks: [{ name: "hello", command: check }],
     files: [],
   });
-  return { id, projectId, title: "Write hello.txt", dispatchCount: 0, attempt: 1, workKind: "implementation", successCriteria: [] };
+  return {
+    id,
+    projectId,
+    title: "Write hello.txt",
+    taskSpec: { goal: "Write hello.txt", endState: "hello.txt holds a greeting", scope: "hello.txt", deliverables: ["hello.txt"] },
+    epicId: null,
+    dispatchCount: 0,
+    attempt: 1,
+    workKind: "implementation",
+    successCriteria: [],
+  };
 }
 
 interface TaskRun {

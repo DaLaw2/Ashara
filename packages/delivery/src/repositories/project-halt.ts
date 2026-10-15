@@ -64,6 +64,16 @@ async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind
   return open ?? null;
 }
 
+/** The episode a halt opens: its kind, class and chain, and on a budget_cap halt the amounts its cap was judged on. */
+function episodeOf(cause: ProjectBlockCause) {
+  return {
+    kind: cause.category,
+    errorClass: cause.errorClass,
+    reason: cause.reason,
+    spend: cause.category === "budget_cap" ? cause.spend : null,
+  };
+}
+
 /**
  * Halts the project for first planning giving up, inside `tx`, which holds the project row locked
  * and has just stamped plan_stopped_at on it: the episode is 'planning_stopped', its reason the
@@ -93,7 +103,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         .where(and(eq(projects.id, id), projectAtWork()))
         .returning({ id: projects.id });
       if (!halted) return "already-blocked";
-      await tx.insert(projectBlocks).values({ projectId: id, kind: cause.category, errorClass: cause.errorClass, reason: cause.reason });
+      await tx.insert(projectBlocks).values({ projectId: id, ...episodeOf(cause) });
       return "blocked";
     });
   }
@@ -120,7 +130,7 @@ export class ProjectHaltRepository extends ProjectRepository {
       if (halted.length === 0) return [];
       await tx
         .insert(projectBlocks)
-        .values(halted.map((row) => ({ projectId: row.id, kind: cause.category, errorClass: cause.errorClass, reason: cause.reason })));
+        .values(halted.map((row) => ({ projectId: row.id, ...episodeOf(cause) })));
       return halted.map((row) => parseProjectId(row.id, "projects.id"));
     });
   }

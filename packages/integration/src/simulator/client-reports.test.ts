@@ -8,7 +8,7 @@ function haltWith(kind: string, errorClass: string | null, reason: string | null
   return {
     ...noRecords,
     reports: [{ id: "r1", body, reportsOn: null, inReplyTo: null }],
-    episodes: [{ id: "e1", kind, errorClass, reason, reportId: "r1", resumedReportId: null, ended: false }],
+    episodes: [{ id: "e1", kind, errorClass, reason, spend: null, reportId: "r1", resumedReportId: null, ended: false }],
   };
 }
 
@@ -33,12 +33,26 @@ describe("checkReports, a halt's cause", () => {
     expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT.replace("failed", "stopped"), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
   });
 
-  it("names whose spending limit a budget_cap halt reached from its recorded error class alone", () => {
-    const project = "the spending limit set for this project was reached, so the next step of the work was not paid for";
-    const unknown = "a spending limit set for this work was reached, so the next step of the work was not paid for; which limit it was is not on record";
-    expect(keysOf(haltWith("budget_cap", "BudgetExceeded", "over", stated(project, "e1")), "blocked")).toEqual([]);
-    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(project, "e1")), "blocked")).toEqual(["halt-cause:budget_cap"]);
-    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(unknown, "e1")), "blocked")).toEqual([]);
+  it("names whose spending limit stopped a budget_cap halt from its recorded error class alone, and states its recorded amounts", () => {
+    const unrecorded = "How much had been spent and set aside against that limit when it stopped the work is not on record.";
+    const project = `the spending limit set for this project left no room for the next step of the work, so that step was not paid for. ${unrecorded}`;
+    const unknown =
+      `a spending limit set for this work left no room for the next step of the work, so that step was not paid for; which limit it was is not on record. ${unrecorded}`;
+    expect(keysOf(haltWith("budget_cap", "BudgetExceeded", "over", stated(project.slice(0, -1), "e1")), "blocked")).toEqual([]);
+    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(project.slice(0, -1), "e1")), "blocked")).toEqual(["halt-cause:budget_cap"]);
+    expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(unknown.slice(0, -1), "e1")), "blocked")).toEqual([]);
+    // smoke3 D1: the amounts on record, not a limit reached.
+    const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
+    const amounts =
+      "When it stopped the work, $0.412203 had been spent and $0.298540 was set aside for work under way, and the next step needed up to " +
+      "$0.304642 set aside, more than the limit had room for; the limit is $1.000000";
+    const withSpend = (sentence: string): ReportRecords => {
+      const records = haltWith("budget_cap", "BudgetExceeded", "over", stated(sentence, "e1"));
+      return { ...records, episodes: records.episodes.map((episode) => ({ ...episode, spend })) };
+    };
+    const projectWords = "the spending limit set for this project left no room for the next step of the work, so that step was not paid for";
+    expect(keysOf(withSpend(`${projectWords}. ${amounts}`), "blocked")).toEqual([]);
+    expect(keysOf(withSpend(`${projectWords}. ${unrecorded.slice(0, -1)}`), "blocked")).toEqual(["halt-cause:budget_cap"]);
   });
 
   it("holds a halt with no cause recorded to saying so, and one with a cause to not saying so", () => {
@@ -46,13 +60,25 @@ describe("checkReports, a halt's cause", () => {
     expect(keysOf(haltWith("budget_cap", "BudgetExceeded", null, "Work on this project is paused.\n\nNo cause was recorded for this pause."), "blocked")).toEqual(["halt-cause:budget_cap"]);
   });
 
-  it("names a given-up task whose stored reason does not parse instead of judging its line on the title alone", () => {
+  it("names a given-up task whose stored reason does not parse, or is absent, instead of judging its line on the title alone", () => {
     const repairing = (blockedReason: unknown): ReportRecords => ({
       ...haltWith("plan_repair", null, null, `Work on this project is paused.\n\n- "Goal": given up.`),
-      repairs: [{ episodeId: "e1", title: "Goal", attempts: 3, blockedReason }],
+      repairs: [{ episodeId: "e1", workItemId: "w1", title: "Goal", attempts: 3, blockedReason }],
     });
-    expect(keysOf(repairing(null), "blocked")).toEqual([]);
+    expect(keysOf(repairing(null), "blocked")).toEqual(["halt-cause-corrupt:plan_repair"]);
     expect(keysOf(repairing({ source: "no-such-source" }), "blocked")).toEqual(["halt-cause-corrupt:plan_repair"]);
+  });
+
+  it("holds a given-up task's line to its recorded category and record, never the stored text", () => {
+    const told = (line: string): ReportRecords => ({
+      ...haltWith("plan_repair", null, null, `Work on this project has stopped.\n\n${line}`),
+      repairs: [{ episodeId: "e1", workItemId: "w1", title: "Goal", attempts: 3, blockedReason: { source: "task_failed", reason: "task_failed" } }],
+    });
+    const category =
+      `- "Goal", after 3 attempts counted against it. Ashara recorded why it was given up as this: its attempts at the work did not succeed. ` +
+      `Ashara keeps the detail in its own record of that task, record w1.`;
+    expect(keysOf(told(category), "blocked")).toEqual([]);
+    expect(keysOf(told(`- "Goal", after 3 attempts. As recorded: task_failed`), "blocked")).toEqual(["halt-cause:plan_repair"]);
   });
 
   it("names a halt of a kind no code path writes since migration 048", () => {
@@ -101,8 +127,8 @@ describe("checkReports, a delivered report", () => {
     const sources = [
       { type: "scope", id: "S1", text: "The product greets.", side: "in" },
       { type: "scope", id: "S2", text: "Any network service.", side: "out" },
-      { type: "assumption", id: "A1", text: "Messages are in English.", status: "Inferred", standing: "not-shown", kind: "client-visible" },
-      { type: "assumption", id: "A2", text: "State lives in memory.", status: "Inferred", standing: "not-shown", kind: "internal-design" },
+      { type: "assumption", id: "A1", text: "Messages are in English.", status: "Inferred", standing: "unrecorded", kind: "client-visible" },
+      { type: "assumption", id: "A2", text: "State lives in memory.", status: "Inferred", standing: "unrecorded", kind: "internal-design" },
     ];
     const traced = {
       reviewSpec: { origin: "review", sources },
@@ -112,13 +138,13 @@ describe("checkReports, a delivered report", () => {
       `\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${lines.join("\n")}`;
 
     it("accepts exactly the uncited asked-for items", () => {
-      expect(keysOf(delivered(merged, traced, section(["- Ashara's assumption, which was never shown to you: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, traced, section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."])), "accepted", [mergedGoal])).toEqual([]);
     });
 
     it("refuses an out-of-scope line or an internal-design assumption listed as not covered", () => {
-      const listed = ["- Ashara's assumption, which was never shown to you: Messages are in English.", "- Any network service."];
+      const listed = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.", "- Any network service."];
       expect(keysOf(delivered(merged, traced, section(listed)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
-      const internal = ["- Ashara's assumption, which was never shown to you: Messages are in English.", "- Ashara's assumption, which was never shown to you: State lives in memory."];
+      const internal = ["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English.", "- Ashara's assumption, which Ashara has no record of showing you: State lives in memory."];
       expect(keysOf(delivered(merged, traced, section(internal)), "accepted", [mergedGoal])).toEqual(["delivered-coverage", "delivered-coverage"]);
     });
 

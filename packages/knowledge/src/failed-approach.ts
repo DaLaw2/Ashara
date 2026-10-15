@@ -40,20 +40,13 @@ export async function recordFailedApproach(
 ): Promise<void> {
   try {
     const epicId = await epicIdOf();
-    // FINDING: taskSpec.area was read but never written by any producer — a silent
-    // death of the shouldSplit class. The fallback was always taken. Removed the
-    // dead read; only the fallback remains.
-    const affectedArea = task.title.toLowerCase();
-
     await failedApproachRepo.record(
       task.projectId,
       task.id,
       epicId,
       task.title,
-      `Task '${task.title}' attempted execution`,
       errorDetail,
       typeof learned === "object" ? routedLesson(task.title, learned, errorDetail) : (learned ?? errorDetail),
-      affectedArea,
     );
   } catch (e) {
     console.warn(`[${task.id}] failed to record failed approach:`, e);

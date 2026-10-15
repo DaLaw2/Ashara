@@ -113,7 +113,7 @@ const SEEN_BY_CLIENT: Readonly<Record<Exclude<AcceptedAssumptionStanding, Stated
   answered: "which you were asked about; your reply neither confirmed nor changed it",
   "answer-unread": "which you were asked about; your reply had not been read when the project was accepted",
   reported: "which was reported to you",
-  "not-shown": "which was never shown to you",
+  unrecorded: "which Ashara has no record of showing you",
 };
 
 function isStated(standing: AcceptedAssumptionStanding): standing is StatedStanding {

@@ -136,6 +136,8 @@ class PlanReportUnfounded extends Error {
 const revisionWorkFields = {
   newTasks: z.array(z.string().min(1)).min(1),
   newCheckTasks: z.number().int().min(0),
+  // Absent on a revision recorded before its review tasks were counted.
+  newReviewTasks: z.number().int().min(0).max(1).optional(),
   newEnvironmentTask: z.boolean(),
   supersededTasks: z.array(z.string().min(1)),
   supersededOther: z.number().int().min(0),
@@ -210,7 +212,8 @@ class PlanRevisionSummaryUnreadable extends Error {
   }
 }
 
-// Every plan and every revision carries one review task (planning decomposition.ts), so both reports state it.
+// The first plan's report states it when the plan holds exactly one review task (PlanReportUnfounded
+// otherwise); a revision's, from the review tasks its summary records.
 const REVIEW_SENTENCE =
   `Then a team member who wrote none of those checks reads them all together with what you asked for, and sends ` +
   `back any that cannot all be passed at once or that test something you did not ask for, before building starts.`;
@@ -271,6 +274,14 @@ function quotedList(titles: readonly string[]): string {
   return titles.map((title) => `- ${title}`).join("\n");
 }
 
+/** What a revision's record says of a review of its checks, and nothing beyond it. */
+function revisionReviewSentence(newReviewTasks: number | undefined): string {
+  if (newReviewTasks === undefined) {
+    return `The record of this revision does not say whether a team member who wrote none of those checks reviews them together before building starts.`;
+  }
+  return newReviewTasks === 1 ? REVIEW_SENTENCE : `No team member reviews those checks together before building starts.`;
+}
+
 /** Plain words: what the client said, what the team now does, what was set aside and what stays done. */
 function planRevisionReport(summary: PlanRevisionSummary): string {
   const paragraphs =
@@ -297,7 +308,7 @@ function planRevisionReport(summary: PlanRevisionSummary): string {
     `The team will now do ${plural(summary.newTasks.length, "task")}:\n${quotedList(summary.newTasks)}`,
     `Before any of them starts, team members who do not do them write the checks that decide whether each is done ` +
       `(${plural(summary.newCheckTasks, "check task")}).`,
-    REVIEW_SENTENCE,
+    revisionReviewSentence(summary.newReviewTasks),
   );
   const setAside = summary.supersededTasks.length + summary.supersededOther;
   paragraphs.push(

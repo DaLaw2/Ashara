@@ -325,16 +325,19 @@ class StubRefusal extends Error {
   }
 }
 
+/** The amounts a stub cap refuses at. */
+const STUB_SPEND = { capUsd: 5, spentUsd: 4.5, inFlightUsd: 0.25, nextCallUsd: 0.5 };
+
 /** A spend cap whose deployment stop is `stop` once `stopped()` returns true. */
 function stubSpendCap(stopped: () => boolean): SpendCapPort {
-  const stop: LoopStop = { reason: "budget_cap: stub deployment cap" };
+  const stop: LoopStop = { reason: "budget_cap: stub deployment cap", spend: STUB_SPEND };
   return {
     deploymentStop: async () => (stopped() ? stop : null),
     refusalOf: (error) =>
       error instanceof StubRefusal
         ? error.refusal === "project"
-          ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message }
-          : { kind: "deployment", reason: error.message }
+          ? { kind: "project", projectId: TEST_PROJECT_ID, reason: error.message, spend: STUB_SPEND }
+          : { kind: "deployment", reason: error.message, spend: STUB_SPEND }
         : null,
   };
 }
@@ -389,7 +392,7 @@ describe("CoreLoop spend cap", () => {
     }).runCycle();
 
     expect(order).toEqual(["reports", "halt", "reports"]);
-    expect(halted).toEqual([{ category: "budget_cap", errorClass: "DeploymentSpendCapReached", reason: "budget_cap: stub deployment cap" }]);
+    expect(halted).toEqual([{ category: "budget_cap", errorClass: "DeploymentSpendCapReached", reason: "budget_cap: stub deployment cap", spend: STUB_SPEND }]);
     expect(result.stop?.reason).toBe("budget_cap: stub deployment cap");
   });
 
@@ -428,7 +431,7 @@ describe("CoreLoop spend cap", () => {
 
     // Finance refuses; the halt is Delivery's (O3 c).
     expect(halted).toEqual([
-      { projectId: TEST_PROJECT_ID, cause: { category: "budget_cap", errorClass: "BudgetExceeded", reason: "budget_cap: stub project cap refusal" } },
+      { projectId: TEST_PROJECT_ID, cause: { category: "budget_cap", errorClass: "BudgetExceeded", reason: "budget_cap: stub project cap refusal", spend: STUB_SPEND } },
     ]);
     expect(roster).toHaveBeenCalledTimes(1);
     expect(result.stop).toBeNull();
@@ -494,15 +497,15 @@ describe("CoreLoop spend cap", () => {
     const reason = "budget_cap: the spend cap of the deployment (every project) is $5.000000";
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) =>
       task.id === TASK_IDS[0]
-        ? { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project" } }
-        : { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "deployment" as const, reason } },
+        ? { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project", spend: STUB_SPEND } }
+        : { taskId: task.id, status: "refused" as const, detail: "refused", refusal: { kind: "deployment" as const, reason, spend: STUB_SPEND } },
     );
 
     const deps = buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => false));
     const result = await new CoreLoop(deps).runCycle();
 
     expect(result.tasksProcessed).toBe(2);
-    expect(result.stop).toEqual({ reason });
+    expect(result.stop).toEqual({ reason, spend: STUB_SPEND });
   });
 
   test("tasks refused only at their project's cap leave the loop running", async () => {
@@ -510,7 +513,7 @@ describe("CoreLoop spend cap", () => {
       taskId: task.id,
       status: "refused" as const,
       detail: "refused",
-      refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project" },
+      refusal: { kind: "project" as const, projectId: TEST_PROJECT_ID, reason: "budget_cap: project", spend: STUB_SPEND },
     }));
 
     const result = await new CoreLoop(buildDeps(undefined, undefined, undefined, undefined, undefined, undefined, stubSpendCap(() => false))).runCycle();

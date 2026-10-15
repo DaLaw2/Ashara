@@ -16,11 +16,11 @@ const asked = { key: "A1", statement: "Commands wait for the lock.", rationale: 
 const internal = { key: "A4", statement: "The log is wal.log.", rationale: "simplest", status: "Inferred", kind: "internal-design", disclosed: "reported" };
 
 describe("readVisionVersion: one reader for every context", () => {
-  test("keyed records keep their keys, kinds and standings; a record without them reads unkeyed, unclassified, never shown", () => {
+  test("keyed records keep their keys, kinds and standings; a record without them reads unkeyed, unclassified, standing unrecorded", () => {
     const read = readVisionVersion(stored([asked, { statement: "Written before keys.", status: "Inferred" }]));
     expect(read.assumptions.map((a) => [a.id, a.keyed, a.kind, a.standing])).toEqual([
       ["A1", true, "client-visible", "asked"],
-      ["A2", false, "unclassified", "not-shown"],
+      ["A2", false, "unclassified", "unrecorded"],
     ]);
     expect(read.scope).toEqual([{ text: "put and get", side: "in" }]);
   });

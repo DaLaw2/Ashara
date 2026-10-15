@@ -21,16 +21,25 @@ import type { Database } from "./database.js";
  */
 
 const reportRow = z.object({ id: z.string(), body: z.string(), reportsOn: z.string().nullable(), inReplyTo: z.string().nullable() });
+/** The amounts a budget_cap halt's cap was judged on, as project_blocks.spend holds them (migration 060). */
+const spendRecord = z.strictObject({
+  capUsd: z.number(),
+  spentUsd: z.number(),
+  inFlightUsd: z.number(),
+  nextCallUsd: z.number().nullable(),
+});
 const episodeRecord = z.object({
   id: z.string(),
   kind: z.string(),
   errorClass: z.string().nullable(),
   reason: z.string().nullable(),
+  /** As stored; a value that does not parse as spendRecord is its own verdict (halt-spend-corrupt). */
+  spend: z.unknown(),
   reportId: z.string().nullable(),
   resumedReportId: z.string().nullable(),
   ended: z.boolean(),
 });
-const repairRow = z.object({ episodeId: z.string(), title: z.string(), attempts: z.number(), blockedReason: z.unknown() });
+const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), title: z.string(), attempts: z.number(), blockedReason: z.unknown() });
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
@@ -60,13 +69,13 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     episodes: await rows(
       episodeRecord,
-      sql`SELECT id, kind, error_class AS "errorClass", reason, report_id AS "reportId", resumed_report_id AS "resumedReportId",
+      sql`SELECT id, kind, error_class AS "errorClass", reason, spend, report_id AS "reportId", resumed_report_id AS "resumedReportId",
                  ended_at IS NOT NULL AS ended
           FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`,
     ),
     repairs: await rows(
       repairRow,
-      sql`SELECT b.id AS "episodeId", w.title, w.dispatch_count AS attempts, w.blocked_reason AS "blockedReason"
+      sql`SELECT b.id AS "episodeId", w.id AS "workItemId", w.title, w.dispatch_count AS attempts, w.blocked_reason AS "blockedReason"
           FROM project_blocks b
           JOIN plan_repairs r ON r.project_id = b.project_id AND r.plan_revision_id IS NULL AND r.created_at <= b.blocked_at
           JOIN work_items w ON w.id = r.work_item_id
@@ -117,8 +126,6 @@ interface ReportedItem {
 }
 
 /** How much of a recorded cause a report must quote: enough to be that cause and no other. */
-const QUOTED_CHARS = 200;
-
 /**
  * How I4 judges each block kind's report, over the code's own list (`satisfies`: a kind added there
  * fails the type check here until it is placed). `stated`: the report states the episode's recorded
@@ -134,6 +141,7 @@ const KIND_JUDGEMENT = {
   planning_stopped: "stated",
   replan_bound: "stated",
   infrastructure: "stated",
+  replan_stopped: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -141,7 +149,7 @@ const KIND_JUDGEMENT = {
 type Judged = typeof KIND_JUDGEMENT;
 type StatedKind = { [K in keyof Judged]: Judged[K] extends "stated" ? K : never }[keyof Judged];
 const JUDGEMENT_OF: ReadonlyMap<string, Judged[keyof Judged]> = new Map(Object.entries(KIND_JUDGEMENT));
-const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure"];
+const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped"];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
   return JUDGEMENT_OF.get(kind) ?? "unknown";
@@ -152,13 +160,52 @@ function statedKind(kind: string): StatedKind | null {
 }
 
 /**
- * What a given-up task's stored reason records of why: its text, none, or a corrupt record. A
- * corrupt reason is its own verdict, never "none": reading it as none would leave the halt report
- * judged on the task's title alone.
+ * Why a given-up task was given up, as the oracle words each stored reason's source for the client:
+ * its category, never the stored text, which is Ashara's internal wording. A reason that does not
+ * parse, or none, is its own verdict: no line can be judged against it.
  */
-type RecordedWhy = { readonly kind: "text"; readonly text: string } | { readonly kind: "none" } | { readonly kind: "corrupt"; readonly detail: string };
+type GivenUpCategory = { readonly kind: "category"; readonly words: string } | { readonly kind: "corrupt"; readonly detail: string };
 
-function recordedWhy(raw: unknown): RecordedWhy {
+function categoryWords(reason: StoredBlockedReason): string {
+  switch (reason.source) {
+    case "failure_given_up":
+    case "task_failed":
+    case "replan":
+      return "its attempts at the work did not succeed";
+    case "orchestrator_error":
+    case "orphan_unreconciled":
+      return "a step of Ashara's own work on it failed";
+    case "merge_unrecorded":
+      return "its work is on the project's main line, but Ashara could not record that";
+    case "environment_unavailable":
+      return "the machines Ashara runs the work on were not available for it";
+    case "environment_undefined":
+      return "the project's environment, in which it is built and tested, was not defined or could not be built";
+    case "environment_change_needed":
+      return "it needed a change to how the project is built and tested, and no such change was made for it";
+    case "checks_stale":
+    case "checks_rewrite_bound":
+      return "the checks that decide it no longer held on the project's environment and could not be written again";
+    case "check_disputed":
+      return "its developer found that a check written for it cannot be passed by correct work, and that could not be settled";
+    case "suite_review_unresolved":
+      return "the review of the plan's checks found problems that could not be settled";
+    case "owner_unresolved":
+      return "no member of the team is assigned to do it";
+    case "dependency_unsatisfiable":
+      return "it depends on work that can never be finished";
+    case "acceptance_failed":
+      return reason.mainCommit === null
+        ? "the final check of the whole project could not read the project's main line"
+        : "the final check of the whole project did not pass on the project's main line";
+    case "superseded":
+      return "a revision of the plan replaced it";
+    case "api":
+      return "it was moved by hand through Ashara's API";
+  }
+}
+
+function givenUpCategory(raw: unknown): GivenUpCategory {
   let parsed: StoredBlockedReason | undefined;
   try {
     parsed = parseStoredBlockedReason(raw);
@@ -166,9 +213,12 @@ function recordedWhy(raw: unknown): RecordedWhy {
     if (!(err instanceof BlockedReasonCorrupt)) throw err;
     return { kind: "corrupt", detail: err.message };
   }
-  if (parsed === undefined) return { kind: "none" };
-  if (parsed.source === "replan") return { kind: "text", text: parsed.replanContext.detail };
-  return "reason" in parsed && typeof parsed.reason === "string" ? { kind: "text", text: parsed.reason } : { kind: "none" };
+  if (parsed === undefined) return { kind: "corrupt", detail: "a given-up task records no reason" };
+  return { kind: "category", words: categoryWords(parsed) };
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
@@ -181,10 +231,11 @@ function recordedWhy(raw: unknown): RecordedWhy {
 function expectedKindWords(kind: StatedKind, errorClass: string | null): string {
   switch (kind) {
     case "budget_cap": {
-      const reached = "was reached, so the next step of the work was not paid for";
-      if (errorClass === SPEND_CAP_ERROR_CLASS.deployment) return `the spending limit set for all of Ashara's work, across every project it runs, ${reached}`;
-      if (errorClass === SPEND_CAP_ERROR_CLASS.project) return `the spending limit set for this project ${reached}`;
-      return `a spending limit set for this work ${reached}; which limit it was is not on record`;
+      // A cap refuses a call whose worst case would cross it, before the recorded spend reaches it (smoke3 D1).
+      const stopped = "left no room for the next step of the work, so that step was not paid for";
+      if (errorClass === SPEND_CAP_ERROR_CLASS.deployment) return `the spending limit set for all of Ashara's work, across every project it runs, ${stopped}`;
+      if (errorClass === SPEND_CAP_ERROR_CLASS.project) return `the spending limit set for this project ${stopped}`;
+      return `a spending limit set for this work ${stopped}; which limit it was is not on record`;
     }
     case "configuration":
       return "a step of the work needed something Ashara's own setup does not provide, for a reason other than a spending limit";
@@ -196,18 +247,45 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       return "the plan has been revised for your changes as many times as the team revises it before its operator looks the project over";
     case "infrastructure":
       return "the machines Ashara runs the work on kept failing while they ran this project's work";
+    case "replan_stopped":
+      return "every attempt to revise the plan failed, the last because the model planning it gave no usable answer";
   }
+}
+
+function usd(amount: number): string {
+  return `$${amount.toFixed(6)}`;
+}
+
+/** The amounts a budget_cap halt's report must state, from its episode's spend, or that they are not on record. */
+function expectedSpendWords(spend: z.infer<typeof spendRecord> | null): string {
+  if (spend === null) return "How much had been spent and set aside against that limit when it stopped the work is not on record.";
+  const next =
+    spend.nextCallUsd === null
+      ? "which together had reached the limit"
+      : `and the next step needed up to ${usd(spend.nextCallUsd)} set aside, more than the limit had room for`;
+  return `When it stopped the work, ${usd(spend.spentUsd)} had been spent and ${usd(spend.inFlightUsd)} was set aside for work under way, ${next}; the limit is ${usd(spend.capUsd)}.`;
 }
 
 /**
  * The cause sentences a halt report must carry, from the episode's row: its recorded kind in the
- * client's words, and the episode's own id as the record that holds the detail (W11b D3); a halt
- * recorded with neither error class nor reason says no cause was.
+ * client's words, a budget_cap halt's recorded amounts, and the episode's own id as the record that
+ * holds the detail (W11b D3); a halt recorded with neither error class nor reason says no cause was.
+ * Null when the episode's spend does not parse: no sentence can be expected of it.
  */
-function statedCause(episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null }, kind: StatedKind): string {
+function statedCause(
+  episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null; readonly spend: unknown },
+  kind: StatedKind,
+): string | null {
   if (episode.reason === null && episode.errorClass === null) return "No cause was recorded for this pause.";
+  let amounts = "";
+  if (kind === "budget_cap") {
+    const spend = z.union([z.null(), spendRecord]).safeParse(episode.spend ?? null);
+    if (!spend.success) return null;
+    amounts = `${expectedSpendWords(spend.data)} `;
+  }
   return (
     `Ashara recorded the cause as this: ${expectedKindWords(kind, episode.errorClass)}. ` +
+    amounts +
     `Ashara keeps the technical detail in its own record of this pause, record ${episode.id}.`
   );
 }
@@ -304,7 +382,9 @@ export function checkReports(records: ReportRecords, project: { readonly status:
       add(`halt-kind-unjudged:${kind}`, `the ${kind} halt is judged as stating its kind, but STATED_KINDS does not hold it`);
     } else if (stating !== null) {
       const stated = statedCause(episode, stating);
-      if (!report.body.includes(stated)) {
+      if (stated === null) {
+        add(`halt-spend-corrupt:${kind}`, `the ${kind} halt records a spend that does not parse, so no report can be judged against it`);
+      } else if (!report.body.includes(stated)) {
         add(`halt-cause:${kind}`, `the ${kind} halt report does not state the recorded cause as "${stated.slice(0, 200)}"; it reads "${report.body.slice(0, 200)}"`);
       }
     } else if (judgement === "retired") {
@@ -312,15 +392,16 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     } else if (kind === "plan_repair" && !episode.ended) {
       const blocking = records.repairs.filter((repair) => repair.episodeId === episode.id);
       for (const repair of blocking) {
-        const recorded = recordedWhy(repair.blockedReason);
-        if (recorded.kind === "corrupt") {
-          add("halt-cause-corrupt:plan_repair", `"${repair.title}" is given up with a stored reason that does not parse, so no report can be judged against it: ${recorded.detail.slice(0, 200)}`);
+        const category = givenUpCategory(repair.blockedReason);
+        if (category.kind === "corrupt") {
+          add("halt-cause-corrupt:plan_repair", `"${repair.title}" is given up with a stored reason that does not parse, so no report can be judged against it: ${category.detail.slice(0, 200)}`);
           continue;
         }
-        const why = recorded.kind === "text" ? recorded.text.slice(0, QUOTED_CHARS) : null;
-        const line = namedLines(report.body).find((each) => each.startsWith(`- "${repair.title}"`));
-        if (line === undefined || (why !== null && !report.body.includes(why))) {
-          add("halt-cause:plan_repair", `the plan_repair halt report does not name "${repair.title}" with its recorded cause${why === null ? "" : ` "${why.slice(0, 120)}"`}`);
+        const expected =
+          `- "${repair.title}", after ${plural(repair.attempts, "attempt")} counted against it. Ashara recorded why it was given up as this: ` +
+          `${category.words}. Ashara keeps the detail in its own record of that task, record ${repair.workItemId}.`;
+        if (!namedLines(report.body).includes(expected)) {
+          add("halt-cause:plan_repair", `the plan_repair halt report does not name "${repair.title}" as "${expected.slice(0, 200)}"`);
         }
       }
       const named = namedLines(report.body).length;

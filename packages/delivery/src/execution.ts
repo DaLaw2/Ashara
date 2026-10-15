@@ -297,7 +297,7 @@ async function executeTask(
       console.warn(`[${task.id}] project ${task.projectId} ${blocked} on a configuration fault (${refusal.errorClass}): ${refusal.reason}`);
     } else if (refusal.kind === "project") {
       // Finance refuses the call; the project's halt at its cap is Delivery's (O3 c).
-      const blocked = await deps.projects.block(task.projectId, projectCapCause(refusal.reason));
+      const blocked = await deps.projects.block(task.projectId, projectCapCause(refusal));
       console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
     }
     const cap =
@@ -357,7 +357,7 @@ async function executeTask(
       );
     }
     return {
-      result: completedResult(task.id),
+      result: completedResult(task.id, execResult.detail),
       outcome: execResult.outcome,
       routedHere: false,
     };
@@ -614,7 +614,7 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
 async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo">, task: WorkItem, error: unknown): Promise<void> {
   const refusal = deps.spendCap.refusalOf(error);
   if (refusal?.kind !== "project") return;
-  const blocked = await deps.projectRepo.block(task.projectId, projectCapCause(refusal.reason));
+  const blocked = await deps.projectRepo.block(task.projectId, projectCapCause(refusal));
   console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
 }
 

@@ -394,9 +394,9 @@ describe("DecompositionEngine", () => {
         expect(implementation?.successCriteria).toEqual(["a member books a seat", "the twenty-first booking is refused"]);
         const check = result.tasks.find((t) => t.taskSpec.origin === "check");
         expect(check?.taskSpec).toMatchObject({ visionItems: traced, acceptance: implementation?.taskSpec.origin === "decomposition" ? implementation.taskSpec.acceptance : [] });
-        expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" cites (its checks may test only what these ask for, and the inputs they say to reject):`);
+        expect(check?.taskSpec.goal).toContain(`Vision items "Task t1" cites (its checks may test only what these ask for, and the inputs they say to reject; where each assumption stands with the client is under the assumptions work proceeds on):`);
         expect(check?.taskSpec.goal).toContain("- S1 (in scope): In: booking a seat in a class of either studio");
-        expect(check?.taskSpec.goal).toContain("- A1 (assumption; Inferred; reported to the client; client-visible behaviour): A class holds at most twenty members");
+        expect(check?.taskSpec.goal).toContain("- A1 (assumption; client-visible behaviour): A class holds at most twenty members");
         expect(check?.taskSpec.goal).toContain("- [A1, S1] the twenty-first booking is refused");
         expect(check?.taskSpec.goal).not.toContain("Bookings are recorded in one ledger");
     });

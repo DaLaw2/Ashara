@@ -20,15 +20,32 @@ interface SpendCaps {
   readonly perProjectUsd: number;
 }
 
+/**
+ * The amounts a cap was judged on when it stopped work, as the ledger read them: the cap, the spend
+ * recorded, the worst case set aside for calls in flight, and the worst case of the call it refused
+ * (null when no call was refused: recorded and in-flight spend had already reached the cap).
+ */
+interface SpendAtCap {
+  readonly capUsd: number;
+  readonly spentUsd: number;
+  readonly inFlightUsd: number;
+  readonly nextCallUsd: number | null;
+}
+
 /** Why the loop must stop: the deployment's cap admits no further call. */
 interface DeploymentStop {
   readonly reason: string;
+  readonly spend: SpendAtCap;
 }
 
 /** A spend cap refusing a call, as the loop routes it. */
 type SpendRefusal =
-  | { readonly kind: "project"; readonly projectId: string; readonly reason: string }
-  | { readonly kind: "deployment"; readonly reason: string };
+  | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
+  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap };
+
+function spendOf(refused: BudgetExceeded): SpendAtCap {
+  return { capUsd: refused.capUsd, spentUsd: refused.spentUsd, inFlightUsd: refused.inFlightUsd, nextCallUsd: refused.estimatedCostUsd };
+}
 
 interface SpendCapDeps {
   /** llm_calls: the spend a cap reads, and the row an admitted call is written to before it is sent. */
@@ -115,7 +132,7 @@ export class SpendCap {
    * does not route refusals itself (a throw the loop handles as an error).
    */
   async deploymentStop(): Promise<DeploymentStop | null> {
-    if (this.deploymentRefusal) return { reason: this.deploymentRefusal.message };
+    if (this.deploymentRefusal) return { reason: this.deploymentRefusal.message, spend: spendOf(this.deploymentRefusal) };
     const spend = await this.deps.ledger.spend({ kind: "deployment" });
     const spentUsd = spend.recordedUsd + spend.inFlightUsd;
     if (spentUsd < this.deps.caps.deploymentUsd) return null;
@@ -124,6 +141,7 @@ export class SpendCap {
         `budget_cap: the deployment has spent $${spentUsd.toFixed(6)} (llm_calls) of its ` +
         `$${this.deps.caps.deploymentUsd.toFixed(6)} cap; no further call can be admitted. ` +
         `Raise ASHARA_BUDGET_LIMIT_USD and restart the server.`,
+      spend: { capUsd: this.deps.caps.deploymentUsd, spentUsd: spend.recordedUsd, inFlightUsd: spend.inFlightUsd, nextCallUsd: null },
     };
   }
 
@@ -132,8 +150,8 @@ export class SpendCap {
     for (let current: unknown = error; current instanceof Error; current = current.cause) {
       if (current instanceof BudgetExceeded) {
         return current.scope.kind === "project"
-          ? { kind: "project", projectId: current.scope.projectId, reason: current.message }
-          : { kind: "deployment", reason: current.message };
+          ? { kind: "project", projectId: current.scope.projectId, reason: current.message, spend: spendOf(current) }
+          : { kind: "deployment", reason: current.message, spend: spendOf(current) };
       }
     }
     return null;

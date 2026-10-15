@@ -27,7 +27,9 @@ export const workItems = pgTable("work_items", {
     .references(() => projects.id),
   // Dispatch-guaranteed attempt counter (migration 018, r9f-t1). Incremented at the
   // dispatch seam so the retry bound survives a crashed agent or discarded output —
-  // decoupled from any cost record. See CoreLoop.processTask.
+  // decoupled from any cost record. See CoreLoop.processTask. A dispatch that never ran the
+  // work (a pre-call refusal, stale checks, a check dispute, an environment change) is refunded,
+  // so the count is attempts counted against the task, not every dispatch.
   dispatchCount: integer("dispatch_count").notNull().default(0),
   // Who owns the item (migration 031): its kind of work and the roster role
   // holding the capability that kind needs. Both or neither; only on a Task.
@@ -90,6 +92,7 @@ export const PROJECT_BLOCK_KINDS = [
   "suite_review",
   "plan_repair",
   "infrastructure",
+  "replan_stopped",
 ] as const;
 
 export const projectBlocks = pgTable("project_blocks", {
@@ -109,6 +112,11 @@ export const projectBlocks = pgTable("project_blocks", {
   /** Migration 048: what the passing substrate probe observed, on an infrastructure halt it ended. */
   resumeEvidence: text("resume_evidence"),
   resumedReportId: uuid("resumed_report_id").references(() => clientMessages.id, { onDelete: "set null" }),
+  /**
+   * Migration 060: on a budget_cap halt, the amounts its cap was judged on (capUsd, spentUsd,
+   * inFlightUsd, nextCallUsd); NULL on every other kind and on a budget_cap halt recorded before it.
+   */
+  spend: jsonb("spend"),
 });
 
 // ---------------------------------------------------------------------------

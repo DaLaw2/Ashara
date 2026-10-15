@@ -137,7 +137,7 @@ describe("the delivered report", () => {
           { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false },
           { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false },
           { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false },
-          { source: assumption("A27", "Empty keys are refused.", "not-shown", "unclassified"), checked: false },
+          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false },
         ],
       },
     });
@@ -148,7 +148,7 @@ describe("the delivered report", () => {
         "- Keys and values are UTF-8 text. (your answer)",
         "- Ashara's assumption, which was reported to you: No artificial limit is imposed on key or value size.",
         "- Ashara's assumption, which you were asked about and have not answered: Values print with a trailing newline.",
-        "- Ashara's assumption, which was never shown to you: Empty keys are refused. (not recorded as what you see or as how it is built)",
+        "- Ashara's assumption, which Ashara has no record of showing you: Empty keys are refused. (not recorded as what you see or as how it is built)",
       ].join("\n"),
     );
     expect(body).not.toContain("network");

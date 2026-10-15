@@ -29,7 +29,7 @@ describe("environment-file write without the grant", () => {
     const verdict = await probeEnvironmentWrite({ substrate, image: ALPINE_IMAGE, instance: testCellInstance(), workRoot: mountRoot });
 
     expect(verdict.evidence).toMatch(/^the in-cell write exited 0; the ownership gate returned environment_change \(/);
-    expect(verdict.evidence).toContain("main's environment/Containerfile is unchanged");
+    expect(verdict.evidence).toContain("the probe runs no merge, so this verdict is all it observed");
     expect(verdict.outcome).toBe("held");
   });
 });

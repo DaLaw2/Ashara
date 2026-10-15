@@ -1,6 +1,5 @@
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
 import type { AnswerOutcome, IntakeOutcome } from "./acl/engagement-acl.js";
 import type { RosterOutcome } from "./acl/organization-acl.js";
 import type { FirstPlanOutcome } from "./first-plan.js";
@@ -11,7 +10,7 @@ import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from 
 import { processTask, handleProcessingError } from "./execution.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
-import { projectCapCause } from "./project-halt.js";
+import { deploymentCapCause, projectCapCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 
@@ -202,7 +201,7 @@ export class CoreLoop {
       const task: WorkItem = batch[i];
       const result = s.status === "fulfilled" ? s.value : await handleProcessingError(deps, task, s.reason);
       if (result.status === "refused" && result.refusal.kind === "deployment") {
-        refusedAtDeployment ??= { reason: result.refusal.reason };
+        refusedAtDeployment ??= { reason: result.refusal.reason, spend: result.refusal.spend };
       }
       results.push(result);
     }
@@ -269,11 +268,7 @@ export class CoreLoop {
    * own reason.
    */
   private async haltAtCap(stop: LoopStop): Promise<CycleResult> {
-    const halted = await this.deps.projectRepo.blockAllActive({
-      category: "budget_cap",
-      errorClass: SPEND_CAP_ERROR_CLASS.deployment,
-      reason: stop.reason,
-    });
+    const halted = await this.deps.projectRepo.blockAllActive(deploymentCapCause(stop));
     if (halted.length > 0) console.warn(`[budget_cap] ${halted.length} project(s) halted at the deployment's spend cap: ${stop.reason}`);
     await this.postBlockReports();
     return stopped(stop);
@@ -299,8 +294,8 @@ export class CoreLoop {
     } catch (err) {
       const refusal = this.deps.spendCap.refusalOf(err);
       if (refusal === null) throw err;
-      if (refusal.kind === "deployment") return { kind: "stop", stop: { reason: refusal.reason } };
-      await this.halt(parseProjectId(refusal.projectId, "spend refusal projectId"), projectCapCause(refusal.reason), `budget_cap ${name}`);
+      if (refusal.kind === "deployment") return { kind: "stop", stop: { reason: refusal.reason, spend: refusal.spend } };
+      await this.halt(parseProjectId(refusal.projectId, "spend refusal projectId"), projectCapCause(refusal), `budget_cap ${name}`);
       console.warn(`[budget_cap] ${name}: the step's other projects run next cycle`);
     }
     const stop = await this.deps.spendCap.deploymentStop();

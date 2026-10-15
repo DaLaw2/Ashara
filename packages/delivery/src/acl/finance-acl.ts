@@ -7,6 +7,9 @@
 
 export type { ContextualLlm } from "@ashara/finance";
 export { BudgetExceeded, PreCallRefusal } from "@ashara/finance";
+// Whose failure an exhausted plan revision was: Ashara's own refusals and faults around a model
+// call, or the model's answer that never validated, or its provider's failure (replan.ts).
+export { LlmCallNotAdmitted, LlmCallNotRecorded, ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/finance";
 export { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 
 // The model language Delivery's planning calls speak, published by Finance in front of Model Access.
@@ -20,5 +23,3 @@ export type {
 } from "@ashara/finance";
 /** @testseam a scripted model in a planning test fails a ladder attempt with it, to count the planner's attempts */
 export { SchemaValidationError } from "@ashara/finance";
-/** @testseam the decomposition test asserts the ladder's exhaustion class */
-export { StructuredOutputExhausted } from "@ashara/finance";

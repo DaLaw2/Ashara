@@ -13,8 +13,11 @@ import type { Database } from "./database.js";
  *   structured call whose prompt no row keeps, so it is not judged): its vision version is the
  *   latest one written before the session was recorded, its assumptions are that version's, and
  *   every assumption line its goal or context states (`- A1 (assumption; <standing>; <kind>): <text>`)
- *   states that version's standing, kind and text for it (W12a D1, W12b D1: a check author's
- *   description renders standings once, at plan time);
+ *   states that version's standing, kind and text for it (W12a D1, W12b D1: a standing written into
+ *   a task's description at plan time goes stale once an answer changes it); and its task section
+ *   states the goal, end state, scope and deliverables its work item's task_spec records, a brief of
+ *   a work item that records none of them being named (development #3: an end state invented from
+ *   the title);
  * - every Liaison question: the assumption it says work proceeds on is the one its vision records
  *   for it, Inferred and asked;
  * - the assumptions report: exactly the assumptions intake recorded as reported, each under its kind;
@@ -30,7 +33,7 @@ import type { Database } from "./database.js";
  */
 
 const visionRow = z.object({ version: z.number(), inferences: z.unknown(), openQuestions: z.unknown() });
-const briefRow = z.object({ title: z.string(), visionAtCreation: z.number().nullable(), brief: z.unknown() });
+const briefRow = z.object({ title: z.string(), visionAtCreation: z.number().nullable(), brief: z.unknown(), taskSpec: z.unknown() });
 const messageRow = z.object({ id: z.string(), body: z.string() });
 const replyRow = z.object({ answerId: z.string(), body: z.string() });
 const deliveredRow = z.object({ sweepId: z.string(), body: z.string(), visionAtAcceptance: z.number().nullable() });
@@ -78,7 +81,7 @@ export async function readTextFactRecords(db: Database, projectId: string): Prom
     ),
     briefs: await rows(
       briefRow,
-      sql`SELECT w.title, s.brief,
+      sql`SELECT w.title, s.brief, w.task_spec AS "taskSpec",
                  (SELECT max(v.version) FROM vision_documents v WHERE v.project_id = w.project_id AND v.created_at <= s.created_at) AS "visionAtCreation"
           FROM dev_sessions s JOIN work_items w ON w.id = s.task_id
           WHERE w.project_id = ${projectId} AND s.brief IS NOT NULL
@@ -149,7 +152,7 @@ interface Assumption {
   readonly key: string;
   readonly statement: string;
   readonly status: string;
-  readonly standing: "stated" | "asked" | "reported" | "not-shown";
+  readonly standing: "stated" | "asked" | "reported" | "unrecorded";
   readonly kind: "client-visible" | "internal-design" | "unclassified";
   /** The answer recorded as making it Stated, with what that answer did, when the record holds one. */
   readonly answer: { readonly messageId: string; readonly verdict: string | null } | null;
@@ -182,7 +185,7 @@ function readVision(vision: z.infer<typeof visionRow>): VisionReading {
       key: record.key ?? `A${i + 1}`,
       statement: record.statement,
       status: record.status,
-      standing: record.status === "Stated" ? "stated" : (record.disclosed ?? "not-shown"),
+      standing: record.status === "Stated" ? "stated" : (record.disclosed ?? "unrecorded"),
       kind: record.kind ?? "unclassified",
       answer: record.clientAnswer === undefined ? null : { messageId: record.clientAnswer.messageId, verdict: record.clientAnswer.verdict ?? null },
     })),
@@ -194,14 +197,14 @@ const STANDING_WORDS: Readonly<Record<Assumption["standing"], string>> = {
   stated: "Stated by the client",
   asked: "Inferred; asked of the client, not yet answered",
   reported: "Inferred; reported to the client",
-  "not-shown": "Inferred; never shown to the client",
+  unrecorded: "Inferred; whether the client was shown it is not on record",
 };
 const KIND_WORDS: Readonly<Record<Assumption["kind"], string>> = {
   "client-visible": "client-visible behaviour",
   "internal-design": "internal design",
   unclassified: "not classified",
 };
-const STANDINGS: ReadonlyArray<Assumption["standing"]> = ["stated", "asked", "reported", "not-shown"];
+const STANDINGS: ReadonlyArray<Assumption["standing"]> = ["stated", "asked", "reported", "unrecorded"];
 
 function standingOfWords(words: string): Assumption["standing"] | null {
   return STANDINGS.find((standing) => STANDING_WORDS[standing] === words) ?? null;
@@ -260,6 +263,7 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: ReadonlyMap<number,
     return;
   }
   const brief = parsed.data;
+  checkBriefTask(title, brief.context, row.taskSpec, add);
   if (row.visionAtCreation !== brief.visionVersion) {
     add(`brief-vision:${title}`, `the brief of "${title}" carries vision v${brief.visionVersion}; v${row.visionAtCreation ?? "none"} was the latest written before its session`);
   }
@@ -304,6 +308,39 @@ function checkBrief(row: z.infer<typeof briefRow>, versions: ReadonlyMap<number,
         `the brief of "${title}" states assumption ${id} as "${kindWords}${notCitable ?? ""}: ${text.slice(0, 120)}"; vision v${brief.visionVersion} records "${KIND_WORDS[recorded.kind]}: ${recorded.statement.slice(0, 120)}"`,
       );
     }
+  }
+}
+
+/**
+ * A brief's task section, as the oracle words it: the stored goal, end state, scope and deliverables,
+ * each under its heading, at the head of the brief's context. A work item whose task_spec records
+ * none of one of them can have no truthful brief; a corrupt task_spec throws TaskSpecCorrupt, so the
+ * run fails rather than passing unjudged.
+ */
+function checkBriefTask(title: string, context: string, rawSpec: unknown, add: Add): void {
+  const spec = parseStoredTaskSpec(rawSpec);
+  const { goal, endState, scope, deliverables } = spec ?? {};
+  if (goal === undefined || endState === undefined || scope === undefined || deliverables === undefined) {
+    add(`brief-spec-unrecorded:${title}`, `a brief of "${title}" was recorded, but its task_spec does not record a goal, end state, scope and deliverables for it to state`);
+    return;
+  }
+  const expected = [
+    "# Task",
+    "",
+    "## Goal",
+    goal,
+    "",
+    "## End State",
+    endState,
+    "",
+    "## Scope",
+    scope,
+    "",
+    "## Deliverables",
+    ...deliverables.map((deliverable, i) => `${i + 1}. ${deliverable}`),
+  ].join("\n");
+  if (!context.startsWith(expected)) {
+    add(`brief-spec:${title}`, `the brief of "${title}" does not open with the task its task_spec records ("${expected.slice(0, 160)}"); it reads "${context.slice(0, 160)}"`);
   }
 }
 
@@ -430,7 +467,7 @@ function checkFirstPlan(records: TextFactRecords, add: Add): void {
 }
 
 /** Where an assumption stands with the client at acceptance, as d95 a defines it, recomputed here. */
-type AcceptedStanding = "stated" | "confirmed" | "changed" | "answered" | "answer-unread" | "asked" | "reported" | "not-shown";
+type AcceptedStanding = "stated" | "confirmed" | "changed" | "answered" | "answer-unread" | "asked" | "reported" | "unrecorded";
 
 const ACCEPTED_STATED: Readonly<Partial<Record<AcceptedStanding, string>>> = {
   stated: "your answer",
@@ -442,7 +479,7 @@ const ACCEPTED_INFERRED: Readonly<Partial<Record<AcceptedStanding, string>>> = {
   answered: "which you were asked about; your reply neither confirmed nor changed it",
   "answer-unread": "which you were asked about; your reply had not been read when the project was accepted",
   reported: "which was reported to you",
-  "not-shown": "which was never shown to you",
+  unrecorded: "which Ashara has no record of showing you",
 };
 
 function acceptedStanding(

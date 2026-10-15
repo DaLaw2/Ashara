@@ -142,7 +142,7 @@ const TWO_QUESTION_INTAKE = {
 
 /** One model for every call, answering each by what its prompt asks. */
 function pipelineModel(
-  options: { readonly reading?: unknown; readonly environmentChange?: boolean; readonly intake?: unknown } = {},
+  options: { readonly reading?: unknown; readonly environmentChange?: boolean; readonly intake?: unknown; readonly revision?: unknown } = {},
 ): MockLanguageModelV4 {
   const mock = new MockLanguageModelV4({
     doGenerate: async (call) => {
@@ -153,7 +153,7 @@ function pipelineModel(
       if (prompt.includes("needs the project environment changed") || prompt.includes("Work on a project stopped")) {
         return jsonResult({ environmentChange: options.environmentChange ?? false, reason: "Only what is booked changes." });
       }
-      if (prompt.includes("changed what is built after work began")) return jsonResult(REVISED_TASKS);
+      if (prompt.includes("changed what is built after work began")) return jsonResult(options.revision ?? REVISED_TASKS);
       if (prompt.includes("Plan the work still to do again")) return jsonResult(REPAIRED_TASKS);
       return jsonResult(FIRST_TASKS);
     },
@@ -620,6 +620,28 @@ describe("a late client change is planned", () => {
     expect(reports[reports.length - 1]?.body).toContain("Ashara recorded the cause as this: the plan has been revised for your changes");
     expect(reports[reports.length - 1]?.body).not.toContain("ReplanBoundReached");
   });
+
+  // A revision whose every attempt got no usable answer from the planning model is the model's
+  // failure, not Ashara's machinery: the halt says so, never "a step of Ashara's own work failed".
+  test("a revision the planning model never answers usably halts as replan_stopped, and the client is told what failed", async () => {
+    const { projectId, questionId } = await plannedProject();
+    await contradict(projectId, questionId);
+    pipelineModel({ revision: { notTasks: "the model's answer does not hold together" } });
+
+    const kinds: string[] = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) kinds.push(...(await replanner().runPending()).map((outcome) => outcome.kind));
+
+    expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+    expect(await projectRow(projectId)).toMatchObject({ status: "blocked", category: "replan_stopped" });
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    const reports = await reportsOf(projectId);
+    const body = reports[reports.length - 1]?.body ?? "";
+    expect(body).toContain(
+      "Ashara recorded the cause as this: every attempt to revise the plan failed, the last because the model planning it gave no usable answer.",
+    );
+    expect(body).not.toContain("a step of Ashara's own work");
+    expect(body).not.toContain("ReplanAttemptsExhausted");
+  });
 });
 
 /** Starts, fails and gives up a task as a dispatch's failure and the failure router's abandonment do. */
@@ -766,7 +788,7 @@ describe("a task the team gives up is planned around", () => {
     expect(reports).toHaveLength(before + 1);
     const body = reports[reports.length - 1]?.body ?? "";
     expect(body).toContain(`"${givenUp[2] ?? ""}", after`);
-    expect(body).toContain("As recorded: ");
+    expect(body).toContain("Ashara recorded why it was given up as this: ");
     expect(body).not.toContain(givenUp[0] ?? "");
   });
 });
@@ -798,7 +820,7 @@ describe("a task no roster role can work is planned around, never left waiting",
       resolveModel: () => gateway.resolveModel("Strong", "agent-runner"),
     });
     const staffOf = (id: string) =>
-      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
+      staffing.staff({ id: parseWorkItemId(id, "test"), projectId, title: "t", epicId: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] });
     const unresolved = await staffOf(harbour.id);
     if (unresolved.kind !== "owner-unresolved") throw new Error(`expected owner-unresolved, got ${unresolved.kind}`);
 

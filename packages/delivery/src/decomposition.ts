@@ -1,7 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { CapabilityLevel } from "./acl/finance-acl.js";
 import type { StructuredValidation } from "./acl/finance-acl.js";
-import { visionSourceLine } from "./acl/engagement-vision-acl.js";
+import { visionSourceCitation, visionSourceLine } from "./acl/engagement-vision-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./acl/quality-acl.js";
 import type {
     DecomposedTaskSpec,
@@ -585,7 +585,8 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
     const description = [
         `${goal}.`,
         `Vision items "${task.title}" cites (its checks may test only what these ask for, and the inputs they say to ` +
-            `reject):\n${bulleted(task.taskSpec.sources.map(visionSourceLine))}`,
+            `reject; where each assumption stands with the client is under the assumptions work proceeds on):\n` +
+            bulleted(task.taskSpec.sources.map(visionSourceCitation)),
         `Acceptance of "${task.title}", each line with the items it serves:\n` +
             bulleted(task.taskSpec.acceptance.map((line) => `[${line.sources.join(", ")}] ${line.line}`)),
         `Deliverables of "${task.title}", for context:\n${bulleted(task.taskSpec.deliverables)}`,
@@ -643,7 +644,7 @@ function reviewTaskFor(
         `Read every check this plan's check tasks wrote, all together and with the vision, before any of the plan's ` +
             `work starts. Name every set of checks that no product could pass together, and every check that tests ` +
             `behaviour none of the vision items its own task cites asks for.`,
-        `Vision items:\n${bulleted(visionItems.map(visionSourceLine))}`,
+        `Vision items:\n${bulleted(visionItems.map(visionSourceCitation))}`,
     ].join("\n\n");
     const successCriteria = [
         "every stored check of the plan was read with the vision",
