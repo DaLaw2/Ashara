@@ -48,7 +48,7 @@ import {
   gitPublicInterface,
   pruneStaleEnvironmentImages,
 } from "@ashara/development";
-import { BlockReports, ClientAnswers, ClientStops, DeliveredReports, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
+import { BlockReports, ClientAnswers, ClientChanges, ClientStops, DeliveredReports, PlanReports, StackChoiceReports, TenderIntake } from "@ashara/engagement";
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import type {
   AgentStaffing,
@@ -96,6 +96,7 @@ import {
 } from "./secrets.js";
 import { loadWebClientAssets } from "./web-client.js";
 import { createAnswerStore } from "./answer-store.js";
+import { createClientChangeStore } from "./client-change-store.js";
 import { createClientStopStore } from "./client-stop-store.js";
 import { createIntakeStore } from "./intake-store.js";
 import { createFirstPlanStore, createPlanReportStore } from "./first-plan-store.js";
@@ -422,6 +423,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
     failureRouter,
     spendCap,
     clientStops: new ClientStops(createClientStopStore(db)),
+    clientChanges: new ClientChanges(createClientChangeStore(db)),
     liaisonIntake: new TenderIntake({
       llm: llmGateway,
       store: createIntakeStore(db),

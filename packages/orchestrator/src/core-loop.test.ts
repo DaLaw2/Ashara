@@ -124,6 +124,7 @@ function buildDeps(
     spendCap,
     failureRouter: { route: notExercised("route") },
     clientStops,
+    clientChanges: { runPending: async () => [] },
     liaisonIntake,
     liaisonAnswers: { runPending: async () => [] },
     rosterDerivation,
@@ -250,7 +251,7 @@ describe("CoreLoop tender intake", () => {
 });
 
 describe("CoreLoop first plan", () => {
-  test("a cycle runs client stops, then intake, the roster, first planning, the Liaison's reports, then dispatch", async () => {
+  test("a cycle runs client stops and changes, then intake, the roster, first planning, the Liaison's reports, then dispatch", async () => {
     const order: string[] = [];
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       order.push("dispatch");
@@ -262,17 +263,31 @@ describe("CoreLoop first plan", () => {
         return [];
       });
 
-    await new CoreLoop(
-      buildDeps(
-        { runPending: step("intake") },
-        { runPending: step("plan") },
-        { runPending: step("report") },
-        { runPending: step("stop") },
-        { runPending: step("roster") },
-      ),
-    ).runCycle();
+    const deps = buildDeps(
+      { runPending: step("intake") },
+      { runPending: step("plan") },
+      { runPending: step("report") },
+      { runPending: step("stop") },
+      { runPending: step("roster") },
+    );
+    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runCycle();
 
-    expect(order).toEqual(["stop", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
+    expect(order).toEqual(["stop", "change", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
+  });
+
+  test("a cycle halted at the spend cap still takes the client's stops and answers the client's changes, and nothing else", async () => {
+    const order: string[] = [];
+    const step = (name: string) =>
+      vi.fn(async () => {
+        order.push(name);
+        return [];
+      });
+    const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop") });
+
+    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") } }).runHaltedCycle();
+
+    expect(order).toEqual(["stop", "change"]);
+    expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
   test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched (W11 D5)", async () => {

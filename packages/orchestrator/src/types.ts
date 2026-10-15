@@ -6,6 +6,7 @@ import type { WorkspacePathStore } from "./task-helpers.js";
 import type {
   LiaisonAnswers,
   LiaisonBlockReports,
+  LiaisonClientChanges,
   LiaisonClientStops,
   LiaisonDeliveredReports,
   LiaisonIntake,
@@ -139,6 +140,12 @@ export interface CoreLoopDeps {
    * before the spend-cap check: a stopped project is never intaken, planned or gated.
    */
   readonly clientStops: LiaisonClientStops;
+  /**
+   * The Liaison's reply to each of the client's changes of direction, which are not yet applied
+   * (M3 X5): run right after the stops, before the spend-cap check (no LLM call), so no change is
+   * left unanswered.
+   */
+  readonly clientChanges: LiaisonClientChanges;
   /** The Liaison's tender intake, run each cycle before work-item gating. */
   readonly liaisonIntake: LiaisonIntake;
   /**

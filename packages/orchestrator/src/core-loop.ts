@@ -78,6 +78,9 @@ export class CoreLoop {
     // reports on it or dispatches its tasks. Nothing of this process is running
     // for it now: the previous cycle awaited every task it dispatched.
     await this.takeClientStops();
+    // The client's changes of direction, each answered once that it is kept but not applied (no
+    // LLM call), so none is left unread even at the spend cap.
+    await this.answerClientChanges();
 
     // The stack a Sprint 0 task merged in an earlier cycle (or before a restart) chose: an
     // Inferred assumption in a new vision version and one report to the client. No LLM call,
@@ -206,16 +209,23 @@ export class CoreLoop {
 
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
-   * stops, each recorded and answered with no LLM call (smoke1 D3). A project stopped here stays
+   * stops and changes, each recorded and answered with no LLM call (smoke1 D3). A project stopped here stays
    * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {
     await this.takeClientStops();
+    await this.answerClientChanges();
   }
 
   private async takeClientStops(): Promise<void> {
     for (const stop of await this.deps.clientStops.runPending()) {
       console.log(`[liaison-stop] stop ${stop.stopId}: project ${stop.projectId} ${stop.kind}`);
+    }
+  }
+
+  private async answerClientChanges(): Promise<void> {
+    for (const change of await this.deps.clientChanges.runPending()) {
+      console.log(`[liaison-change] change ${change.changeId}: project ${change.projectId} told not applied, reply ${change.replyId}`);
     }
   }
 

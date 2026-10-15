@@ -32,6 +32,7 @@ export { PROJECT_BLOCK_KINDS } from "./repositories/block-report.js";
 export { listDueBlockReports, postProjectBlockReport } from "./repositories/block-report.js";
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
+export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
 export {
   listDueDeliveredReports,
   listProjectsReadyForAcceptance,

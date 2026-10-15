@@ -4,6 +4,8 @@ export { ClientAnswers } from "./answers.js";
 export type { AnswerOutcome, AnswerStore, LiaisonAnswers } from "./answers.js";
 export { ClientStops } from "./client-stop.js";
 export type { ClientStopStore, LiaisonClientStops } from "./client-stop.js";
+export { ClientChanges } from "./client-change.js";
+export type { ClientChangeStore, LiaisonClientChanges } from "./client-change.js";
 export { PlanReports } from "./plan-report.js";
 export type { LiaisonPlanReports, PlanReportStore } from "./plan-report.js";
 export { BlockReports } from "./block-report.js";

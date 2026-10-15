@@ -119,6 +119,7 @@ function loopDeps(parts: Partial<Omit<CoreLoopDeps, "eventLogger">> & Pick<CoreL
     developmentService: { execute: notExercised("execute") },
     failureRouter: { route: notExercised("route") },
     clientStops: { runPending: async () => [] },
+    clientChanges: { runPending: async () => [] },
     stackChoices: { runPending: async () => [] },
     liaisonIntake: { runPending: async () => [] },
     liaisonAnswers: { runPending: async () => [] },
