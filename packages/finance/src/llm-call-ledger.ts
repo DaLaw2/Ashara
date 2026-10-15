@@ -1,4 +1,4 @@
-import type { LlmCallRepository, NewLlmCall } from "@ashara/db";
+import type { LlmCallMeasurement, LlmCallRepository } from "@ashara/db";
 import { describeUnmeasuredCost, measureCost } from "@ashara/llm-gateway";
 import type { LlmCallRecorder, LlmProviderCall, ModelConfig, PendingLlmCall } from "@ashara/llm-gateway";
 import { UnpricedModel } from "./errors.js";
@@ -42,26 +42,20 @@ function costOf(call: LlmProviderCall, estimatedCostUsd: number): number | null 
   return null;
 }
 
-/** Maps one provider call to its llm_calls row. Every unreported count stays `null`. */
-function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
+/** What one provider call's record adds to the row its admission wrote. Every unreported count stays `null`. */
+function measurementOf(call: LlmProviderCall): LlmCallMeasurement {
   const estimatedCostUsd = worstCaseCostUsd(call.model, call.requestBytes, call.maxOutputTokens);
   const outcome =
     call.outcome.kind === "ok"
       ? { outcome: "ok" as const, errorKind: null }
       : { outcome: "error" as const, errorKind: call.outcome.errorKind };
   return {
-    projectId: call.context.projectId,
-    taskId: call.context.taskId,
-    callSite: call.context.callSite,
-    provider: call.provider,
-    model: call.model.id,
     inputTokens: call.usage?.reported.inputTokens ?? null,
     outputTokens: call.usage?.reported.outputTokens ?? null,
     cacheReadTokens: call.usage?.reported.cacheReadTokens ?? null,
     cacheWriteTokens: call.usage?.reported.cacheWriteTokens ?? null,
     reasoningTokens: call.usage?.reasoningTokens ?? null,
     costUsd: costOf(call, estimatedCostUsd),
-    estimatedCostUsd,
     finishReason: call.finishReason,
     createdAt: call.requestedAt,
     ...outcome,
@@ -72,13 +66,13 @@ function toLlmCallRow(call: LlmProviderCall): NewLlmCall {
  * The Finance cost ledger's recorder (architecture K10): the server's gateway
  * calls `assertPriced` before every provider request and `record` after it.
  * The pre-call check refuses an unpriced model, then asks the spend cap to
- * admit the call's worst case. A row's `created_at` is the instant the gateway
- * sent the request, the same instant whose rates price it here and in the cost
- * the gateway returns.
+ * admit the call's worst case, which writes the call's row as pending. A
+ * recorded row's `created_at` is the instant the gateway sent the request, the
+ * same instant whose rates price it here and in the cost the gateway returns.
  */
 export class LlmCallLedger implements LlmCallRecorder {
   constructor(
-    private readonly calls: LlmCallRepository,
+    private readonly calls: Pick<LlmCallRepository, "record" | "markPendingUnmeasuredAfterCrash">,
     private readonly cap: SpendCap,
   ) {}
 
@@ -88,11 +82,23 @@ export class LlmCallLedger implements LlmCallRecorder {
   }
 
   /**
-   * The in-flight estimate is released only once the row is written: a call
-   * whose row failed to write stays counted for the life of this process.
+   * Completes the row the call's admission wrote. A call whose record fails stays pending, counted
+   * at its estimate, until a later startup marks it unmeasured_after_crash, counted the same.
    */
   async record(call: LlmProviderCall): Promise<void> {
-    await this.calls.insert(toLlmCallRow(call));
-    this.cap.release(call.callId);
+    await this.calls.record(call.callId, measurementOf(call));
+  }
+
+  /**
+   * Run once at startup, before the first call is admitted: every pending row is a call an earlier
+   * process admitted and never recorded. It keeps counting at its estimate; it is never dropped.
+   */
+  async reconcileAtStartup(): Promise<void> {
+    const marked = await this.calls.markPendingUnmeasuredAfterCrash();
+    if (marked === 0) return;
+    console.warn(
+      `[LlmCallLedger] ${marked} llm_calls row(s) were admitted by an earlier process and never recorded: ` +
+        `marked unmeasured_after_crash, each still counted against the spend cap at its worst-case estimate`,
+    );
   }
 }

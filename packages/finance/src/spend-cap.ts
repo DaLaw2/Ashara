@@ -3,7 +3,6 @@ import type { ModelConfig, PendingLlmCall } from "@ashara/llm-gateway";
 import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid } from "./errors.js";
 
 type ProjectId = PendingLlmCall["context"]["projectId"];
-type SpendScope = Parameters<LlmCallRepository["spentUsd"]>[0];
 
 /**
  * Every token of a byte-level BPE tokenizer (the Claude, GPT, DeepSeek and
@@ -33,7 +32,8 @@ type SpendRefusal =
   | { readonly kind: "deployment"; readonly reason: string };
 
 interface SpendCapDeps {
-  readonly ledger: Pick<LlmCallRepository, "spentUsd">;
+  /** llm_calls: the spend a cap reads, and the row an admitted call is written to before it is sent. */
+  readonly ledger: Pick<LlmCallRepository, "spend" | "admit">;
   /** The per-project block (migration 025): a project at its cap is blocked, and the loop skips it. */
   readonly projects: {
     block(
@@ -81,11 +81,12 @@ export function worstCaseCostUsd(model: ModelConfig, requestBytes: number, maxOu
 /**
  * Finance's one spend authority. The cap is read from llm_calls on every call,
  * so it survives a restart; an unmeasured call counts at its recorded estimate.
- * Admitted calls not yet recorded are held as in-flight estimates, and admission
- * is serialized, so concurrent calls cannot each see the same headroom.
+ * An admitted call's row is written at admission with its worst-case estimate
+ * (state 'pending', migration 053), so a call admitted and never recorded, its
+ * process dead or its record failed, still counts after a restart. Admission is
+ * serialized, so concurrent calls cannot each see the same headroom.
  */
 export class SpendCap {
-  private readonly inFlight = new Map<string, { readonly projectId: ProjectId; readonly estimateUsd: number }>();
   private admissions: Promise<unknown> = Promise.resolve();
   private deploymentRefusal: BudgetExceeded | null = null;
 
@@ -110,14 +111,9 @@ export class SpendCap {
     return admission;
   }
 
-  /** Drops an admitted call's in-flight estimate once its row is in llm_calls. */
-  release(callId: string): void {
-    this.inFlight.delete(callId);
-  }
-
   /**
    * Whether the deployment's cap stops the loop: a call it refused in this
-   * process, or recorded spend already at the cap, when no call can fit.
+   * process, or spend (recorded and in flight) already at the cap, when no call can fit.
    *
    * The refusal is remembered for the life of the process on purpose. The caps
    * are read once at boot (ASHARA_BUDGET_LIMIT_USD), so raising one takes a
@@ -128,7 +124,8 @@ export class SpendCap {
    */
   async deploymentStop(): Promise<DeploymentStop | null> {
     if (this.deploymentRefusal) return { reason: this.deploymentRefusal.message };
-    const spentUsd = await this.deps.ledger.spentUsd({ kind: "deployment" });
+    const spend = await this.deps.ledger.spend({ kind: "deployment" });
+    const spentUsd = spend.recordedUsd + spend.inFlightUsd;
     if (spentUsd < this.deps.caps.deploymentUsd) return null;
     return {
       reason:
@@ -150,30 +147,15 @@ export class SpendCap {
     return null;
   }
 
-  private inFlightUsd(projectId?: ProjectId): number {
-    let total = 0;
-    for (const call of this.inFlight.values()) {
-      if (projectId === undefined || call.projectId === projectId) total += call.estimateUsd;
-    }
-    return total;
-  }
-
   /**
-   * One scope's recorded spend and in-flight estimates, as an admission adds them. The in-flight
-   * sum is taken before the ledger read, never after: `release` runs only once a call's row is
-   * committed, so a call missing from this snapshot has its row committed before the read's
-   * statement starts, and the read counts it. Read the other way round, a call recorded after the
-   * read's snapshot and released before the in-flight sum counts in neither (B9). The cost is the
-   * safe direction: a call recorded during the read may count twice, as row and as estimate.
+   * One admission: both caps checked, then the call's pending row written, all inside this
+   * admission's turn. Recorded spend and in-flight estimates come from one statement on llm_calls,
+   * so no call can be between them (the B9 race of an in-memory in-flight set). A call recorded
+   * while the read runs moves from its estimate to its cost, never above it, so a stale read only
+   * overcounts.
    */
-  private async admissionView(scope: SpendScope): Promise<{ readonly spentUsd: number; readonly inFlightUsd: number }> {
-    const inFlightUsd = this.inFlightUsd(scope.kind === "project" ? scope.projectId : undefined);
-    const spentUsd = await this.deps.ledger.spentUsd(scope);
-    return { spentUsd, inFlightUsd };
-  }
-
   private async admitNow(call: PendingLlmCall): Promise<void> {
-    const { projects, caps } = this.deps;
+    const { ledger, projects, caps } = this.deps;
     const { projectId } = call.context;
     const estimatedCostUsd = worstCaseCostUsd(call.model, call.requestBytes, call.maxOutputTokens);
     const refusal = (scope: BudgetExceeded["scope"], capUsd: number, spentUsd: number, inFlightUsd: number) =>
@@ -187,7 +169,7 @@ export class SpendCap {
         estimatedCostUsd,
       });
 
-    const { spentUsd: deploymentSpent, inFlightUsd: deploymentInFlight } = await this.admissionView({ kind: "deployment" });
+    const { recordedUsd: deploymentSpent, inFlightUsd: deploymentInFlight } = await ledger.spend({ kind: "deployment" });
     if (deploymentSpent + deploymentInFlight + estimatedCostUsd > caps.deploymentUsd) {
       const refused = refusal({ kind: "deployment" }, caps.deploymentUsd, deploymentSpent, deploymentInFlight);
       this.deploymentRefusal ??= refused;
@@ -195,7 +177,7 @@ export class SpendCap {
       throw refused;
     }
 
-    const { spentUsd: projectSpent, inFlightUsd: projectInFlight } = await this.admissionView({ kind: "project", projectId });
+    const { recordedUsd: projectSpent, inFlightUsd: projectInFlight } = await ledger.spend({ kind: "project", projectId });
     if (projectSpent + projectInFlight + estimatedCostUsd > caps.perProjectUsd) {
       const refused = refusal({ kind: "project", projectId }, caps.perProjectUsd, projectSpent, projectInFlight);
       const blocked = await projects.block(projectId, { category: "budget_cap", errorClass: refused.name, reason: refused.message });
@@ -203,6 +185,14 @@ export class SpendCap {
       throw refused;
     }
 
-    this.inFlight.set(call.callId, { projectId, estimateUsd: estimatedCostUsd });
+    await ledger.admit({
+      id: call.callId,
+      projectId,
+      taskId: call.context.taskId,
+      callSite: call.context.callSite,
+      provider: call.provider,
+      model: call.model.id,
+      estimatedCostUsd,
+    });
   }
 }

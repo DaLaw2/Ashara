@@ -1,12 +1,13 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { SpendCap } from "@ashara/finance";
 import type { Database } from "./database.js";
+import type { QueryPlant } from "./faults.js";
 import type { Violation } from "./invariants.js";
 
-/** How drizzle sends a timestamp parameter (Date.prototype.toISOString). */
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const LEDGER_INSERT = 'insert into "llm_calls"';
+/** An admission writes its call's row (state 'pending'); the call's record completes that row. */
+const LEDGER_ADMIT = 'insert into "llm_calls"';
+const LEDGER_RECORD = 'update "llm_calls"';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The harness could not see when a call's row was written: the admission clause cannot be judged. */
 class AdmissionsUnobservable extends Error {
@@ -17,6 +18,7 @@ class AdmissionsUnobservable extends Error {
 }
 
 const sentQuery = z.object({ values: z.array(z.unknown()) }).loose();
+const sentText = z.union([z.string(), z.object({ text: z.string() }).loose()]);
 
 /** The parameters a pool query was sent with: drizzle sends (text, values) or ({ text, values }). */
 function parametersOf(args: readonly unknown[]): readonly unknown[] {
@@ -28,109 +30,97 @@ function parametersOf(args: readonly unknown[]): readonly unknown[] {
 
 const callRows = z.array(
   z.object({
-    requestedAt: z.coerce.date(),
+    id: z.string(),
     callSite: z.string(),
     estimate: z.coerce.number().nullable(),
     cost: z.coerce.number().nullable(),
   }),
 );
 
+type Seen = { readonly kind: "admitted" | "recorded"; readonly uuids: readonly string[] };
+
 /**
  * I5, the admission clause (F11): what the spend cap's admission promises, judged from outside it.
  * At every instant, the deployment's recorded spend (each row at its cost, or its estimate when
  * unmeasured, as the cap counts it) plus the worst-case estimate of every call admitted and not yet
- * recorded is within the cap. A call is admitted at its row's `created_at` (the gateway reads the
- * clock right after the admission, and the simulated clock never repeats an instant) and recorded
- * when its insert returns, at the clock's last instant then (seen at the db seam, faults.ts).
- *
- * Judged as strictly as the harness can see, never more: a call admitted and never recorded (its
- * process died, its write failed) has no row and counts nothing, though production holds its
- * estimate in flight until the restart. And a call counts at its cost from the moment its insert
- * returns, while production still holds its larger estimate until it is released just after.
+ * recorded is within the cap. A call is admitted when its pending row's insert returns and recorded
+ * when the update completing that row returns, both seen at the db seam (faults.ts) in the order
+ * they returned. A call admitted and never recorded (its process died, its record failed) stays in
+ * flight at its estimate for good, as its pending or unmeasured_after_crash row counts in production.
  */
 export class AdmissionLedger {
-  private readonly recordedAt = new Map<number, number>();
-  private readonly unreadable: string[] = [];
+  private readonly seen: Seen[] = [];
 
-  constructor(private readonly clock: { peek(): number }) {}
-
-  /** Every db seam call that returned: an llm_calls insert records its call now. */
+  /** Every db seam call that returned: an llm_calls insert admits a call, an llm_calls update records one. */
   written(label: string, args: readonly unknown[]): void {
-    if (!label.startsWith(LEDGER_INSERT)) return;
-    const instants = parametersOf(args).filter((value): value is string => typeof value === "string" && ISO_INSTANT.test(value));
-    const [instant] = instants;
-    if (instant === undefined || instants.length > 1) {
-      this.unreadable.push(`an llm_calls insert carried ${instants.length} timestamp parameters, not one`);
-      return;
-    }
-    const requestedAt = Date.parse(instant);
-    if (this.recordedAt.has(requestedAt)) this.unreadable.push(`two llm_calls inserts carried the instant ${instant}`);
-    this.recordedAt.set(requestedAt, this.clock.peek());
+    const kind = label.startsWith(LEDGER_ADMIT) ? "admitted" : label.startsWith(LEDGER_RECORD) ? "recorded" : null;
+    if (kind === null) return;
+    const uuids = parametersOf(args).filter((value): value is string => typeof value === "string" && UUID.test(value));
+    this.seen.push({ kind, uuids });
   }
 
-  /** The first admission past the cap, or null; throws when a row's write was not seen. */
+  /** The first admission past the cap, or null; throws when a row's admission or record was not seen whole. */
   async judge(observer: Database, capUsd: number, step: number): Promise<Violation | null> {
-    if (this.unreadable.length > 0) throw new AdmissionsUnobservable(this.unreadable.join("; "));
     const rows = callRows.parse(
       (
         await observer.execute(sql`
-          SELECT created_at AS "requestedAt", call_site AS "callSite", estimated_cost_usd AS estimate, cost_usd AS cost
-          FROM llm_calls ORDER BY created_at`)
+          SELECT id, call_site AS "callSite", estimated_cost_usd AS estimate, cost_usd AS cost FROM llm_calls`)
       ).rows,
     );
-    type Event = { readonly at: number; readonly kind: "admitted" | "recorded"; readonly row: (typeof rows)[number]; readonly estimate: number };
-    const events: Event[] = [];
-    for (const row of rows) {
-      const at = row.requestedAt.getTime();
-      const recorded = this.recordedAt.get(at);
-      if (recorded === undefined) throw new AdmissionsUnobservable(`the llm_calls row of ${row.requestedAt.toISOString()} (${row.callSite}) was written where the db seam did not see it`);
-      if (row.estimate === null) throw new AdmissionsUnobservable(`the llm_calls row of ${row.requestedAt.toISOString()} (${row.callSite}) carries no estimate`);
-      events.push({ at, kind: "admitted", row, estimate: row.estimate }, { at: recorded, kind: "recorded", row, estimate: row.estimate });
-    }
-    // At one instant the admission comes first: the insert's instant is the last one read before it.
-    events.sort((a, b) => a.at - b.at || (a.kind === b.kind ? 0 : a.kind === "admitted" ? -1 : 1));
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const admitted = new Set<string>();
+    const recorded = new Set<string>();
     let spent = 0;
     let inFlight = 0;
-    let calls = 0;
-    for (const event of events) {
+    for (const event of this.seen) {
+      const ids = event.uuids.filter((uuid) => byId.has(uuid));
+      const [id] = ids;
+      if (id === undefined || ids.length > 1) {
+        throw new AdmissionsUnobservable(`an llm_calls ${event.kind === "admitted" ? "insert" : "update"} named ${ids.length} llm_calls rows, not one`);
+      }
+      const row = byId.get(id);
+      if (row === undefined) throw new AdmissionsUnobservable(`the llm_calls row ${id} vanished while it was judged`);
+      if (row.estimate === null) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) carries no estimate`);
       if (event.kind === "recorded") {
-        inFlight -= event.estimate;
-        calls -= 1;
-        spent += event.row.cost ?? event.estimate;
+        if (!admitted.has(id) || recorded.has(id)) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was recorded ${recorded.has(id) ? "twice" : "before it was admitted"}`);
+        recorded.add(id);
+        inFlight -= row.estimate;
+        spent += row.cost ?? row.estimate;
         continue;
       }
-      inFlight += event.estimate;
-      calls += 1;
+      if (admitted.has(id)) throw new AdmissionsUnobservable(`the llm_calls row ${id} (${row.callSite}) was admitted twice`);
+      admitted.add(id);
+      inFlight += row.estimate;
       if (spent + inFlight > capUsd + 1e-9) {
         return {
           invariant: "I5",
           step,
           statement:
-            `the spend cap admitted past itself: when ${event.row.callSite} was admitted at ${event.row.requestedAt.toISOString()}, ` +
-            `recorded spend $${spent.toFixed(6)} plus ${calls} call(s) in flight at their worst case $${inFlight.toFixed(6)} exceeds the cap $${capUsd}`,
+            `the spend cap admitted past itself: when ${row.callSite} was admitted, recorded spend $${spent.toFixed(6)} plus ` +
+            `${admitted.size - recorded.size} call(s) in flight at their worst case $${inFlight.toFixed(6)} exceeds the cap $${capUsd}`,
           key: "I5:over-committed",
         };
       }
     }
+    const unseen = rows.find((row) => !admitted.has(row.id));
+    if (unseen !== undefined) throw new AdmissionsUnobservable(`the llm_calls row ${unseen.id} (${unseen.callSite}) was written where the db seam did not see it`);
     return null;
   }
 }
 
+/** The spend read's in-flight sum, as Finance's LlmCallRepository.spend sends it. */
+const IN_FLIGHT_FILTER = "FILTER (WHERE state = 'pending')";
+
 /**
- * The pre-B9 read order planted in Finance's spend cap (the admission clause's mutation check):
- * an admission reads the recorded spend first and the in-flight estimates after it, so a call whose
- * row is committed after the read's snapshot and released before the in-flight sum counts in
- * neither. Patches the class for the whole process; returns what puts the real order back.
+ * The admission clause's mutation check: the spend cap's read leaves the pending rows out, so an
+ * admission counts the recorded spend alone and every call admitted and not yet recorded is
+ * invisible to it, the way an in-memory in-flight set is invisible to the next process.
  */
-export function plantLedgerReadFirst(): () => void {
-  const prototype = SpendCap.prototype;
-  const real = prototype["admissionView"];
-  prototype["admissionView"] = async function (this: SpendCap, scope) {
-    const spentUsd = await this["deps"].ledger.spentUsd(scope);
-    const inFlightUsd = this["inFlightUsd"](scope.kind === "project" ? scope.projectId : undefined);
-    return { spentUsd, inFlightUsd };
-  };
-  return () => {
-    prototype["admissionView"] = real;
-  };
-}
+export const pendingUncounted: QueryPlant = (args) => {
+  const parsed = sentText.safeParse(args[0]);
+  if (!parsed.success) return [...args];
+  const text = typeof parsed.data === "string" ? parsed.data : parsed.data.text;
+  if (!text.includes(IN_FLIGHT_FILTER)) return [...args];
+  const planted = text.replace(IN_FLIGHT_FILTER, "FILTER (WHERE false)");
+  return [typeof parsed.data === "string" ? planted : { ...parsed.data, text: planted }, ...args.slice(1)];
+};

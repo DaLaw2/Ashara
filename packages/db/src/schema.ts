@@ -440,14 +440,18 @@ export const llmCalls = pgTable(
     cacheReadTokens: integer("cache_read_tokens"),
     cacheWriteTokens: integer("cache_write_tokens"),
     costUsd: numeric("cost_usd", { precision: 20, scale: 12, mode: "number" }),
-    outcome: text().notNull(),
+    // Migration 053: NULL exactly while the call is not recorded.
+    outcome: text(),
     errorKind: text("error_kind"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
-    // Migration 030: NULL only on rows written before it; a CHECK refuses NULL on every new row.
+    // Migration 030: NULL only on rows written before it and on rows not recorded yet (053).
     finishReason: text("finish_reason"),
     reasoningTokens: integer("reasoning_tokens"),
     // Migration 035: Finance's worst-case estimate, made before the call; the cap counts it when costUsd is NULL.
     estimatedCostUsd: numeric("estimated_cost_usd", { precision: 20, scale: 12, mode: "number" }),
+    // Migration 053: 'pending' from admission to record, 'recorded' after it, 'unmeasured_after_crash'
+    // when a later process's startup found it pending. A row in every state counts against the cap.
+    state: text().notNull(),
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),

@@ -214,25 +214,17 @@ describe("lifecycle simulator, fast tier", () => {
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 
-  // B9 (baseline §7.7), fixed in Finance: an admission sums the in-flight estimates before it reads
-  // the recorded spend. Planted back (ledger-read-first), the other task's call is recorded and
-  // released between the spend read and the in-flight sum and counts in neither. The window needs
-  // the tape to hand the turn on at the read's return and back only after the other task's release:
-  // observed in seeds 1-80 at cap $10 on seed 23 alone, at cap $6 on seed 7 alone. Seed 7 at $6 since
-  // the stand-in plan's lines name their sources (ADR-074 addendum 2 d89 A): ledger-read-first over
-  // seeds 1-80 at $10 then caught it on none, and at $6 on seed 7 alone, which fails I5:over-committed
-  // alone and passes clean (observed, scan of 2026-10-14). Why the change moved the window: unverified.
-  // Seed 96 at $6 since a retry asks git whether its branch conflicts with main (w12b D2): every host
-  // git call is a seam the interleaver turns at, and seed 7 then no longer met the window (observed,
-  // scan of 2026-10-15: ledger-read-first over seeds 1-80 at $6 and 1-60 at $10 caught it on none
-  // alone; over 81-119 at $6, seed 96 fails I5:over-committed alone and passes clean).
-  it("catches an admission that counts a just-recorded call in neither the spend nor the in-flight sum", async () => {
-    // The race needs two admissions to meet near the cap, so it hangs on the calls' estimated prices:
-    // the check author's brief and tools grew (W11 D4) and seed 23 at $10 no longer met it.
+  // Migration 053: an admitted call's estimate is its llm_calls row, pending until the call is
+  // recorded, and the spend read counts it. Planted (pending-uncounted), the read leaves the pending
+  // rows out, as an in-memory in-flight set is left out by the next process: an admission made while
+  // another call is in flight sees only the recorded spend. It needs two admissions to meet near the
+  // cap (observed, scan of 2026-10-15 over seeds 1-20 at $6 with two projects: seeds 14 and 19 fail
+  // I5:over-committed alone and pass clean).
+  it("catches an admission that leaves out the calls admitted and not yet recorded", async () => {
     const shared = { projects: 2, capUsd: 6 } as const;
-    const clean = await seeded(96, undefined, shared);
+    const clean = await seeded(14, undefined, shared);
     expect(keys(clean), clean.violations.map((v) => `${v.key}: ${v.statement}`).join("\n")).toEqual([]);
-    const planted = await seeded(96, "ledger-read-first", shared);
+    const planted = await seeded(14, "pending-uncounted", shared);
     expect(keys(planted)).toEqual(["I5:over-committed"]);
   }, 90_000);
 

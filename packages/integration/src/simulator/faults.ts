@@ -186,8 +186,8 @@ export class Scheduler {
 
   /**
    * After the call ran, before its caller sees the result: the other task may run first, as it
-   * may in production between a query's snapshot and the moment its rows reach the caller (a sum
-   * read before another task's row was written, then that task's in-flight estimate released).
+   * may in production between a query's snapshot and the moment its rows reach the caller (a spend
+   * sum read before another task's admission wrote its pending row).
    */
   async returned(seam: SeamKind, label: string): Promise<void> {
     await this.interleaver.turn(`${seam}:${label}:returned`);

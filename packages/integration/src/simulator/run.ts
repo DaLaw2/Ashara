@@ -16,7 +16,7 @@ import { composeAshara } from "@ashara/server/compose";
 import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
 import type { ContendedWaitKind } from "@ashara/shared";
-import { AdmissionLedger, plantLedgerReadFirst } from "./admissions.js";
+import { AdmissionLedger, pendingUncounted } from "./admissions.js";
 import { CheckoutWatch } from "./checkout-watch.js";
 import { createRunDatabase } from "./database.js";
 import type { Database, RunDatabase } from "./database.js";
@@ -44,11 +44,11 @@ import type { Decision, TapeMode } from "./tape.js";
  * - skip-merge-record: every merge recorded under a commit main does not hold (I7, records clause);
  * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
  * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,
- *   admission clause). With one project it admits nothing more: the last check (the project's)
- *   reads the in-flight estimates and adds its own with no await between (baseline §7.6), so it is
- *   planted on a run of two projects, where only the deployment's check stands between them;
- * - ledger-read-first: a spend-cap admission reads the recorded spend before the in-flight
- *   estimates, the order B9 crossed the cap with (I5, admission clause; baseline §7.7);
+ *   admission clause). Planted on a run of two projects, where only the deployment's check stands
+ *   between them (baseline §7.6). Since migration 053 an admission's own estimate is a row written
+ *   after the project's check, an await later; whether one project now catches it too: unverified;
+ * - pending-uncounted: a spend-cap admission's read leaves out the pending rows of calls admitted
+ *   and not yet recorded, so it counts the recorded spend alone (I5, admission clause);
  * - infrastructure-fault-pinned: a task's infrastructure faults stop counting at the halt (I8);
  * - halt-report-fixed-cause: a halt's report states a fixed cause, not the recorded one (I4);
  * - stop-report-omits-merge: the stop report leaves out a merge on record (I4);
@@ -63,7 +63,7 @@ const MUTATIONS = [
   "skip-merge-record",
   "no-checkout-lock",
   "no-admission-queue",
-  "ledger-read-first",
+  "pending-uncounted",
   "infrastructure-fault-pinned",
   "halt-report-fixed-cause",
   "stop-report-omits-merge",
@@ -87,7 +87,7 @@ const PLANTED: Readonly<Record<Mutation, Plant>> = {
   "skip-merge-record": { bypassed: [], queries: skipMergeRecord, code: null },
   "no-checkout-lock": { bypassed: ["target-checkout"], queries: null, code: null },
   "no-admission-queue": { bypassed: ["spend-admission"], queries: null, code: null },
-  "ledger-read-first": { bypassed: [], queries: null, code: plantLedgerReadFirst },
+  "pending-uncounted": { bypassed: [], queries: pendingUncounted, code: null },
   "infrastructure-fault-pinned": { bypassed: [], queries: pinInfrastructureFaults, code: null },
   "halt-report-fixed-cause": { bypassed: [], queries: haltReportFixedCause, code: null },
   "stop-report-omits-merge": { bypassed: [], queries: stopReportOmitsMerge, code: null },
@@ -460,7 +460,7 @@ export async function runSeed(options: RunOptions): Promise<RunResult> {
   const planted = options.mutation === undefined ? null : PLANTED[options.mutation];
   const interleaver = new Interleaver(tape, new Set(planted?.bypassed ?? []), onInterleave);
   const scheduler = new Scheduler(tape, FAULTS[options.profile], interleaver, options.forcedFaults);
-  const admissions = new AdmissionLedger(clock);
+  const admissions = new AdmissionLedger();
   const gitDates = new GitDates();
   let longestQuiet = 0;
 

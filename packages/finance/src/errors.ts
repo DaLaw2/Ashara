@@ -54,9 +54,9 @@ interface BudgetExceededContext {
   readonly provider: string;
   readonly model: string;
   readonly capUsd: number;
-  /** Summed from llm_calls: each call's cost, or its pre-call estimate when unmeasured. */
+  /** Summed from llm_calls rows no longer pending: each call's cost, or its pre-call estimate when unmeasured. */
   readonly spentUsd: number;
-  /** Estimates of calls this process admitted and has not recorded yet. */
+  /** Estimates of calls admitted and not recorded yet: llm_calls rows in state 'pending' (migration 053). */
   readonly inFlightUsd: number;
   /** This call's worst-case cost. */
   readonly estimatedCostUsd: number;

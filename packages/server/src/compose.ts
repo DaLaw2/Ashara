@@ -229,8 +229,9 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
   // every provider request the gateway refuses an unpriced model and a call whose
-  // worst case would cross the project's or the deployment's cap; after it, one
-  // llm_calls row. The loop reads the same cap to stop at the deployment's.
+  // worst case would cross the project's or the deployment's cap and writes the
+  // admitted call's llm_calls row as pending; after it, the call's record completes
+  // that row. The loop reads the same cap to stop at the deployment's.
   const llmCallRepo = new LlmCallRepository(db);
   const spendCap = new SpendCap({
     ledger: llmCallRepo,
@@ -516,6 +517,13 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
         console.error(`FATAL: ${lost.message}; stopping the runner, no target is driven unclaimed`);
         abortController.abort(lost);
       });
+
+      // A model call a prior process admitted and never recorded keeps counting against the spend
+      // cap at its estimate, marked unmeasured_after_crash, before this process admits any call.
+      await reconcileOrRefuse(
+        () => llmCallLedger.reconcileAtStartup(),
+        `llm_calls admissions in ${redactedDatabaseUrl(databaseUrl)}`,
+      );
 
       // A prior process may have crashed mid-dispatch, leaving items InProgress with no owning
       // agent, or Failed with no recovery routed. Reset orphans to Pending and route parked Failed

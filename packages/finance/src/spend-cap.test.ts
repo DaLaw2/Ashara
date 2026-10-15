@@ -190,7 +190,9 @@ describe("Finance's spend cap, read from llm_calls", () => {
     const [row] = await rowsOf(projectId);
     expect(row?.costUsd).toBeNull();
     expect(row?.estimatedCostUsd).toBeGreaterThan(0);
-    expect(await calls.spentUsd({ kind: "project", projectId })).toBeCloseTo(row?.estimatedCostUsd ?? Number.NaN, 12);
+    const spend = await calls.spend({ kind: "project", projectId });
+    expect(spend.recordedUsd).toBeCloseTo(row?.estimatedCostUsd ?? Number.NaN, 12);
+    expect(spend.inFlightUsd).toBe(0);
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/spend cap counts the call at its estimate/));
   });
 
@@ -213,42 +215,31 @@ describe("Finance's spend cap, read from llm_calls", () => {
     expect((await fresh.cap.deploymentStop())?.reason).toMatch(/^budget_cap: the deployment has spent/);
   });
 
-  test("a call recorded and released while an admission reads the ledger still counts, as row or as estimate (B9)", async () => {
+  test("an admitted call is a pending row from its admission on: another process's admission counts it", async () => {
     const projectId = await newProject();
-    const pending = (callId: string) => ({
-      callId,
+    const pending = {
+      callId: randomUUID(),
       context: { projectId, taskId: null, callSite: "decomposition" as const },
       provider: "deepseek",
       model: MODEL,
       operation: "generateObject" as const,
       requestBytes: 1_000,
       maxOutputTokens: 100,
-    });
+    };
     const estimate = worstCaseCostUsd(MODEL, 1_000, 100);
-    // A ledger whose read takes its snapshot, then lets the other call's row commit and its
-    // estimate be released, then returns the snapshot: the interleaving that crossed the cap.
-    let recordedUsd = 0;
-    let duringRead: (() => void) | null = null;
-    const ledger = {
-      async spentUsd(): Promise<number> {
-        const snapshot = recordedUsd;
-        await Promise.resolve();
-        const recordOther = duringRead;
-        duringRead = null;
-        recordOther?.();
-        return snapshot;
-      },
-    };
-    const caps = { deploymentUsd: estimate * 1.5, perProjectUsd: estimate * 1.5 };
-    const cap = new SpendCap({ ledger, projects: { block: () => Promise.resolve("blocked" as const) }, caps });
+    const caps = { deploymentUsd: LARGE, perProjectUsd: estimate * 1.5 };
 
-    await cap.admit(pending("first"));
-    duringRead = () => {
-      recordedUsd += estimate;
-      cap.release("first");
-    };
-    await expect(cap.admit(pending("second"))).rejects.toMatchObject({ name: "BudgetExceeded", scope: { kind: "deployment" } });
-    expect(duringRead).toBeNull();
+    await processWithCaps(caps).cap.admit(pending);
+
+    const [row] = await rowsOf(projectId);
+    expect(row).toEqual({ costUsd: null, estimatedCostUsd: expect.closeTo(estimate, 12) });
+    expect(await calls.spend({ kind: "project", projectId })).toEqual({ recordedUsd: 0, inFlightUsd: expect.closeTo(estimate, 12) });
+    // A process with nothing in memory refuses a second worst case on the same headroom.
+    await expect(processWithCaps(caps).cap.admit({ ...pending, callId: randomUUID() })).rejects.toMatchObject({
+      name: "BudgetExceeded",
+      scope: { kind: "project", projectId },
+      inFlightUsd: expect.closeTo(estimate, 12),
+    });
   });
 
   test("concurrent calls cannot each spend the same headroom", async () => {

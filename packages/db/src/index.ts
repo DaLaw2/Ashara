@@ -52,7 +52,7 @@ export { ConfigRepository } from "./repositories/config.js";
 export { ContractRepository } from "./repositories/contract.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
-export type { NewLlmCall } from "./repositories/llm-call.js";
+export type { LlmCallMeasurement } from "./repositories/llm-call.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
