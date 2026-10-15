@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { CheckoutHolderOverran, ensureTargetGitInit, withTargetCheckout } from "@ashara/execution-infra";
-import { createWorkItemId } from "@ashara/shared";
+import { createWorkItemId, observeContendedWaits } from "@ashara/shared";
 import type { DispatchRef } from "../dispatch-result.js";
 import { recoverOrphanedMerge, resetCheckoutToHead, taskBranchName, tentativeMerge } from "../merge.js";
 import { VerificationInfrastructureFault, finalizeSuccess } from "./finalize.js";
@@ -149,6 +149,14 @@ describe("finalize serialises per target checkout", () => {
 
   test("a waiter fails naming the holder once the holder outlasts its declared bound; the stuck checkout is never taken", async () => {
     const target = await makeDir("ashara-finalize-stuck-");
+    // A waiter arms its bound only after the real I/O that canonicalises the target, and fake time advanced before
+    // that is time its bound never sees. It reaches contendedWait with the bound armed, so count arrivals there.
+    let armed = 0;
+    let bothArmed: () => void = () => {};
+    const waitersArmed = new Promise<void>((done) => {
+      bothArmed = done;
+    });
+    let restoreWaits: () => void = () => {};
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       let releaseStuck: () => void = () => {};
@@ -164,12 +172,18 @@ describe("finalize serialises per target checkout", () => {
         });
       });
       await leaseExtended;
+      // Installed once the holder has the checkout, so the only arrivals it counts are the two waiters.
+      restoreWaits = observeContendedWaits((kind, waiting) => {
+        if (kind === "target-checkout" && ++armed === 2) bothArmed();
+        return waiting;
+      });
       let waiterSettled = false;
       const waiter = withTargetCheckout(target, "waiter", () => Promise.resolve("ran")).catch((e: unknown) => e);
       void waiter.then(() => {
         waiterSettled = true;
       });
       const third = withTargetCheckout(target, "third", () => Promise.resolve("third ran")).catch((e: unknown) => e);
+      await waitersArmed;
 
       // Past the host-side allowance alone, but inside the extended bound: still waiting.
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 30_000);
@@ -189,6 +203,7 @@ describe("finalize serialises per target checkout", () => {
       expect(await withTargetCheckout(target, "after", () => Promise.resolve("after ran"))).toBe("after ran");
     } finally {
       vi.useRealTimers();
+      restoreWaits();
     }
   });
 });
