@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
-import { clientMessages, noOpenStop, projects, workItems } from "@ashara/db";
+import { clientMessages, noOpenStop, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { StoredVision, VisionAppend } from "../vision.js";
@@ -29,7 +29,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<DueStackChoiceR
     .from(projects)
     .where(
       and(
-        eq(projects.status, "active"),
+        projectAtWork(),
         noOpenStop(projects.id),
         sql`NOT EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = projects.id AND m.reports_on = ${SUBJECT})`,
       ),

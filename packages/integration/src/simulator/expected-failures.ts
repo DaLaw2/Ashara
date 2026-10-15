@@ -34,7 +34,6 @@ const B8 =
   "B8 (baseline §3; task t-begin-failure-leaks-connection): a BEGIN that fails leaves its pool client checked out: drizzle-orm " +
   "0.45.2's node-postgres session transaction() sends begin before its try/finally, so the client is never released";
 const EXPECTED_FAILURES: readonly ExpectedFailure[] = [
-  { seed: 75, keys: ["I1:leaked-connection:begin"], baseline: B8 },
   { seed: 86, keys: ["I1:leaked-connection:begin"], baseline: B8 },
 ];
 

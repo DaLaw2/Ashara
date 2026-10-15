@@ -2,7 +2,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "../connection.js";
 import { projects, rosterRoles, visionDocuments } from "../schema/index.js";
-import { noOpenStop } from "./project.js";
+import { noOpenStop, projectAtWork } from "./project.js";
 
 // A project's roster (migration 031): the rows of its latest revision. Derived
 // from vision v1 before the first plan; the table is append-only.
@@ -65,7 +65,7 @@ export async function listProjectsAwaitingRoster(db: DbHandle): Promise<ProjectA
     )
     .where(
       and(
-        eq(projects.status, "active"),
+        projectAtWork(),
         isNull(projects.firstPlannedAt),
         isNull(projects.planStoppedAt),
         sql`NOT EXISTS (SELECT 1 FROM work_items w WHERE w.project_id = ${projects.id})`,

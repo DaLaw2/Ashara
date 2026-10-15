@@ -1,9 +1,8 @@
 import { afterAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import { createDb, DEFAULT_DATABASE_URL, PROJECT_BLOCK_KINDS } from "@ashara/db";
+import { createDb, DEFAULT_DATABASE_URL, PROJECT_BLOCK_KINDS, PROJECT_LIFECYCLES } from "@ashara/db";
 import { WORK_ITEM_STATUSES } from "@ashara/delivery";
-import { PROJECT_STATUSES } from "@ashara/engagement";
 import { ATTEMPT_TERMINALS } from "@ashara/workplace";
 
 // The code's lifecycle lists against the CHECK constraints the migrations wrote: a member one
@@ -25,7 +24,7 @@ async function checkedValues(table: string, constraint: string): Promise<string[
 describe("lifecycle lists match the schema", () => {
   test.each([
     ["work_items", "work_items_status_check", WORK_ITEM_STATUSES],
-    ["projects", "projects_status_known", PROJECT_STATUSES],
+    ["projects", "projects_lifecycle_known", PROJECT_LIFECYCLES],
     ["project_blocks", "project_blocks_kind_check", PROJECT_BLOCK_KINDS],
     ["dev_sessions", "dev_sessions_attempt_terminal_check", ATTEMPT_TERMINALS],
   ])("%s %s", async (table, constraint, list) => {

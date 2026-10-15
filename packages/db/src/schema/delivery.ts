@@ -72,8 +72,9 @@ export const dependencies = pgTable("dependencies", {
 });
 
 // ---------------------------------------------------------------------------
-// project_blocks (migration 040): one row per time a project entered 'blocked',
-// opened and ended by the projects_block_episode trigger and the operator's unblock.
+// project_blocks (migration 040): one row per time Delivery halted a project. An open row is
+// the halt itself (migration 059): opened and ended by Delivery's halt guard, ended as
+// 'client_stop' by the projects_stop_ends_halt trigger when the client stops the project.
 // ---------------------------------------------------------------------------
 
 /**

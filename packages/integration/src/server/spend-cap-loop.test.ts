@@ -22,6 +22,7 @@ import { createWorkItemId, systemClock } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
+import { projectState } from "../simulator/project-state.js";
 
 // The spend caps end to end: Finance refuses an LLM call made inside the loop, and the loop
 // routes the refusal. Against Postgres; no real LLM call is made.
@@ -234,7 +235,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
 
     const ended = await new ContinuousRunner(new CoreLoop(deps), { idleIntervalMs: 60_000 }).run(abort.signal, async () => {
       // The halt is recorded as the deployment's cap before the client sends its stop.
-      const halted = await db.execute(sql`SELECT status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
+      const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
       stopId = (await messages.insertInbound({ projectId, kind: "stop", body: "Please stop.", inReplyTo: null })).id;
     });
@@ -392,7 +393,7 @@ describe("a turn refused at the project's spend cap", () => {
     const lessons = await db.execute(sql`SELECT count(*)::int AS n FROM failed_approaches WHERE task_id = ${itemId}`);
     expect(lessons.rows).toEqual([{ n: 0 }]);
     const project = await db.execute(
-      sql`SELECT status, blocked_error_class AS "errorClass", blocked_reason AS reason FROM projects WHERE id = ${projectId}`,
+      sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS reason FROM projects WHERE id = ${projectId}`,
     );
     // The class the Liaison names the project's own cap by (SPEND_CAP_ERROR_CLASS), as finance records it.
     expect(project.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.project, reason: expect.stringMatching(/^budget_cap: the spend cap of project/) }]);

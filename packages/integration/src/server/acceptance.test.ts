@@ -20,6 +20,7 @@ import type { VisionSource } from "@ashara/engagement";
 import { createAcceptanceStore, createDeliveredReportStore } from "@ashara/server/acceptance-store";
 import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
+import { projectState } from "../simulator/project-state.js";
 
 // Story s-independent-verify-m1 W7 (design P11, §2.8; eighth run E3): a project whose goal tasks are
 // all done is swept on main once; a pass makes it Accepted with one delivered report rendered from
@@ -184,7 +185,7 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
 }
 
 async function statusOf(projectId: ProjectId): Promise<string> {
-  const result = await db.execute(sql`SELECT status FROM projects WHERE id = ${projectId}`);
+  const result = await db.execute(sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status ?? "(none)";
 }
 
@@ -331,9 +332,9 @@ describe("acceptance on main", () => {
 
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {
     const { projectId } = await deliveredProject();
-    await expect(db.execute(sql`UPDATE projects SET status = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
+    await expect(db.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${projectId}`)).rejects.toThrow();
     await runAcceptanceSweeps(sweepDeps(true, "all suites passed"));
-    await expect(db.execute(sql`UPDATE projects SET status = 'active' WHERE id = ${projectId}`)).rejects.toThrow();
+    await expect(db.execute(sql`UPDATE projects SET lifecycle = 'active' WHERE id = ${projectId}`)).rejects.toThrow();
     expect(await statusOf(projectId)).toBe("accepted");
 
     await new ClientMessageRepository(db).insertInbound({ projectId, kind: "stop", body: "Thanks, done.", inReplyTo: null });

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
+import { projectHalted, projects } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 import { ATTEMPT_TERMINALS, TERMINAL_SESSION_PHASES } from "./session-vocabulary.js";
 
@@ -165,7 +166,9 @@ function toSession(row: z.infer<typeof SessionRowSchema>, attemptColumnsSince: D
  * and provider. Every row is validated on the way out of Postgres.
  */
 export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promise<RunEvidence> {
-  const projectRows = await db.execute(sql`SELECT id, name, status FROM projects WHERE id = ${projectId}`);
+  const projectRows = await db.execute(
+    sql`SELECT id, name, CASE WHEN ${projectHalted(projects.id)} THEN 'blocked' ELSE lifecycle END AS status FROM projects WHERE id = ${projectId}`,
+  );
   const [projectRow] = projectRows.rows;
   if (projectRow === undefined) throw new RunReportProjectMissing(projectId);
   const project = ProjectRowSchema.parse(projectRow);

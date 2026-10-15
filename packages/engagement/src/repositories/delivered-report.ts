@@ -378,7 +378,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
     })
     .from(acceptanceSweeps)
     .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
-    .where(and(eq(acceptanceSweeps.passed, true), isNull(acceptanceSweeps.reportId), eq(projects.status, "accepted"), noOpenStop(projects.id)))
+    .where(and(eq(acceptanceSweeps.passed, true), isNull(acceptanceSweeps.reportId), eq(projects.lifecycle, "accepted"), noOpenStop(projects.id)))
     .orderBy(asc(acceptanceSweeps.createdAt), asc(acceptanceSweeps.id));
   const due: DueDeliveredReportRow[] = [];
   for (const row of rows) {

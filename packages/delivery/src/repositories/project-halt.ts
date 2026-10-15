@@ -1,18 +1,16 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { ProjectRepository, noOpenStop, projectBlocks, projects } from "@ashara/db";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { ProjectRepository, noOpenStop, projectAtWork, projectBlocks, projects } from "@ashara/db";
+import type { DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "../project-halt.js";
 
-/**
- * Delivery's one guard over projects.status (O3 c, ADR-080 d3): the only moves Delivery makes. A
- * halt takes an active project to 'blocked'; a resumption (the substrate probe, or the operator's
- * unblock once the cause is cleared) takes a halted one back to 'active'. Every other status is
- * Engagement's (its project-lifecycle.ts), and no write of Delivery's names one.
- */
-export const PROJECT_HALT = {
-  halt: { from: "active", to: "blocked" },
-  resume: { from: "blocked", to: "active" },
-} as const;
+// Delivery's one guard over the project halt (O3 c, ADR-080 d3; migration 059). A project is halted
+// while it has an open project_blocks episode; this module is the only writer of that episode and
+// of the halt's cause on the project row (blocked_category, blocked_error_class, blocked_reason). A
+// halt opens an episode on a project at work (Engagement's lifecycle 'active', not halted); a
+// resumption (the substrate probe, or the operator's unblock once the cause is cleared) ends it.
+// Engagement's lifecycle column is never written here; the client's stop ends a halt it finds
+// through the projects_stop_ends_halt trigger.
 
 /** A project id named for a write that matches no project row. */
 class ProjectNotFound extends Error {
@@ -25,71 +23,106 @@ class ProjectNotFound extends Error {
   }
 }
 
-/** An unblock named a project that is not blocked. */
+/** An unblock named a project that is not halted. */
 class ProjectNotBlocked extends Error {
   constructor(
     readonly projectId: ProjectId,
-    readonly status: string,
+    readonly lifecycle: string,
   ) {
-    super(`cannot unblock project ${projectId}: it is '${status}', not '${PROJECT_HALT.resume.from}'`);
+    super(`cannot unblock project ${projectId}: it is '${lifecycle}' and not halted (no open block episode)`);
     this.name = "ProjectNotBlocked";
   }
 }
 
-/** A blocked project with no open block episode: migration 040's trigger or backfill did not run for it. */
+/** The open episode read under the project's lock was gone when it was to be ended: nothing was written. */
 class BlockEpisodeMissing extends Error {
   constructor(readonly projectId: ProjectId) {
-    super(`cannot return project ${projectId} to work: it is blocked but has no open block episode to end`);
+    super(`cannot return project ${projectId} to work: its open block episode was ended while the project row was locked`);
     this.name = "BlockEpisodeMissing";
   }
 }
 
+/** Locks the project row for the rest of `tx`; null when there is no such project. */
+async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly lifecycle: string; readonly planStoppedAt: Date | null } | null> {
+  const [locked] = await tx
+    .select({ lifecycle: projects.lifecycle, planStoppedAt: projects.planStoppedAt })
+    .from(projects)
+    .where(eq(projects.id, id))
+    .for("update");
+  return locked ?? null;
+}
+
+/**
+ * The open episode of a project whose row `tx` holds locked: read in its own statement after the
+ * lock, so a halt committed by a writer the lock waited for is seen.
+ */
+async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind: string; readonly reportId: string | null } | null> {
+  const [open] = await tx
+    .select({ kind: projectBlocks.kind, reportId: projectBlocks.reportId })
+    .from(projectBlocks)
+    .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
+  return open ?? null;
+}
+
+/**
+ * Halts the project for first planning giving up, inside `tx`, which holds the project row locked
+ * and has just stamped plan_stopped_at on it: the episode is 'planning_stopped', its reason the
+ * last planning error.
+ */
+export async function haltForPlanningStopped(tx: DbHandle, id: ProjectId, lastError: string | null): Promise<void> {
+  await tx.insert(projectBlocks).values({ projectId: id, kind: "planning_stopped", errorClass: null, reason: lastError });
+}
+
 /**
  * The Project Record as Delivery reads and halts it: Engagement's record (db's ProjectRepository)
- * and the halt, whose every write goes through PROJECT_HALT.
+ * and the halt, whose every write is here.
  */
 export class ProjectHaltRepository extends ProjectRepository {
   /**
-   * Blocks an active project and records why (migration 025), with the cause's
-   * category (migration 040); the projects_block_episode trigger opens the block's
-   * episode, which the Liaison reports to the client once. A project already
-   * blocked keeps its status and the cause it was first blocked with, so the
-   * earliest cause stays on record. A project that does not exist throws.
+   * Halts a project at work and records why (migration 025), with the cause's category (migration
+   * 040), opening the episode the Liaison reports to the client once. A project already halted
+   * keeps the cause it was first halted with, so the earliest cause stays on record; a stopped or
+   * accepted one is not halted. Either is "already-blocked". A project that does not exist throws.
    */
   async block(id: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> {
-    const [row] = await this.db
-      .update(projects)
-      .set({
-        status: PROJECT_HALT.halt.to,
-        blockedCategory: cause.category,
-        blockedErrorClass: cause.errorClass,
-        blockedReason: cause.reason,
-      })
-      .where(and(eq(projects.id, id), eq(projects.status, PROJECT_HALT.halt.from)))
-      .returning({ id: projects.id });
-    if (row) return "blocked";
-    const [existing] = await this.db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).limit(1);
-    if (!existing) throw new ProjectNotFound(id, "block the project");
-    return "already-blocked";
+    return this.db.transaction(async (tx) => {
+      if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "block the project");
+      const [halted] = await tx
+        .update(projects)
+        .set({ blockedCategory: cause.category, blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
+        .where(and(eq(projects.id, id), projectAtWork()))
+        .returning({ id: projects.id });
+      if (!halted) return "already-blocked";
+      await tx.insert(projectBlocks).values({ projectId: id, kind: cause.category, errorClass: cause.errorClass, reason: cause.reason });
+      return "blocked";
+    });
   }
 
   /**
-   * Blocks every active project with no stop awaiting the Liaison, with one cause: the
-   * deployment's spend cap, which binds them all (migration 048). Each block opens its episode
-   * (the projects_block_episode trigger). Returns the projects blocked.
+   * Halts every project at work with no stop awaiting the Liaison, with one cause: the
+   * deployment's spend cap, which binds them all (migration 048). Each halt opens its episode.
+   * Returns the projects halted.
    */
   async blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]> {
-    const rows = await this.db
-      .update(projects)
-      .set({
-        status: PROJECT_HALT.halt.to,
-        blockedCategory: cause.category,
-        blockedErrorClass: cause.errorClass,
-        blockedReason: cause.reason,
-      })
-      .where(and(eq(projects.status, PROJECT_HALT.halt.from), noOpenStop(projects.id)))
-      .returning({ id: projects.id });
-    return rows.map((row) => parseProjectId(row.id, "projects.id"));
+    return this.db.transaction(async (tx) => {
+      const candidates = await tx
+        .select({ id: projects.id })
+        .from(projects)
+        .where(and(eq(projects.lifecycle, "active"), noOpenStop(projects.id)))
+        .orderBy(asc(projects.id))
+        .for("update");
+      if (candidates.length === 0) return [];
+      const halted = await tx
+        .update(projects)
+        .set({ blockedCategory: cause.category, blockedErrorClass: cause.errorClass, blockedReason: cause.reason })
+        .where(and(inArray(projects.id, candidates.map((row) => row.id)), projectAtWork(), noOpenStop(projects.id)))
+        .returning({ id: projects.id });
+      if (halted.length === 0) return [];
+      await tx
+        .insert(projectBlocks)
+        .values(halted.map((row) => ({ projectId: row.id, kind: cause.category, errorClass: cause.errorClass, reason: cause.reason })));
+      return halted.map((row) => parseProjectId(row.id, "projects.id"));
+    });
   }
 
   /**
@@ -104,10 +137,9 @@ export class ProjectHaltRepository extends ProjectRepository {
       .from(projects)
       .where(
         and(
-          eq(projects.status, PROJECT_HALT.resume.from),
-          eq(projects.blockedCategory, "infrastructure"),
           noOpenStop(projects.id),
-          sql`EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = ${projects.id} AND b.ended_at IS NULL AND b.report_id IS NOT NULL)`,
+          sql`EXISTS (SELECT 1 FROM project_blocks b WHERE b.project_id = ${projects.id} AND b.ended_at IS NULL
+            AND b.kind = 'infrastructure' AND b.report_id IS NOT NULL)`,
         ),
       )
       .orderBy(asc(projects.createdAt), asc(projects.id));
@@ -117,25 +149,16 @@ export class ProjectHaltRepository extends ProjectRepository {
   /**
    * The automatic way out of an infrastructure halt (migration 048): in one transaction with the
    * project row locked, its open episode is ended as 'probe_passed' with what the probe observed,
-   * and the project returns to 'active' with its cause cleared. The Liaison then tells the client,
-   * once, that work resumed. A project no longer halted on infrastructure is left as it is: "moved".
-   * A halt whose own report is not yet posted is left as it is too, "unreported": its report is
-   * due only while the episode is open, so it is told before it can end.
+   * and its cause cleared. The Liaison then tells the client, once, that work resumed. A project no
+   * longer halted on infrastructure is left as it is: "moved". A halt whose own report is not yet
+   * posted is left as it is too, "unreported": its report is due only while the episode is open,
+   * so it is told before it can end.
    */
   async resumeFromInfrastructureHalt(id: ProjectId, evidence: string): Promise<"resumed" | "moved" | "unreported"> {
     return this.db.transaction(async (tx) => {
-      const [locked] = await tx
-        .select({ status: projects.status, category: projects.blockedCategory })
-        .from(projects)
-        .where(eq(projects.id, id))
-        .for("update");
-      if (!locked) throw new ProjectNotFound(id, "resume the project");
-      if (locked.status !== PROJECT_HALT.resume.from || locked.category !== "infrastructure") return "moved";
-      const [open] = await tx
-        .select({ reportId: projectBlocks.reportId })
-        .from(projectBlocks)
-        .where(and(eq(projectBlocks.projectId, id), isNull(projectBlocks.endedAt)));
-      if (!open) throw new BlockEpisodeMissing(id);
+      if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "resume the project");
+      const open = await openEpisode(tx, id);
+      if (!open || open.kind !== "infrastructure") return "moved";
       if (open.reportId === null) return "unreported";
       const [episode] = await tx
         .update(projectBlocks)
@@ -145,30 +168,25 @@ export class ProjectHaltRepository extends ProjectRepository {
       if (!episode) throw new BlockEpisodeMissing(id);
       await tx
         .update(projects)
-        .set({ status: PROJECT_HALT.resume.to, blockedCategory: null, blockedErrorClass: null, blockedReason: null })
+        .set({ blockedCategory: null, blockedErrorClass: null, blockedReason: null })
         .where(eq(projects.id, id));
       return "resumed";
     });
   }
 
   /**
-   * The operator's way out of 'blocked' (migration 040), after the cause is cleared: in one
+   * The operator's way out of a halt (migration 040), after the cause is cleared: in one
    * transaction with the project row locked, the open block episode is ended with who and why,
-   * and the project returns to 'active' with its cause cleared. A project whose first planning
-   * gave up has its planning record reset, so first planning runs again from no attempts; a
-   * plan revision's failed attempts are reset likewise (migration 042). The
-   * Liaison then tells the client, once, that work resumed. Only a blocked project is unblocked:
-   * any other status throws ProjectNotBlocked, and nothing is written.
+   * and the cause cleared. A project whose first planning gave up has its planning record reset,
+   * so first planning runs again from no attempts; a plan revision's failed attempts are reset
+   * likewise (migration 042). The Liaison then tells the client, once, that work resumed. Only a
+   * halted project is unblocked: any other throws ProjectNotBlocked, and nothing is written.
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
     return this.db.transaction(async (tx) => {
-      const [locked] = await tx
-        .select({ status: projects.status, planStoppedAt: projects.planStoppedAt })
-        .from(projects)
-        .where(eq(projects.id, id))
-        .for("update");
+      const locked = await lockProject(tx, id);
       if (!locked) throw new ProjectNotFound(id, "unblock the project");
-      if (locked.status !== PROJECT_HALT.resume.from) throw new ProjectNotBlocked(id, locked.status);
+      if (!(await openEpisode(tx, id))) throw new ProjectNotBlocked(id, locked.lifecycle);
 
       const [episode] = await tx
         .update(projectBlocks)
@@ -182,7 +200,6 @@ export class ProjectHaltRepository extends ProjectRepository {
       await tx
         .update(projects)
         .set({
-          status: PROJECT_HALT.resume.to,
           blockedCategory: null,
           blockedErrorClass: null,
           blockedReason: null,

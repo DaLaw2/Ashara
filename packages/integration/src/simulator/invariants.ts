@@ -12,6 +12,7 @@ import { checkReports, readReportRecords } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
 import type { FakeCell } from "./fake-podman.js";
+import { projectState } from "./project-state.js";
 import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
@@ -117,7 +118,7 @@ export async function readSnapshot(db: Database, projectId: string): Promise<Sna
   const [project] = z.array(projectRow).parse(
     (
       await db.execute(sql`
-        SELECT status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
+        SELECT ${projectState} AS status, blocked_category AS "blockedCategory", blocked_reason AS "blockedReason",
                plan_stopped_at IS NOT NULL AS "planStopped", workspace_path AS "workspacePath",
                EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed AND s.report_id IS NOT NULL) AS "deliveredReported"
         FROM projects WHERE id = ${projectId}`)

@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
-import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange } from "@ashara/db";
+import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange, projectAtWork, projectHalted } from "@ashara/db";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { ProjectBlockCause } from "../project-halt.js";
@@ -112,7 +112,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
     .from(projects)
     .where(
       and(
-        eq(projects.status, "active"),
+        projectAtWork(),
         isNotNull(projects.firstPlannedAt),
         sql`NOT ${pendingChange(projects.id)}`,
         unreported("first-plan"),
@@ -185,7 +185,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
     .select({ id: projects.id, attempts: projects.planAttempts })
     .from(projects)
     .where(
-      and(eq(projects.status, "blocked"), isNotNull(projects.planStoppedAt), unreported("planning-stopped"), noOpenStop(projects.id)),
+      and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), unreported("planning-stopped"), noOpenStop(projects.id)),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
   for (const row of stopped) {

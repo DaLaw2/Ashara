@@ -210,7 +210,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       and(
         inArray(projectBlocks.endKind, ["unblocked", "probe_passed"]),
         isNull(projectBlocks.resumedReportId),
-        ne(projects.status, "stopped"),
+        ne(projects.lifecycle, "stopped"),
         noOpenStop(projects.id),
       ),
     )
@@ -235,7 +235,6 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       and(
         isNull(projectBlocks.endedAt),
         isNull(projectBlocks.reportId),
-        eq(projects.status, "blocked"),
         noOpenStop(projects.id),
         notCoveredByPlanningStoppedReport,
       ),

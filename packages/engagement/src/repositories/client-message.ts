@@ -1,5 +1,5 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { ProjectRepository, clientMessages, noOpenStop } from "@ashara/db";
+import { ProjectRepository, clientMessages, noOpenStop, projectHalted } from "@ashara/db";
 import type { Database, DbHandle, ProjectRecord } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 
@@ -106,7 +106,7 @@ export class ClientMessageRepository {
 
   /**
    * Inbound tenders not yet consumed, of active projects, oldest first: the
-   * Liaison's intake queue. A blocked project's tender stays unconsumed and is
+   * Liaison's intake queue. A halted project's tender stays unconsumed and is
    * not taken in, and so does one whose project has a stop awaiting the Liaison.
    */
   async listUnconsumedTenders(): Promise<ClientMessageRow[]> {
@@ -118,7 +118,8 @@ export class ClientMessageRepository {
           eq(clientMessages.direction, "inbound"),
           eq(clientMessages.kind, "tender"),
           isNull(clientMessages.consumedAt),
-          sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${clientMessages.projectId} AND p.status = 'active')`,
+          sql`EXISTS (SELECT 1 FROM projects p WHERE p.id = ${clientMessages.projectId} AND p.lifecycle = 'active')`,
+          sql`NOT ${projectHalted(clientMessages.projectId)}`,
           noOpenStop(clientMessages.projectId),
         ),
       )

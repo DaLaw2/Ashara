@@ -1,5 +1,5 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projects } from "@ashara/db";
+import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 
@@ -12,7 +12,7 @@ import { parseProjectId, type ProjectId } from "@ashara/shared";
 // is due while a passed sweep has none (engagement repositories/delivered-report.ts).
 
 /** Every condition of readiness, on the projects row in scope. */
-const readyForAcceptance = sql`(${projects.status} = 'active'
+const readyForAcceptance = sql`(${projectAtWork()}
   AND ${projects.firstPlannedAt} IS NOT NULL
   AND NOT ${pendingChange(projects.id)}
   AND NOT ${pendingRepair(projects.id)}

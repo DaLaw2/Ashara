@@ -1,9 +1,9 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { projects, visionDocuments, workItems, noOpenAnswer, noOpenStop } from "@ashara/db";
+import { projects, visionDocuments, workItems, noOpenAnswer, noOpenStop, projectAtWork } from "@ashara/db";
 import { WorkItemRowRepository } from "./work-item.js";
-import { PROJECT_HALT } from "./project-halt.js";
+import { haltForPlanningStopped } from "./project-halt.js";
 
 // Delivery's first plan of a project (migration 020). A project awaits its first
 // plan while it is active, has a vision, has no work items and has no planning
@@ -62,7 +62,7 @@ interface ProjectAwaitingPlanRow {
 
 const awaitingPlan = () =>
   and(
-    eq(projects.status, "active"),
+    projectAtWork(),
     isNull(projects.firstPlannedAt),
     isNull(projects.planStoppedAt),
     sql`EXISTS (SELECT 1 FROM vision_documents v WHERE v.project_id = projects.id)`,
@@ -168,12 +168,19 @@ export async function recordFirstPlanFailure(db: DbHandle, projectId: ProjectId,
   return row.planAttempts;
 }
 
-/** Blocks the project and stamps planning stopped, together: a halt, through Delivery's guard. */
+/**
+ * Stamps planning stopped and halts the project, together, with the project row locked: the halt
+ * through Delivery's guard.
+ */
 export async function stopFirstPlanning(db: DbHandle, projectId: ProjectId): Promise<void> {
-  const [row] = await db
-    .update(projects)
-    .set({ status: PROJECT_HALT.halt.to, planStoppedAt: sql`now()` })
-    .where(and(eq(projects.id, projectId), eq(projects.status, PROJECT_HALT.halt.from), awaitingPlan()))
-    .returning({ id: projects.id });
-  if (!row) throw new ProjectNotAwaitingPlan(projectId, "stop planning");
+  await db.transaction(async (tx) => {
+    await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+    const [row] = await tx
+      .update(projects)
+      .set({ planStoppedAt: sql`now()` })
+      .where(and(eq(projects.id, projectId), awaitingPlan()))
+      .returning({ lastError: projects.planLastError });
+    if (!row) throw new ProjectNotAwaitingPlan(projectId, "stop planning");
+    await haltForPlanningStopped(tx, projectId, row.lastError);
+  });
 }

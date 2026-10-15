@@ -7,6 +7,7 @@ import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, Pr
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
+import { projectState } from "../simulator/project-state.js";
 
 // Against Postgres: every row belongs to a project this suite creates under a
 // unique name, and afterAll deletes exactly those rows. No real LLM call is made.
@@ -104,7 +105,7 @@ const ProjectRowSchema = z.object({
 
 async function projectRow(projectId: ProjectId): Promise<z.infer<typeof ProjectRowSchema>> {
   const result = await db.execute(sql`
-    SELECT status, blocked_error_class AS "blockedErrorClass", blocked_reason AS "blockedReason"
+    SELECT ${projectState} AS status, blocked_error_class AS "blockedErrorClass", blocked_reason AS "blockedReason"
     FROM projects WHERE id = ${projectId}`);
   return ProjectRowSchema.parse(result.rows[0]);
 }

@@ -17,6 +17,7 @@ import type { ProjectId } from "@ashara/shared";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
+import { projectState } from "../simulator/project-state.js";
 
 // Against the shared dev database: every row here belongs to a project this
 // suite creates under a unique name, and afterAll deletes exactly those rows.
@@ -619,7 +620,7 @@ describe("roster", () => {
     // Organization halts nothing itself (O3 c); the core loop halts the project as a fault, so:
     await new ProjectHaltRepository(db).block(projectId, { category: "fault", ...refused.refusal });
     const row = await db.execute(
-      sql`SELECT status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,
+      sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`,
     );
     const [blocked] = z.array(z.object({ status: z.string(), errorClass: z.string(), reason: z.string() })).parse(row.rows);
     expect(blocked?.status).toBe("blocked");

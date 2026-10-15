@@ -5,6 +5,9 @@ import { clients } from "./identity.js";
 
 // The project record every context keys its rows by.
 
+/** Every state of Engagement's lifecycle a project can hold (projects_lifecycle_known, migration 059). */
+export const PROJECT_LIFECYCLES = ["active", "stopped", "accepted"] as const;
+
 // ---------------------------------------------------------------------------
 // projects (migration 014, K3 Project Record; client_id since migration 018)
 // ---------------------------------------------------------------------------
@@ -12,14 +15,16 @@ import { clients } from "./identity.js";
 export const projects = pgTable("projects", {
   id: uuid().primaryKey().default(sql`gen_random_uuid()`),
   name: text().notNull(),
-  status: varchar({ length: 20 }).notNull().default("active"),
+  // Migration 059: Engagement's lifecycle (active, stopped, accepted), written only by its lifecycle
+  // guard. Delivery's halt is not here: a project is halted while it has an open project_blocks row.
+  lifecycle: varchar({ length: 20 }).notNull().default("active"),
   clientId: uuid("client_id")
     .notNull()
     .references(() => clients.id),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   // Migration 020: Delivery's first plan of the project. Failed attempts with the
   // last one's error; the plan transaction stamps first_planned_at, giving up
-  // stamps plan_stopped_at together with status 'blocked'.
+  // stamps plan_stopped_at together with opening the halt's episode.
   planAttempts: integer("plan_attempts").notNull().default(0),
   planLastError: text("plan_last_error"),
   firstPlannedAt: timestamptz("first_planned_at"),
@@ -31,7 +36,8 @@ export const projects = pgTable("projects", {
   // dispatch, then never rewritten.
   workspacePath: text("workspace_path"),
   // Migration 025: why one bad record blocked the project, so the loop skips it
-  // instead of failing every project's cycle. Recorded together, on blocked rows only.
+  // instead of failing every project's cycle. Recorded together, while the project is halted
+  // (kept after the client's stop).
   blockedErrorClass: text("blocked_error_class"),
   blockedReason: text("blocked_reason"),
   // Migration 042: failed attempts to revise the plan for the current request, with the

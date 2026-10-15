@@ -9,6 +9,7 @@ import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanRe
 import type { ProjectId } from "@ashara/shared";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
+import { projectState } from "../simulator/project-state.js";
 
 // Story s-client-channel-m1: a client's stop halts its project. Every row belongs
 // to a project this suite creates under a unique name, and every step is
@@ -83,7 +84,7 @@ const ProjectRowSchema = z.array(
 
 async function projectRow(projectId: ProjectId) {
   const result = await db.execute(sql`
-    SELECT status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
+    SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
   return ProjectRowSchema.parse(result.rows)[0];
 }
 

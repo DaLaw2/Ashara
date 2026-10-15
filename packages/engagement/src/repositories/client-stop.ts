@@ -1,10 +1,9 @@
-import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { clientMessages, projects, workItems } from "@ashara/db";
+import { clientMessages, workItems } from "@ashara/db";
 import type { Database } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import { PROJECT_STATUSES } from "../project-lifecycle.js";
-import { PROJECT_LIFECYCLE } from "../project-lifecycle.js";
+import { stopProject } from "../project-lifecycle.js";
 import { ClientMessageRepository } from "./client-message.js";
 
 // The client's stop (migration 028). The Liaison consumes each inbound 'stop',
@@ -46,20 +45,6 @@ type ClientStopCommit =
   | { readonly kind: "stopped"; readonly reported: boolean; readonly merged: number }
   | { readonly kind: "already-stopped" };
 
-/** The project a stop names is in a status the stop transaction does not know. */
-class ProjectStatusUnknown extends Error {
-  constructor(
-    readonly projectId: ProjectId,
-    readonly status: string | null,
-  ) {
-    super(
-      `cannot stop project ${projectId}: expected one of the statuses ${PROJECT_STATUSES.join(", ")}, found ` +
-        `${status === null ? "no project row" : `'${status}'`}`,
-    );
-    this.name = "ProjectStatusUnknown";
-  }
-}
-
 /** Inbound stops not yet consumed, of any project status, oldest first. */
 export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> {
   const rows = await db
@@ -78,9 +63,9 @@ export async function listUnconsumedStops(db: Database): Promise<OpenStopRow[]> 
 
 /**
  * One stop, in one transaction: the stop consumed first (its row lock
- * serialises two consumers of it), then an active or blocked project moved to
+ * serialises two consumers of it), then an active (halted or not) or accepted project moved to
  * 'stopped' and the report, composed from the project's merged tasks and whether
- * it was paused (blocked) when the stop arrived, posted once. A project already
+ * Delivery had it halted when the stop arrived, posted once. A project already
  * stopped gets only the consumption.
  */
 export async function recordClientStop(
@@ -91,23 +76,9 @@ export async function recordClientStop(
   return db.transaction(async (tx) => {
     await new ClientMessageRepository(tx).markConsumed(stop.id);
 
-    const [before] = await tx.select({ status: projects.status }).from(projects).where(eq(projects.id, stop.projectId)).for("update");
-
     // An accepted project (migration 049) waits for exactly this.
-    const [moved] = await tx
-      .update(projects)
-      .set({ status: PROJECT_LIFECYCLE.stop.to })
-      .where(and(eq(projects.id, stop.projectId), inArray(projects.status, [...PROJECT_LIFECYCLE.stop.from])))
-      .returning({ id: projects.id });
-    if (!moved) {
-      const [existing] = await tx
-        .select({ status: projects.status })
-        .from(projects)
-        .where(eq(projects.id, stop.projectId))
-        .limit(1);
-      if (existing?.status === PROJECT_LIFECYCLE.stop.to) return { kind: "already-stopped" };
-      throw new ProjectStatusUnknown(stop.projectId, existing?.status ?? null);
-    }
+    const moved = await stopProject(tx, stop.projectId);
+    if (moved.kind === "already-stopped") return moved;
 
     // A Task is merged when its merge record holds the commit Z0's merge step made
     // on main (migration 041), written before the Task is completed. Neither task
@@ -140,7 +111,7 @@ export async function recordClientStop(
         projectId: stop.projectId,
         direction: "outbound",
         kind: "report",
-        body: composeReport(merged, before?.status === "blocked"),
+        body: composeReport(merged, moved.wasHalted),
         inReplyTo: stop.id,
         reportsOn: "client-stop",
       })

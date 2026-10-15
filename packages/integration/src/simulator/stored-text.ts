@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { checkReports, readReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
+import { projectState } from "./project-state.js";
 import { checkTextFacts, readTextFactRecords } from "./text-facts.js";
 import type { TextFactRecords } from "./text-facts.js";
 
@@ -49,7 +50,7 @@ class StoredProjectMissing extends Error {
  */
 export async function judgeStoredText(db: Database, projectId: string, briefs: "as-recorded" | readonly RecomposedBrief[]): Promise<StoredTextViolation[]> {
   const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> => z.array(schema).parse((await db.execute(query)).rows);
-  const [project] = await rows(projectRow, sql`SELECT status FROM projects WHERE id = ${projectId}`);
+  const [project] = await rows(projectRow, sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   if (project === undefined) throw new StoredProjectMissing(projectId);
   const items = await rows(
     itemRow,

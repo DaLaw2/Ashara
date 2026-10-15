@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { clientMessages, noOpenStop, projects, replanRequests } from "@ashara/db";
+import { clientMessages, noOpenStop, projectAtWork, projects, replanRequests } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { StoredVision, VisionAppend } from "../vision.js";
@@ -62,7 +62,7 @@ async function openAnswerRows(db: DbHandle, answerId: string | null): Promise<Op
         eq(clientMessages.direction, "inbound"),
         eq(clientMessages.kind, "answer"),
         isNull(clientMessages.consumedAt),
-        eq(projects.status, "active"),
+        projectAtWork(),
         noOpenStop(clientMessages.projectId),
         answerId === null ? undefined : eq(clientMessages.id, answerId),
       ),

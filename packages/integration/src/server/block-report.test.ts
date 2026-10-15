@@ -10,6 +10,7 @@ import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { postPlanReport, ProjectHaltRepository } from "@ashara/delivery";
+import { projectState } from "../simulator/project-state.js";
 
 // Story s-loop-never-stop-m1, migrations 040 and 048: every project halt is told to the client
 // once, in plain words, stating its cause, and its end (an operator's unblock, or the substrate
@@ -65,7 +66,7 @@ async function episodesOf(projectId: ProjectId) {
 }
 
 async function statusOf(projectId: ProjectId): Promise<string | undefined> {
-  const result = await db.execute(sql`SELECT status FROM projects WHERE id = ${projectId}`);
+  const result = await db.execute(sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status;
 }
 
@@ -136,26 +137,32 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
 
   test("unblocking a project that is not blocked throws and writes nothing", async () => {
     const projectId = await newProject();
-    await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not 'blocked'/);
+    await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not halted/);
     expect(await episodesOf(projectId)).toEqual([]);
   });
 
-  test("no way back to work but the recorded unblock: a bare status write is refused", async () => {
+  test("no way back to work but the recorded unblock: a bare write of the cause or of the episode is refused", async () => {
     const projectId = await newProject();
     await new ProjectHaltRepository(db).block(projectId, budgetCap);
 
     await expect(
-      db.execute(sql`UPDATE projects SET status = 'active', blocked_category = NULL, blocked_error_class = NULL, blocked_reason = NULL
-        WHERE id = ${projectId}`),
-    ).rejects.toThrow();
+      db.execute(sql`UPDATE projects SET blocked_category = NULL, blocked_error_class = NULL, blocked_reason = NULL WHERE id = ${projectId}`),
+    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/halted with no cause recorded/) } });
+    await expect(
+      db.execute(sql`UPDATE project_blocks SET ended_at = now(), end_kind = 'unblocked', unblocked_by = 'x', unblock_reason = 'y'
+        WHERE project_id = ${projectId} AND ended_at IS NULL`),
+    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/records a halt's cause but has no open block episode/) } });
     expect(await statusOf(projectId)).toBe("blocked");
   });
 
   test("a stopped first planning is told by its planning-stopped report alone; a later stop after an unblock is told again", async () => {
     const projectId = await newProject();
+    // First planning giving up, as stopFirstPlanning writes it: planning stopped and the halt's episode together.
     const stop = () =>
-      db.execute(sql`UPDATE projects SET status = 'blocked', plan_stopped_at = now(), plan_attempts = 3, plan_last_error = 'x'
-        WHERE id = ${projectId}`);
+      db.transaction(async (tx) => {
+        await tx.execute(sql`UPDATE projects SET plan_stopped_at = now(), plan_attempts = 3, plan_last_error = 'x' WHERE id = ${projectId}`);
+        await tx.execute(sql`INSERT INTO project_blocks (project_id, kind, reason) VALUES (${projectId}, 'planning_stopped', 'x')`);
+      });
 
     await stop();
     await reports().runPending();
@@ -175,7 +182,7 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     expect(bodies).toHaveLength(3);
     expect(bodies[1]).toContain("has resumed");
     expect(bodies[2]).toContain("could not turn this project's vision into a plan");
-    // first planning's last error is what the episode recorded (migration 040's trigger): told by its kind.
+    // first planning's last error is what the episode recorded: told by its kind.
     expect(bodies[2]).toContain("Ashara recorded the cause as this: every attempt to make the plan failed.");
   });
 });

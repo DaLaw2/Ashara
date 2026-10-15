@@ -12,6 +12,7 @@ import type { WorkItemRepository as WorkItemPort } from "@ashara/delivery";
 import { parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
+import { projectState } from "../simulator/project-state.js";
 
 // Story s-loop-never-stop-m1: one project's bad record blocks that project, with
 // the cause on its row, and the other projects proceed. Every row belongs to a
@@ -78,7 +79,7 @@ const ProjectStateSchema = z.array(
 
 async function stateOf(handle: Handle, projectId: ProjectId) {
   const result = await handle.execute(sql`
-    SELECT status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
+    SELECT ${projectState} AS status, blocked_error_class AS "errorClass", blocked_reason AS "reason" FROM projects WHERE id = ${projectId}`);
   return ProjectStateSchema.parse(result.rows)[0];
 }
 

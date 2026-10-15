@@ -28,6 +28,7 @@ import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createIntakeStore } from "@ashara/server/intake-store";
 import { createRosterStore } from "@ashara/server/roster-store";
 import { createPlanReportStore } from "@ashara/server/plan-report-store";
+import { projectState } from "../simulator/project-state.js";
 
 // A late client change is planned (t-replan-on-change). Every row here belongs to a project
 // this suite creates under a unique name, and afterAll deletes exactly those rows. Each store
@@ -268,7 +269,7 @@ async function dependenciesOf(id: string): Promise<string[]> {
 /** The project's status and category, and the answers whose revision it awaits (replan_requests), oldest first. */
 async function projectRow(projectId: ProjectId) {
   const result = await db.execute(sql`
-    SELECT status, blocked_category AS "category",
+    SELECT ${projectState} AS status, blocked_category AS "category",
       COALESCE((SELECT json_agg(rr.answer_id ORDER BY rr.created_at) FROM replan_requests rr
         WHERE rr.project_id = projects.id AND rr.plan_revision_id IS NULL), '[]'::json) AS "awaiting"
     FROM projects WHERE id = ${projectId}`);

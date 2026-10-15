@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } f
 import { z } from "zod";
 import { parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair } from "@ashara/db";
+import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { WorkItemRowRepository } from "./work-item.js";
@@ -74,7 +74,7 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<ProjectA
     )
     .where(
       and(
-        eq(projects.status, "active"),
+        projectAtWork(),
         isNotNull(projects.firstPlannedAt),
         sql`(${pendingChange(projects.id)} OR ${pendingRepair(projects.id)})`,
         noOpenStop(projects.id),
@@ -219,12 +219,14 @@ export async function withPlanRevisionTransaction(
   try {
     await db.transaction(async (tx) => {
       const [locked] = await tx
-        .select({ status: projects.status })
+        .select({ lifecycle: projects.lifecycle })
         .from(projects)
         .where(eq(projects.id, projectId))
         .for("update");
       if (!locked) throw new RevisionReadMoved(projectId, "the project does not exist");
-      if (locked.status !== "active") throw new RevisionReadMoved(projectId, `the project is ${locked.status}`);
+      // Read after the lock, in its own statement: a halt committed while the lock was awaited is seen.
+      const [atWork] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), projectAtWork()));
+      if (!atWork) throw new RevisionReadMoved(projectId, `the project is ${locked.lifecycle === "active" ? "blocked" : locked.lifecycle}`);
       // The answer transaction locks the project row too: no answer is added to this set meanwhile.
       const awaited = await awaitedAnswers(tx, projectId);
       if (awaited.join(",") !== record.answers.join(",")) {
@@ -343,7 +345,7 @@ export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, er
     .where(
       and(
         eq(projects.id, projectId),
-        eq(projects.status, "active"),
+        projectAtWork(),
         sql`(${pendingChange(projects.id)} OR ${pendingRepair(projects.id)})`,
       ),
     )
@@ -384,7 +386,7 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<DuePlanR
     .where(
       and(
         isNull(planRevisions.reportId),
-        eq(projects.status, "active"),
+        projectAtWork(),
         noOpenStop(projects.id),
         sql`EXISTS (SELECT 1 FROM client_messages m WHERE m.project_id = ${projects.id} AND m.reports_on = 'first-plan')`,
       ),

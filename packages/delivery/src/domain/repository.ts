@@ -4,7 +4,7 @@ import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 import type { WorkItem } from "./work-item.js";
 
-/** Which projects' work may be dispatched (projects.status = 'active'), and blocking one. */
+/** Which projects' work may be dispatched (active and not halted), and halting one. */
 export interface ActiveProjects {
   listActiveIds(): Promise<ProjectId[]>;
   /**

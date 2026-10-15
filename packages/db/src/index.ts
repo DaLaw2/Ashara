@@ -7,6 +7,7 @@ export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-c
 
 export {
   PROJECT_BLOCK_KINDS,
+  PROJECT_LIFECYCLES,
   acceptanceSweeps,
   checkDisputes,
   clientMessages,
@@ -26,7 +27,7 @@ export {
   workItems,
 } from "./schema/index.js";
 
-export { ProjectRepository, noOpenAnswer, noOpenStop, pendingChange, pendingRepair } from "./repositories/project.js";
+export { ProjectRepository, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projectHalted } from "./repositories/project.js";
 export type { ProjectRecord } from "./repositories/project.js";
 export { latestRosterRevision, latestRosterRoles, listProjectsAwaitingRoster, recordFirstRoster } from "./repositories/roster.js";
 export { completedGoalTasks } from "./repositories/goal-tasks.js";

@@ -135,7 +135,7 @@ const statusRow = z.object({ id: z.string(), status: z.string() });
 
 export interface ReportsSetAside {
   readonly records: readonly SetAside[];
-  /** The projects accepted again for the while, with the status each had. */
+  /** The projects accepted again for the while, with the lifecycle state each had. */
   readonly statuses: ReadonlyArray<z.infer<typeof statusRow>>;
 }
 
@@ -157,16 +157,16 @@ export async function setAsideReports(db: Db): Promise<ReportsSetAside> {
     const episodes = z.array(setAsideRow).parse(
       (
         await tx.execute(sql`
-          UPDATE project_blocks b SET report_id = NULL FROM project_blocks o, projects p
-          WHERE o.id = b.id AND p.id = b.project_id AND p.status = 'blocked' AND b.ended_at IS NULL AND b.report_id IS NOT NULL
+          UPDATE project_blocks b SET report_id = NULL FROM project_blocks o
+          WHERE o.id = b.id AND b.ended_at IS NULL AND b.report_id IS NOT NULL
           RETURNING b.id, b.project_id AS "projectId", o.report_id AS "reportId"`)
       ).rows,
     );
     const statuses: Array<z.infer<typeof statusRow>> = [];
     for (const projectId of new Set(sweeps.map((sweep) => sweep.projectId))) {
-      statuses.push(...z.array(statusRow).parse((await tx.execute(sql`SELECT id, status FROM projects WHERE id = ${projectId} AND status <> 'accepted'`)).rows));
+      statuses.push(...z.array(statusRow).parse((await tx.execute(sql`SELECT id, lifecycle AS status FROM projects WHERE id = ${projectId} AND lifecycle <> 'accepted'`)).rows));
     }
-    for (const { id } of statuses) await tx.execute(sql`UPDATE projects SET status = 'accepted' WHERE id = ${id}`);
+    for (const { id } of statuses) await tx.execute(sql`UPDATE projects SET lifecycle = 'accepted' WHERE id = ${id}`);
     return {
       records: [...sweeps.map((row) => ({ table: "acceptance_sweeps" as const, ...row })), ...episodes.map((row) => ({ table: "project_blocks" as const, ...row }))],
       statuses,
@@ -192,7 +192,7 @@ export async function settleReports(db: Db, setAside: ReportsSetAside): Promise<
       await tx.execute(sql`DELETE FROM client_messages WHERE id = ${record.reportId}`);
       recomposed.push(record);
     }
-    for (const { id, status } of setAside.statuses) await tx.execute(sql`UPDATE projects SET status = ${status} WHERE id = ${id}`);
+    for (const { id, status } of setAside.statuses) await tx.execute(sql`UPDATE projects SET lifecycle = ${status} WHERE id = ${id}`);
     return recomposed;
   });
 }
