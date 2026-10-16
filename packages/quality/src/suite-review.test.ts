@@ -58,13 +58,29 @@ function interfaceAt(reads: Array<{ path: string; commit: string }> = []): Publi
 }
 const INTERFACE = interfaceAt();
 
-function source(statusB = "Completed"): SuiteReviewSource {
+function source(statusB = "Completed", options: { readonly frozen?: boolean; readonly reopensA?: number } = {}): SuiteReviewSource {
   return {
     checkTasksUnderReview: async () => [
-      { id: CHECK_A, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Sum by month" },
-      { id: CHECK_B, status: statusB, checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Refuse bad rows" },
+      { id: CHECK_A, status: "Completed", checksFor: IMPL_A, visionItems: [SCOPE.text], sources: [SCOPE], checkedTitle: "Sum by month", reviewReopens: options.reopensA ?? 0 },
+      { id: CHECK_B, status: statusB, checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: [REFUSAL], checkedTitle: "Refuse bad rows", reviewReopens: 0 },
     ],
     latest: async (taskId) => (taskId === IMPL_A ? stored(CHECK_A, "prints-count", "sh checks/count.sh") : stored(CHECK_B, "stdout-empty", "sh checks/empty.sh")),
+    frozen: async () => options.frozen ?? false,
+  };
+}
+
+/** Another model family than the stub's: a second review from it can confirm a finding no witness settles. */
+const OTHER_FAMILY = { provider: "other", model: "other-strong" };
+
+/** The bound a review asks with, read off its requests. */
+function bounds(into: number[]): ContextualLlm {
+  return {
+    forCall: () => ({
+      generateStructured: async (request) => {
+        into.push(request.maxTokens);
+        return { data: request.schema.parse({ problems: [] }), provider: "stub", model: "stub-model" };
+      },
+    }),
   };
 }
 
@@ -73,7 +89,7 @@ function source(statusB = "Completed"): SuiteReviewSource {
  * A request for a second opinion is answered by `other` when given, as a catalog with another model
  * at the capability would; else by the same model again.
  */
-function scripted(answers: unknown[], prompts: string[] = [], other: { provider: string; model: string } | null = null, asked: unknown[] = []): ContextualLlm {
+function scripted(answers: readonly unknown[], prompts: string[] = [], other: { provider: string; model: string } | null = null, asked: unknown[] = []): ContextualLlm {
   let next = 0;
   return {
     forCall: () => ({
@@ -109,45 +125,152 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     const prompts: string[] = [];
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [], advisory: [], undecided: [] });
     expect(prompts).toHaveLength(1);
     for (const text of [...VISION, `## Check task ${CHECK_A}`, `## Check task ${CHECK_B}`, "sh checks/count.sh", "sh checks/empty.sh", "--- file checks/t.sh"]) {
       expect(prompts[0]).toContain(text);
     }
   });
 
-  test("problems come back with the check tasks they name", async () => {
-    const problem = { checkTasks: [CHECK_A, CHECK_B], kind: "contradiction", problem: "a prints a count, b requires empty stdout", evidence: "count.sh; empty.sh" };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [problem] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
+  // ADR-084 decision 2: a contradiction quotes what each of its two checks requires; Z0 holds each
+  // quote to its check, and another model family must reach the same pair before anything reopens.
+  const conflict = {
+    checkTasks: [CHECK_A, CHECK_B],
+    kind: "contradiction",
+    conflict: [
+      { checkTask: CHECK_A, check: "prints-count", requires: "sh checks/count.sh" },
+      { checkTask: CHECK_B, check: "stdout-empty", requires: "sh   checks/empty.sh" },
+    ],
+    problem: "a prints a count, b requires empty stdout",
+    evidence: "count.sh; empty.sh",
+  };
 
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({
-      kind: "problems",
-      reviewed: [CHECK_A, CHECK_B],
-      setAside: [],
-      released: [],
-      problems: [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction", problem: problem.problem, evidence: problem.evidence }],
+  test("a grounded contradiction another model family reaches too is routed to both check tasks with its quotes", async () => {
+    const recorded: Recorded[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [conflict] }, { problems: [conflict] }], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+
+    const outcome = await reviewer.review(TASK, PROJECT_PATH);
+    expect(outcome).toMatchObject({ kind: "problems", advisory: [], undecided: [], problems: [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction", evidence: conflict.evidence }] });
+    if (outcome.kind !== "problems") return expect.unreachable("an agreed contradiction is routed");
+    expect(outcome.problems[0]?.problem).toContain("Two reviews by different model families, stub/stub-model and other/other-strong");
+    expect(outcome.problems[0]?.problem).toContain(`check "stdout-empty" of ${CHECK_B} requires "sh   checks/empty.sh"`);
+    expect(recorded[0]?.judgements).toMatchObject([{ checkTaskId: CHECK_A, check: null, outcome: "routed", basis: "other-family-agreed" }]);
+  });
+
+  test("a self-refuting contradiction the other family's review does not reach is kept as advisory and routes nothing", async () => {
+    const recorded: Recorded[] = [];
+    const refuted = { ...conflict, problem: "a product satisfying both still passes them; the real conflict is elsewhere" };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [refuted] }, { problems: [] }], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({
+      kind: "clean",
+      advisory: [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction", why: "the second review, by another model family, did not reach it" }],
+      undecided: [],
     });
+    expect(recorded[0]?.judgements).toMatchObject([{ outcome: "advisory", basis: "other-family-disagreed", second: [] }]);
+  });
+
+  test("a contradiction only one model family reached routes nothing, whatever the re-sample says", async () => {
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [conflict] }, { problems: [conflict] }]), source: source(), publicInterface: INTERFACE, judgements: keep() });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [{ kind: "contradiction", why: "no model of another family reviewed it, so nothing confirmed it" }] });
+  });
+
+  test("a contradiction quoting text its check does not hold, or one check twice, is re-asked", async () => {
+    const prompts: string[] = [];
+    const [sideA, sideB] = conflict.conflict;
+    const misquoted = { ...conflict, conflict: [sideA, { ...sideB, requires: "stdout is never empty" }] };
+    const twice = { ...conflict, checkTasks: [CHECK_A], conflict: [sideA, sideA] };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misquoted, twice] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", advisory: [] });
+    expect(prompts[1]).toContain(`quotes "stdout is never empty" as what check "stdout-empty" requires, but neither its command nor any file of check task ${CHECK_B} holds that text`);
+    expect(prompts[1]).toContain(`gives one check, "prints-count" of ${CHECK_A}, as both sides of its conflict`);
   });
 
   // ADR-083: a check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
-  test("a cited item the reviewer finds no check deciding is routed to its check task; one its task does not cite is re-asked", async () => {
-    const prompts: string[] = [];
-    const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
-    const uncited = { ...undecided, item: REFUSAL.id };
-    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [uncited] }, { problems: [undecided] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
+  const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
 
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({
-      kind: "problems",
-      problems: [{ checkTaskIds: [CHECK_A], kind: "undecided-item", problem: `Cited item ${SCOPE.id} is decided by none of the checks: ${undecided.problem}`, evidence: undecided.evidence }],
-    });
+  test("an undecided item another model family agrees on is routed to its check task; one its task does not cite is re-asked", async () => {
+    const prompts: string[] = [];
+    const uncited = { ...undecided, item: REFUSAL.id };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [uncited] }, { problems: [undecided] }, { problems: [undecided] }], prompts, OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep() });
+
+    const outcome = await reviewer.review(TASK, PROJECT_PATH);
+    expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ checkTaskIds: [CHECK_A], kind: "undecided-item", evidence: undecided.evidence }] });
+    if (outcome.kind !== "problems") return expect.unreachable("an agreed undecided item is routed");
+    expect(outcome.problems[0]?.problem).toBe(
+      `Cited item ${SCOPE.id} is decided by none of the checks: ${undecided.problem} Two reviews by different model families, stub/stub-model and other/other-strong, each found it so.`,
+    );
     expect(prompts[0]).toContain(`- "prints-count" (its author says it decides S1): sh checks/count.sh`);
     expect(prompts[0]).toContain(`"undecided-item": an item a check task's own task cites that none of its checks decides`);
     expect(prompts[1]).toContain(`names item ${JSON.stringify(REFUSAL.id)} as decided by no check, but check task ${CHECK_A} does not cite it`);
   });
 
+  test("an undecided item a lone model family raises reopens nothing: it is kept advisory and the item stays undecided", async () => {
+    const recorded: Recorded[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided] }, { problems: [undecided] }]), source: source(), publicInterface: INTERFACE, judgements: keep(recorded) });
+
+    const item = { checkTaskId: CHECK_A, itemId: SCOPE.id, itemText: SCOPE.text };
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", undecided: [item], advisory: [{ kind: "undecided-item", why: "no model of another family reviewed it, so nothing confirmed it" }] });
+    const model = { provider: "stub", model: "stub-model" };
+    expect(recorded[0]?.judgements).toEqual([
+      {
+        checkTaskId: CHECK_A,
+        check: null,
+        outcome: "advisory",
+        basis: "no-other-family",
+        first: undecided,
+        firstModel: model,
+        second: [undecided],
+        secondReview: { kind: "re-sample", first: model, second: model },
+        undecided: item,
+      },
+    ]);
+  });
+
+  test("an undecided item the other family does not reach stays undecided", async () => {
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided] }, { problems: [] }], [], OTHER_FAMILY), source: source(), publicInterface: INTERFACE, judgements: keep() });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", undecided: [{ itemId: SCOPE.id }], advisory: [{ why: "the second review, by another model family, did not reach it" }] });
+  });
+
+  // ADR-084 decision 3: the rounds of a revision's review are bounded by its durable record, and a frozen check set reopens nothing.
+  test("an undecided item on a check task the review already reopened once is kept undecided without a second review", async () => {
+    const prompts: string[] = [];
+    const recorded: Recorded[] = [];
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [undecided] }], prompts, OTHER_FAMILY), source: source("Completed", { reopensA: 1 }), publicInterface: INTERFACE, judgements: keep(recorded) });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", undecided: [{ itemId: SCOPE.id }], advisory: [{ why: "its check task was already reopened once by this review" }] });
+    expect(prompts).toHaveLength(1);
+    expect(recorded[0]?.judgements).toMatchObject([{ outcome: "advisory", basis: "reopened-once", second: [], secondReview: null }]);
+  });
+
+  test("after the check set freezes, a new finding of any kind reopens nothing and its item is reported undecided", async () => {
+    const prompts: string[] = [];
+    const recorded: Recorded[] = [];
+    const findings = { problems: [undecided, conflict, rowCount] };
+    const reviewer = new SuiteReviewer({ llm: scripted([findings, findings], prompts, OTHER_FAMILY), source: source("Completed", { frozen: true }), publicInterface: INTERFACE, judgements: keep(recorded) });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean", released: [], undecided: [{ itemId: SCOPE.id }] });
+    expect(prompts).toHaveLength(1);
+    expect(recorded[0]?.judgements.map((judgement) => [judgement.first.kind, judgement.outcome, judgement.basis])).toEqual([
+      ["undecided-item", "advisory", "frozen"],
+      ["contradiction", "advisory", "frozen"],
+      ["outside-vision", "advisory", "frozen"],
+    ]);
+  });
+
+  test("the review's output bound holds a full findings answer: never the 4,096 tokens a findings answer runs past, and more with more checks", async () => {
+    const asked: number[] = [];
+    await new SuiteReviewer({ llm: bounds(asked), source: source(), publicInterface: INTERFACE, judgements: keep() }).review(TASK, PROJECT_PATH);
+    const many: SuiteReviewSource = {
+      ...source(),
+      latest: async (taskId) => ({ ...stored(taskId === IMPL_A ? CHECK_A : CHECK_B, "c", "sh c.sh"), checks: Array.from({ length: 20 }, (_, i) => ({ name: `c${i}`, command: "sh c.sh", decides: ["S1"] })) }),
+    };
+    await new SuiteReviewer({ llm: bounds(asked), source: many, publicInterface: INTERFACE, judgements: keep() }).review(TASK, PROJECT_PATH);
+    expect(asked[0]).toBeGreaterThan(4096);
+    expect(asked[1]).toBeGreaterThan(asked[0] ?? Infinity);
+  });
+
   test("a verdict naming a check task it did not read is re-asked, and one that never validates gives no verdict", async () => {
     const prompts: string[] = [];
-    const ghost = { problems: [{ checkTasks: ["ghost"], kind: "contradiction", problem: "p", evidence: "e" }] };
+    const ghost = { problems: [{ ...conflict, checkTasks: ["ghost"] }] };
     const reviewer = new SuiteReviewer({ llm: scripted([ghost], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
     await expect(reviewer.review(TASK, PROJECT_PATH)).rejects.toBeInstanceOf(StructuredOutputExhausted);
@@ -163,8 +286,9 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
   test("a check task whose row records no item ids names its cited items by their place", async () => {
     const prompts: string[] = [];
     const legacy: SuiteReviewSource = {
-      checkTasksUnderReview: async () => [{ id: CHECK_B, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: null, checkedTitle: "Refuse bad rows" }],
+      checkTasksUnderReview: async () => [{ id: CHECK_B, status: "Completed", checksFor: IMPL_B, visionItems: [REFUSAL.text], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0 }],
       latest: async () => stored(CHECK_B, "stdout-empty", "sh checks/empty.sh"),
+      frozen: async () => false,
     };
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [{ ...misread, judgedItems: ["item 1"] }] }, { problems: [] }], prompts), source: legacy, publicInterface: INTERFACE, judgements: keep() });
     expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({ kind: "clean" });
@@ -179,7 +303,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
 
   test("an Abandoned check task is set aside and the other suites are reviewed", async () => {
     const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [] }]), source: source("Abandoned"), publicInterface: INTERFACE, judgements: keep() });
-    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A], setAside: [CHECK_B], released: [] });
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A], setAside: [CHECK_B], released: [], advisory: [], undecided: [] });
   });
 
   test("a review task with no vision items is refused before any model call", async () => {
@@ -234,6 +358,8 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       reviewed: [CHECK_A, CHECK_B],
       setAside: [],
       released: [],
+      advisory: [],
+      undecided: [],
       problems: [
         {
           checkTaskIds: [CHECK_A],
@@ -259,7 +385,17 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
         projectId: PROJECT,
         reviewTaskId: REVIEW_ID,
         judgements: [
-          { checkTaskId: CHECK_A, check: "prints-count", outcome: "routed", first: rowCount, second: [secondClause], secondReview: { kind: "re-sample", first: model, second: model } },
+          {
+            checkTaskId: CHECK_A,
+            check: "prints-count",
+            outcome: "routed",
+            basis: "two-reviews",
+            first: rowCount,
+            firstModel: model,
+            second: [secondClause],
+            secondReview: { kind: "re-sample", first: model, second: model },
+            undecided: null,
+          },
         ],
       },
     ]);
@@ -304,6 +440,8 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
           secondReview: "a re-sample of the first review's model stub/stub-model, so not an independent judgement",
         },
       ],
+      advisory: [],
+      undecided: [],
     });
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toBe(prompts[0]);
@@ -354,7 +492,7 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       const prompts: string[] = [];
       const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [misread] }, { problems: [] }], prompts), source: source(), publicInterface: INTERFACE, judgements: keep() });
 
-      expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [] });
+      expect(await reviewer.review(TASK, PROJECT_PATH)).toEqual({ kind: "clean", reviewed: [CHECK_A, CHECK_B], setAside: [], released: [], advisory: [], undecided: [] });
       expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain(`but A3 states it: "${REFUSAL.text}"`);
     }

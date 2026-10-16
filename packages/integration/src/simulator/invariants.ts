@@ -480,8 +480,10 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
 
   // I6: no Done without its evidence. A passed sweep accepted the project: every item a check must
   // decide (an in-scope line, an assumption not recorded as internal design) is decided by a
-  // stored check that sweep ran, as its recorded decides names it (d89 E, ADR-083). Judged on
-  // every passed sweep once the run ends, whatever the project's status then.
+  // stored check that sweep ran, as its recorded decides names it (d89 E, ADR-083), and every such
+  // item a suite review left undecided is named unverified in the sweep's delivered report, never
+  // covered (ADR-084 decision 2). Judged on every passed sweep once the run ends, whatever the
+  // project's status then.
   if (context.final) {
     for (const found of uncheckedAtPassedSweeps(snapshot.reports)) add("I6", `unchecked-item:${found.key}`, found.statement);
   }

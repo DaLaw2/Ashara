@@ -89,9 +89,10 @@ export const suiteReviewFindings = pgTable("suite_review_findings", {
 });
 
 // ---------------------------------------------------------------------------
-// suite_review_judgements (migration 063, Quality): one row per outside-vision rejection a suite
-// review made that Z0 could not disprove, routed or released, with both reviews' findings whole and
-// what the second review was. Append-only; the jsonb columns are parsed by the repository.
+// suite_review_judgements (migrations 063, 069, Quality): one row per finding of a suite review's
+// first pass that Z0 could not disprove, routed, released or advisory, with both reviews' findings
+// whole, what the second review was (none when no second review could change the outcome) and why
+// it acted or did not (basis). Append-only; the jsonb columns are parsed by the repository.
 // ---------------------------------------------------------------------------
 
 export const suiteReviewJudgements = pgTable("suite_review_judgements", {
@@ -105,14 +106,67 @@ export const suiteReviewJudgements = pgTable("suite_review_judgements", {
   checkTaskId: uuid("check_task_id")
     .notNull()
     .references(() => workItems.id, { onDelete: "cascade" }),
-  checkName: text("check_name").notNull(),
+  /** The rejected check of an outside-vision finding; null for the other kinds. */
+  checkName: text("check_name"),
   outcome: text().notNull(),
+  basis: text().notNull(),
   firstFinding: jsonb("first_finding").notNull(),
   secondFindings: jsonb("second_findings").notNull(),
   firstModel: text("first_model").notNull(),
-  secondModel: text("second_model").notNull(),
-  secondReview: text("second_review").notNull(),
+  secondModel: text("second_model"),
+  secondReview: text("second_review"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// undecided_items (migration 069, Quality): one row per cited item a suite review found no check
+// deciding where that finding did not act; the item stays undecided and is reported unverified.
+// Append-only, one row per check task and item.
+// ---------------------------------------------------------------------------
+
+export const undecidedItems = pgTable(
+  "undecided_items",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    reviewTaskId: uuid("review_task_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    checkTaskId: uuid("check_task_id")
+      .notNull()
+      .references(() => workItems.id, { onDelete: "cascade" }),
+    itemId: text("item_id").notNull(),
+    itemText: text("item_text").notNull(),
+    judgementId: uuid("judgement_id")
+      .notNull()
+      .references(() => suiteReviewJudgements.id, { onDelete: "cascade" }),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    onePerCheckTask: unique("undecided_items_one_per_check_task").on(t.checkTaskId, t.itemId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// check_set_freezes (migration 069, Quality): one row per review task, written when the first
+// implementation task depending on it is dispatched, with the check set it reviewed as it then
+// stood. Append-only; check_set is parsed by the repository.
+// ---------------------------------------------------------------------------
+
+export const checkSetFreezes = pgTable("check_set_freezes", {
+  reviewTaskId: uuid("review_task_id")
+    .primaryKey()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  frozenBy: uuid("frozen_by")
+    .notNull()
+    .references(() => workItems.id, { onDelete: "cascade" }),
+  checkSet: jsonb("check_set").notNull(),
+  frozenAt: timestamptz("frozen_at").notNull().defaultNow(),
 });
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import type { createDb } from "@ashara/db";
-import { TaskCheckRepository } from "@ashara/quality";
+import { CheckSetFreezeRepository, TaskCheckRepository } from "@ashara/quality";
 import type { SuiteReviewSource, TaskCheckStore } from "@ashara/quality";
 
 /** Quality's task-check store over task_checks, work_items and dependencies (migration 036). */
@@ -16,11 +16,13 @@ export function createTaskCheckStore(db: ReturnType<typeof createDb>): TaskCheck
   };
 }
 
-/** What Quality's review of a plan revision's suites reads (migration 036, ADR-074 addendum 2 d71 c). */
+/** What Quality's review of a plan revision's suites reads (migrations 036, 069; ADR-074 addendum 2 d71 c). */
 export function createSuiteReviewSource(db: ReturnType<typeof createDb>): SuiteReviewSource {
   const repo = new TaskCheckRepository(db);
+  const freezes = new CheckSetFreezeRepository(db);
   return {
     checkTasksUnderReview: (reviewTaskId) => repo.checkTasksUnderReview(reviewTaskId),
     latest: (taskId) => repo.latest(taskId),
+    frozen: (reviewTaskId) => freezes.frozen(reviewTaskId),
   };
 }

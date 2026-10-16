@@ -58,7 +58,7 @@ function run(
     },
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    refundDispatchCount: notExercised("refundDispatchCount"),
+    saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit,
     addDependency: notExercised("addDependency"),
     getDependencies: notExercised("getDependencies"),

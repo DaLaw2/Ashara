@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, ProjectRepository } from "@ashara/db";
 import type { ContextualLlm } from "@ashara/finance";
-import { SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
+import { CheckSetFreezeRepository, SuiteReviewJudgementRepository, SuiteReviewer, suiteReviewJudgementsOf } from "@ashara/quality";
 import type { SuiteReviewSource } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
@@ -34,7 +34,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await db.execute(sql`DELETE FROM check_set_freezes WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM undecided_items WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM suite_review_judgements WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM task_checks WHERE project_id = ${projectId}`);
+  await db.execute(sql`DELETE FROM dependencies WHERE from_id IN (SELECT id FROM work_items WHERE project_id = ${projectId})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id = ${projectId}`);
   await db.execute(sql`DELETE FROM projects WHERE id = ${projectId}`);
   await db.execute(sql`DELETE FROM clients WHERE id = ${clientId}`);
@@ -50,8 +54,8 @@ describe("suite review judgements (migration 063)", () => {
     const checkB = await workItem("Checks of Refuse bad rows");
     const source: SuiteReviewSource = {
       checkTasksUnderReview: async () => [
-        { id: checkA, status: "Completed", checksFor: implA, visionItems: ["Monthly totals"], sources: null, checkedTitle: "Sum by month" },
-        { id: checkB, status: "Completed", checksFor: implB, visionItems: ["Malformed rows are refused"], sources: null, checkedTitle: "Refuse bad rows" },
+        { id: checkA, status: "Completed", checksFor: implA, visionItems: ["Monthly totals"], sources: null, checkedTitle: "Sum by month", reviewReopens: 0 },
+        { id: checkB, status: "Completed", checksFor: implB, visionItems: ["Malformed rows are refused"], sources: null, checkedTitle: "Refuse bad rows", reviewReopens: 0 },
       ],
       latest: async (taskId) => ({
         checkTaskId: taskId === implA ? checkA : checkB,
@@ -61,6 +65,7 @@ describe("suite review judgements (migration 063)", () => {
         checks: [{ name: taskId === implA ? "prints-count" : "stdout-empty", command: "sh check.sh", decides: ["item 1"] }],
         files: [],
       }),
+      frozen: async () => false,
     };
     const rejectA = { checkTasks: [checkA], kind: "outside-vision", check: "prints-count", judgedItems: ["item 1"], missingClause: "prints the row count", problem: "a row count is asked for by nothing", evidence: "sh check.sh" };
     const rejectB = { checkTasks: [checkB], kind: "outside-vision", check: "stdout-empty", judgedItems: ["item 1"], missingClause: "an empty stdout", problem: "an empty stdout is asked for by nothing", evidence: "sh check.sh" };
@@ -89,6 +94,7 @@ describe("suite review judgements (migration 063)", () => {
         checkTaskId: checkA,
         checkName: "prints-count",
         outcome: "routed",
+        basis: "two-reviews",
         firstFinding: rejectA,
         secondFindings: [{ ...rejectA, missingClause: "a count of the rows" }],
         firstModel: "first/strong-a",
@@ -100,6 +106,7 @@ describe("suite review judgements (migration 063)", () => {
         checkTaskId: checkB,
         checkName: "stdout-empty",
         outcome: "released",
+        basis: "two-reviews",
         firstFinding: rejectB,
         secondFindings: [undecidedB],
         firstModel: "first/strong-a",
@@ -115,9 +122,11 @@ describe("suite review judgements (migration 063)", () => {
     const reviewTask = await workItem("Review with a corrupt judgement");
     const checkTask = await workItem("Checks with a corrupt judgement");
     await db.execute(sql`
-      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, first_finding, second_findings, first_model, second_model, second_review)
-      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')`);
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
+      VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', '{"kind":"outside-vision"}'::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')`);
     await expect(suiteReviewJudgementsOf(db, projectId)).rejects.toMatchObject({ name: "SuiteReviewJudgementCorrupt" });
+    // The corrupt row is this test's alone: the project's other judgements are read whole after it.
+    await db.execute(sql`DELETE FROM suite_review_judgements WHERE review_task_id = ${reviewTask}`);
   });
 
   test("a re-sample must name the same model twice, and another model two different ones", async () => {
@@ -126,9 +135,88 @@ describe("suite review judgements (migration 063)", () => {
     const finding = JSON.stringify({ checkTasks: [checkTask], kind: "outside-vision", check: "c", judgedItems: ["S1"], missingClause: "x", problem: "p", evidence: "e" });
     const insert = (secondModel: string, secondReview: string) =>
       db.execute(sql`
-        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, first_finding, second_findings, first_model, second_model, second_review)
-        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondReview})`);
+        INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
+        VALUES (${projectId}, ${reviewTask}, ${checkTask}, 'c', 'released', 'two-reviews', ${finding}::jsonb, '[]'::jsonb, 'p/m', ${secondModel}, ${secondReview})`);
     await expect(insert("q/n", "re-sample")).rejects.toThrow();
     await expect(insert("p/m", "other-model")).rejects.toThrow();
+  });
+});
+
+describe("witnessed findings and the check set freeze (migration 069, ADR-084 decisions 2 and 3)", () => {
+  async function task(title: string, spec: unknown, workKind: string | null): Promise<string> {
+    const id = randomUUID();
+    await db.execute(sql`
+      INSERT INTO work_items (id, level, status, title, project_id, task_spec, work_kind, owner_role_id)
+      VALUES (${id}, 'Task', 'Completed', ${title}, ${projectId}, ${JSON.stringify(spec)}::jsonb, ${workKind}, ${workKind === null ? null : randomUUID()})`);
+    return id;
+  }
+
+  /** A review in which both reviews raise one undecided item, the second answering from `secondProvider`. */
+  async function reviewUndecided(secondProvider: string) {
+    const reviewTask = parseWorkItemId(await workItem("Review an undecided item"), "test review task");
+    const impl = await workItem("Durable put");
+    const check = await workItem("Checks of Durable put");
+    const cited = { type: "scope" as const, id: "S9", text: "put survives a power loss", side: "in" as const };
+    const source: SuiteReviewSource = {
+      checkTasksUnderReview: async () => [{ id: check, status: "Completed", checksFor: impl, visionItems: [cited.text], sources: [cited], checkedTitle: "Durable put", reviewReopens: 0 }],
+      latest: async () => ({ checkTaskId: check, revision: 1, environmentVersion: "v1", baselineCommit: null, checks: [{ name: "put-then-get", command: "sh put.sh", decides: ["S9"] }], files: [] }),
+      frozen: async () => false,
+    };
+    const undecided = { checkTasks: [check], kind: "undecided-item", item: "S9", problem: "no check distinguishes fsynced from written data", evidence: "sh put.sh" };
+    const answers = [{ problems: [undecided] }, { problems: [undecided] }];
+    let next = 0;
+    const llm: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async (request) => {
+          const answer = answers[next++];
+          const by = request.otherThan === undefined ? { provider: "first", model: "strong-a" } : { provider: secondProvider, model: "strong-b" };
+          return { data: request.schema.parse(answer), ...by };
+        },
+      }),
+    };
+    const reviewer = new SuiteReviewer({ llm, source, publicInterface: { at: async () => ({ kind: "absent" }) }, judgements: new SuiteReviewJudgementRepository(db) });
+    const outcome = await reviewer.review({ id: reviewTask, projectId, taskSpec: { origin: "review", visionItems: [cited.text] } }, "/unused");
+    const kept = await db.execute(sql`SELECT item_id AS "itemId", item_text AS "itemText", check_task_id AS "checkTaskId" FROM undecided_items WHERE review_task_id = ${reviewTask}`);
+    const judged = (await suiteReviewJudgementsOf(db, projectId)).filter((judgement) => judgement.reviewTaskId === reviewTask);
+    return { outcome, kept: kept.rows, judged, check };
+  }
+
+  test("an undecided item only one model family raised is kept advisory and stored undecided, never routed", async () => {
+    const { outcome, kept, judged, check } = await reviewUndecided("first");
+    expect(outcome).toMatchObject({ kind: "clean", undecided: [{ checkTaskId: check, itemId: "S9" }] });
+    expect(kept).toEqual([{ itemId: "S9", itemText: "put survives a power loss", checkTaskId: check }]);
+    expect(judged).toMatchObject([{ checkName: null, outcome: "advisory", basis: "no-other-family", secondModel: "first/strong-b" }]);
+  });
+
+  test("an undecided item another model family agrees on is routed once and not stored undecided", async () => {
+    const { outcome, kept, judged } = await reviewUndecided("second");
+    expect(outcome).toMatchObject({ kind: "problems", undecided: [], problems: [{ kind: "undecided-item" }] });
+    expect(kept).toEqual([]);
+    expect(judged).toMatchObject([{ outcome: "routed", basis: "other-family-agreed", secondModel: "second/strong-b", secondReview: "other-model" }]);
+  });
+
+  test("the first task dispatched on a review's check set freezes it once, with the set as it stood; the freeze is never updated", async () => {
+    const freezes = new CheckSetFreezeRepository(db);
+    const cited = [{ type: "scope", id: "S1", text: "Keys can be stored", side: "in" }];
+    const impl = await task("Store keys", { origin: "decomposition" }, "implementation");
+    const checker = await task("Checks of Store keys", { origin: "check", checksFor: impl, visionItems: ["Keys can be stored"], sources: cited }, "check");
+    const review = await task("Review the plan's checks", { origin: "review" }, null);
+    await db.execute(sql`INSERT INTO dependencies (from_id, to_id) VALUES (${review}, ${checker}), (${impl}, ${review})`);
+    for (const revision of [1, 2]) {
+      await db.execute(sql`
+        INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+        VALUES (${projectId}, ${impl}, ${checker}, ${revision}, ${`stores-r${revision}`}, 'sh store.sh', '[]'::jsonb, ${"e".repeat(64)}, '["S1"]'::jsonb)`);
+    }
+
+    expect(await freezes.frozen(review)).toBe(false);
+    expect(await freezes.freezeFor(checker)).toEqual([]);
+    expect(await freezes.freezeFor(impl)).toEqual([review]);
+    expect(await freezes.freezeFor(impl)).toEqual([]);
+    expect(await freezes.frozen(review)).toBe(true);
+    const rows = await db.execute(sql`SELECT frozen_by AS "frozenBy", check_set AS "checkSet" FROM check_set_freezes WHERE review_task_id = ${review}`);
+    expect(rows.rows).toEqual([
+      { frozenBy: impl, checkSet: [{ checkTaskId: checker, checksFor: impl, cited, revision: 2, checks: [{ name: "stores-r2", decides: ["S1"] }] }] },
+    ]);
+    await expect(db.execute(sql`UPDATE check_set_freezes SET frozen_by = ${checker} WHERE review_task_id = ${review}`)).rejects.toThrow();
   });
 });

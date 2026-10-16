@@ -26,7 +26,7 @@ function emptyWorkItemRepo(): WorkItemRepository {
     save: unused("save"),
     incrementDispatchCount: unused("incrementDispatchCount"),
     recordInfrastructureFault: unused("recordInfrastructureFault"),
-    refundDispatchCount: unused("refundDispatchCount"),
+    saveRefunded: unused("saveRefunded"),
     recordMergeCommit: unused("recordMergeCommit"),
     addDependency: unused("addDependency"),
     getDependencies: unused("getDependencies"),
@@ -98,8 +98,8 @@ describe("reconcileWorkItemsOnStartup — the dispatch a dead process counted", 
         row = { ...item, dispatchCount: row.dispatchCount, events: [] };
       },
       recordInfrastructureFault: async () => { throw new Error("recordInfrastructureFault: not exercised"); },
-      refundDispatchCount: async () => {
-        row = { ...row, dispatchCount: row.dispatchCount - 1 };
+      saveRefunded: async (item) => {
+        row = { ...item, dispatchCount: row.dispatchCount - 1, events: [] };
         return row.dispatchCount;
       },
     };

@@ -41,6 +41,7 @@ import {
 import { RosterDerivation, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "@ashara/organization";
 import {
   CheckDisputeRepository,
+  CheckSetFreezeRepository,
   SuiteReviewFindingRepository,
   SuiteReviewJudgementRepository,
   SuiteReviewer,
@@ -452,6 +453,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       containment,
     ),
     suiteReviewFindings: new SuiteReviewFindingRepository(db),
+    checkSetFreeze: new CheckSetFreezeRepository(db),
     infrastructureProbe: substrateProbe(cellSubstrate),
     heldCells: { release: () => releaseHeldCells(cellSubstrate) },
     taskLanes: ports.taskLanes,

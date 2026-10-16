@@ -71,7 +71,10 @@ const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), titl
 const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
-const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown() });
+const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown(), reportBody: z.string().nullable() });
+/** A cited item a suite review left undecided (undecided_items, migration 069): its id and the text its check task cited it with. */
+const undecidedRow = z.object({ id: z.string(), text: z.string() });
+const sweptUndecidedRow = undecidedRow.extend({ sweepId: z.string() });
 /** One stored check, with the check task that wrote it and what it says it decides (migration 064). */
 const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
 type SweptCheck = z.infer<typeof storedCheckRow>;
@@ -93,12 +96,20 @@ export interface ReportRecords {
   readonly reviewSpec: unknown;
   /** Every check of each Completed goal task's latest stored revision (the sets a sweep runs), with its check task's task_spec. */
   readonly goalChecks: readonly SweptCheck[];
+  /** The items a suite review left undecided on a check task of a Completed goal task. */
+  readonly goalUndecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
   /**
    * Every passed acceptance sweep, in order, with the vision version current when it passed (its
    * fields unparsed; version null when none was) and every stored check it ran, with the check task
    * that wrote it: each goal task it checked, at its latest checks revision written before the sweep.
    */
-  readonly passedSweeps: ReadonlyArray<z.infer<typeof passedSweepRow> & { readonly storedChecks: readonly SweptCheck[] }>;
+  readonly passedSweeps: ReadonlyArray<
+    z.infer<typeof passedSweepRow> & {
+      readonly storedChecks: readonly SweptCheck[];
+      /** The items a suite review left undecided, before the sweep, on a check task whose checks it ran. */
+      readonly undecided: ReadonlyArray<z.infer<typeof undecidedRow>>;
+    }
+  >;
 }
 
 export async function readReportRecords(db: Database, projectId: string): Promise<ReportRecords> {
@@ -158,6 +169,15 @@ export async function readReportRecords(db: Database, projectId: string): Promis
           WHERE g.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
           ORDER BY a.id, c.name`,
     ),
+    goalUndecided: await rows(
+      undecidedRow,
+      sql`SELECT u.item_id AS id, u.item_text AS text
+          FROM undecided_items u
+          JOIN work_items a ON a.id = u.check_task_id
+          JOIN work_items g ON g.id::text = a.task_spec->>'checksFor'
+          WHERE u.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
+          ORDER BY u.item_id`,
+    ),
     passedSweeps: await passedSweepsOf(projectId, rows),
   };
 }
@@ -168,7 +188,9 @@ async function passedSweepsOf(
 ): Promise<ReportRecords["passedSweeps"]> {
   const sweeps = await rows(
     passedSweepRow,
-    sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries" FROM acceptance_sweeps s
+    sql`SELECT s.id, v.version, v.inferences, v.scope_boundaries AS "scopeBoundaries",
+               (SELECT m.body FROM client_messages m WHERE m.id = s.report_id) AS "reportBody"
+        FROM acceptance_sweeps s
         LEFT JOIN LATERAL (SELECT version, inferences, scope_boundaries FROM vision_documents d
                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
         WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
@@ -184,9 +206,20 @@ async function passedSweepsOf(
         WHERE s.project_id = ${projectId} AND s.passed
         ORDER BY s.id, a.id, c.name`,
   );
+  const undecided = await rows(
+    sweptUndecidedRow,
+    sql`SELECT s.id AS "sweepId", u.item_id AS id, u.item_text AS text
+        FROM acceptance_sweeps s
+        CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
+        JOIN work_items a ON a.task_spec->>'checksFor' = t.task_id
+        JOIN undecided_items u ON u.check_task_id = a.id AND u.created_at <= s.created_at
+        WHERE s.project_id = ${projectId} AND s.passed
+        ORDER BY s.id, u.item_id`,
+  );
   return sweeps.map((sweep) => ({
     ...sweep,
     storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ checkTaskId, taskSpec, name, decides }) => ({ checkTaskId, taskSpec, name, decides })),
+    undecided: undecided.filter((item) => item.sweepId === sweep.id).map(({ id, text }) => ({ id, text })),
   }));
 }
 
@@ -683,7 +716,14 @@ type CoverageOnRecord =
   | { readonly kind: "unrecorded" }
   /** A record the coverage is computed from cannot be read: production's report cannot be rendered either. */
   | { readonly kind: "unreadable"; readonly detail: string }
-  | { readonly kind: "recorded"; readonly asked: readonly VisionSource[]; readonly uncovered: readonly VisionSource[]; readonly notAsked: readonly VisionSource[] };
+  | {
+      readonly kind: "recorded";
+      readonly asked: readonly VisionSource[];
+      readonly uncovered: readonly VisionSource[];
+      /** Asked items a stored check records it decides but a suite review left undecided (ADR-084 decision 2). */
+      readonly undecided: readonly VisionSource[];
+      readonly notAsked: readonly VisionSource[];
+    };
 
 /** An item is the same across a plan's revisions only when its type, id and text all match (as acceptance.ts compares them). */
 function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string {
@@ -766,7 +806,39 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
     if (record.kind === "internal-design" || !missed("assumption", key, record.statement)) return [];
     return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is decided by no stored check ${at} ran` }];
   });
-  return [...scopeFindings, ...assumptionFindings];
+  return [...scopeFindings, ...assumptionFindings, ...undecidedAtSweep(sweep, scope.data, inferences.data, at)];
+}
+
+/**
+ * ADR-084 decision 2: an item of what the client asked for that a suite review left undecided is
+ * unverified, never covered, whatever a stored check records it decides. Once the sweep's delivered
+ * report is posted, it names every such item apart as not verified and never says every item is
+ * decided. Judged per item, keyed by its id.
+ */
+function undecidedAtSweep(
+  sweep: ReportRecords["passedSweeps"][number],
+  scope: ReadonlyArray<z.infer<typeof sweptScopeLine>>,
+  inferences: ReadonlyArray<z.infer<typeof sweptAssumption>>,
+  at: string,
+): UncheckedFinding[] {
+  if (sweep.reportBody === null) return [];
+  const asked = new Set([
+    ...scope.flatMap((line, i) => (typeof line !== "string" && line.side === "out" ? [] : [`S${i + 1}`])),
+    ...inferences.flatMap((record, i) => (record.kind === "internal-design" ? [] : [record.key ?? `A${i + 1}`])),
+  ]);
+  const undecided = sweep.undecided.filter((item) => asked.has(item.id));
+  if (undecided.length === 0) return [];
+  // eslint-disable-next-line no-restricted-syntax -- policy default: an absent section lists no item, so every undecided item is reported unlisted below
+  const listed = (paragraph(sweep.reportBody, UNDECIDED_HEAD) ?? "").split("\n").filter((line) => line.startsWith("- "));
+  const findings = undecided.flatMap((item) =>
+    listed.some((line) => line.includes(item.text))
+      ? []
+      : [{ key: `undecided-unreported:${item.id}`, statement: `${item.id} ("${item.text.slice(0, 120)}"), left undecided by a suite review, is not named as unverified in the delivered report of ${at}` }],
+  );
+  if (sweep.reportBody.includes(ALL_COVERED)) {
+    findings.push({ key: "undecided-covered", statement: `the delivered report of ${at} says every item is decided while ${undecided.length} item(s) are left undecided` });
+  }
+  return findings;
 }
 
 /**
@@ -776,7 +848,7 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
  * recorded as the team's own design choice, is not part of what the client asked for and is never
  * listed. Unrecorded when the review holds no traced items or one such check records none it decides.
  */
-function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalChecks">): CoverageOnRecord {
+function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalChecks" | "goalUndecided">): CoverageOnRecord {
   // A corrupt task_spec throws TaskSpecCorrupt through the snapshot check: the run fails, never passes unjudged.
   const items = parseStoredTaskSpec(records.reviewSpec)?.sources;
   if (items === undefined) return { kind: "unrecorded" };
@@ -785,11 +857,21 @@ function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalCheck
   const decided = swept.decided;
   const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
   const asked = items.filter(isAsked);
-  return { kind: "recorded", asked, uncovered: asked.filter((source) => !decided.has(identityOf(source))), notAsked: items.filter((source) => !isAsked(source)) };
+  const left = new Set(records.goalUndecided.map((item) => JSON.stringify([item.id, item.text])));
+  return {
+    kind: "recorded",
+    asked,
+    uncovered: asked.filter((source) => !decided.has(identityOf(source))),
+    undecided: asked.filter((source) => decided.has(identityOf(source)) && left.has(JSON.stringify([source.id, source.text]))),
+    notAsked: items.filter((source) => !isAsked(source)),
+  };
 }
 
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
+const UNDECIDED_HEAD = "These items of what you asked for have a stored check that passed on main and is recorded as deciding them";
+const ALL_COVERED = "Every item of what you asked for is decided";
+const OTHERS_COVERED = "Every other item of what you asked for is decided";
 
 /** Where the delivered report's coverage section departs from the records. */
 function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
@@ -802,9 +884,13 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
       ...(listed.length === 0 ? [] : [`the records hold ${what}, but the delivered report lists ${listed.length} item(s) as not covered`]),
     ];
   if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no record of what the checks decide");
-  const problems = unverifiedProblems(body, coverage.notAsked);
+  const problems = [...unverifiedProblems(body, coverage.notAsked), ...undecidedProblems(body, coverage.undecided)];
   if (coverage.asked.length === 0) return [...problems, ...expectSentence("holds no item of what you asked for", "no item the client asked for")];
-  if (coverage.uncovered.length === 0) return [...problems, ...expectSentence("Every item of what you asked for is decided", "every asked-for item decided")];
+  if (coverage.uncovered.length === 0) {
+    return coverage.undecided.length === 0
+      ? [...problems, ...expectSentence(ALL_COVERED, "every asked-for item decided")]
+      : [...problems, ...expectSentence(OTHERS_COVERED, "every asked-for item decided but those left undecided")];
+  }
   for (const source of coverage.uncovered) {
     if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as decided by no stored check`);
   }
@@ -813,6 +899,22 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
   }
   if (listed.length !== coverage.uncovered.length) problems.push(`the delivered report lists ${listed.length} item(s) as not covered; the records hold ${coverage.uncovered.length}`);
   return problems;
+}
+
+/**
+ * ADR-084 decision 2: the delivered report names every asked-for item a suite review left undecided
+ * as not verified, and nothing else there; no such section when there is none.
+ */
+function undecidedProblems(body: string, undecided: readonly VisionSource[]): string[] {
+  const section = paragraph(body, UNDECIDED_HEAD);
+  if (undecided.length === 0) return section === null ? [] : ["the delivered report names items a review left undecided; the records hold none"];
+  if (section === null) return [`the delivered report does not name the ${undecided.length} item(s) a review left undecided as not verified`];
+  const listed = section.split("\n").filter((line) => line.startsWith("- "));
+  const missing = undecided.filter((source) => !listed.some((line) => line.includes(source.text)));
+  return [
+    ...missing.map((source) => `the delivered report does not name "${source.text}" (${source.id}), left undecided by a review, as not verified`),
+    ...(listed.length === undecided.length ? [] : [`the delivered report names ${listed.length} item(s) as left undecided; the records hold ${undecided.length}`]),
+  ];
 }
 
 /**

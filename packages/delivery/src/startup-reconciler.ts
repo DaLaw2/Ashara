@@ -279,32 +279,28 @@ async function blockUnsettled(
  */
 async function requeueOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Promise<void> {
   const evidence = await deps.devSessionStore.dispatchEvidence(orphan.id, ORPHANED_SESSION_RESOLVER);
+  const unfinished = evidence.latestPhase !== null && !isTerminalSessionPhase(evidence.latestPhase);
   const previousStatus = orphan.status;
   requeueWorkItem(orphan);
-  await deps.workItemRepo.save(orphan, previousStatus);
-  await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
-
-  const unfinished = evidence.latestPhase !== null && !isTerminalSessionPhase(evidence.latestPhase);
   if (!unfinished) {
+    await deps.workItemRepo.save(orphan, previousStatus);
     console.warn(
       `[startup-reconciler] requeued ${orphan.id}; its dispatch stays counted (latest session ${evidence.latestPhase ?? "none"}, ` +
         `so no record shows a dispatch that never finished)`,
     );
-    return;
-  }
-  if (evidence.orphanedBefore >= MAX_ORPHAN_REFUNDS) {
+  } else if (evidence.orphanedBefore >= MAX_ORPHAN_REFUNDS) {
+    await deps.workItemRepo.save(orphan, previousStatus);
     console.warn(
       `[startup-reconciler] requeued ${orphan.id}; its unfinished dispatch stays counted: ${evidence.orphanedBefore} earlier ` +
         `dispatch(es) of it were already orphaned by a dead process (bound ${MAX_ORPHAN_REFUNDS})`,
     );
-    return;
-  }
-  try {
-    const dispatchCount = await deps.workItemRepo.refundDispatchCount(orphan.id);
+  } else {
+    // The requeue and its refund are one write: a fault under either leaves the item InProgress for
+    // the next attempt of the settlement, never requeued with its unfinished dispatch charged.
+    const dispatchCount = await deps.workItemRepo.saveRefunded(orphan, previousStatus);
     console.warn(`[startup-reconciler] requeued ${orphan.id}; its dispatch never finished (session non-terminal), refunded (dispatch count ${dispatchCount})`);
-  } catch (error) {
-    console.warn(`[startup-reconciler] requeued ${orphan.id}; the refund of its unfinished dispatch failed, it stays counted:`, error);
   }
+  await publishBestEffort(deps.eventStore, takeEvents(orphan), orphan.id);
 }
 
 function isTerminalSessionPhase(phase: string): boolean {

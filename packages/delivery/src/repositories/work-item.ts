@@ -279,11 +279,22 @@ export class WorkItemRowRepository {
   }
 
   /**
-   * Takes back one counted dispatch, never below zero, in a single UPDATE: the
-   * dispatch seam counted an attempt that a spend-cap refusal stopped, which is
-   * not an attempt the retry bound should charge. Returns the post-refund value.
+   * Writes a transition out of the dispatch (as `save` does) and takes back the dispatch the seam
+   * counted, never below zero, in one transaction: the attempt stopped before any work the retry
+   * bound should charge. Neither is written without the other, so a fault under either leaves the
+   * item where it was, still counted, for its routing to be retried. Returns the post-refund value.
    */
-  async refundDispatchCount(id: string): Promise<number> {
+  async saveRefunded(
+    item: { id: string; status: string; blockedReason?: unknown; failureVerdict: FailureVerdict | null; updatedAt: Date },
+    expectedPreviousStatus: string,
+  ): Promise<number> {
+    return this.withTransaction(async (tx) => {
+      await tx.save(item, expectedPreviousStatus);
+      return tx.takeBackDispatch(item.id);
+    });
+  }
+
+  private async takeBackDispatch(id: string): Promise<number> {
     const [row] = await this.db
       .update(workItems)
       .set({ dispatchCount: sql`${workItems.dispatchCount} - 1` })

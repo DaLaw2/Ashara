@@ -204,6 +204,12 @@ export interface CoreLoopDeps {
    */
   readonly suiteReviewFindings: SuiteReviewFindingRecord;
   /**
+   * Quality's freeze of a plan revision's check set, run at every dispatch before it is counted: the
+   * first implementation dispatched on a review's check set freezes it, so no later review of that
+   * set reopens anything.
+   */
+  readonly checkSetFreeze: CheckSetFreeze;
+  /**
    * The Liaison's one report per project halt and per resumption; run every cycle, at the budget
    * cap too (no LLM call), and once more when the deployment cap stops the loop.
    */
@@ -272,17 +278,16 @@ interface SuiteReviewFindingsEntry {
   }>;
 }
 
-/**
- * Appends the findings; resolves, per named check task, to how many reviews have named it, this one
- * included, and to every problem the earlier reviews found in its checks, oldest first (ADR-074
- * addendum 2 d89 F).
- */
+/** Appends the findings; resolves, per named check task, to how many reviews have named it, this one included. */
 interface SuiteReviewFindingRecord {
-  record(findings: SuiteReviewFindingsEntry): Promise<{
-    readonly timesNamed: ReadonlyMap<string, number>;
-    readonly earlierFindings: ReadonlyMap<
-      string,
-      ReadonlyArray<{ readonly kind: "contradiction" | "outside-vision" | "undecided-item"; readonly problem: string; readonly evidence: string }>
-    >;
-  }>;
+  record(findings: SuiteReviewFindingsEntry): Promise<{ readonly timesNamed: ReadonlyMap<string, number> }>;
+}
+
+/**
+ * Quality's freeze of a plan revision's check set (ADR-084 decision 3): freezes the check set of
+ * every review task the dispatched task depends on that is not frozen yet, and resolves to the review
+ * tasks it froze. A task that depends on no review freezes nothing.
+ */
+interface CheckSetFreeze {
+  freezeFor(taskId: string): Promise<readonly string[]>;
 }

@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, isDatabaseConnectionFault, noOpenStop, projects, taskChecks, undecidedItems, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
@@ -44,7 +44,10 @@ type AcceptedVisionItem =
  * line of a check task whose stored checks ran in the sweep cites it.
  */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean }> }
+  | {
+      readonly kind: "recorded";
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: boolean }>;
+    }
   /** The review, or a check task whose checks ran, records no traced items: coverage cannot be stated. */
   | { readonly kind: "unrecorded" };
 
@@ -385,7 +388,8 @@ async function assumptionsAtAcceptance(
  * Every item of the vision as the plan's latest completed review recorded it (every item of the
  * vision its revision was decomposed from), each checked exactly when a check of a goal task's
  * latest stored revision (the sets the sweep ran) records that it decides it (ADR-083): a line
- * citing an item is no check of it. Unrecorded when the review holds no traced items, or one of
+ * citing an item is no check of it; each also undecided when a suite review left it so on one of
+ * those goal tasks' check tasks. Unrecorded when the review holds no traced items, or one of
  * those checks records no items it decides. Where each assumption stands with the client comes from
  * the vision at acceptance (d95 a), and an assumption whose text there is not the one reviewed is
  * refused, never reported on the plan's copy.
@@ -417,11 +421,13 @@ async function visionCoverage(
     for (const identity of items) decided.add(identity);
   }
   const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
+  const undecided = goalIds.length === 0 ? new Set<string>() : await undecidedOf(db, projectId, goalIds);
   return {
     kind: "recorded",
     items: items.map((source) => {
       const checked = decided.has(sourceIdentity(source));
-      if (source.type === "scope") return { source, checked };
+      const left = undecided.has(undecidedIdentity(source));
+      if (source.type === "scope") return { source, checked, undecided: left };
       const now = current.get(source.id);
       if (now === undefined) {
         throw new AcceptedStandingUnreadable(sweep.id, projectId, null, `the vision at acceptance holds no assumption ${source.id}, which the plan's review recorded`);
@@ -434,9 +440,28 @@ async function visionCoverage(
           `assumption ${source.id} reads "${now.text}" at acceptance, not "${source.text}" as the plan's review recorded it`,
         );
       }
-      return { source: now, checked };
+      return { source: now, checked, undecided: left };
     }),
   };
+}
+
+/** An item as an undecided_items row names it: its id and the text its check task cited it with. */
+function undecidedIdentity(item: { readonly id: string; readonly text: string }): string {
+  return JSON.stringify([item.id, item.text]);
+}
+
+/**
+ * The items a suite review left undecided on a check task of one of the goal tasks the sweep ran
+ * (migration 069), by id and cited text: a review found no check really deciding them and nothing
+ * settled it, so the report never counts them as covered.
+ */
+async function undecidedOf(db: DbHandle, projectId: string, goalIds: readonly string[]): Promise<Set<string>> {
+  const rows = await db
+    .select({ id: undecidedItems.itemId, text: undecidedItems.itemText })
+    .from(undecidedItems)
+    .innerJoin(workItems, eq(workItems.id, undecidedItems.checkTaskId))
+    .where(and(eq(undecidedItems.projectId, projectId), inArray(sql`${workItems.taskSpec}->>'checksFor'`, [...goalIds])));
+  return new Set(rows.map(undecidedIdentity));
 }
 
 /** A passed sweep with no main commit, which acceptance_sweeps_pass_has_main forbids. */

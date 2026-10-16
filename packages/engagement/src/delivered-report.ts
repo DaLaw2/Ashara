@@ -11,6 +11,7 @@ import type { VisionSource } from "./vision-language/vision-source.js";
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
 // folded into "delivered" or into what passed: the opening claims only the run that happened. Every
 // assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
+// So is every item a review of the checks left undecided (ADR-084): never counted as covered.
 // The only ways of running the product presented as verified are the commands acceptance ran and saw
 // pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
 
@@ -38,10 +39,15 @@ type AcceptedVisionItem =
 
 /**
  * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
- * ran records that it decides it (ADR-083); or none recorded.
+ * ran records that it decides it (ADR-083), and whether a review of those checks left it undecided
+ * (ADR-084 decision 2: a stored check claims it, a review found none really decides it, and nothing
+ * settled that); or none recorded.
  */
 type VisionCoverage =
-  | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean }> }
+  | {
+      readonly kind: "recorded";
+      readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean; readonly undecided: boolean }>;
+    }
   | { readonly kind: "unrecorded" };
 
 /** An accepted project whose delivered report the client has not been sent. */
@@ -364,6 +370,9 @@ function coverageSection(vision: VisionCoverage): string {
   if (asked.length === 0) return "The plan's record holds no item of what you asked for, so none of it is stated as checked.";
   const uncovered = asked.filter((item) => !item.checked);
   if (uncovered.length === 0) {
+    if (asked.some((item) => item.undecided)) {
+      return "Every other item of what you asked for is decided by a stored check of a task whose stored checks passed on main.";
+    }
     return "Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.";
   }
   return [
@@ -371,6 +380,25 @@ function coverageSection(vision: VisionCoverage): string {
       `main, so nothing confirms them either way:`,
     ...uncovered.map((item) => coverageLine(item.source)),
   ].join("\n");
+}
+
+/**
+ * The items of what the client asked for that a stored check claims to decide but a review of the
+ * checks found none really does, with nothing to settle it: they are unverified, never covered
+ * (ADR-084 decision 2). Empty when there are none.
+ */
+function undecidedSection(vision: VisionCoverage): string[] {
+  if (vision.kind === "unrecorded") return [];
+  const undecided = vision.items.filter((item) => askedFor(item.source) && item.checked && item.undecided);
+  if (undecided.length === 0) return [];
+  return [
+    [
+      `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a ` +
+        `review of the checks found that none of them really decides it, and no second review by another model family confirmed ` +
+        `or settled that: they are not verified by Ashara.`,
+      ...undecided.map((item) => coverageLine(item.source)),
+    ].join("\n"),
+  ];
 }
 
 /** What ran on main, and only that: the environment's test and the stored checks of the tasks named. */
@@ -412,6 +440,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),
     coverageSection(due.vision),
+    ...undecidedSection(due.vision),
     ...unverifiedSection(due.vision),
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");

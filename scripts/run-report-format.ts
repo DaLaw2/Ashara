@@ -199,23 +199,32 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
 
 /** One finding of a suite review, as the report states it. */
 function findingLine(finding: StoredJudgement["secondFindings"][number]): string {
-  return finding.kind === "outside-vision" ? `missing "${finding.missingClause}": ${finding.problem}` : `contradiction: ${finding.problem}`;
+  switch (finding.kind) {
+    case "outside-vision":
+      return `missing "${finding.missingClause}": ${finding.problem}`;
+    case "undecided-item":
+      return `undecided ${finding.item}: ${finding.problem}`;
+    case "contradiction":
+      return `contradiction${finding.conflict === undefined ? "" : ` (${finding.conflict.map((side) => `"${side.check}" of ${side.checkTask} requires "${side.requires}"`).join("; ")})`}: ${finding.problem}`;
+  }
 }
 
 /**
- * The suite reviews' judgements on the outside-vision rejections they routed or released, each with
- * both reviews' findings whole and what the second review was: another model, or a re-sample of the first.
+ * The suite reviews' judgements on every finding of their first pass, routed, released or kept as
+ * advisory, each with why, both reviews' findings whole and what the second review was: another
+ * model, a re-sample of the first, or none asked.
  */
 export function formatSuiteReviewJudgements(judgements: readonly StoredJudgement[]): string {
   if (judgements.length === 0) return "Suite review judgements: none recorded";
   const lines = [`Suite review judgements (${judgements.length}):`];
   for (const judgement of judgements) {
+    const subject = judgement.checkName === null ? `its ${judgement.firstFinding.kind} finding` : `check "${judgement.checkName}"`;
+    const second = judgement.secondReview === null ? "no second review asked" : `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`;
     lines.push(
-      `  review ${judgement.reviewTaskId}, check "${judgement.checkName}" of task ${judgement.checkTaskId}: ${judgement.outcome}; ` +
-        `second review ${judgement.secondReview} (first ${judgement.firstModel}, second ${judgement.secondModel})`,
+      `  review ${judgement.reviewTaskId}, ${subject} of task ${judgement.checkTaskId}: ${judgement.outcome} (${judgement.basis}); ${second}`,
       `    first review:  ${findingLine(judgement.firstFinding)}`,
     );
-    if (judgement.secondFindings.length === 0) lines.push("    second review: no rejection of this check task");
+    if (judgement.secondReview !== null && judgement.secondFindings.length === 0) lines.push("    second review: no finding on this check task");
     for (const finding of judgement.secondFindings) lines.push(`    second review: ${findingLine(finding)}`);
   }
   return lines.join("\n");

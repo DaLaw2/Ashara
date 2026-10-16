@@ -1,6 +1,6 @@
-import { and, asc, count, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { suiteReviewFindings, suiteReviewJudgements } from "@ashara/db";
+import { suiteReviewFindings, suiteReviewJudgements, undecidedItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SuiteReviewJudgementStore } from "../suite-review.js";
 
@@ -46,13 +46,9 @@ class SuiteReviewFindingCorrupt extends Error {
   }
 }
 
-/**
- * What the record holds of the check tasks one review named: per check task, how many reviews have
- * named it, this one included, and every problem the earlier ones found in its checks, oldest first.
- */
+/** What the record holds of the check tasks one review named: per check task, how many reviews have named it, this one included. */
 interface RecordedSuiteReview {
   readonly timesNamed: ReadonlyMap<string, number>;
-  readonly earlierFindings: ReadonlyMap<string, readonly ReviewProblem[]>;
 }
 
 export class SuiteReviewFindingRepository {
@@ -60,15 +56,14 @@ export class SuiteReviewFindingRepository {
 
   /**
    * Appends one row per check task the problems name and returns, per named check task, how many
-   * reviews have named it, this one included, and what the earlier reviews found in its checks
-   * (ADR-074 addendum 2 d89 F: a rewrite shown only the latest review can put back what an earlier
-   * one had it drop), read in the same transaction as the insert.
+   * reviews have named it, this one included, read in the same transaction as the insert: the
+   * count that bounds its reopens, which no refund of the review's dispatch changes.
    */
   async record(findings: NewSuiteReviewFindings): Promise<RecordedSuiteReview> {
     const named = [...new Set(findings.problems.flatMap((problem) => problem.checkTaskIds))];
     if (named.length === 0) throw new SuiteReviewFindingsUnrecordable(findings.reviewTaskId, "its problems name no check task");
     return this.db.transaction(async (tx) => {
-      const inserted = await tx
+      await tx
         .insert(suiteReviewFindings)
         .values(
           named.map((checkTaskId) => ({
@@ -79,27 +74,7 @@ export class SuiteReviewFindingRepository {
               .filter((problem) => problem.checkTaskIds.includes(checkTaskId))
               .map(({ kind, problem, evidence }) => ({ kind, problem, evidence })),
           })),
-        )
-        .returning({ id: suiteReviewFindings.id });
-      const earlierRows = await tx
-        .select({ id: suiteReviewFindings.id, checkTaskId: suiteReviewFindings.checkTaskId, problems: suiteReviewFindings.problems })
-        .from(suiteReviewFindings)
-        .where(
-          and(
-            inArray(suiteReviewFindings.checkTaskId, named),
-            notInArray(
-              suiteReviewFindings.id,
-              inserted.map((row) => row.id),
-            ),
-          ),
-        )
-        .orderBy(asc(suiteReviewFindings.createdAt), asc(suiteReviewFindings.id));
-      const earlierFindings = new Map<string, ReviewProblem[]>(named.map((checkTaskId) => [checkTaskId, []]));
-      for (const row of earlierRows) {
-        const parsed = ReviewProblemsSchema.safeParse(row.problems);
-        if (!parsed.success) throw new SuiteReviewFindingCorrupt(row.id, `problems do not parse: ${z.prettifyError(parsed.error)}`);
-        earlierFindings.get(row.checkTaskId)?.push(...parsed.data);
-      }
+        );
       const rows = await tx
         .select({ checkTaskId: suiteReviewFindings.checkTaskId, times: count() })
         .from(suiteReviewFindings)
@@ -112,15 +87,19 @@ export class SuiteReviewFindingRepository {
       if (uncounted.length > 0) {
         throw new SuiteReviewFindingsUnrecordable(findings.reviewTaskId, `check task(s) ${uncounted.join(", ")} counted no review right after one was recorded`);
       }
-      return { timesNamed: times, earlierFindings };
+      return { timesNamed: times };
     });
   }
 }
+
+const StoredConflictSideSchema = z.strictObject({ checkTask: z.string().min(1), check: z.string().min(1), requires: z.string().min(1) });
 
 const StoredFindingSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("contradiction"),
     checkTasks: z.array(z.string().min(1)).min(1),
+    // A second review's contradiction recorded before migration 069 quotes no conflict.
+    conflict: z.tuple([StoredConflictSideSchema, StoredConflictSideSchema]).optional(),
     problem: z.string().min(1),
     evidence: z.string().min(1),
   }),
@@ -142,17 +121,21 @@ const StoredFindingSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-const StoredJudgementSchema = z.strictObject({
-  reviewTaskId: z.string().min(1),
-  checkTaskId: z.string().min(1),
-  checkName: z.string().min(1),
-  outcome: z.enum(["routed", "released"]),
-  firstFinding: StoredFindingSchema.refine((finding) => finding.kind === "outside-vision", "the first finding of a judgement is an outside-vision rejection"),
-  secondFindings: z.array(StoredFindingSchema),
-  firstModel: z.string().min(1),
-  secondModel: z.string().min(1),
-  secondReview: z.enum(["other-model", "re-sample"]),
-});
+const StoredJudgementSchema = z
+  .strictObject({
+    reviewTaskId: z.string().min(1),
+    checkTaskId: z.string().min(1),
+    checkName: z.string().min(1).nullable(),
+    outcome: z.enum(["routed", "released", "advisory"]),
+    basis: z.enum(["two-reviews", "other-family-agreed", "other-family-disagreed", "no-other-family", "frozen", "reopened-once"]),
+    firstFinding: StoredFindingSchema,
+    secondFindings: z.array(StoredFindingSchema),
+    firstModel: z.string().min(1),
+    secondModel: z.string().min(1).nullable(),
+    secondReview: z.enum(["other-model", "re-sample"]).nullable(),
+  })
+  .refine((row) => (row.firstFinding.kind === "outside-vision") === (row.checkName !== null), "a judgement names a check exactly when its first finding is an outside-vision rejection")
+  .refine((row) => (row.secondModel === null) === (row.secondReview === null), "a judgement records a second review's model exactly when it records what that review was");
 
 export type StoredJudgement = z.infer<typeof StoredJudgementSchema>;
 
@@ -167,27 +150,64 @@ class SuiteReviewJudgementCorrupt extends Error {
   }
 }
 
-/** Quality's record of a suite review's judgements on the rejections it routed or released (migration 063). */
+/** An insert of judgements read back fewer rows than it wrote: the items they leave undecided could not be tied to them. */
+class SuiteReviewJudgementsUnreturned extends Error {
+  constructor(
+    readonly reviewTaskId: string,
+    readonly written: number,
+    readonly returned: number,
+  ) {
+    super(`review task ${reviewTaskId}: ${written} judgement(s) were written but ${returned} came back`);
+    this.name = "SuiteReviewJudgementsUnreturned";
+  }
+}
+
+/**
+ * Quality's record of a suite review's judgements on its findings (migrations 063, 069), and of the
+ * cited items its advisory findings leave undecided, in one transaction: an item is never kept
+ * undecided without the judgement that left it so, nor a judgement without its item.
+ */
 export class SuiteReviewJudgementRepository implements SuiteReviewJudgementStore {
-  constructor(private readonly db: DbHandle) {}
+  constructor(private readonly db: Database) {}
 
   async record(review: Parameters<SuiteReviewJudgementStore["record"]>[0]): Promise<void> {
     if (review.judgements.length === 0) return;
-    await this.db.insert(suiteReviewJudgements).values(
-      review.judgements.map((judgement) => ({
-        projectId: review.projectId,
-        reviewTaskId: review.reviewTaskId,
-        checkTaskId: judgement.checkTaskId,
-        checkName: judgement.check,
-        outcome: judgement.outcome,
-        firstFinding: judgement.first,
-        secondFindings: judgement.second,
-        firstModel: `${judgement.secondReview.first.provider}/${judgement.secondReview.first.model}`,
-        secondModel: `${judgement.secondReview.second.provider}/${judgement.secondReview.second.model}`,
-        secondReview: judgement.secondReview.kind,
-      })),
-    );
+    await this.db.transaction(async (tx) => {
+      const ids = await tx
+        .insert(suiteReviewJudgements)
+        .values(
+          review.judgements.map((judgement) => ({
+            projectId: review.projectId,
+            reviewTaskId: review.reviewTaskId,
+            checkTaskId: judgement.checkTaskId,
+            checkName: judgement.check,
+            outcome: judgement.outcome,
+            basis: judgement.basis,
+            firstFinding: judgement.first,
+            secondFindings: judgement.second,
+            firstModel: modelText(judgement.firstModel),
+            secondModel: judgement.secondReview === null ? null : modelText(judgement.secondReview.second),
+            secondReview: judgement.secondReview === null ? null : judgement.secondReview.kind,
+          })),
+        )
+        .returning({ id: suiteReviewJudgements.id });
+      if (ids.length !== review.judgements.length) throw new SuiteReviewJudgementsUnreturned(review.reviewTaskId, review.judgements.length, ids.length);
+      const undecided = review.judgements.flatMap((judgement, i) => {
+        const id = ids[i]?.id;
+        return judgement.undecided === null || id === undefined ? [] : [{ ...judgement.undecided, judgementId: id }];
+      });
+      if (undecided.length === 0) return;
+      // One row per check task and item: an item a later round leaves undecided again is already kept.
+      await tx
+        .insert(undecidedItems)
+        .values(undecided.map((item) => ({ projectId: review.projectId, reviewTaskId: review.reviewTaskId, ...item })))
+        .onConflictDoNothing({ target: [undecidedItems.checkTaskId, undecidedItems.itemId] });
+    });
   }
+}
+
+function modelText(model: { readonly provider: string; readonly model: string }): string {
+  return `${model.provider}/${model.model}`;
 }
 
 /** Every judgement the suite reviews of a project recorded, oldest first, each parsed whole: what the owner's run report states of them. */
@@ -199,6 +219,7 @@ export async function suiteReviewJudgementsOf(db: DbHandle, projectId: string): 
       checkTaskId: suiteReviewJudgements.checkTaskId,
       checkName: suiteReviewJudgements.checkName,
       outcome: suiteReviewJudgements.outcome,
+      basis: suiteReviewJudgements.basis,
       firstFinding: suiteReviewJudgements.firstFinding,
       secondFindings: suiteReviewJudgements.secondFindings,
       firstModel: suiteReviewJudgements.firstModel,

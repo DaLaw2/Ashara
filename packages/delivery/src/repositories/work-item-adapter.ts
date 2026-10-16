@@ -116,8 +116,8 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
     async incrementDispatchCount(id) {
       return db.incrementDispatchCount(id);
     },
-    async refundDispatchCount(id) {
-      return db.refundDispatchCount(id);
+    async saveRefunded(item, expectedPreviousStatus) {
+      return db.saveRefunded(workItemSaveRow(item), expectedPreviousStatus);
     },
     async recordInfrastructureFault(id) {
       return db.recordInfrastructureFault(id);

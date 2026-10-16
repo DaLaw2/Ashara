@@ -18,21 +18,30 @@ import type { TaskChecks } from "./task-checks.js";
 // checks it reads. Each check is judged against the vision items its own task cites, with their
 // status, and against the product's public interface as it stood on the commit the checks were
 // written against (d89 B): a reviewer that reads neither rejects checks their brief required.
-// What it finds is routed by the orchestrator (planning's exitSuiteReview). A model can misread an
-// item it was shown whole. Z0 can disprove an outside-vision rejection only one way: the clause it
-// quotes as missing appears word for word (case and punctuation aside) in the text of an item the
-// check's task cites. Such a rejection is discarded and the review asked again within the ladder's
-// bound. Z0 cannot tell that a paraphrased clause is absent, so a rejection it cannot disprove is
-// the reviewer's judgement, not a verified fact: it is acted on only when a second review, a fresh
-// call with the same prompt that never sees the first verdict, rejects the same check as outside
-// the vision too. The second review is asked of another model at the same capability when the
-// catalog has one; otherwise it is a re-sample of the first review's model, and every text that
-// names it says which it was. When the second does not reject that check, the check is released as
-// passing review. Either way both judgements are recorded whole (suite_review_judgements), and a
-// routed rejection carries both reviews' clauses side by side. Z0 keeps a suite only when every
-// item its task cites is one some check says it decides (ADR-083); whether that check's verdict
-// really decides the item is the reviewer's to judge, and a cited item it finds no check deciding
-// sends the check task back.
+// What it finds is routed by the orchestrator (planning's exitSuiteReview), and only a finding with
+// a witness, or with another model family's agreement where no witness can exist, reopens anything
+// (ADR-084 decision 2). A model can misread an item it was shown whole. Z0 can disprove an
+// outside-vision rejection only one way: the clause it quotes as missing appears word for word (case
+// and punctuation aside) in the text of an item the check's task cites. Such a rejection is
+// discarded and the review asked again within the ladder's bound. Z0 cannot tell that a paraphrased
+// clause is absent, so a rejection it cannot disprove is the reviewer's judgement, not a verified
+// fact: it is acted on only when a second review, a fresh call with the same prompt that never sees
+// the first verdict, rejects the same check as outside the vision too. The second review is asked of
+// another model at the same capability when the catalog has one; otherwise it is a re-sample of the
+// first review's model, and every text that names it says which it was. When the second does not
+// reject that check, the check is released as passing review.
+// A contradiction must quote, from the stored check files, what each of its two checks requires; Z0
+// holds each quote to the check it names. Whether two shell commands can pass together is not
+// decidable from their text without reading them as some stack's language, which Ashara never does,
+// so a grounded contradiction still needs agreement. An undecided item ("no check decides A22")
+// overrules the stored record that some check decides it (ADR-083), and no run can witness an
+// absence. Either acts only when the second review, from another model family (another provider),
+// reaches the same finding; otherwise it is kept as advisory, and an undecided item stays undecided
+// (undecided_items) and is reported unverified, never covered.
+// Two ratchets bound the rounds (ADR-084 decision 3): a check task the review already reopened once
+// is not reopened for an undecided item again (the item stays undecided), and once the check set is
+// frozen, at the first implementation dispatched on it, no finding acts. Every judgement is recorded
+// whole (suite_review_judgements) before anything is routed, released or kept on it.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {
@@ -46,14 +55,18 @@ interface CheckTaskUnderReview {
   readonly sources: readonly VisionSource[] | null;
   /** The title of the task its checks decide. */
   readonly checkedTitle: string | null;
+  /** How many reviews have reopened it so far (its suite_review_findings rows). */
+  readonly reviewReopens: number;
 }
 
-/** What the review reads: the review task's check tasks and the checks stored for their tasks. */
+/** What the review reads: the review task's check tasks, the checks stored for their tasks, and whether its check set is frozen. */
 export interface SuiteReviewSource {
   /** The check tasks the review task depends on: its plan revision's. */
   checkTasksUnderReview(reviewTaskId: WorkItemId): Promise<readonly CheckTaskUnderReview[]>;
   /** The task's latest revision of checks, or null when none was ever stored. */
   latest(taskId: WorkItemId): Promise<TaskChecks | null>;
+  /** Whether the review task's check set is frozen: an implementation depending on it was dispatched (check_set_freezes). */
+  frozen(reviewTaskId: WorkItemId): Promise<boolean>;
 }
 
 /** The product's public interface as it stood at one commit of the target checkout. */
@@ -137,37 +150,81 @@ function secondReviewText(review: SecondReview): string {
     : `a review by a different model, ${modelName(review.second)}, than the first's ${modelName(review.first)}`;
 }
 
-/** One outside-vision rejection as recorded: both reviews' findings on its check task whole, and what the second review was. */
-interface ReviewJudgement {
+/**
+ * Why a finding acted or did not (suite_review_judgements.basis): an outside-vision rejection's two
+ * reviews; another model family's agreement, or its absence, on a finding no witness can settle; or
+ * a ratchet that holds whatever a second review says.
+ */
+type JudgementBasis = "two-reviews" | "other-family-agreed" | "other-family-disagreed" | "no-other-family" | "frozen" | "reopened-once";
+
+/** What each basis means, as every text that reports a finding that did not act says it. */
+const BASIS_TEXT: Readonly<Record<Exclude<JudgementBasis, "two-reviews" | "other-family-agreed">, string>> = {
+  "other-family-disagreed": "the second review, by another model family, did not reach it",
+  "no-other-family": "no model of another family reviewed it, so nothing confirmed it",
+  frozen: "the plan's check set is frozen: an implementation was dispatched on it",
+  "reopened-once": "its check task was already reopened once by this review",
+};
+
+/** A cited item a finding left undecided: kept undecided and reported unverified, never covered. */
+interface UndecidedItem {
   readonly checkTaskId: string;
-  readonly check: string;
-  readonly outcome: "routed" | "released";
-  readonly first: OutsideVisionFinding;
-  /** Every finding the second review made on the check task, none when it found nothing there. */
-  readonly second: readonly ReviewFinding[];
-  readonly secondReview: SecondReview;
+  readonly itemId: string;
+  readonly itemText: string;
 }
 
-/** Where a review's judgements on its outside-vision rejections are recorded; a write that fails fails the review. */
+/** One finding of the first review as recorded: both reviews' findings on it whole, what the second review was, and why it acted or did not. */
+interface ReviewJudgement {
+  /** The check task it is recorded on: the one it names, or a contradiction's first side's. */
+  readonly checkTaskId: string;
+  /** The rejected check of an outside-vision finding; null for the other kinds. */
+  readonly check: string | null;
+  readonly outcome: "routed" | "released" | "advisory";
+  readonly basis: JudgementBasis;
+  readonly first: ReviewFinding;
+  /** The model the first review's verdict came from. */
+  readonly firstModel: ReviewModel;
+  /** Every finding the second review made on the check tasks it names, none when it found nothing there or was not asked. */
+  readonly second: readonly ReviewFinding[];
+  /** Null when no second review was asked: none could have changed the outcome. */
+  readonly secondReview: SecondReview | null;
+  /** The item an advisory undecided-item finding leaves undecided; null for every other finding. */
+  readonly undecided: UndecidedItem | null;
+}
+
+/**
+ * Where a review's judgements, and the items they leave undecided, are recorded, together; a write
+ * that fails fails the review.
+ */
 export interface SuiteReviewJudgementStore {
   record(review: { readonly projectId: ProjectId; readonly reviewTaskId: WorkItemId; readonly judgements: readonly ReviewJudgement[] }): Promise<void>;
+}
+
+/** A finding that did not act: kept as advisory, with why. */
+interface AdvisoryFinding {
+  readonly checkTaskIds: readonly string[];
+  readonly kind: ReviewFinding["kind"];
+  readonly finding: string;
+  readonly why: string;
 }
 
 /**
  * The review's verdict, accepted only after its schema validated and every check task it names is
  * one it read. `reviewed` names the check tasks whose suites it read; `setAside` the Abandoned ones,
  * whose implementations wait on nothing they wrote; `released` the rejections the second review did
- * not reach.
+ * not reach; `advisory` the findings that did not act, and `undecided` the cited items they leave
+ * undecided.
  */
+interface ReviewedOutcome {
+  readonly reviewed: readonly string[];
+  readonly setAside: readonly string[];
+  readonly released: readonly ReleasedRejection[];
+  readonly advisory: readonly AdvisoryFinding[];
+  readonly undecided: readonly UndecidedItem[];
+}
+
 type SuiteReviewOutcome =
-  | { readonly kind: "clean"; readonly reviewed: readonly string[]; readonly setAside: readonly string[]; readonly released: readonly ReleasedRejection[] }
-  | {
-      readonly kind: "problems";
-      readonly reviewed: readonly string[];
-      readonly setAside: readonly string[];
-      readonly released: readonly ReleasedRejection[];
-      readonly problems: readonly SuiteReviewProblem[];
-    };
+  | (ReviewedOutcome & { readonly kind: "clean" })
+  | (ReviewedOutcome & { readonly kind: "problems"; readonly problems: readonly SuiteReviewProblem[] });
 
 /** The review task, as the dispatch describes it. */
 interface ReviewTask {
@@ -217,10 +274,14 @@ class SuiteJudgementsUnrecorded extends Error {
 
 const NonEmpty = z.string().trim().min(1);
 
+/** One side of a contradiction: a check, and the text of its command or its check task's files that shows what it requires. */
+const ConflictSideSchema = z.strictObject({ checkTask: NonEmpty, check: NonEmpty, requires: NonEmpty });
+
 /**
- * A rejection is acted on only with what makes its claim checkable: an outside-vision finding names
+ * A finding is acted on only with what makes its claim checkable: an outside-vision finding names
  * the one check task and the one check it judged, the cited items it judged the check against and,
- * quoted, the clause it says none of them states; a finding without them is not a verdict.
+ * quoted, the clause it says none of them states; a contradiction names its two checks, each with
+ * what it requires quoted from the stored checks; a finding without them is not a verdict.
  */
 const ReviewResponseSchema = z.strictObject({
   problems: z.array(
@@ -228,6 +289,7 @@ const ReviewResponseSchema = z.strictObject({
       z.strictObject({
         kind: z.literal("contradiction"),
         checkTasks: z.array(NonEmpty).min(1),
+        conflict: z.tuple([ConflictSideSchema, ConflictSideSchema]),
         problem: NonEmpty,
         evidence: NonEmpty,
       }),
@@ -267,6 +329,8 @@ interface ReviewedSuite {
   readonly taskTitle: string;
   readonly cited: readonly CitedItem[];
   readonly checks: TaskChecks;
+  /** How many reviews have reopened its check task so far. */
+  readonly reviewReopens: number;
 }
 
 /** A check file longer than this is cut in the prompt, and the cut is stated. */
@@ -346,8 +410,11 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     ``,
     `# What to return`,
     `Name every problem of these three kinds, and nothing else:`,
-    `- "contradiction": checks, of one check task or of several, that no single product could all pass (one requires`,
-    `  an output, a format, a file or an exit status that another forbids). Name every check task whose checks are involved.`,
+    `- "contradiction": two checks, of one check task or of two, that no single product could both pass (one requires`,
+    `  an output, a format, a file or an exit status that the other forbids). Name every check task whose checks are`,
+    `  involved, and give "conflict": the two checks, each as its check task id, its name exactly as written above, and`,
+    `  "requires", the text of its command or of one of its check task's files, copied exactly, that shows what it`,
+    `  requires. Two checks that one product can pass together are no contradiction, however they are written.`,
     `- "outside-vision": a check that requires behaviour none of the vision items its own task cites asks for. Judge`,
     `  each check only against its own task's cited items, whatever their status or recorded kind: an Inferred`,
     `  assumption the task cites is asked for. An input a cited item says the product must reject is asked for. Using a`,
@@ -367,7 +434,8 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `differently. When there is no problem, return {"problems": []}.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
-    `Use exactly this format: {"problems": [{"kind": "contradiction", "checkTasks": ["<check task id>", "<check task id>"], "problem": "...", "evidence": "..."}, ` +
+    `Use exactly this format: {"problems": [{"kind": "contradiction", "checkTasks": ["<check task id>", "<check task id>"], ` +
+      `"conflict": [{"checkTask": "<check task id>", "check": "<check name>", "requires": "<copied text>"}, {"checkTask": "<check task id>", "check": "<check name>", "requires": "<copied text>"}], "problem": "...", "evidence": "..."}, ` +
       `{"kind": "outside-vision", "checkTasks": ["<check task id>"], "check": "<check name>", "judgedItems": ["<cited item id>"], "missingClause": "...", "problem": "...", "evidence": "..."}, ` +
       `{"kind": "undecided-item", "checkTasks": ["<check task id>"], "item": "<cited item id>", "problem": "...", "evidence": "..."}]}`,
   ].join("\n");
@@ -378,7 +446,8 @@ function reviewReask(ctx: { readonly errors: readonly string[] }): string {
     `\n\nYour previous response was REJECTED for these reasons:\n` +
     ctx.errors.map((e) => `- ${e}`).join("\n") +
     `\nRe-send corrected JSON only. In "checkTasks" use ONLY the check task ids written above, in "check" ONLY a ` +
-    `check of that check task, in "judgedItems" ONLY the ids of the items that check task cites. No markdown, no prose.`
+    `check of that check task, in "judgedItems" ONLY the ids of the items that check task cites, in "requires" ONLY ` +
+    `text copied exactly from that check's command or its check task's files. No markdown, no prose.`
   );
 }
 
@@ -398,7 +467,10 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
   const unreadError = (i: number, id: string): string =>
     `problem ${i + 1} names check task ${JSON.stringify(id)}, which is none of [${[...suites.keys()].join(", ")}]`;
   return response.problems.flatMap((problem, i) => {
-    if (problem.kind === "contradiction") return problem.checkTasks.filter((id) => !suites.has(id)).map((id) => unreadError(i, id));
+    if (problem.kind === "contradiction") {
+      const unread = problem.checkTasks.filter((id) => !suites.has(id)).map((id) => unreadError(i, id));
+      return unread.length > 0 ? unread : conflictErrors(problem, i, suites);
+    }
     const checkTaskId = problem.checkTasks[0];
     const suite = checkTaskId === undefined ? undefined : suites.get(checkTaskId);
     if (checkTaskId === undefined || suite === undefined) return [unreadError(i, checkTaskId ?? "(none)")];
@@ -430,6 +502,47 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
   });
 }
 
+/** Text as a quote is matched against a stored check: every run of whitespace one space. */
+function spaced(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Z0's part of a contradiction's witness: its two sides are two different checks, each written by a
+ * check task the finding names, each with what it requires copied from its own command or its check
+ * task's files; and the finding names no check task neither side is of.
+ */
+function conflictErrors(problem: ContradictionFinding, i: number, suites: ReadonlyMap<string, ReviewedSuite>): string[] {
+  const [a, b] = problem.conflict;
+  const errors: string[] = [];
+  if (a.checkTask === b.checkTask && a.check === b.check) errors.push(`problem ${i + 1} gives one check, ${JSON.stringify(a.check)} of ${a.checkTask}, as both sides of its conflict`);
+  const sideTasks = new Set([a.checkTask, b.checkTask]);
+  for (const id of problem.checkTasks.filter((named) => !sideTasks.has(named))) {
+    errors.push(`problem ${i + 1} names check task ${JSON.stringify(id)}, which neither side of its conflict is of`);
+  }
+  for (const [n, side] of [a, b].entries()) {
+    const suite = suites.get(side.checkTask);
+    if (suite === undefined || !problem.checkTasks.includes(side.checkTask)) {
+      errors.push(`side ${n + 1} of problem ${i + 1} is of check task ${JSON.stringify(side.checkTask)}, which is not one the problem names among those read`);
+      continue;
+    }
+    const check = suite.checks.checks.find((each) => each.name === side.check);
+    if (check === undefined) {
+      errors.push(`side ${n + 1} of problem ${i + 1} is check ${JSON.stringify(side.check)}, which check task ${side.checkTask} did not write (it wrote [${suite.checks.checks.map((each) => each.name).join(", ")}])`);
+      continue;
+    }
+    const quote = spaced(side.requires);
+    const texts = [check.command, ...suite.checks.files.map((file) => file.content)].map(spaced);
+    if (quote === "" || !texts.some((text) => text.includes(quote))) {
+      errors.push(
+        `side ${n + 1} of problem ${i + 1} quotes ${JSON.stringify(side.requires)} as what check ${JSON.stringify(side.check)} requires, but neither its command nor ` +
+          `any file of check task ${side.checkTask} holds that text: copy it exactly`,
+      );
+    }
+  }
+  return errors;
+}
+
 function verdictValidation(response: ReviewResponse, suites: ReadonlyMap<string, ReviewedSuite>): StructuredValidation {
   const errors = verdictErrors(response, suites);
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
@@ -437,15 +550,21 @@ function verdictValidation(response: ReviewResponse, suites: ReadonlyMap<string,
 
 type ReviewFinding = ReviewResponse["problems"][number];
 type OutsideVisionFinding = Extract<ReviewFinding, { readonly kind: "outside-vision" }>;
+type ContradictionFinding = Extract<ReviewFinding, { readonly kind: "contradiction" }>;
+type UndecidedItemFinding = Extract<ReviewFinding, { readonly kind: "undecided-item" }>;
 
 function isOutsideVision(finding: ReviewFinding): finding is OutsideVisionFinding {
   return finding.kind === "outside-vision";
 }
 
+function sideLine(side: ContradictionFinding["conflict"][number]): string {
+  return `check ${JSON.stringify(side.check)} of ${side.checkTask} requires ${JSON.stringify(side.requires)}`;
+}
+
 function findingLine(finding: ReviewFinding): string {
   switch (finding.kind) {
     case "contradiction":
-      return `contradiction in ${finding.checkTasks.join(", ")}: ${finding.problem}`;
+      return `contradiction in ${finding.checkTasks.join(", ")} (${finding.conflict.map(sideLine).join("; ")}): ${finding.problem}`;
     case "undecided-item":
       return `cited item ${finding.item} is decided by no check: ${finding.problem}`;
     case "outside-vision":
@@ -453,14 +572,50 @@ function findingLine(finding: ReviewFinding): string {
   }
 }
 
-/** A contradiction or undecided-item finding's problem as the reopened check author reads it. */
-function routedProblem(finding: Exclude<ReviewFinding, OutsideVisionFinding>): string {
+/** The two checks of a contradiction, in either order: two findings on the same pair are the same contradiction. */
+function conflictKey(finding: ContradictionFinding): string {
+  return JSON.stringify(finding.conflict.map((side) => [side.checkTask, side.check]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+}
+
+/** The check tasks a finding names, once each. */
+function namedBy(finding: ReviewFinding): string[] {
+  return finding.kind === "contradiction" ? [...new Set(finding.conflict.map((side) => side.checkTask))] : [...new Set(finding.checkTasks)];
+}
+
+/** The second review's finding that reaches the same one: the same check rejected, the same two checks in conflict, the same item undecided. */
+function agreeingWith(finding: ReviewFinding, second: readonly ReviewFinding[]): ReviewFinding | undefined {
   switch (finding.kind) {
+    case "outside-vision":
+      return second.find((other) => other.kind === "outside-vision" && other.checkTasks[0] === finding.checkTasks[0] && other.check === finding.check);
     case "contradiction":
-      return finding.problem;
+      return second.find((other) => other.kind === "contradiction" && conflictKey(other) === conflictKey(finding));
     case "undecided-item":
-      return `Cited item ${finding.item} is decided by none of the checks: ${finding.problem}`;
+      return second.find((other) => other.kind === "undecided-item" && other.checkTasks[0] === finding.checkTasks[0] && other.item === finding.item);
   }
+}
+
+/** A contradiction both families reached, as Delivery routes it: what each of its checks requires, quoted, and who agreed. */
+function agreedContradiction(first: ContradictionFinding, review: SecondReview): SuiteReviewProblem {
+  return {
+    checkTaskIds: namedBy(first),
+    kind: "contradiction",
+    problem:
+      `${first.problem} Two reviews by different model families, ${modelName(review.first)} and ${modelName(review.second)}, ` +
+      `each found that no product can pass both: ${first.conflict.map(sideLine).join("; ")}.`,
+    evidence: first.evidence,
+  };
+}
+
+/** An undecided item both families reached, as the reopened check author reads it. */
+function agreedUndecided(first: UndecidedItemFinding, review: SecondReview): SuiteReviewProblem {
+  return {
+    checkTaskIds: namedBy(first),
+    kind: "undecided-item",
+    problem:
+      `Cited item ${first.item} is decided by none of the checks: ${first.problem} Two reviews by different model families, ` +
+      `${modelName(review.first)} and ${modelName(review.second)}, each found it so.`,
+    evidence: first.evidence,
+  };
 }
 
 /**
@@ -483,6 +638,46 @@ function judgedRejection(first: OutsideVisionFinding, second: OutsideVisionFindi
   };
 }
 
+/**
+ * The output bound of one review: a full answer can name a finding for every check it reads, each
+ * with quoted evidence, so the bound grows with the checks under review and never falls below what
+ * a plan of a few suites needs.
+ */
+const REVIEW_OUTPUT_FLOOR = 8192;
+const REVIEW_OUTPUT_PER_CHECK = 600;
+const REVIEW_OUTPUT_CEILING = 32768;
+
+function reviewOutputBound(suites: readonly ReviewedSuite[]): number {
+  const checks = suites.reduce((sum, suite) => sum + suite.checks.checks.length, 0);
+  return Math.min(REVIEW_OUTPUT_CEILING, Math.max(REVIEW_OUTPUT_FLOOR, checks * REVIEW_OUTPUT_PER_CHECK));
+}
+
+/** A finding's own suite, or the first side's for a contradiction; a validated finding always has one. */
+function suiteOf(reviewTaskId: WorkItemId, finding: ReviewFinding, suites: ReadonlyMap<string, ReviewedSuite>): ReviewedSuite {
+  const [checkTaskId] = namedBy(finding);
+  const suite = checkTaskId === undefined ? undefined : suites.get(checkTaskId);
+  if (suite === undefined) throw new SuiteVerdictUnfit(reviewTaskId, `a validated finding names check task ${JSON.stringify(finding.checkTasks)}, which is not one it read`);
+  return suite;
+}
+
+/** The cited item an undecided-item finding names, as its check task cites it; a validated finding always names one it cites. */
+function undecidedItemOf(reviewTaskId: WorkItemId, finding: UndecidedItemFinding, suite: ReviewedSuite): UndecidedItem {
+  const item = suite.cited.find((each) => each.id === finding.item);
+  if (item === undefined) throw new SuiteVerdictUnfit(reviewTaskId, `a validated undecided item ${JSON.stringify(finding.item)} is not one check task ${suite.checkTaskId} cites`);
+  return { checkTaskId: suite.checkTaskId, itemId: item.id, itemText: item.text };
+}
+
+/**
+ * Why a finding cannot act whatever a second review says, or null when the second review decides:
+ * nothing acts on a frozen check set, and an undecided item does not reopen a check task this review
+ * already reopened once (ADR-084 decision 3).
+ */
+function ratchetOf(finding: ReviewFinding, frozen: boolean, suite: ReviewedSuite): Extract<JudgementBasis, "frozen" | "reopened-once"> | null {
+  if (frozen) return "frozen";
+  if (finding.kind === "undecided-item" && suite.reviewReopens > 0) return "reopened-once";
+  return null;
+}
+
 interface SuiteReviewerDeps {
   readonly llm: ContextualLlm;
   readonly source: SuiteReviewSource;
@@ -501,72 +696,87 @@ export class SuiteReviewer implements SuiteReviewing {
     }
     const { suites, setAside } = await this.readSuites(task.id);
     const interfaces = await this.readInterfaces(task.id, targetProjectPath, suites);
+    const frozen = await this.deps.source.frozen(task.id);
     const bySuite = new Map(suites.map((suite) => [suite.checkTaskId, suite]));
     const provider = withStructuredLadder(
       this.deps.llm.forCall({ projectId: task.projectId, taskId: task.id, callSite: "suite-review" }),
       { site: "suite-review", attempts: 2, onAttempt: this.deps.onAttempt, reask: reviewReask },
     );
     const prompt = reviewPrompt(itemLines(task.taskSpec?.sources, vision), interfaces, suites);
+    const maxTokens = reviewOutputBound(suites);
     const ask = (otherThan?: ReviewModel) =>
       provider.generateStructured({
         capability: "Strong",
         prompt,
         schema: ReviewResponseSchema,
         validate: (value) => verdictValidation(value, bySuite),
-        maxTokens: 4096,
+        maxTokens,
         otherThan,
       });
-    const reviewedIds = [...bySuite.keys()];
+    const reviewed = { reviewed: [...bySuite.keys()], setAside };
     const first = await this.verdict(task.id, () => ask(), bySuite);
-    const rejections = first.data.problems.filter(isOutsideVision);
-    // A contradiction or an undecided item reopens its check tasks for more or other checks, never
-    // fewer: it is acted on as the first review states it.
-    const routed: SuiteReviewProblem[] = first.data.problems.flatMap((finding) =>
-      isOutsideVision(finding)
-        ? []
-        : [
-            {
-              checkTaskIds: [...new Set(finding.checkTasks)],
-              kind: finding.kind,
-              problem: routedProblem(finding),
-              evidence: finding.evidence,
-            },
-          ],
-    );
-    if (rejections.length === 0) {
-      if (routed.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside, released: [] };
-      return { kind: "problems", reviewed: reviewedIds, setAside, released: [], problems: routed };
-    }
+    if (first.data.problems.length === 0) return { kind: "clean", ...reviewed, released: [], advisory: [], undecided: [] };
+    const findings = first.data.problems.map((finding) => {
+      const suite = suiteOf(task.id, finding, bySuite);
+      return { finding, suite, ratchet: ratchetOf(finding, frozen, suite) };
+    });
     // The second review sees exactly the first's inputs and none of its verdict, asked of another
-    // model when the catalog has one; it is asked only when there is a rejection Z0 could not disprove.
-    const answered = await this.verdict(task.id, () => ask(first.model), bySuite);
-    const second = answered.data.problems;
-    const review = secondReviewOf(first.model, answered.model);
+    // model when the catalog has one; it is asked only when some finding's outcome turns on it.
+    const answered = findings.some(({ ratchet }) => ratchet === null) ? await this.verdict(task.id, () => ask(first.model), bySuite) : null;
+    const review = answered === null ? null : secondReviewOf(first.model, answered.model);
+    const second = answered === null ? [] : answered.data.problems;
+
+    const routed: SuiteReviewProblem[] = [];
     const released: ReleasedRejection[] = [];
+    const advisory: AdvisoryFinding[] = [];
     const judgements: ReviewJudgement[] = [];
-    for (const finding of rejections) {
-      const [checkTaskId] = finding.checkTasks;
-      const suite = checkTaskId === undefined ? undefined : bySuite.get(checkTaskId);
-      if (checkTaskId === undefined || suite === undefined) {
-        throw new SuiteVerdictUnfit(task.id, `a validated rejection names check task ${JSON.stringify(finding.checkTasks)}, which is not one it read`);
-      }
-      const onTask = second.filter((other) => other.checkTasks.includes(checkTaskId));
-      const agreeing = second.find((other): other is OutsideVisionFinding => isOutsideVision(other) && other.checkTasks[0] === checkTaskId && other.check === finding.check);
-      judgements.push({ checkTaskId, check: finding.check, outcome: agreeing === undefined ? "released" : "routed", first: finding, second: onTask, secondReview: review });
-      if (agreeing !== undefined) {
-        routed.push(judgedRejection(finding, agreeing, suite, review));
+    for (const { finding, suite, ratchet } of findings) {
+      const named = namedBy(finding);
+      const onTasks = second.filter((other) => namedBy(other).some((id) => named.includes(id)));
+      const base = { checkTaskId: suite.checkTaskId, first: finding, firstModel: first.model, second: onTasks, secondReview: review };
+      const keep = (basis: Exclude<JudgementBasis, "two-reviews" | "other-family-agreed">): void => {
+        const undecided = finding.kind === "undecided-item" ? undecidedItemOf(task.id, finding, suite) : null;
+        judgements.push({ ...base, check: isOutsideVision(finding) ? finding.check : null, outcome: "advisory", basis, undecided });
+        advisory.push({ checkTaskIds: named, kind: finding.kind, finding: findingLine(finding), why: BASIS_TEXT[basis] });
+      };
+      if (ratchet !== null) {
+        keep(ratchet);
         continue;
       }
-      released.push({ checkTaskId, check: finding.check, first: findingLine(finding), second: onTask.map(findingLine), secondReview: secondReviewText(review) });
+      if (review === null) throw new SuiteVerdictUnfit(task.id, "a finding whose outcome turns on a second review has none");
+      const agreeing = agreeingWith(finding, second);
+      if (isOutsideVision(finding)) {
+        const judgement: Omit<ReviewJudgement, "outcome"> = { ...base, check: finding.check, basis: "two-reviews", undecided: null };
+        if (agreeing !== undefined && isOutsideVision(agreeing)) {
+          judgements.push({ ...judgement, outcome: "routed" });
+          routed.push(judgedRejection(finding, agreeing, suite, review));
+        } else {
+          judgements.push({ ...judgement, outcome: "released" });
+          released.push({ checkTaskId: suite.checkTaskId, check: finding.check, first: findingLine(finding), second: onTasks.map(findingLine), secondReview: secondReviewText(review) });
+        }
+        continue;
+      }
+      // No witness can settle these: only another model family's agreement acts on them.
+      if (review.first.provider === review.second.provider) {
+        keep("no-other-family");
+        continue;
+      }
+      if (agreeing === undefined) {
+        keep("other-family-disagreed");
+        continue;
+      }
+      judgements.push({ ...base, check: null, outcome: "routed", basis: "other-family-agreed", undecided: null });
+      routed.push(finding.kind === "contradiction" ? agreedContradiction(finding, review) : agreedUndecided(finding, review));
     }
-    // Recorded before anything is released or routed on them: a judgement that cannot be kept is not acted on.
+    // Recorded before anything is released, routed or kept on them: a judgement that cannot be kept is not acted on.
     try {
       await this.deps.judgements.record({ projectId: task.projectId, reviewTaskId: task.id, judgements });
     } catch (err) {
       throw new SuiteJudgementsUnrecorded(task.id, judgements.length, { cause: err });
     }
-    if (routed.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside, released };
-    return { kind: "problems", reviewed: reviewedIds, setAside, released, problems: routed };
+    const undecided = judgements.flatMap((judgement) => (judgement.undecided === null ? [] : [judgement.undecided]));
+    if (routed.length === 0) return { kind: "clean", ...reviewed, released, advisory, undecided };
+    return { kind: "problems", ...reviewed, released, advisory, undecided, problems: routed };
   }
 
   /** One review's verdict, validated by the ladder and again here: a model that ignored validate is caught, never acted on. */
@@ -613,6 +823,7 @@ export class SuiteReviewer implements SuiteReviewing {
         taskTitle: checkTask.checkedTitle,
         cited: citedItems(checkTask.sources, checkTask.visionItems),
         checks,
+        reviewReopens: checkTask.reviewReopens,
       });
     }
     if (suites.length === 0) throw new SuitesUnreadable(reviewTaskId, "none of its check tasks finished a suite to review");

@@ -342,7 +342,7 @@ function rewriteText(args: readonly unknown[], rewrite: (text: string) => string
 
 /**
  * A dispatch refund gives nothing back: the count written `dispatch_count - 1` (WorkItemRepository
- * refundDispatchCount, the startup reconciler's and every routing's refund) stays as it was, so a
+ * saveRefunded, the startup reconciler's and every routing's refund) stays as it was, so a
  * dispatch stopped by a fault beneath it stays charged (I10).
  */
 export const skipDispatchRefund: QueryPlant = (args) => rewriteText(args, (text) => text.replace(/((?:"work_items"\.)?"dispatch_count") - 1/, "$1 - 0"));

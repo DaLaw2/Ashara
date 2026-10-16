@@ -244,12 +244,15 @@ function reopenableCheckTask(
 }
 
 /**
- * How many times the review of a plan revision's suites may name one check task and have it
- * reopened (ADR-074 addendum 2 d71 c), as disputes are bounded (d65 c). A review that names it once
- * more gives the review up and its plan is repaired: the check author has not settled the problem
- * that often.
+ * How many times the review of a plan revision's suites may reopen one check task (ADR-074
+ * addendum 2 d71 c; ADR-084 decision 3): once after the first review that acts on it. The count is
+ * the review's durable record of the check tasks it named (suite_review_findings), never the review's
+ * dispatch count, which a reopen refunds. Each check task is reopened at most once, so a revision's
+ * review rounds end after at most one per check task plus the first. A review that names one again
+ * with a problem that acts gives the review up and its plan is repaired; an undecided item on it does
+ * not act there and stays undecided (Quality's suite review).
  */
-const SUITE_REVIEW_BOUND = 2;
+const SUITE_REVIEW_BOUND = 1;
 
 /** One problem the review found: the check tasks whose checks it involves, what is wrong, and the evidence. */
 interface SuiteReviewProblem {
@@ -267,11 +270,6 @@ interface SuiteReviewFindings {
    * durable record, suite_review_findings). Every named check task has an entry.
    */
   readonly timesNamed: ReadonlyMap<string, number>;
-  /**
-   * Per check task the problems name: every problem earlier reviews found in its checks, oldest
-   * first (ADR-074 addendum 2 d89 F). Every named check task has an entry, empty on its first review.
-   */
-  readonly earlierFindings: ReadonlyMap<string, readonly Omit<SuiteReviewProblem, "checkTaskIds">[]>;
 }
 
 type SuiteReviewExit =
@@ -290,17 +288,6 @@ class SuiteReviewCountMissing extends Error {
   ) {
     super(`review task ${reviewTaskId}: the findings name check task ${checkTaskId}, but no count of reviews naming it was recorded`);
     this.name = "SuiteReviewCountMissing";
-  }
-}
-
-/** The review's record names a check task without its earlier findings: a rewrite would be briefed on less than was found. */
-class SuiteReviewHistoryMissing extends Error {
-  constructor(
-    readonly reviewTaskId: string,
-    readonly checkTaskId: string,
-  ) {
-    super(`review task ${reviewTaskId}: the findings name check task ${checkTaskId}, but no record of earlier reviews of it was read`);
-    this.name = "SuiteReviewHistoryMissing";
   }
 }
 
@@ -341,15 +328,11 @@ const PROBLEM_KINDS: Readonly<Record<SuiteReviewProblem["kind"], { readonly labe
 };
 
 /**
- * The review's problems as the check author reads them in its reopened task's brief, and every
- * problem earlier reviews found in this task's checks (ADR-074 addendum 2 d89 F): a rewrite shown
- * only the latest review can bring back a check an earlier review had it drop.
+ * The review's problems as the check author reads them in its reopened task's brief. A check task
+ * is reopened by a review only once (SUITE_REVIEW_BOUND), so no earlier review's findings on it are
+ * ever left to brief.
  */
-function reviewBrief(
-  checkTaskId: string,
-  problems: readonly SuiteReviewProblem[],
-  earlier: readonly Omit<SuiteReviewProblem, "checkTaskIds">[],
-): string {
+function reviewBrief(checkTaskId: string, problems: readonly SuiteReviewProblem[]): string {
   const own = problems.filter((problem) => problem.checkTaskIds.includes(checkTaskId));
   const fixes = [...new Set(own.map((problem) => problem.kind))].map((kind) => PROBLEM_KINDS[kind].fix);
   return [
@@ -366,13 +349,6 @@ function reviewBrief(
         .filter((line) => line !== "")
         .join("\n");
     }),
-    ...(earlier.length === 0
-      ? []
-      : [
-          `Earlier reviews found these problems in this task's checks too. Your new checks must not bring any of them ` +
-            `back:\n` +
-            earlier.map((problem, i) => `Earlier problem ${i + 1} (${PROBLEM_KINDS[problem.kind].label}): ${problem.problem}\nEvidence: ${problem.evidence}`).join("\n"),
-        ]),
   ].join("\n\n");
 }
 
@@ -399,7 +375,6 @@ export function exitSuiteReview(
   for (const checkTaskId of named) {
     const times = findings.timesNamed.get(checkTaskId);
     if (times === undefined) throw new SuiteReviewCountMissing(review.id, checkTaskId);
-    if (!findings.earlierFindings.has(checkTaskId)) throw new SuiteReviewHistoryMissing(review.id, checkTaskId);
     if (times > SUITE_REVIEW_BOUND) {
       giveUpWorkItem(review, {
         source: "suite_review_unresolved",
@@ -430,12 +405,10 @@ export function exitSuiteReview(
   }
   for (const { item, checkedTaskId } of reopenable) {
     const times = findings.timesNamed.get(item.id);
-    const earlier = findings.earlierFindings.get(item.id);
-    if (earlier === undefined) throw new SuiteReviewHistoryMissing(review.id, item.id);
     reopenCheckTask(
       item,
       checkedTaskId,
-      reviewBrief(item.id, findings.problems, earlier),
+      reviewBrief(item.id, findings.problems),
       { reviewTaskId: review.id, reviewed: times },
       { review_task_id: review.id, review: times },
     );

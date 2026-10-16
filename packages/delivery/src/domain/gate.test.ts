@@ -29,7 +29,7 @@ function repoOf(items: WorkItem[], edges: Array<{ fromId: WorkItemId; toId: Work
     projectIdsWithStatus: async () => [],
     listIdsByStatus: async () => [],
     incrementDispatchCount: async () => 1,
-    refundDispatchCount: async () => 0,
+    saveRefunded: async () => 0,
     recordInfrastructureFault: async () => 1,
     recordMergeCommit: async () => {},
     addDependency: async () => {},

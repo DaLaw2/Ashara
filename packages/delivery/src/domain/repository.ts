@@ -48,12 +48,14 @@ export interface WorkItemRepository {
    */
   incrementDispatchCount(id: WorkItemId): Promise<number>;
   /**
-   * Gives back the dispatch the seam counted when the attempt was refused a model
-   * call before doing any work the retry bound should charge (a spend-cap refusal).
-   * A single `dispatch_count = dispatch_count - 1` UPDATE guarded on a positive
-   * count; returns the new value and throws when no counted dispatch is there to refund.
+   * Persists a transition out of a dispatch (as `save`) and gives back the dispatch the seam counted,
+   * in one transaction: the attempt was stopped before any work the retry bound should charge (a
+   * refusal, a fault beneath it, a routing that sends it back to wait). Returns the count after
+   * the refund. Throws, writing neither, when the save fails or no counted dispatch is there to
+   * refund: a refund is never separable from the routing it belongs to, so no routing commits with
+   * its attempt left charged.
    */
-  refundDispatchCount(id: WorkItemId): Promise<number>;
+  saveRefunded(item: WorkItem, expectedPreviousStatus: WorkItemStatus): Promise<number>;
   /**
    * Counts one infrastructure fault on the item's dispatches (migration 048) in a single UPDATE and
    * returns the count after it: the durable bound of its uncharged requeues. Throws when the item

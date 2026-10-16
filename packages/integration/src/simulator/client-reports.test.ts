@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { checkReports, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 
-const noRecords: ReportRecords = { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], passedSweeps: [] };
+const noRecords: ReportRecords = { reports: [], episodes: [], burnWarnings: [], repairs: [], sweeps: [], revisionReports: [], reviewSpec: null, goalChecks: [], goalUndecided: [], passedSweeps: [] };
 
 function haltWith(kind: string, errorClass: string | null, reason: string | null, body: string): ReportRecords {
   return {
@@ -213,6 +213,17 @@ describe("checkReports, a delivered report", () => {
       expect(keysOf(delivered(merged, noDesign, `${head}${unverified(["- A2: State lives in memory."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
     });
 
+    // ADR-084 decision 2: an item a review left undecided is named as not verified, never covered.
+    const undecidedHead = (lines: readonly string[]): string =>
+      `\n\nThese items of what you asked for have a stored check that passed on main and is recorded as deciding them, but a review of the checks found that none of them really decides it, and no second review by another model family confirmed or settled that: they are not verified by Ashara.\n${lines.join("\n")}`;
+    it("holds an item a review left undecided to being named as not verified, never counted covered", () => {
+      const left = { ...traced, goalUndecided: [{ id: "S1", text: "The product greets." }] };
+      const uncovered = section(["- Ashara's assumption, which Ashara has no record of showing you: Messages are in English."]);
+      expect(keysOf(delivered(merged, left, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual([]);
+      expect(keysOf(delivered(merged, left, uncovered), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+      expect(keysOf(delivered(merged, traced, `${uncovered}${undecidedHead(["- The product greets."])}`), "accepted", [mergedGoal])).toEqual(["delivered-coverage"]);
+    });
+
     it("holds a report to saying coverage is not on record when a swept check records no items it decides", () => {
       const [check] = traced.goalChecks;
       if (check === undefined) throw new Error("the fixture holds one stored check");
@@ -247,6 +258,8 @@ describe("uncheckedAtPassedSweeps", () => {
     inferences,
     scopeBoundaries,
     storedChecks: decided.length === 0 ? [] : [{ checkTaskId: "c1", taskSpec: spec(cited), name: "greets", decides: decided.map((cite) => cite.id) }],
+    reportBody: null,
+    undecided: [],
   });
   const keysOf = (...sweeps: ReportRecords["passedSweeps"]) => uncheckedAtPassedSweeps({ passedSweeps: sweeps }).map((found) => found.key);
 
@@ -277,6 +290,15 @@ describe("uncheckedAtPassedSweeps", () => {
     const reworded = { ...visible, statement: "Messages are in French." };
     expect(keysOf(sweep([visible], [S1, A1]), { ...sweep([reworded], [S1, A1]), id: "sweep-2" })).toEqual(["A1"]);
     expect(keysOf(sweep([visible], [S1]), { ...sweep([visible], [S1]), id: "sweep-2" })).toEqual(["A1"]);
+  });
+
+  // ADR-084 decision 2: an item a suite review left undecided reaches I6 as unverified, never covered.
+  it("names an item a review left undecided that the sweep's delivered report does not name as unverified, or calls covered", () => {
+    const left = (reportBody: string) => ({ ...sweep([visible], [S1, A1]), reportBody, undecided: [{ id: "S1", text: greets.text }] });
+    const named = `These items of what you asked for have a stored check that passed on main and is recorded as deciding them, but nothing settled it.\n- ${greets.text}`;
+    expect(keysOf(left(`Delivered.\n\n${named}\n\nNothing more.`))).toEqual([]);
+    expect(keysOf(left("Delivered.\n\nEvery item of what you asked for is decided by a stored check."))).toEqual(["undecided-unreported:S1", "undecided-covered"]);
+    expect(keysOf({ ...left("Delivered."), reportBody: null })).toEqual([]);
   });
 
   it("fails closed when the vision or the trace cannot be read", () => {

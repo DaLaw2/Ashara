@@ -217,8 +217,8 @@ async function executeTask(
   if (execResult.status === "suite_review_problems") {
     // Not the review's failure and no lesson (ADR-074 addendum 2 d71 c): the checks are their
     // authors' to fix, so each named check task is reopened with the findings and the review waits
-    // on them to read the new suites, within a bound per check task; past it the review is given up
-    // and its plan repaired.
+    // on them to read the new suites, each check task reopened at most once; past that the review
+    // is given up and its plan repaired.
     await routeAsSuiteReview(deps, task, execResult);
     return {
       result: blockedResult(task.id, execResult.detail),
@@ -246,8 +246,7 @@ async function executeTask(
     // rebuilds main's environment while every environment task is done, so the task is given up
     // and its plan repaired, which can plan a new environment (W6: no item waits on a person). No
     // agent ran, so the dispatch is given back: the count is attempts at the task's work.
-    await refundBestEffort(deps, task.id, "an undefined environment");
-    await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail });
+    await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: execResult.detail }, "refund");
     return {
       result: blockedResult(task.id, execResult.detail),
       outcome: execResult.outcome,
@@ -261,13 +260,12 @@ async function executeTask(
     // and no production path appends a roster revision after the first, so the task is given up,
     // never Failed, and its plan repaired: the repair staffs its new tasks from the latest roster.
     // No agent ran, so the dispatch is given back.
-    await refundBestEffort(deps, task.id, "an unresolved owner");
-    await routeAsGivenUp(deps, task.id, {
-      source: "owner_unresolved",
-      ownerRoleId: execResult.ownerRoleId,
-      rosterRevision: execResult.rosterRevision,
-      reason: execResult.reason,
-    });
+    await routeAsGivenUp(
+      deps,
+      task.id,
+      { source: "owner_unresolved", ownerRoleId: execResult.ownerRoleId, rosterRevision: execResult.rosterRevision, reason: execResult.reason },
+      "refund",
+    );
     return {
       result: blockedResult(task.id, execResult.detail),
       outcome: execResult.outcome,
@@ -298,8 +296,7 @@ async function executeTask(
       // The task's model requests are spent (the work ledger, ADR-084 decision 1): no grant raises a
       // task's budget, so a re-dispatch meets the same refusal. Given up, never requeued, and its
       // plan repaired; the dispatch is given back, since its attempt was not found wanting.
-      await refundBestEffort(deps, task.id, "its work budget spent");
-      await routeAsGivenUp(deps, task.id, workBudgetGiveUp(refusal));
+      await routeAsGivenUp(deps, task.id, workBudgetGiveUp(refusal), "refund");
       return {
         result: blockedResult(task.id, execResult.detail),
         outcome: execResult.outcome,
@@ -446,9 +443,8 @@ async function requeueAndRefund(deps: ExecutionRoutingDeps, taskId: WorkItem["id
     console.warn(`[${taskId}] requeue after ${why} rejected (${e.from} -> Pending); item left at ${e.from}`);
     return;
   }
-  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  const dispatchCount = await refundBestEffort(deps, taskId, why);
-  console.warn(`[${taskId}] back to Pending after ${why} (dispatch count ${dispatchCount})`);
+  const dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
+  console.warn(`[${taskId}] back to Pending after ${why}, its dispatch given back (dispatch count ${dispatchCount})`);
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), site);
 }
 
@@ -486,9 +482,11 @@ async function routeAsParked(
 
 /**
  * Gives the item up with the stated cause; its abandonment opens a plan repair (migration 048).
- * An item that is no longer open (moved during the dispatch) is left where it is.
+ * An item that is no longer open (moved during the dispatch) is left where it is. `refund` gives
+ * the dispatch back in the same write as the give-up, when the attempt did no work the retry bound
+ * should charge; `keep` leaves it counted.
  */
-async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: GiveUpCause): Promise<void> {
+async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], reason: GiveUpCause, dispatch: "refund" | "keep"): Promise<void> {
   const item = await PlanningService.findWorkItem(deps.workItemRepo, taskId);
   if (!item) {
     console.warn(`[${taskId}] work item vanished before it could be given up (${reason.reason})`);
@@ -502,8 +500,13 @@ async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkItem["id"]
     console.warn(`[${taskId}] ${reason.source} give-up rejected (${e.from} -> Abandoned); item left at ${e.from} (${reason.reason})`);
     return;
   }
-  await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
-  console.warn(`[${taskId}] given up (${reason.source}); its plan is repaired: ${reason.reason}`);
+  if (dispatch === "refund") {
+    const dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
+    console.warn(`[${taskId}] given up (${reason.source}), its dispatch given back (dispatch count ${dispatchCount}); its plan is repaired: ${reason.reason}`);
+  } else {
+    await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+    console.warn(`[${taskId}] given up (${reason.source}); its plan is repaired: ${reason.reason}`);
+  }
   await publishBestEffort(deps.eventStore, taskId, takeEvents(item), "execution.routeAsGivenUp");
 }
 
@@ -592,7 +595,7 @@ async function routeAsInfrastructureFault(
             `${INFRASTRUCTURE_FAULT_BUDGET + 1} and the substrate probe resumed it: ${fault.reason}`
           : `fault ${faults} on this task that was not its work (${fault.class}), after its project halted at fault ` +
             `${INFRASTRUCTURE_FAULT_BUDGET + 1} and was returned to work: ${fault.reason}`,
-    });
+    }, dispatch === "counted" ? "refund" : "keep");
     return;
   }
   const why = `infrastructure fault ${faults} of ${INFRASTRUCTURE_FAULT_BUDGET} (${fault.class}: ${fault.unavailable} unavailable)`;
@@ -718,19 +721,6 @@ async function requeueUncounted(deps: ExecutionRoutingDeps, taskId: WorkItem["id
 }
 
 /**
- * A refund that fails leaves the dispatch counted: the retry bound is then charged one attempt
- * too many, the conservative direction, so it is logged and the routing stands.
- */
-async function refundBestEffort(deps: ExecutionRoutingDeps, taskId: WorkItem["id"], why: string): Promise<number | string> {
-  try {
-    return await deps.workItemRepo.refundDispatchCount(taskId);
-  } catch (e) {
-    console.warn(`[${taskId}] the dispatch stopped by ${why} could not be refunded; it stays counted:`, e);
-    return "not refunded";
-  }
-}
-
-/**
  * The exit of an item whose stored checks went stale (planning's exitStaleChecks): its check task
  * reopened and the item back at Pending waiting on it, with the dispatch given back (no model
  * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item given up
@@ -764,14 +754,17 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
         source: "checks_stale",
         checkTaskId: stale.checkTaskId,
         reason: `${stale.detail}\nThe check task cannot be reopened: it moved to ${e.from} while it was being reopened`,
-      });
+      }, "keep");
       return;
     }
     await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsStaleChecks");
   }
 
+  // A rewrite sends the item back to wait with its dispatch given back (no model ran), in one write.
+  let dispatchCount: number | null = null;
   try {
-    await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+    if (exit.kind === "rewrite") dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
+    else await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     // An owner moved the item during the dispatch; a reopened check task stays reopened and the
@@ -783,7 +776,6 @@ async function routeAsStaleChecks(deps: ExecutionRoutingDeps, taskId: WorkItem["
 
   switch (exit.kind) {
     case "rewrite": {
-      const dispatchCount = await refundBestEffort(deps, taskId, "stale stored checks");
       console.warn(
         `[${taskId}] stored checks revision ${stale.revision} stale; check task ${stale.checkTaskId} reopened to write them ` +
           `again, item back at Pending waiting on it (dispatch count ${dispatchCount})`,
@@ -843,7 +835,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
         checkTaskId: dispute.checkTaskId,
         checkName: dispute.check.name,
         reason: `${dispute.reason}\nThe check task cannot be reopened: it moved to ${e.from} while it was being reopened`,
-      });
+      }, "keep");
       return;
     }
     await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsDisputed");
@@ -855,8 +847,11 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
     }
   }
 
+  // A rewrite sends the item back to wait with its dispatch given back, in one write.
+  let dispatchCount: number | null = null;
   try {
-    await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
+    if (exit.kind === "rewrite") dispatchCount = await deps.workItemRepo.saveRefunded(item, previousStatus);
+    else await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     console.warn(`[${task.id}] check-dispute exit (${exit.kind}) rejected (${e.from} -> ${item.status}); item left at ${e.from}`);
@@ -865,7 +860,6 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
   await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsDisputed");
 
   if (exit.kind === "rewrite") {
-    const dispatchCount = await refundBestEffort(deps, task.id, "a check dispute");
     const whose = dispute.checksOf === task.id ? "" : ` of merged task ${dispute.checksOf}`;
     console.warn(
       `[${task.id}] check ${JSON.stringify(dispute.check.name)}${whose} disputed (dispute ${disputes} of its check task); check task ` +
@@ -889,7 +883,7 @@ async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem, dispu
  * problems nobody answered.
  */
 async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, review: SuiteReviewProblemsResult): Promise<void> {
-  const { timesNamed, earlierFindings } = await deps.suiteReviewFindings.record({
+  const { timesNamed } = await deps.suiteReviewFindings.record({
     projectId: task.projectId,
     reviewTaskId: task.id,
     problems: review.problems,
@@ -905,7 +899,7 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
   const previousStatus = item.status;
   let exit: ReturnType<typeof exitSuiteReview>;
   try {
-    exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed, earlierFindings });
+    exit = exitSuiteReview(item, checkTasks, { problems: review.problems, timesNamed });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
     console.warn(`[${task.id}] suite-review exit rejected (${e.from} -> ${e.to}); review left at ${e.from} (${review.detail})`);
@@ -931,10 +925,11 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
       return;
     }
     case "reopened": {
+      let dispatchCount: number;
       try {
-        await deps.workItemRepo.withTransaction(async (tx) => {
+        dispatchCount = await deps.workItemRepo.withTransaction(async (tx) => {
           for (const checkTask of exit.checkTasks) await PlanningService.saveWorkItem(tx, checkTask, "Completed");
-          await PlanningService.saveWorkItem(tx, item, previousStatus);
+          return tx.saveRefunded(item, previousStatus);
         });
       } catch (e) {
         if (!(e instanceof InvalidStatusTransition)) throw e;
@@ -943,14 +938,13 @@ async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkItem, re
           source: "suite_review_unresolved",
           checkTaskIds: named,
           reason: `${review.detail}\nThe check tasks cannot be reopened: ${e.message}`,
-        });
+        }, "keep");
         return;
       }
       for (const checkTask of exit.checkTasks) {
         await publishBestEffort(deps.eventStore, checkTask.id, takeEvents(checkTask), "execution.routeAsSuiteReview");
       }
       await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsSuiteReview");
-      const dispatchCount = await refundBestEffort(deps, task.id, "a suite review with problems");
       console.warn(
         `[${task.id}] suite review found ${review.problems.length} problem(s); check task(s) ${named.join(", ")} reopened ` +
           `with them, review back at Pending waiting on them (dispatch count ${dispatchCount})`,
@@ -1017,11 +1011,12 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
   }
 
   const environment = exit.environment;
+  let dispatchCount: number;
   try {
-    await deps.workItemRepo.withTransaction(async (tx) => {
+    dispatchCount = await deps.workItemRepo.withTransaction(async (tx) => {
       await PlanningService.createWorkItem(tx, environment);
       await tx.addDependency(item.id, environment.id);
-      await PlanningService.saveWorkItem(tx, item, previousStatus);
+      return tx.saveRefunded(item, previousStatus);
     });
   } catch (e) {
     if (!(e instanceof InvalidStatusTransition)) throw e;
@@ -1031,7 +1026,6 @@ async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task: WorkIt
   }
   await publishBestEffort(deps.eventStore, environment.id, takeEvents(environment), "execution.routeAsEnvironmentChange");
   await publishBestEffort(deps.eventStore, task.id, takeEvents(item), "execution.routeAsEnvironmentChange");
-  const dispatchCount = await refundBestEffort(deps, task.id, "an environment change request");
   console.warn(
     `[${task.id}] needs a change to the environment recipe (${request.paths.join(", ")}); environment task ${environment.id} opened ` +
       `(${opened + 1} for this task), item back at Pending waiting on it (dispatch count ${dispatchCount})`,
@@ -1221,6 +1215,12 @@ export async function processTask(
     }
     targetProjectPath = workspace.path;
 
+    // The check set an implementation is about to be judged by freezes before it is dispatched
+    // (ADR-084 decision 3); a freeze that cannot be written stops the dispatch, uncounted.
+    for (const reviewTaskId of await deps.checkSetFreeze.freezeFor(task.id)) {
+      console.log(`[${task.id}] the check set of review task ${reviewTaskId} is frozen: this is the first task dispatched on it`);
+    }
+
     // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
     // is about to be handed to the agent. Bump the dispatch counter with a single
     // atomic UPDATE BEFORE executeTask, so the attempt is recorded even if the agent
@@ -1237,6 +1237,38 @@ export async function processTask(
     return { taskId: task.id, status: "interrupted", detail: fault.reason };
   }
 
+  try {
+    return await runCountedDispatch(deps, task, workItem, routingDeps, targetProjectPath, attempt);
+  } catch (e) {
+    throw new CountedDispatchThrew(task.id, e);
+  }
+}
+
+/**
+ * A throw out of a dispatch the seam counted. Its recovery (handleProcessingError) reads from it
+ * that an item still InProgress holds a counted dispatch to give back: every routing that ends a
+ * dispatch its work did not earn writes the refund with its transition (saveRefunded), so an item
+ * still InProgress after a counted dispatch has not been refunded.
+ */
+class CountedDispatchThrew extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly thrown: unknown,
+  ) {
+    super(`task ${taskId}: its counted dispatch threw: ${describeErrorChain(thrown)}`, { cause: thrown });
+    this.name = "CountedDispatchThrew";
+  }
+}
+
+/** The dispatch after the seam counted it: its run, then its routing. */
+async function runCountedDispatch(
+  deps: CoreLoopDeps,
+  task: WorkItem,
+  workItem: WorkItem,
+  routingDeps: ExecutionRoutingDeps,
+  targetProjectPath: string,
+  attempt: number,
+): Promise<TaskResult> {
   let executed: Awaited<ReturnType<typeof executeTask>>;
   try {
     executed = await executeTask(routingDeps, deps.dispatchService, task, targetProjectPath, attempt);
@@ -1245,8 +1277,7 @@ export async function processTask(
     if (refusal?.kind === "task_work") {
       // The task's spent work budget surfaced as a throw: given up as on a refused result, never
       // requeued, since every re-dispatch meets the same refusal.
-      await refundBestEffort(routingDeps, task.id, "its work budget spent");
-      await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal));
+      await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal), "refund");
       return blockedResult(task.id, refusal.reason);
     }
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
@@ -1424,8 +1455,9 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
  * Recovers from a THROWN orchestrator error during `processTask` (as opposed to a typed TaskResult,
  * which processTask routes itself, its own throws included): the throw is Ashara's own fault, never
  * the task's work, so no lesson is written for it (ADR-080 d3 c). An item left InProgress is
- * requeued uncharged as Ashara's fault (counted on its fault budget; the dispatch is not refunded,
- * since whether the seam counted it is unknown here: the conservative direction). An item the
+ * requeued uncharged as Ashara's fault (counted on its fault budget), its dispatch given back with
+ * the requeue when the throw came out of a dispatch the seam counted (CountedDispatchThrew): a
+ * routing whose write faulted wrote neither its transition nor its refund. An item the
  * agent's failure already committed to Failed is routed through the FailureRouter, so it neither
  * strands at Failed nor deadlocks its dependents. Fully fail-closed: if recovery itself throws, the
  * item is left for the STARTUP reconciler and the caller's cycle loop continues.
@@ -1433,9 +1465,11 @@ async function handleTaskError(deps: CoreLoopDeps, task: WorkItem, verdict: Fail
 export async function handleProcessingError(
   deps: CoreLoopDeps,
   task: WorkItem,
-  error: unknown,
+  thrown: unknown,
 ): Promise<TaskResult> {
-  console.warn(`[${task.id}] task processing failed with orchestrator error:`, error);
+  const dispatch = thrown instanceof CountedDispatchThrew ? "counted" : "not-counted";
+  const error = thrown instanceof CountedDispatchThrew ? thrown.thrown : thrown;
+  console.warn(`[${task.id}] task processing failed with orchestrator error (dispatch ${dispatch}):`, error);
   const fault = asharaFaultOf(error, "process the task");
 
   try {
@@ -1457,7 +1491,7 @@ export async function handleProcessingError(
             environmentOwner: deps.environmentOwner,
             workdirBase: deps.config.workdirBase,
           };
-          await routeAsInfrastructureFault(routingDeps, current, fault, "not-counted");
+          await routeAsInfrastructureFault(routingDeps, current, fault, dispatch);
           break;
         }
 

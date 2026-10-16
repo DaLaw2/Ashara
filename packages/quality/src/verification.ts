@@ -386,9 +386,18 @@ export class TaskVerification {
             )
             .join("\n");
     const releasedChecks = outcome.released.map((r) => `${r.checkTaskId}: ${r.check}`);
+    // A finding with neither a witness nor another family's agreement reopens nothing; it is kept
+    // as advisory, and an item it leaves undecided is reported unverified (ADR-084 decision 2).
+    const advisory =
+      (outcome.advisory.length === 0
+        ? ""
+        : `\nKept as advisory, acting on nothing:\n` + outcome.advisory.map((a) => `- [${a.kind}; ${a.checkTaskIds.join(", ")}] ${a.finding} (${a.why})`).join("\n")) +
+      (outcome.undecided.length === 0
+        ? ""
+        : `\nLeft undecided, to be reported unverified: ${outcome.undecided.map((u) => `${u.itemId} of ${u.checkTaskId}`).join(", ")}`);
     if (outcome.kind === "clean") {
-      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem${setAside}${released}`;
-      if (released !== "") console.warn(`[${task.id}] ${detail}`);
+      const detail = `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found no problem that acts${setAside}${released}${advisory}`;
+      if (released !== "" || advisory !== "") console.warn(`[${task.id}] ${detail}`);
       eventSink?.emit({ event: "suites_reviewed", taskId: task.id, attempt: task.attempt, reviewed: outcome.reviewed, setAside: outcome.setAside, released: releasedChecks });
       return {
         status: "completed",
@@ -404,7 +413,8 @@ export class TaskVerification {
       `the review read the suites of ${outcome.reviewed.length} check task(s) with the vision and found ` +
       `${outcome.problems.length} problem(s) in the checks of ${named.join(", ")}${setAside}:\n` +
       outcome.problems.map((p) => `- [${p.kind}; ${p.checkTaskIds.join(", ")}] ${p.problem}`).join("\n") +
-      released;
+      released +
+      advisory;
     console.warn(`[${task.id}] ${summary}`);
     eventSink?.emit({ event: "suite_review_problems", taskId: task.id, attempt: task.attempt, checkTasks: named, problems: outcome.problems.length, released: releasedChecks });
     return {

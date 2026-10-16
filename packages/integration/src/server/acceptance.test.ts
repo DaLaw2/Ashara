@@ -260,6 +260,8 @@ afterAll(async () => {
   const ours = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
   await db.execute(sql`DELETE FROM acceptance_sweeps WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM plan_repairs WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM undecided_items WHERE project_id IN (${ours})`);
+  await db.execute(sql`DELETE FROM suite_review_judgements WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${ours})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${ours})`);
@@ -316,6 +318,29 @@ describe("acceptance on main", () => {
     );
     expect(body).toContain("they are not verified by Ashara.\n- A2: The log file is kv.log\n\n");
     for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service"]) expect(body).not.toContain(absent);
+  });
+
+  // ADR-084 decision 2: an item a suite review left undecided on a delivered task's check task is
+  // read back as undecided and told as not verified, never as covered, though its stored check passed.
+  test("an item a suite review left undecided is read as undecided and reported as not verified", async () => {
+    const { projectId, goals, scaffold, checksOfStore } = await deliveredProject();
+    const finding = JSON.stringify({ checkTasks: [checksOfStore], kind: "undecided-item", item: "S1", problem: "no check reads a key back after a restart", evidence: "sh checks/run.sh" });
+    const judged = await db.execute(sql`
+      INSERT INTO suite_review_judgements (project_id, review_task_id, check_task_id, check_name, outcome, basis, first_finding, second_findings, first_model, second_model, second_review)
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, NULL, 'advisory', 'no-other-family', ${finding}::jsonb, '[]'::jsonb, 'p/m', 'p/m', 're-sample')
+      RETURNING id`);
+    const [judgement] = z.array(z.object({ id: z.string() })).parse(judged.rows);
+    await db.execute(sql`
+      INSERT INTO undecided_items (project_id, review_task_id, check_task_id, item_id, item_text, judgement_id)
+      VALUES (${projectId}, ${checksOfStore}, ${checksOfStore}, 'S1', ${VISION.stored.text}, ${judgement?.id})`);
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+
+    const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const items = due?.kind === "due" && due.vision.kind === "recorded" ? due.vision.items : [];
+    expect(items.filter((item) => item.undecided).map((item) => [item.source.id, item.checked])).toEqual([["S1", true]]);
+    expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
+    const [body = ""] = await reportsOf(projectId);
+    expect(body).toContain("no second review by another model family confirmed or settled that: they are not verified by Ashara.\n- Keys can be stored and read\n\n");
   });
 
   // A goal task a plan revision replaced while it was open is set aside, never given up.

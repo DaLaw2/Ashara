@@ -70,6 +70,7 @@ export {
 export type { TaskCheckStore, TaskChecks } from "./task-checks.js";
 export { TaskCheckRepository } from "./repositories/task-check.js";
 export { CheckDisputeRepository } from "./repositories/check-dispute.js";
+export { CheckSetFreezeRepository } from "./repositories/check-set-freeze.js";
 export { SuiteReviewFindingRepository, SuiteReviewJudgementRepository, blockingReview } from "./repositories/suite-review.js";
 export { suiteReviewJudgementsOf } from "./repositories/suite-review.js";
 export type { StoredJudgement } from "./repositories/suite-review.js";

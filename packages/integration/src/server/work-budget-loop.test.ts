@@ -215,6 +215,7 @@ function serverProcess(at: Fixture, budgets: WorkBudgets): CoreLoop {
     planReports: { runPending: async () => [] },
     checkDisputes: { record: notExercised("checkDisputes") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+    checkSetFreeze: { freezeFor: async () => [] },
     blockReports: { runPending: async () => [] },
     burnWarnings: { runPending: async () => [] },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },

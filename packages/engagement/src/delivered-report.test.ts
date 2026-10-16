@@ -171,9 +171,9 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "A key can be stored and read back"), checked: true },
-          { source: scope("S2", "A key can be deleted"), checked: true },
-          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false },
+          { source: scope("S1", "A key can be stored and read back"), checked: true, undecided: false },
+          { source: scope("S2", "A key can be deleted"), checked: true, undecided: false },
+          { source: scope("S3", "Concurrent writers never corrupt the store"), checked: false, undecided: false },
         ],
       },
     });
@@ -210,10 +210,36 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false }] },
     });
     expect(body).toContain("Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.");
     expect(body).not.toContain("not checked");
+  });
+
+  // ADR-084 decision 2: an item a review of the checks left undecided is unverified, never covered,
+  // even though a stored check that passed records that it decides it.
+  test("an item a review left undecided is named as not verified, and never counted among the covered", async () => {
+    const body = await render({
+      sweepId: "s3c",
+      projectId,
+      mainCommit: MAIN,
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: MERGE_A } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      vision: {
+        kind: "recorded",
+        items: [
+          { source: scope("S1", "Keys can be stored"), checked: true, undecided: false },
+          { source: scope("S2", "A stored key survives a power loss"), checked: true, undecided: true },
+        ],
+      },
+    });
+    expect(body).not.toContain("Every item of what you asked for is decided");
+    expect(body).toContain("Every other item of what you asked for is decided by a stored check");
+    const [, unverified = ""] = body.split("a review of the checks found that none of them really decides it");
+    expect(unverified).toContain("they are not verified by Ashara.\n- A stored key survives a power loss");
+    expect(unverified).not.toContain("Keys can be stored");
   });
 
   test("a record with no item of what the client asked for claims no coverage", async () => {
@@ -225,7 +251,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Any network service", "out"), checked: false, undecided: false }] },
     });
     expect(body).toContain("The plan's record holds no item of what you asked for, so none of it is stated as checked.");
     expect(body).not.toContain("Every item");
@@ -246,18 +272,18 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: scope("S1", "put stores a value under a key"), checked: true },
-          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true },
-          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true },
-          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false },
-          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false },
-          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true },
-          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false },
-          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false },
-          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false },
-          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false },
-          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false },
-          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false },
+          { source: scope("S1", "put stores a value under a key"), checked: true, undecided: false },
+          { source: scope("S2", "Several processes may use the same data directory at the same time"), checked: true, undecided: false },
+          { source: scope("S3", "A partly written final log record is ignored on recovery"), checked: true, undecided: false },
+          { source: scope("S4", "Any network service or remote access; this is a local CLI tool.", "out"), checked: false, undecided: false },
+          { source: scope("S5", "Non-Linux platforms.", "out"), checked: false, undecided: false },
+          { source: assumption("A4", "Commands wait for the data-directory lock.", "stated", "client-visible"), checked: true, undecided: false },
+          { source: assumption("A2", "Keys and values are UTF-8 text.", "stated", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A8", "The tool uses an OS advisory lock on a lock file.", "reported", "internal-design"), checked: false, undecided: false },
+          { source: assumption("A10", "Each log record is length-prefixed with a checksum.", "reported", "internal-design"), checked: false, undecided: false },
+          { source: assumption("A20", "No artificial limit is imposed on key or value size.", "reported", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A26", "Values print with a trailing newline.", "asked", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A27", "Empty keys are refused.", "unrecorded", "unclassified"), checked: false, undecided: false },
         ],
       },
     });
@@ -286,7 +312,7 @@ describe("the delivered report", () => {
     const fields = { ...BASE, checked: ["Count words"], unchecked: [], givenUp: [] };
     const visible = await render({
       ...fields,
-      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true }] },
+      vision: { kind: "recorded", items: [{ source: assumption("A1", "Totals print last.", "reported", "client-visible"), checked: true, undecided: false }] },
     });
     expect(visible).not.toContain("not verified by Ashara");
     expect(await render({ ...fields, vision: { kind: "unrecorded" } })).not.toContain("not verified by Ashara");
@@ -305,10 +331,10 @@ describe("the delivered report", () => {
       vision: {
         kind: "recorded",
         items: [
-          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false },
-          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false },
-          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false },
-          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false },
+          { source: assumption("A1", "Python 3.12 is the runtime.", "confirmed", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A2", "Totals print last.", "changed", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A3", "No argument prints usage.", "answered", "client-visible"), checked: false, undecided: false },
+          { source: assumption("A4", "Missing files exit 1.", "answer-unread", "client-visible"), checked: false, undecided: false },
         ],
       },
     });
@@ -332,7 +358,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: [],
       givenUp: [],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Out of scope: non-Linux platforms.", "unclassified"), checked: false, undecided: false }] },
     });
     expect(body).toContain("- Out of scope: non-Linux platforms. (recorded without saying whether it is in or out of scope)");
   });
@@ -346,7 +372,7 @@ describe("the delivered report", () => {
       checked: ["Store keys"],
       unchecked: ["Set up the product's module root"],
       givenUp: ["Shard the store"],
-      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true }] },
+      vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true, undecided: false }] },
     });
     const [opening] = body.split("\n\n");
     expect(opening).toBe(

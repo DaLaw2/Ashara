@@ -40,7 +40,7 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: notExercised("incrementDispatchCount"),
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    refundDispatchCount: notExercised("refundDispatchCount"),
+    saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit: notExercised("recordMergeCommit"),
     addDependency: notExercised("addDependency"),
     getDependencies: notExercised("getDependencies"),

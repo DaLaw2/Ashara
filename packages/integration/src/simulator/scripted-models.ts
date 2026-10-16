@@ -186,6 +186,7 @@ const checkRowSchema = z.object({
   checkTaskId: z.string(),
   taskId: z.string(),
   name: z.string(),
+  command: z.string(),
   files: z.array(z.object({ path: z.string(), content: z.string() })),
 });
 
@@ -426,20 +427,39 @@ export class StandIns {
     };
   }
 
-  /** The suite review finds each wrong, contradictory or out-of-vision check with the profile's probability. */
+  /**
+   * The suite review finds each contradictory or out-of-vision check with the profile's probability.
+   * A contradiction names the two checks, each with its command quoted as what it requires: the
+   * contradictory check and a check of another check task that requires what it forbids. A wrong
+   * check contradicts no other check: only a run of it on correct work witnesses it (a dispute).
+   * A doubting review names a cited item of a sound suite as undecided, which only another model
+   * family's agreement could act on.
+   */
   private async review(): Promise<unknown> {
     // A review is a task of its own (origin review): the checks it reads are its project's.
     const rows = await this.latestChecks((await this.taskInProgress()).projectId);
     const problems: unknown[] = [];
     for (const row of rows) {
+      const own = ownSpecOf(row);
+      if (own?.kind !== "contradictory" || !this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)) continue;
+      const partner = rows.find((other) => other.checkTaskId !== row.checkTaskId && requiresAny(ownSpecOf(other), own.forbids));
+      if (partner === undefined) continue;
+      problems.push({
+        checkTasks: [row.checkTaskId, partner.checkTaskId],
+        kind: "contradiction",
+        conflict: [
+          { checkTask: row.checkTaskId, check: row.name, requires: row.command },
+          { checkTask: partner.checkTaskId, check: partner.name, requires: partner.command },
+        ],
+        problem: `Check ${row.name} forbids [${own.forbids.join(", ")}], which check ${partner.name} requires.`,
+        evidence: `${row.command}; ${partner.command}`,
+      });
+    }
+    for (const row of rows) {
       for (const spec of specsOf(row.files)) {
-        if (spec.kind !== "wrong" && spec.kind !== "contradictory" && spec.kind !== "out_of_vision") continue;
+        if (spec.kind !== "out_of_vision") continue;
         if (!this.context.tape.chance("model.suite-review.catch", this.context.rates.reviewCatch)) continue;
         const evidence = `It requires [${spec.requires.join(", ")}] and forbids [${spec.forbids.join(", ")}].`;
-        if (spec.kind !== "out_of_vision") {
-          problems.push({ checkTasks: [row.checkTaskId], kind: "contradiction", problem: `Check ${row.name} cannot pass on correct work.`, evidence });
-          continue;
-        }
         const cited = await this.citedBy(row.checkTaskId);
         problems.push({
           checkTasks: [row.checkTaskId],
@@ -470,6 +490,14 @@ export class StandIns {
         });
       }
     }
+    const sound = rows.find((row) => ownSpecOf(row)?.kind === "correct");
+    if (sound !== undefined && this.context.tape.chance("model.suite-review.undecided", this.context.rates.reviewMisread)) {
+      const [item] = await this.citedBy(sound.checkTaskId);
+      if (item !== undefined) {
+        this.context.onModelCall({ site: "suite-review", action: "undecided" });
+        problems.push({ checkTasks: [sound.checkTaskId], kind: "undecided-item", item: item.id, problem: `No check of the suite is read as deciding ${item.id}.`, evidence: sound.command });
+      }
+    }
     return { problems };
   }
 
@@ -489,7 +517,7 @@ export class StandIns {
   private async latestChecks(projectId: string): Promise<Array<z.infer<typeof checkRowSchema>>> {
     const { observer } = this.context;
     const result = await observer.execute(sql`
-      SELECT c.check_task_id AS "checkTaskId", c.task_id AS "taskId", c.name, c.files
+      SELECT c.check_task_id AS "checkTaskId", c.task_id AS "taskId", c.name, c.command, c.files
       FROM task_checks c
       WHERE c.project_id = ${projectId}
         AND c.revision = (SELECT max(revision) FROM task_checks l WHERE l.task_id = c.task_id)
@@ -808,6 +836,16 @@ function finished(summary: string): ToolStep {
 }
 
 /** The check specs a stored check's files hold; a file that is not one is skipped. */
+/** The spec of one stored check: the spec file its command runs, or null when it runs none. */
+function ownSpecOf(row: z.infer<typeof checkRowSchema>): CheckSpec | null {
+  const [spec] = specsOf(row.files.filter((file) => row.command.endsWith(` ${file.path}`)));
+  return spec === undefined ? null : spec;
+}
+
+function requiresAny(spec: CheckSpec | null, behaviours: readonly string[]): boolean {
+  return spec !== null && spec.requires.some((behaviour) => behaviours.includes(behaviour));
+}
+
 function specsOf(files: ReadonlyArray<{ readonly path: string; readonly content: string }>): CheckSpec[] {
   const specs: CheckSpec[] = [];
   for (const file of files) {

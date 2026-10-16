@@ -15,7 +15,7 @@ import { toRecordedOutcome } from "./acl/workplace-acl.js";
 import type { Outcome } from "./acl/workplace-acl.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { CoreLoopDeps } from "./types.js";
-import { processTask } from "./execution.js";
+import { handleProcessingError, processTask } from "./execution.js";
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 // Stable ID shared by every item copy the mock repo returns, so the domain
@@ -137,6 +137,7 @@ function coreLoopDeps(
     stackChoices: { runPending: notExercised("stackChoices") },
     checkDisputes: { record: notExercised("checkDisputes") },
     suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+    checkSetFreeze: { freezeFor: async () => [] },
     blockReports: { runPending: notExercised("blockReports") },
     burnWarnings: { runPending: notExercised("burnWarnings") },
     infrastructureProbe: { probe: notExercised("infrastructureProbe") },
@@ -200,7 +201,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     listIdsByStatus: notExercised("listIdsByStatus"),
     incrementDispatchCount: async () => 1,
     recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-    refundDispatchCount: notExercised("refundDispatchCount"),
+    saveRefunded: notExercised("saveRefunded"),
     recordMergeCommit: async (id, commit) => {
       mergeRecords.push({ id, commit });
     },
@@ -402,7 +403,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
-      refundDispatchCount: async () => {
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
         refunded++;
         return 0;
       },
@@ -445,6 +447,54 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
     expect(halts).toEqual([]);
+  });
+
+  // ADR-080 d3 c: a fault under the refund itself must not charge the task for Ashara's own fault.
+  test("a refund whose write faults leaves the task uncharged: the requeue and its refund fail together and the recovery writes both", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let row = freshPendingItem();
+    // The routing in executeTask and processTask's retry of it both fault: only the cycle's recovery is left to write it.
+    let refundFaults = 2;
+    const copy = (item: WorkItem): WorkItem => ({ ...item, events: [] });
+    const workItemRepo: WorkItemRepository = {
+      findById: async () => copy(row),
+      save: async (item: WorkItem, expectedPreviousStatus) => {
+        if (row.status !== expectedPreviousStatus) throw new InvalidStatusTransition(item.id, row.status, item.status);
+        row = { ...copy(item), dispatchCount: row.dispatchCount };
+      },
+      incrementDispatchCount: async () => {
+        row = { ...row, dispatchCount: row.dispatchCount + 1 };
+        return row.dispatchCount;
+      },
+      recordInfrastructureFault: async () => 1,
+      async saveRefunded(item, expectedPreviousStatus) {
+        // The one transaction rolled back: neither the requeue nor the refund was written.
+        if (refundFaults-- > 0) throw new Error("Failed query: update \"work_items\" set \"dispatch_count\" = \"work_items\".\"dispatch_count\" - 1");
+        await this.save(item, expectedPreviousStatus);
+        row = { ...row, dispatchCount: row.dispatchCount - 1 };
+        return row.dispatchCount;
+      },
+      create: notExercised("create"),
+      listByProject: notExercised("listByProject"),
+      findByProjectAndStatus: notExercised("findByProjectAndStatus"),
+      projectIdsWithStatus: notExercised("projectIdsWithStatus"),
+      listIdsByStatus: notExercised("listIdsByStatus"),
+      recordMergeCommit: notExercised("recordMergeCommit"),
+      addDependency: notExercised("addDependency"),
+      getDependencies: async () => [],
+      findChildren: async () => [],
+      listDependenciesByProject: notExercised("listDependenciesByProject"),
+      withTransaction: notExercised("withTransaction"),
+    };
+    const deps = coreLoopDeps({ workItemRepo, dispatchService: { execute: async () => probeBlocked } });
+    const task = freshPendingItem();
+
+    // The cycle's own path: a rejected processTask is recovered by handleProcessingError (core-loop.ts).
+    const result = await processTask(deps, task).catch((e: unknown) => handleProcessingError(deps, task, e));
+
+    expect(result.status).toBe("interrupted");
+    expect(row).toMatchObject({ status: "Pending", dispatchCount: 0 });
+    expect(refundFaults).toBe(-1);
   });
 
   // A fault after the merge commit (`git rev-parse HEAD` failing) is Ashara's, and the merged task
@@ -570,6 +620,37 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(refunds()).toBe(0);
     expect(failureRoutes()).toBe(0);
     expect(failedApproaches()).toBe(0);
+  });
+
+  // ADR-084 decision 3: the check set a task is judged by freezes before the task is dispatched.
+  test("the dispatch freezes the check set of the reviews the task depends on before it is counted; a freeze that fails stops it uncounted", async () => {
+    const { deps } = buildEnvironmentBlockedDeps();
+    const order: string[] = [];
+    deps.workItemRepo.incrementDispatchCount = async () => {
+      order.push("counted");
+      return 1;
+    };
+    deps.checkSetFreeze.freezeFor = async (taskId) => {
+      order.push(`freeze ${taskId}`);
+      return [];
+    };
+    await processTask(deps, freshPendingItem());
+    expect(order.slice(0, 2)).toEqual([`freeze ${ITEM_ID}`, "counted"]);
+
+    const failing = buildEnvironmentBlockedDeps();
+    let counted = 0;
+    failing.deps.workItemRepo.incrementDispatchCount = async () => {
+      counted++;
+      return 1;
+    };
+    failing.deps.checkSetFreeze.freezeFor = async () => {
+      throw new Error("check_set_freezes insert failed");
+    };
+    const result = await processTask(failing.deps, freshPendingItem());
+    expect(result).toMatchObject({ status: "interrupted", detail: expect.stringContaining("check_set_freezes insert failed") });
+    expect(counted).toBe(0);
+    expect(failing.stored().status).toBe("Pending");
+    expect(failing.failureRoutes()).toBe(0);
   });
 
   test("a throw out of the dispatch past the seam: Ashara's fault, back to Pending with the dispatch refunded, no lesson", async () => {
@@ -749,9 +830,10 @@ describe("stored checks stale: the check task is reopened and the item waits on 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: async (id) => {
-        const row = rowOf(id);
-        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
+        const row = rowOf(item.id);
+        rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
       recordMergeCommit: notExercised("recordMergeCommit"),
@@ -898,9 +980,10 @@ describe("a disputed check: the check task is reopened with the dispute and the 
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: async (id) => {
-        const row = rowOf(id);
-        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
+        const row = rowOf(item.id);
+        rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
       recordMergeCommit: notExercised("recordMergeCommit"),
@@ -1062,9 +1145,10 @@ describe("an environment change requested: an environment task is opened and the
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: async (id) => {
-        const row = rowOf(id);
-        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
+        const row = rowOf(item.id);
+        rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
       recordMergeCommit: notExercised("recordMergeCommit"),
@@ -1253,7 +1337,8 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
         return row.dispatchCount;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: async () => {
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
         row = { ...row, dispatchCount: row.dispatchCount - 1 };
         return row.dispatchCount;
       },
@@ -1392,7 +1477,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       listIdsByStatus: notExercised("listIdsByStatus"),
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: notExercised("refundDispatchCount"),
+      saveRefunded: notExercised("saveRefunded"),
       addDependency: notExercised("addDependency"),
       getDependencies: async () => [],
       findChildren: async () => [],
@@ -1618,9 +1703,10 @@ describe("a review of the plan's suites with problems: the named check tasks are
         return row.dispatchCount + 1;
       },
       recordInfrastructureFault: notExercised("recordInfrastructureFault"),
-      refundDispatchCount: async (id) => {
-        const row = rowOf(id);
-        rows.set(id, { ...row, dispatchCount: row.dispatchCount - 1 });
+      async saveRefunded(item, expectedPreviousStatus) {
+        await this.save(item, expectedPreviousStatus);
+        const row = rowOf(item.id);
+        rows.set(item.id, { ...row, dispatchCount: row.dispatchCount - 1 });
         return row.dispatchCount - 1;
       },
       recordMergeCommit: notExercised("recordMergeCommit"),
@@ -1657,7 +1743,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
           recorded.push(findings);
           const ids = [...new Set(findings.problems.flatMap((p) => p.checkTaskIds))];
           for (const id of ids) named.set(id, (named.get(id) ?? priorReviews) + 1);
-          return { timesNamed: new Map(ids.map((id) => [id, named.get(id) ?? 0])), earlierFindings: new Map(ids.map((id) => [id, []])) };
+          return { timesNamed: new Map(ids.map((id) => [id, named.get(id) ?? 0])) };
         },
       },
       failedApproachRepo: { record: async () => { approaches++; } },

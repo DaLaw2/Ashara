@@ -771,6 +771,7 @@ export const TEXT_COVERED: readonly CoveredText[] = [
   { source: `${ENGAGEMENT}/delivered-report.ts#deliveredReport`, judges: [i4("delivered-close")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#uncheckedSection`, judges: [i4("delivered-unchecked")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#unverifiedSection`, judges: [i4("delivered-coverage")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#undecidedSection`, judges: [i4("delivered-coverage")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#givenUpSection`, judges: [i4("delivered-given-up")] },
   { source: `${ENGAGEMENT}/delivered-report.ts#unreadNotice`, judges: [i4("delivered-notice-unfounded")] },
   { source: `${ENGAGEMENT}/block-report.ts#projectBlockedReport`, judges: [i4("halt-cause")] },

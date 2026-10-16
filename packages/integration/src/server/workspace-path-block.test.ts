@@ -169,6 +169,7 @@ describe("a project whose workspace path is refused", () => {
       planReports: { runPending: async () => [] },
       checkDisputes: { record: notExercised("checkDisputes") },
       suiteReviewFindings: { record: notExercised("suiteReviewFindings") },
+      checkSetFreeze: { freezeFor: async () => [] },
       blockReports: { runPending: async () => [] },
       burnWarnings: { runPending: async () => [] },
       infrastructureProbe: { probe: notExercised("infrastructureProbe") },

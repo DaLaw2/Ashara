@@ -15,6 +15,9 @@ const TaskCheckDecidesSchema = z.tuple([z.string().min(1)], z.string().min(1)).n
 
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
 
+/** A count of suite_review_findings rows as Postgres returns it cast to int. */
+const ReopenCountSchema = z.number().int().nonnegative();
+
 interface TaskCheckDefinition {
   readonly name: string;
   readonly command: string;
@@ -107,6 +110,8 @@ interface CheckTaskUnderReview {
   readonly visionItems: readonly string[] | null;
   readonly sources: readonly VisionSource[] | null;
   readonly checkedTitle: string | null;
+  /** How many reviews have reopened it: its suite_review_findings rows. */
+  readonly reviewReopens: number;
 }
 
 interface CompletedChecks {
@@ -213,6 +218,7 @@ export class TaskCheckRepository {
         successCriteria: workItems.successCriteria,
         blockedReason: workItems.blockedReason,
         checkedTitle: sql<string | null>`(SELECT checked.title FROM work_items checked WHERE checked.id::text = ${workItems.taskSpec}->>'checksFor')`,
+        reviewReopens: sql<unknown>`(SELECT count(*) FROM suite_review_findings named WHERE named.check_task_id = ${workItems.id})::int`,
       })
       .from(dependencies)
       .innerJoin(workItems, eq(workItems.id, dependencies.toId))
@@ -227,6 +233,7 @@ export class TaskCheckRepository {
         visionItems: taskSpec?.visionItems ?? null,
         sources: taskSpec?.sources ?? null,
         checkedTitle: row.checkedTitle,
+        reviewReopens: ReopenCountSchema.parse(row.reviewReopens),
       };
     });
   }
