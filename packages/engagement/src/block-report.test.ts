@@ -39,7 +39,7 @@ describe("project block reports", () => {
     },
   );
 
-  // smoke1 D4: a deployment-cap halt was told as "The budget set for this project has to be raised".
+  // A deployment-cap halt is never told as the project's own budget needing to be raised.
   test.each([
     [
       SPEND_CAP_ERROR_CLASS.deployment,
@@ -67,7 +67,7 @@ describe("project block reports", () => {
     if (errorClass !== SPEND_CAP_ERROR_CLASS.project) expect(posted[0].body).not.toContain("The budget set for this project");
   });
 
-  // smoke3 D1: $0.41 of $1 was spent when the cap refused a call whose worst case would cross it.
+  // A cap refuses a call whose worst case would cross it, before the recorded spend reaches the limit.
   test("a budget_cap halt states the spent, set-aside and limit amounts its record holds, never a limit reached", async () => {
     const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
     const { reports, posted } = reportsFor([
@@ -89,7 +89,7 @@ describe("project block reports", () => {
     expect(posted[0].body).toContain("No cause was recorded for this pause.");
   });
 
-  // W11b D3: the client read "PlanReportUnfounded: project ... 13 decomposed task(s) ...".
+  // The client never reads an error class or its chain.
   test("a fault's report keeps the error class and chain with the operator, and names the record that holds them", async () => {
     const reason =
       "PlanReportUnfounded: project 00000000-0000-4000-8000-000000000020 is recorded as planned with 2 epic(s), 13 decomposed task(s); " +
@@ -114,7 +114,7 @@ describe("project block reports", () => {
   });
 });
 
-// Story s-independent-verify-m1 W7 (M2 trial M3): the cause told is the one observed, never a
+// Story s-independent-verify-m1 W7: the cause told is the one observed, never a
 // sentence fixed per kind of halt.
 describe("halt reports state the observed cause", () => {
   test("an infrastructure halt quotes the recorded fault chain, says it is not charged and resumes by itself", async () => {

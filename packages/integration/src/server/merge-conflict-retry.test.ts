@@ -22,9 +22,9 @@ import type { ProjectId, WorkItemId } from "@ashara/shared";
 import { createTaskCheckStore } from "@ashara/server/task-check-store";
 import { testCellInstance } from "../test-cells.js";
 
-// w12b D2 (ADR-074 d96 d, d99): two tasks dispatched in one batch left the same main and changed the
-// same file. The first merged; the second's merge conflicted, and its retry was dispatched on its
-// branch unchanged, so it conflicted again by construction. Real podman, real git, the scratch
+// ADR-074 d96 d, d99: two tasks dispatched in one batch leave the same main and change the
+// same file. The first merges; the second's merge conflicts, and its retry must start with that
+// conflict, since its branch unchanged would conflict again by construction. Real podman, real git, the scratch
 // database and the real failure router, with a scripted model: no real LLM call.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));

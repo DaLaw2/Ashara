@@ -6,10 +6,8 @@ import { AsharaRootNotFound } from "./errors.js";
 // ---------------------------------------------------------------------------
 // CWD-independent Ashara root anchoring (rp-t2 — CWD blindness)
 //
-// A process whose cwd is not the Ashara source checkout (the agent subprocess
-// once ran in the task's worktree) mis-resolves a cwd-relative config default:
-// config/models.toml is not found and routing profiles fall through to
-// capability logic. Observed live (Run 11 attempt 1, $1.48 burned).
+// A process whose cwd is not the Ashara source checkout mis-resolves a
+// cwd-relative config default: config/models.toml is not found.
 //
 // Anchoring to THIS module's on-disk location (import.meta.url) instead of
 // process.cwd() makes those defaults correct by construction whatever the cwd.

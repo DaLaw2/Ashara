@@ -1,5 +1,6 @@
 import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import type { DbHandle } from "../connection.js";
+import { insertedRow } from "../inserted-row.js";
 import { clientSessions } from "../schema/index.js";
 
 type ClientSessionRow = typeof clientSessions.$inferSelect;
@@ -14,7 +15,7 @@ export class ClientSessionRepository {
   constructor(private readonly db: DbHandle) {}
 
   async create(tokenHash: string, clientId: string, ttlSeconds: number): Promise<ClientSessionRow> {
-    const [row] = await this.db
+    const rows = await this.db
       .insert(clientSessions)
       .values({
         tokenHash,
@@ -22,7 +23,7 @@ export class ClientSessionRepository {
         expiresAt: sql`now() + make_interval(secs => ${ttlSeconds})`,
       })
       .returning();
-    return row;
+    return insertedRow(rows, "client_sessions", `create a session for client ${clientId}`);
   }
 
   /** The session for this hash when it is neither expired nor revoked, else null. */

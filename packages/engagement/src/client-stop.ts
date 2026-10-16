@@ -19,7 +19,7 @@ import type { ProjectId } from "@ashara/shared";
 // mid-cycle therefore waits for that cycle's attempts (up to the agent timeout).
 //
 // A stop is taken in while the project is paused, and while the loop itself is halted (the
-// deployment's spend cap: the runner keeps answering stops, smoke1 D3): the project moves to
+// deployment's spend cap: the runner keeps answering stops): the project moves to
 // 'stopped' and its halt ends with it, so lifting the pause later does not resume it, and the
 // report says so.
 

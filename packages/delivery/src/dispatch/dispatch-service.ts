@@ -324,7 +324,7 @@ function disputedCheckOf(
   return { revision, check, checksOf: ofTask ?? taskId };
 }
 
-export interface DispatchServiceDeps {
+interface DispatchServiceDeps {
   readonly config: DispatchConfig;
   readonly sessionStore: SessionStore;
   readonly knowledgeSink: KnowledgeSink;
@@ -398,7 +398,7 @@ export class DispatchService {
     try {
       return await this.executeTask(task, targetProjectPath);
     } finally {
-      // Every build_environment call leaves an image (third run N12): once the environment task
+      // Every build_environment call leaves an image: once the environment task
       // ends, however it ends, only main's current version and images in use are kept.
       if (task.workKind === "environment") {
         await pruneStaleEnvironmentImages(task.projectId, targetProjectPath, this.deps.environment.images, readEnvironmentDefinition);
@@ -506,10 +506,10 @@ export class DispatchService {
     }
 
     // A retry resumes the task's branch. When it conflicts with main (a batch partner merged the
-    // same files first, w12b D2), the attempt starts with main merged into it and the conflict in
+    // same files first), the attempt starts with main merged into it and the conflict in
     // its worktree, named in its brief: the branch as it is would only conflict again. A conflict
     // that cannot be prepared is Z0's git and blocks under class ashara, never dispatching the branch unchanged.
-    // A branch that merges cleanly starts with main merged into it (P6: a tree regression is repaired
+    // A branch that merges cleanly starts with main merged into it (a tree regression is repaired
     // on the merged tree it was found on, createWorkdirForRetry).
     let resumesBranch = false;
     try {
@@ -823,7 +823,7 @@ export class DispatchService {
       const delivered = await this.verification.sweepDelivered(d, d.work.stored);
       if (delivered !== null) return delivered;
     }
-    // A check author is dispatched only on a foundation the environment builds (W11 D2): on one it
+    // A check author is dispatched only on a foundation the environment builds: on one it
     // does not, every check fails for that reason alone and the red run could decide nothing.
     if (d.work.kind === "check-authoring") {
       const unbuilt = await this.verification.foundationBuildGate(d, d.work);

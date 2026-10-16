@@ -69,7 +69,7 @@ function howToRun(body: string): string {
   return body.slice(start, end);
 }
 
-// smoke2 D3: the plan said tally.py, the product was wc.py, and the report never said how to run it.
+// The report says how to run the product as main holds it, whatever file name the plan used.
 describe("how to run the product", () => {
   test("quotes the public interface file from main as is, after what was delivered", async () => {
     const text = "Run: python wc.py <file>...\n\nPrints lines, words and bytes, then a total.\n";
@@ -104,7 +104,7 @@ describe("how to run the product", () => {
   });
 });
 
-// Story s-independent-verify-m1 W7 (eighth run E3): the delivered report, every line from a record.
+// Story s-independent-verify-m1 W7: the delivered report, every line from a record.
 describe("the delivered report", () => {
   test("names each goal task with how its record says it closed, and each vision item no check covers as not checked", async () => {
     const body = await render({
@@ -182,9 +182,9 @@ describe("the delivered report", () => {
     expect(body).not.toContain("Every item");
   });
 
-  // W11c D3: the run's coverage list named both exclusions and every internal-design assumption as
-  // unchecked items of what the client asked for. The shape below is that run's vision.
-  test("the W11c shape: exclusions and the team's design choices are never listed; an uncited assumption is Ashara's, as the client saw it", async () => {
+  // Exclusions and internal-design assumptions are never unchecked items of what the client asked
+  // for. The vision below has scope lines on both sides and assumptions of every kind.
+  test("a vision with exclusions and design choices: exclusions and the team's design choices are never listed; an uncited assumption is Ashara's, as the client saw it", async () => {
     const body = await render({
       sweepId: "s6",
       projectId,
@@ -226,7 +226,7 @@ describe("the delivered report", () => {
     expect(body).not.toContain("Several processes");
   });
 
-  // smoke2 D1 (d95 a): each uncited assumption is worded by where it stood at acceptance, an answer included.
+  // d95 a: each uncited assumption is worded by where it stood at acceptance, an answer included.
   test("an answered assumption is never said to be unanswered: each standing at acceptance has its own words", async () => {
     const body = await render({
       sweepId: "s8",

@@ -7,23 +7,23 @@ export interface CycleRunner {
   runCycle(): Promise<CycleResult>;
   /**
    * What still runs once a cycle has stopped the loop: the client's stops, each recorded and
-   * answered with no LLM call, so a stop sent while the loop is halted holds (smoke1 D3).
+   * answered with no LLM call, so a stop sent while the loop is halted holds.
    */
   runHaltedCycle(): Promise<void>;
 }
 
-export interface RunnerConfig {
+interface RunnerConfig {
   readonly pollIntervalMs: number;
   readonly idleIntervalMs: number;
   readonly maxConsecutiveErrors: number;
-  readonly databaseUrl: string;
+  /** The database the runner LISTENs on for wake-ups; `null` is poll only, a choice the caller states. */
+  readonly databaseUrl: string | null;
 }
 
-const DEFAULT_RUNNER_CONFIG: RunnerConfig = {
+const DEFAULT_RUNNER_CONFIG: Omit<RunnerConfig, "databaseUrl"> = {
   pollIntervalMs: 10_000,
   idleIntervalMs: 30_000,
   maxConsecutiveErrors: 3,
-  databaseUrl: "",
 };
 
 export class ContinuousRunner {
@@ -35,7 +35,7 @@ export class ContinuousRunner {
   // the work it announced would sit until the idle timeout.
   private wakePending = false;
 
-  constructor(coreLoop: CycleRunner, config: Partial<RunnerConfig> = {}) {
+  constructor(coreLoop: CycleRunner, config: Pick<RunnerConfig, "databaseUrl"> & Partial<RunnerConfig>) {
     this.coreLoop = coreLoop;
     this.config = { ...DEFAULT_RUNNER_CONFIG, ...config };
   }
@@ -43,15 +43,15 @@ export class ContinuousRunner {
   /**
    * Cycles until `signal` aborts. A cycle that reports a stop halts the loop for good: `onHalt` runs
    * once with it, and from then on only the client's stops are taken in and answered, each wake or
-   * idle interval, until `signal` aborts (smoke1 D3: a stop sent after the deployment cap stopped
-   * the loop was accepted and never answered). Resolves, once `signal` aborted, to the stop that
-   * halted the loop, or `null` when none did.
+   * idle interval, until `signal` aborts, so a stop sent while the loop is halted is answered.
+   * Resolves, once `signal` aborted, to the stop that halted the loop, or `null` when
+   * none did.
    */
   async run(signal: AbortSignal, onHalt: (stop: LoopStop) => Promise<void>): Promise<LoopStop | null> {
     console.log("Continuous runner starting");
 
     let pgListener: PgListener | null = null;
-    if (this.config.databaseUrl) {
+    if (this.config.databaseUrl !== null) {
       pgListener = await listenForEvents(this.config.databaseUrl, () => {
         this.wake();
       });

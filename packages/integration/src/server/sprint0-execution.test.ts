@@ -473,7 +473,7 @@ describe("Sprint 0", () => {
     expect(reports[0]?.body).toContain(STATEMENT);
   }, 600_000);
 
-  // D5 of the 2026-10-14 Sprint 0 run: the statement was the project's latest, whatever version was on main.
+  // The statement is the one of the version on main, never the project's latest.
   it("the statement is the one recorded for the version on main; a version no environment task recorded is environment_undefined", async () => {
     // Earlier cases in this project build other versions (the untracked-output case), so the version on main is
     // the one the last dispatch after Sprint 0 resolved, not any succeeded build.
@@ -588,7 +588,7 @@ describe("Sprint 0", () => {
     expect(next.events.some((e) => e.event === "environment_rebuilt")).toBe(false);
   }, 600_000);
 
-  // The t-env-recipe review: the product scaffold asking for an environment change opens one whose
+  // The product scaffold asking for an environment change opens one whose
   // merge lands on a main with no product; running the product's build and test there fails it and
   // stalls every task behind the scaffold. Recorded "absent", only the probe runs (d72 S).
   it("an environment change opened with no product on main runs the probe only; one opened with a product runs its build and test", async () => {

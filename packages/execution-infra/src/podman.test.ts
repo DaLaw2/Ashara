@@ -8,7 +8,6 @@ import { createCellBackend } from "./cell-backend.js";
 import { readCellLimits } from "./cell-limits.js";
 import {
   CellExecFailed,
-  CellLimitsInvalid,
   CellStartFailed,
   CellTeardownFailed,
   InvalidCellRequest,
@@ -18,6 +17,7 @@ import {
   ProcessSpawnFailed,
   SubstrateUnavailable,
 } from "./errors.js";
+import { CellLimitsInvalid, TeardownIncomplete } from "./index.js";
 import { PodmanSubstrate, type CellSpec } from "./podman.js";
 import type { ProcessRequest, ProcessResult } from "./process-runner.js";
 
@@ -242,7 +242,7 @@ describe("PodmanSubstrate argv", () => {
     const cell = await substrate.createCell(spec);
     const result = await cell.exec(["cat", "--", "./a"], { timeoutSeconds: 30, stdin: "in", cwd: "src" });
     const args = requests[1]?.args ?? [];
-    // argv travels in the wrapper's environment, never on its command line (M2 trial M1).
+    // argv travels in the wrapper's environment, never on its command line.
     expect(args.slice(0, 14)).toEqual([
       "exec", "-i", "--preserve-fds=1", "-w", "/workspace/src",
       "-e", "ASHARA_ARGC=3", "-e", "ASHARA_ARG_0=cat", "-e", "ASHARA_ARG_1=--", "-e", "ASHARA_ARG_2=./a",
@@ -299,7 +299,7 @@ describe("PodmanSubstrate argv", () => {
     }
   });
 
-  // M2 trial M1: `kill -9 $(pgrep -f ...)` in the command killed the wrapper itself.
+  // A command such as `kill -9 $(pgrep -f ...)` can kill the wrapper itself.
   it("an exit with no status report in a cell that passes its probe is the command's result, its status unknown", async () => {
     const { requests, substrate } = recorder([ok(ID), { ...unreported(137, "partial err"), stdout: "partial" }, ok("", 0)]);
     const cell = await substrate.createCell(spec);
@@ -371,11 +371,13 @@ describe("PodmanSubstrate argv", () => {
   });
 
   it("throws a typed teardown failure instead of swallowing it", async () => {
-    const { requests, substrate } = recorder([ok(ID), { ...ok("", 2), stderr: "boom" }, ok(ID)]);
+    const failed = { ...ok("", 2), stderr: "boom" };
+    const { requests, substrate } = recorder([ok(ID), failed, failed, ok(ID)]);
     const cell = await substrate.createCell(spec);
     await expect(cell.teardown()).rejects.toBeInstanceOf(CellTeardownFailed);
     expect(requests[1]?.args).toEqual(["rm", "-f", ID]);
-    // Still tracked after a failed teardown, so teardownAll retries it.
+    // Still tracked after a failed teardown, so teardownAll retries it, and names what it could not remove.
+    await expect(substrate.teardownAll()).rejects.toBeInstanceOf(TeardownIncomplete);
     expect(await substrate.teardownAll()).toEqual([ID]);
     await expect(cell.exec(["true"], { timeoutSeconds: 1 })).rejects.toBeInstanceOf(CellExecFailed);
   });

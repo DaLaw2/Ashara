@@ -9,7 +9,7 @@ import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 // read from recorded outcomes, not handed over in memory, so one written before a
 // crash is still reported after the restart; the store posts each at most once. A revision
 // of the plan for a client's change (migration 042) is reported the same way, once each, naming
-// every answer it took in (migration 052; smoke1 D2): each of them was promised the client would
+// every answer it took in (migration 052): each of them was promised the client would
 // be told what changed.
 
 type PlanReportSubject = "first-plan" | "planning-stopped";
@@ -52,7 +52,7 @@ type DuePlanReport =
       readonly droppedOrderingHints: DroppedOrderingHints;
       /**
        * Revisions written before this report, oldest first. The epics and counts above are the plan
-       * they left standing, never the work they replaced (W11b D1).
+       * they left standing, never the work they replaced.
        */
       readonly revisions: readonly RevisionBeforeReport[];
     }
@@ -370,7 +370,7 @@ export class PlanReports implements LiaisonPlanReports {
       const kind = await this.store.postReport(due.projectId, due.subject, body, revisionIds);
       outcomes.push({ kind, projectId: due.projectId, subject: due.subject });
     }
-    // A project blocked above is not told what the team will now do (W11b D2). The store lists only
+    // A project blocked above is not told what the team will now do. The store lists only
     // active projects' revisions; this keeps that so within the pass that blocked it.
     const blocked = new Set(outcomes.filter((o) => o.kind === "project-blocked").map((o) => o.projectId));
     for (const due of await this.store.dueRevisionReports()) {

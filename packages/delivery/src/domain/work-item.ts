@@ -240,20 +240,24 @@ export function giveUpWorkItem(item: WorkItem, reason: GiveUpReason): void {
   );
 }
 
+/** Why a replanned item's prior attempt failed, carried to its next attempt. */
+type ReplanContext = Extract<StoredBlockedReason, { source: "replan" }>["replanContext"];
+
 /**
  * Recovers a Failed item back to Pending so it re-enters planning (FailureRouter's
- * "replan" decision, ADR-029). Clears the prior failure reason — a fresh attempt
- * starts without a stale blockedReason lingering on the row. Pins its from-status to
+ * "replan" decision, ADR-029). Replaces the prior failure reason with `replanContext`, the
+ * failure the next attempt is told about, or with none when a person replans by hand
+ * (`null`): no stale blockedReason lingers on the row. Pins its from-status to
  * `Failed` EXPLICITLY (the `-> Pending` edge is shared with Blocked/InProgress, each
  * owned by its own method): replan is a retry decision, distinct from an unblock or
  * a crash-orphan requeue, so it must never accept a Blocked or InProgress item.
  */
-export function replanWorkItem(item: WorkItem): void {
+export function replanWorkItem(item: WorkItem, replanContext: ReplanContext | null): void {
   if (item.status !== "Failed" || !canTransitionTo(item.status, "Pending")) {
     throw new InvalidStatusTransition(item.id, item.status, "Pending");
   }
   item.status = "Pending";
-  item.blockedReason = undefined;
+  item.blockedReason = replanContext === null ? undefined : { source: "replan", replanContext };
   item.updatedAt = new Date();
   item.events.push(
     createDomainEvent("work_item.replanned", "delivery", {
@@ -266,7 +270,7 @@ export function replanWorkItem(item: WorkItem): void {
 /**
  * Moves an item to the terminal Abandoned status. Which statuses may reach
  * Abandoned is governed solely by `canTransitionTo` and the transition table
- * in `@ashara/shared/transitions.ts` — this function delegates to it and
+ * in `work-item-language/transitions.ts` — this function delegates to it and
  * adds no further guard. Callers include the FailureRouter (Failed →
  * Abandoned, ADR-029) and the HTTP PATCH /work-items/:id/status route, which
  * is the only caller that takes Blocked, Pending or InProgress to Abandoned.

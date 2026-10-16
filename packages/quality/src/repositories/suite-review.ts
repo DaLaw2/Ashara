@@ -60,8 +60,8 @@ export class SuiteReviewFindingRepository {
   /**
    * Appends one row per check task the problems name and returns, per named check task, how many
    * reviews have named it, this one included, and what the earlier reviews found in its checks
-   * (ADR-074 addendum 2 d89 F: a rewrite shown only the latest review put back what an earlier one
-   * had it drop), read in the same transaction as the insert.
+   * (ADR-074 addendum 2 d89 F: a rewrite shown only the latest review can put back what an earlier
+   * one had it drop), read in the same transaction as the insert.
    */
   async record(findings: NewSuiteReviewFindings): Promise<RecordedSuiteReview> {
     const named = [...new Set(findings.problems.flatMap((problem) => problem.checkTaskIds))];

@@ -128,7 +128,7 @@ class AnswerReadingExhausted extends Error {
 }
 
 /**
- * An answer at its attempt cap with no error on record (engagement D4). Migration 019's
+ * An answer at its attempt cap with no error on record. Migration 019's
  * CHECK makes this unrepresentable; meeting it means the store lied, and no error is
  * invented to stand in for the missing one.
  */
@@ -144,7 +144,7 @@ class AnswerFailureUnrecorded extends Error {
 
 const AnswerReadingSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ verdict: z.literal("confirms") }),
-  // A changed decision is classified again (W11 residual): the kind of the decision it replaced says
+  // A changed decision is classified again: the kind of the decision it replaced says
   // nothing about the new one, and only a client-visible decision may be cited by an acceptance line.
   z.strictObject({ verdict: z.literal("changes"), statement: z.string().min(1), kind: AssumptionKindSchema }),
   z.strictObject({ verdict: z.literal("does-not-answer") }),

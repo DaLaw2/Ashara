@@ -67,7 +67,7 @@ export type AttemptRecord =
   | { readonly kind: "outcome"; readonly at: number; readonly outcome: RecordedOutcome };
 
 /** The outcome as recorded: an error (or a cancellation reason) becomes its serialized chain, so the record stays plain data. */
-export type RecordedOutcome = Plain<Outcome>;
+type RecordedOutcome = Plain<Outcome>;
 type Plain<O> = O extends Outcome
   ? Omit<O, "error" | "reason"> & { readonly error?: SerializedError }
   : never;

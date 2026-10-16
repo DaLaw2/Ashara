@@ -119,7 +119,7 @@ const ISOLATION_CHECK = 'ashara_stat /proc/1 && ashara_init_sid=$ashara_sid && a
  * --preserve-fds=1, so the host's fourth pipe is fd 3 in the cell. argv reaches the wrapper
  * through its environment (ASHARA_ARGC, ASHARA_ARG_<i>), never its own command line: a command
  * that kills by pattern (`pkill -f`, `kill $(pgrep -f ...)`) matches the command lines of the
- * processes it finds, and the wrapper's must not carry the command's text (M2 trial M1). The
+ * processes it finds, and the wrapper's must not carry the command's text. The
  * wrapper rebuilds argv and unsets those variables before argv runs. The wrapper runs
  * `timeout -k <grace> <seconds> argv` with fd 3 closed, sweeps the cell, then writes the
  * command's exit status to fd 3. A command's own status therefore arrives on a channel closed to
@@ -285,7 +285,7 @@ export interface SubstrateInfo {
   readonly rootless: boolean;
 }
 
-export interface PodmanSubstrateOptions {
+interface PodmanSubstrateOptions {
   /** Path or name of the podman binary; configuration, so a missing binary can be observed. */
   readonly podmanPath: string;
   /**
@@ -459,12 +459,12 @@ class PodmanCell implements Cell {
     }
     if (result.statusReport === "") {
       // The wrapper never reported: podman exec or the wrapper's sh failed, the cell was lost
-      // mid-run, or the command killed the wrapper (M2 trial M1). Only the last leaves a cell that
+      // mid-run, or the command killed the wrapper. Only the last leaves a cell that
       // answers a fresh exec, whose sweep also ends what the command left that the dead wrapper
       // never swept. timeout(1) never ends the wrapper.
       const unreported = `podman exec exited ${exitCode} and the in-cell wrapper reported no status for the command`;
       if (exitCode <= SIGNAL_EXIT_FLOOR) {
-        // A wrapper killed by a signal exits above 128 (the trial's was 137). Anything else is podman
+        // A wrapper killed by a signal exits above 128. Anything else is podman
         // or the OCI runtime failing before the wrapper ran (125-127) or the wrapper's sh itself:
         // the substrate's failure, which a cell that still answers a probe does not change.
         throw new CellExecFailed(

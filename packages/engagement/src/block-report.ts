@@ -6,12 +6,12 @@ import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
 // s-independent-verify-m1 W7): the client hears, once, that a project is paused, the cause as it
 // was recorded, and what happens next; and that it resumed. The cause is never a sentence asserted
-// as observed fact (M2 trial M3: a fixed sentence told the client a false cause): a halt recorded
+// as observed fact, since a fixed sentence can name a cause nobody observed: a halt recorded
 // with an error chain is told as Ashara's record of its kind, in the client's words, naming the
-// record that holds the chain, which stays with the operator (W11b D3: the raw chain told the
-// client internal class names); a plan-repair halt tells each given-up task's recorded reason as its
-// category in the client's words, naming the task's record, which holds the stored text (stored
-// reasons are Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
+// record that holds the chain, which stays with the operator because the raw chain names Ashara's
+// internal classes; a plan-repair halt tells each given-up task's recorded reason as its category
+// in the client's words, naming the task's record, which holds the stored text (stored reasons are
+// Ashara's internal wording); and a halt with none recorded says so. Reports are read from recorded block
 // episodes, so a halt written before a crash is still reported after the restart; the store posts
 // each at most once. No task is reported on its own: no task waits on a person (W6).
 
@@ -113,7 +113,7 @@ export interface LiaisonBlockReports {
 
 /**
  * Whose spending limit a budget_cap halt records, from its recorded error class (SPEND_CAP_ERROR_CLASS),
- * never from its message: the deployment's, binding every project, or the project's own (smoke1 D4).
+ * never from its message: the deployment's, binding every project, or the project's own.
  * A class that is neither is not guessed at: the report says which limit is not on record.
  */
 type SpendLimit = "deployment" | "project" | "unrecorded";
@@ -174,7 +174,7 @@ function spendFigures(spend: SpendAtCap | null): string {
 /**
  * What the episode's recorded kind says paused the project, in the client's words: only what every
  * halt recorded with that kind is by definition (ProjectBlockCategory), stated as Ashara's own
- * record, so a misrecorded kind reads as Ashara's record and not as an observed fact (M2 trial M3).
+ * record, so a misrecorded kind reads as Ashara's record and not as an observed fact.
  */
 function recordedKind(halt: ToldHalt): string {
   switch (halt.kind) {
@@ -198,7 +198,7 @@ function recordedKind(halt: ToldHalt): string {
 /**
  * The cause in the client's words, from the episode's recorded kind; the record's own text (the error
  * class and its chain) stays in project_blocks for the operator, and the report names that record
- * (W11b D3). A halt with no cause recorded says so.
+ * instead of quoting Ashara's internal class names. A halt with no cause recorded says so.
  */
 function recordedCause(episodeId: string, halt: ToldHalt, cause: RecordedCause): string {
   if (cause.reason === null && cause.errorClass === null) return "No cause was recorded for this pause.";

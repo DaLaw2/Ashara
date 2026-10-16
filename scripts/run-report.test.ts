@@ -196,7 +196,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       sessionId: idleSession,
       attempt: 1,
     }));
-    // A close as already delivered completes with no attempt; the report quotes its own end record (W5 D5).
+    // A close as already delivered completes with no attempt; the report quotes its own end record.
     const deliveredSession = createSessionId();
     const deliveredDetail = `task already delivered on main at ${"a".repeat(40)}: its checks revision 1 and every suite pass there; nothing merged`;
     await withSessionLifecycle(store, { sessionId: deliveredSession, taskId: idleTaskId, brief: { ...brief, taskId: idleTaskId }, environmentVersion: null }, async () => ({
@@ -277,7 +277,7 @@ describe("the trace contract (M2 exit 7) on a scripted run", () => {
       `terminal finished:done, 3 turn(s), model deepseek/deepseek-scripted, base cell, prompt digest ${recorded?.kind === "recorded" ? recorded.attempt.promptDigest : "MISSING"}`,
     );
     // The orphan sits on the task that has llm_calls rows: those calls cannot be tied to an attempt.
-    expect(report.text).toContain("UNTIED: 3 llm_calls row(s) on this task and 1 session(s) without a recorded attempt");
+    expect(report.text).toContain("UNTIED: 3 llm_calls row(s) on this task and 1 session(s) that ended without a recorded attempt");
     expect(report.text).toContain("6 dev session(s), 1 with a recorded attempt, 5 without; 1 task(s) UNTIED");
   });
 

@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
+import { insertedRow } from "../inserted-row.js";
 import { environmentBuilds } from "../schema/index.js";
 
 interface EnvironmentBuildColumns {
@@ -84,7 +85,7 @@ export class EnvironmentBuildRepository {
       network: build.network,
       logDigest: build.logDigest,
     };
-    const [row] = await this.db
+    const rows = await this.db
       .insert(environmentBuilds)
       .values({ projectId: build.projectId, version: build.version, status: "succeeded", error: null, ...columns })
       .onConflictDoUpdate({
@@ -93,11 +94,11 @@ export class EnvironmentBuildRepository {
         set: { ...columns, createdAt: sql`now()` },
       })
       .returning();
-    return toRecord(row);
+    return toRecord(insertedRow(rows, "environment_builds", `record the succeeded build of version ${build.version}`));
   }
 
   async recordFailed(build: NewFailedEnvironmentBuild): Promise<EnvironmentBuildRecord> {
-    const [row] = await this.db
+    const rows = await this.db
       .insert(environmentBuilds)
       .values({
         projectId: build.projectId,
@@ -111,6 +112,6 @@ export class EnvironmentBuildRepository {
         error: build.error,
       })
       .returning();
-    return toRecord(row);
+    return toRecord(insertedRow(rows, "environment_builds", `record the failed build of version ${build.version}`));
   }
 }

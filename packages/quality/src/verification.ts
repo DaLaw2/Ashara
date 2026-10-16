@@ -254,7 +254,7 @@ export function observeAcceptanceSweeps(next: (sweep: AcceptanceSweep) => void):
   };
 }
 
-export interface TaskVerificationDeps {
+interface TaskVerificationDeps {
   readonly config: { readonly workdirBase: string };
   readonly cells: VerificationCells;
   readonly attemptPolicy: { readonly perCommandTimeoutSeconds: number };
@@ -710,7 +710,7 @@ export class TaskVerification {
   }
 
   /**
-   * Separation of duties (s-platform-role-m1, sprint0-run D5; ADR-074 addendum 2 d72 B1), before
+   * Separation of duties (s-platform-role-m1; ADR-074 addendum 2 d72 B1), before
    * the tentative merge: the task branch's changes since it left main may not touch the recipe of
    * main's environment (the platform role's) nor any stored check file of the project (the check
    * author's). Every other file is the product's, inputs the image build reads included: the
@@ -1153,7 +1153,7 @@ export class TaskVerification {
   }
 
   /**
-   * Before a check author's model is called (W11 D2): the environment's `build` from this dispatch's
+   * Before a check author's model is called: the environment's `build` from this dispatch's
    * image on a fresh checkout of the plan's foundation, as the merge gate builds before it runs
    * anything. Passing: null, and every red run of the attempt (define_check's and the one at
    * finish) is on a foundation that builds, so a check failing there fails for its own reason. Failing:
@@ -1371,7 +1371,7 @@ export class TaskVerification {
     if (stored.baselineCommit === null) {
       problem = `revision ${stored.revision} records no baseline commit (it was stored before baselines were recorded), so it cannot be red-run again`;
     } else {
-      // As at authoring (W11 D2): on a baseline the environment no longer builds, every check fails
+      // As at authoring: on a baseline the environment no longer builds, every check fails
       // for that reason alone, which is no evidence the set still tells the task's work from its absence.
       // The BaseCell (Sprint 0's cells only) defines no build: its run is the red run alone, as before.
       let build: EnvironmentTestRun | null = null;
@@ -1473,7 +1473,7 @@ export class TaskVerification {
     const { task, sessionId } = d;
     // The summary and the chain, its context included, become the next check attempt's brief
     // (formatPriorAttemptFailure renders the chain verbatim), so neither names a commit the cell
-    // cannot reach (eighth run E5); `operator`, the foundation's commit among it, goes only to the event.
+    // cannot reach; `operator`, the foundation's commit among it, goes only to the event.
     const summary = `the checks of check task ${task.id} were rejected: ${reason}`;
     this.deps.eventSink?.emit({ event: "task_failed", taskId: task.id, attempt: task.attempt, reason: summary, ...operator });
     const chain = wrapError("development", "keepChecks", reason, { taskId: task.id });

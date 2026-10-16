@@ -34,7 +34,7 @@ import { testCellInstance } from "../test-cells.js";
 // Independent verification end to end (story s-independent-verify-m1) on real podman, real git, the
 // real recorded gateway and the real task_checks table, with a scripted model: no real LLM call and
 // no skip. A check task's checks are red-run on the plan's foundation (the product scaffold's merge
-// here, which the environment builds, ADR-074 addendum 2 d74 A, W11 D2) and stored; an implementation task is swept for delivery on main, then
+// here, which the environment builds, ADR-074 addendum 2 d74 A) and stored; an implementation task is swept for delivery on main, then
 // decided by them on its tentative merge.
 
 const stub = vi.hoisted(() => ({ model: undefined as unknown }));
@@ -281,7 +281,7 @@ describe("independent verification", () => {
     const mainBefore = await git("rev-parse", "main");
     const helloSh = `checks/${hello.implementation.id}/hello.sh`;
 
-    // Eighth run E1: the author also writes the product beside its checks; it is discarded, so the
+    // The author also writes the product beside its checks; it is discarded, so the
     // red run still fails on the foundation and the stored set holds the check file only.
     const { result, mock, events } = await runTask(hello.check, [
       toolCallTurn("write_file", { path: helloSh, content: HELLO_CHECK }),
@@ -296,7 +296,7 @@ describe("independent verification", () => {
     expect(events.find((e) => e.event === "check_red_run")).toMatchObject({ rejected: [], baselineCommit: foundation, foundationTaskId });
     expect(events.find((e) => e.event === "check_files_discarded")).toMatchObject({ paths: ["hello.txt"] });
     expect(JSON.stringify(mock.doGenerateCalls[3]?.prompt ?? null)).toContain("Discarded, outside your checks directory");
-    // Eighth run E5: the foundation is named by its task, never by a commit the cell cannot reach.
+    // The foundation is named by its task, never by a commit the cell cannot reach.
     expect(promptText(mock)).toContain(`the merge of task ${foundationTaskId}`);
     expect(promptText(mock)).toContain(`under checks/${hello.implementation.id}/ and nowhere else`);
     expect(promptText(mock)).not.toContain(foundation);
@@ -319,8 +319,8 @@ describe("independent verification", () => {
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
 
-  // Second run N1/N5: checks in bash-only syntax failed on main with a dash syntax error, which the
-  // red run accepts, and the author could not replace them.
+  // A check in bash-only syntax fails under dash with a syntax error, which the red
+  // run would accept, so the author sees why at once and can replace it.
   it("define_check red-runs the check at once and shows why it fails; a redefinition replaces it", async () => {
     const greeting = await plannedPair("Write hi.txt");
     const hiSh = `checks/${greeting.implementation.id}/hi.sh`;
@@ -334,7 +334,7 @@ describe("independent verification", () => {
     ]);
 
     expect(result.status, result.detail).toBe("completed");
-    // Third run N8: the author sees the project's stored checks, the earlier task's included.
+    // The author sees the project's stored checks, the earlier task's included.
     expect(promptText(mock)).toContain("Checks already stored in this project");
     expect(promptText(mock)).toContain('### Task \\"Write hello.txt\\"');
     expect(promptText(mock)).toContain(`- says hello: \`sh ${helloSh}\``);
@@ -347,7 +347,7 @@ describe("independent verification", () => {
     expect(afterRedefine).toContain('Replaced check \\"says hi\\" (1 defined so far)');
     expect(afterRedefine).toContain("hi.txt: No such file");
     expect(events.filter((e) => e.event === "check_defined")).toMatchObject([
-      // V7: a check that fails on its own syntax never reached its verdict, and is rejected at once.
+      // A check that fails on its own syntax never reached its verdict, and is rejected at once.
       { name: "says hi", replaced: false, exitCode: 2, rejection: expect.stringContaining("it exited 2 on the foundation, not 99") },
       { name: "says hi", replaced: true, exitCode: 99, rejection: null },
     ]);
@@ -357,7 +357,7 @@ describe("independent verification", () => {
     expect(await git("worktree", "list", "--porcelain")).not.toContain("checkouts");
   }, 300_000);
 
-  // W11 D4: debug_tmp, debug_env and debug_ls were defined to look around the foundation and stored as acceptance checks.
+  // A look around the foundation is never stored as an acceptance check.
   it("probe_foundation shows the foundation and stores nothing; only the checks defined reach the set", async () => {
     const greeting = await plannedPair("Write hey.txt");
 
@@ -387,8 +387,8 @@ describe("independent verification", () => {
 
     expect(result.status).toBe("failed");
     expect(result.detail).toContain("no check of the set fails on the foundation");
-    // The detail and the chain are the next check attempt's brief: no commit the cell cannot reach
-    // (eighth run E5); the operator's copy is in the task_failed event alone.
+    // The detail and the chain are the next check attempt's brief: no commit the cell cannot reach;
+    // the operator's copy is in the task_failed event alone.
     expect(result.detail).not.toContain(foundation);
     expect(JSON.stringify(result.errorEnvelope)).not.toContain(foundation);
     expect(events.find((e) => e.event === "task_failed")).toMatchObject({ baselineCommit: foundation, foundationTaskId });
@@ -516,7 +516,7 @@ describe("independent verification", () => {
   }, 300_000);
 });
 
-// D3 of the 2026-10-14 Sprint 0 run: a merge was checked only against its own task's checks.
+// A merge is checked against every stored suite, not only its own task's checks.
 describe("post-merge regression suite", () => {
   /** What the orchestrator does on a completed result. */
   async function markCompleted(taskId: WorkItemId): Promise<void> {
@@ -652,8 +652,7 @@ describe("post-merge regression suite", () => {
     );
   }, 300_000);
 
-  // docs/investigations/second-run-2026-10-14.md N2 (no exit from a wrong check) and N3 (a retry judged
-  // only on its own uncommitted diff).
+  // A wrong check has an exit (a dispute), and a retry is never judged only on its own uncommitted diff.
   it("a disputed check ends the attempt as disputed with the work kept; a re-dispatch that finds it done on the branch runs the gates", async () => {
     const reef = await checkedPair("Write reef.txt", { name: "reefs", command: "grep reef reef.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
@@ -701,8 +700,8 @@ describe("post-merge regression suite", () => {
     expect(result.detail).toContain('check "empties" FAILED: exited 99');
   }, 300_000);
 
-  // Fourth run N13: work an earlier task delivered beyond its scope parked the later task for the
-  // operator. ADR-074 addendum 2 d74 A: the sweep before dispatch closes it with no implementer.
+  // ADR-074 addendum 2 d74 A: when an earlier task delivered beyond its scope, the sweep
+  // before dispatch closes the later task with no implementer, never parking it for the operator.
   it("its checks and the regression suite pass on main itself: completed as already delivered at main before any model call, nothing merged", async () => {
     const again = await checkedPair("Write wave.txt again", { name: "waves again", command: "grep wave wave.txt || exit 99" });
     const mainBefore = await git("rev-parse", "main");
@@ -723,10 +722,9 @@ describe("post-merge regression suite", () => {
     expect(await git("branch", "--list", `task/${again.implementation.id}`)).toBe("");
   }, 300_000);
 
-  // Run 7 (ADR-074 addendum 2 d74 A): a check task re-authoring checks for work an earlier task had
-  // already delivered red-ran them on main, where every one passed, so it could never finish; the
-  // later task was never dispatched. On the foundation they fail, the set is kept, and the sweep
-  // closes the task as already delivered with no implementer dispatched.
+  // ADR-074 addendum 2 d74 A: checks re-authored for work an earlier task already delivered
+  // would all pass on main, so they are red-run on the foundation, where they fail; the set is kept,
+  // and the sweep closes the task as already delivered with no implementer dispatched.
   it("a re-authored set is red-run on the foundation, not main; the task it decides is then closed already delivered with no model call", async () => {
     const later = await plannedPair("Greet the user with hello");
     await new TaskCheckRepository(db).append({

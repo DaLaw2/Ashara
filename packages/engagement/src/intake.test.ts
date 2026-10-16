@@ -364,7 +364,7 @@ describe("TenderIntake assumptions report (ADR-074 addendum 2 d89 C)", () => {
     ]);
   });
 
-  // W11c D3: the vision records which side of the scope each line is on, so no report reads it from the wording.
+  // The vision records which side of the scope each line is on, so no report reads it from the wording.
   test("the vision records each scope line with its side, in scope first", async () => {
     const write = await intakeOf({ ...raw([]), inScope: ["put and get"], outOfScope: ["any network service"] });
     expect(write.vision(["q0"]).scopeBoundaries).toEqual([

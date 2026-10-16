@@ -142,8 +142,8 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
     expect(prompts).toEqual([]);
   });
 
-  // W11 (ADR-074 addendum 2 d89 B): the reviewer called checks of cited Inferred assumptions "outside the
-  // vision" and rejected the binary name the public interface fixed, because it saw neither.
+  // ADR-074 addendum 2 d89 B: a reviewer that sees neither the cited Inferred assumptions nor the public
+  // interface calls checks of those assumptions "outside the vision" and rejects names the interface fixed.
   test("each suite is judged against its own task's cited items, with their status, and the interface its checks were written against", async () => {
     const prompts: string[] = [];
     const reads: Array<{ path: string; commit: string }> = [];

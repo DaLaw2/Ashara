@@ -367,7 +367,7 @@ interface DuePlanRevisionRow {
 /**
  * Plan revisions the client has not been told about, oldest first. Only an active project's: a
  * report saying what the team will now do is not posted while the project is halted or stopped,
- * nor while a stop awaits the Liaison (W11b D2); a halted project's revision is reported once it
+ * nor while a stop awaits the Liaison; a halted project's revision is reported once it
  * resumes. A revision written before the project's first plan was reported is not listed here:
  * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
  * was not told about.

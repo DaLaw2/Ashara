@@ -7,14 +7,6 @@ import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { WorkItemRowRepository } from "./work-item.js";
 import type { StoredFailureVerdict, WorkItem, WorkItemRepository } from "../domain/index.js";
 
-/**
- * Bridges the db persistence repository (Drizzle row shape, nullable columns) to
- * the planning domain WorkItemRepository port (domain WorkItem shape, optional
- * fields). Extracted from the composition root so both the server wiring and the
- * bulk-plan facade wiring in tests share ONE adapter (mig9-t5) rather than
- * duplicating the row↔domain mapping.
- */
-
 type DbRow = Awaited<ReturnType<WorkItemRowRepository["findById"]>>;
 
 /**
@@ -67,12 +59,17 @@ export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
     dispatchCount: row.dispatchCount,
     workKind: row.workKind === null ? null : parseWorkKind(row.workKind),
     ...(row.ownerRoleId !== null ? { ownerRoleId: row.ownerRoleId } : {}),
-    createdAt: row.createdAt ?? new Date(),
-    updatedAt: row.updatedAt ?? new Date(),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     events: [],
   };
 }
 
+/**
+ * Bridges the persistence repository (Drizzle row shape, nullable columns) to Delivery's
+ * WorkItemRepository port (domain WorkItem shape, optional fields). The server's wiring and the
+ * tests share this one adapter, so the row-to-domain mapping exists once.
+ */
 export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository {
   return {
     async create(item) {

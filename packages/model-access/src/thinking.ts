@@ -74,12 +74,10 @@ export function thinkingProviderOptions(
 /**
  * The least output added for reasoning to a request sent with thinking on. Why:
  * DeepSeek counts reasoning against `max_tokens`, so a bound sized for the
- * answer alone can be spent entirely on reasoning. In the W5 trial
- * (2026-10-14) 7 of 12 deepseek-flash calls stopped at `length` with output
- * tokens equal to reasoning tokens and 0 characters of text, at bounds of
- * 2,048 and 4,096. DeepSeek's own default bound in thinking mode is 64K
- * (api-docs.deepseek.com/api/create-chat-completion, read 2026-10-14); half of
- * it for reasoning, on top of the answer, is a policy choice. A request still
+ * answer alone can be spent entirely on reasoning. DeepSeek's own
+ * default bound in thinking mode is 64K
+ * (api-docs.deepseek.com/api/create-chat-completion); half of it for
+ * reasoning, on top of the answer, is a policy choice. A request still
  * cut off reports its allowance in its `StructuredOutputTruncated`.
  */
 const MIN_REASONING_ALLOWANCE_TOKENS = 32_768;
@@ -87,22 +85,16 @@ const MIN_REASONING_ALLOWANCE_TOKENS = 32_768;
 /**
  * Reasoning tokens allowed per byte of a one-shot request's prompt, above the
  * minimum, for every site that runs with thinking on (decomposition among
- * them). The scaling was introduced (a7bd9bbb) on the theory
- * that the suite review's cut tracked its prompt: in W11c (2026-10-14,
- * llm_calls) both suite-review calls, at 20,084 and 20,192 input tokens, spent
- * all 36,864 output tokens reasoning and were cut off. smoke2 (2026-10-15,
- * docs/investigations/smoke2-python-wc-2026-10-15.md D2) disproved that for
- * the suite review: its prompt was small enough that the allowance was the
- * 32,768 minimum, and the call again spent all 36,864 output tokens on
- * reasoning with no answer. So the suite review now runs with thinking off
- * (config/models.toml, ADR-074 d95 b) and gets no allowance; how much
- * reasoning any site needs as its prompt grows is unmeasured. One token per
- * byte is about four per prompt token. The worst-case price follows, because
+ * them). The suite review runs with thinking off (config/models.toml, ADR-074
+ * d95 b) and gets no allowance: a larger allowance does not stop it spending
+ * its whole bound on reasoning. How much reasoning any site needs
+ * as its prompt grows is unmeasured. One token per byte is about four per
+ * prompt token. The worst-case price follows, because
  * Finance prices the bound this returns.
  */
 const REASONING_TOKENS_PER_PROMPT_BYTE = 1;
 
-/** DeepSeek's documented `max_tokens` ceiling: "between 1 and 384K (393216)" (same page, read 2026-10-14). */
+/** DeepSeek's documented `max_tokens` ceiling: "between 1 and 384K (393216)" (same page). */
 const DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216;
 
 /** The output bound a request is sent with, and how much of it is the reasoning allowance. */

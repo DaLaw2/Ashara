@@ -148,7 +148,7 @@ export class UnpricedModel extends PreCallRefusal {
 }
 
 /** Which cap a refused call would have crossed. */
-export type SpendCapScope =
+type SpendCapScope =
   | { readonly kind: "project"; readonly projectId: string }
   | { readonly kind: "deployment" };
 

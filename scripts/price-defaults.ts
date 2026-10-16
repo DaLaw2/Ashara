@@ -7,7 +7,7 @@
  * price column when its key or SQL name mentions cost or price, and any `.default(` on it is reported.
  */
 
-export interface PriceColumnDefault {
+interface PriceColumnDefault {
   readonly line: number;
   readonly column: string;
   readonly text: string;

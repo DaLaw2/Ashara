@@ -29,7 +29,7 @@ import {
 
 export interface DecompositionLLM {
     /**
-     * `validate` (mig-run10) is an optional post-parse SEMANTIC check run INSIDE
+     * `validate` is an optional post-parse SEMANTIC check run INSIDE
      * the reliability ladder attempt: a `false` verdict (e.g. a phantom
      * `dependsOn` ref) is a retryable failure whose feedback is re-asked and
      * escalated, so one malformed emission is corrected on retry rather than
@@ -92,7 +92,7 @@ export class DecompositionEngine {
                 ? this.ensureSprint0Task(epic.id, allTasks, dependencyEdges)
                 : dependOnEnvironment(input.environment.taskId, allTasks, dependencyEdges);
         // A revision on a layout already merged red-runs its checks on that layout's latest merged
-        // state (layout.taskId), never on an environment task merged before it (W11 D2); a new
+        // state (layout.taskId), never on an environment task merged before it; a new
         // environment task of the revision lands on that state, so it is the foundation then.
         const foundationId =
             input.layout.kind === "new"
@@ -172,7 +172,7 @@ export class DecompositionEngine {
     }
 
     /**
-     * PURE pre-check (mig-run10) run inside the reliability ladder's attempt, so
+     * PURE pre-check run inside the reliability ladder's attempt, so
      * an over-cap emission or a phantom `dependsOn` ref is re-asked with this
      * feedback rather than accepted. It mirrors {@link resolveTasks}'s failure
      * checks without assigning ids (generateId runs once, after this passes).

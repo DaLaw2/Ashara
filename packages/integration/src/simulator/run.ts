@@ -252,7 +252,7 @@ function simulatedEnvironment(workdir: string, capUsd: number): () => void {
   delete process.env["ASHARA_BUDGET_TOTAL"];
   delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
   delete process.env["MAX_BATCH_SIZE"];
-  // Required configuration since W9; the fake runtime accepts and ignores the caps they become.
+  // Required configuration (ADR-074 d82 W9); the fake runtime accepts and ignores the caps they become.
   process.env["ASHARA_CELL_MEMORY"] = "4g";
   process.env["ASHARA_CELL_CPUS"] = "4";
   process.env["ASHARA_CELL_PIDS_LIMIT"] = "1024";

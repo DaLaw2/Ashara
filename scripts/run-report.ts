@@ -7,7 +7,8 @@
  * Per task: each dev session's attempt (terminal, turns, model, environment version, prompt
  * digest), or, when none is recorded, what the row says about why (still open, closed by the startup
  * reconciler, from before migration 046, or ended without an attempt outcome), never "no model
- * call"; a task with llm_calls rows and a session without a recorded attempt is flagged UNTIED. Its
+ * call"; a task with llm_calls rows and a session that ended without a recorded attempt is flagged
+ * UNTIED (an open session is in flight, and one completed as already delivered ran no attempt). Its
  * llm_calls per provider with the measured coverage of their cost and the cache-hit share
  * (cache-read over input tokens, over the calls that reported both). Then the run's totals. Exits 1 when an llm_calls row is priced at
  * exactly $0, which the ledger must never write (an unknown cost is NULL).

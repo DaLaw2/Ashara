@@ -28,7 +28,7 @@ const DEFINITION = [
 ].join("\n");
 const CONTAINERFILE_TEXT = "FROM scratch\n";
 
-export interface EnvironmentWriteProbeRequest {
+interface EnvironmentWriteProbeRequest {
   readonly substrate: { createCell(spec: CellSpec): Promise<Cell> };
   /** The image the cell starts from. */
   readonly image: string;

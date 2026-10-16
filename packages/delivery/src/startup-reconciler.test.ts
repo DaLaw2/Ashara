@@ -154,8 +154,8 @@ function targetWithMain(subjects: readonly string[]): { readonly path: string; r
   return { path, head: git("rev-parse", "HEAD") };
 }
 
-// The 400-seed deep soak (2026-10-15): B5, a merge committed on main and a crash before the task's
-// Completed update, requeued and redone; B3, a requeue that failed once left the orphan InProgress.
+// A merge committed on main and a crash before the task's Completed update must not requeue the
+// merged work, and a requeue that fails once must not leave the orphan InProgress.
 describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, within a bound, never left InProgress", () => {
   const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-0000000000bb", "test");
   const dirs: string[] = [];

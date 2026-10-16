@@ -140,7 +140,7 @@ describe("lifecycle simulator, directed", () => {
   /** An implementation attempt's draw, counted over implementation attempts only. */
   const implementation = (site: string, nth: number | "every"): Direction => draw(site, nth, 1, "implementation");
 
-  // B8 (baseline §3): the first BEGIN fails with a 40001. The transaction wrapper (db
+  // The first BEGIN fails with a 40001. The transaction wrapper (db
   // connection.ts) releases the connection whose BEGIN failed, so no checkout outlives the process.
   it("releases the connection of a failed BEGIN, leaving none checked out", async () => {
     const result = await directed([{ kind: "fault", seam: "db", label: "begin", nth: 1, fault: "db-query-failed" }]);
@@ -148,7 +148,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // B3 (baseline §3; task t-orphan-requeue-failure): a crash, a crash right after the task is set
+  // Task t-orphan-requeue-failure: a crash, a crash right after the task is set
   // InProgress (its orphan), then a 40001 on the startup reconciler's dev_sessions read. The
   // reconciler retries the requeue within its bound, so the orphan is never left InProgress.
   it("retries a failed requeue of an orphan, never leaving it InProgress while the process lives", async () => {
@@ -162,21 +162,21 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // B5 (baseline §3, re-confirmed §7.8; task t-merge-record-crash-window): the process dies on the
+  // Task t-merge-record-crash-window: the process dies on the
   // merge-record write right after the merge commit landed on main (Quality merge.ts
   // commitMerge, then orchestrator execution.ts writes the record). The startup reconciler reads
   // main before it requeues an orphan, and records the merge it finds instead of dispatching the
   // merged work again.
-  it("records a merge on main whose record a crash lost, never re-dispatching it (B5)", async () => {
+  it("records a merge on main whose record a crash lost, never re-dispatching it", async () => {
     const result = await directed([{ kind: "fault", seam: "db", label: /^update "work_items" set "merge_commit" = \$1/, nth: 1, fault: "crash-before" }]);
     expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual(["db:crash-before"]);
     expect(result.log.some((line) => line.includes("was merged on main as") && line.includes("merge recorded, Completed, not re-dispatched"))).toBe(true);
     expect(keys(result)).toEqual([]);
   }, 90_000);
 
-  // B4 (baseline §3): two simulated git index.lock failures fail the substrate gate's cell start.
-  // Before W6 the environment task was parked at Blocked (environment_unavailable) for an operator:
-  // I1, I2 and I8. Now the fault is requeued uncharged and the next dispatch completes it.
+  // Two simulated git index.lock failures fail the substrate gate's cell start. The fault is
+  // requeued uncharged and the next dispatch completes it, never parking the task for an operator
+  // (story s-loop-never-stop-m1 W6).
   it("requeues a task whose cell could not start, never parks it for a person", async () => {
     const result = await directed([
       { kind: "fault", seam: "git", label: "add", nth: 6, fault: "git-failed" },
@@ -239,12 +239,12 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(planted)).toContain("I7:checkout-overlap:merge --abort");
   }, 120_000);
 
-  // ADR-074 d84 b. With one project the admission queue's absence admits nothing more (baseline
-  // §7.6), so here two projects share one deployment cap of $10, spent to the cap. The turn is
+  // ADR-074 d84 b. With one project the admission queue's absence admits nothing more, so here two
+  // projects share one deployment cap of $10, spent to the cap. The turn is
   // handed on after every database call returns, so an admission's spend read is followed by the
   // other task's: skipping the queue lets both pass on one headroom smaller than their two
-  // estimates. The in-flight read precedes the spend read (B9's fix), so what this catches is the
-  // queue's race, not B9's.
+  // estimates. The in-flight read precedes the spend read, so what this catches is the queue's race,
+  // not a race between those two reads.
   it("catches two admissions passing the deployment's cap on one headroom when the admission queue is skipped", async () => {
     const race = [...BATCH_OF_TWO, switchAtEvery(/^interleave:db:.*:returned$/)];
     const shared = { projects: 2, capUsd: 10 } as const;
@@ -298,7 +298,7 @@ describe("lifecycle simulator, directed", () => {
     expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
     expect(keys(await directed([], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
     expect(keys(await directed([], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
-    // W11c D3: the stand-ins' assumption is cited by no acceptance line, so the report lists it; dropped, it is named.
+    // The stand-ins' assumption is cited by no acceptance line, so the report lists it; dropped, it is named.
     expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage"]);
     expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
   }, 120_000);
@@ -314,7 +314,7 @@ describe("lifecycle simulator, directed", () => {
     expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 
-  // smoke2 D3: the delivered report quotes the public interface file main holds, cut when it is too
+  // The delivered report quotes the public interface file main holds, cut when it is too
   // long, or says main holds none. The scaffold writes a short one (benign), none (1) or a long one (2).
   it("catches a delivered report whose how-to-run section is not main's public interface file", async () => {
     const scaffold = (form: number): Direction => draw("agent.scaffold.public-interface", "every", form, "scaffold");
@@ -360,7 +360,7 @@ describe("lifecycle simulator, directed", () => {
   }, 90_000);
 
   /*
-   * The adversarial behaviours (test retro 2026-10-15 pattern 2; ADR-081), each judged twice: the
+   * The adversarial behaviours (docs/investigations/test-retro-2026-10-15/, pattern 2; ADR-081), each judged twice: the
    * stand-in's trace says it misbehaved, and production's own records (coverage.ts MODEL_PATHS, the
    * attempt terminals of dev_sessions) say the gateway, the attempt loop and the routers met it; and
    * the run passes every invariant.
@@ -376,7 +376,7 @@ describe("lifecycle simulator, directed", () => {
     expect([...result.coverage.attempts]).toEqual(expect.arrayContaining([...attempts]));
   }
 
-  // (a) w12b D2: both tasks of a batch write product/INDEX, each branched before the other merged;
+  // (a) Both tasks of a batch write product/INDEX, each branched before the other merged;
   // the second's retry is handed its conflict with main.
   const SAME_FILE = [...BATCH_OF_TWO, switchAtEvery(/^interleave:git:/), implementation("agent.shared-file", "every")];
 
@@ -406,7 +406,7 @@ describe("lifecycle simulator, directed", () => {
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
-  // (e) I11, S2: the turn cap ends an attempt after its first edit; the task still completes.
+  // (e) The turn cap ends an attempt after its first edit; the task still completes.
   it("ends an attempt at its turn cap in the middle of its edits", async () => {
     const result = await adversarial([implementation("agent.turn-cap-mid-edit", 1)]);
     expectReached(result, ["agent-runner stall-mid-edit"], [], ["turn_cap"]);

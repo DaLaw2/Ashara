@@ -1,5 +1,6 @@
 import { createDomainEvent } from "@ashara/shared";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
+import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { WorkItem } from "./work-item.js";
 import { giveUpWorkItem } from "./work-item.js";
 
@@ -100,6 +101,7 @@ function awaitRewrittenChecks(
 export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stale: StaleChecks): StaleChecksExit {
   const rewrites = stale.revision - 1;
   if (rewrites >= CHECK_REWRITE_BOUND) {
+    requireInProgress(task, "Abandoned");
     giveUpWorkItem(task, {
       source: "checks_rewrite_bound",
       checkTaskId: stale.checkTaskId,
@@ -113,6 +115,7 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
   }
   const reopenable = reopenableCheckTask(checkTask, stale.checkTaskId);
   if (reopenable.kind === "refused") {
+    requireInProgress(task, "Abandoned");
     giveUpWorkItem(task, {
       source: "checks_stale",
       checkTaskId: stale.checkTaskId,
@@ -120,7 +123,7 @@ export function exitStaleChecks(task: WorkItem, checkTask: WorkItem | null, stal
     });
     return { kind: "unreopenable", why: reopenable.why };
   }
-  if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, "Pending");
+  requireInProgress(task, "Pending");
   reopenCheckTask(
     reopenable.item,
     task.id,
@@ -187,6 +190,7 @@ function disputeBrief(taskId: string, dispute: CheckDispute): string {
  */
 export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, dispute: CheckDispute): DisputeExit {
   if (dispute.disputes > CHECK_DISPUTE_BOUND) {
+    requireInProgress(task, "Abandoned");
     giveUpWorkItem(task, {
       source: "check_disputed",
       checkTaskId: dispute.checkTaskId,
@@ -199,6 +203,7 @@ export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, di
   }
   const reopenable = reopenableCheckTask(checkTask, dispute.checkTaskId);
   if (reopenable.kind === "refused") {
+    requireInProgress(task, "Abandoned");
     giveUpWorkItem(task, {
       source: "check_disputed",
       checkTaskId: dispute.checkTaskId,
@@ -207,7 +212,7 @@ export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, di
     });
     return { kind: "unreopenable", why: reopenable.why };
   }
-  if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, "Pending");
+  requireInProgress(task, "Pending");
   const why = { disputed_check: dispute.check.name, disputed_revision: dispute.revision, dispute: dispute.disputes };
   reopenCheckTask(
     reopenable.item,
@@ -218,6 +223,11 @@ export function exitDisputedCheck(task: WorkItem, checkTask: WorkItem | null, di
   );
   awaitRewrittenChecks(task, dispute.checkTaskId, why);
   return { kind: "rewrite" };
+}
+
+/** These exits are an InProgress task's alone; `to` is the status the exit about to run would write. */
+function requireInProgress(task: WorkItem, to: WorkItemStatus): void {
+  if (task.status !== "InProgress") throw new InvalidStatusTransition(task.id, task.status, to);
 }
 
 function reopenableCheckTask(
@@ -316,9 +326,8 @@ function kindText(kind: SuiteReviewProblem["kind"]): string {
 
 /**
  * The review's problems as the check author reads them in its reopened task's brief, and every
- * problem earlier reviews found in this task's checks (ADR-074 addendum 2 d89 F; W11: each rewrite was
- * shown only the latest review, so a check one review had it drop came back and the next review
- * named it again).
+ * problem earlier reviews found in this task's checks (ADR-074 addendum 2 d89 F): a rewrite shown
+ * only the latest review can bring back a check an earlier review had it drop.
  */
 function reviewBrief(
   checkTaskId: string,

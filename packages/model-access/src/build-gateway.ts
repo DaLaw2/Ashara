@@ -79,7 +79,7 @@ function assertRoutingProfileModelsPresent(config: GatewayConfig): void {
   });
 }
 
-export interface BuildGatewayOptions {
+interface BuildGatewayOptions {
   /**
    * Already-resolved gateway config. Acquisition (the DB catalog and the
    * secret store, in the server) stays caller-side — this factory only

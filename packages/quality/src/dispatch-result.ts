@@ -58,7 +58,7 @@ export async function cleanupWorkdirBeforeReturn(taskId: string, workDir: string
  * check) failed and no verdict was reached; and runExecution, a throw out of the dispatch past the
  * cell's creation that no stage caught.
  */
-export type EnvironmentStage =
+type EnvironmentStage =
   | "probeSubstrate"
   | "resolveEnvironment"
   | "planWork"
@@ -133,7 +133,7 @@ export interface DispatchRef {
   readonly attempt: number;
 }
 
-export interface EnvironmentBlock extends AgentPart {
+interface EnvironmentBlock extends AgentPart {
   readonly task: DispatchRef;
   readonly sessionId: string;
   readonly stage: EnvironmentStage;

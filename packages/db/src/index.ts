@@ -4,6 +4,7 @@ export type { Database, DbHandle, DbTransaction, PoolFactory } from "./connectio
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
 export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-claim.js";
+export { insertedRow } from "./inserted-row.js";
 
 export {
   PROJECT_BLOCK_KINDS,

@@ -199,7 +199,7 @@ export function sample(coverage: Coverage, snapshot: Snapshot, faults: readonly 
  *   recorded cut at the output limit (finish reason length) with output beyond its reasoning, or with
  *   every output token reasoning; or recorded stopped with no output at all; or, structured, an
  *   error stopped with output (the answer did not parse or did not validate);
- * - merge:conflict-presented: a session's brief hands the task its conflict with main (w12b D2).
+ * - merge:conflict-presented: a session's brief hands the task its conflict with main.
  */
 const MODEL_PATHS = [
   "turn:truncated",
@@ -266,7 +266,7 @@ export async function sampleModelPaths(coverage: Coverage, observer: Database, p
   }
 }
 
-export interface MachineCoverage {
+interface MachineCoverage {
   readonly machine: string;
   readonly reached: readonly string[];
   readonly unreached: readonly string[];
@@ -317,9 +317,8 @@ const BEHAVIOURS: ReadonlyArray<readonly [set: BehaviourSet, members: readonly s
  * The soaks that have a coverage floor, by the profile their seeds run under, and the sets each
  * floors. Under the seeds' own profiles (profile.ts profileOfSeed) a soak draws seam faults, and the
  * hostile and chaos profiles' misbehaviour at low rates. The adversarial profile draws no seam fault
- * (profile.ts FAULTS) and every misbehaviour at high rates: observed 2026-10-15, `simulate.ts
- * --seeds 80 --profile adversarial --jobs 6`, every MODEL_PATHS key reached by 12 to 57 of the 80
- * seeds and every CONCURRENCY key by 28 to 50, no fault key by any.
+ * (profile.ts FAULTS) and every misbehaviour at high rates, so it floors the model and concurrency
+ * sets and no fault set.
  */
 const FLOORS = {
   own: ["faults", "models", "concurrency", "plants"],
@@ -331,10 +330,8 @@ export type Floor = keyof typeof FLOORS;
  * The keys a soak under its seeds' own profiles reaches too seldom to floor, each with the seeds of
  * 400 that reached it: under 5% of seeds, so at 80 seeds each is expected under 4 times and is at
  * zero more than once in 55 soaks (e^-4), which a re-roll alone would cause, not a lost behaviour.
- * Observed 2026-10-15 with `simulate.ts --seeds 200 --start 1 --jobs 6` and `--start 201`, one
- * project. Every key at 5% or more is floored; the least, db:db-transaction-killed at 24 of 400, was
- * reached by 5 and 6 of the 80-seed soaks of one and of two projects. Each key here is forced by the
- * directed tier instead (simulator.test.ts), and every MODEL_PATHS key is floored in the adversarial soak.
+ * Every key at 5% or more is floored. Each key here is forced by the directed tier instead
+ * (simulator.test.ts), and every MODEL_PATHS key is floored in the adversarial soak.
  */
 export const RARE_UNDER_OWN_PROFILES: ReadonlyMap<string, number> = new Map([
   ["faults db:db-unreachable", 1],

@@ -11,13 +11,13 @@ import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { TaskChecks } from "./task-checks.js";
 
-// Quality's review of a plan revision's check suites (ADR-074 addendum 2 d71 c; fifth run N20: 36
-// stored checks no product could all pass). After the last check task of a revision completes and
+// Quality's review of a plan revision's check suites (ADR-074 addendum 2 d71 c): checks written by
+// independent authors can together ask for what no product can pass. After the last check task of a revision completes and
 // before any implementation starts, every stored suite is read together with the vision, in one
 // structured call of its own: a separate dispatch of the check author's role that wrote none of the
 // checks it reads. Each check is judged against the vision items its own task cites, with their
 // status, and against the product's public interface as it stood on the commit the checks were
-// written against (d89 B, W11: the reviewer read neither, and rejected checks their brief required).
+// written against (d89 B): a reviewer that reads neither rejects checks their brief required.
 // What it finds is routed by the orchestrator (planning's exitSuiteReview).
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */

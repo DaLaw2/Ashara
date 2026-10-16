@@ -24,7 +24,7 @@ import { executeTool, toolSchemasFor } from "./tools.js";
  */
 const AGENT_CALL_SITE = "agent-runner";
 
-export interface AttemptDeps {
+interface AttemptDeps {
   /** The recorded gateway: every turn is one generateTurn call, one llm_calls row. */
   readonly llm: ContextualTurnLlm;
   /** The task's cell; every tool call goes through it, none touches the host filesystem. */

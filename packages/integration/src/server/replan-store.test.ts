@@ -336,7 +336,7 @@ afterAll(async () => {
   await db.$client.end();
 });
 
-// W11b D1, D2: answers read after the first plan was written and before it was reported (W11 D5).
+// Answers read after the first plan was written and before it was reported.
 describe("the client is told one plan, and never what the team will now do on a halted project", () => {
   test("a change read between the first plan and its report gives one founded report of the revised plan, and no halt", async () => {
     const { projectId, questionId } = await plannedProject({ reported: false });
@@ -367,7 +367,7 @@ describe("the client is told one plan, and never what the team will now do on a 
     expect(revisions.rows).toEqual([{ requestedBy: answerId, reportId: plan.id }]);
   });
 
-  // smoke1 D2: two changing answers were folded into one revision, and the first-plan report named only the first.
+  // Changing answers folded into one revision are each named in the first-plan report.
   test("two changing answers read before the first plan's report are one revision, and the report names both", async () => {
     const { projectId, questionIds } = await plannedProject({ reported: false, intake: TWO_QUESTION_INTAKE });
     const [studioQuestion, teacherQuestion] = questionIds;
@@ -532,7 +532,7 @@ describe("a late client change is planned", () => {
     expect(await replanner().runPending()).toEqual([]);
   });
 
-  // W11 D2: revision 3's checks were red-run on Sprint 0's commit, which holds no product to build.
+  // A revision's checks are never red-run on Sprint 0's commit, which holds no product to build.
   test("a revision after the scaffold red-runs its checks on the layout's latest merge, never on the environment task merged before it", async () => {
     const { projectId, questionId } = await plannedProject();
     const first = await itemsOf(projectId);
@@ -616,7 +616,7 @@ describe("a late client change is planned", () => {
     expect(await blockReports().runPending()).toEqual([]);
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(before + 1);
-    // The recorded kind in the client's words; the replanner's ReplanBoundReached chain stays in the record (W11b D3).
+    // The recorded kind in the client's words; the replanner's ReplanBoundReached chain stays in the record.
     expect(reports[reports.length - 1]?.body).toContain("Ashara recorded the cause as this: the plan has been revised for your changes");
     expect(reports[reports.length - 1]?.body).not.toContain("ReplanBoundReached");
   });
@@ -727,7 +727,7 @@ describe("a task the team gives up is planned around", () => {
     expect(await replanner().runPending()).toEqual([]);
   });
 
-  // Story s-loop-never-stop-m1 W6, the second run's M2 shape: a check task given up for a cause the
+  // Story s-loop-never-stop-m1 W6: a check task given up for a cause the
   // failure router never saw (here a dispute past its bound) is repaired, never left for a person.
   test("a check task given up past its dispute bound is repaired like any give-up, with the dispute as its evidence", async () => {
     const { projectId } = await plannedProject();
@@ -793,9 +793,9 @@ describe("a task the team gives up is planned around", () => {
   });
 });
 
-// Story s-loop-never-stop-m1 W6, the verifier's finding: a task no roster role can work was parked
-// at Blocked until a newer roster revision, which no production path writes (recordFirstRoster
-// refuses any revision but 1). It is given up instead, and the repair staffs its new tasks.
+// Story s-loop-never-stop-m1 W6: a task no roster role can work is never parked at Blocked until a
+// newer roster revision, which no production path writes (recordFirstRoster refuses any revision
+// but 1). It is given up instead, and the repair staffs its new tasks.
 describe("a task no roster role can work is planned around, never left waiting", () => {
   test("staffing finds no owner; the sweep gives the Blocked task up; the repair re-plans it with an owner the staffing resolves", async () => {
     const { projectId } = await plannedProject();
@@ -824,7 +824,7 @@ describe("a task no roster role can work is planned around, never left waiting",
     const unresolved = await staffOf(harbour.id);
     if (unresolved.kind !== "owner-unresolved") throw new Error(`expected owner-unresolved, got ${unresolved.kind}`);
 
-    // A Blocked owner_unresolved row as the dispatch wrote it before this change.
+    // A Blocked owner_unresolved row, as a stored row from an earlier dispatch holds it.
     await startTask(harbour.id);
     const reason = { source: "owner_unresolved", ownerRoleId: unresolved.ownerRoleId, rosterRevision: unresolved.rosterRevision, reason: unresolved.reason };
     await db.execute(sql`UPDATE work_items SET status = 'Blocked', blocked_reason = ${JSON.stringify(reason)}::jsonb WHERE id = ${harbour.id}`);

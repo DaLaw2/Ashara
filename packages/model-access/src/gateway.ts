@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { APICallError, NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
-import type { LanguageModel } from "ai";
+import type { GenerateObjectResult, LanguageModel } from "ai";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { extractJson } from "./json-utils.js";
@@ -18,7 +18,7 @@ import type { LanguageModelFactory } from "./provider-registry.js";
 import type { StructuredProvider } from "./reliability-ladder.js";
 import { outputBudget, thinkingModeFor, thinkingProviderOptions } from "./thinking.js";
 import type { OutputBudget } from "./thinking.js";
-import { assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
+import { SdkFinishReasonSchema, assistantMessageOf, cachedTurnPrompt, mapFinishReason, parseToolCalls, toSdkTools } from "./turn.js";
 import type { TurnLlm, TurnRequest, TurnResult } from "./turn.js";
 import type {
   ExtractedUsage,
@@ -110,8 +110,6 @@ function errorOutcome(error: unknown): LlmCallOutcome {
 
 /** The error kind of a structured call that stopped at `maxTokens` without a valid result. */
 const TRUNCATED: LlmCallOutcome = { kind: "error", errorKind: "truncated" };
-
-const SdkFinishReasonSchema = z.enum(["stop", "length", "content-filter", "tool-calls", "error", "other"]);
 
 /** The SDK's finish reason as recorded; total over every input, so an undocumented value is kept, never folded. */
 function recordedFinishReason(sdkFinishReason: unknown): LlmFinishReason {
@@ -397,23 +395,25 @@ export class LLMGateway {
     const site = request.site ?? scope.site;
     const requestBytes = utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema));
     const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
-    const params: Parameters<typeof generateObject>[0] = {
-      model: resolved.provider,
-      schema: request.schema,
-      prompt: request.prompt,
-      system: request.systemPrompt,
-      maxOutputTokens: budget.maxOutputTokens,
-      maxRetries: 0,
-      providerOptions,
-    };
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };
+    // The SDK validates the response against request.schema once and types the object by it.
+    const call = (): Promise<GenerateObjectResult<T>> =>
+      generateObject({
+        model: resolved.provider,
+        schema: request.schema,
+        prompt: request.prompt,
+        system: request.systemPrompt,
+        maxOutputTokens: budget.maxOutputTokens,
+        maxRetries: 0,
+        providerOptions,
+      });
     let sent: {
-      readonly result: Awaited<ReturnType<typeof generateObject>>;
+      readonly result: GenerateObjectResult<T>;
       readonly requestedAt: Date;
       readonly admitted: AdmittedCall;
     };
     try {
-      sent = await this.send(scope, resolved, operation, size, () => generateObject(params));
+      sent = await this.send(scope, resolved, operation, size, call);
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       throw structuredFailureOf(error, resolved, budget);
@@ -442,7 +442,7 @@ export class LLMGateway {
     await this.settle(admitted, requestedAt, extraction, finishReason, OK);
 
     return {
-      data: result.object as T,
+      data: result.object,
       usage: extraction.usage,
       provider: resolved.providerName,
       model: resolved.modelConfig.id,

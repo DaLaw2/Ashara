@@ -6,10 +6,10 @@ import { loadServerConfig, loadDatabaseUrl } from "./config.js";
 const TEST_DB_URL = "postgres://localhost:5432/test";
 const TEST_TOKEN = "test-token";
 
-// Finding (a), E2E Run 11: the owner's cap must reach Finance's deployment cap
+// The owner's cap must reach Finance's deployment cap
 // whichever of its two names the owner set. Finance's enforcement of it is
 // tested against llm_calls in packages/integration/src/finance/spend-cap.test.ts.
-describe("loadServerConfig — budget cap plumbing (finding a) and settings that fail closed", () => {
+describe("loadServerConfig — budget cap plumbing and settings that fail closed", () => {
   const saved: Record<string, string | undefined> = {};
   const KEYS = [
     "DATABASE_URL",

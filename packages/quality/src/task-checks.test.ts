@@ -25,11 +25,11 @@ import type { CheckCells, TaskChecks } from "./task-checks.js";
 
 const run = (exitCode: number | null, timedOut: boolean): CheckRun => ({ name: "c", command: "make check", exitCode, timedOut, output: "x" });
 
-// The 30fb60d5 review (b): a check that timed out on main was kept as "fails on main". ADR-074
-// addendum 2 d74 A: one rule for every authoring, on the plan's foundation.
+// ADR-074 addendum 2 d74 A: one rule for every authoring, on the plan's foundation; a check that
+// timed out is never kept as one that fails.
 describe("the red-run rule", () => {
-  // V7 (lessons digest 2026-10-14): a red run that counted any non-zero exit as decisive accepted
-  // "nothing builds" as "the work is missing". Only the check's own verdict exit is decisive.
+  // Any non-zero exit counted as decisive would read "nothing builds"
+  // as "the work is missing". Only the check's own verdict exit is decisive.
   test("a check is kept only when it passes or states the behaviour missing by its verdict exit", () => {
     expect(redRunProblem(run(0, false))).toBeNull();
     expect(redRunProblem(run(CHECK_MISSING_EXIT, false))).toBeNull();
@@ -59,8 +59,8 @@ describe("the red-run rule", () => {
   });
 });
 
-// Second run N1/N5 (docs/investigations/second-run-2026-10-14.md): a check broken by its own
-// syntax was only found at finish, and could not be replaced.
+// A check broken by its own
+// syntax is found when it is defined, not at finish, and can be replaced.
 describe("define_check's record", () => {
   test("a check defined again under its name replaces the earlier one in place", () => {
     const recorder = new CheckRecorder();
@@ -93,8 +93,8 @@ describe("define_check's record", () => {
   });
 });
 
-// Fifth run N22: a check run wrote an interpreter cache into the workspace, and the harvest rejected
-// every check for it ("not UTF-8 text").
+// A check run can write an interpreter cache into the workspace, which must not make
+// the harvest reject every check ("not UTF-8 text").
 describe("the harvest of a check attempt's files", () => {
   const scratch: string[] = [];
   afterAll(async () => {
@@ -128,7 +128,7 @@ describe("the harvest of a check attempt's files", () => {
     expect(harvest).toEqual({ kind: "harvested", files: [{ path: `${AREA}run.py`, content: "print('hi')\n" }], discarded: [] });
   });
 
-  // Eighth run E1, simulator B1: the author wrote the product beside its checks, and the stored set held it.
+  // Product files an author writes beside its checks never reach the stored set.
   test("stores only the files under the author's checks area; product files it wrote beside them are discarded", async () => {
     const { dir, start } = await repoWithStart();
     await mkdir(join(dir, AREA), { recursive: true });
@@ -171,7 +171,7 @@ describe("the harvest of a check attempt's files", () => {
   });
 });
 
-// L9's tracked-file refusal (eighth run E1): a check run on a tree whose product files it replaced
+// The tracked-file refusal: a check run on a tree whose product files it replaced
 // is no verdict on that product. The cell is a stand-in that runs the command on the host checkout.
 describe("a check run that changes a tracked file of the checkout", () => {
   const scratch: string[] = [];
@@ -251,7 +251,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
   });
 });
 
-// Eighth run E5: the brief named the foundation's commit, which the cell's one-commit repository never holds.
+// The brief never names the foundation's commit, which the cell's one-commit repository never holds.
 describe("the check author's foundation and checks directory", () => {
   test("names the foundation by its task and the author's checks directory, never a commit", () => {
     const text = formatFoundationForCheckAuthor({ taskId: "env-task" }, checkAreaOf("impl-1"));
@@ -261,7 +261,7 @@ describe("the check author's foundation and checks directory", () => {
   });
 });
 
-// Second run D10: an implementer that could not see the check files recreated one.
+// An implementer that cannot see the check files may recreate one.
 describe("the implementer's brief of its checks", () => {
   const stored = (files: TaskChecks["files"]): TaskChecks => ({
     checkTaskId: "check-1",
@@ -296,7 +296,7 @@ describe("the implementer's brief of its checks", () => {
   });
 });
 
-// Third run N8: independent check authors fixed incompatible output formats for the same line.
+// Independent check authors can fix incompatible output formats for the same line.
 describe("the check author's brief of the project's stored checks", () => {
   const task = (taskId: string, title: string, files: TaskChecks["files"]) => ({
     taskId,

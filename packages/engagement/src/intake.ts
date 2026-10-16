@@ -12,14 +12,14 @@ import { classifyReadFailure } from "./read-failure.js";
 import type { FirstVision, InferredAssumption } from "./vision.js";
 
 // The Liaison's intake of a tender (story s-liaison-intake-m1, ADR-075 Engagement).
-// Proceed on silence at once (orchestrator 2026-10-13, on the board): the questions
+// Proceed on silence at once (story s-liaison-intake-m1): the questions
 // go out, the assumptions work proceeds on are recorded as Inferred, and vision v1
 // is written in the same intake. A later answer is a change request, not a rewrite.
 // The assumptions no question carries are reported to the client in one message of the
 // same intake, without waiting (ADR-073 Q8, ADR-074 addendum 2 d89 C), so every Inferred
 // assumption intake writes is one the client was asked about or told of.
 
-/** At most this many questions per tender (orchestrator 2026-10-13, on the board). */
+/** At most this many questions per tender (story s-liaison-intake-m1). */
 const MAX_QUESTIONS_PER_TENDER = 5;
 
 /**
@@ -36,8 +36,8 @@ const LABEL_LEAD_IN = /^\s*until you answer\b\s*,?\s*(?:we proceed on this assum
 
 /**
  * The assumption statement without a lead-in that repeats the label shown before
- * it (transcript 2, N1: the model wrote "Until you answer, ..." into every
- * statement, so the client read the phrase twice and the vision stored it).
+ * it: a model may write "Until you answer, ..." into a statement, which the
+ * client would read twice and the vision would store.
  */
 function withoutLabelLeadIn(statement: string): string {
   const rest = statement.replace(LABEL_LEAD_IN, "").trim();

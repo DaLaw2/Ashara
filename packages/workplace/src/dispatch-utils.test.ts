@@ -19,7 +19,7 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("readManifestContext", () => {
-  test("includes manifests outside the former hardcoded nine (composer.json)", async () => {
+  test("includes a manifest of any stack, with no list of manifest names (composer.json)", async () => {
     await writeFile(
       join(dir, "composer.json"),
       JSON.stringify({

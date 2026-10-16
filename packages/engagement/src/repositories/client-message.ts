@@ -1,5 +1,5 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
-import { ProjectRepository, clientMessages, noOpenStop, projectHalted } from "@ashara/db";
+import { ProjectRepository, clientMessages, insertedRow, noOpenStop, projectHalted } from "@ashara/db";
 import type { Database, DbHandle, ProjectRecord } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
 
@@ -77,11 +77,11 @@ export class ClientMessageRepository {
   ): Promise<ClientMessageRow[]> {
     const rows: ClientMessageRow[] = [];
     for (const [i, body] of bodies.entries()) {
-      const [row] = await this.db
+      const inserted = await this.db
         .insert(clientMessages)
         .values({ projectId, direction: "outbound", kind: "question", body, inReplyTo, position: i + 1 })
         .returning();
-      rows.push(row);
+      rows.push(insertedRow(inserted, "client_messages", `post question ${i + 1} to project ${projectId}`));
     }
     return rows;
   }
@@ -180,7 +180,7 @@ export class ClientMessageRepository {
     direction: "inbound" | "outbound",
     message: NewClientMessage,
   ): Promise<ClientMessageRow> {
-    const [row] = await this.db
+    const rows = await this.db
       .insert(clientMessages)
       .values({
         projectId: message.projectId,
@@ -190,7 +190,7 @@ export class ClientMessageRepository {
         inReplyTo: message.inReplyTo,
       })
       .returning();
-    return row;
+    return insertedRow(rows, "client_messages", `insert a ${direction} ${message.kind} for project ${message.projectId}`);
   }
 }
 

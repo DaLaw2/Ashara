@@ -8,7 +8,7 @@ export type CheckRunReport =
   /**
    * The check files, or a check's command, left files the checkout's commit tracks changed: the
    * product the checks judge is no longer the one checked out, so the run reached no verdict on it
-   * (a check defect, eighth run E1). Nothing after that runs on the checkout.
+   * (a check defect). Nothing after that runs on the checkout.
    */
   | ProductChangedReport;
 

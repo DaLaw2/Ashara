@@ -6,7 +6,7 @@ import type { Tape } from "./tape.js";
  * the recipe under `environment/`, check files written over the checkout). A delivered behaviour
  * is one file; a regression deletes it. Behaviour files are distinct, so they never conflict in
  * git; the shared index is one file every implementation may append its line to, so two tasks of
- * one batch that both write it conflict on the second merge, as w12b D2's did.
+ * one batch that both write it conflict on the second merge.
  */
 const BEHAVIOUR_DIR = "product/behaviours";
 export const LAYOUT_FILE = "product/LAYOUT";
@@ -118,8 +118,8 @@ export function recipeTokens(containerfile: string): string[] {
     .filter((token): token is string => token !== undefined);
 }
 
-/** The token whose presence breaks every build as the cell's user (run 6 G2). */
+/** The token whose presence breaks every build as the cell's user. */
 export const RECIPE_DEFECT_TOKEN = "cache-dir-owner=root";
-/** What a build or test under that defect prints (run 6). */
+/** What a build or test under that defect prints. */
 export const RECIPE_DEFECT_SYMPTOM = "the cache dir is owned by root";
 export const TOOLCHAIN_TOKEN = "toolchain";

@@ -38,7 +38,7 @@ class StandInUnanswerable extends Error {
 }
 
 /** What the stand-ins read and decide with. Every project of the run shares one universe. */
-export interface StandInContext {
+interface StandInContext {
   readonly tape: Tape;
   readonly rates: AdversaryRates;
   readonly universe: Universe;
@@ -107,7 +107,7 @@ function cutAtBound(content: LanguageModelV4Content[], bound: number): LanguageM
 }
 
 /**
- * The whole output bound spent on reasoning, no answer (W11c D4, smoke2 D2): the reasoning count
+ * The whole output bound spent on reasoning, no answer: the reasoning count
  * in the wire format a Chat Completions provider reports it in, where the gateway reads it.
  */
 function reasoningOnly(bound: number): LanguageModelV4GenerateResult {
@@ -469,7 +469,7 @@ export class StandIns {
   /**
    * The attempt as the profile's response-level misbehaviour leaves it, or as scripted. The last
    * step ends the attempt (finish, dispute), so every cut lands before it:
-   * - the turn cap after some of the steps and before the rest (I11, S2: work left uncommitted);
+   * - the turn cap after some of the steps and before the rest (work left uncommitted);
    * - one turn cut at the output limit mid tool call, empty, or all reasoning, where the attempt's
    *   steps would have gone on.
    */
@@ -491,7 +491,7 @@ export class StandIns {
     return { steps: steps.slice(0, at), end, cut: end === "truncated" ? (steps[at] ?? null) : null };
   }
 
-  /** The scaffold's public interface file (smoke2 D3): written as briefed, left out, or longer than any report quotes whole. */
+  /** The scaffold's public interface file: written as briefed, left out, or longer than any report quotes whole. */
   private publicInterfaceWork(): ToolStep[] {
     const form = this.context.tape.pick("agent.scaffold.public-interface", 3, "scaffold");
     if (form === 1) return [];
@@ -560,7 +560,7 @@ export class StandIns {
       steps.push(["write_file", { path, content: `${JSON.stringify(check.spec)}\n` }]);
       steps.push(["define_check", { name: check.name, command: `sim check ${path}` }]);
     }
-    // Run 8 E1, E2: the author also writes the product it checks, in its own workspace.
+    // The author also writes the product it checks, in its own workspace.
     if (tape.chance("agent.check.writes-product", rates.authorWritesProduct, "checks")) {
       for (const b of checked.behaviours) steps.push(["write_file", { path: behaviourPath(b), content: `${b} by the check author\n` }]);
     }
@@ -598,7 +598,7 @@ export class StandIns {
     if (tape.chance("agent.manifest", rates.overDelivery / 3, "implementation") && !conflicted.includes(MANIFEST_FILE)) {
       steps.push(["write_file", { path: MANIFEST_FILE, content: `${mine.ref}\n` }]);
     }
-    // w12b D2: one file two tasks of a batch both write, so the second merge conflicts.
+    // One file two tasks of a batch both write, so the second merge conflicts.
     if (tape.chance("agent.shared-file", rates.sharedFileEdit, "implementation") && !conflicted.includes(SHARED_INDEX_FILE)) {
       steps.push(["write_file", { path: SHARED_INDEX_FILE, content: `${mine.ref}: ${behaviours.join(", ")}\n` }]);
     }

@@ -160,8 +160,8 @@ async function podmanJson(substrate: PodmanSubstrate, operation: string, args: r
 
 /**
  * Removes the project's environment images of every version other than `keepVersion` (main's
- * current one) that no container uses, live or stopped (third run
- * N12: every build_environment call left a tagged image). Only images labelled ashara.managed=1
+ * current one) that no container uses, live or stopped: every build_environment call leaves a
+ * tagged image. Only images labelled ashara.managed=1
  * and ashara.project=<projectId> are selected, and both labels are checked again on what podman
  * returns, so a change in its filter semantics removes nothing of anyone else's. An image that
  * cannot be removed is kept and reported; a podman failure listing images or containers throws.

@@ -104,8 +104,8 @@ export interface CredentialCanaries {
 
 // The paths arrive on stdin, one per line, never as arguments: an exec's argv reaches the cell as
 // environment variables (podman.ts ASHARA_ARG_<n>), which the /proc/*/environ read below prints
-// back, so a probed path containing a canary value (npx's INIT_CWD inside `<cwd>/.env`, W5 trial
-// 2026-10-14 D4) reported the probe's own input as a leak.
+// back, so a probed path containing a canary value (npx's INIT_CWD inside `<cwd>/.env`) would be
+// reported as a leak of the probe's own input.
 const CREDENTIAL_SCRIPT = [
   'while IFS= read -r p || [ -n "$p" ]; do',
   '  if [ -f "$p" ] && [ -r "$p" ]; then',
@@ -160,8 +160,8 @@ const CONNECT_TIMEOUT_SECONDS = 5;
  * Every OS-level way the image may have to open a TCP connection is tried, each one present: bash's
  * /dev/tcp, nc, wget, curl, and busybox's own wget when only the busybox binary is installed.
  * Nothing about the image's language is consulted. Each attempt prints `connect: <mechanism> exit
- * <n>` and its stderr indented below; an image with none prints `connect: none` (D3 of the W12 exit
- * runs: an image without wget or curl attempted nothing and reported held).
+ * <n>` and its stderr indented below; an image with none prints `connect: none`, so an image that
+ * attempted nothing is never read as held.
  */
 const OUTBOUND_SCRIPT = [
   'host=$1; port=$2; t=$3; ifs=""',

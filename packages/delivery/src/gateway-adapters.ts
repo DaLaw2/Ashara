@@ -6,7 +6,7 @@ import type { DecompositionLLM } from "./decomposition.js";
 type ZodSchema<T> = ZodType<T>;
 
 /**
- * Re-ask suffix for decomposition retries (mig-run10). The `errors` are the
+ * Re-ask suffix for decomposition retries. The `errors` are the
  * schema issues or the decomposer's own UnresolvableDependencyError and
  * TaskCapExceededError messages, so the model is told exactly what to fix.
  * A dependency it drops on this instruction is not lost silently: the decomposer
@@ -22,7 +22,7 @@ function decompositionReask(ctx: { readonly errors: readonly string[] }): string
 }
 
 /**
- * Decomposition LLM wired through its OWN reliability ladder (mig-run10, ADR-030):
+ * Decomposition LLM wired through its OWN reliability ladder (ADR-030):
  * two validated attempts per tier, escalate one capability tier,
  * then `StructuredOutputExhausted`. It runs a SEMANTIC
  * `validate` (phantom `dependsOn` ref detection) inside each attempt and re-asks

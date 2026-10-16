@@ -7,11 +7,11 @@ const MAX_LISTING_ENTRIES = 100;
 
 /**
  * Read the head of every top-level text file and return formatted content
- * blocks for the decomposition LLM.
+ * blocks for the brief's context map.
  *
- * Replaces the former hardcoded TECH_STACK_MARKERS iteration: a project
- * whose stack Ashara has never seen (composer.json, build.zig, mix.exs, …)
- * now reaches the planner with its own manifest contents.
+ * No list of manifest names (Target Generality): a project whose stack
+ * Ashara has never seen (composer.json, build.zig, mix.exs, …) reaches the
+ * agent with its own manifest contents.
  *
  * Bounds:
  *  - per-file: MANIFEST_HEAD_CHARS (500 chars)

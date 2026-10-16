@@ -31,7 +31,7 @@ export interface AdversaryRates {
   readonly flakyCheck: number;
   /** A check whose command cannot run, or runs past its limit. */
   readonly unrunnableCheck: number;
-  /** The check author also writes product files (run 8 E1, E2). */
+  /** The check author also writes product files. */
   readonly authorWritesProduct: number;
   /** The model ends a turn with no tool call (a refusal). */
   readonly refusal: number;
@@ -45,7 +45,7 @@ export interface AdversaryRates {
   readonly disputeWrong: number;
   /** The suite review catches a wrong, contradictory or out-of-vision check. */
   readonly reviewCatch: number;
-  /** Sprint 0 writes a recipe defect (run 6: a cache dir owned by root). */
+  /** Sprint 0 writes a recipe defect (a cache dir owned by root). */
   readonly recipeDefect: number;
   /** The client answers a question by changing its assumption after the first merge. */
   readonly lateChange: number;
@@ -54,10 +54,10 @@ export interface AdversaryRates {
   /** The spend cap is set below what the plan needs. */
   readonly lowBudget: number;
   /*
-   * Response-level misbehaviour (test retro 2026-10-15 pattern 2). Each reaches production as a
+   * Response-level misbehaviour (docs/investigations/test-retro-2026-10-15/, pattern 2). Each reaches production as a
    * provider's response would: through the gateway, the attempt loop and the routers.
    */
-  /** An implementation also writes the product's shared index, which a batch partner may write too (w12b D2, H4). */
+  /** An implementation also writes the product's shared index, which a batch partner may write too. */
   readonly sharedFileEdit: number;
   /** An implementer handed its conflict with main leaves the conflict markers in. */
   readonly conflictMarkersLeft: number;
@@ -65,9 +65,9 @@ export interface AdversaryRates {
   readonly truncatedTurn: number;
   /** An agent turn answers with no content at all. */
   readonly emptyTurn: number;
-  /** A call spends its whole output bound on reasoning and returns no answer (W11c D4, smoke2 D2). */
+  /** A call spends its whole output bound on reasoning and returns no answer. */
   readonly reasoningExhausted: number;
-  /** The attempt runs out of turns after some of its edits and before the rest (I11, S2). */
+  /** The attempt runs out of turns after some of its edits and before the rest, leaving that work uncommitted. */
   readonly turnCapMidEdit: number;
   /** A structured answer is cut at the output limit in the middle of its object. */
   readonly truncatedStructured: number;
@@ -143,8 +143,8 @@ interface RateSpread {
 }
 
 /**
- * The rates a profile draws per seed instead of fixing them (test retro pattern 2: a suite review
- * that catches at one fixed rate says nothing of a review that misses more, N8, N20, R3, E4).
+ * The rates a profile draws per seed instead of fixing them: a suite review that catches at one
+ * fixed rate says nothing of a review that misses more.
  */
 const VARIED_RATES = ["reviewCatch", "disputeRight", "disputeWrong"] as const;
 type VariedRate = (typeof VARIED_RATES)[number];

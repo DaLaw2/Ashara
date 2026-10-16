@@ -99,7 +99,7 @@ describe("Project workspace path (migration 024)", () => {
     expect(message).toMatch(/does not exist/);
   });
 
-  test("vision_documents no longer carries a project path", async () => {
+  test("vision_documents carries no project path", async () => {
     const rows = await db.execute(
       sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'vision_documents' AND column_name = 'project_path'`,
     );

@@ -149,7 +149,7 @@ describe("DecompositionEngine", () => {
         for (const t of result.tasks.filter((t) => t.taskSpec.origin !== "sprint0" && t.id !== scaffold?.id)) {
             expect(waitsOn(result.dependencyEdges, t.id, scaffold?.id ?? ""), t.title).toBe(true);
         }
-        // W5 W1/W2: the scaffold writes down the public interface, and its placeholder starts and refuses each entry.
+        // The scaffold writes down the public interface, and its placeholder starts and refuses each entry.
         expect(scaffold?.description).toContain("Write down the product's public interface in PUBLIC_INTERFACE.md");
         expect(scaffold?.successCriteria).toContainEqual(expect.stringMatching(/starts as the interface says .* never failing to start/));
         // Stack-free: the layout is the implementer's to choose in the environment's own terms.
@@ -165,7 +165,7 @@ describe("DecompositionEngine", () => {
         expect(revision.tasks.filter((t) => t.taskSpec.origin === "product-scaffold")).toEqual([]);
     });
 
-    test("a revision on a merged layout red-runs on that layout's latest merge, never on the environment task merged before it (W11 D2)", async () => {
+    test("a revision on a merged layout red-runs on that layout's latest merge, never on the environment task merged before it", async () => {
         const decompose = (environment: DecompositionInput["environment"]) =>
             new DecompositionEngine(
                 scriptedLlm({ tasks: [task("t1")] }, { prompts: [], verdicts: [] }),
@@ -211,7 +211,7 @@ describe("DecompositionEngine", () => {
             );
             for (const deliverable of implementation.taskSpec.deliverables) expect(check?.taskSpec.goal).toContain(deliverable);
             for (const criterion of implementation.successCriteria) expect(check?.taskSpec.goal).toContain(`[S1] ${criterion}`);
-            // W5 W1: the check author tests the interface the scaffold wrote down, never a guessed one.
+            // The check author tests the interface the scaffold wrote down, never a guessed one.
             expect(check?.taskSpec.goal).toContain("Read the product's public interface in PUBLIC_INTERFACE.md");
             expect(check?.taskSpec.goal).toMatch(/never try other ways to start, configure or call the product/);
         }
@@ -221,8 +221,8 @@ describe("DecompositionEngine", () => {
         }
     });
 
-    // Fourth run N13: check tasks depending only on Sprint 0 ran after earlier implementations changed
-    // main, found their work already there, and the red-run rule left them no exit.
+    // A check task depending only on Sprint 0 can run after earlier implementations
+    // changed main and find its work already there; it must still have an exit under the red-run rule.
     test.each([
         ["a first plan", { kind: "new" } as const],
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],
@@ -235,7 +235,7 @@ describe("DecompositionEngine", () => {
         const result = await new DecompositionEngine(llm).decompose({ ...INPUT, environment, layout });
 
         const environmentId = environment.kind === "new" ? result.tasks.find((t) => t.taskSpec.origin === "product-scaffold")?.id : environment.taskId;
-        // A revision's checks are red-run on the layout already merged, never on the environment task (W11 D2).
+        // A revision's checks are red-run on the layout already merged, never on the environment task.
         const foundationId = layout.kind === "existing" ? layout.taskId : environmentId;
         const checkIds = result.tasks.filter((t) => t.taskSpec.origin === "check").map((t) => t.id);
         const decomposed = result.tasks.filter((t) => t.taskSpec.origin === "decomposition");
@@ -314,8 +314,8 @@ describe("DecompositionEngine", () => {
         const llm = scriptedLlm({ tasks: [task("t1", { [field]: undefined })] }, seen);
         await expect(new DecompositionEngine(llm).decompose(INPUT)).rejects.toThrow(field);
     });
-    // Fifth run N21: the first task printed a column count the tender never asked for (ADR-074 addendum 2 d71 d).
-    // W11 (d89 A): deliverables used assumptions the task did not name; now every line names its own sources.
+    // ADR-074 addendum 2 d71 d: a task must not ask for what the tender never asked for.
+    // d89 A: every deliverable and acceptance line names its own sources.
     test.each([
         ["an acceptance line that names no source", { acceptance: [{ text: "keys come back sorted", sources: [] }] }, "names no vision item it serves"],
         ["a deliverable that names no source", { deliverables: [{ text: "sorted listing", sources: [] }] }, "names no vision item it serves"],
@@ -363,7 +363,7 @@ describe("DecompositionEngine", () => {
         expect(seen.prompts).toEqual([]);
     });
 
-    // W11 (d89 A): the traced items are exactly the union of the lines' sources, never chosen beside them.
+    // d89 A: the traced items are exactly the union of the lines' sources, never chosen beside them.
     test("a task's traced items are exactly the union of its lines' sources, by id or exact text; its check task carries them", async () => {
         const llm = scriptedLlm(
             {
@@ -401,7 +401,7 @@ describe("DecompositionEngine", () => {
         expect(check?.taskSpec.goal).not.toContain("Bookings are recorded in one ledger");
     });
 
-    // Fifth run N20: 36 stored checks no product could all pass (ADR-074 addendum 2 d71 c).
+    // ADR-074 addendum 2 d71 c: stored checks can together ask for what no product can pass.
     test.each([
         ["a first plan", { kind: "new" } as const],
         ["a revision building on the environment already done", { kind: "existing", taskId: "env-done" } as const],

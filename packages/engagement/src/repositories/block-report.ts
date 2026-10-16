@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { z } from "zod";
-import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
+import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { SpendAtCap } from "@ashara/delivery/project-halt";
@@ -293,11 +293,11 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
 }
 
 async function insertReport(tx: DbHandle, projectId: string, body: string): Promise<string> {
-  const [message] = await tx
+  const rows = await tx
     .insert(clientMessages)
     .values({ projectId, direction: "outbound", kind: "report", body, inReplyTo: null })
     .returning({ id: clientMessages.id });
-  return message.id;
+  return insertedRow(rows, "client_messages", `post a block report to project ${projectId}`).id;
 }
 
 /**

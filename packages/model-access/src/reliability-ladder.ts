@@ -280,13 +280,12 @@ async function runLadderCore<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * A post-parse SEMANTIC validation of structured output (mig-run10). The Zod
+ * A post-parse SEMANTIC validation of structured output. The Zod
  * schema proves the SHAPE; this proves a cross-field INVARIANT the schema cannot
  * express — e.g. every `dependsOn` ref names a sibling that was actually emitted.
  * Returning `ok:false` makes the ladder treat the attempt as failed and (with a
  * `reask`) feed the errors back into the retry prompt, so a single malformed LLM
- * emission is CORRECTED on retry instead of exploding the caller (the Run-10
- * phantom-ref failure). It is not a throw so it crosses the model-access boundary
+ * emission is CORRECTED on retry instead of exploding the caller. It is not a throw so it crosses the model-access boundary
  * without the caller's error type leaking into this package.
  */
 export type StructuredValidation =
@@ -344,7 +343,7 @@ export interface StructuredLadderOptions {
    * Re-ask suffix appended to the prompt on attempts after the first, built from
    * the previous attempt's errors (schema or `validate`). Absent ⇒ retries re-send
    * the identical prompt (unchanged behavior). Present ⇒ the model is told WHAT was
-   * wrong so it can correct it — the Run-10 self-heal for a malformed emission.
+   * wrong so it can correct a malformed emission.
    */
   readonly reask?: (ctx: { readonly errors: readonly string[] }) => string;
 }

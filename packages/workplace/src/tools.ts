@@ -207,7 +207,7 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
   },
 };
 
-/** Beside define_check: a look at the foundation that is never kept as a check (W11 D4). */
+/** Beside define_check: a look at the foundation that is never kept as a check. */
 const PROBE_FOUNDATION_SCHEMA: TurnToolSchema = {
   description:
     "Run one shell command on the plan's foundation, exactly where define_check red-runs a check (your check " +
@@ -281,13 +281,13 @@ export function toolSchemasFor(toolProfile: ToolProfile, runChecks: boolean): To
   }
 }
 
-export type ToolExecution =
+type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
   | { readonly kind: "dispute"; readonly checkName: string; readonly ofTask: string | null; readonly reason: string }
   | { readonly kind: "environment_failure"; readonly error: unknown; readonly toolName: string };
 
-export interface ToolContext {
+interface ToolContext {
   readonly cell: CellBackend;
   /** The per-command bound for this call: the attempt's limit, cut further by the wall clock left. */
   readonly commandTimeoutSeconds: number;

@@ -3,10 +3,10 @@ import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import type { VisionSource } from "./vision-language/vision-source.js";
 
-// The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8; eighth run E3):
+// The Liaison's delivered report (story s-independent-verify-m1 W7, design §2.8):
 // once a project is accepted on its sweep of main, the client is told, once, what was delivered:
 // each goal task and how its record says it closed, and which items of what they asked for no
-// stored check covers. Every sentence is rendered from a record (past-designs sweep #1): a close
+// stored check covers. Every sentence is rendered from a record: a close
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
 // folded into "delivered" or into what passed: the opening claims only the run that happened.
 
@@ -143,7 +143,7 @@ function closeLine(title: string, close: GoalClose): string {
 }
 
 /**
- * Whether the item is part of what the client asked for (W11c D3): a line the vision records as out
+ * Whether the item is part of what the client asked for: a line the vision records as out
  * of scope is not, nor is an assumption recorded as the team's own design choice, which the client
  * was told their acceptance does not depend on. Everything else is, an unclassified one included.
  */

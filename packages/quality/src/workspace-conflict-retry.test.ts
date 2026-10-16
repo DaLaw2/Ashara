@@ -9,7 +9,7 @@ import type { WorkdirInfo } from "@ashara/execution-infra";
 import { ConflictRetryUnprepared, conflictWithMain, mainMergedForRetry, stagedConflictMarkers, taskBranchName, tentativeMerge } from "./merge.js";
 import type { MainConflict } from "./merge.js";
 
-// w12b D2: two tasks of one batch leave the same main and change the same file. Once the first is
+// Two tasks of one batch leave the same main and change the same file. Once the first is
 // merged, the second's branch conflicts with main; its retry must start with that conflict in its
 // worktree, never on the branch as it was. Real git throughout.
 
@@ -79,7 +79,7 @@ describe("a retry of a branch that conflicts with main", () => {
     expect(await readFile(join(target, "shared.txt"), "utf8")).toBe("first\nsecond\n");
   });
 
-  // Lessons digest P6: a branch whose merge with main failed post-merge verification would be
+  // A branch whose merge with main failed post-merge verification would be
   // retried on a tree without main's newer work, where the failure cannot reproduce.
   test("a branch that merges cleanly is resumed with main's newer work merged in, once", async () => {
     const { target, workdirBase } = await sameBaseConflict();

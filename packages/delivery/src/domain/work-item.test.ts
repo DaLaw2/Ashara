@@ -195,11 +195,11 @@ describe("method-level preconditions guard the shared -> Pending edge", () => {
   });
 
   test("replanWorkItem throws on an InProgress item (retry intent, not a requeue)", () => {
-    expect(() => replanWorkItem(seedInProgress())).toThrow(InvalidStatusTransition);
+    expect(() => replanWorkItem(seedInProgress(), null)).toThrow(InvalidStatusTransition);
   });
 
   test("replanWorkItem throws on a Blocked item", () => {
-    expect(() => replanWorkItem(seedBlocked())).toThrow(InvalidStatusTransition);
+    expect(() => replanWorkItem(seedBlocked(), null)).toThrow(InvalidStatusTransition);
   });
 
   test("requeueWorkItem throws on a Blocked item (requeue is InProgress-only)", () => {
@@ -211,7 +211,7 @@ describe("replanWorkItem", () => {
   test("moves a Failed item back to Pending, clears the failure reason, and emits work_item.replanned", () => {
     const item = seedFailed();
 
-    replanWorkItem(item);
+    replanWorkItem(item, null);
     const events = takeEvents(item);
 
     expect(item.status).toBe("Pending");
@@ -221,10 +221,19 @@ describe("replanWorkItem", () => {
     expect(events[0]?.payload.work_item_id).toBe(item.id);
   });
 
+  test("a replan with the failure's context records it as the item's reason, for its next attempt", () => {
+    const item = seedFailed();
+
+    replanWorkItem(item, { attempt: 2, detail: "tests failed", raw: { exit: 1 } });
+
+    expect(item.status).toBe("Pending");
+    expect(item.blockedReason).toEqual({ source: "replan", replanContext: { attempt: 2, detail: "tests failed", raw: { exit: 1 } } });
+  });
+
   test("throws InvalidStatusTransition when the item is not Failed", () => {
     const item = createPendingWorkItem("Task", "leaf-task", TEST_PROJECT_ID);
 
-    expect(() => replanWorkItem(item)).toThrow(InvalidStatusTransition);
+    expect(() => replanWorkItem(item, null)).toThrow(InvalidStatusTransition);
   });
 });
 
@@ -283,7 +292,7 @@ describe("abandonWorkItem", () => {
     abandonWorkItem(item, ABANDON_REASON);
     takeEvents(item);
 
-    expect(() => replanWorkItem(item)).toThrow(InvalidStatusTransition);
+    expect(() => replanWorkItem(item, null)).toThrow(InvalidStatusTransition);
   });
 });
 

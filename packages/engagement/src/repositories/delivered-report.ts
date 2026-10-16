@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { acceptanceSweeps, clientMessages, completedGoalTasks, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
+import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
@@ -105,7 +105,7 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, column: "checked_t
 /**
  * The project's goal tasks given up (Abandoned), oldest first: each is a task the plan was repaired
  * around. A task a plan revision replaced while it was open (blocked_reason source `superseded`) was
- * set aside, not given up, and is not one (w12b D4).
+ * set aside, not given up, and is not one.
  */
 async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<string[]> {
   const rows = await db
@@ -240,7 +240,7 @@ function visionAtAcceptance(sweep: { readonly id: string; readonly projectId: st
 /**
  * Each assumption of the vision version current at acceptance, by id, with where it then stood with
  * the client (d95 a): a confirming answer asks for no replan, so the plan's own copy of the vision
- * can predate it (smoke2 D1). A reply counts only if it was sent by acceptance, and as read only if
+ * can predate it. A reply counts only if it was sent by acceptance, and as read only if
  * it was read by then. Throws AcceptedStandingUnreadable when any of it cannot be read.
  */
 async function assumptionsAtAcceptance(
@@ -299,7 +299,7 @@ async function assumptionsAtAcceptance(
 /**
  * Every item of the vision as the plan's latest completed review recorded it (every item of the
  * vision its revision was decomposed from), each checked exactly when an acceptance line of the
- * check task of a goal task's latest stored checks (the sets the sweep ran) cites it (W11c D3). A
+ * check task of a goal task's latest stored checks (the sets the sweep ran) cites it. A
  * stored check is not recorded against one line, so the trace reaches the check task's lines, not
  * one check. Unrecorded when the review, or one of those check tasks, holds no traced items. Which
  * items are checked comes from the trace; where each assumption stands with the client comes from
@@ -434,10 +434,11 @@ export async function postDeliveredReport(db: Database, sweepId: string, body: s
       .for("update");
     if (!sweep) throw new AcceptedSweepNotFound(sweepId);
     if (sweep.reportId !== null) return "already-posted";
-    const [message] = await tx
+    const rows = await tx
       .insert(clientMessages)
       .values({ projectId: sweep.projectId, direction: "outbound", kind: "report", body, inReplyTo: null })
       .returning({ id: clientMessages.id });
+    const message = insertedRow(rows, "client_messages", `post the delivered report of acceptance sweep ${sweepId}`);
     await tx.update(acceptanceSweeps).set({ reportId: message.id }).where(eq(acceptanceSweeps.id, sweepId));
     return "posted";
   });

@@ -36,7 +36,7 @@ interface FailureRouteCommon {
  * replan bound; a non-retryable one is given up at once and spends no retry. The verdict is set
  * where the failure is decided, never read back out of the failure's text.
  */
-export type FailureRouteInput = FailureRouteCommon & { readonly verdict: FailureVerdict };
+type FailureRouteInput = FailureRouteCommon & { readonly verdict: FailureVerdict };
 
 /**
  * A typed recovery decision. Every branch carries the raw failure context so the

@@ -100,6 +100,14 @@ import { createRosterStore } from "./roster-store.js";
 // working day; a failed login answers one second after it arrived.
 const CLIENT_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
+// The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
+// (ADR-074 d56); 25 turns is a policy cap on the agent loop.
+const ATTEMPT_POLICY = {
+  maxTurns: 25,
+  perCommandTimeoutSeconds: 300,
+  toolTimeoutSeconds: 60,
+};
+
 // Login throttle, per fifteen-minute window and per source (an IPv4 address or an
 // IPv6 /64, source-network.ts), task t-login-hardening:
 // - 5 per (name, source): a client is closed out only by its own source's failures.
@@ -108,14 +116,6 @@ const CLIENT_LOGIN_FAILURE_DELAY_MS = 1000;
 // every client, that they are not. The price is that distributed guessing is
 // bounded per source, not in total; against that the code itself carries the
 // entropy (MIN_CLIENT_ACCESS_CODE_LENGTH).
-// The limits of one agent attempt. Its wall clock is Workplace's own 20 minutes
-// (ADR-074 d56); 25 turns is the cap the agent loop has always had.
-const ATTEMPT_POLICY = {
-  maxTurns: 25,
-  perCommandTimeoutSeconds: 300,
-  toolTimeoutSeconds: 60,
-};
-
 const CLIENT_LOGIN_THROTTLE = {
   windowSeconds: 15 * 60,
   perNameAndSource: 5,
@@ -324,8 +324,8 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   // The brief's intent: the task's project's current vision, its VERBATIM
-  // visionText (never the summary: the paraphrase is the step that dropped "Go"
-  // in Run 36) and its assumptions, which Delivery renders for the Assignment (O9).
+  // visionText (never the summary: a paraphrase can drop what the client asked
+  // for) and its assumptions, which Delivery renders for the Assignment (O9).
   const intentSource: ProjectIntentSource = {
     async loadIntent(taskId: string) {
       const projectId = await findTaskProjectId(taskId);
@@ -525,7 +525,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
       // Cells a previous process of this instance leaked, removed before any dispatch.
       await reconcileCellsAtStartup(cellSubstrate, cellInstance);
 
-      // Environment images an earlier process left of versions main no longer uses (third run N12).
+      // Environment images an earlier process left of versions main no longer uses.
       // Pruning never fails the start: each project's failure is logged and retried next time.
       for (const project of await projectRepo.listWithWorkspace()) {
         await pruneStaleEnvironmentImages(project.id, project.workspacePath, environmentImages, readEnvironmentDefinition);

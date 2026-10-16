@@ -1,6 +1,6 @@
 import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import type { DbHandle } from "@ashara/db";
-import { workItems, dependencies } from "@ashara/db";
+import { insertedRow, workItems, dependencies } from "@ashara/db";
 import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
@@ -77,8 +77,8 @@ export class WorkItemRowRepository {
   }
 
   async create(item: typeof workItems.$inferInsert) {
-    const [row] = await this.db.insert(workItems).values(item).returning();
-    return this.validateRow(row);
+    const rows = await this.db.insert(workItems).values(item).returning();
+    return this.validateRow(insertedRow(rows, "work_items", `create work item ${item.id ?? "(id from the database)"}`));
   }
 
   /**

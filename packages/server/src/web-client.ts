@@ -79,7 +79,7 @@ const NodeBindingsSchema = z.object({
   incoming: z.object({ socket: z.object({ remoteAddress: z.string().min(1) }) }),
 });
 
-export interface WebClientAssets {
+interface WebClientAssets {
   readonly html: string;
   readonly script: string;
   readonly stylesheet: string;

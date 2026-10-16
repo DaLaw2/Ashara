@@ -123,7 +123,7 @@ describe("first-plan report", () => {
     expect(posted[0]).not.toMatch(/Store keys without newlines|set aside/);
   });
 
-  test("a revision that took in two changing answers names both, each with what it changed (smoke1 D2)", async () => {
+  test("a revision that took in two changing answers names both, each with what it changed", async () => {
     const twoChanges = {
       ...CHANGE_SUMMARY,
       changes: [

@@ -33,8 +33,8 @@ const VisionAssumptionSchema = z.strictObject({
  * (ADR-013; ADR-033 §5). It is built in-process, handed to the Workplace attempt loop as its
  * AssignmentBrief, recorded in dev_sessions and written to workdirBase/records/<task>/. Every field
  * is explicit so a producer field outside the schema is a compile error or a parse error
- * (`.strict()`), never an invisible drop (finding-g: `knowledgeContext` and `contextMap` were once
- * assembled at cost and dropped on the way to the prompt).
+ * (`.strict()`), never an invisible drop: a field assembled at cost and lost on the way to the
+ * prompt is caught where it is produced.
  *
  * Field tiers:
  *  - PROJECT: `intent`, the owner's vision verbatim, `assumptions`, the assumptions of that same

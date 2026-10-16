@@ -1,5 +1,5 @@
 /**
- * Run-state replay (test retrospective 2026-10-15, "Tape replay" (a)): loads a kept run's plain pg
+ * Run-state replay: loads a kept run's plain pg
  * dump into a scratch database, migrates it forward, re-runs today's brief and report composers over
  * its records with no model call, and judges what they state with the simulator's text-against-fact
  * oracle (I9, packages/integration/src/simulator/text-facts.ts) and its report oracle (I4,
@@ -11,7 +11,7 @@
  * `--psql` is the command that runs psql with the SQL on its stdin; the scratch database's name is
  * appended as its last argument. Split on spaces, no quoting. With the database in a container:
  *
- *   npx tsx scripts/replay-run-state.ts --dump run-w12b/ashara_run_w12b.sql \
+ *   npx tsx scripts/replay-run-state.ts --dump kept-run/ashara_run.sql \
  *     --psql "podman exec -i docker_postgres_1 psql -U ashara -v ON_ERROR_STOP=1 -q -d"
  *
  * The scratch database `ashara_replay_*` is created on the server of REPLAY_DATABASE_URL (default

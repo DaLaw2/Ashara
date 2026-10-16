@@ -10,7 +10,6 @@ import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
-import type { AttemptDeps } from "./attempt.js";
 import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
@@ -20,6 +19,7 @@ import { promptDigest } from "./prompt-digest.js";
 import type { AttemptRecord } from "./records.js";
 import type { VerdictReport } from "./verdict-report.js";
 
+type AttemptDeps = Parameters<typeof runAttempt>[1];
 type TurnRequest = Parameters<ReturnType<ContextualTurnLlm["forCall"]>["generateTurn"]>[0];
 type Call = { readonly name: string; readonly input: unknown; readonly invalid?: string };
 type Step = (request: TurnRequest) => Promise<CostedTurnResult> | CostedTurnResult;
@@ -253,7 +253,7 @@ describe("runAttempt", () => {
     expect(run).toEqual({ type: "error-text", value: "Exit code: 1\nSTDERR:\nboom" });
   });
 
-  // M2 trial M1: a command that killed the process running it, in a cell that stayed healthy.
+  // A command that kills the process running it, in a cell that stays healthy.
   it("reports a command whose exit status was lost to the model, not as an environment failure", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "run_command", input: { command: "pkill -f flock" } }]),
@@ -389,7 +389,7 @@ describe("runAttempt", () => {
     expect(outcome.detail).toContain("provider unreachable");
   });
 
-  // The 509bbbc5 review: Finance's BudgetExceeded (a PreCallRefusal) ended the attempt as transport_exhausted.
+  // Finance's BudgetExceeded (a PreCallRefusal) never ends the attempt as transport_exhausted.
   it("ends as refused, carrying the refusal by type, when a turn's call is refused before it is sent", async () => {
     class CapRefusal extends PreCallRefusal {}
     const refusal = new CapRefusal("budget_cap: the spend cap of project p is $1.000000");
@@ -593,7 +593,7 @@ describe("define_check", () => {
     return { checks, defined, timeouts, written, probed };
   }
 
-  it("probe_foundation runs a command on the foundation and defines no check (W11 D4)", async () => {
+  it("probe_foundation runs a command on the foundation and defines no check", async () => {
     const { llm, requests } = scriptedLlm([
       () => turn([{ name: "probe_foundation", input: { command: "ls" } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Looked." } }]),
@@ -702,7 +702,7 @@ describe("define_check", () => {
     });
   });
 
-  // Eighth run E1: authors wrote the product beside their checks; Z0 discards it and says so, and a
+  // An author can write the product beside its checks; Z0 discards it and says so, and a
   // check that changes a tracked file reaches no verdict.
   it("names the files it discarded outside the checks directory, and a run that changed the project as unrunnable", async () => {
     const { llm, requests } = scriptedLlm([
@@ -721,7 +721,7 @@ describe("define_check", () => {
     expect(answer).toMatchObject({ value: expect.stringContaining('It could not be red-run: on the foundation, check "builds" changed files the project tracks: src/main.src') });
   });
 
-  // W11 (d89 C): the header said the client agreed to every assumption, and to most of them it had agreed to nothing.
+  // d89 C: the header never claims the client agreed to an assumption it was only told of or asked about.
   // O9: Delivery words each assumption's note; Workplace renders it and adds nothing of its own.
   it("renders each assumption by its key with the note Delivery wrote, and claims no agreement", () => {
     const brief = {
@@ -877,7 +877,7 @@ describe("workplace boundaries", () => {
     expect(prompt).toContain("A greeting file");
   });
 
-  // ADR-074 addendum 2 d73 (go-run G2): the recipe's author and the implementer both learn the run-as user.
+  // ADR-074 addendum 2 d73: the recipe's author and the implementer both learn the run-as user.
   it.each(["run-and-dispute-checks", "build-environment"] as const)("the %s brief states that cells run as a non-root user with a writable HOME", (profile) => {
     const prompt = buildSystemPrompt(assignment().brief, CHARTER, profile);
     expect(prompt).toContain("non-root user");

@@ -8,7 +8,7 @@ import type { Database } from "./database.js";
 import { PUBLIC_INTERFACE_PATH } from "./product.js";
 
 /**
- * I9, text against fact (ADR-081; test retrospective 2026-10-15 pattern 1): every fact a composer
+ * I9, text against fact (ADR-081): every fact a composer
  * states in what it writes for an agent or the client is the fact the store held when it composed
  * it. Judged by structure, not language: the oracle recomputes from the rows each fact a composer
  * is meant to state, and compares it with the structured part of what was written (a brief's vision
@@ -17,11 +17,10 @@ import { PUBLIC_INTERFACE_PATH } from "./product.js";
  *   structured call whose prompt no row keeps, so it is not judged): its vision version is the
  *   latest one written before the session was recorded, its assumptions are that version's, and
  *   every assumption line its goal or context states (`- A1 (assumption; <standing>; <kind>): <text>`)
- *   states that version's standing, kind and text for it (W12a D1, W12b D1: a standing written into
- *   a task's description at plan time goes stale once an answer changes it); and its task section
- *   states the goal, end state, scope and deliverables its work item's task_spec records, a brief of
- *   a work item that records none of them being named (development #3: an end state invented from
- *   the title);
+ *   states that version's standing, kind and text for it, since a standing written into a task's
+ *   description at plan time goes stale once an answer changes it; and its task section states the
+ *   goal, end state, scope and deliverables its work item's task_spec records, a brief of a work
+ *   item that records none of them being named, so no end state is invented from the title;
  * - every Liaison question: the assumption it says work proceeds on is the one its vision records
  *   for it, Inferred and asked;
  * - the assumptions report: exactly the assumptions intake recorded as reported, each under its kind;
@@ -30,8 +29,8 @@ import { PUBLIC_INTERFACE_PATH } from "./product.js";
  * - the first-plan report: its decomposed and check task counts, of the plan that stood when it was
  *   posted;
  * - the delivered report: each assumption it lists stands with the client as the vision current at
- *   acceptance and the client's replies by then say (smoke2 D1); and the public interface file it
- *   quotes is the one main holds at the sweep's commit, or it says main holds none (smoke2 D3),
+ *   acceptance and the client's replies by then say; and the public interface file it
+ *   quotes is the one main holds at the sweep's commit, or it says main holds none,
  *   judged only where the project's checkout is held.
  * Halt, stop and the rest of the delivered report are I4's (client-reports.ts). The expected
  * wording is written here, never read from a composer: an oracle that asks production what to
@@ -284,7 +283,7 @@ const storedBrief = z.looseObject({
   assumptions: z.array(briefAssumption),
 });
 
-export interface TextViolation {
+interface TextViolation {
   readonly key: string;
   readonly statement: string;
 }
@@ -647,7 +646,7 @@ function quoteOf(quoted: string, file: string): "whole" | "cut" | null {
 }
 
 /**
- * The delivered report's how-to-run section against main (smoke2 D3): the quoted block is the public
+ * The delivered report's how-to-run section against main: the quoted block is the public
  * interface file as main holds it at the sweep's commit, whole or its start and end around one
  * marker counting exactly what was cut, and the report says it was cut exactly when it was; with no
  * such file on main, the report says the product has none, naming the file. Not judged where no

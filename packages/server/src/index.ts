@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   await ashara.startup();
 
   // A halt (the deployment's spend cap) stops the work for good but not the process: HTTP stays up,
-  // and the runner keeps taking in and answering the client's stops until SIGTERM (smoke1 D3). No
+  // and the runner keeps taking in and answering the client's stops until SIGTERM. No
   // attempt runs from the halt on, so every cell is removed then.
   const runnerPromise = ashara.runner.run(ashara.shutdownSignal, async (stop) => {
     console.error(

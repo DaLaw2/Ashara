@@ -57,7 +57,7 @@ describe("ContinuousRunner wakePending", () => {
       (runner) => { runner.wake(); return idle(); },
       idle,
     ]);
-    const runner = new ContinuousRunner(cycles.loop, { idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    const runner = new ContinuousRunner(cycles.loop, { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
     const abort = new AbortController();
 
@@ -78,6 +78,7 @@ describe("ContinuousRunner wakePending", () => {
       idle,
     ]);
     const runner = new ContinuousRunner(cycles.loop, {
+      databaseUrl: null,
       idleIntervalMs: IDLE_MS,
       pollIntervalMs: IDLE_MS,
       maxConsecutiveErrors: 1,
@@ -99,11 +100,11 @@ describe("ContinuousRunner wakePending", () => {
 });
 
 describe("ContinuousRunner stop", () => {
-  // smoke1 D3: after the deployment cap stopped the runner, a client's stop was accepted and never answered.
+  // A client's stop sent after the deployment cap stopped the runner is still taken in and answered.
   test("a cycle that reports a stop halts the work for good; from then on only the client's stops are taken in, until shutdown", async () => {
     const stop = { reason: "budget_cap: deployment cap reached", spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: null } };
     const cycles = scriptedCycles([() => ({ tasksProcessed: 0, results: [], stop }), idle]);
-    const runner = new ContinuousRunner(cycles.loop, { idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
+    const runner = new ContinuousRunner(cycles.loop, { databaseUrl: null, idleIntervalMs: IDLE_MS, pollIntervalMs: IDLE_MS });
     cycles.bind(runner);
     const halts: string[] = [];
     const abort = new AbortController();

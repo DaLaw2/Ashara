@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EnvironmentBuildRepository, ProjectRepository } from "@ashara/db";
 import {
   EnvironmentBuildFailed,
+  EnvironmentBuildUnrecorded,
   PodmanSubstrate,
   buildEnvironmentImage,
   loadBaseCell,
@@ -180,8 +181,8 @@ describe("environment image build", () => {
       { projectId, repoGitDir: gitDir, commit: "main", definition },
       { substrate, recorder, timeoutMs: 120_000 },
     ).catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(EnvironmentBuildUnrecorded);
     expect(failure).toMatchObject({
-      name: "EnvironmentBuildUnrecorded",
       projectId,
       version: expect.stringMatching(/^[0-9a-f]{64}$/),
       imageId: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),

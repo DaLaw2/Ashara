@@ -6,7 +6,7 @@ import { z } from "zod";
 import { MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
 import { describeErrorChain } from "@ashara/shared";
 
-/**
+/*
  * Scratch databases of design §4.14: one template migrated once per migration set, one database
  * per run created from it and dropped after, and stale run databases older than an hour dropped
  * at tier start. Never the shared database itself: every name starts with `ashara_sim_`.

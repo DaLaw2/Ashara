@@ -8,7 +8,7 @@ import { ensureTargetGitInit } from "@ashara/execution-infra";
 import { commitMerge, resetCheckoutToHead, taskMergeOnMain, tentativeMerge } from "./merge.js";
 
 // ---------------------------------------------------------------------------
-// Run 39: post-merge verify runs the project's own build inside the MAIN
+// Post-merge verify runs the project's own build inside the MAIN
 // checkout, so whatever that build produces dirties the checkout the NEXT merge
 // needs clean. Real git throughout — the refusal being reproduced is git's own
 // ("Your local changes to the following files would be overwritten by merge"),

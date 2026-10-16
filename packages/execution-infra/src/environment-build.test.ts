@@ -4,7 +4,7 @@ import { pruneEnvironmentImages } from "./environment-build.js";
 import { PodmanCommandFailed } from "./errors.js";
 import { PodmanSubstrate } from "./podman.js";
 
-// Third run N12: every build_environment call left a tagged image. Pruning keeps main's current
+// Every build_environment call leaves a tagged image. Pruning keeps main's current
 // version and every image a container uses, and touches nothing without Ashara's labels. podman is
 // a fake process runner here: the argv each call sends is the observation.
 

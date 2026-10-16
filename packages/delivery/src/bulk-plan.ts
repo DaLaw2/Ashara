@@ -51,12 +51,12 @@ function resolveChecksFor(
   return { ...taskSpec, checksFor: resolved };
 }
 
-export interface BulkPlanResult {
+interface BulkPlanResult {
   readonly tempIdToId: Record<string, WorkItemId>;
   readonly created: number;
 }
 
-export interface CreateBulkPlanDeps {
+interface CreateBulkPlanDeps {
   /**
    * The DOMAIN shape of the work-item repository (adapted by the composition root), bound to the
    * caller's transaction, so creation goes through PlanningService.

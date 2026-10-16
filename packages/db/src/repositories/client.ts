@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import type { DbHandle } from "../connection.js";
+import { insertedRow } from "../inserted-row.js";
 import { clients } from "../schema/index.js";
 
 interface ClientRecord {
@@ -13,8 +14,8 @@ export class ClientRepository {
   constructor(private readonly db: DbHandle) {}
 
   async create(name: string): Promise<ClientRecord> {
-    const [row] = await this.db.insert(clients).values({ name }).returning();
-    return row;
+    const rows = await this.db.insert(clients).values({ name }).returning();
+    return insertedRow(rows, "clients", `create client ${JSON.stringify(name)}`);
   }
 
   async get(id: string): Promise<ClientRecord | null> {

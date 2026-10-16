@@ -32,8 +32,8 @@ import { createGatewayDecompositionLLM } from "./gateway-adapters.js";
 // Delivery's revision of a plan already under way (story s-liaison-intake-m1, task
 // t-replan-on-change, migration 042), asked for in one of two ways. A client answer that changed an
 // assumption the plan was built on is recorded as a request (replan_requests, migration 052); every
-// such answer awaiting a revision is taken in by the next one, and its report names each (smoke1
-// D2). A task given up, for any cause
+// such answer awaiting a revision is taken in by the next one, and its report names each, since
+// each was promised the client would hear what it changed. A task given up, for any cause
 // (the failure router's attempt bound, a dispute or review bound, the environment-change bound, an
 // unsatisfiable dependency: ADR-074 addendum 2 d74 D, d76; migrations 045, 048), opens a plan repair:
 // no person releases its dependents; the remaining work is planned again around it. Either stops the project's
@@ -260,6 +260,20 @@ class ReplanAttemptsExhausted extends Error {
   ) {
     super(`project ${projectId}: the plan could not be revised after ${attempts} attempt(s); last error: ${lastError}`);
     this.name = "ReplanAttemptsExhausted";
+  }
+}
+
+/**
+ * The project has spent its revision attempts but holds no error for them. The CHECK of migration
+ * 042 makes this unrepresentable; meeting it means the store lied.
+ */
+class ReplanFailureUnrecorded extends Error {
+  constructor(
+    readonly projectId: ProjectId,
+    readonly attempts: number,
+  ) {
+    super(`project ${projectId} has ${attempts} failed plan revision attempts but no recorded error`);
+    this.name = "ReplanFailureUnrecorded";
   }
 }
 
@@ -518,7 +532,7 @@ function isEnvironmentTask(item: WorkItem): boolean {
  * completed (an open one is superseded with the rest). Built on, its taskId is the layout's latest
  * merged state: of the latest completed product scaffold and every task with a merge on record that
  * completed after it, the last to complete. Never a task merged before the scaffold, whose commit
- * holds no product to build (W11 D2). A Completed task with a merge takes no later transition (only
+ * holds no product to build. A Completed task with a merge takes no later transition (only
  * a check task is reopened, and nothing of it is merged), so its updatedAt is when it completed.
  */
 function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
@@ -568,6 +582,7 @@ export class Replanner implements Replanning {
         outcomes.push(await this.revise(project));
       } catch (err) {
         const projectRecord =
+          err instanceof ReplanFailureUnrecorded ||
           err instanceof ReplanRequestUnfounded ||
           err instanceof ReplanRequestMissing ||
           err instanceof RepairSubjectUnreadable ||
@@ -599,8 +614,8 @@ export class Replanner implements Replanning {
       return this.block(projectId, { ...projectBlockCause(err), category: "plan_repair" });
     }
     if (project.replanAttempts >= MAX_REPLAN_ATTEMPTS) {
-      // The CHECK of migration 042 records an error with every counted attempt.
-      const err = new ReplanAttemptsExhausted(projectId, project.replanAttempts, project.replanLastError ?? "(none recorded)");
+      if (project.replanLastError === null) throw new ReplanFailureUnrecorded(projectId, project.replanAttempts);
+      const err = new ReplanAttemptsExhausted(projectId, project.replanAttempts, project.replanLastError);
       return this.block(projectId, projectBlockCause(err));
     }
 

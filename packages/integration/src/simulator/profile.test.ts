@@ -3,7 +3,7 @@ import { drawRates } from "./profile.js";
 import { Tape } from "./tape.js";
 
 describe("drawRates", () => {
-  // Test retro 2026-10-15 pattern 2: a review that catches at one fixed rate says nothing of one that misses more.
+  // docs/investigations/test-retro-2026-10-15/, pattern 2: a review that catches at one fixed rate says nothing of one that misses more.
   it("draws the review and dispute rates per seed under hostile, chaos and adversarial, the same on every draw of a seed", () => {
     for (const profile of ["hostile", "chaos", "adversarial"] as const) {
       const seen = new Set<string>();

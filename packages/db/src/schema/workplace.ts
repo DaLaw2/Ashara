@@ -14,11 +14,8 @@ export const devSessions = pgTable("dev_sessions", {
     .notNull()
     .references(() => workItems.id),
   phase: varchar({ length: 20 }).notNull().default("Preparing"),
-  workerId: uuid("worker_id"),
   brief: jsonb(),
-  output: jsonb(),
   verificationResult: jsonb("verification_result"),
-  findings: jsonb(),
   // Migration 034: the environment version the session's cells were built from; NULL when they
   // ran on the BaseCell (only the Sprint 0 task does).
   environmentVersion: text("environment_version"),

@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import type { WorkItemId, DomainEvent } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { WorkItemNotFound } from "../work-item-language/transitions.js";
 import type { WorkItemStatus } from "../work-item-language/work-item-status.js";
 import { salvagedReason } from "./salvaged-result.js";
 import type { WorkItem } from "./work-item.js";
@@ -145,5 +146,13 @@ describe("LifecycleRouter cascade-completion with salvaged results", () => {
     // was salvaged. Only a "completed" salvage settles.
     const savedParent = await repo.findById(parentId);
     expect(savedParent?.status).toBe("InProgress");
+  });
+});
+
+describe("LifecycleRouter.activateAncestors", () => {
+  test("a parent the store does not hold is WorkItemNotFound, never the end of the chain", async () => {
+    const repo = buildInMemoryRepo([]);
+
+    await expect(LifecycleRouter.activateAncestors(repo, createWorkItemId())).rejects.toThrow(WorkItemNotFound);
   });
 });

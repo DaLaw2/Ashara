@@ -58,9 +58,7 @@ function asText(value: string | Uint8Array): string {
 /**
  * The host's git, spawned by a small helper process instead of the simulator's own: a mechanical
  * cost, not behaviour. A spawn from Node forks the spawning process, and the simulator's is a few
- * hundred MB. Observed 2026-10-15 (t-simulator-parallel, seed 4 at two projects, timing around
- * execFileGitRunner): 946 git calls, 2.8 s of the event loop blocked inside spawn and 6.0 s in git
- * of a 14.4 s seed. The commands, their arguments, working directories and environments are the
+ * hundred MB, so each spawn blocks its event loop for the fork. The commands, their arguments, working directories and environments are the
  * ones production passes, and a non-zero exit rejects as execFile's does: the error's message,
  * `code`, `killed`, `signal`, `cmd`, `stdout` and `stderr` are execFile's own.
  */

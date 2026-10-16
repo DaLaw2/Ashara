@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "@ashara/delivery";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { readCellLimits, type CellResourceLimits } from "@ashara/execution-infra";
 
-export interface ServerConfig {
+interface ServerConfig {
   readonly databaseUrl: string;
   readonly apiToken: string;
   readonly port: number;
@@ -82,10 +82,9 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     rawBatchSize === undefined
       ? DEFAULT_CONFIG.maxBatchSize
       : parseIntegerSetting("MAX_BATCH_SIZE", rawBatchSize, 1, Number.MAX_SAFE_INTEGER);
-  // Finding (a), E2E Run 11: the owner's $1 cap lived in ASHARA_BUDGET_TOTAL
-  // while the enforcing cap read only ASHARA_BUDGET_LIMIT_USD, and the run
-  // over-ran to $1.08. Both names set the one deployment cap, the dedicated
-  // ASHARA_BUDGET_LIMIT_USD winning when both are set. Blank values are treated
+  // Both names set the one deployment cap, so a cap the owner set under either
+  // name is enforced; the dedicated ASHARA_BUDGET_LIMIT_USD wins
+  // when both are set. Blank values are treated
   // as unset so an empty override never masks the fallback.
   const deploymentVariable =
     nonEmptyEnv("ASHARA_BUDGET_LIMIT_USD") !== undefined ? "ASHARA_BUDGET_LIMIT_USD" : "ASHARA_BUDGET_TOTAL";
@@ -107,7 +106,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   // Policy default: unset means "podman on PATH". Pointing it at a missing
   // binary is how an unavailable substrate is observed without uninstalling.
   const podmanBinary = nonEmptyEnv("ASHARA_PODMAN_BINARY") ?? "podman";
-  // No default: the host also runs Postgres and Z0, so the caps are the owner's choice (W9).
+  // No default: the host also runs Postgres and Z0, so the caps are the owner's choice (ADR-074 d82 W9).
   const cellLimits = readCellLimits(process.env);
 
   return {

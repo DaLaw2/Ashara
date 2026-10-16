@@ -102,7 +102,7 @@ export function planningVisionOf(stored: StoredVision): PlanningVision {
 }
 
 /** A change the client's answer made: their question, their words and what work now proceeds on. */
-export interface StatedChange {
+interface StatedChange {
   readonly question: string;
   readonly answer: string;
   readonly decision: string;
@@ -131,7 +131,7 @@ class AssumptionUnkeyed extends Error {
 }
 
 /** The project's vision as an Assignment carries it: the client's text and every assumption, by key, in neutral words. */
-export interface AssignmentIntent {
+interface AssignmentIntent {
   readonly version: number;
   readonly visionText: string;
   readonly assumptions: AgentBrief["assumptions"];

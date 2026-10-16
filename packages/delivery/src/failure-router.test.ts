@@ -1,7 +1,8 @@
 import { describe, test, expect } from "vitest";
 import type { FailureVerdict } from "./acl/quality-acl.js";
 import { FailureRouter } from "./failure-router.js";
-import type { FailureRouteInput } from "./failure-router.js";
+
+type FailureRouteInput = Parameters<FailureRouter["route"]>[0];
 
 const WORK: FailureVerdict = { kind: "retryable", ground: "work" };
 
@@ -23,8 +24,8 @@ describe("FailureRouter", () => {
     expect(router.route(makeInput({ priorAttempts: 2 }))).toMatchObject({ action: "abandon", attempts: 2 });
   });
 
-  // Lessons digest P6: abandoning on the first tree regression gave up work that may have been
-  // correct and left the broken merged tree with no repair path.
+  // Abandoning on the first tree regression would give up work that may be correct and leave
+  // the broken merged tree with no repair path.
   test("a tree regression is retried on the merged tree, and its abandon at the bound names it", () => {
     const verdict: FailureVerdict = { kind: "retryable", ground: "tree-regression" };
     expect(new FailureRouter(2).route(makeInput({ priorAttempts: 1, verdict })).action).toBe("replan");

@@ -108,11 +108,11 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     await reports().runPending();
     await reports().runPending();
 
-    // The cause told is the recorded kind in the client's words; the chain stays in the record (W11b D3).
+    // The cause told is the recorded kind in the client's words; the chain stays in the record.
     expect(await messagesOf(projectId)).toEqual([
       expect.stringContaining("Ashara recorded the cause as this: the spending limit set for this project left no room for the next step of the work"),
     ]);
-    // smoke3 D1: the amounts the halt recorded, read back from project_blocks.spend, never a limit "reached".
+    // The amounts the halt recorded, read back from project_blocks.spend, never a limit "reached".
     expect((await messagesOf(projectId))[0]).toContain(
       "When it stopped the work, $0.412203 had been spent and $0.298540 was set aside for work under way, and the next step needed up to $0.304642 set aside",
     );
@@ -222,7 +222,7 @@ describe("an infrastructure halt is told once with its cause, resumes by itself 
     expect(await projects.listInfrastructureHalted()).toContain(projectId);
 
     const [halted] = await messagesOf(projectId);
-    // The recorded kind as Ashara's record, the chain kept for the operator (M2 trial M3, W11b D3).
+    // The recorded kind as Ashara's record, the chain kept for the operator.
     expect(halted).toContain("Ashara recorded the cause as this: the machines Ashara runs the work on kept failing");
     expect(halted).not.toMatch(/InfrastructureFaultBudgetSpent|task cell unavailable/);
     expect(halted).toContain("resumes this project by itself");
@@ -317,7 +317,7 @@ describe("every task given up opens a plan repair, and the undeliverable halt na
   });
 });
 
-// ADR-074 addendum 2 d71 c (fifth run N20): a suite_review halt recorded before migration 048 is
+// ADR-074 addendum 2 d71 c: a suite_review halt recorded before migration 048 is
 // still told once, with the last review's problems.
 describe("a suite review halt recorded before migration 048 is told once", () => {
   test("the counts per check task survive in the record, and the block's report states the last review's problems", async () => {

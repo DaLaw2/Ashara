@@ -168,7 +168,7 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
     ).toThrow(/two assumptions share the key A1/);
   });
 
-  // W11c D3 and the W11 residual: a scope line keeps the side intake recorded, and a disclosure that
+  // A scope line keeps the side intake recorded, and a disclosure that
   // is neither value is an unreadable vision, never an assumption the client was not shown.
   test("a scope line carries its recorded side, and a malformed disclosure makes the vision unreadable", () => {
     const projectId = parseProjectId("00000000-0000-4000-8000-000000000025", "test");

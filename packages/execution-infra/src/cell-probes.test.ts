@@ -15,7 +15,7 @@ function cellPrinting(stdout: string): Cell {
 }
 
 describe("probeCredentialRead", () => {
-  it("sends the probed paths on stdin, never in argv, which reaches the cell's environment (W5 D4)", async () => {
+  it("sends the probed paths on stdin, never in argv, which reaches the cell's environment", async () => {
     const calls: Array<{ argv: readonly string[]; stdin: unknown }> = [];
     const path = "/home/someone/project/.env";
     const cell: Cell = {
@@ -78,7 +78,7 @@ describe("probeOutboundHost", () => {
     expect((await probeOutboundHost(cellPrinting(stdout), "1.1.1.1")).outcome).toBe("breached");
   });
 
-  it("is unverifiable, never held, when the image has no mechanism to attempt a connection (W12 D3)", async () => {
+  it("is unverifiable, never held, when the image has no mechanism to attempt a connection", async () => {
     const verdict = await probeOutboundHost(cellPrinting("interfaces: lo\nroutes: 0\nconnect: none\n"), "1.1.1.1");
     expect(verdict.outcome).toBe("unverifiable");
     expect(verdict.evidence).toContain("no connection mechanism in the image");

@@ -38,7 +38,7 @@ class EnvironmentCheckCommitFailed extends Error {
 }
 
 /** Which check a fresh checkout is for: each has its own directory. */
-export type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify" | "verify-probe" | "foundation-build";
+type EnvironmentCheckoutPurpose = "environment-check" | "substrate-gate" | "verify" | "verify-probe" | "foundation-build";
 
 /** Everything one environment check needs of its dispatch. */
 export interface EnvironmentCheckScope {

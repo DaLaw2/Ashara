@@ -348,7 +348,7 @@ describe("the client's answers", () => {
     ).toHaveLength(0);
   });
 
-  test("two answers of one project in one cycle: each is read against the vision as the other left it (third run N9)", async () => {
+  test("two answers of one project in one cycle: each is read against the vision as the other left it", async () => {
     const { projectId, questionIds } = await intakenProject();
     const [first, second] = questionIds;
     if (first === undefined || second === undefined) throw new Error("intake posted fewer than two questions");

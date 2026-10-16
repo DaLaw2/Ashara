@@ -22,7 +22,7 @@ import { createAnswerStore } from "@ashara/server/answer-store";
 import { createClientStopStore } from "@ashara/server/client-stop-store";
 import { projectState } from "../simulator/project-state.js";
 
-// Story s-independent-verify-m1 W7 (design P11, §2.8; eighth run E3): a project whose goal tasks are
+// Story s-independent-verify-m1 W7 (design P11, §2.8): a project whose goal tasks are
 // all done is swept on main once; a pass makes it Accepted with one delivered report rendered from
 // the records, a failure is a defect repaired like any task given up. The sweep itself (cells, main)
 // is Quality's and is stood in here; every record is real Postgres. Every row belongs to a
@@ -45,7 +45,7 @@ interface Delivered {
   readonly checksOfStore: string;
 }
 
-/** The vision the plan was reviewed against, in the W11c shape: lines in and out of scope, and assumptions of each kind and standing. */
+/** The vision the plan was reviewed against: lines in and out of scope, and assumptions of each kind and standing. */
 const VISION = {
   stored: { type: "scope", id: "S1", text: "Keys can be stored and read", side: "in" },
   deleted: { type: "scope", id: "S2", text: "Keys can be deleted", side: "in" },
@@ -256,7 +256,7 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Store keys": built and merged, commit ${MERGE_A}.`);
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
-    // W11c D3: the items of what the client asked for that no acceptance line of a passing check task
+    // The items of what the client asked for that no acceptance line of a passing check task
     // cites, and only those; the exclusion and the team's design choice are never listed.
     expect(body).toContain(
       "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, " +
@@ -266,7 +266,7 @@ describe("acceptance on main", () => {
     for (const absent of ["- Keys can be deleted", "A missing key exits 3", "Any network service", "kv.log"]) expect(body).not.toContain(absent);
   });
 
-  // w12b D4: a goal task a plan revision replaced while it was open was set aside, never given up.
+  // A goal task a plan revision replaced while it was open is set aside, never given up.
   test("the delivered report's given-up tasks are the goal tasks given up, never one a plan revision set aside", async () => {
     const { projectId, goals, scaffold } = await deliveredProject();
     expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
@@ -319,8 +319,8 @@ describe("acceptance on main", () => {
     expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
   });
 
-  // smoke2 D1 (ADR-074 d95 a): the plan was made, then a confirming answer was read (no replan), then
-  // the project was accepted. The review's copy of the vision still says the item was asked about.
+  // ADR-074 d95 a: a confirming answer read after the plan was made asks for no replan, so the
+  // review's copy of the vision can still say the item was asked about when the project is accepted.
   test("an answer confirming an assumption after the plan was made is reported as confirmed, and an unreadable standing is refused", async () => {
     const { projectId, goals, scaffold, question } = await deliveredProject({ prefixAsked: true });
     if (question === null) throw new Error("the fixture posted no question");

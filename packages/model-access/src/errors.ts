@@ -1,4 +1,5 @@
 import { describeErrorChain } from "@ashara/shared";
+import type { CapabilityLevel } from "./capability-level.js";
 
 export class GatewayError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -22,11 +23,11 @@ export class ProviderError extends GatewayError {
  * capability. There is no downgrade: a lower-tier model is never substituted.
  */
 export class NoProviderAvailableError extends GatewayError {
-  readonly capability: string;
+  readonly capability: CapabilityLevel;
   /** `id (capability)` of every model the enabled providers offered. */
   readonly availableModels: readonly string[];
 
-  constructor(capability: string, availableModels: readonly string[]) {
+  constructor(capability: CapabilityLevel, availableModels: readonly string[]) {
     super(
       `No provider available for capability level "${capability}" or above: no enabled provider offers a model ` +
         `graded at that level or higher, and no lower model is substituted ` +
@@ -54,11 +55,11 @@ export class UnknownProvider extends GatewayError {
   }
 }
 
-export interface RoutingProfileUnresolvedContext {
+interface RoutingProfileUnresolvedContext {
   /** Enabled-provider combo whose profile was consulted, e.g. "anthropic+deepseek". */
   readonly combo: string;
   readonly site: string;
-  readonly capability: string;
+  readonly capability: CapabilityLevel;
   /** Model the profile maps the site to; `null` when no entry covers the capability. */
   readonly mappedModel: string | null;
   /** Providers searched for `mappedModel` (enabled, minus any excluded by a fallback). */
@@ -75,7 +76,7 @@ export interface RoutingProfileUnresolvedContext {
 export class RoutingProfileUnresolved extends GatewayError {
   readonly combo: string;
   readonly site: string;
-  readonly capability: string;
+  readonly capability: CapabilityLevel;
   readonly mappedModel: string | null;
   readonly searchedProviders: readonly string[];
 
@@ -102,7 +103,7 @@ export class SchemaValidationError extends GatewayError {
   readonly errors: string[];
   /**
    * The model whose answer failed (its config id, as llm_calls records it), so a failed ladder
-   * attempt names the model that was called (fourth run N17); null when no model answered.
+   * attempt names the model that was called; null when no model answered.
    */
   readonly model: string | null;
 
@@ -221,7 +222,7 @@ export class InvalidThinkingPolicy extends GatewayError {
 /**
  * Thrown by `buildGateway` when zero LLM providers are configured.
  *
- * Per ADR-030 (docs/decisions.md), this is the structural fix for the
+ * Per ADR-030 (docs/decisions/ADR-030-llm-boundary-reliability.md), this is the structural fix for the
  * "run silently executes on stubs" failure class — a mis-set provider
  * config must refuse to start, never fall back to a stub silently.
  */
@@ -264,7 +265,7 @@ function quoteList(values: readonly string[]): string {
   return values.map((v) => `"${v}"`).join(", ") || "none";
 }
 
-export interface RoutingProfileIncompleteContext {
+interface RoutingProfileIncompleteContext {
   /** Enabled-provider combo whose profile is short a site, e.g. "anthropic+deepseek". */
   readonly combo: string;
   /** `KNOWN_LLM_SITES` entries the profile fails to map. */
@@ -308,7 +309,7 @@ export class RoutingProfileIncomplete extends GatewayError {
   }
 }
 
-export interface RoutingProfileModelMissingContext {
+interface RoutingProfileModelMissingContext {
   /** Enabled-provider combo whose profile names the models. */
   readonly combo: string;
   /** `"<site>" -> "<model>"` for every mapping whose model no enabled provider offers. */
@@ -346,23 +347,12 @@ export class RoutingProfileModelMissing extends GatewayError {
 }
 
 /**
- * Thrown by `loadRoutingProfilesFromToml` when a models.toml that IS present
- * and IS parseable carries a `[routing.profiles]` block that fails schema
- * validation — most often a site key that is not a `KNOWN_LLM_SITES` entry
- * (a typo, or a key left behind after the call site was deleted).
- *
- * Deliberately NOT degraded to "no profiles": dropping the whole block on a
- * one-key typo would send every site to capability routing, the same silent
- * mis-route the boot completeness check exists to prevent, and the stale key
- * would disappear without a trace. A missing or unparseable file still
- * degrades — that is a deployment shape, not an authoring error.
- */
-/**
- * Thrown by `createLanguageModel` when an openai-compatible provider has no
- * `baseUrl`. The AI SDK defaults to `https://api.openai.com/v1` when
- * `baseURL` is absent, so a NULL value silently routes traffic to the wrong
- * vendor. Discipline A: absence must fail closed, not resolve to a default
- * that changes the destination.
+ * Thrown by `createLanguageModel` when a `deepseek`, `local` or
+ * `openai-compatible` provider has no `baseUrl`. The AI SDK falls back to its
+ * own default endpoint when `baseURL` is absent, so a NULL value silently
+ * routes traffic to an endpoint the deployment did not name. Discipline A:
+ * absence must fail closed, not resolve to a default that changes the
+ * destination.
  */
 export class ProviderMissingBaseUrl extends GatewayError {
   readonly provider: string;
@@ -384,6 +374,18 @@ export class ProviderMissingBaseUrl extends GatewayError {
   }
 }
 
+/**
+ * Thrown by `loadRoutingProfilesFromToml` when a models.toml that IS present
+ * and IS parseable carries a `[routing.profiles]` block that fails schema
+ * validation — most often a site key that is not a `KNOWN_LLM_SITES` entry
+ * (a typo, or a key left behind after the call site was deleted).
+ *
+ * Deliberately NOT degraded to "no profiles": dropping the whole block on a
+ * one-key typo would send every site to capability routing, the same silent
+ * mis-route the boot completeness check exists to prevent, and the stale key
+ * would disappear without a trace. A missing or unparseable file is
+ * `ModelsConfigUnreadable`, a broken deployment.
+ */
 export class InvalidRoutingProfiles extends GatewayError {
   readonly configPath: string;
   readonly issues: readonly string[];
@@ -443,7 +445,7 @@ export class TurnToolExecutable extends GatewayError {
   }
 }
 
-export interface TurnResponseInvalidContext {
+interface TurnResponseInvalidContext {
   readonly provider: string;
   readonly model: string;
   readonly issues: readonly string[];

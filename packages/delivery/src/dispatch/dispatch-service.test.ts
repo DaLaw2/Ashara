@@ -199,9 +199,9 @@ function result(status: ExecutionResult["status"]): ExecutionResult {
 
 const session = { sessionId: "sess", taskId: "task", brief: brief(), environmentVersion: null };
 
-// E2E Run 39: six failure returns, none of which transitioned the session, left
-// 6 rows in Preparing that listActive() reported as live agents. The fix is not
-// six call sites — it is one seam every exit passes through.
+// Every exit of a dispatch passes through one seam that writes the
+// session's terminal status, so no failure return leaves a row in Preparing that
+// listActive() reports as a live agent.
 describe("withSessionLifecycle — the session's terminal write cannot be skipped", () => {
   // EXHAUSTIVE over ExecutionResult["status"]: whatever a future seventh return
   // returns, it is one of these, so this is the proof that a new return site
@@ -671,7 +671,7 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(await readdir(workdirBase)).toEqual(["projects"]);
   });
 
-  test("an environment task's images are pruned when it ends, however it ends, keeping main's version (third run N12)", async () => {
+  test("an environment task's images are pruned when it ends, however it ends, keeping main's version", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { result, probe } = await dispatchWith(checkStore(null), "environment");
 
@@ -694,8 +694,8 @@ describe("a task nothing could decide ends before the agent", () => {
   });
 });
 
-// The isolated-worker run's finding 1: a verifier cell refused by the substrate was routed as a
-// tree regression and the task Abandoned. Every stage that runs on the substrate is failed here in
+// A cell the substrate refuses is an infrastructure fault, never a tree regression that abandons
+// the task. Every stage that runs on the substrate is failed here in
 // turn, with the real PodmanSubstrate over a fake process runner and a real git target.
 describe("a substrate failure at any stage blocks the task on the environment", () => {
   const scratch: string[] = [];
@@ -761,7 +761,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly baselineExit?: number;
     /** Like checkoutsBlocked, but only from the model's first call: the checkouts before the model are made. */
     readonly checkoutsBlockedAfterSweep?: boolean;
-    /** The exit code of the environment's build on a red run's foundation (W11 D2); 0 when absent. */
+    /** The exit code of the environment's build on a red run's foundation; 0 when absent. */
     readonly foundationBuildExit?: number;
   }
 
@@ -979,7 +979,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       expect(run).toContain("--userns=keep-id");
       expect(run[run.indexOf("-e") + 1]).toBe("HOME=/ashara-cell/home");
     }
-    // sprint0-run-2026-10-14 D9: the brief carries the vision's assumptions, not only its text.
+    // The brief carries the vision's assumptions, not only its text.
     expect(system).toContain("vision version 2");
     expect(system).toContain("- A1 (Inferred; reported to the client; client-visible behaviour): Greetings are written in lower case.");
     expect(system).toContain("- A2 (Stated by the client; client-visible behaviour): The greeting file is plain text, one line.");
@@ -1032,7 +1032,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(warns.some((w) => w.includes("still on disk"))).toBe(false);
   });
 
-  // The 509bbbc5 review: a refused turn was transport_exhausted, then "failed" for the FailureRouter.
+  // A turn refused before it was sent is neither transport_exhausted nor a failure for the FailureRouter.
   test("a turn refused before it was sent: refused carrying the refusal, never failed; no lesson; partial work kept", async () => {
     const refusal = new PreCallRefusal("budget_cap: the spend cap of project p is $1.000000");
     const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({ refusesSecondTurn: refusal });
@@ -1050,7 +1050,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(branchKept).toBe(true);
   });
 
-  // The 30fb60d5 review (a): a git step around the stored checks blamed the task as a verification gap.
+  // A git step of Z0's around the stored checks that fails never blames the task as a verification gap.
   test("Z0 cannot make the checks' checkout: blocked under postMergeCheckRun, never a failure of the task", async () => {
     const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ checkoutsBlockedAfterSweep: true });
 
@@ -1108,9 +1108,9 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.find((e) => e.event === "checks_revalidated")).toMatchObject({ storedVersion: "e".repeat(64), trusted: true });
   });
 
-  // t-env-failure-precision: a check's own exit 125 was podman exec's failure code, so the red run
-  // blocked. V7: it is the check's own exit, not its verdict that the work is missing, so the set
-  // is stale on this environment, never an environment failure.
+  // A check's own exit 125 is also podman exec's failure code, but here it is the check's own exit,
+  // not its verdict that the work is missing, so the set is stale on this environment, never an
+  // environment failure.
   test("a stored check that itself exits 125 on its baseline is the check's own, never an environment failure", async () => {
     const { result, events, probe } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 125 });
 
@@ -1175,7 +1175,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(mainAfter).toBe(mainBefore);
   });
 
-  // W11 D2: every revision-3 check failed on a foundation with no build manifest, and the red run kept them all.
+  // A check that fails because the foundation does not build is never kept by the red run.
   test("checks from another environment version on a baseline the environment no longer builds: checks_stale, never trusted on failures the build caused", async () => {
     const { result, probe, events, foundationBuilds } = await dispatch({ storedVersion: "e".repeat(64), ciExit: 1, foundationBuildExit: 1 });
 
@@ -1238,7 +1238,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(result.outcome !== null ? attemptSummary(result.outcome) : null).toBe("check files in the worktree: 0");
   });
 
-  // Sprint 0 run D2: a SIGTERM mid-attempt was "failed", and the FailureRouter abandoned the item.
+  // A SIGTERM mid-attempt is an interruption, never a failure the FailureRouter can abandon the item for.
   test("the shutdown signal mid-attempt: interrupted, never failed; no lesson; partial work kept", async () => {
     const { result, events, probe, mainBefore, mainAfter, branchKept } = await dispatch({ shutdownDuringSecondTurn: new AbortController(), attempt: 3 });
 
@@ -1268,7 +1268,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     },
   );
 
-  // The 93f7aeb7 review (a): a fault of Z0's own machinery inside run_checks was labelled "task cell".
+  // A fault of Z0's own machinery inside run_checks is never labelled "task cell".
   test("Z0 cannot make run_checks' checkout: blocked as verification infrastructure, never the task cell", async () => {
     const { result, events } = await dispatch({ agentRunsChecks: true, checkoutsBlockedAfterSweep: true });
 
@@ -1288,7 +1288,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_interrupted")).toBe(false);
   });
 
-  // Fourth run N13 (ADR-074 addendum 2 d67 b): work an earlier task over-delivered had no exit but the operator.
+  // ADR-074 addendum 2 d67 b: work an earlier task over-delivered has an exit other than the operator.
   test("no change against main and the checks, the environment's test and the regression suite pass on main: already delivered at main, nothing merged", async () => {
     const { result, events, started, mainBefore, mainAfter, branchKept } = await dispatch({ agentWritesNothing: true, ciExit: 0 });
 
@@ -1336,11 +1336,11 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     expect(events.some((e) => e.event === "task_completed" || e.event === "task_failed")).toBe(false);
   });
 
-  // Sprint 0 run D5: an implementer's commit changed the environment's files and moved its version.
+  // An implementer's commit must not change the environment's files and so move its version.
   describe("the ownership gate: an implementer's branch touches only what its role may write", () => {
     const CHECK_FILE: Awaited<ReturnType<TaskCheckStore["checkFilesOf"]>>[number] = { taskId: "44444444-4444-4444-8444-444444444444", path: "checks/greet.sh" };
 
-    // third-run N7: the refusal's only exit was an operator editing main.
+    // A refused environment change has an exit other than an operator editing main.
     test("a branch changing environment/Containerfile: an environment change is requested with the need and the diff; branch deleted, nothing merged", async () => {
       const { result, events, started, probe, mainBefore, mainAfter, branchKept } = await dispatch({
         agentAlsoWrites: { "environment/Containerfile": "FROM scratch\nRUN true\n" },

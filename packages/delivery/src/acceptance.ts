@@ -51,7 +51,7 @@ export interface AcceptanceStore {
   recordDefect(sweep: SweepRecord, writeDefect: (workItems: WorkItemRepository) => Promise<string>): Promise<"recorded" | "moved">;
 }
 
-export interface AcceptanceDeps {
+interface AcceptanceDeps {
   readonly acceptance: AcceptanceStore;
   readonly acceptanceSweeper: Pick<TaskVerification, "sweepForAcceptance">;
   readonly projectRepo: { block(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> };

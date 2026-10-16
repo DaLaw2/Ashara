@@ -160,7 +160,7 @@ export class SpendCap {
   /**
    * One admission: both caps checked, then the call's pending row written, all inside this
    * admission's turn. Recorded spend and in-flight estimates come from one statement on llm_calls,
-   * so no call can be between them (the B9 race of an in-memory in-flight set). A call recorded
+   * so no call can be between them, as it could between an in-memory in-flight set and a read. A call recorded
    * while the read runs moves from its estimate to its cost, never above it, so a stale read only
    * overcounts.
    */
@@ -209,7 +209,7 @@ export class SpendCap {
 /**
  * The error class a `budget_cap` block records, which says whose cap it was: the deployment's, which
  * halts every active project at once (the core loop's halt at the cap), or the project's own (the
- * spend cap's refusal of one project's call). The Liaison's report names the cap from it (smoke1 D4).
+ * spend cap's refusal of one project's call). The Liaison's report names the cap from it.
  */
 export const SPEND_CAP_ERROR_CLASS = {
   deployment: "DeploymentSpendCapReached",

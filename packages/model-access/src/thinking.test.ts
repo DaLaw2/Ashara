@@ -51,7 +51,7 @@ describe("loadThinkingPolicyFromToml", () => {
 });
 
 describe("outputBudget", () => {
-  // smoke2 D2: the suite review was cut off at the 32,768 minimum allowance too, so it runs with thinking off.
+  // A reasoning allowance, even the 32,768 minimum, does not stop the suite review spending its whole bound on reasoning, so it runs with thinking off.
   test("the repo's suite-review resolves to thinking off and its bound carries no reasoning allowance (ADR-074 d95 b)", () => {
     const policy = loadThinkingPolicyFromToml(join(import.meta.dirname, "..", "..", "..", "config", "models.toml"));
     const mode = thinkingModeFor(policy, "suite-review");

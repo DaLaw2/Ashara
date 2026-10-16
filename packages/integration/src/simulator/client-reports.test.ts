@@ -41,7 +41,7 @@ describe("checkReports, a halt's cause", () => {
     expect(keysOf(haltWith("budget_cap", "BudgetExceeded", "over", stated(project.slice(0, -1), "e1")), "blocked")).toEqual([]);
     expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(project.slice(0, -1), "e1")), "blocked")).toEqual(["halt-cause:budget_cap"]);
     expect(keysOf(haltWith("budget_cap", "SomethingElse", "over", stated(unknown.slice(0, -1), "e1")), "blocked")).toEqual([]);
-    // smoke3 D1: the amounts on record, not a limit reached.
+    // The amounts on record, not a limit reached.
     const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
     const amounts =
       "When it stopped the work, $0.412203 had been spent and $0.298540 was set aside for work under way, and the next step needed up to " +
@@ -101,7 +101,7 @@ describe("checkReports, a delivered report", () => {
     expect(keysOf(delivered(`- "Goal": closed on commit c1; whether it was merged or already delivered there is not on record.`, {}, unrecordedTail), "accepted", [goal])).toEqual([]);
   });
 
-  // w12b D4: a goal task a plan revision replaced while it was open was set aside, not given up.
+  // A goal task a plan revision replaced while it was open is set aside, not given up.
   it("holds the given-up list to the goal tasks given up, never one a plan revision set aside", () => {
     const merged = { ...goal, mergeKind: "merged" };
     const close = `- "Goal": built and merged, commit c1.`;
@@ -119,7 +119,7 @@ describe("checkReports, a delivered report", () => {
     expect(keysOf(delivered(`- "Goal": closed on commit c1; whether it was merged or already delivered there is not on record.`, {}, unrecordedTail), "accepted", [already])).toEqual(["delivered-close"]);
   });
 
-  // W11c D3: coverage comes from the acceptance trace; an out-of-scope line or an internal-design
+  // Coverage comes from the acceptance trace; an out-of-scope line or an internal-design
   // assumption is never listed as not covered, and every uncited asked-for item is.
   describe("coverage from the acceptance trace", () => {
     const merged = `- "Goal": built and merged, commit c1.`;

@@ -9,7 +9,7 @@ export class SecurityError extends Error {
   }
 }
 
-export type SecretKeyFileProblem =
+type SecretKeyFileProblem =
   | "path-empty"
   | "missing"
   | "not-a-file"

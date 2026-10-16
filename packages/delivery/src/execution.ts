@@ -560,7 +560,7 @@ async function routeAsInfrastructureFault(
 /**
  * Whether a dispatch that stopped on a fault had already merged its work: Z0 commits the merge on
  * main and only then reads its id and writes the record, so a fault after the commit leaves merged
- * work behind, and a requeue would redo it (B5). Main is read first, within the merge record's
+ * work behind, and a requeue would redo it. Main is read first, within the merge record's
  * bound. A merge found is recorded and the task Completed (or parked merge_unrecorded when that
  * cannot be written); main that cannot be read parks the task orphan_unreconciled, whose exit reads
  * main again, with the project blocked on Ashara's own fault. False only when main holds no merge
@@ -997,7 +997,7 @@ async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem, attemp
     let events: DomainEvent[];
     try {
       // The Completed transition is committed before its events return: a publish failure after it
-      // must not route a merged, Completed task as failed (orchestrator D1).
+      // must not route a merged, Completed task as failed.
       events = await PlanningService.route(deps.workItemRepo, task.id, "passed");
     } catch (e) {
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
@@ -1161,8 +1161,8 @@ export async function processTask(
     // DISPATCH SEAM (migration 018, r9f-t1). The item is now committed InProgress and
     // is about to be handed to the agent. Bump the dispatch counter with a single
     // atomic UPDATE BEFORE executeTask, so the attempt is recorded even if the agent
-    // crashes, its output is discarded, or any downstream step throws — the exact
-    // Run-9 hole where a discarded output left the retry bound reading zero forever.
+    // crashes, its output is discarded, or any downstream step throws: a count taken
+    // later would leave the retry bound reading zero forever for a discarded output.
     // This is the ONE place a dispatch is counted; every retry-bound consumer
     // (FailureRouter recovery, startup reconciler) reads the resulting
     // dispatch_count off the reloaded WorkItem.
@@ -1226,7 +1226,7 @@ export async function processTask(
     // above. Any item that landed at Failed is routed through
     // the FailureRouter so it recovers (replan) or terminates
     // (abandon) rather than sitting in Failed and deadlocking its
-    // dependents (Run-8 C2, migration Phase 6).
+    // dependents.
     if (!current) {
       console.warn(
         `[${task.id}] work item vanished after agent returned ` +
@@ -1317,10 +1317,7 @@ export async function processTask(
 
         default: {
           const _exhaustive: never = current.status;
-          throw new Error(
-            `Unhandled WorkItemStatus in processTask post-agent ladder: ` +
-            `${String(_exhaustive)}`,
-          );
+          throw new UnhandledWorkItemStatus(task.id, "processTask post-agent ladder", _exhaustive);
         }
       }
     }
@@ -1419,10 +1416,7 @@ export async function handleProcessingError(
 
         default: {
           const _exhaustive: never = current.status;
-          throw new Error(
-            `Unhandled WorkItemStatus in handleProcessingError: ` +
-            `${String(_exhaustive)}`,
-          );
+          throw new UnhandledWorkItemStatus(task.id, "handleProcessingError", _exhaustive);
         }
       }
     }
@@ -1434,4 +1428,16 @@ export async function handleProcessingError(
   }
 
   return { taskId: task.id, status: "interrupted", detail: fault.reason };
+}
+
+/** A work item status no arm of a status ladder handles: the ladder fell behind the status vocabulary. */
+class UnhandledWorkItemStatus extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly ladder: string,
+    readonly status: unknown,
+  ) {
+    super(`[${taskId}] unhandled work item status in ${ladder}: ${String(status)}`);
+    this.name = "UnhandledWorkItemStatus";
+  }
 }

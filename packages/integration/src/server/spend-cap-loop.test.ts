@@ -194,7 +194,7 @@ describe("the deployment spend cap stops the loop", () => {
 
     // The halt ends the work; the test then ends the halted runner, as SIGTERM does.
     const abort = new AbortController();
-    const stop = await new ContinuousRunner(new CoreLoop(deps)).run(abort.signal, async () => abort.abort());
+    const stop = await new ContinuousRunner(new CoreLoop(deps), { databaseUrl: null }).run(abort.signal, async () => abort.abort());
 
     expect(intake).toHaveBeenCalledTimes(1);
     expect(roster).not.toHaveBeenCalled();
@@ -203,7 +203,7 @@ describe("the deployment spend cap stops the loop", () => {
   });
 });
 
-// smoke1 D3: after the deployment cap stopped the runner, a client's stop returned 201 and was never consumed or answered.
+// A stop accepted after the deployment cap stopped the runner is consumed and answered.
 describe("a stop the client sends after the deployment cap halted the loop", () => {
   test("is recorded and answered by the halted runner, and holds when the halt is lifted", async () => {
     const projects = new ProjectHaltRepository(db);
@@ -234,7 +234,7 @@ describe("a stop the client sends after the deployment cap halted the loop", () 
     });
     let stopId = "";
 
-    const ended = await new ContinuousRunner(new CoreLoop(deps), { idleIntervalMs: 60_000 }).run(abort.signal, async () => {
+    const ended = await new ContinuousRunner(new CoreLoop(deps), { databaseUrl: null, idleIntervalMs: 60_000 }).run(abort.signal, async () => {
       // The halt is recorded as the deployment's cap before the client sends its stop.
       const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${projectId}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
@@ -287,8 +287,8 @@ function scriptedSubstrate(mountRoot: string): PodmanSubstrate {
 }
 
 describe("a turn refused at the project's spend cap", () => {
-  // The 509bbbc5 review: the refusal ended the attempt as transport_exhausted, the item went to
-  // Failed and through the FailureRouter, and a failed_approaches lesson was written.
+  // A refusal at the cap is not an attempt's failure: it never ends the attempt as
+  // transport_exhausted, never sends the item to Failed or the FailureRouter, and writes no lesson.
   test("returns the item to Pending with its dispatch unconsumed and no lesson, and blocks the project budget_cap", async () => {
     const calls = new LlmCallRepository(db);
     const projects = new ProjectHaltRepository(db);

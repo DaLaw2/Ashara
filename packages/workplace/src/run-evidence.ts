@@ -82,7 +82,7 @@ const CallTotalsRowSchema = z.object({
  * - `reconciled`: a reconciler (`by`), not the session itself, wrote its terminal phase.
  * - `predates-attempt-columns`: created before migration 046 applied.
  * - `completed-without-attempt`: it completed with no attempt (its work already delivered on main,
- *   W5 trial D5); `endDetail` is its terminal write's own detail, null on a row written before a
+ *   so it says why); `endDetail` is its terminal write's own detail, null on a row written before a
  *   completion recorded one.
  * - `unrecorded`: it ended without an attempt outcome reaching it (before the model, or the attempt
  *   threw); `endOutcome` is its terminal write's outcome, when one was written.

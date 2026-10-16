@@ -1,7 +1,7 @@
 import type { CostMeasurement, PreCallRefusal } from "@ashara/finance";
 
 /** A turn whose cost is not known, and why. */
-export interface UnmeasuredTurn {
+interface UnmeasuredTurn {
   readonly turn: number;
   readonly reason: string;
 }
@@ -10,7 +10,7 @@ export interface UnmeasuredTurn {
  * What the attempt's model calls cost. One unmeasured turn makes the whole attempt unmeasured:
  * `measuredUsd` is then only the sum of the turns that were priced, a lower bound, never the total.
  */
-export type AttemptCost =
+type AttemptCost =
   | { readonly measured: true; readonly totalUsd: number; readonly turns: number }
   | { readonly measured: false; readonly measuredUsd: number; readonly unmeasuredTurns: readonly UnmeasuredTurn[] };
 

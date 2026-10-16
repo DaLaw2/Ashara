@@ -27,9 +27,6 @@ import type { SpendAtCap } from "./project-halt.js";
 export interface CoreLoopConfig {
   readonly workdirBase: string;
   readonly maxBatchSize: number;
-  readonly maxRetries: number;
-  readonly decompositionTimeoutMs: number;
-  readonly verifyTimeoutMs: number;
 }
 
 /**
@@ -41,9 +38,6 @@ export interface CoreLoopConfig {
  */
 export const DEFAULT_CONFIG: Omit<CoreLoopConfig, "workdirBase"> = {
   maxBatchSize: 2,
-  maxRetries: 1,
-  decompositionTimeoutMs: 120_000,
-  verifyTimeoutMs: 120_000,
 };
 
 /** Why the loop must stop for good, the deployment's spend cap; the runner ends on it instead of cycling again. */

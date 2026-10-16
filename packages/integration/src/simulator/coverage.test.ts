@@ -39,7 +39,7 @@ describe("sample", () => {
     expect([...coverage.transitions].sort()).toEqual(["InProgress->Completed", "Pending->InProgress"]);
   });
 
-  // The L2 review: an unknown event was collected, never reported, and its item's later "from" went wrong.
+  // An unknown event is never collected unreported, which would put its item's later "from" wrong.
   it("refuses an event kind it does not model instead of skipping it", () => {
     const events = [{ seq: 1, eventType: "work_item.teleported", workItemId: "a" }];
     expect(() => sample(emptyCoverage(), snapshotWith(events), [], [])).toThrow(/work_item\.teleported .* not in EVENT_TARGET/);

@@ -68,8 +68,7 @@ type ProjectRow = z.infer<typeof projectRow>;
 /**
  * A halt episode and the report that told the client of it. A planning stop is told by the
  * planning-stopped report (one client message, reports_on 'planning-stopped', posted after the stop),
- * which its episode row does not link: that message is its report. First met under the adversarial
- * profile (seed 5: twelve failed knowledge calls, a planning call since deleted, stopped planning, and I2 named the told episode).
+ * which its episode row does not link: that message is its report.
  */
 const episodeRow = z.object({ id: z.string(), kind: z.string(), reportId: z.string().nullable(), ended: z.boolean() });
 const checkRow = z.object({
@@ -406,13 +405,13 @@ export function checkSnapshot(step: number, snapshot: Snapshot, context: { reado
     }
     for (const file of check.files) {
       if (file.path.startsWith("product/")) {
-        add("I3", `product-file:${task?.title ?? check.taskId}:${file.path}`, `check set r${check.revision} of "${task?.title ?? check.taskId}" holds product file ${file.path}: a check that supplies what it checks (run 8 E1)`);
+        add("I3", `product-file:${task?.title ?? check.taskId}:${file.path}`, `check set r${check.revision} of "${task?.title ?? check.taskId}" holds product file ${file.path}: a check that supplies what it checks`);
       }
     }
   }
   for (const found of cellRoleViolations(snapshot.items, context.cells)) add("I3", found.key, found.statement);
 
-  // I4: an accepted project has its delivered report (E3), once the run ends; that a halt episode
+  // I4: an accepted project has its delivered report, once the run ends; that a halt episode
   // has its report is I2's. What each report states is judged against the records it is rendered
   // from (client-reports.ts): the halt's recorded cause, the merges recorded at a stop, the goals'
   // closes and the unchecked tasks at acceptance, and no report posted twice.

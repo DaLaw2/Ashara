@@ -1,7 +1,7 @@
 /**
- * Every error names the operation, the exact argv sent to the substrate (argv never carries a
- * secret: cells get no --env-host or --secret, and their one -e is HOME, a fixed in-cell path), the exit
- * code and stderr where one exists.
+ * Every error names the operation, the exact argv sent to the substrate, the exit code and stderr
+ * where one exists. Cells get no --env-host or --secret: `podman run` passes one -e, HOME, a fixed
+ * in-cell path, and `podman exec` passes only the tool's own argv, as ASHARA_ARGC and ASHARA_ARG_<i>.
  */
 
 import { renderElided } from "@ashara/shared";

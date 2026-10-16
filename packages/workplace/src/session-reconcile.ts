@@ -13,13 +13,13 @@ interface OrphanedSessionResolution {
 }
 
 /** The session store's view of the startup reconcile; DevSessionRepository satisfies it. */
-export interface OrphanedSessionStore {
+interface OrphanedSessionStore {
   /** Closes every session still in a non-terminal phase with `resolution`; returns how many. */
   failStale(resolution: OrphanedSessionResolution): Promise<number>;
 }
 
 /** What the startup reconcile of sessions did: how many it closed, or why it could not. */
-export type SessionReconcile =
+type SessionReconcile =
   | { readonly kind: "terminalized"; readonly count: number }
   | { readonly kind: "failed"; readonly error: unknown };
 

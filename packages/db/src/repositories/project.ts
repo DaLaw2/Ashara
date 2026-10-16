@@ -2,6 +2,7 @@ import { and, asc, desc, eq, getTableName, isNotNull, isNull, sql, type AnyColum
 import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
+import { insertedRow } from "../inserted-row.js";
 import { PROJECT_LIFECYCLES, projects } from "../schema/index.js";
 
 export interface ProjectRecord {
@@ -127,8 +128,8 @@ export class ProjectRepository {
   constructor(protected readonly db: DbHandle) {}
 
   async create(name: string, clientId: string): Promise<ProjectRecord> {
-    const [row] = await this.db.insert(projects).values({ name, clientId }).returning(recordColumns);
-    return toRecord(row);
+    const rows = await this.db.insert(projects).values({ name, clientId }).returning(recordColumns);
+    return toRecord(insertedRow(rows, "projects", `create project ${JSON.stringify(name)} for client ${clientId}`));
   }
 
   async get(id: ProjectId): Promise<ProjectRecord | null> {

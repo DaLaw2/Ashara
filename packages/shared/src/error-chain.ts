@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 /** Deep enough for any chain Ashara builds; a deeper one is cut and says so. */
 const MAX_CAUSE_DEPTH = 8;
 /** Nesting of a single field value (an object inside an object, an Error inside a field ...) kept before it is cut. */
@@ -32,10 +30,6 @@ const FALLBACK_TEXT_CHARS = 1_000;
 /** A JSON value: what a serialized error's own fields are reduced to, so the chain stays plain data. */
 type JsonValue = string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(jsonValueSchema), z.record(z.string(), jsonValueSchema)]),
-);
-
 /**
  * Why a chain is not whole: `depth` cut at MAX_CAUSE_DEPTH, `cycle` a cause that is an earlier
  * error of the same chain, `size` the whole chain exceeded its size bound and was cut to fit.
@@ -59,23 +53,6 @@ export interface SerializedError {
   readonly cause?: SerializedError;
   readonly truncated?: ChainTruncation;
 }
-
-/**
- * The shape a serialized chain is read back through.
- * @testseam nothing Ashara stores is a bare SerializedError read back today; the schema pins the written shape.
- */
-export const serializedErrorSchema: z.ZodType<SerializedError> = z.lazy(() =>
-  z.object({
-    name: z.string(),
-    message: z.string(),
-    fields: z.record(z.string(), jsonValueSchema).optional(),
-    stack: z.string().optional(),
-    errors: z.array(serializedErrorSchema).optional(),
-    errorsNotKept: z.number().int().nonnegative().optional(),
-    cause: serializedErrorSchema.optional(),
-    truncated: z.enum(["depth", "cycle", "size"]).optional(),
-  }),
-);
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}[truncated by Ashara: ${max} of ${text.length} characters kept]`;

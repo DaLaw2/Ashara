@@ -61,7 +61,7 @@ export class DevSessionRepository {
    * attempt threw). Required, never defaulted: the six columns of migration 046 then stay NULL, and
    * NULL means only "no attempt recorded", never "no model call" (run-report reads it that way).
    * `attemptEnd`: how the session ended, in its own words, as `fail` writes a failure's, so a session
-   * that completed without an attempt (work already delivered on main) says why (W5 trial D5).
+   * that completed without an attempt (work already delivered on main) says why.
    */
   async complete(sessionId: string, attempt: SessionAttempt | null, attemptEnd: { readonly outcome: "completed"; readonly detail: string }) {
     await this.db
@@ -92,8 +92,7 @@ export class DevSessionRepository {
    * reconciler (Discipline B). The server is single-process (ADR-022), so at boot
    * no session can legitimately be in flight: every surviving `Preparing` row is a
    * crash orphan whose agent is gone. Leaving them would keep `listActive()`
-   * reporting dead sessions as live agents forever, which is exactly what E2E Run
-   * 39 did. Returns the number of rows resolved so the reconcile summary can
+   * reporting dead sessions as live agents forever. Returns the number of rows resolved so the reconcile summary can
    * report it rather than closing them silently.
    */
   async failStale(verificationResult: unknown): Promise<number> {

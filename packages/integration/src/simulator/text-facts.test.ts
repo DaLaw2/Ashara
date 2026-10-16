@@ -44,8 +44,8 @@ describe("checkTextFacts, briefs", () => {
     expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Stated by the client", "Stated by the client")] })).toEqual([]);
   });
 
-  // W12a D1: a check author's description is rendered at plan time and dispatched after the client
-  // confirmed the assumption; the brief carries the confirming vision and still says "not yet answered".
+  // A check author's description rendered at plan time can be dispatched after the client
+  // confirmed the assumption, so a brief carrying the confirming vision can still say "not yet answered".
   it("names a brief that calls an answered assumption unanswered", () => {
     expect(keysOf({ visions: [v1, v2], briefs: [brief(2, "Inferred; asked of the client, not yet answered", "Stated by the client")] })).toEqual([
       'brief-standing:Write the checks for "Lock":A1',
@@ -131,7 +131,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
     body: `Your project is delivered.\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${line}`,
   });
 
-  // smoke2 D1: the client confirmed the assumption, and the report says it is unanswered.
+  // An assumption the client confirmed is never reported as unanswered.
   it("holds each listed assumption to where it stood with the client at acceptance", () => {
     expect(keysOf({ visions: [v1, v2], reviewSpec, delivered: [delivered("- Commands wait for the lock. (you confirmed this when asked)", 2)] })).toEqual([]);
     expect(
@@ -147,7 +147,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
   });
 });
 
-// smoke2 D3: the report never said how to run the product, though the scaffold wrote its interface.
+// The report says how to run the product from the interface file the scaffold wrote on main.
 describe("checkTextFacts, the delivered report's quote of the public interface", () => {
   const commit = "d".repeat(40);
   const lead = `How to run it: the product's public interface, quoted as PUBLIC_INTERFACE.md reads on main at commit ${commit}.`;

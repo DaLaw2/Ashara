@@ -11,9 +11,9 @@ import type { WorkItemStatus } from "./work-item-status.js";
  * Every status's outbound edges, keyed by `Record<WorkItemStatus, ...>` so the
  * machine is TOTAL by construction: adding a member to WorkItemStatus without
  * declaring where it can go fails to typecheck, and a terminal state has to say
- * `[]` out loud instead of being terminal by omission. `Archived` was removed
- * because it was terminal by omission in the other direction — declared, never
- * reachable, and never written by anything.
+ * `[]` out loud instead of being terminal by omission. A status nothing
+ * writes is not declared either: it would be terminal by omission in the
+ * other direction.
  *
  * `Blocked -> Abandoned` exists because Blocked is the owner-parked state and
  * its only other exit is `-> Pending`: without a give-up edge, work an owner
@@ -23,8 +23,7 @@ import type { WorkItemStatus } from "./work-item-status.js";
  * `Pending -> Abandoned` and `InProgress -> Abandoned` give every non-terminal
  * status a one-hop path to a terminal one. Without them, Pending had no path to
  * any terminal status at all, and InProgress required two hops (-> Failed ->
- * Abandoned). Their first traverser, the run-end sweep, was deleted by
- * t-cut-w7; the owner's PATCH /work-items/:id/status route remains one.
+ * Abandoned). The owner's PATCH /work-items/:id/status route traverses them.
  *
  * `Completed -> Pending` has one traverser: planning's exitStaleChecks reopens a
  * Completed check task whose stored checks went stale, pinned to work kind

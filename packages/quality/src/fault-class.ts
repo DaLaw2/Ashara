@@ -67,7 +67,7 @@ export class DispatchFault extends Error {
 }
 
 /** A throw out of a stage of a dispatch, by class: never `agent_work` (see FaultClass). */
-export type ThrownFault =
+type ThrownFault =
   | { readonly class: "substrate"; readonly error: EnvironmentError }
   | { readonly class: "ashara"; readonly error: unknown };
 

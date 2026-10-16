@@ -16,8 +16,8 @@ export const CHECK_RUNNER =
   "environment's image, with no network.";
 
 /**
- * The exit status by which a check states its own verdict that the behaviour it checks is missing
- * (V7, lessons digest 2026-10-14). On the foundation only this exit is a decisive failure: any other
+ * The exit status by which a check states its own verdict that the behaviour it checks is missing.
+ * On the foundation only this exit is a decisive failure: any other
  * non-zero exit (the product or the check's harness failing to build or start, a shell error) is a
  * check that never reached its verdict, and counting it would accept "nothing builds" as "the work
  * is missing". Which part of a command is setup and which is the verdict only the check's author
@@ -68,7 +68,7 @@ export type CheckDefinitionResult =
       readonly redRun: CheckRedRunPreview;
       /**
        * Files the author wrote outside its checks directory: never kept, never placed on the
-       * foundation (eighth run E1). Empty when there are none.
+       * foundation. Empty when there are none.
        */
       readonly discarded: readonly string[];
     }
@@ -89,14 +89,14 @@ export type FoundationProbe =
 export interface CheckDefinitionPort {
   /**
    * The author wrote `path` with write_file or edit_file: only such files are its submission, never
-   * a file a command it ran left in the workspace (fifth run N22).
+   * a file a command it ran left in the workspace.
    */
   fileWritten(path: string): void;
   define(check: CheckDefinition, timeoutSeconds: number): Promise<CheckDefinitionResult>;
   /**
    * Runs one command on the foundation the way define_check red-runs a check, and records nothing:
    * the author's way to look at the foundation, so no command it runs only to look around is ever
-   * stored as an acceptance check (W11 D4). A substrate that cannot run it throws.
+   * stored as an acceptance check. A substrate that cannot run it throws.
    */
   probe(command: string, timeoutSeconds: number): Promise<FoundationProbe>;
 }

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ErrorLayer } from "@ashara/shared";
 import { errorEnvelopeSchema, renderChainForBrief } from "./error-envelope.js";
 
@@ -7,18 +8,13 @@ import { errorEnvelopeSchema, renderChainForBrief } from "./error-envelope.js";
 // touch blockedReason) — is what makes a replan an INFORMED retry instead of a repeat of the exact
 // attempt that just failed.
 
-interface ReplanContext {
-  readonly attempt: number;
-  readonly detail: string;
-  readonly raw: unknown;
-}
+const ReplanContextSchema = z.object({
+  attempt: z.number(),
+  detail: z.string(),
+  raw: z.unknown(),
+});
 
-function isReplanContext(value: unknown): value is ReplanContext {
-  if (typeof value !== "object" || value === null) return false;
-  // contract-erasing: narrowing for ReplanContext, which has a known shape
-  const candidate = value as Record<string, unknown>;
-  return typeof candidate.attempt === "number" && typeof candidate.detail === "string";
-}
+type ReplanContext = z.infer<typeof ReplanContextSchema>;
 
 /**
  * Fail-safe (Discipline A): the replan context is jsonb round-tripped through the DB, so a
@@ -28,7 +24,8 @@ function isReplanContext(value: unknown): value is ReplanContext {
  */
 function extractReplanContext(taskId: string, candidate: unknown): ReplanContext | null {
   if (candidate === undefined) return null;
-  if (!isReplanContext(candidate)) {
+  const parsed = ReplanContextSchema.safeParse(candidate);
+  if (!parsed.success) {
     console.warn(
       `[${taskId}] malformed blockedReason.replanContext (expected {attempt: number, detail: string, raw}); ` +
         `omitting Prior Attempt Failure section from brief:`,
@@ -36,7 +33,7 @@ function extractReplanContext(taskId: string, candidate: unknown): ReplanContext
     );
     return null;
   }
-  return candidate;
+  return parsed.data;
 }
 
 function innermostLayer(layer: ErrorLayer): ErrorLayer {

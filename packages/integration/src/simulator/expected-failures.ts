@@ -44,7 +44,7 @@ function entryOf(run: Pick<RunResult, "seed" | "profile">, mode: RunMode): Expec
 }
 
 /** How a seed's violations differ from its entry: keys it failed and is not listed for, and listed keys it no longer fails. */
-export interface ExpectedFailureDiff {
+interface ExpectedFailureDiff {
   readonly unexpected: readonly string[];
   readonly missing: readonly string[];
 }

@@ -58,7 +58,7 @@ function postMergeVerdict(operation: PostMergeOperation): FailureVerdict {
   return operation === "postMergeVerify" ? TREE_REGRESSED : WORK_FAILED;
 }
 
-export type FinalizeResult =
+type FinalizeResult =
   /** `mergeCommit`: the commit the merge made on main, read back from git; the task's merge record. */
   | { readonly success: true; readonly mergeCommit: string }
   | {

@@ -30,7 +30,7 @@ export type TreeFileRead =
   | { readonly kind: "file"; readonly text: string; readonly truncated: boolean }
   | { readonly kind: "absent" };
 
-export interface TreeEntry {
+interface TreeEntry {
   readonly name: string;
   /** From lstat: a symbolic link is reported as one, never as what it points to. */
   readonly kind: "file" | "directory" | "symlink" | "other";

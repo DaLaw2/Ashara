@@ -290,7 +290,7 @@ describe("CoreLoop first plan", () => {
     expect(mockProcessTask).not.toHaveBeenCalled();
   });
 
-  test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched (W11 D5)", async () => {
+  test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched", async () => {
     const order: string[] = [];
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       order.push("dispatch");

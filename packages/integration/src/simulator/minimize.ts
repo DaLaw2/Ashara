@@ -1,9 +1,9 @@
 import type { Decision } from "./tape.js";
 
 /** Whether a replay of these decisions (every other one benign) still fails the same way. */
-export type StillFails = (decisions: readonly Decision[]) => Promise<boolean>;
+type StillFails = (decisions: readonly Decision[]) => Promise<boolean>;
 
-export interface Minimized {
+interface Minimized {
   readonly decisions: readonly Decision[];
   readonly replays: number;
   /** True when the replay budget ran out before a 1-minimal set was reached. */

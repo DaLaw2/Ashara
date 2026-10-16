@@ -36,7 +36,7 @@ const COMMIT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** `sh` exits 126 for a command it cannot execute and 127 for one it cannot find. */
 const COMMAND_UNRUNNABLE = new Set([126, 127]);
 
-export interface CheckFile {
+interface CheckFile {
   readonly path: string;
   readonly content: string;
 }
@@ -101,7 +101,7 @@ export interface TaskCheckStore {
   /**
    * The check task's foundation (ADR-074 addendum 2 d74 A): the recorded merge of the product
    * scaffold it depends on, or of its one dependency merged after the scaffold for a plan revision
-   * with no scaffold of its own; none for a dependency merged before it (W11 D2).
+   * with no scaffold of its own; none for a dependency merged before it.
    */
   foundationOf(checkTaskId: WorkItemId): Promise<CheckFoundation>;
   /**
@@ -132,7 +132,7 @@ type CheckRecording =
  * define_check's record: keeps each definition of one attempt for Z0 to harvest. A definition
  * with the name of an earlier one replaces it in place (the last definition of a name wins). It
  * also keeps the paths the author wrote with its file tools: only those are its submission, never
- * a file a command it ran left behind (fifth run N22).
+ * a file a command it ran left behind.
  */
 export class CheckRecorder {
   private readonly defined: CheckDefinition[] = [];
@@ -207,7 +207,7 @@ export function describeFoundationBuild(build: EnvironmentTestRun): string {
 }
 
 /**
- * The environment's build fails on a red run's foundation (W11 D2): every check would fail there
+ * The environment's build fails on a red run's foundation: every check would fail there
  * because nothing builds, which says nothing about whether it tells the task's work from its
  * absence. The red run is unrunnable, never accepted. Names no commit: its message reaches the plan
  * repair's evidence; the commit goes to the event.
@@ -257,7 +257,7 @@ async function commitOf(repo: HostRepo, taskId: string, step: string, args: read
 
 /**
  * The directory a check author writes its check files in: `checks/<id>/`, the id of the task its
- * checks decide. Only paths under it are a check set's files (eighth run E1, simulator B1): any
+ * checks decide. Only paths under it are a check set's files: any
  * other file the author writes, the product's source included, is never kept nor placed under a
  * check run. It names a directory, never a language's file.
  */
@@ -326,7 +326,7 @@ export async function worktreeSnapshotCommit(repo: HostRepo, taskId: string, pur
   return commitIndex(repo, taskId, `ashara: current work of task ${taskId}, for ${purpose}`);
 }
 
-export type CheckHarvest =
+type CheckHarvest =
   | {
       readonly kind: "harvested";
       readonly files: readonly CheckFile[];
@@ -340,9 +340,9 @@ export type CheckHarvest =
  * The files a check attempt wrote: everything in its worktree is committed to the throwaway branch,
  * the branch is diffed against the commit it started from (hardened git), and of the paths it
  * changed only those the author wrote with its file tools (`written`) are its submission; whatever
- * else changed was left by a command it ran and is no check file (fifth run N22). Of the submission
+ * else changed was left by a command it ran and is no check file. Of the submission
  * only the paths under `area` (checkAreaOf) are check files; the rest are discarded, logged and
- * returned, never kept (eighth run E1). Each file is read through the safe tree reader. A deletion,
+ * returned, never kept. Each file is read through the safe tree reader. A deletion,
  * a link, a file of the environment's build context (`buildContext`), a file too large or not UTF-8
  * text, all within the area, rejects the whole harvest.
  */
@@ -465,7 +465,7 @@ export interface SuiteRun {
  * first suite's files are in place. Before each suite its files are written over the checkout; a
  * suite whose files cannot be written is reported `files_refused` and the next one still runs. An
  * earlier suite's files and whatever its commands wrote stay in the checkout. A file `commit`
- * tracks may never change (L9's tracked-file refusal, eighth run E1): after the files are written
+ * tracks may never change (the tracked-file refusal): after the files are written
  * and after each check, hardened host git compares the checkout with `commit`, and the first
  * suite that changed one is reported `product_changed`, naming the files and the check; no later
  * check or suite runs on that tree, so the returned list then ends early. Each check is bounded
@@ -539,7 +539,7 @@ async function changedTrackedPaths(repo: HostRepo): Promise<string[]> {
 /**
  * A run of the checks on Z0's own checkout (the post-merge run, the run on main) changed files the
  * checked-out commit tracks: the product they judge is no longer the one checked out, so the run
- * is no verdict on it, neither a pass nor a failure of the task's work (eighth run E1, L9).
+ * is no verdict on it, neither a pass nor a failure of the task's work.
  */
 class CheckRunChangedProduct extends Error {
   readonly check: string | null;
@@ -552,7 +552,7 @@ class CheckRunChangedProduct extends Error {
     report: ProductChangedReport,
   ) {
     // Names no commit: its message reaches a later brief through the block's reason, and a cell's
-    // repository holds no commit of the target (eighth run E5); the caller's event carries it.
+    // repository holds no commit of the target; the caller's event carries it.
     super(`checks of task ${taskId}: ${suite}: ${describeProductChange(report)}`);
     this.name = "CheckRunChangedProduct";
     this.check = report.check;
@@ -601,7 +601,7 @@ export async function runChecksOnCheckout(
  * a verdict there, an exit within its time limit by a command the environment can run, and either
  * pass or fail with the check's own verdict that the behaviour is missing (CHECK_MISSING_EXIT). Any
  * other failure is the check's build, setup or harness failing before its verdict: counting it as
- * decisive would accept "nothing builds" as "the work is missing" (V7). A timeout proves nothing:
+ * decisive would accept "nothing builds" as "the work is missing". A timeout proves nothing:
  * the same check could time out on the task's work too. A check that passes on the foundation is
  * kept: it guards behaviour that already holds, and the set rule (redRunSetProblem) is what proves
  * the set can tell the task's work from its absence. null when it holds.
@@ -668,7 +668,7 @@ export function foundationProbeOf(report: CheckRunReport, timeoutSeconds: number
 /**
  * Where a check task's checks are red-run and where its files go, as its brief states it: the
  * foundation, never today's main, named by the task whose merge it is. Its commit is not named: the
- * cell's repository is a throwaway one of a single commit, which never holds it (eighth run E5).
+ * cell's repository is a throwaway one of a single commit, which never holds it.
  */
 export function formatFoundationForCheckAuthor(foundation: { readonly taskId: string }, area: string): string {
   return [
@@ -709,8 +709,8 @@ const MAX_BRIEF_CHECK_FILE_CHARS = 8000;
 const MAX_BRIEF_CHECK_FILES_CHARS = 24000;
 
 /**
- * The stored check files, read-only: the implementer must see what the checks read to satisfy them
- * (second run D10: one that could not see them recreated one, which the ownership gate refuses).
+ * The stored check files, read-only: the implementer must see what the checks read to satisfy them,
+ * and one that cannot see them may recreate one, which the ownership gate refuses.
  * A cut is always marked, never silent.
  */
 function checkFilesForBrief(files: readonly CheckFile[]): string {
@@ -746,9 +746,9 @@ function checkFileLines(files: readonly CheckFile[], budget: { left: number }, h
 }
 
 /**
- * Every check already stored in the project, as the check author's brief states them (third run
- * N8): independent authors fixed incompatible output formats for the same line, and nothing showed
- * one author the other's checks. The rule is stated; a contradiction that still slips through is
+ * Every check already stored in the project, as the check author's brief states them: independent
+ * authors can fix incompatible output formats for the same line unless each sees
+ * the other's checks. The rule is stated; a contradiction that still slips through is
  * disputed by the implementer that meets it. Files share one size cap, every cut marked.
  */
 export function formatProjectChecksForCheckAuthor(stored: readonly ProjectTaskChecks[]): string {

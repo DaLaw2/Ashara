@@ -138,7 +138,7 @@ export class CoreLoop {
     }
 
     // Answers posted while the roster was derived are read before the first plan, so it is made
-    // from the vision they state (W11 D5).
+    // from the vision they state.
     const beforePlan = await this.readAnswers();
     if (beforePlan !== null) return this.haltAtCap(beforePlan);
 
@@ -151,7 +151,7 @@ export class CoreLoop {
     if (plans.kind === "stop") return this.haltAtCap(plans.stop);
     for (const outcome of plans.outcomes) logFirstPlan(outcome);
     // Answers posted while the first plan was being written are read before any of its tasks is
-    // dispatched (W11 D5): one that changes an assumption the plan relied on flags the project, the
+    // dispatched: one that changes an assumption the plan relied on flags the project, the
     // revision below replans it in this cycle, and the gate never dispatches the plan it replaces.
     const afterPlan = await this.readAnswers();
     if (afterPlan !== null) return this.haltAtCap(afterPlan);
@@ -221,7 +221,7 @@ export class CoreLoop {
 
   /**
    * What runs once a cycle has stopped the loop (the deployment's spend cap): only the client's
-   * stops and changes, each recorded and answered with no LLM call (smoke1 D3). A project stopped here stays
+   * stops and changes, each recorded and answered with no LLM call, so a stop sent while the loop is halted holds. A project stopped here stays
    * stopped when the halt is lifted: the owner's unblock admits only a blocked project.
    */
   async runHaltedCycle(): Promise<void> {

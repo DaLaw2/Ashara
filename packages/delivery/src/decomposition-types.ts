@@ -120,7 +120,8 @@ export type EnvironmentPlanning =
  * The product's layout a plan builds on (ADR-074 addendum 2 d72 B2): set up by a new product
  * scaffold task in the plan, or already set up by a completed one. `taskId` is then the completed
  * task whose recorded merge is the layout's latest merged state: the scaffold, or a task merged
- * after it. A revision on the existing environment red-runs its checks there (W11 D2).
+ * after it. A revision on the existing environment red-runs its checks there, since the environment
+ * task's own commit holds no product to build.
  */
 export type LayoutPlanning =
     | { readonly kind: "new" }
@@ -196,7 +197,7 @@ const TracedLineOutputSchema = z.object({
 export const TaskOutputSchema = z.object({
     tasks: z.array(z.object({
         /**
-         * Stable, decomposer-local handle for this task (G3, Run 7/8). `dependsOn`
+         * Stable, decomposer-local handle for this task. `dependsOn`
          * entries reference sibling tasks by this `ref` so an edge survives even
          * when the LLM paraphrases a title. Optional so legacy plans that only emit
          * titles still parse; resolution falls back to exact-title match for them.
@@ -206,9 +207,9 @@ export const TaskOutputSchema = z.object({
         description: z.string(),
         dependsOn: z.array(z.string()).default([]),
         goal: z.string().default(""),
-        // Required and non-empty: these were once filled by keyword inference over
-        // the title when the model omitted them, which wrote a guessed spec in the
-        // register of the model's own. Omission is now a schema failure the ladder re-asks.
+        // Required and non-empty: an omission is a schema failure the ladder re-asks, never
+        // filled by inference over the title, which would write a guessed spec in the register
+        // of the model's own.
         endState: z.string().trim().min(1),
         scope: z.string().trim().min(1),
         // Each deliverable and each acceptance line names the vision items it serves (ADR-074 addendum
@@ -259,9 +260,9 @@ function untracedText(line: UntracedLine): string {
 
 /**
  * A planned task's deliverable or acceptance line cites no vision item, one the vision does not hold,
- * or an assumption that may not be a source (ADR-074 addendum 2 d71 d, d89 A and E; fifth run N21: a
- * scaffold task whose behaviour the tender never asked for; W11: lines drawn from assumptions the task
- * did not name). Checked mechanically, with no model call. Inside the ladder its message is a re-ask;
+ * or an assumption that may not be a source (ADR-074 addendum 2 d71 d, d89 A and E): an untraced
+ * line can ask for behaviour the tender never asked for, or rest on an assumption the task does not
+ * name. Checked mechanically, with no model call. Inside the ladder its message is a re-ask;
  * past it the plan is rejected, never written.
  */
 export class UntraceableTaskError extends Error {
@@ -298,7 +299,7 @@ export class VisionItemsMissing extends Error {
  * and every ref/title that WAS available — so the failing decomposition is
  * self-diagnosing without re-running it.
  */
-export interface UnresolvableDependencyContext {
+interface UnresolvableDependencyContext {
     readonly dependentTaskTitle: string;
     readonly unresolvedRef: string;
     readonly availableRefs: readonly string[];
@@ -310,8 +311,7 @@ export interface UnresolvableDependencyContext {
  * Raised when a task's `dependsOn` entry (G3) matches neither a sibling task's
  * `ref` (primary) nor its exact `title` (legacy fallback), and the referent was
  * never emitted at all. Fails the decomposition closed (Discipline A) instead of
- * silently dropping the edge, which is exactly how prerequisites ran out of order
- * in Run 7/8.
+ * silently dropping the edge: a dropped edge lets a prerequisite run out of order.
  */
 export class UnresolvableDependencyError extends Error {
     readonly context: UnresolvableDependencyContext;

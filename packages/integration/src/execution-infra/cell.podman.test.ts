@@ -130,8 +130,8 @@ describe("cell on real podman", () => {
     expect(await ps(`label=ashara.task=${task}`)).toHaveLength(0);
   });
 
-  // sprint0-run-2026-10-14 D13: a worktree's gitlink names its git dir's host path. go-run-2026-10-14 G4: a
-  // toolchain that reads the repository failed on an unusable stand-in (ADR-074 addendum 2 d73).
+  // A worktree's gitlink names its git dir's host path, which a cell cannot reach, and a toolchain
+  // that reads the repository needs a usable one, not a stand-in (ADR-074 addendum 2 d73).
   it("a cell sees a throwaway repository of its own: one commit, no remote, nothing of the host's; what it does there never reaches Z0's diff", async () => {
     const git = async (cwd: string, ...args: string[]): Promise<string> =>
       (await run("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args])).stdout.trim();
@@ -201,7 +201,7 @@ describe("cell on real podman", () => {
     expect(await readdir(join(mountRoot, ".ashara-cell-state", instance))).toEqual([]);
   }, 60_000);
 
-  // go-run-2026-10-14 G2: a recipe made a root-owned cache the cell's user could not write.
+  // A recipe must not leave a root-owned cache the cell's user cannot write.
   it("every cell runs as the host's uid with a writable HOME of its own, the probe's as the task's", async () => {
     const base = await loadBaseCell();
     const worktree = await mkdtemp(join(mountRoot, "user-task-"));
@@ -312,7 +312,7 @@ describe("cell on real podman", () => {
   }, 60_000);
 
   // CI's podman 4.9.3 (crun) starts an exec in the caller's session, outside the cell, where
-  // podman 5.8.2 (crun 1.27) starts it in a session of its own; the wrapper refused the former. Here
+  // podman 5.8.2 (crun 1.27) starts it in a session of its own; a wrapper must run under both. Here
   // the wrapper runs as the child of a shell, so it leads no session on any runtime, and that shell
   // must outlive the wrapper's sweep for the exec's exit to arrive.
   it.each([
@@ -359,8 +359,8 @@ describe("cell on real podman", () => {
     }
   }, 60_000);
 
-  // m2-trial-rust-kv-2026-10-14 M1: `kill -9 $(pgrep -f '<pattern from the command>')` matched the
-  // wrapper, whose command line carried the command, and the lost status read as a lost cell.
+  // `kill -9 $(pgrep -f '<pattern from the command>')` must not match
+  // the wrapper, and a lost status in a cell that still answers is not a lost cell.
   it("a command that kills by a pattern from its own text ends itself, never the wrapper; one that kills the wrapper is a lost status in a healthy cell", async () => {
     const cell = await substrate.createCell({
       image: (await loadBaseCell()).image,
@@ -376,7 +376,7 @@ describe("cell on real podman", () => {
       `kill -9 $(read -r me _ < /proc/self/stat; for p in /proc/[0-9]*; do [ "\${p#/proc/}" = "$me" ] && continue; ` +
       `tr '\\0' ' ' < "$p/cmdline" 2>/dev/null | grep -qF -- ${pattern} && echo "\${p#/proc/}"; done)`;
     try {
-      // The model's trial command: the marker is in its own text, so it matches its own processes.
+      // The marker is in the command's own text, so it matches its own processes.
       const own = await cell.exec(
         ["sh", "-c", `sleep 41 & echo started; ${pkill("'flock-x-ltest3'")}; sleep 2; echo survived`],
         { timeoutSeconds: 20 },

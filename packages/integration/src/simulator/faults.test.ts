@@ -14,7 +14,7 @@ function outsideBatches(tape: Tape): Interleaver {
 }
 
 describe("Scheduler", () => {
-  // The L2 review: a fault drawn for a call it cannot touch was recorded, and counted as reached.
+  // A fault drawn for a call it cannot touch is never recorded nor counted as reached.
   it("records only faults the call can carry", async () => {
     const tape = new Tape({ kind: "seeded", seed: 7 });
     const scheduler = new Scheduler(tape, { perSeamCall: 1, budget: 200 }, outsideBatches(tape));

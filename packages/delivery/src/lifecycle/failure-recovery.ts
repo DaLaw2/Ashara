@@ -5,6 +5,7 @@ import { PlanningService, replanWorkItem, abandonWorkItem, takeEvents } from "..
 import type { FailureRouter, FailureDecision, RawFailureContext } from "../failure-router.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import { WORK_FAILED } from "../acl/quality-acl.js";
+import { WorkItemNotFound } from "../work-item-language/transitions.js";
 import { projectBlockCause } from "../project-halt.js";
 import type { EventPublisher } from "./ports.js";
 
@@ -124,7 +125,8 @@ async function abandonFailClosed(
     `[${item.id}] recovery internals failed (route/save); abandoning fail-closed so the item does not strand at Failed:`,
     error,
   );
-  const fresh = (await deps.workItemRepo.findById(item.id)) ?? item;
+  const fresh = await deps.workItemRepo.findById(item.id);
+  if (fresh === null) throw new WorkItemNotFound(item.id);
   if (fresh.status !== "Failed") {
     return "abandon";
   }
@@ -145,12 +147,7 @@ async function applyReplan(
   failure: RawFailureContext,
 ): Promise<void> {
   const previousStatus = item.status;
-  replanWorkItem(item);
-
-  item.blockedReason = {
-    source: "replan",
-    replanContext: { attempt, detail: failure.detail, raw: failure.raw },
-  };
+  replanWorkItem(item, { attempt, detail: failure.detail, raw: failure.raw });
   await PlanningService.saveWorkItem(deps.workItemRepo, item, previousStatus);
   await publishEvents(deps, item);
 }

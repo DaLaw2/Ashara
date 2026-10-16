@@ -61,7 +61,7 @@ export class LifecycleRouter {
 
     while (parentId) {
       const parent = await repo.findById(parentId);
-      if (!parent) break;
+      if (!parent) throw new WorkItemNotFound(parentId);
       if (parent.status !== "Pending") break;
 
       const from = parent.status;
@@ -117,7 +117,7 @@ export class LifecycleRouter {
  *
  * An Abandoned item outside these two cases is genuinely missing work and
  * must not settle its parent — the parent stays incomplete rather than
- * silently rolling up (Run-9 redteam L2).
+ * silently rolling up.
  */
 function isSettled(item: WorkItem): boolean {
   if (item.status === "Completed") return true;

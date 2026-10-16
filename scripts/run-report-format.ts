@@ -104,6 +104,25 @@ function sessionLine(index: number, s: Session): string {
   }
 }
 
+/**
+ * Whether a session's model calls, if it made any, can never be tied to an attempt: it ended, or
+ * was closed, with no attempt recorded and may have called a model before it did. An open session
+ * is not: it is in flight, and its calls precede the attempt record it has yet to write. A session
+ * that completed without an attempt is not: its work was already delivered, so it ran no attempt.
+ */
+function mayHoldUntiedCalls(s: Session): boolean {
+  switch (s.attempt.kind) {
+    case "reconciled":
+    case "predates-attempt-columns":
+    case "unrecorded":
+      return true;
+    case "recorded":
+    case "open":
+    case "completed-without-attempt":
+      return false;
+  }
+}
+
 function callLines(rows: readonly CallTotals[]): string[] {
   if (rows.length === 0) return ["    (no llm_calls rows)"];
   return rows.map((row) => `    ${row.provider}: ${costLine(row)}; ${cacheShare(row)}`);
@@ -134,14 +153,18 @@ export function formatRunReport(evidence: RunEvidence): { readonly text: string;
     });
     const taskCalls = calls.filter((row) => row.taskId === task.taskId);
     lines.push("  llm_calls:", ...callLines(taskCalls));
-    const unrecorded = task.sessions.filter((s) => s.attempt.kind !== "recorded").length;
+    const untied = task.sessions.filter(mayHoldUntiedCalls).length;
+    const inFlight = task.sessions.filter((s) => s.attempt.kind === "open").length;
     const callCount = taskCalls.reduce((sum, row) => sum + row.calls, 0);
-    if (unrecorded > 0 && callCount > 0) {
+    if (untied > 0 && callCount > 0) {
       untiedTasks += 1;
       lines.push(
-        `  UNTIED: ${callCount} llm_calls row(s) on this task and ${unrecorded} session(s) without a recorded attempt; ` +
+        `  UNTIED: ${callCount} llm_calls row(s) on this task and ${untied} session(s) that ended without a recorded attempt; ` +
           "those calls cannot be tied to an attempt",
       );
+    }
+    if (inFlight > 0 && callCount > 0) {
+      lines.push(`  in flight: ${inFlight} session(s) not yet terminal; their calls are tied once their attempt is recorded`);
     }
   }
   const projectCalls = calls.filter((row) => row.taskId === null);

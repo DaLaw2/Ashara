@@ -80,8 +80,8 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
-// The verifier of W6: an owner_unresolved block waited on a newer roster revision, which no
-// production path writes (db roster.ts recordFirstRoster refuses any revision but 1).
+// An owner_unresolved block cannot wait on a newer roster revision, which no production path
+// writes (db roster.ts recordFirstRoster refuses any revision but 1).
 describe("a Blocked owner_unresolved or environment_undefined task is given up, never left waiting", () => {
   test.each<StoredBlockedReason>([
     { source: "owner_unresolved", ownerRoleId: "role-1", rosterRevision: 1, reason: "not in roster" },

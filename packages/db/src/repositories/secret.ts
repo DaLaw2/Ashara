@@ -3,7 +3,7 @@ import type { DbHandle } from "../connection.js";
 import { secrets } from "../schema/index.js";
 
 /** One encrypted secret as stored. Plaintext never reaches this layer. */
-export interface EncryptedSecretRow {
+interface EncryptedSecretRow {
   readonly name: string;
   readonly keyId: string;
   readonly iv: Buffer;

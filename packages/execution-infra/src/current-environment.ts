@@ -79,7 +79,7 @@ async function mainCommit(repo: HostRepo): Promise<{ readonly commit: string } |
 
 /**
  * Removes the project's environment images that main's current environment version does not use
- * and no container uses (third run N12), after an environment task ends and at startup. When main
+ * and no container uses, since every build_environment call leaves one, after an environment task ends and at startup. When main
  * cannot be read, or its environment cannot be resolved (read by `readDefinition`, the definition's
  * owner's parse), nothing is removed: which version is current is unknown. Cleanup never fails its caller: any failure is logged at warn, and the
  * next environment task's end or startup tries again.

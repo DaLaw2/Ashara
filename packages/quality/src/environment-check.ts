@@ -179,8 +179,8 @@ export function runPostMergeProbe(
 }
 
 /**
- * The definition's `build` from `imageRef` on a fresh checkout of `commit`, a red run's foundation
- * (W11 D2): the merge gate's first step, run before any check there, so a check that fails only
+ * The definition's `build` from `imageRef` on a fresh checkout of `commit`, a red run's foundation:
+ * the merge gate's first step, run before any check there, so a check that fails only
  * because the product does not build is never read as a check that tells the task's work from its
  * absence. The command is the environment's own, never one Ashara names. The cell has no network; a
  * substrate failure throws.

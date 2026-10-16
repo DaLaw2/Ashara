@@ -3,11 +3,13 @@ import type { ProjectId } from "@ashara/shared";
 import { parseProjectId } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
-import type { AcceptanceDeps, AcceptanceStore } from "./acceptance.js";
+import type { AcceptanceStore } from "./acceptance.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 const MAIN = "f".repeat(40);
+
+type AcceptanceDeps = Parameters<typeof runAcceptanceSweeps>[0];
 
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
 

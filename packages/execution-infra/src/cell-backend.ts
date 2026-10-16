@@ -53,7 +53,7 @@ export interface CellBackend {
   run(command: string, timeoutSeconds: number): Promise<ExecResult>;
 }
 
-export interface CellBackendOptions {
+interface CellBackendOptions {
   /** Timeout for the file tools (read, write, list, search). */
   readonly toolTimeoutSeconds: number;
 }

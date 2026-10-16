@@ -21,7 +21,7 @@ import {
  * - no-checkout-lock: a task waiting for the target checkout goes on at once (I7, merge-queue clause);
  * - no-admission-queue: a spend-cap admission goes on without waiting for the ones ahead of it (I5,
  *   admission clause). Planted on a run of two projects, where only the deployment's check stands
- *   between them (baseline §7.6). Since migration 053 an admission's own estimate is a row written
+ *   between them. Since migration 053 an admission's own estimate is a row written
  *   after the project's check, an await later; whether one project now catches it too: unverified;
  * - pending-uncounted: a spend-cap admission's read leaves out the pending rows of calls admitted
  *   and not yet recorded, so it counts the recorded spend alone (I5, admission clause);
@@ -31,15 +31,15 @@ import {
  * - delivered-report-omits-goal, delivered-report-misstates-unchecked: the delivered report leaves
  *   out a goal's close, or states the wrong tasks as not checked by a stored check (I4);
  * - delivered-report-omits-uncovered: the delivered report leaves out an asked-for item no
- *   acceptance line of a swept check task cites (I4, W11c D3);
+ *   acceptance line of a swept check task cites (I4);
  * - delivered-report-unrecorded: the delivered report is posted but not recorded on its sweep, so
  *   it is posted again (I4, exactly once);
  * - brief-misstates-standing: a brief's text calls an assumption asked about Stated by the client
- *   (I9, W12a D1's class);
+ *   (I9);
  * - delivered-report-misstates-standing: the delivered report says an assumption the client was
- *   asked about was reported to them (I9, smoke2 D1's class);
+ *   asked about was reported to them (I9);
  * - delivered-report-misquotes-interface: the delivered report's how-to-run section is not the
- *   public interface file main holds, or misstates its absence (I9, smoke2 D3's class);
+ *   public interface file main holds, or misstates its absence (I9);
  * - question-misstates-assumption: a question says work proceeds on an assumption its vision does
  *   not record (I9).
  */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { describeErrorChain, serializeError, serializedErrorSchema } from "./error-chain.js";
+import { describeErrorChain, serializeError } from "./error-chain.js";
 
 class CellExecFailed extends Error {
   constructor(
@@ -20,9 +20,9 @@ function threeDeep(stderr = "no such container"): Error {
 }
 
 describe("serializeError", () => {
-  test("a 3-deep chain with typed fields round-trips through the schema as JSON", () => {
+  test("a 3-deep chain with typed fields round-trips as JSON", () => {
     const serialized = serializeError(threeDeep());
-    const back = serializedErrorSchema.parse(JSON.parse(JSON.stringify(serialized)));
+    const back: unknown = JSON.parse(JSON.stringify(serialized));
 
     expect(back).toEqual(serialized);
     expect(back).toMatchObject({
@@ -34,8 +34,8 @@ describe("serializeError", () => {
         cause: { name: "CellExecFailed", fields: { argv: ["podman", "exec", "c1"], exitCode: 125, stderr: "no such container" } },
       },
     });
-    expect(back.truncated).toBeUndefined();
-    expect(back.cause?.cause?.cause).toBeUndefined();
+    expect(serialized.truncated).toBeUndefined();
+    expect(serialized.cause?.cause?.cause).toBeUndefined();
   });
 
   test("a chain over the size bound is cut to fit and says so", () => {
@@ -43,7 +43,7 @@ describe("serializeError", () => {
 
     expect(JSON.stringify(serialized).length).toBeLessThanOrEqual(2_000);
     expect(serialized.truncated).toBe("size");
-    expect(serializedErrorSchema.safeParse(serialized).success).toBe(true);
+    expect(JSON.parse(JSON.stringify(serialized))).toEqual(serialized);
   });
 
   test("a cyclic cause, an over-deep chain and a thrown non-Error are bounded and never throw", () => {
@@ -99,7 +99,7 @@ describe("serializeError", () => {
     const serialized = serializeError(agg);
     expect(serialized.errors?.map((e) => e.message)).toEqual(["connect ECONNREFUSED ::1:1", "connect ECONNREFUSED 127.0.0.1:1"]);
     expect(serialized.errors?.[0]?.fields).toEqual({ code: "ECONNREFUSED" });
-    expect(serializedErrorSchema.safeParse(serialized).success).toBe(true);
+    expect(JSON.parse(JSON.stringify(serialized))).toEqual(serialized);
     expect(describeErrorChain(agg)).toBe(
       "AggregateError:  [2 errors: Error: connect ECONNREFUSED ::1:1; Error: connect ECONNREFUSED 127.0.0.1:1]",
     );

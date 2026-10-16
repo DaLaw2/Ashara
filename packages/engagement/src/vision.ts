@@ -4,7 +4,7 @@ import type { ProjectId } from "@ashara/shared";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeLine, ScopeSide } from "./vision-language/vision-assumption.js";
 
-// The Vision (ADR-075 Engagement, engagement review D3): a project's vision, versioned and
+// The Vision (ADR-075 Engagement): a project's vision, versioned and
 // append-only. Engagement alone writes it: intake writes v1, a client's answer and the team's stack
 // choice each append the next version. Every other context reads a version only through
 // readVisionVersion, the published reader, never the stored jsonb.
@@ -381,7 +381,7 @@ export function readVisionVersion(stored: StoredVision): VisionVersion {
 export interface FirstVision {
   readonly visionText: string;
   readonly summary: string;
-  /** What the client asked for, then what the tender leaves out, each with its side (W11c D3). */
+  /** What the client asked for, then what the tender leaves out, each with its side. */
   readonly scopeBoundaries: readonly ScopeLine[];
   readonly inferences: readonly InferredAssumption[];
   readonly openQuestions: ReadonlyArray<{

@@ -92,7 +92,7 @@ const unreported = (subject: PlanReportSubject) =>
  * its epics and tasks are the project's work items that no revision superseded
  * (a superseded item belongs to the revision that replaced it, whose
  * blocked_reason names it). A revision written before the first plan was
- * reported (answers read in the cycle that wrote the plan, W11 D5) is returned
+ * reported (answers read in the cycle that wrote the plan) is returned
  * with it, so the client gets one report of the plan that stands, not one of a
  * plan already replaced followed by its revision. Only an active project's first
  * plan is due, and none while the project awaits a revision: the client is

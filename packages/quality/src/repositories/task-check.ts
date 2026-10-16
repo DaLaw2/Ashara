@@ -130,7 +130,7 @@ export class TaskCheckRepository {
    * depends on one; otherwise its one dependency: a revision's latest merged state of the layout,
    * or the revision's new environment task. A foundation other than a scaffold must have completed
    * after a Completed product scaffold of the project: a commit merged before the product's layout
-   * holds nothing that builds, so every check would fail there for that reason alone (W11 D2). A
+   * holds nothing that builds, so every check would fail there for that reason alone. A
    * foundation that is ambiguous, not Completed, without a merge commit on record, or merged before
    * the scaffold is no foundation: the reason says which.
    */
@@ -275,7 +275,7 @@ export class TaskCheckRepository {
   /**
    * The latest checks of every task of the project that has any, except `exceptTaskId` and tasks
    * Abandoned (their checks never run again), each with its task's title, oldest task first. What
-   * a check author is shown so the checks it writes do not contradict them (third run N8).
+   * a check author is shown so the checks it writes do not contradict them.
    */
   async storedOfProject(projectId: string, exceptTaskId: string): Promise<Array<TaskChecksRecord & { readonly title: string }>> {
     const tasks = await this.db

@@ -140,7 +140,7 @@ interface SetAside {
 const setAsideRow = z.object({ id: z.string(), projectId: z.string(), reportId: z.string() });
 const statusRow = z.object({ id: z.string(), status: z.string() });
 
-export interface ReportsSetAside {
+interface ReportsSetAside {
   readonly records: readonly SetAside[];
   /** The projects accepted again for the while, with the lifecycle state each had. */
   readonly statuses: ReadonlyArray<z.infer<typeof statusRow>>;

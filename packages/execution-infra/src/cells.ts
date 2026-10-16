@@ -5,7 +5,7 @@ import { SubstrateUnavailable } from "./errors.js";
 import type { PodmanSubstrate } from "./podman.js";
 
 /** Whether the substrate answers now, with what it answered or why it did not. */
-export interface SubstrateProbe {
+interface SubstrateProbe {
   probe(): Promise<{ readonly passed: true; readonly evidence: string } | { readonly passed: false; readonly evidence: string }>;
 }
 

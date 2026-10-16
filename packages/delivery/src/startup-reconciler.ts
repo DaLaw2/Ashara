@@ -164,11 +164,11 @@ type Settled = "requeued" | "completed" | "blocked" | "moved";
 
 /**
  * Settles an InProgress item a previous process left (Discipline A, B). Main is read first: a
- * dead process may have committed the task's merge and died before its record (B5), and a requeue
+ * dead process may have committed the task's merge and died before its record, and a requeue
  * would redo merged work. A merge found is recorded and the task Completed through the path a
  * finished dispatch takes (recordMergeCommit, then PlanningService.route); none found, the task is
  * requeued (requeueOrphan). Each attempt re-reads the item, so a partial write of the one before
- * is never built on. Past the bound the task is blocked, never left InProgress (B3): with its merge
+ * is never built on. Past the bound the task is blocked, never left InProgress: with its merge
  * found but unrecorded, as merge_unrecorded, whose record the loop writes again each cycle;
  * otherwise as orphan_unreconciled under Ashara's own fault class, with the project blocked on it
  * so the operator sees it. A block that cannot be written either throws: the start is refused

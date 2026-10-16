@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
-import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { exitDisputedCheck, exitStaleChecks, exitSuiteReview } from "./stale-checks.js";
 import { createPendingWorkItem, startWorkItem } from "./work-item.js";
 import type { WorkItem } from "./work-item.js";
@@ -54,8 +53,20 @@ describe("exitStaleChecks", () => {
     const task = { ...implementation(), status: "Abandoned" as const };
     const check = completedCheckTask();
 
-    expect(() => exitStaleChecks(task, check, { checkTaskId: check.id, revision: 1, detail: "red run" })).toThrow(InvalidStatusTransition);
+    expect(() => exitStaleChecks(task, check, { checkTaskId: check.id, revision: 1, detail: "red run" })).toThrow(
+      expect.objectContaining({ name: "InvalidStatusTransition", from: "Abandoned", to: "Pending" }),
+    );
     expect(check.status).toBe("Completed");
+  });
+
+  test("a Pending task past the bound is not given up through a stale-checks exit", () => {
+    const task = { ...implementation(), status: "Pending" as const };
+    const check = completedCheckTask();
+
+    expect(() => exitStaleChecks(task, check, { checkTaskId: check.id, revision: 3, detail: "red run" })).toThrow(
+      expect.objectContaining({ name: "InvalidStatusTransition", from: "Pending", to: "Abandoned" }),
+    );
+    expect(task.status).toBe("Pending");
   });
 });
 
@@ -99,8 +110,8 @@ describe("exitSuiteReview (ADR-074 addendum 2 d71 c)", () => {
     expect(a.blockedReason).toMatchObject({ source: "replan", replanContext: { raw: { checkedTaskId: "impl-a", reviewTaskId: review.id } } });
   });
 
-  // W11 (ADR-074 addendum 2 d89 F): rewrite 2's brief carried only review 2's finding, so the stale-lock and
-  // interrupted-compact checks review 1 had it drop came back.
+  // ADR-074 addendum 2 d89 F: a rewrite shown only the latest review's findings can bring back a
+  // check an earlier review had it drop.
   test("a reopened check task's brief carries every earlier review's findings on it, not only the latest", () => {
     const review = reviewTask();
     const a = checkTaskFor("impl-a");

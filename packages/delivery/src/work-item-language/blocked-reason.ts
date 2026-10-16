@@ -35,8 +35,8 @@ const orchestratorErrorSchema = z.object({
 
 /**
  * Failure-recovery replan path: context for the next attempt, set on a
- * Pending item AFTER replanWorkItem clears blockedReason, so the next
- * execution knows why the prior attempt failed.
+ * Pending item by replanWorkItem, so the next execution knows why the prior
+ * attempt failed.
  */
 const replanSchema = z.object({
   source: z.literal("replan"),
@@ -389,7 +389,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
  * infrastructure fault is not the task's. `give-up`: the cause cannot clear by itself, so the task
  * is given up (Abandoned) and its plan repaired (migration 045, widened by 048).
  */
-export type BlockedExit =
+type BlockedExit =
   | { readonly kind: "merge-recorded"; readonly mergeCommit: string; readonly mergeKind: MergeKind | null }
   | { readonly kind: "read-main" }
   | { readonly kind: "requeue" }

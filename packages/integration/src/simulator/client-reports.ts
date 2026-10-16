@@ -8,7 +8,7 @@ import type { VisionSource } from "@ashara/engagement";
 import type { Database } from "./database.js";
 
 /**
- * I4, what the client is told, judged against the records it is told from (W6/W7/W11): a halt
+ * I4, what the client is told, judged against the records it is told from: a halt
  * report states its episode's recorded kind and names the episode's record, a stop report names
  * exactly the merges recorded, and a delivered report names each goal's recorded close, exactly the
  * completed tasks no stored check covers, the goals given up, and exactly the items of what the
@@ -125,7 +125,6 @@ interface ReportedItem {
   readonly blockedReason: unknown;
 }
 
-/** How much of a recorded cause a report must quote: enough to be that cause and no other. */
 /**
  * How I4 judges each block kind's report, over the code's own list (`satisfies`: a kind added there
  * fails the type check here until it is placed). `stated`: the report states the episode's recorded
@@ -231,7 +230,7 @@ function plural(count: number, noun: string): string {
 function expectedKindWords(kind: StatedKind, errorClass: string | null): string {
   switch (kind) {
     case "budget_cap": {
-      // A cap refuses a call whose worst case would cross it, before the recorded spend reaches it (smoke3 D1).
+      // A cap refuses a call whose worst case would cross it, before the recorded spend reaches it.
       const stopped = "left no room for the next step of the work, so that step was not paid for";
       if (errorClass === SPEND_CAP_ERROR_CLASS.deployment) return `the spending limit set for all of Ashara's work, across every project it runs, ${stopped}`;
       if (errorClass === SPEND_CAP_ERROR_CLASS.project) return `the spending limit set for this project ${stopped}`;
@@ -269,7 +268,7 @@ function expectedSpendWords(spend: z.infer<typeof spendRecord> | null): string {
 /**
  * The cause sentences a halt report must carry, from the episode's row: its recorded kind in the
  * client's words, a budget_cap halt's recorded amounts, and the episode's own id as the record that
- * holds the detail (W11b D3); a halt recorded with neither error class nor reason says no cause was.
+ * holds the detail; a halt recorded with neither error class nor reason says no cause was.
  * Null when the episode's spend does not parse: no sentence can be expected of it.
  */
 function statedCause(
@@ -313,7 +312,7 @@ function closeOnRecord(goal: ReportedItem, items: readonly ReportedItem[]): stri
 /**
  * How an Abandoned goal task left the plan, from its stored reason: set aside, when a revision of
  * the plan replaced it while it was open (source `superseded`: the team did not give up on it, the
- * plan stopped asking for it; w12b D4), or given up, for every other recorded reason. A reason that
+ * plan stopped asking for it), or given up, for every other recorded reason. A reason that
  * does not parse, or none, is its own verdict: neither reading is on record.
  */
 type Disposal = { readonly kind: "given-up" } | { readonly kind: "set-aside" } | { readonly kind: "corrupt"; readonly detail: string };
@@ -488,7 +487,7 @@ function identityOf(source: VisionSource): string {
 }
 
 /**
- * The coverage the delivered report must state, from the records alone (W11c D3): the review task's
+ * The coverage the delivered report must state, from the records alone: the review task's
  * sources are every item of the vision; an item is checked when an acceptance line of a check task
  * that wrote a goal task's latest stored checks cites it; an out-of-scope line, or an assumption
  * recorded as the team's own design choice, is not part of what the client asked for and is never

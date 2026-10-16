@@ -412,7 +412,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     return { deps, stored: () => row, statusesWritten, failureRoutes: () => routed, failedApproaches: () => approaches, refunds: () => refunded, halts };
   }
 
-  // Story s-loop-never-stop-m1 W6; simulator B4: one transient fault must not park a task for a person.
+  // Story s-loop-never-stop-m1 W6: one transient fault must not park a task for a person.
   test("an infrastructure fault within the budget: back to Pending, the dispatch refunded, never Failed, no failure router, no halt", async () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps();
 
@@ -427,8 +427,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts).toEqual([]);
   });
 
-  // The 400-seed deep soak (2026-10-15, two projects, seed 326): `git rev-parse HEAD` failed right
-  // after the merge commit, the dispatch faulted as Ashara's, and the merged task was requeued.
+  // A fault after the merge commit (`git rev-parse HEAD` failing) is Ashara's, and the merged task
+  // must not be requeued for it.
   test("a fault after its merge reached main: the merge recorded and the task Completed, never requeued", async () => {
     const { deps, stored, statusesWritten, refunds } = buildEnvironmentBlockedDeps();
     const main = targetWithMain([`merge: task ${ITEM_ID}`]);
@@ -508,7 +508,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts[0]?.reason).toContain("index.lock exists");
   });
 
-  // Orchestrator D2: a fault before the dispatch seam was charged as the task's and replanned without bound.
+  // A fault before the dispatch seam is never charged as the task's, which would replan it without bound.
   test("a throw before the dispatch seam: Ashara's fault, back to Pending uncounted, no failure router, no lesson", async () => {
     const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds } = buildEnvironmentBlockedDeps();
     let counted = 0;
@@ -566,8 +566,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     ).not.toThrow();
   });
 
-  // The isolated-worker run's finding 1: the verifier cell refused after the agent's work passed.
-  // Before, operation postMergeVerify reached the classifier as TREE_REGRESSION and was abandoned.
+  // A verifier cell refused after the agent's work passed is an infrastructure fault: operation
+  // postMergeVerify never reaches the classifier as TREE_REGRESSION.
   test("a verifier cell refused after the agent ran: an infrastructure fault, never the failure router", async () => {
     const outcome: Outcome = { ...COMPLETED_OUTCOME, summary: "wrote greet.sh", turnsUsed: 4, cost: { measured: true, totalUsd: 0.0006, turns: 4 } };
     const detail =
@@ -662,8 +662,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
   });
 });
 
-// The 30fb60d5 review (c): stale checks were classified VERIFICATION_GAP, replanned and lessoned against the implementer.
-// The 93f7aeb7 review (d): parked at Blocked naming the check task, nothing ever reopened it.
+// Stale checks are never a VERIFICATION_GAP replanned and lessoned against the implementer, and an
+// item parked on them waits on a check task that is reopened, never on one nothing reopens.
 describe("stored checks stale: the check task is reopened and the item waits on it", () => {
   const CHECK_ID: WorkItemId = createWorkItemId();
   const detail = "the checks of task t (revision 1, check task c) were red-run on environment version e, but ...";
@@ -813,8 +813,8 @@ describe("stored checks stale: the check task is reopened and the item waits on 
 
 });
 
-// docs/investigations/second-run-2026-10-14.md N2: an implementer's correct "these checks cannot pass"
-// was routed as the task's own failure and abandoned after 3, stranding its dependents.
+// An implementer's "these checks cannot pass" is a
+// dispute of the checks, never the task's own failure.
 describe("a disputed check: the check task is reopened with the dispute and the item waits on it", () => {
   const CHECK_ID: WorkItemId = createWorkItemId();
   const reason = "the check uses [[ ]], which the runner's sh rejects with exit 2 on any work";
@@ -960,8 +960,8 @@ describe("a disputed check: the check task is reopened with the dispute and the 
   });
 });
 
-// docs/investigations/third-run-2026-10-14.md N7: a refused environment edit's only exit was an
-// operator editing main. ADR-074 addendum 2 d66 b: Z0 opens an environment task and the item waits.
+// ADR-074 addendum 2 d66 b: a refused environment
+// edit opens an environment task and the item waits, never an operator editing main.
 describe("an environment change requested: an environment task is opened and the item waits on it", () => {
   const ROLE_ID = "55555555-5555-4555-8555-555555555555";
   const detail = "ownership gate refused the work of t: environment/ belongs to the platform role; ...";
@@ -1087,8 +1087,8 @@ describe("an environment change requested: an environment task is opened and the
     expect(approaches()).toBe(0);
   });
 
-  // The t-env-recipe review: the scaffold's own environment change ran the product's build and test
-  // on a main with no product, failed, and stalled every task behind the scaffold.
+  // The scaffold's own environment change must not run the product's build and test on a main with
+  // no product, where it fails and stalls every task behind the scaffold.
   test("asked by the product scaffold before any scaffold completed: the environment task records no product on main", async () => {
     const scaffold: Pick<WorkItem, "taskSpec"> = { taskSpec: { origin: "product-scaffold", checkedBy: "substrate" } };
     const { deps, opened } = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID }, scaffold);
@@ -1126,7 +1126,7 @@ describe("an environment change requested: an environment task is opened and the
     expect(approaches()).toBe(0);
   });
 
-  // Orchestrator D3: a roster read error was folded into "no owner", and the task was given up.
+  // A roster read error is never folded into "no owner", which would give the task up.
   test("a roster that cannot be read: Ashara's fault, back to Pending with the dispatch refunded, never given up", async () => {
     const built = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
     const { item, opened, routed, approaches } = built;
@@ -1159,8 +1159,8 @@ describe("an environment change requested: an environment task is opened and the
   });
 });
 
-// The 509bbbc5 review: a turn refused at a spend cap reached the FailureRouter as a failed attempt.
-// The 30fb60d5 review (e): a refusal no cap made took the failure route; one rule now holds for both.
+// A turn refused before its call was sent, at a spend cap or for any other reason, never reaches
+// the FailureRouter as a failed attempt: one rule holds for both.
 describe("a dispatch refused before its call was sent is no failed approach", () => {
   class StubCapRefusal extends Error {
     constructor(readonly scope: "project" | "deployment") {
@@ -1297,7 +1297,7 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
     expect(failedApproaches()).toBe(0);
   });
 
-  // Sprint 0 run D2: a SIGTERM's cancelled attempt was counted, and the third count abandoned the item.
+  // A SIGTERM's cancelled attempt is never counted toward the bound that abandons the item.
   test("interrupted by shutdown on its third dispatch: back to Pending, count unchanged, no lesson, no failure router", async () => {
     const { deps, stored, statusesWritten, attempts, failureRoutes, failedApproaches, blocks } = buildRefusalDeps("shutdown", 2);
 
@@ -1367,8 +1367,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
     attempt: 1,
   };
 
-  // Orchestrator D1: the Completed transition commits before its events publish; a failed publish
-  // after it routed a merged, Completed task as failed and wrote a false lesson.
+  // The Completed transition commits before its events publish; a failed publish after it must not
+  // route a merged, Completed task as failed nor write a false lesson.
   test("a publish that fails after the task is Completed: still completed, no lesson", async () => {
     const built = buildMergeDeps(merged, async () => {});
     const { stored, writes } = built;
@@ -1416,8 +1416,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
     expect(stored().status).toBe("Completed");
   });
 
-  // t-exec-timeout-orphans: the write used to throw out of processTask and leave the item
-  // InProgress, which the startup reconciler requeues: merged work dispatched again.
+  // t-exec-timeout-orphans: a write that throws out of processTask leaves the item InProgress, which
+  // the startup reconciler requeues: merged work dispatched again.
   test("a merge-record write that keeps failing: not Completed, not InProgress, Blocked naming the merge commit", async () => {
     let attempts = 0;
     const { deps, stored, writes } = buildMergeDeps(merged, async () => {
@@ -1440,9 +1440,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
     ).not.toThrow();
   });
 
-  // The 400-seed deep soak (2026-10-15, two projects, seed 163): the Completed update after a
-  // recorded merge drew a serialization failure, reached processTask as Ashara's fault and was
-  // requeued, so merged work was dispatched again.
+  // A serialization failure on the Completed update after a recorded merge reaches processTask as
+  // Ashara's fault; requeueing it would dispatch merged work again.
   function failingCompletion(failures: number) {
     const built = buildMergeDeps(merged, async () => {});
     let failed = 0;
@@ -1522,8 +1521,8 @@ describe("a completed dispatch records its merge before the task is Completed", 
   });
 });
 
-// docs/investigations/fifth-run-2026-10-14.md N20: 36 stored checks no product could all pass reached
-// the implementers. ADR-074 addendum 2 d71 c: a review reads them together before any implementation.
+// ADR-074 addendum 2 d71 c: a review reads the stored
+// checks together before any implementation, so a suite no product can pass never reaches one.
 describe("a review of the plan's suites with problems: the named check tasks are reopened and the review waits", () => {
   const CHECK_A: WorkItemId = createWorkItemId();
   const CHECK_B: WorkItemId = createWorkItemId();

@@ -64,7 +64,7 @@ export const ASSUMPTION_KIND_LABEL: Readonly<Record<AssumptionKind | "unclassifi
 };
 
 /**
- * Which side of the vision's scope a scope line is on (W11c D3): what the client asked for, or what
+ * Which side of the vision's scope a scope line is on: what the client asked for, or what
  * the tender explicitly leaves out. A line written before sides were recorded reads as
  * "unclassified": not evidence that it is out of scope.
  */

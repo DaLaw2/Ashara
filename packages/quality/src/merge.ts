@@ -13,13 +13,13 @@ function exitCodeOf(e: unknown): number | null {
   return typeof e === "object" && e !== null && "code" in e && typeof e.code === "number" ? e.code : null;
 }
 
-export type MergeResult =
+type MergeResult =
   | { readonly status: "clean" }
   | { readonly status: "conflict"; readonly files: string[] }
   /** Git refused the merge for a reason other than a conflict, or could not say which files conflict: `cause` is its error. */
   | { readonly status: "error"; readonly message: string; readonly cause: unknown };
 
-export type CheckoutReset =
+type CheckoutReset =
   | { readonly status: "clean" }
   | { readonly status: "error"; readonly message: string };
 
@@ -75,8 +75,8 @@ async function getConflictingFiles(targetPath: string): Promise<string[]> {
  * rebuilt binary, a regenerated lockfile, a coverage directory. Anything of that
  * which is tracked makes git refuse the NEXT merge before it starts ("Your local
  * changes to the following files would be overwritten by merge"), so a task that
- * PASSED its own verification is rejected, retried, escalated and abandoned
- * (Run 39, the compiled `jot` binary). Restoring HEAD first makes the merge a
+ * PASSED its own verification is rejected, retried, escalated and abandoned.
+ * Restoring HEAD first makes the merge a
  * function of the two commits alone, whatever the project's build produces.
  *
  * `clean -fd` without `-x` deliberately keeps ignored paths: Ashara's control
@@ -154,6 +154,14 @@ function mergeSubject(taskId: string): string {
   return `merge: task ${taskId}`;
 }
 
+/** A line of `git log` output whose commit field is not a commit id. */
+class CommitIdUnparseable extends Error {
+  constructor(readonly field: string | undefined) {
+    super(`not a commit id: ${JSON.stringify(field)}`);
+    this.name = "CommitIdUnparseable";
+  }
+}
+
 /** Git gave no answer about the target's main: never read as "nothing merged". */
 class MainUnreadable extends Error {
   constructor(
@@ -201,7 +209,7 @@ export async function taskMergeOnMain(targetPath: string, taskId: string): Promi
     const [commit, subject] = line.split("\x1f");
     if (subject !== mergeSubject(taskId)) continue;
     const parsed = CommitIdSchema.safeParse(commit);
-    if (!parsed.success) throw new MainUnreadable(taskId, targetPath, "log main", { cause: new Error(`not a commit id: ${JSON.stringify(commit)}`) });
+    if (!parsed.success) throw new MainUnreadable(taskId, targetPath, "log main", { cause: new CommitIdUnparseable(commit) });
     return parsed.data;
   }
   return null;
@@ -253,7 +261,7 @@ function nulSeparated(stdout: string): string[] {
 /**
  * A task branch that does not merge with main: the main commit it was tried against and the files
  * git could not combine. Two tasks dispatched in one batch start from the same main; once the first
- * merges, the second's branch can conflict with the main it lands on (w12b D2).
+ * merges, the second's branch can conflict with the main it lands on.
  */
 export interface MainConflict {
   readonly mainCommit: string;
@@ -336,7 +344,7 @@ async function startMainMerge(repo: HostRepo, taskId: string, conflict: MainConf
 
 /**
  * Merges main into a resumed task branch that merges with it cleanly, as a commit on the branch,
- * before the next attempt (lessons digest P6). A branch whose tentative merge with main failed the
+ * before the next attempt. A branch whose tentative merge with main failed the
  * post-merge verification (a tree regression) would otherwise be retried on a tree that never held
  * main's newer work: there the failure cannot reproduce, the attempt's own gate passes again, and
  * the merge fails again for the same reason. With main merged in, the attempt works on the tree the
@@ -367,8 +375,8 @@ async function mergeMainIntoBranch(repo: HostRepo, taskId: string): Promise<"mer
 /**
  * How a resumed task branch's worktree is made ready before its next attempt (createWorkdirForRetry).
  * When the branch conflicts with main, main's merge is left staged with the conflicts in the files
- * (startMainMerge): re-dispatching the branch unchanged would only conflict again (w12b D2).
- * Otherwise main's newer work is merged into it as a commit (mergeMainIntoBranch, P6): the attempt
+ * (startMainMerge): re-dispatching the branch unchanged would only conflict again.
+ * Otherwise main's newer work is merged into it as a commit (mergeMainIntoBranch): the attempt
  * works on the tree its merge will be verified as. Either throws ConflictRetryUnprepared when the
  * merge cannot be prepared.
  */

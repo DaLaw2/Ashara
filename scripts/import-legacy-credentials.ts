@@ -15,7 +15,7 @@ import type { DbTransaction } from "@ashara/db";
 import { API_TOKEN_SECRET_NAME, SecretStore, providerApiKeySecretName } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
 
-export interface LegacyImportReport {
+interface LegacyImportReport {
   /** Secret names written (or already holding the same value). Never values. */
   readonly imported: readonly string[];
 }

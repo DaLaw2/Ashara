@@ -15,7 +15,7 @@ import type { CostMeasurement } from "./cost.js";
 import { LlmCallCostMissing, LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
 
 /** Required on every model call: the project the spend belongs to, and the work item when one is served. */
-export interface LlmCallContext {
+interface LlmCallContext {
   readonly projectId: ProjectId;
   readonly taskId: WorkItemId | null;
   /** Who the call serves: always a routing site. */

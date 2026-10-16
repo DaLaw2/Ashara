@@ -137,7 +137,7 @@ export function createRoutes(deps: AppDeps): Hono<AppEnv> {
               409,
             );
           }
-          replanWorkItem(item);
+          replanWorkItem(item, null);
           break;
         case "Abandoned": {
           const callerReason =

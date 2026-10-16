@@ -78,7 +78,7 @@ describe("exit 6 probes from inside a real cell", () => {
     expect(denied.evidence).toContain("none found");
     expect(denied.outcome).toBe("held");
 
-    // A value inside a probed path (npx's INIT_CWD inside `<cwd>/.env`, W5 D4) is not the probe's own leak.
+    // A value inside a probed path (npx's INIT_CWD inside `<cwd>/.env`) is not the probe's own leak.
     const pathPrefix = await probeCredentialRead(cell, { ...canaries, values: [...canaries.values, { name: "INIT_CWD", value: keyDir }] });
     expect(pathPrefix.evidence).toContain("none found");
     expect(pathPrefix.outcome).toBe("held");

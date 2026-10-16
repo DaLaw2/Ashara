@@ -30,10 +30,10 @@ export interface TurnRequest {
  * Why the model stopped, mapped from the SDK's finish reason. A finish reason
  * that is missing, `error`, or not one the SDK documents is `provider_error`.
  */
-export type TurnFinishReason = "stop" | "tool_calls" | "truncated" | "content_filter" | "other" | "provider_error";
+type TurnFinishReason = "stop" | "tool_calls" | "truncated" | "content_filter" | "other" | "provider_error";
 
 /** A tool call the model made. The gateway returns it; it never executes it. */
-export type TurnToolCall =
+type TurnToolCall =
   | { readonly kind: "valid"; readonly toolCallId: string; readonly toolName: string; readonly input: unknown }
   | {
       readonly kind: "invalid";
@@ -65,7 +65,8 @@ export interface TurnLlm {
   generateTurn(request: TurnRequest): Promise<TurnResult>;
 }
 
-const SdkFinishReasonSchema = z.enum(["stop", "length", "content-filter", "tool-calls", "error", "other"]);
+/** The AI SDK's documented finish reasons; the one vocabulary both the turn and the structured paths read. */
+export const SdkFinishReasonSchema = z.enum(["stop", "length", "content-filter", "tool-calls", "error", "other"]);
 
 const SDK_TO_TURN: Readonly<Record<z.infer<typeof SdkFinishReasonSchema>, TurnFinishReason>> = {
   stop: "stop",
@@ -99,8 +100,8 @@ function withCacheBreakpoint<M extends ModelMessage>(message: M): M {
  * The system prompt and conversation of one turn, with Anthropic prompt-cache
  * breakpoints when the provider type is `anthropic`; every other type gets them
  * unchanged. An attempt re-sends its whole conversation every turn, so without
- * a breakpoint every turn pays full input price for the same prefix (W5 trial
- * 2026-10-14: 0 cache reads over 569,810 Claude input tokens). Anthropic caches
+ * a breakpoint every turn pays full input price for the same prefix.
+ * Anthropic caches
  * the prefix up to each breakpoint, in the order tools, system, messages:
  * - the system prompt: tools and system, stable for the whole attempt;
  * - the message before the latest assistant message: where the previous turn's

@@ -33,13 +33,13 @@ export type ChannelCaller =
   | { readonly kind: "client"; readonly clientId: string };
 
 /** A handler's verdict, rendered as JSON by whichever route called it. */
-export interface ChannelResponse {
+interface ChannelResponse {
   readonly status: 200 | 201 | 400 | 404 | 409;
   readonly body: unknown;
 }
 
 /** The request body as read by the route: parsed JSON, or why it could not be. */
-export type JsonBody =
+type JsonBody =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly reason: string };
 
