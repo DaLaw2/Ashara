@@ -12,7 +12,7 @@ import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js
 
 // The Liaison's delivered report (migration 049; story s-independent-verify-m1 W7): due while a
 // passed acceptance sweep has none, rendered only from what is recorded: how each goal task closed,
-// which tasks' checks the sweep ran, the tasks given up, and every item of the reviewed vision with
+// which tasks' checks the sweep ran and the commands of those that passed, the tasks given up, and every item of the reviewed vision with
 // whether a check covers it and where each assumption stood with the client at acceptance.
 
 /** How a goal task's recorded commit closed it (migration 049). */
@@ -68,8 +68,14 @@ interface DueDeliveredReportRow {
   readonly unchecked: readonly string[];
   /** The titles of goal tasks given up (Abandoned), which the plan was repaired around. */
   readonly givenUp: readonly string[];
+  readonly executed: ExecutedChecks;
   readonly vision: VisionCoverage;
 }
+
+/** The stored checks the sweep ran and saw pass, by task title; unrecorded on a sweep from before migration 065. */
+type ExecutedChecks =
+  | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
+  | { readonly kind: "unrecorded" };
 
 /**
  * A due report whose records could not be read; the rest of the due reports are still listed.
@@ -147,6 +153,38 @@ async function sweepTaskTitles(db: DbHandle, sweepId: string, column: "checked_t
     if (title === undefined) throw new SweepTaskMissing(sweepId, id);
     return title;
   });
+}
+
+/** acceptance_sweeps.executed_checks (migration 065): the stored checks a passed sweep ran and saw pass; null on a row written before it. */
+const ExecutedChecksSchema = z.array(z.object({ taskId: z.guid(), name: z.string().min(1), command: z.string().min(1) })).nullable();
+
+/** A passed sweep's stored executed_checks is neither null nor a list of executed checks. */
+class SweepExecutedChecksUnreadable extends ReportRecordUnreadable {
+  constructor(
+    readonly sweepId: string,
+    readonly detail: string,
+  ) {
+    super(`acceptance sweep ${sweepId}: executed_checks is not a list of {taskId, name, command}: ${detail}`);
+    this.name = "SweepExecutedChecksUnreadable";
+  }
+}
+
+/** The stored checks the sweep records it ran and saw pass, each with its task's title; unrecorded on a sweep from before migration 065. */
+async function executedChecksOf(db: DbHandle, sweepId: string, raw: unknown): Promise<ExecutedChecks> {
+  const parsed = ExecutedChecksSchema.safeParse(raw);
+  if (!parsed.success) throw new SweepExecutedChecksUnreadable(sweepId, z.prettifyError(parsed.error));
+  if (parsed.data === null) return { kind: "unrecorded" };
+  const ids = [...new Set(parsed.data.map((check) => check.taskId))];
+  const rows = ids.length === 0 ? [] : await db.select({ id: workItems.id, title: workItems.title }).from(workItems).where(inArray(workItems.id, ids));
+  const titles = new Map(rows.map((row) => [row.id, row.title]));
+  return {
+    kind: "recorded",
+    checks: parsed.data.map((check) => {
+      const task = titles.get(check.taskId);
+      if (task === undefined) throw new SweepTaskMissing(sweepId, check.taskId);
+      return { task, name: check.name, command: check.command };
+    }),
+  };
 }
 
 /**
@@ -427,6 +465,7 @@ interface DueSweep {
   readonly mainCommit: string | null;
   readonly checkedTasks: unknown;
   readonly uncheckedTasks: unknown;
+  readonly executedChecks: unknown;
   readonly acceptedAt: Date;
   readonly workspacePath: string | null;
   readonly failures: number;
@@ -453,6 +492,7 @@ async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredRep
     checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
     unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
     givenUp: await givenUpGoalTitles(db, row.projectId),
+    executed: await executedChecksOf(db, row.id, row.executedChecks),
     vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
   };
 }
@@ -472,6 +512,7 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDe
       mainCommit: acceptanceSweeps.mainCommit,
       checkedTasks: acceptanceSweeps.checkedTasks,
       uncheckedTasks: acceptanceSweeps.uncheckedTasks,
+      executedChecks: acceptanceSweeps.executedChecks,
       acceptedAt: acceptanceSweeps.createdAt,
       workspacePath: projects.workspacePath,
       failures: acceptanceSweeps.reportFailures,

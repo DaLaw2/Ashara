@@ -10,7 +10,9 @@ const MERGE_A = "a".repeat(40);
 
 type Listed = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
 type Due = Extract<Listed, { readonly kind: "due" }>;
-type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures">;
+/** A due report's records; `executed`, when not the case under test, is one check that ran. */
+type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures" | "executed"> & { readonly executed?: Due["executed"] };
+const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
 type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
 function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): Item {
@@ -26,7 +28,7 @@ const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
 
 async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
-  const due: Due = { ...fields, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
+  const due: Due = { ...fields, executed: fields.executed ?? ONE_RUN, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
   const reports = new DeliveredReports(
@@ -64,6 +66,16 @@ const BASE: Fields = {
   vision: { kind: "unrecorded" },
 };
 
+/** The section that says how acceptance ran the product, up to the interface file's. */
+function asRun(body: string): string {
+  const start = body.indexOf("\n\nWhat was delivered:");
+  const from = body.indexOf("\n\n", start + 2) + 2;
+  const quoted = body.indexOf("\n\nPublic interface (from ");
+  const end = quoted >= 0 ? quoted : body.indexOf("\n\nHow to run", from);
+  expect(end).toBeGreaterThan(from);
+  return body.slice(from, end);
+}
+
 /** The section that quotes the product's public interface file, or says why not, up to the next section. */
 function howToRun(body: string): string {
   const quoted = body.indexOf("Public interface (from ");
@@ -81,10 +93,38 @@ describe("how to run the product", () => {
     expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("Public interface"));
     expect(howToRun(body)).toBe(
       `Public interface (from ${INTERFACE_FILE} on main at commit ${MAIN}), quoted as the file reads. ` +
-        `This file changed since the product scaffold wrote it: acceptance refuses one left byte for byte as the scaffold wrote it, or missing. ` +
-        `Ashara has not verified that it describes the delivered product.\n\`\`\`\n${text}\`\`\``,
+        `Acceptance ran none of what this file documents, and Ashara has not verified that it describes the delivered product. ` +
+        `Where it differs from the commands acceptance ran, only those commands are verified.\n\`\`\`\n${text}\`\`\``,
     );
     expect(body).not.toContain("How to run it");
+  });
+
+  // ADR-080 d9b: the client is never told a stale way to run the product as verified.
+  test("the CLI changed and the interface file did not: only what acceptance ran is verified, and the stale entry is quoted as unverified", async () => {
+    const stale = "Run: kv put <key> <value>\n";
+    const executed = { kind: "recorded" as const, checks: [{ task: "Store keys", name: "set then get", command: "./kv set a 1 && ./kv get a | grep -qx 1" }] };
+    const body = await render({ ...BASE, executed }, { kind: "present", text: stale });
+    const verified = asRun(body);
+    expect(verified).toBe(
+      `How the product was run in acceptance: each command below is a stored check that ran from the repository root of main at commit ${MAIN}, ` +
+        `inside the project environment, and passed. These are the only ways of running the product Ashara verified.\n` +
+        `- "Store keys", check "set then get":\n\`\`\`\n./kv set a 1 && ./kv get a | grep -qx 1\n\`\`\``,
+    );
+    expect(verified).not.toContain("kv put");
+    const quote = howToRun(body);
+    expect(quote).toContain("Acceptance ran none of what this file documents, and Ashara has not verified that it describes the delivered product.");
+    expect(quote).toContain(stale);
+    expect(body.indexOf(verified)).toBeLessThan(body.indexOf(quote));
+  });
+
+  test("with nothing on record of what acceptance ran, or nothing run, no way of running the product is stated as verified", async () => {
+    const text = "Run: kv put <key> <value>\n";
+    expect(asRun(await render({ ...BASE, executed: { kind: "unrecorded" } }, { kind: "present", text }))).toBe(
+      "Which commands acceptance ran is not on record for this delivery, so no way of running the product is stated as verified.",
+    );
+    expect(asRun(await render({ ...BASE, executed: { kind: "recorded", checks: [] } }, { kind: "present", text }))).toBe(
+      "No stored check ran in acceptance, so no way of running the product is verified.",
+    );
   });
 
   test("a file holding a fence is quoted in a longer one, so nothing in it closes the quote", async () => {
@@ -376,6 +416,7 @@ describe("a delivered report that fails is its own project's", () => {
 
   const due = (sweepId: string, id: typeof projectId, targetProjectPath: string, failures: number, interfaceReadFailures = failures): Due => ({
     ...BASE,
+    executed: ONE_RUN,
     kind: "due",
     failures,
     interfaceReadFailures,

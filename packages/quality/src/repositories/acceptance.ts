@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { acceptanceSweeps, completedGoalTasks, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
+import type { ExecutedCheck } from "../verification.js";
 
 // A delivered project is accepted on one sweep of main HEAD (migration 049; story
 // s-independent-verify-m1 W7, design P11). A project is ready for it once its first plan exists,
@@ -118,14 +119,14 @@ async function lockReady(tx: DbHandle, projectId: ProjectId): Promise<boolean> {
 }
 
 /**
- * A sweep that passed: recorded, and the project moved to 'accepted' by `accept` (Engagement's
+ * A sweep that passed: recorded with the stored checks it ran and saw pass (migration 065), and the project moved to 'accepted' by `accept` (Engagement's
  * lifecycle guard, which the composition root supplies), in one transaction (the
  * projects_acceptance_guard trigger refuses the move without the row). "moved" when the project is
  * no longer ready; nothing is written.
  */
 export async function recordAcceptance(
   db: Database,
-  sweep: AcceptanceSweepRecord & { readonly mainCommit: string },
+  sweep: AcceptanceSweepRecord & { readonly mainCommit: string; readonly executedChecks: readonly ExecutedCheck[] },
   accept: (tx: DbTransaction, projectId: ProjectId) => Promise<void>,
 ): Promise<"accepted" | "moved"> {
   return db.transaction(async (tx) => {
@@ -138,6 +139,7 @@ export async function recordAcceptance(
       uncheckedTasks: [...sweep.uncheckedTasks],
       passed: true,
       details: sweep.details,
+      executedChecks: sweep.executedChecks.map(({ taskId, name, command }) => ({ taskId, name, command })),
     });
     await accept(tx, sweep.projectId);
     return "accepted";

@@ -11,6 +11,8 @@ import type { VisionSource } from "./vision-language/vision-source.js";
 // whose kind was not recorded is said to be so, and "not checked" is stated as not checked, never
 // folded into "delivered" or into what passed: the opening claims only the run that happened. Every
 // assumption classed internal design is named as not verified by Ashara (ADR-083): no check decides it.
+// The only ways of running the product presented as verified are the commands acceptance ran and saw
+// pass; the public interface file, none of whose entries acceptance runs, is quoted as unverified.
 
 /** How a goal task's record says it closed. */
 type GoalClose =
@@ -64,8 +66,18 @@ interface DueDeliveredReport {
   readonly unchecked: readonly string[];
   /** Goal tasks given up, which the plan was repaired around, by title. */
   readonly givenUp: readonly string[];
+  /** The stored checks the sweep ran and saw pass (acceptance_sweeps.executed_checks). */
+  readonly executed: ExecutedChecks;
   readonly vision: VisionCoverage;
 }
+
+/**
+ * The stored checks an accepted sweep ran on main and saw pass, by task title, with the command each
+ * ran; or none recorded (a sweep recorded before they were), which verifies no way of running the product.
+ */
+type ExecutedChecks =
+  | { readonly kind: "recorded"; readonly checks: ReadonlyArray<{ readonly task: string; readonly name: string; readonly command: string }> }
+  | { readonly kind: "unrecorded" };
 
 /**
  * A passed sweep whose report its records could not be read for; `error` says why. `cause` is
@@ -221,23 +233,47 @@ function interfaceSection(file: string, commit: string, read: InterfaceTold): st
     );
   }
   const quoted = keepEnds(wholeText(read.text), INTERFACE_QUOTE_CHARS);
-  const text = renderElided(quoted);
-  const fence = fenceFor(text);
-  const body = text === "" || text.endsWith("\n") ? text : `${text}\n`;
   const cut =
     uncutText(quoted) === null
       ? ` It is longer than ${INTERFACE_QUOTE_CHARS} characters, so only its start and end are quoted; the marker inside says how many characters were cut.`
       : "";
-  return `Public interface (from ${file} on main at commit ${commit}), quoted as the file reads.${cut} ${INTERFACE_UNVERIFIED}\n${fence}\n${body}${fence}`;
+  return `Public interface (from ${file} on main at commit ${commit}), quoted as the file reads.${cut} ${INTERFACE_UNVERIFIED}\n${fenced(renderElided(quoted))}`;
+}
+
+/** `text` in a fence nothing in it can close, ending its last line. */
+function fenced(text: string): string {
+  const fence = fenceFor(text);
+  const body = text === "" || text.endsWith("\n") ? text : `${text}\n`;
+  return `${fence}\n${body}${fence}`;
 }
 
 /**
- * What Ashara checked of the quoted file, and what it did not: acceptance compares its bytes with
- * the product scaffold's placeholder and never judges what it says.
+ * What Ashara did not do with the quoted file: acceptance runs none of its entries, so an entry a
+ * later change left stale reads here as the file wrote it and is never presented as verified.
  */
 const INTERFACE_UNVERIFIED =
-  `This file changed since the product scaffold wrote it: acceptance refuses one left byte for byte as the scaffold ` +
-  `wrote it, or missing. Ashara has not verified that it describes the delivered product.`;
+  `Acceptance ran none of what this file documents, and Ashara has not verified that it describes the delivered product. ` +
+  `Where it differs from the commands acceptance ran, only those commands are verified.`;
+
+/** At most this many characters of one check's command are quoted; a longer one keeps its start and end. */
+const COMMAND_QUOTE_CHARS = 2000;
+
+/**
+ * How the product was run in acceptance, and only that: each stored check the sweep records it ran
+ * on main and saw pass, by its task, with the command quoted as it ran. These are the only ways of
+ * running the product the report presents as verified; with none recorded it says no way is.
+ */
+function executedSection(commit: string, executed: ExecutedChecks): string {
+  if (executed.kind === "unrecorded") {
+    return `Which commands acceptance ran is not on record for this delivery, so no way of running the product is stated as verified.`;
+  }
+  if (executed.checks.length === 0) return `No stored check ran in acceptance, so no way of running the product is verified.`;
+  return [
+    `How the product was run in acceptance: each command below is a stored check that ran from the repository root of main ` +
+      `at commit ${commit}, inside the project environment, and passed. These are the only ways of running the product Ashara verified.`,
+    ...executed.checks.map((check) => `- "${check.task}", check "${check.name}":\n${fenced(renderElided(keepEnds(wholeText(check.command), COMMAND_QUOTE_CHARS)))}`),
+  ].join("\n");
+}
 
 /** What the core loop asks of the Liaison each cycle (no LLM call). */
 export interface LiaisonDeliveredReports {
@@ -371,6 +407,7 @@ function deliveredReport(due: DueDeliveredReport, file: string, productInterface
   return [
     opening(due),
     `What was delivered:\n${due.goals.map((goal) => closeLine(goal.title, goal.close)).join("\n")}`,
+    executedSection(due.mainCommit, due.executed),
     interfaceSection(file, due.mainCommit, productInterface),
     ...uncheckedSection(due.unchecked),
     ...givenUpSection(due.givenUp),

@@ -47,8 +47,11 @@ interface SweepRecord {
 /** The acceptance store (migration 049); the composition root supplies it. */
 export interface AcceptanceStore {
   readyForAcceptance(): Promise<readonly ReadyProject[]>;
-  /** Records a passed sweep and moves the project to accepted, together; "moved" when it is no longer ready. */
-  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved">;
+  /**
+   * Records a passed sweep, with the stored checks it ran and saw pass, and moves the project to
+   * accepted, together; "moved" when it is no longer ready.
+   */
+  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string; readonly executedChecks: Extract<Sweep, { readonly kind: "ran" }>["executedChecks"] }): Promise<"accepted" | "moved">;
   /** Counts one sweep that could not run on the project (projects.acceptance_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
   /** Records a failed sweep with the defect `writeDefect` writes in the same transaction; "moved" when no longer ready. */
@@ -206,7 +209,7 @@ async function sweepOne(deps: AcceptanceDeps, ready: ReadyProject): Promise<"acc
     details: sweep.details,
   };
   if (sweep.passed) {
-    const outcome = await deps.acceptance.recordAccepted(record);
+    const outcome = await deps.acceptance.recordAccepted({ ...record, executedChecks: sweep.executedChecks });
     console.log(`[acceptance] project ${ready.projectId}: sweep on main ${sweep.mainCommit} passed; ${outcome}`);
     return outcome === "accepted" ? "accepted" : "not-accepted";
   }

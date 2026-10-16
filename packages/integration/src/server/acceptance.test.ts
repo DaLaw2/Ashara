@@ -188,8 +188,13 @@ function deliveredReports(): DeliveredReports {
   });
 }
 
+/**
+ * A stand-in sweep's verdict and what it ran: by default every checked task's stored check
+ * ("works", as storeCheck writes it) ran and passed.
+ */
 function sweepDeps(passed: boolean, details: string, ran: { readonly checked: readonly string[]; readonly unchecked: readonly string[] } = { checked: [], unchecked: [] }) {
   const projects = new ProjectHaltRepository(db);
+  const executedChecks = ran.checked.map((taskId) => ({ taskId, name: "works", command: "sh checks/run.sh" }));
   return {
     acceptance: acceptanceStore(),
     containment: memoryStepContainment(() => true),
@@ -201,7 +206,8 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
         environmentVersion: "v1",
         checkedTasks: ran.checked,
         uncheckedTasks: ran.unchecked,
-        publicInterface: { kind: "changed" as const },
+        publicInterface: { kind: "not-placeholder" as const },
+        executedChecks,
         details,
       }),
     },
@@ -286,8 +292,14 @@ describe("acceptance on main", () => {
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(1);
     const [body] = reports;
-    expect(body).toContain(`Public interface (from PUBLIC_INTERFACE.md on main at commit ${MAIN}), quoted as the file reads. This file changed`);
-    expect(body).toContain(`Ashara has not verified that it describes the delivered product.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
+    // Presented as verified: only the commands the sweep recorded it ran and saw pass, by task.
+    expect(body).toContain(
+      `How the product was run in acceptance: each command below is a stored check that ran from the repository root of main at commit ${MAIN}, ` +
+        `inside the project environment, and passed. These are the only ways of running the product Ashara verified.\n` +
+        `- "Store keys", check "works":\n\`\`\`\nsh checks/run.sh\n\`\`\`\n- "Delete keys", check "works":\n\`\`\`\nsh checks/run.sh\n\`\`\`\n\n`,
+    );
+    expect(body).toContain(`Public interface (from PUBLIC_INTERFACE.md on main at commit ${MAIN}), quoted as the file reads. Acceptance ran none of what this file documents`);
+    expect(body).toContain(`Ashara has not verified that it describes the delivered product. Where it differs from the commands acceptance ran, only those commands are verified.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
     expect(body.split("\n\n")[0]).toContain(`the environment's test and the stored checks of 2 completed tasks passed together on main, commit ${MAIN}`);
     // The scaffold, checked only by the substrate, is done but listed apart from what passed.
     expect(body).toContain(`not checked by a stored check: none was written for them, so nothing in the run above confirms them:\n- "Set up the module root"`);
@@ -324,6 +336,24 @@ describe("acceptance on main", () => {
     const [body] = await reportsOf(projectId);
     expect(body).toContain(`These tasks were given up, and the plan was revised around them:\n- "List keys"`);
     expect(body).not.toContain("Watch keys");
+  });
+
+  test("a sweep recorded without what it ran states no way of running the product as verified, and one whose record does not parse is refused", async () => {
+    const due = async (projectId: ProjectId) => (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
+    const unrecorded = await deliveredProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: unrecorded.goals, unchecked: [unrecorded.scaffold] }))).toBe(1);
+    await db.execute(sql`UPDATE acceptance_sweeps SET executed_checks = NULL WHERE project_id = ${unrecorded.projectId}`);
+    expect(await due(unrecorded.projectId)).toMatchObject({ kind: "due", executed: { kind: "unrecorded" } });
+
+    const malformed = await deliveredProject();
+    expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: malformed.goals, unchecked: [malformed.scaffold] }))).toBe(1);
+    await db.execute(sql`UPDATE acceptance_sweeps SET executed_checks = '[{"taskId": "x"}]'::jsonb WHERE project_id = ${malformed.projectId}`);
+    expect(await due(malformed.projectId)).toMatchObject({ kind: "unread", cause: "record", error: expect.objectContaining({ name: "SweepExecutedChecksUnreadable" }) });
+
+    await deliveredReports().runPending();
+    const [body] = await reportsOf(unrecorded.projectId);
+    expect(body).toContain("Which commands acceptance ran is not on record for this delivery, so no way of running the product is stated as verified.");
+    expect(body).not.toContain("How the product was run in acceptance");
   });
 
   test("coverage follows the stored checks: an item is checked only by a check deciding it as its text reads, and a broken or missing record is never read as covered", async () => {

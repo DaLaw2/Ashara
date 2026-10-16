@@ -210,10 +210,32 @@ export type AcceptanceSweep =
       readonly uncheckedTasks: readonly string[];
       /** The public interface file on main against the product scaffold's: a scaffold's byte for byte, or none, is not accepted. */
       readonly publicInterface: InterfaceStanding;
+      /**
+       * Every stored check this sweep ran that passed, in the order run, with the command it ran:
+       * the only ways of running the product acceptance saw work, which the delivered report
+       * presents as verified (the public interface file's entries are never run).
+       */
+      readonly executedChecks: readonly ExecutedCheck[];
       readonly details: string;
     }
   | { readonly kind: "unrunnable"; readonly error: EnvironmentError }
   | { readonly kind: "faulted"; readonly mainCommit: string | null; readonly error: AcceptanceSweepFault };
+
+/** One stored check an acceptance sweep ran and saw pass: whose it is, and the command run. */
+export interface ExecutedCheck {
+  readonly taskId: string;
+  readonly name: string;
+  readonly command: string;
+}
+
+/** Each task's stored checks that ran in `runs` and passed, in run order; a check that failed or never ran is none of them. */
+function executedChecksOf(stored: ReadonlyArray<{ readonly taskId: string; readonly suite: CheckSuite }>, runs: readonly SuiteRun[]): ExecutedCheck[] {
+  return stored.flatMap(({ taskId, suite }) => {
+    const report = runs.find((run) => run.suite === suite)?.report;
+    if (report?.kind !== "ran") return [];
+    return report.runs.filter(checkPassed).map((run) => ({ taskId, name: run.name, command: run.command }));
+  });
+}
 
 /** A step of an acceptance sweep failed on something other than the substrate: no verdict exists. */
 class AcceptanceSweepFault extends Error {
@@ -626,8 +648,9 @@ export class TaskVerification {
    * Completed tasks with no stored check are named apart (`uncheckedTasks`), never counted as
    * passed. A main whose public interface file is byte for byte the one a product scaffold in
    * `scaffolds` wrote, or that holds no such file, fails the sweep, its details opening with what to
-   * update or restore: the delivered report quotes that file to the client as how to run the
-   * product, and a placeholder or nothing tells them nothing true. A main with no environment its cells can be built from fails the sweep, with the
+   * update or restore. Passing that comparison verifies nothing the file says: the delivered report
+   * quotes the file as unverified, and presents as verified only `executedChecks`, the stored
+   * checks this sweep ran and saw pass. A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
    * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
    * bounds both (orchestrator acceptance.ts).
@@ -685,6 +708,7 @@ export class TaskVerification {
         checkedTasks: [],
         uncheckedTasks: [],
         publicInterface: { kind: "not-compared" },
+        executedChecks: [],
         details: `no environment its cells can be built from: ${resolution.reason}`,
       };
     }
@@ -695,13 +719,17 @@ export class TaskVerification {
     const completed = await this.deps.checks.completedOf(projectId, null);
     const checkedIds = new Set(completed.checked.map((prior) => prior.taskId));
     const neverChecked = goalTaskIds.filter((id) => !checkedIds.has(id));
-    const suites: CheckSuite[] = [
-      { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.definition.test }], files: [] },
-      ...completed.checked.map((prior) => ({
+    const stored = completed.checked.map((prior) => ({
+      taskId: prior.taskId,
+      suite: {
         label: `task ${prior.taskId}'s checks revision ${prior.revision} (check task ${prior.checkTaskId})`,
         checks: prior.checks,
         files: prior.files,
-      })),
+      },
+    }));
+    const suites: CheckSuite[] = [
+      { label: `the environment's test (version ${environment.version})`, checks: [{ name: "environment test", command: environment.definition.test }], files: [] },
+      ...stored.map((each) => each.suite),
     ];
     at("run the suites on a checkout of main");
     const checkCells: CheckCells = {
@@ -740,6 +768,7 @@ export class TaskVerification {
       checkedTasks,
       uncheckedTasks: completed.unchecked,
       publicInterface,
+      executedChecks: executedChecksOf(stored, runs),
       details,
     };
   }

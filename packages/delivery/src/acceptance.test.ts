@@ -10,6 +10,7 @@ const projectId = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test")
 const MAIN = "f".repeat(40);
 const SCAFFOLD_MERGE = "a".repeat(40);
 const SCAFFOLDS = [{ taskId: "s1", mergeCommit: SCAFFOLD_MERGE }];
+const EXECUTED = [{ taskId: "g1", name: "put then get", command: "./kv set a 1 && ./kv get a" }];
 
 type AcceptanceDeps = Parameters<typeof runAcceptanceSweeps>[0];
 
@@ -55,6 +56,7 @@ function defectRepo(writes: Array<{ op: string; status: string; source?: string 
  */
 function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }> = SCAFFOLDS) {
   const accepted: string[] = [];
+  const executed: unknown[] = [];
   const defects: Array<{ details: string; writes: Array<{ op: string; status: string; source?: string }> }> = [];
   const created: WorkItem[] = [];
   const blocks: Array<{ projectId: ProjectId; cause: ProjectBlockCause }> = [];
@@ -65,6 +67,7 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
       blocked ? [] : [{ projectId, workspacePath: "/tmp/ashara-acceptance-test", goalTaskIds: ["g1", "g2"], scaffoldMerges }],
     recordAccepted: async (record) => {
       accepted.push(record.mainCommit);
+      executed.push(record.executedChecks);
       return "accepted";
     },
     recordSweepFault: async () => ++faults,
@@ -100,7 +103,7 @@ function harness(sweep: Sweep, scaffoldMerges: ReadonlyArray<{ readonly taskId: 
   const resume = (): void => {
     if (blocks.at(-1)?.cause.category === "infrastructure") blocked = false;
   };
-  return { deps, accepted, defects, created, blocks, sweeps, scaffoldsSwept, resume, faults: () => faults };
+  return { deps, accepted, executed, defects, created, blocks, sweeps, scaffoldsSwept, resume, faults: () => faults };
 }
 
 /** An EnvironmentError as the substrate throws it (structurally: execution-infra is not this package's to import). */
@@ -125,20 +128,23 @@ function sweepFault(): Extract<Sweep, { readonly kind: "faulted" }>["error"] {
 describe("the acceptance sweep", () => {
   test("a sweep that passes on main makes the project accepted, nothing else", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const { deps, accepted, defects, blocks, sweeps, scaffoldsSwept } = harness({
+    const { deps, accepted, executed, defects, blocks, sweeps, scaffoldsSwept } = harness({
       kind: "ran",
       passed: true,
       mainCommit: MAIN,
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
-      publicInterface: { kind: "changed" },
+      publicInterface: { kind: "not-placeholder" },
+      executedChecks: EXECUTED,
       details: "all passed",
     });
     expect(await runAcceptanceSweeps(deps)).toBe(1);
     expect(sweeps).toEqual([["g1", "g2"]]);
     expect(scaffoldsSwept).toEqual([SCAFFOLDS]);
     expect(accepted).toEqual([MAIN]);
+    // What the delivered report presents as verified is what the sweep ran: recorded with the acceptance.
+    expect(executed).toEqual([EXECUTED]);
     expect(defects).toEqual([]);
     expect(blocks).toEqual([]);
   });
@@ -153,7 +159,8 @@ describe("the acceptance sweep", () => {
       environmentVersion: "v1",
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
-      publicInterface: { kind: "changed" },
+      publicInterface: { kind: "not-placeholder" },
+      executedChecks: [],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
@@ -183,6 +190,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "scaffold-placeholder", file: "PUBLIC_INTERFACE.md", scaffoldTaskId: "s1", scaffoldCommit: SCAFFOLD_MERGE },
+      executedChecks: [],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);
@@ -205,6 +213,7 @@ describe("the acceptance sweep", () => {
       checkedTasks: ["g1", "g2"],
       uncheckedTasks: [],
       publicInterface: { kind: "absent", file: "PUBLIC_INTERFACE.md" },
+      executedChecks: [],
       details,
     });
     expect(await runAcceptanceSweeps(deps)).toBe(0);

@@ -144,4 +144,6 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   reportRetryAt: timestamptz("report_retry_at"),
   /** Migration 063: failed attempts whose records are on file but do not read as a report; only these count toward the substitute notice. */
   reportRecordFailures: integer("report_record_failures").notNull().default(0),
+  /** Migration 065: the stored checks a passed sweep ran and saw pass, [{taskId, name, command}]; null on a failed sweep or one recorded before 065. */
+  executedChecks: jsonb("executed_checks"),
 });
