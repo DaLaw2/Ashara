@@ -5,7 +5,8 @@ import { projects } from "./project.js";
 // ---------------------------------------------------------------------------
 // step_faults (migration 063): a subject of a cycle step (a tender, an answer, a project, a report)
 // whose run failed on Ashara's side, with how many times in a row, the last error, and when it is
-// tried again. A subject that runs through has its row deleted.
+// tried again. A subject that runs through has its row deleted. One that exhausted its faults is
+// parked (parked_at): not tried again while its project is not at work.
 // ---------------------------------------------------------------------------
 
 export const stepFaults = pgTable(
@@ -19,6 +20,7 @@ export const stepFaults = pgTable(
     faults: integer().notNull(),
     lastError: text("last_error").notNull(),
     retryAt: timestamptz("retry_at").notNull(),
+    parkedAt: timestamptz("parked_at"),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.step, table.subjectId] })],

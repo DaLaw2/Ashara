@@ -3,7 +3,7 @@ import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import type { SpendAtCap } from "@ashara/finance";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one
@@ -224,13 +224,18 @@ const notCoveredByPlanningStoppedReport = sql`(${projectBlocks.kind} <> 'plannin
   SELECT 1 FROM client_messages m WHERE m.project_id = ${projectBlocks.projectId}
     AND m.reports_on = 'planning-stopped' AND m.created_at < ${projectBlocks.blockedAt}))`;
 
+/** The report's subject in the block-report step's ledger: one per episode and side (BlockReports). */
+function reportSubject(subject: DueBlockReportRow["subject"], row: { readonly id: string; readonly projectId: string }) {
+  return { id: `${subject}:${row.id}`, projectId: parseProjectId(row.projectId, "project_blocks.project_id") };
+}
+
 /**
  * Every block report not yet posted, oldest first within each subject. A project the client
- * stopped, or has a stop awaiting the Liaison, is not reported on.
+ * stopped, or has a stop awaiting the Liaison, is not reported on. Each episode is read on its own
+ * (readEach): one whose record does not read as a report is that report's UnreadSubject, and every
+ * other report is still listed.
  */
-export async function listDueBlockReports(db: DbHandle, blockingReview: BlockingReviewReader): Promise<DueBlockReportRow[]> {
-  const due: DueBlockReportRow[] = [];
-
+export async function listDueBlockReports(db: DbHandle, blockingReview: BlockingReviewReader): Promise<Array<DueBlockReportRow | UnreadSubject>> {
   const resumed = await db
     .select({ id: projectBlocks.id, projectId: projectBlocks.projectId, endKind: projectBlocks.endKind })
     .from(projectBlocks)
@@ -244,10 +249,16 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       ),
     )
     .orderBy(asc(projectBlocks.endedAt), asc(projectBlocks.id));
-  for (const row of resumed) {
-    const how = ResumeKindSchema.parse(row.endKind);
-    due.push({ subject: "project-resumed", episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id"), how });
-  }
+  const resumedReports = await readEach(
+    resumed,
+    (row) => reportSubject("project-resumed", row),
+    (row): DueBlockReportRow => ({
+      subject: "project-resumed",
+      episodeId: row.id,
+      projectId: parseProjectId(row.projectId, "project_blocks.project_id"),
+      how: ResumeKindSchema.parse(row.endKind),
+    }),
+  );
 
   const blocked = await db
     .select({
@@ -270,26 +281,32 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       ),
     )
     .orderBy(asc(projectBlocks.blockedAt), asc(projectBlocks.id));
-  for (const row of blocked) {
-    const kind = ProjectBlockKindSchema.safeParse(row.kind);
-    if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
-    const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
-    if (kind.data === "check_dispute") {
-      const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute });
-    } else if (kind.data === "suite_review") {
-      const review = await blockingReview(db, row.projectId, row.blockedAt);
-      if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review });
-    } else if (kind.data === "plan_repair") {
-      const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned });
-    } else {
-      due.push({ subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause: { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend) } });
-    }
-  }
+  const blockedReports = await readEach(
+    blocked,
+    (row) => reportSubject("project-blocked", row),
+    async (row): Promise<DueBlockReportRow> => {
+      const kind = ProjectBlockKindSchema.safeParse(row.kind);
+      if (!kind.success) throw new ProjectBlockKindUnknown(row.id, row.kind);
+      const projectId = parseProjectId(row.projectId, "project_blocks.project_id");
+      if (kind.data === "check_dispute") {
+        const dispute = await blockingDispute(db, row.id, row.projectId, row.blockedAt);
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, dispute };
+      }
+      if (kind.data === "suite_review") {
+        const review = await blockingReview(db, row.projectId, row.blockedAt);
+        if (review === null) throw new BlockingReviewMissing(row.id, row.projectId);
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, review };
+      }
+      if (kind.data === "plan_repair") {
+        const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
+        return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned };
+      }
+      const cause = { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend) };
+      return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause };
+    },
+  );
 
-  return due;
+  return [...resumedReports, ...blockedReports];
 }
 
 async function insertReport(tx: DbHandle, projectId: string, body: string): Promise<string> {

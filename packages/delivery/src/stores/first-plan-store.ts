@@ -1,5 +1,6 @@
 import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
+import { readEach } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { createBulkPlan } from "../bulk-plan.js";
 import type { FirstPlanStore } from "../first-plan.js";
@@ -23,15 +24,19 @@ export function createFirstPlanStore(db: ReturnType<typeof createDb>): FirstPlan
   const projects = new ProjectHaltRepository(db);
   return {
     async projectsAwaitingPlan() {
-      const rows = await listProjectsAwaitingFirstPlan(db);
-      return Promise.all(rows.map(async (row) => ({
-        projectId: row.projectId,
-        projectName: row.projectName,
-        vision: row.vision,
-        planAttempts: row.planAttempts,
-        planLastError: row.planLastError,
-        rosterRows: await latestRosterRoles(db, row.projectId),
-      })));
+      // Each project's roster is read on its own (readEach): one that does not read is that project's UnreadSubject.
+      return readEach(
+        await listProjectsAwaitingFirstPlan(db),
+        (row) => ({ id: row.projectId, projectId: row.projectId }),
+        async (row) => ({
+          projectId: row.projectId,
+          projectName: row.projectName,
+          vision: row.vision,
+          planAttempts: row.planAttempts,
+          planLastError: row.planLastError,
+          rosterRows: await latestRosterRoles(db, row.projectId),
+        }),
+      );
     },
     async writeFirstPlan(write) {
       // The bulk-plan path runs inside the locked first-plan transaction, so the

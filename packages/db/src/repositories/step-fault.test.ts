@@ -47,4 +47,25 @@ describe("stepFaultLedger", () => {
     expect((await restarted.faultsOf("liaison-intake")).has(subject)).toBe(false);
     expect((await restarted.faultsOf("liaison-answers")).has(subject)).toBe(true);
   });
+
+  test("a parked subject is not due while its project is halted, and is due past its backoff once its project is at work", async () => {
+    const ledger = stepFaultLedger(db);
+    const clientId = (await new ClientRepository(db).create(`step-fault-test-${NONCE}-client-parked`)).id;
+    const halted = (await new ProjectRepository(db).create(`step-fault-test-${NONCE}-halted`, clientId)).id;
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`UPDATE projects SET blocked_category = 'fault', blocked_error_class = 'Scripted', blocked_reason = 'scripted halt' WHERE id = ${halted}`);
+      await tx.execute(sql`INSERT INTO project_blocks (project_id, kind, error_class, reason) VALUES (${halted}, 'fault', 'Scripted', 'scripted halt')`);
+    });
+    const atWork = `parked-at-work-${NONCE}`;
+    const ofHalted = `parked-halted-${NONCE}`;
+    await ledger.record({ step: "block-report", subjectId: atWork, projectId, error: "e", retryAfterSeconds: -1 });
+    await ledger.record({ step: "block-report", subjectId: ofHalted, projectId: halted, error: "e", retryAfterSeconds: -1 });
+    await ledger.park("block-report", atWork);
+    await ledger.park("block-report", ofHalted);
+
+    const standing = await stepFaultLedger(db).faultsOf("block-report");
+    expect(standing.get(ofHalted)).toEqual({ faults: 1, due: false });
+    expect(standing.get(atWork)).toEqual({ faults: 1, due: true });
+    await expect(ledger.park("block-report", `never-recorded-${NONCE}`)).rejects.toMatchObject({ name: "StepFaultNotOnRecord" });
+  });
 });

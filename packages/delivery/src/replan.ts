@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { DomainEvent, ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { DomainEvent, ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { withStructuredLadder } from "./acl/finance-acl.js";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
@@ -160,7 +160,8 @@ interface PlanRevisionWrite {
 
 /** Delivery's persistence port for plan revisions. Each method is one transaction. */
 export interface ReplanStore {
-  projectsAwaitingReplan(): Promise<readonly ProjectAwaitingReplan[]>;
+  /** Every project awaiting a revision, each read on its own: one whose rows do not read is its UnreadSubject. */
+  projectsAwaitingReplan(): Promise<ReadonlyArray<ProjectAwaitingReplan | UnreadSubject>>;
   /**
    * Supersedes the open items, writes the new ones, records the revision and records the client's
    * answers and the repairs it takes in, together; "moved" and nothing written when the project,

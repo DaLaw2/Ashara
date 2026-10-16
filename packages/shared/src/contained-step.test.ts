@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { containEach, memoryStepContainment, uncontainedSteps } from "./contained-step.js";
+import { UnreadSubject, containEach, memoryStepContainment, readEach, uncontainedSteps } from "./contained-step.js";
 import { parseProjectId } from "./ids.js";
 
 class Escaping extends Error {}
@@ -90,6 +90,52 @@ describe("containEach", () => {
     expect(containment.halted).toEqual([]);
     await faultAgain();
     expect(containment.halted).toEqual([{ projectId: projectA, fault: expect.objectContaining({ name: "StepFaultsExhausted", faults: 6, subjectId: "a" }) }]);
+  });
+
+  test("a subject of a project already halted ends parked at the bound: recorded, not tried while its project is not at work, tried again once it is", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const containment = memoryStepContainment(() => false);
+    containment.notAtWork.add(projectA);
+    const [first] = subjects;
+    if (first === undefined) throw new Error("no subject");
+    let runs = 0;
+    const fail = async (): Promise<string> => {
+      runs += 1;
+      return Promise.reject(new TypeError("always"));
+    };
+    // Six faults on record, the last one's backoff passed: the next fault passes the bound on a project already halted.
+    for (let fault = 0; fault < 6; fault += 1) {
+      await containment.record({ step: "block-report", subjectId: "a", projectId: projectA, error: "seed", retryAfterSeconds: -1 });
+    }
+    await containEach(containment, "block-report", [first], (s) => s, fail);
+    expect(containment.halted).toEqual([]);
+    expect(containment.recorded.get("block-report/a")).toMatchObject({ faults: 7, parked: true });
+    expect(errors).toHaveBeenCalledWith(expect.stringMatching(/already halted.*parked in step_faults.*scripts\/project\.ts unblock/));
+
+    // Its backoff passes, and it is still not tried while its project is halted.
+    await containment.record({ step: "block-report", subjectId: "a", projectId: projectA, error: "seed", retryAfterSeconds: -1 });
+    expect(await containEach(containment, "block-report", [first], (s) => s, fail)).toEqual([]);
+    expect(runs).toBe(1);
+
+    containment.notAtWork.delete(projectA);
+    expect(await containEach(containment, "block-report", [first], (s) => s, async () => "ran")).toEqual(["ran"]);
+    expect(containment.recorded.size).toBe(0);
+  });
+
+  test("a row a listing cannot read is its subject's fault: recorded on it like a failed run, and every other row is still read and run", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const containment = memoryStepContainment(() => false);
+    const rows = [{ id: "a", projectId: projectA, spend: "not an amount" }, { id: "b", projectId: projectB, spend: "1" }];
+    const listed = await readEach(rows, (row) => row, (row) => {
+      if (!/^\d+$/.test(row.spend)) throw new TypeError(`spend of ${row.id} does not parse`);
+      return { id: row.id, projectId: row.projectId, spend: Number(row.spend) };
+    });
+
+    expect(listed[0]).toBeInstanceOf(UnreadSubject);
+    const outcomes = await containEach(containment, "block-report", listed, (s) => s, async (s) => s.spend);
+    expect(outcomes).toEqual([expect.objectContaining({ kind: "step-faulted", subjectId: "a", projectId: projectA, error: expect.stringContaining("spend of a does not parse") }), 1]);
+    expect(containment.recorded.get("block-report/a")).toMatchObject({ faults: 1 });
   });
 
   test("uncontained steps skip nothing and contain nothing", async () => {

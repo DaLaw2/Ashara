@@ -594,6 +594,24 @@ describe("a late client change is planned", () => {
     expect(await dependenciesOf(added.id)).not.toContain(sprint0.id);
   });
 
+  test("one project whose work items do not read is that project's fault alone: every other project is still revised", async () => {
+    const unreadable = await plannedProject();
+    const healthy = await plannedProject();
+    await contradict(unreadable.projectId, unreadable.questionId);
+    await contradict(healthy.projectId, healthy.questionId);
+    await db.execute(sql`UPDATE work_items SET success_criteria = '{"not": "criteria"}'::jsonb WHERE project_id = ${unreadable.projectId} AND level = 'Task'`);
+    pipelineModel();
+
+    const containment = memoryStepContainment(() => false);
+    const outcomes = await replanner(containment).runPending();
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({ kind: "step-faulted", step: "replan", subjectId: unreadable.projectId, error: expect.stringContaining("WorkItemRowCorrupt") }),
+      expect.objectContaining({ kind: "revised", projectId: healthy.projectId }),
+    ]);
+    expect(containment.recorded.get(`replan/${unreadable.projectId}`)).toMatchObject({ faults: 1 });
+  });
+
   test("past the bound of revisions the project is blocked, not revised, and the client is told once", async () => {
     const { projectId, questionId } = await plannedProject();
     const answerId = await contradict(projectId, questionId);

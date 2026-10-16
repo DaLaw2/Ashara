@@ -1,6 +1,6 @@
 import { latestRosterRoles } from "@ashara/db";
 import type { createDb } from "@ashara/db";
-import { parseWorkItemId, type ProjectId } from "@ashara/shared";
+import { parseWorkItemId, readEach, type ProjectId } from "@ashara/shared";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
 import type { ReplanStore } from "../replan.js";
@@ -27,9 +27,12 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
   const workItems = new WorkItemRowRepository(db);
   return {
     async projectsAwaitingReplan() {
-      const rows = await listProjectsAwaitingReplan(db);
-      return Promise.all(
-        rows.map(async (row) => ({
+      // Each project's roster and work items are read on its own (readEach): one project's row that
+      // does not parse is that project's UnreadSubject, never the listing's.
+      return readEach(
+        await listProjectsAwaitingReplan(db),
+        (row) => ({ id: row.projectId, projectId: row.projectId }),
+        async (row) => ({
           projectId: row.projectId,
           projectName: row.projectName,
           changesAwaited: row.changesAwaited,
@@ -46,7 +49,7 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
             mergeCommit: item.mergeCommit,
             environmentStatement: item.environmentStatement,
           })),
-        })),
+        }),
       );
     },
     async writeRevision(write) {

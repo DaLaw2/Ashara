@@ -59,6 +59,74 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   deploymentCapCause: { kind: "not-per-project", reason: "a pure constructor" },
 };
 
+/**
+ * A listing in a repository or store: a function named as one (LISTING_NAME) in a file holding
+ * persistence (LISTING_FILE). Containment wraps each subject's run; the listing that yields the
+ * subjects must not throw for one project's row either, or that row stops the step for every project.
+ */
+type Listing =
+  /** Reads each row on its own (readEach): a row that does not read is its subject's UnreadSubject. */
+  | { readonly kind: "read-each" }
+  /** Contains each row in a fault path of its own, at `marker` (`why`). */
+  | { readonly kind: "own"; readonly marker: string; readonly why: string }
+  /**
+   * Copies each row's columns, and at most reads more rows per row (`why`): nothing in `body` (the
+   * listing itself unless named) parses, throws or converts a row, so no row can fail on its own.
+   */
+  | { readonly kind: "rows-only"; readonly why: string; readonly body?: string }
+  /** Not a listing of many projects' subjects that a cycle step contains (`why`). */
+  | { readonly kind: "not-a-step-listing"; readonly why: string };
+
+const LISTING_FILE = /\/(repositories|stores)\/|-store\.ts$|-repository\.ts$/;
+const LISTING_NAME = /(?:export async function|async) ((?:list|projectsAwaiting|due|open|readyFor)\w*)\(/g;
+/** What can throw for one row: a schema parse, a typed refusal, a parse or conversion of a stored value (parseProjectId of a uuid column names no project to blame, and is allowed). */
+const ROW_FALLIBLE = /\.parse\(|safeParse\(|throw new |\bparse(?!ProjectId\b)[A-Z]\w*\(|\browTo\w+\(/;
+
+const ROWS_ONLY_QUERIES = "each row's columns, with per-row queries only, whose failure is the database's and every project's alike";
+
+/** Every listing of a repository or store, keyed `<file>#<name>`. */
+const LISTINGS: Readonly<Record<string, Listing>> = {
+  "packages/db/src/repositories/client.ts#list": { kind: "not-a-step-listing", why: "the clients, for the HTTP API" },
+  "packages/db/src/repositories/config.ts#listModelConfigs": { kind: "not-a-step-listing", why: "the deployment's model configuration, no project's" },
+  "packages/db/src/repositories/config.ts#listProviderConfigs": { kind: "not-a-step-listing", why: "the deployment's provider configuration, no project's" },
+  "packages/db/src/repositories/event-store.ts#listRecent": { kind: "not-a-step-listing", why: "the HTTP API's recent events; no cycle step reads it" },
+  "packages/db/src/repositories/project.ts#listByClient": { kind: "not-a-step-listing", why: "one client's projects, for the HTTP API" },
+  "packages/db/src/repositories/project.ts#listActiveIds": { kind: "rows-only", why: "project ids only" },
+  "packages/db/src/repositories/project.ts#listWithWorkspace": { kind: "not-a-step-listing", why: "read once at startup, outside the cycle" },
+  "packages/db/src/repositories/roster.ts#listProjectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored; Organization parses it inside the step" },
+  "packages/db/src/repositories/secret.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
+  "packages/delivery/src/repositories/first-plan.ts#listProjectsAwaitingFirstPlan": { kind: "rows-only", why: "each project with its vision row as stored; planning parses it inside the step" },
+  "packages/delivery/src/repositories/plan-report.ts#listDuePlanReports": { kind: "read-each" },
+  "packages/delivery/src/repositories/project-halt.ts#listInfrastructureHalted": { kind: "rows-only", why: "project ids only" },
+  "packages/delivery/src/repositories/replan.ts#listProjectsAwaitingReplan": { kind: "read-each" },
+  "packages/delivery/src/repositories/replan.ts#listDuePlanRevisionReports": { kind: "read-each" },
+  "packages/delivery/src/repositories/work-item-adapter.ts#listByProject": { kind: "not-a-step-listing", why: "one project's work items" },
+  "packages/delivery/src/repositories/work-item-adapter.ts#listIdsByStatus": { kind: "not-a-step-listing", why: "read once at startup, outside the cycle" },
+  "packages/delivery/src/repositories/work-item-adapter.ts#listDependenciesByProject": { kind: "not-a-step-listing", why: "one project's dependencies" },
+  "packages/delivery/src/repositories/work-item.ts#listIdsByStatus": { kind: "not-a-step-listing", why: "read once at startup, outside the cycle" },
+  "packages/delivery/src/repositories/work-item.ts#listByProject": { kind: "not-a-step-listing", why: "one project's work items" },
+  "packages/delivery/src/repositories/work-item.ts#listDependenciesByProject": { kind: "not-a-step-listing", why: "one project's dependencies" },
+  "packages/delivery/src/stores/first-plan-store.ts#projectsAwaitingPlan": { kind: "read-each" },
+  "packages/delivery/src/stores/replan-store.ts#projectsAwaitingReplan": { kind: "read-each" },
+  "packages/engagement/src/repositories/block-report.ts#listDueBlockReports": { kind: "read-each" },
+  "packages/engagement/src/repositories/client-answer.ts#listOpenAnswers": { kind: "rows-only", why: ROWS_ONLY_QUERIES, body: "async function openAnswerRows(" },
+  "packages/engagement/src/repositories/client-change.ts#listUnconsumedChanges": { kind: "rows-only", why: "message and project ids only" },
+  "packages/engagement/src/repositories/client-message.ts#listByProject": { kind: "not-a-step-listing", why: "one project's messages, for the client channel" },
+  "packages/engagement/src/repositories/client-message.ts#listUnconsumedTenders": { kind: "rows-only", why: "message rows as stored" },
+  "packages/engagement/src/repositories/client-stop.ts#listUnconsumedStops": { kind: "rows-only", why: "message and project ids only" },
+  "packages/engagement/src/repositories/delivered-report.ts#listDueDeliveredReports": {
+    kind: "own",
+    marker: "catch (error)",
+    why: "a sweep whose records do not read is listed as its unread report, which counts toward the notice sent in its place",
+  },
+  "packages/engagement/src/repositories/stack-choice.ts#listDueStackChoices": { kind: "rows-only", why: ROWS_ONLY_QUERIES },
+  "packages/quality/src/repositories/acceptance.ts#listProjectsReadyForAcceptance": { kind: "rows-only", why: ROWS_ONLY_QUERIES },
+  "packages/security/src/secret-store.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
+  "packages/server/src/intake-store.ts#openTenders": { kind: "rows-only", why: "message rows as stored" },
+  "packages/server/src/roster-store.ts#projectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored" },
+  "packages/workplace/src/dev-session-repository.ts#listActive": { kind: "not-a-step-listing", why: "the HTTP API's live sessions" },
+};
+
 function read(file: string): string {
   return readFileSync(join(ROOT, file), "utf8");
 }
@@ -141,5 +209,47 @@ describe("the cycle's per-project steps", () => {
       }
     }
     expect(uncontained).toEqual([]);
+  });
+
+  test("every listing is classified, and none can throw for one project's row: each row is read on its own, or none can fail", () => {
+    const found = new Map<string, string>();
+    for (const pkg of readdirSync(join(ROOT, "packages")).filter((name) => name !== "integration")) {
+      for (const path of sourceFiles(join(ROOT, "packages", pkg, "src"))) {
+        const file = relative(ROOT, path);
+        if (!LISTING_FILE.test(file)) continue;
+        const text = readFileSync(path, "utf8");
+        for (const match of text.matchAll(LISTING_NAME)) found.set(`${file}#${match[1]}`, bodyFrom(text, match.index));
+      }
+    }
+    expect([...found.keys()].filter((key) => LISTINGS[key] === undefined), "listings with no decision on how a row is read").toEqual([]);
+    expect(Object.keys(LISTINGS).filter((key) => !found.has(key)), "classified listings no longer declared").toEqual([]);
+
+    const throwing: string[] = [];
+    for (const [key, listing] of Object.entries(LISTINGS)) {
+      const listed = found.get(key);
+      if (listed === undefined) continue;
+      if (listing.kind === "read-each" && !listed.includes("readEach(")) throwing.push(`${key}: does not read its rows with readEach`);
+      if (listing.kind === "own" && !listed.includes(listing.marker)) throwing.push(`${key}: no longer contains each row at ${listing.marker}`);
+      if (listing.kind === "rows-only") {
+        const file = key.slice(0, key.indexOf("#"));
+        const body = listing.body === undefined ? listed : bodyFrom(read(file), read(file).indexOf(listing.body));
+        const fallible = ROW_FALLIBLE.exec(body);
+        if (fallible !== null) throwing.push(`${key}: reads a row with ${fallible[0]}, which can throw for that row alone; read each row with readEach`);
+      }
+    }
+    expect(throwing).toEqual([]);
+  });
+
+  test("every failure counted toward a stop is read by modelCallFailureOf alone, never qualified by a second reading", () => {
+    const qualified: string[] = [];
+    for (const pkg of readdirSync(join(ROOT, "packages")).filter((name) => name !== "integration")) {
+      for (const path of sourceFiles(join(ROOT, "packages", pkg, "src"))) {
+        const text = readFileSync(path, "utf8");
+        for (const line of text.split("\n")) {
+          if (/\bmodelCallFailureOf\(/.test(line) && /&&|\|\|/.test(line)) qualified.push(`${relative(ROOT, path)}: ${line.trim()}`);
+        }
+      }
+    }
+    expect(qualified).toEqual([]);
   });
 });

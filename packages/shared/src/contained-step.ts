@@ -3,9 +3,12 @@ import type { ProjectId } from "./ids.js";
 
 // One subject's failure in a step of the contractor loop's cycle is that subject's: recorded on it,
 // tried again after a backoff, and logged at warn, while the step goes on with every other subject.
-// A step that let it throw would stop the cycle for every project, cycle after cycle. A subject that
+// A step that let it throw would stop the cycle for every project, cycle after cycle. That holds for
+// reading a subject as much as for acting on it: a listing reads each subject's rows on their own
+// (readEach), so a row that cannot be read is its subject's fault, never the listing's. A subject that
 // keeps failing halts its project as Ashara's own fault, so it reaches the client's report and the
-// owner's unblock instead of retrying unseen for good.
+// owner's unblock, and is parked: never tried again while its project is not at work, so a subject
+// of a project already halted, stopped or accepted ends on its record instead of retrying unseen.
 
 /** The steps of a cycle that work through their subjects one at a time, each subject one project's. */
 export type CycleStep =
@@ -25,7 +28,10 @@ export type CycleStep =
   | "parked-exits"
   | "infrastructure-resume";
 
-/** A subject with a fault on record: how many in a row, and whether its backoff has passed. */
+/**
+ * A subject with a fault on record: how many in a row, and whether it is tried again now (its
+ * backoff has passed and, when it is parked, its project is back at work).
+ */
 export interface StepFaultStanding {
   readonly faults: number;
   readonly due: boolean;
@@ -45,14 +51,19 @@ export interface StepFaultLedger {
   }): Promise<number>;
   /** The subject ran through: its faults are cleared. */
   clear(step: CycleStep, subjectId: string): Promise<void>;
+  /** The subject exhausted its faults: it is not due again while its project is not at work (an owner's unblock returns it). */
+  park(step: CycleStep, subjectId: string): Promise<void>;
 }
 
 /** The ledger, with the errors the cycle itself handles and no step may contain, and the halt of a project whose subject keeps failing. */
 export interface StepContainment extends StepFaultLedger {
   /** An error the cycle handles for every subject at once (a spend-cap refusal): it throws through. */
   escapes(error: unknown): boolean;
-  /** Halts the project as Ashara's own fault (Delivery's halt, O3 c); a project already halted keeps its first cause. */
-  halt(projectId: ProjectId, fault: StepFaultsExhausted): Promise<void>;
+  /**
+   * Halts the project as Ashara's own fault (Delivery's halt, O3 c). A project already halted keeps
+   * its first cause, and one stopped or accepted is not halted: either is "already-blocked".
+   */
+  halt(projectId: ProjectId, fault: StepFaultsExhausted): Promise<"blocked" | "already-blocked">;
 }
 
 /** Faults in a row after which a subject's project is halted: with the backoff below, about an hour of failing. */
@@ -87,47 +98,110 @@ function faultBackoffSeconds(faults: number): number {
   return Math.min(60 * 2 ** Math.max(0, faults - 1), 3600);
 }
 
+/** The subject of a step a listing names: its id in the step's ledger, and the project it is one of. */
+interface StepSubject {
+  readonly id: string;
+  readonly projectId: ProjectId;
+}
+
+/**
+ * A subject a listing named and could not read, with what reading its rows threw. containEach
+ * records it on the subject as it records a run that threw, so the listing still yields every other
+ * subject.
+ */
+export class UnreadSubject implements StepSubject {
+  constructor(
+    readonly id: string,
+    readonly projectId: ProjectId,
+    readonly error: unknown,
+  ) {}
+}
+
+/**
+ * Reads each row of a listing of many projects' subjects on its own: a row whose `read` throws becomes
+ * its subject's UnreadSubject, and every other row is still read; a row already unread is kept as it
+ * is. `subjectOf` names the subject as the step's containEach does, so its fault and the clearing of
+ * it land on one subject, from only what the listing's own query yields.
+ */
+export async function readEach<R, T>(
+  rows: ReadonlyArray<R | UnreadSubject>,
+  subjectOf: (row: R) => StepSubject,
+  read: (row: R) => Promise<T> | T,
+): Promise<Array<T | UnreadSubject>> {
+  const listed: Array<T | UnreadSubject> = [];
+  for (const row of rows) {
+    if (row instanceof UnreadSubject) {
+      listed.push(row);
+      continue;
+    }
+    try {
+      listed.push(await read(row));
+    } catch (err) {
+      const subject = subjectOf(row);
+      listed.push(new UnreadSubject(subject.id, subject.projectId, err));
+    }
+  }
+  return listed;
+}
+
+type SubjectRun<O> = { readonly ran: true; readonly outcome: O } | { readonly ran: false; readonly error: unknown };
+
+async function runSubject<T, O>(item: T | UnreadSubject, run: (item: T) => Promise<O>): Promise<SubjectRun<O>> {
+  if (item instanceof UnreadSubject) return { ran: false, error: item.error };
+  try {
+    return { ran: true, outcome: await run(item) };
+  } catch (err) {
+    return { ran: false, error: err };
+  }
+}
+
 /**
  * Runs `run` on each item in order, each contained to its subject: a subject waiting out the backoff
- * of an earlier fault is skipped; a run that throws anything but an escaping error is recorded on
- * its subject and logged at warn, its project is halted once its faults in a row reach
- * MAX_SUBJECT_FAULTS, and the next item runs; a run that completes clears the subject's faults. Only
- * an escaping error, or a failure of the ledger or of the halt itself, throws through.
+ * of an earlier fault, or parked while its project is not at work, is skipped; a run that throws
+ * anything but an escaping error, and a subject its listing could not read (UnreadSubject), is
+ * recorded on the subject and logged at warn, and the next item runs. Once a subject's faults in a
+ * row reach MAX_SUBJECT_FAULTS its project is halted and the subject parked, logged at error. A run
+ * that completes clears the subject's faults. Only an escaping error, or a failure of the ledger or
+ * of the halt itself, throws through.
  */
 export async function containEach<T, O>(
   containment: StepContainment,
   step: CycleStep,
-  items: readonly T[],
-  subjectOf: (item: T) => { readonly id: string; readonly projectId: ProjectId },
+  items: ReadonlyArray<T | UnreadSubject>,
+  subjectOf: (item: T) => StepSubject,
   run: (item: T) => Promise<O>,
 ): Promise<Array<O | StepFaulted>> {
   if (items.length === 0) return [];
   const standing = await containment.faultsOf(step);
   const outcomes: Array<O | StepFaulted> = [];
   for (const item of items) {
-    const subject = subjectOf(item);
+    const subject = item instanceof UnreadSubject ? item : subjectOf(item);
     const prior = standing.get(subject.id);
     if (prior !== undefined && !prior.due) continue;
-    let outcome: O;
-    try {
-      outcome = await run(item);
-    } catch (err) {
-      if (containment.escapes(err)) throw err;
-      const error = describeErrorChain(err);
-      const retryAfterSeconds = faultBackoffSeconds((prior?.faults ?? 0) + 1);
-      const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
-      const exhausted = faults >= MAX_SUBJECT_FAULTS;
-      if (exhausted) await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error));
-      console.warn(
-        `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row, tried again in ${retryAfterSeconds}s` +
-          `${exhausted ? "; its project is halted on Ashara's own fault until the owner unblocks it" : ""}; ` +
-          `the step goes on with its other subjects: ${error}`,
-      );
-      outcomes.push({ kind: "step-faulted", step, subjectId: subject.id, projectId: subject.projectId, faults, retryAfterSeconds, error });
+    const result = await runSubject(item, run);
+    if (result.ran) {
+      if (prior !== undefined) await containment.clear(step, subject.id);
+      outcomes.push(result.outcome);
       continue;
     }
-    if (prior !== undefined) await containment.clear(step, subject.id);
-    outcomes.push(outcome);
+    if (containment.escapes(result.error)) throw result.error;
+    const error = describeErrorChain(result.error);
+    const retryAfterSeconds = faultBackoffSeconds((prior?.faults ?? 0) + 1);
+    const faults = await containment.record({ step, subjectId: subject.id, projectId: subject.projectId, error, retryAfterSeconds });
+    const where = `[${step}] ${subject.id} (project ${subject.projectId}): fault ${faults} in a row`;
+    if (faults >= MAX_SUBJECT_FAULTS) {
+      const halted = await containment.halt(subject.projectId, new StepFaultsExhausted(step, subject.id, faults, error));
+      await containment.park(step, subject.id);
+      const project =
+        halted === "blocked" ? "its project is now halted on Ashara's own fault" : "its project was already halted, stopped or accepted, and keeps its first cause";
+      console.error(
+        `${where}; ${project}; the subject is parked in step_faults and not tried again until its project is back at work ` +
+          `(npx tsx scripts/project.ts unblock ${subject.projectId} --reason <what was repaired>); the step goes on with its other subjects: ${error}`,
+      );
+    } else {
+      console.warn(`${where}, tried again in ${retryAfterSeconds}s; the step goes on with its other subjects: ${error}`);
+    }
+    outcomes.push({ kind: "step-faulted", step, subjectId: subject.id, projectId: subject.projectId, faults, retryAfterSeconds, error });
   }
   return outcomes;
 }
@@ -137,36 +211,66 @@ export async function containEach<T, O>(
  * @testseam unit tests of the cycle's steps contain their subjects with it; the composition root supplies db's ledger
  */
 export function memoryStepContainment(escapes: (error: unknown) => boolean): StepContainment & {
-  readonly recorded: ReadonlyMap<string, { readonly faults: number; readonly error: string; readonly retryAt: number }>;
+  readonly recorded: ReadonlyMap<string, { readonly faults: number; readonly error: string; readonly retryAt: number; readonly parked: boolean }>;
   readonly halted: ReadonlyArray<{ readonly projectId: ProjectId; readonly fault: StepFaultsExhausted }>;
+  /** The projects not at work: a halt of one is "already-blocked", and a parked subject of one is not due. */
+  readonly notAtWork: Set<ProjectId>;
 } {
-  const recorded = new Map<string, { faults: number; error: string; retryAt: number }>();
+  const recorded = new Map<string, { faults: number; error: string; retryAt: number; parked: boolean; projectId: ProjectId }>();
   const halted: Array<{ projectId: ProjectId; fault: StepFaultsExhausted }> = [];
+  const notAtWork = new Set<ProjectId>();
   const key = (step: CycleStep, subjectId: string): string => `${step}/${subjectId}`;
   return {
     recorded,
     halted,
+    notAtWork,
     escapes,
     halt: async (projectId, fault) => {
+      if (notAtWork.has(projectId)) return "already-blocked";
       halted.push({ projectId, fault });
+      notAtWork.add(projectId);
+      return "blocked";
     },
     faultsOf: async (step) => {
       const prefix = `${step}/`;
       const standing = new Map<string, StepFaultStanding>();
       for (const [at, fault] of recorded) {
-        if (at.startsWith(prefix)) standing.set(at.slice(prefix.length), { faults: fault.faults, due: fault.retryAt <= Date.now() });
+        const due = fault.retryAt <= Date.now() && !(fault.parked && notAtWork.has(fault.projectId));
+        if (at.startsWith(prefix)) standing.set(at.slice(prefix.length), { faults: fault.faults, due });
       }
       return standing;
     },
     record: async (fault) => {
-      const faults = (recorded.get(key(fault.step, fault.subjectId))?.faults ?? 0) + 1;
-      recorded.set(key(fault.step, fault.subjectId), { faults, error: fault.error, retryAt: Date.now() + fault.retryAfterSeconds * 1000 });
-      return faults;
+      const prior = recorded.get(key(fault.step, fault.subjectId));
+      recorded.set(key(fault.step, fault.subjectId), {
+        faults: (prior?.faults ?? 0) + 1,
+        error: fault.error,
+        retryAt: Date.now() + fault.retryAfterSeconds * 1000,
+        parked: prior?.parked ?? false,
+        projectId: fault.projectId,
+      });
+      return (prior?.faults ?? 0) + 1;
     },
     clear: async (step, subjectId) => {
       recorded.delete(key(step, subjectId));
     },
+    park: async (step, subjectId) => {
+      const fault = recorded.get(key(step, subjectId));
+      if (fault === undefined) throw new UnrecordedSubjectParked(step, subjectId);
+      fault.parked = true;
+    },
   };
+}
+
+/** A subject was parked with no fault on record to park. */
+class UnrecordedSubjectParked extends Error {
+  constructor(
+    readonly step: CycleStep,
+    readonly subjectId: string,
+  ) {
+    super(`step ${step} parked ${subjectId}, which has no fault on record`);
+    this.name = "UnrecordedSubjectParked";
+  }
 }
 
 /** A containment was asked to keep a fault where nothing may be contained. */
@@ -194,6 +298,9 @@ export function uncontainedSteps(): StepContainment {
     },
     halt: async (_projectId, fault) => {
       throw new UncontainedStepFault(fault.step, fault.subjectId);
+    },
+    park: async (step, subjectId) => {
+      throw new UncontainedStepFault(step, subjectId);
     },
   };
 }

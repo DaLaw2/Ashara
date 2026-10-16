@@ -6,6 +6,7 @@
  */
 
 export type { ContextualLlm } from "@ashara/finance";
+/** @testseam a planning test refuses a call with it, to show a refusal is never counted against the plan; the spend cap throws it */
 export { BudgetExceeded } from "@ashara/finance";
 // Whose failure a failed model call was, the model's, its provider's or Ashara's: an exhausted plan
 // revision's halt is recorded by it (replan.ts).

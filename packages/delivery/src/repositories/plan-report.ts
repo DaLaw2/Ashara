@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { DbHandle } from "@ashara/db";
 import { clientMessages, planRevisions, projects, workItems, noOpenStop, pendingChange, projectAtWork, projectHalted } from "@ashara/db";
 import { parseWorkItemJsonb, WorkItemRowCorrupt } from "../work-item-language/work-item-row.js";
@@ -102,11 +102,10 @@ const unreported = (subject: PlanReportSubject) =>
  * report and nothing more. A work item
  * whose jsonb does not parse is that one project's bad record, so it is
  * returned as that project's row instead of failing the listing for every
- * project (story s-loop-never-stop-m1).
+ * project (story s-loop-never-stop-m1); any other planned project whose rows do
+ * not read is its UnreadSubject (readEach).
  */
-export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow[]> {
-  const due: DuePlanReportRow[] = [];
-
+export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanReportRow | UnreadSubject>> {
   const planned = await db
     .select({ id: projects.id, droppedDependencies: projects.planDroppedDependencies })
     .from(projects)
@@ -120,7 +119,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  for (const row of planned) {
+  const firstPlans = await readEach(planned, (row) => ({ id: `first-plan:${row.id}`, projectId: parseProjectId(row.id, "projects.id") }), async (row): Promise<DuePlanReportRow> => {
     const items = await db
       .select({
         id: workItems.id,
@@ -146,8 +145,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       dropped = droppedOrderingHints(projectId, row.droppedDependencies);
     } catch (err) {
       if (!(err instanceof WorkItemRowCorrupt) && !(err instanceof PlanDroppedDependenciesCorrupt)) throw err;
-      due.push({ subject: "first-plan-unreadable", projectId, cause: projectBlockCause(err) });
-      continue;
+      return { subject: "first-plan-unreadable", projectId, cause: projectBlockCause(err) };
     }
     const tasks = standing.filter((i) => i.level === "Task");
     const origins = tasks.map((i) => i.origin);
@@ -163,7 +161,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
         .where(and(eq(planRevisions.projectId, row.id), isNull(planRevisions.reportId)))
         .orderBy(asc(planRevisions.revision))
     ).map((revision) => ({ ...revision, answersTaken: parseAnswersTaken(revision.revisionId, revision.answersTaken) }));
-    due.push({
+    return {
       subject: "first-plan",
       projectId,
       epicTitles: standing.filter((i) => i.level === "Epic").map((i) => i.title),
@@ -178,8 +176,8 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
         started: tasks.filter((i) => i.dispatchCount > 0).length,
       },
       droppedOrderingHints: dropped,
-    });
-  }
+    };
+  });
 
   const stopped = await db
     .select({ id: projects.id, attempts: projects.planAttempts })
@@ -188,10 +186,8 @@ export async function listDuePlanReports(db: DbHandle): Promise<DuePlanReportRow
       and(projectHalted(projects.id), isNotNull(projects.planStoppedAt), unreported("planning-stopped"), noOpenStop(projects.id)),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  for (const row of stopped) {
-    due.push({ subject: "planning-stopped", projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts });
-  }
-  return due;
+  const stops = stopped.map((row): DuePlanReportRow => ({ subject: "planning-stopped", projectId: parseProjectId(row.id, "projects.id"), attempts: row.attempts }));
+  return [...firstPlans, ...stops];
 }
 
 /** A revision the first-plan report was to describe is gone or already reported: nothing of the report is recorded. */

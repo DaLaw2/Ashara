@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
 
@@ -75,13 +75,15 @@ type ReportableDue = Exclude<DuePlanReport, { readonly subject: "first-plan-unre
 
 /** Engagement's persistence port for planning reports. */
 export interface PlanReportStore {
-  dueReports(): Promise<readonly DuePlanReport[]>;
+  /** Each due report read on its own: one whose rows do not read is its UnreadSubject. */
+  dueReports(): Promise<ReadonlyArray<DuePlanReport | UnreadSubject>>;
   /**
    * Posts the report unless one on this subject already exists for the project, recording each of
    * `revisionIds` as reported by it in the same write.
    */
   postReport(projectId: ProjectId, subject: PlanReportSubject, body: string, revisionIds: readonly string[]): Promise<"posted" | "already-posted">;
-  dueRevisionReports(): Promise<readonly DuePlanRevisionReport[]>;
+  /** Each due revision report read on its own: one whose row does not read is its UnreadSubject. */
+  dueRevisionReports(): Promise<ReadonlyArray<DuePlanRevisionReport | UnreadSubject>>;
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
   postRevisionReport(revisionId: string, body: string): Promise<"posted" | "already-posted">;
   /**

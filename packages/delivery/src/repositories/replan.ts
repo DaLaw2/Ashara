@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } from "drizzle-orm";
 import { z } from "zod";
-import { parseProjectId, type DomainEvent, type ProjectId } from "@ashara/shared";
+import { parseProjectId, readEach, type DomainEvent, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
 import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
@@ -50,9 +50,10 @@ function revisionsSince(kind: "client_change" | "repair", blockKind: "replan_bou
  * awaits. One statement for the projects, so a project and the vision it is listed with are read
  * from the same snapshot. `revisionsSinceReview` counts the revisions for client changes written
  * after the operator last ended a replan_bound block; `repairsSinceReview` the plan repairs after
- * the last plan_repair block; each every one when none was.
+ * the last plan_repair block; each every one when none was. Each project is read on its own
+ * (readEach): one whose rows do not read is its UnreadSubject, and every other project is listed.
  */
-export async function listProjectsAwaitingReplan(db: DbHandle): Promise<ProjectAwaitingReplanRow[]> {
+export async function listProjectsAwaitingReplan(db: DbHandle): Promise<Array<ProjectAwaitingReplanRow | UnreadSubject>> {
   const rows = await db
     .select({
       id: projects.id,
@@ -84,30 +85,32 @@ export async function listProjectsAwaitingReplan(db: DbHandle): Promise<ProjectA
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
 
-  const listed: ProjectAwaitingReplanRow[] = [];
-  for (const row of rows) {
-    const counts = CountsSchema.parse({
-      revisionsSinceReview: row.revisionsSinceReview,
-      repairsSinceReview: row.repairsSinceReview,
-      nextRevision: row.nextRevision,
-    });
-    const awaited = await db
-      .select({ id: planRepairs.workItemId })
-      .from(planRepairs)
-      .where(and(eq(planRepairs.projectId, row.id), isNull(planRepairs.planRevisionId)))
-      .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
-    listed.push({
-      projectId: parseProjectId(row.id, "projects.id"),
-      projectName: row.name,
-      changesAwaited: await awaitedAnswers(db, row.id),
-      repairsAwaited: awaited.map((repair) => repair.id),
-      replanAttempts: row.replanAttempts,
-      replanLastError: row.replanLastError,
-      ...counts,
-      vision: row.vision,
-    });
-  }
-  return listed;
+  return readEach(
+    rows,
+    (row) => ({ id: row.id, projectId: parseProjectId(row.id, "projects.id") }),
+    async (row): Promise<ProjectAwaitingReplanRow> => {
+      const counts = CountsSchema.parse({
+        revisionsSinceReview: row.revisionsSinceReview,
+        repairsSinceReview: row.repairsSinceReview,
+        nextRevision: row.nextRevision,
+      });
+      const awaited = await db
+        .select({ id: planRepairs.workItemId })
+        .from(planRepairs)
+        .where(and(eq(planRepairs.projectId, row.id), isNull(planRepairs.planRevisionId)))
+        .orderBy(asc(planRepairs.createdAt), asc(planRepairs.workItemId));
+      return {
+        projectId: parseProjectId(row.id, "projects.id"),
+        projectName: row.name,
+        changesAwaited: await awaitedAnswers(db, row.id),
+        repairsAwaited: awaited.map((repair) => repair.id),
+        replanAttempts: row.replanAttempts,
+        replanLastError: row.replanLastError,
+        ...counts,
+        vision: row.vision,
+      };
+    },
+  );
 }
 
 /** The answers whose revision the project awaits, in the order the client sent them. */
@@ -370,9 +373,9 @@ interface DuePlanRevisionRow {
  * nor while a stop awaits the Liaison; a halted project's revision is reported once it
  * resumes. A revision written before the project's first plan was reported is not listed here:
  * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
- * was not told about.
+ * was not told about. A revision whose row does not read is its UnreadSubject (readEach).
  */
-export async function listDuePlanRevisionReports(db: DbHandle): Promise<DuePlanRevisionRow[]> {
+export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<DuePlanRevisionRow | UnreadSubject>> {
   const rows = await db
     .select({
       id: planRevisions.id,
@@ -392,13 +395,17 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<DuePlanR
       ),
     )
     .orderBy(asc(planRevisions.createdAt), asc(planRevisions.id));
-  return rows.map((row) => ({
-    revisionId: row.id,
-    projectId: parseProjectId(row.projectId, "plan_revisions.project_id"),
-    revision: row.revision,
-    summary: row.summary,
-    answersTaken: parseAnswersTaken(row.id, row.answersTaken),
-  }));
+  return readEach(
+    rows,
+    (row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "plan_revisions.project_id") }),
+    (row) => ({
+      revisionId: row.id,
+      projectId: parseProjectId(row.projectId, "plan_revisions.project_id"),
+      revision: row.revision,
+      summary: row.summary,
+      answersTaken: parseAnswersTaken(row.id, row.answersTaken),
+    }),
+  );
 }
 
 /** A report was asked to be posted for a plan revision that does not exist. */

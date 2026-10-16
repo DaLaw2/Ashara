@@ -13,6 +13,7 @@ export type { ModelCallFailure } from "./model-call-failure.js";
 export { measureCost } from "./cost.js";
 /** @testseam the integration spend-cap.test.ts checks the tiered worst-case estimate; SpendCap.admit is its production caller */
 export { worstCaseCostUsd } from "./spend-cap.js";
+/** @testseam a caller's test refuses a call with it, and the integration spend-cap.test.ts asserts it; SpendCap.admit throws it */
 export { BudgetExceeded } from "./errors.js";
 /** @testseam the integration llm-call-ledger.test.ts asserts the refusal class; LlmCallLedger throws it */
 export { UnpricedModel } from "./errors.js";

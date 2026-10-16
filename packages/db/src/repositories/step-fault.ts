@@ -2,7 +2,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { StepFaultLedger, StepFaultStanding } from "@ashara/shared";
 import type { DbHandle } from "../connection.js";
-import { stepFaults } from "../schema/index.js";
+import { projects, stepFaults } from "../schema/index.js";
+import { projectAtWork } from "./project.js";
 
 const StandingRowSchema = z.object({ subjectId: z.string().min(1), faults: z.number().int().positive(), due: z.boolean() });
 
@@ -17,13 +18,29 @@ class StepFaultRowCorrupt extends Error {
   }
 }
 
-/** The cycle steps' faults per subject (migration 063), kept in step_faults so a backoff outlives a restart. */
+/** A subject was to be parked with no step_faults row on record for it: nothing was parked. */
+class StepFaultNotOnRecord extends Error {
+  constructor(
+    readonly step: string,
+    readonly subjectId: string,
+  ) {
+    super(`step_faults of step ${step}: parking ${subjectId} found no fault on record to park`);
+    this.name = "StepFaultNotOnRecord";
+  }
+}
+
+/**
+ * The cycle steps' faults per subject (migration 063), kept in step_faults so a backoff, and the
+ * parking of a subject that exhausted its faults, outlive a restart.
+ */
 export function stepFaultLedger(db: DbHandle): StepFaultLedger {
   return {
     async faultsOf(step) {
+      const due = sql<unknown>`(${stepFaults.retryAt} <= now() AND (${stepFaults.parkedAt} IS NULL OR ${projectAtWork()}))`;
       const rows = await db
-        .select({ subjectId: stepFaults.subjectId, faults: stepFaults.faults, due: sql<unknown>`${stepFaults.retryAt} <= now()` })
+        .select({ subjectId: stepFaults.subjectId, faults: stepFaults.faults, due })
         .from(stepFaults)
+        .innerJoin(projects, eq(projects.id, stepFaults.projectId))
         .where(eq(stepFaults.step, step));
       const standing = new Map<string, StepFaultStanding>();
       for (const row of rows) {
@@ -48,6 +65,14 @@ export function stepFaultLedger(db: DbHandle): StepFaultLedger {
     },
     async clear(step, subjectId) {
       await db.delete(stepFaults).where(and(eq(stepFaults.step, step), eq(stepFaults.subjectId, subjectId)));
+    },
+    async park(step, subjectId) {
+      const parked = await db
+        .update(stepFaults)
+        .set({ parkedAt: sql`now()`, updatedAt: sql`now()` })
+        .where(and(eq(stepFaults.step, step), eq(stepFaults.subjectId, subjectId)))
+        .returning({ subjectId: stepFaults.subjectId });
+      if (parked.length === 0) throw new StepFaultNotOnRecord(step, subjectId);
     },
   };
 }

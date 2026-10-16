@@ -148,6 +148,31 @@ describe("a blocked project is told once; an operator's unblock is recorded and 
     ]);
   });
 
+  test("one episode whose record does not read is that report's fault alone: every other project is still told", async () => {
+    const unreadable = await newProject();
+    const healthy = await newProject();
+    const projects = new ProjectHaltRepository(db);
+    await projects.block(unreadable, budgetCap);
+    await projects.block(healthy, budgetCap);
+    await db.execute(sql`UPDATE project_blocks SET spend = '{"capUsd": "five"}'::jsonb WHERE project_id = ${unreadable}`);
+
+    try {
+      const store = createBlockReportStore(db);
+      const ours: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((r) => r.projectId === unreadable || r.projectId === healthy) };
+      const outcomes = await new BlockReports(ours, memoryStepContainment(() => false)).runPending();
+
+      expect(outcomes).toEqual([
+        expect.objectContaining({ kind: "step-faulted", step: "block-report", projectId: unreadable, error: expect.stringContaining("BlockSpendUnreadable") }),
+        { kind: "posted", projectId: healthy, subject: "project-blocked" },
+      ]);
+      expect(await messagesOf(healthy)).toHaveLength(1);
+      expect(await messagesOf(unreadable)).toEqual([]);
+    } finally {
+      // Repaired, so the later tests' listings, which let every fault through, read it.
+      await db.execute(sql`UPDATE project_blocks SET spend = NULL WHERE project_id = ${unreadable}`);
+    }
+  });
+
   test("unblocking a project that is not blocked throws and writes nothing", async () => {
     const projectId = await newProject();
     await expect(new ProjectHaltRepository(db).unblock(projectId, "operator-a", "nothing")).rejects.toThrow(/not halted/);

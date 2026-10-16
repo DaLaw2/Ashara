@@ -17,6 +17,7 @@ export function stepContainment(db: DbHandle, escapes: (error: unknown) => boole
     halt: async (projectId, fault) => {
       const result = await halts.block(projectId, projectBlockCause(fault));
       console.warn(`[step-faults] project ${projectId} ${result}: ${fault.message}`);
+      return result;
     },
   };
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { memoryStepContainment, parseProjectId } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
-import { SchemaValidationError } from "./acl/finance-acl.js";
+import { BudgetExceeded, SchemaValidationError } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { planningVisionOf } from "./acl/engagement-acl.js";
@@ -240,5 +240,35 @@ describe("the vision items a plan traces to (ADR-074 addendum 2 d71 d)", () => {
 
     expect(outcomes).toEqual([expect.objectContaining({ kind: "step-faulted", step: "first-plan", subjectId: projectId, error: expect.stringContaining("Cannot read properties") })]);
     expect(containment.recorded.get(`first-plan/${projectId}`)).toMatchObject({ faults: 1 });
+  });
+
+  test("the project's own spend cap refusing the planning call throws through to the core loop, and counts no attempt toward the stop", async () => {
+    const projectId = parseProjectId("00000000-0000-4000-8000-000000000028", "test");
+    const refusal = new BudgetExceeded({
+      scope: { kind: "project", projectId },
+      provider: "stub",
+      model: "stub-model",
+      capUsd: 1,
+      spentUsd: 1,
+      inFlightUsd: 0,
+      estimatedCostUsd: 0.1,
+    });
+    const store: FirstPlanStore = {
+      ...storeWith([awaiting(projectId, null, 0)], []),
+      recordFailedAttempt: async () => {
+        throw new Error("recordFailedAttempt must not be reached: a refusal is Ashara's, never the plan's");
+      },
+    };
+    const refusing: ContextualLlm = {
+      forCall: () => ({
+        generateStructured: async () => {
+          throw refusal;
+        },
+      }),
+    };
+    const containment = memoryStepContainment((error) => error instanceof BudgetExceeded);
+
+    await expect(new FirstPlanner({ containment, llm: refusing, store }).runPending()).rejects.toBe(refusal);
+    expect(containment.recorded.size).toBe(0);
   });
 });

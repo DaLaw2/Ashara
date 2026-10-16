@@ -1,12 +1,12 @@
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { LadderAttemptEvent } from "./acl/finance-acl.js";
 import type { WorkItemLevel } from "./work-item-language/work-item-status.js";
 import type { WorkKind } from "./acl/organization-acl.js";
 import { projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { VisionUnreadable, planningVisionOf } from "./acl/engagement-acl.js";
-import { BudgetExceeded, modelCallFailureOf } from "./acl/finance-acl.js";
+import { modelCallFailureOf } from "./acl/finance-acl.js";
 import type { ContextualLlm } from "./acl/finance-acl.js";
 import { RosterUnreadable, WorkKindOwnerUnresolved, ownerOf, parseStoredRoster } from "./acl/organization-acl.js";
 import type { PlanningVision, StoredVision } from "./acl/engagement-acl.js";
@@ -65,7 +65,8 @@ type FirstPlanCommit =
 
 /** Delivery's persistence port for the first plan. Each method is one transaction. */
 export interface FirstPlanStore {
-  projectsAwaitingPlan(): Promise<readonly ProjectAwaitingPlan[]>;
+  /** Every project awaiting its first plan, each read on its own: one whose rows do not read is its UnreadSubject. */
+  projectsAwaitingPlan(): Promise<ReadonlyArray<ProjectAwaitingPlan | UnreadSubject>>;
   /**
    * Writes the whole plan and stamps the project planned, or nothing when the
    * project gained work items or a planning outcome since it was read.
@@ -257,11 +258,13 @@ export class FirstPlanner implements FirstPlanning {
       write = toWrite(projectId, await this.decompose(project, vision), owners);
       commit = await this.deps.store.writeFirstPlan(write);
     } catch (err) {
-      // Only the model's or its provider's failure is a failed plan attempt. Ashara's own (a store
-      // write that failed, a request refused or built wrong, a fault nothing names) never counts
-      // toward the stop: it throws, contained to this project (containEach), or blocks it when it
-      // is the project's record (runPending).
-      if (modelCallFailureOf(err) === "ashara" && !carriesSpendRefusal(err)) throw err;
+      // Only the model's or its provider's failure is a failed plan attempt (modelCallFailureOf, as
+      // every counted step reads it). Ashara's own (a spend cap's refusal, a store write that failed,
+      // a request built wrong, a fault nothing names) never counts toward the stop: a refusal escapes
+      // to the core loop's step, which halts the project it names (Finance refuses, Delivery halts:
+      // O3 c); any other is contained to this project (containEach), or blocks it when it is the
+      // project's record (runPending).
+      if (modelCallFailureOf(err) === "ashara") throw err;
       return this.fail(project, err);
     }
     if (commit.kind === "already-planned") return { kind: "already-planned", projectId };
@@ -298,21 +301,10 @@ export class FirstPlanner implements FirstPlanning {
     console.warn(
       `[first-plan] project ${projectId} (vision v${project.vision.version}): attempt ${attempt}/${MAX_PLAN_ATTEMPTS} failed: ${error}`,
     );
-    // A refusal of the project's own spend cap is counted as the attempt it ended, then thrown on:
-    // the core loop's step halts the project it names (Finance refuses, Delivery halts: O3 c).
-    if (carriesSpendRefusal(err)) throw err;
     if (attempt < MAX_PLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
 
     await this.deps.store.stopPlanning(projectId);
     console.warn(`[first-plan] project ${projectId}: planning stopped after ${attempt} attempts; project blocked`);
     return { kind: "stopped", projectId, attempts: attempt };
   }
-}
-
-/** Whether `err` is, or carries as a cause, a refusal of the project's own spend cap. */
-function carriesSpendRefusal(err: unknown): boolean {
-  for (let current: unknown = err; current instanceof Error; current = current.cause) {
-    if (current instanceof BudgetExceeded && current.scope.kind === "project") return true;
-  }
-  return false;
 }

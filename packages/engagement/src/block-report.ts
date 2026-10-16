@@ -1,7 +1,7 @@
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import type { SpendAtCap } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
-import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
+import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (story s-loop-never-stop-m1, migrations 040, 048; story
@@ -104,7 +104,8 @@ type DueBlockReport =
 
 /** Engagement's persistence port for block reports. */
 export interface BlockReportStore {
-  dueReports(): Promise<readonly DueBlockReport[]>;
+  /** Every report due, each read on its own: one whose record does not read as a report is its UnreadSubject. */
+  dueReports(): Promise<ReadonlyArray<DueBlockReport | UnreadSubject>>;
   /** Posts the report on a project's block episode, `on` the block or its resumption, unless one exists. */
   postProjectReport(episodeId: string, on: "blocked" | "resumed", body: string): Promise<"posted" | "already-posted">;
 }
@@ -382,7 +383,10 @@ export class BlockReports implements LiaisonBlockReports {
     private readonly containment: StepContainment,
   ) {}
 
-  /** A report that cannot be posted is that report's, contained to it (containEach); only listing them throws through. */
+  /**
+   * A report that cannot be read or posted is that report's, contained to it (containEach); only a
+   * failure of the listing as a whole throws through.
+   */
   async runPending(): Promise<ReadonlyArray<BlockReportOutcome | StepFaulted>> {
     const due = await this.store.dueReports();
     return containEach(

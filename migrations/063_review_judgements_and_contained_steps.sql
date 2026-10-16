@@ -13,7 +13,9 @@
 -- on Ashara's side is recorded here with how many faults in a row, the last error, and when it is
 -- tried again, instead of failing the loop's cycle for every project. A subject whose retry_at is
 -- in the future is skipped by its step; one that runs through has its row deleted. These faults
--- never count against the client's input or the work.
+-- never count against the client's input or the work. A subject that exhausted its faults halted
+-- its project and is parked (parked_at): skipped while its project is not at work, so a subject of
+-- a project already halted, stopped or accepted stops retrying, and an owner's unblock returns it.
 --
 -- acceptance_sweeps.report_record_failures: the failed attempts at a delivered report whose
 -- records are on file but do not read as a report; only these count toward the acceptance notice
@@ -56,6 +58,7 @@ CREATE TABLE step_faults (
   faults INTEGER NOT NULL CHECK (faults > 0),
   last_error TEXT NOT NULL,
   retry_at TIMESTAMPTZ NOT NULL,
+  parked_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (step, subject_id)
 );
