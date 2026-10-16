@@ -11,14 +11,14 @@ import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, EventStoreRepository, LlmCallRepository } from "@ashara/db";
 import { FailedApproachRepository } from "@ashara/knowledge";
 import { DispatchService, ContinuousRunner, CoreLoop, DEFAULT_CONFIG, concurrentTaskLanes, FailureRouter, adaptWorkItemRepo, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
-import { BlockReports, ClientStops, ClientMessageRepository } from "@ashara/engagement";
-import type { BlockReportStore, ClientStopStore } from "@ashara/engagement";
+import { BlockReports, ClientStops, ClientMessageRepository, DeliveredReports } from "@ashara/engagement";
+import type { BlockReportStore, ClientStopStore, DeliveredReportStore } from "@ashara/engagement";
 import { PodmanSubstrate } from "@ashara/execution-infra";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
 import type { CoreLoopDeps } from "@ashara/delivery";
-import { createWorkItemId, memoryStepContainment, systemClock, UnreadSubject } from "@ashara/shared";
+import { createWorkItemId, memoryStepContainment, parseProjectId, systemClock, UnreadSubject } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
@@ -335,6 +335,80 @@ describe("the deployment cap halts two projects", () => {
       const halted = await db.execute(sql`SELECT ${projectState} AS status, blocked_error_class AS "errorClass" FROM projects WHERE id = ${id}`);
       expect(halted.rows).toEqual([{ status: "blocked", errorClass: SPEND_CAP_ERROR_CLASS.deployment }]);
     }
+  });
+});
+
+type DueDeliveredReport = Extract<Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number], { readonly kind: "due" }>;
+
+// An accepted project's delivered report whose post faulted in the cycle that stops at the cap: no
+// full cycle runs again in this process, so the halted cycles retry it once its backoff passed.
+describe("the deployment cap stops the cycle an accepted project's delivered report faulted in", () => {
+  test("the project still gets exactly one delivered report, on a halted cycle once its backoff passed", async () => {
+    const projectId = parseProjectId(randomUUID(), "test project");
+    const due: DueDeliveredReport = {
+      kind: "due",
+      failures: 0,
+      interfaceReadFailures: 0,
+      recordFailures: 0,
+      sweepId: randomUUID(),
+      projectId,
+      mainCommit: "c3".repeat(20),
+      targetProjectPath: join(root, "unused"),
+      goals: [{ title: "Store keys", close: { kind: "merged", commit: "a1".repeat(20) } }],
+      checked: ["Store keys"],
+      unchecked: [],
+      givenUp: [],
+      executed: { kind: "unrecorded" },
+      vision: { kind: "unrecorded" },
+    };
+    const posted: string[] = [];
+    let postFaults = 1;
+    let failures = 0;
+    let retryAt = 0;
+    // The sweep's report columns, held here: the listing honours the retry time the failure set, as acceptance_sweeps.report_retry_at does.
+    const store: DeliveredReportStore = {
+      dueReports: async () => (posted.length > 0 || Date.now() < retryAt ? [] : [{ ...due, failures }]),
+      postReport: async (_sweepId, body) => {
+        if (postFaults > 0) {
+          postFaults -= 1;
+          throw new Error("client_messages insert failed");
+        }
+        posted.push(body);
+        return "posted";
+      },
+      recordReportFailure: async (_sweepId, failure) => {
+        if (failure.retryAfterSeconds === null) return;
+        failures += 1;
+        retryAt = Date.now() + failure.retryAfterSeconds * 1000;
+      },
+    };
+    const capReason = "budget_cap: the spend cap of the deployment (every project) is $1.000000";
+    const loop = new CoreLoop(
+      loopDeps({
+        deliveredReports: new DeliveredReports(store, { file: "PUBLIC_INTERFACE.md", at: async () => ({ kind: "absent" }) }),
+        spendCap: { deploymentStop: async () => ({ reason: capReason, spend: { capUsd: 1, spentUsd: 1, inFlightUsd: 0, nextCallUsd: null } }), refusalOf: () => null },
+      }),
+    );
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const cycle = await loop.runCycle();
+      expect(cycle.stop?.reason).toBe(capReason);
+      expect(failures).toBe(1);
+      expect(posted).toHaveLength(0);
+
+      // A halted cycle inside the backoff leaves the faulted report for later; one past it posts it, once.
+      await loop.runHaltedCycle();
+      expect(posted).toHaveLength(0);
+      vi.setSystemTime(Date.now() + 61_000);
+      await loop.runHaltedCycle();
+      await loop.runHaltedCycle();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain("Store keys");
   });
 });
 

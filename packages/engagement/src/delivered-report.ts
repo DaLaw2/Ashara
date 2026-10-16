@@ -1,4 +1,4 @@
-import { describeErrorChain, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
+import { describeErrorChain, faultBackoffSeconds, keepEnds, renderElided, uncutText, wholeText } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import { checkDecides } from "./vision-language/vision-source.js";
@@ -208,11 +208,6 @@ function unreadNotice(due: UnreadDeliveredReport, attempts: number): string {
       `records in ${attempts} attempts. Ashara keeps the error in its record of this delivery, acceptance sweep ${due.sweepId}.`,
     `Nothing more is built on this project; it waits until you stop it.`,
   ].join("\n\n");
-}
-
-/** Wait before the next attempt at a failed report: doubling from a minute, at most an hour. */
-function retryAfterSeconds(failures: number): number {
-  return Math.min(60 * 2 ** Math.max(0, failures - 1), 3600);
 }
 
 /** A fence no run of backticks in `text` can close early. */
@@ -540,7 +535,7 @@ export class DeliveredReports implements LiaisonDeliveredReports {
     what: "interface" | "record" | "connection" | "post",
   ): Promise<DeliveredReportOutcome> {
     const failures = due.failures + 1;
-    const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, retryAfterSeconds(failures), err);
+    const failure = new DeliveredReportFailed(due.projectId, due.sweepId, failures, faultBackoffSeconds(failures), err);
     await this.recordFailure(due.sweepId, {
       error: describeErrorChain(err),
       interfaceRead: what === "interface",

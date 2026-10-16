@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi, afterEach, beforeEach } from "vitest";
@@ -382,7 +382,7 @@ describe("CoreLoop first plan", () => {
     expect(order).toEqual(["stop", "change", "intake", "roster", "plan", "report", "dispatch", "dispatch"]);
   });
 
-  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block reports still due, and nothing else", async () => {
+  test("a cycle halted at the spend cap takes the client's stops, answers the client's changes and posts the block and delivered reports still due, and nothing else", async () => {
     const order: string[] = [];
     const step = (name: string) =>
       vi.fn(async () => {
@@ -391,10 +391,33 @@ describe("CoreLoop first plan", () => {
       });
     const deps = buildDeps({ runPending: step("intake") }, { runPending: step("plan") }, { runPending: step("report") }, { runPending: step("stop") });
 
-    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") } }).runHaltedCycle();
+    await new CoreLoop({ ...deps, clientChanges: { runPending: step("change") }, blockReports: { runPending: step("block-report") }, deliveredReports: { runPending: step("delivered-report") } }).runHaltedCycle();
 
-    expect(order).toEqual(["stop", "change", "block-report"]);
+    expect(order).toEqual(["stop", "change", "block-report", "delivered-report"]);
     expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
+  test("every step the cycle runs with no model call is either run by a halted cycle or excluded from it with its reason", () => {
+    // A step with no model call that posts what the client is owed and is left out of runHaltedCycle
+    // waits, after a cap halt, for a full cycle this process never runs. A new step is classified here.
+    const classified: Record<string, "halted" | { readonly excluded: string }> = {
+      "client-stop": "halted",
+      "client-change": "halted",
+      "settled-branches": "halted",
+      "block-report": "halted",
+      "delivered-report": "halted",
+      "stack-choice": { excluded: "it records a vision version from a merged choice, a change a halted loop does not make; a choice pending at the halt is recorded and reported on the next full cycle" },
+      "infrastructure-resume": { excluded: "it returns a halted project to work, which a loop halted at the cap does not admit" },
+      "plan-report": { excluded: "it reports plans, which only steps with model calls write; a report pending at the halt is posted on the next full cycle" },
+      "parked-exits": { excluded: "it moves Blocked tasks toward dispatch, and a halted cycle dispatches nothing" },
+      "acceptance": { excluded: "it sweeps main on cells, which is work, not a report" },
+      "gate": { excluded: "it selects tasks to dispatch, and a halted cycle dispatches nothing" },
+      "burn-warning": { excluded: "it warns before the budget halts a project; a project halted at the cap is told so by its block report" },
+    };
+    const source = readFileSync(new URL("./core-loop.ts", import.meta.url), "utf8");
+    const steps = [...source.matchAll(/this\.step\("([a-z-]+)"/g)].map((match) => match[1]);
+
+    expect(new Set(steps)).toEqual(new Set(Object.keys(classified)));
   });
 
   test("answers posted during the roster or the first plan are read in the same cycle, before the plan is revised or dispatched", async () => {

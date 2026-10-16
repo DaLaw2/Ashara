@@ -101,9 +101,15 @@ export interface StepFaulted {
   readonly error: string;
 }
 
-/** The wait before a subject is tried again after its `faults`-th fault in a row: doubling from a minute, at most an hour. */
-function faultBackoffSeconds(faults: number): number {
-  return Math.min(60 * 2 ** Math.max(0, faults - 1), 3600);
+/**
+ * @testseam The wait before a subject is tried again after its first fault; each fault in a row
+ * after it doubles the wait. A cross-package test holds the simulator's settle cycles to it.
+ */
+export const FIRST_FAULT_BACKOFF_SECONDS = 60;
+
+/** The wait before a subject is tried again after its `faults`-th fault in a row: doubling from the first, at most an hour. */
+export function faultBackoffSeconds(faults: number): number {
+  return Math.min(FIRST_FAULT_BACKOFF_SECONDS * 2 ** Math.max(0, faults - 1), 3600);
 }
 
 /** The subject of a step a listing names: its id in the step's ledger, and the project it is one of. */

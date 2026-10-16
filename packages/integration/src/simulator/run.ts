@@ -117,14 +117,19 @@ const LOW_CAP_USD = 0.02;
  * (docs/investigations/simulator-baseline-2026-10-14.md §7.7), so the bound is three times that.
  */
 const NO_PROGRESS_CYCLES = 6;
-/**
- * The cycles an ended run settles on, each an idle interval apart, so what it owes the client is sent
- * on them. Why 3: a report whose post faulted is contained and tried again after a minute
- * (shared/contained-step.ts faultBackoffSeconds), and three idle intervals are the first that pass it.
- */
-const SETTLE_CYCLES = 3;
 const POLL_INTERVAL_MS = 10_000;
 const IDLE_INTERVAL_MS = 30_000;
+/**
+ * @testseam The wait before a report whose post faulted is tried again: the product's first fault
+ * backoff (shared FIRST_FAULT_BACKOFF_SECONDS). The simulator may not import it (ADR-081), so
+ * integration server/settle-cycles.test.ts holds the two equal.
+ */
+export const REPORT_RETRY_MS = 60_000;
+/**
+ * The cycles an ended run settles on, each an idle interval apart, so what it owes the client is sent
+ * on them: as many idle intervals as the first that pass a faulted report's retry wait.
+ */
+const SETTLE_CYCLES = Math.floor(REPORT_RETRY_MS / IDLE_INTERVAL_MS) + 1;
 const LOG_LINES = 400;
 const UNPRICED_NOISE = ["cost unmeasured", "no routing profile for enabled-provider combo"];
 /** Compositions one run may make, restarts included: a boot that fails past it ends the run. */
