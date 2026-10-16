@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
+import { checkReports } from "./client-reports.js";
 import type { Database } from "./database.js";
 import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
 
@@ -12,29 +13,12 @@ import { PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
  * states in what it writes for an agent or the client is the fact the store held when it composed
  * it. Judged by structure, not language: the oracle recomputes from the rows each fact a composer
  * is meant to state, and compares it with the structured part of what was written (a brief's vision
- * version and assumptions) or with the fixed sentence shapes the text carries. Covered:
- * - every brief a session recorded (implementer, check author, environment; the suite review is one
- *   structured call whose prompt no row keeps, so it is not judged): its vision version is the
- *   latest one written before the session was recorded, its assumptions are that version's, and
- *   every assumption line its goal or context states (`- A1 (assumption; <standing>; <kind>): <text>`)
- *   states that version's standing, kind and text for it, since a standing written into a task's
- *   description at plan time goes stale once an answer changes it; and its task section states the
- *   goal, end state, scope and deliverables its work item's task_spec records, a brief of a work
- *   item that records none of them being named, so no end state is invented from the title;
- * - every Liaison question: the assumption it says work proceeds on is the one its vision records
- *   for it, Inferred and asked;
- * - the assumptions report: exactly the assumptions intake recorded as reported, each under its kind;
- * - every reply to a client answer: what the plan assumed and what work now proceeds on, from the
- *   two vision versions around the answer, and only for an answer recorded as a change;
- * - the first-plan report: its decomposed and check task counts, of the plan that stood when it was
- *   posted;
- * - the delivered report: each assumption it lists stands with the client as the vision current at
- *   acceptance and the client's replies by then say; and the public interface file it
- *   quotes is the one main holds at the sweep's commit, or it says main holds none,
- *   judged only where the project's checkout is held.
- * Halt, stop and the rest of the delivered report are I4's (client-reports.ts). The expected
- * wording is written here, never read from a composer: an oracle that asks production what to
- * expect can never find production wrong (boundary-rules.toml [integration] `named-only`).
+ * version and assumptions) or with the fixed sentence shapes the text carries. Which composer each
+ * check judges, which I4 (client-reports.ts) judges, and which none judges and why, is data:
+ * TEXT_COVERED, TEXT_EXCLUDED and CLIENT_MESSAGE_WRITERS at the end of this file, which
+ * text-coverage.test.ts holds to every composer and client_messages writer the source declares.
+ * The expected wording is written here, never read from a composer: an oracle that asks production
+ * what to expect can never find production wrong (boundary-rules.toml [integration] `named-only`).
  */
 
 const visionRow = z.object({ version: z.number(), inferences: z.unknown(), openQuestions: z.unknown() });
@@ -288,27 +272,35 @@ interface TextViolation {
   readonly statement: string;
 }
 
-/** I9 on one project's records. Keys name the composer's subject (a task's title, an assumption's id), never a row id. */
+type Add = (key: string, statement: string) => void;
+type Versions = ReadonlyMap<number, VisionReading>;
+type TextCheck = (records: TextFactRecords, add: Add, versions: Versions) => void;
+
+/** I9 on one project's records: every check TEXT_COVERED names, once each, in the list's order. Keys name the composer's subject (a task's title, an assumption's id), never a row id. */
 export function checkTextFacts(records: TextFactRecords): TextViolation[] {
   const found: TextViolation[] = [];
   const add = (key: string, statement: string): void => {
     found.push({ key, statement });
   };
   const versions = new Map(records.visions.map((vision) => [vision.version, readVision(vision)]));
-
-  for (const row of records.briefs) checkBrief(row, versions, add);
-  checkQuestions(records, versions, add);
-  checkAnswerReplies(records, versions, add);
-  checkAssumptionsReport(records, versions, add);
-  checkFirstPlan(records, add);
-  checkDeliveredStandings(records, versions, add);
-  checkDeliveredInterface(records, add);
+  for (const check of I9_CHECKS) check(records, add, versions);
   return found;
 }
 
-type Add = (key: string, statement: string) => void;
+/**
+ * Every brief a session recorded (implementer, check author, environment): its vision version is
+ * the latest one written before the session was recorded, its assumptions are that version's, and
+ * every assumption line its goal or context states (`- A1 (assumption; <standing>; <kind>): <text>`)
+ * states that version's standing, kind and text for it, since a standing written into a task's
+ * description at plan time goes stale once an answer changes it; and its task section states the
+ * goal, end state, scope and deliverables its work item's task_spec records, a brief of a work item
+ * that records none of them being named, so no end state is invented from the title.
+ */
+function checkBriefs(records: TextFactRecords, add: Add, versions: Versions): void {
+  for (const row of records.briefs) checkBrief(row, versions, add);
+}
 
-function checkBrief(row: z.infer<typeof briefRow>, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
+function checkBrief(row: z.infer<typeof briefRow>, versions: Versions, add: Add): void {
   const { title } = row;
   const parsed = storedBrief.safeParse(row.brief);
   if (!parsed.success) {
@@ -401,7 +393,8 @@ function checkBriefTask(title: string, context: string, rawSpec: unknown, add: A
 /** What the client reads before a question's assumption, as the oracle words it. */
 const PROCEEDS_ON = "Until you answer, we proceed on this assumption:";
 
-function checkQuestions(records: TextFactRecords, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
+/** Every Liaison question: the assumption it says work proceeds on is the one its vision records for it, Inferred and asked. */
+function checkQuestions(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const [index, question] of records.questions.entries()) {
     const at = [...versions.values()].flatMap((vision) => (vision.kind === "read" ? [vision] : [])).find((vision) => vision.questions.some((q) => q.messageId === question.id));
     const open = at?.questions.find((q) => q.messageId === question.id);
@@ -423,7 +416,11 @@ function checkQuestions(records: TextFactRecords, versions: ReadonlyMap<number, 
   }
 }
 
-function checkAnswerReplies(records: TextFactRecords, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
+/**
+ * Every reply to a client answer: what the plan assumed and what work now proceeds on, from the two
+ * vision versions around the answer, and only for an answer recorded as a change.
+ */
+function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const reply of records.answerReplies) {
     const recordedBy = [...versions.entries()].flatMap(([version, vision]) =>
       vision.kind === "read" ? vision.assumptions.filter((a) => a.answer?.messageId === reply.answerId).map((a) => ({ version, assumption: a })) : [],
@@ -449,7 +446,8 @@ function checkAnswerReplies(records: TextFactRecords, versions: ReadonlyMap<numb
 /** How the assumptions report opens, as the oracle words it. */
 const ASSUMPTIONS_OPENING = "Besides the questions we asked, the tender leaves these decisions open";
 
-function checkAssumptionsReport(records: TextFactRecords, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
+/** The assumptions report: exactly the assumptions intake recorded as reported, each under its kind. */
+function checkAssumptionsReport(records: TextFactRecords, add: Add, versions: Versions): void {
   const first = records.visions[0];
   const vision = first === undefined ? undefined : versions.get(first.version);
   if (vision === undefined) {
@@ -491,7 +489,10 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** The plan that stood when the first plan was reported: tasks written by then, less those a revision written by then superseded. */
+/**
+ * The first-plan report's decomposed and check task counts, of the plan that stood when it was
+ * reported: tasks written by then, less those a revision written by then superseded.
+ */
 function checkFirstPlan(records: TextFactRecords, add: Add): void {
   const { report, items, revisions } = records.firstPlan;
   if (report === null) return;
@@ -563,7 +564,11 @@ function acceptedLine(assumption: Assumption, standing: AcceptedStanding): strin
 
 const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 
-function checkDeliveredStandings(records: TextFactRecords, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
+/**
+ * Each assumption the delivered report lists stands with the client as the vision current at
+ * acceptance and the client's replies by then say.
+ */
+function checkDeliveredStandings(records: TextFactRecords, add: Add, versions: Versions): void {
   if (records.delivered.length === 0) return;
   // A corrupt task_spec throws TaskSpecCorrupt: the run fails, never passes unjudged.
   const reviewed = (parseStoredTaskSpec(records.reviewSpec)?.sources ?? []).filter((source) => source.type === "assumption");
@@ -701,3 +706,157 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
     }
   }
 }
+
+/** Who judges a composer's text: a check of I9 here, or I4 (client-reports.ts) by the violation key it reports. */
+type TextJudge = { readonly by: "I9"; readonly check: TextCheck } | { readonly by: "I4"; readonly check: typeof checkReports; readonly key: string };
+
+/** A composer whose text an oracle judges. `source` is `<repo-relative path>#<name>`, a method's name `Class.method`. */
+interface CoveredText {
+  readonly source: string;
+  readonly judges: readonly [TextJudge, ...TextJudge[]];
+}
+
+/**
+ * A composer no oracle judges, and why: `not-a-composer`, named like one but composing no text an
+ * agent or the client reads; `not-kept`, a model call's prompt, which no row keeps (llm_calls
+ * records the call, never its prompt), so no oracle can read it back; `fixed-text`, the same text
+ * whatever the records hold; `unjudged`, text Ashara composes from its records that no oracle
+ * judges.
+ */
+interface ExcludedText {
+  readonly source: string;
+  readonly kind: "not-a-composer" | "not-kept" | "fixed-text" | "unjudged";
+  readonly reason: string;
+}
+
+/** A writer of client_messages rows and the composers whose text it posts, each on TEXT_COVERED or TEXT_EXCLUDED. */
+interface ClientMessageWriter {
+  readonly source: string;
+  readonly posts: readonly [string, ...string[]];
+  /** It also writes rows the client sent: the client's own words, of which Ashara composes none. */
+  readonly clientWords: boolean;
+}
+
+const DELIVERY = "packages/delivery/src";
+const ENGAGEMENT = "packages/engagement/src";
+const QUALITY = "packages/quality/src";
+const WORKPLACE = "packages/workplace/src";
+
+const i9 = (check: TextCheck): TextJudge => ({ by: "I9", check });
+const i4 = (key: string): TextJudge => ({ by: "I4", check: checkReports, key });
+
+/**
+ * Every composer an oracle judges. I9's dispatcher runs each I9 check named here, once, in the
+ * order of its first entry; text-coverage.test.ts fails on a composer or writer the source declares
+ * that is on none of TEXT_COVERED, TEXT_EXCLUDED and CLIENT_MESSAGE_WRITERS.
+ * @testseam text-coverage.test.ts holds it to the source; checkTextFacts is its production caller
+ */
+export const TEXT_COVERED: readonly CoveredText[] = [
+  // The brief's vision version and assumptions, its assumption lines, and its task section against the work item's task_spec.
+  { source: `${DELIVERY}/dispatch/dispatch-service.ts#DispatchService.buildBrief`, judges: [i9(checkBriefs)] },
+  { source: `${WORKPLACE}/prompt.ts#buildTaskPrompt`, judges: [i9(checkBriefs)] },
+  { source: `${WORKPLACE}/prompt.ts#assumptionsSection`, judges: [i9(checkBriefs)] },
+  { source: `${ENGAGEMENT}/intake.ts#questionBody`, judges: [i9(checkQuestions)] },
+  { source: `${ENGAGEMENT}/answers.ts#replanReport`, judges: [i9(checkAnswerReplies)] },
+  { source: `${ENGAGEMENT}/intake.ts#assumptionsReport`, judges: [i9(checkAssumptionsReport)] },
+  { source: `${ENGAGEMENT}/plan-report.ts#firstPlanReport`, judges: [i9(checkFirstPlan)] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#coverageSection`, judges: [i9(checkDeliveredStandings), i4("delivered-coverage")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#interfaceSection`, judges: [i9(checkDeliveredInterface)] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#deliveredReport`, judges: [i4("delivered-close")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#uncheckedSection`, judges: [i4("delivered-unchecked")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#unverifiedSection`, judges: [i4("delivered-coverage")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#givenUpSection`, judges: [i4("delivered-given-up")] },
+  { source: `${ENGAGEMENT}/delivered-report.ts#unreadNotice`, judges: [i4("delivered-notice-unfounded")] },
+  { source: `${ENGAGEMENT}/block-report.ts#projectBlockedReport`, judges: [i4("halt-cause")] },
+  { source: `${ENGAGEMENT}/block-report.ts#planRepairBoundReport`, judges: [i4("halt-cause:plan_repair")] },
+  // No code path writes a check_dispute or suite_review halt; I4 names any one a run writes.
+  { source: `${ENGAGEMENT}/block-report.ts#disputeBoundReport`, judges: [i4("halt-kind-retired")] },
+  { source: `${ENGAGEMENT}/block-report.ts#suiteReviewBoundReport`, judges: [i4("halt-kind-retired")] },
+  { source: `${ENGAGEMENT}/client-stop.ts#stopReport`, judges: [i4("stop-merges")] },
+];
+
+const I9_CHECKS: readonly TextCheck[] = [...new Set(TEXT_COVERED.flatMap((entry) => entry.judges.flatMap((judge) => (judge.by === "I9" ? [judge.check] : []))))];
+
+/** @testseam text-coverage.test.ts holds it to the source: the composers no oracle judges, each with its reason */
+export const TEXT_EXCLUDED: readonly ExcludedText[] = [
+  { source: `${ENGAGEMENT}/block-report.ts#blockedBody`, kind: "not-a-composer", reason: "chooses which halt composer writes the report; each is placed on its own" },
+  { source: `${ENGAGEMENT}/repositories/block-report.ts#postProjectBlockReport`, kind: "not-a-composer", reason: "posts the body it is given, through insertReport" },
+  { source: `${ENGAGEMENT}/repositories/block-report.ts#insertReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${DELIVERY}/repositories/plan-report.ts#postPlanReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${DELIVERY}/repositories/replan.ts#postPlanRevisionReport`, kind: "not-a-composer", reason: "posts the body it is given" },
+  { source: `${DELIVERY}/dispatch/dispatch-records.ts#DispatchRecords.writeBrief`, kind: "not-a-composer", reason: "writes the composed brief to the conversation record as it is" },
+  { source: `${WORKPLACE}/agent-brief.ts#createAgentBrief`, kind: "not-a-composer", reason: "parses a composed brief against its schema; DispatchService.buildBrief composes it" },
+  { source: `${WORKPLACE}/prompt.ts#buildSystemPrompt`, kind: "not-a-composer", reason: "joins the charter's duties to the sections placed on their own" },
+  { source: "packages/execution-infra/src/podman.ts#parseStatusReport", kind: "not-a-composer", reason: "parses podman's status output" },
+  { source: "packages/finance/src/llm-call-ledger.ts#NO_USAGE_REPORT", kind: "not-a-composer", reason: "a cost measurement value, not text" },
+  { source: "packages/model-access/src/turn.ts#cachedTurnPrompt", kind: "not-a-composer", reason: "places cache breakpoints on a prompt already composed" },
+  { source: "packages/server/src/client-channel.ts#readJsonBody", kind: "not-a-composer", reason: "reads an HTTP request body" },
+  { source: "packages/server/src/fail-closed.ts#fatalReport", kind: "not-a-composer", reason: "the operator's log line for a fatal error; no agent or client reads it" },
+
+  { source: `${QUALITY}/suite-review.ts#reviewPrompt`, kind: "not-kept", reason: "the suite review's prompt" },
+  { source: `${QUALITY}/suite-review.ts#suiteSection`, kind: "not-kept", reason: "part of the suite review's prompt" },
+  { source: `${QUALITY}/suite-review.ts#interfaceSection`, kind: "not-kept", reason: "part of the suite review's prompt" },
+  { source: `${DELIVERY}/decomposition.ts#DecompositionEngine.buildDecomposePrompt`, kind: "not-kept", reason: "the planner's prompt" },
+  { source: `${DELIVERY}/replan.ts#causeSection`, kind: "not-kept", reason: "part of a plan revision's planner prompt" },
+  { source: `${DELIVERY}/replan.ts#abandonmentSection`, kind: "not-kept", reason: "part of a plan revision's planner and environment prompts" },
+  { source: `${DELIVERY}/replan.ts#doneSection`, kind: "not-kept", reason: "part of a plan revision's planner prompt" },
+  { source: `${DELIVERY}/replan.ts#environmentPrompt`, kind: "not-kept", reason: "the prompt asking whether a plan revision needs the environment changed" },
+  { source: "packages/organization/src/derivation.ts#buildPrompt", kind: "not-kept", reason: "the prompt that derives the project's team" },
+  { source: `${ENGAGEMENT}/intake.ts#buildIntakePrompt`, kind: "not-kept", reason: "the prompt that reads a tender" },
+  { source: `${ENGAGEMENT}/answers.ts#buildAnswerPrompt`, kind: "not-kept", reason: "the prompt that reads a client answer" },
+
+  { source: `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`, kind: "fixed-text", reason: "the one reply to every change request" },
+
+  { source: `${ENGAGEMENT}/block-report.ts#projectResumedReport`, kind: "unjudged", reason: "states how the halt ended; I4 judges only that it is its episode's one report" },
+  { source: `${ENGAGEMENT}/plan-report.ts#planRevisionReport`, kind: "unjudged", reason: "states the revision's task counts and what it set aside; I4 judges only that it is its revision's one report" },
+  { source: `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`, kind: "unjudged", reason: "states the count of failed planning attempts" },
+  { source: `${ENGAGEMENT}/intake.ts#failureReport`, kind: "unjudged", reason: "states the count of failed intake attempts" },
+  { source: `${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`, kind: "unjudged", reason: "quotes the environment's recorded statement" },
+  { source: `${ENGAGEMENT}/delivered-report.ts#executedSection`, kind: "unjudged", reason: "quotes the stored checks the acceptance sweep records it ran on main; no oracle compares them with the sweep's record" },
+  { source: `${DELIVERY}/domain/stale-checks.ts#disputeBrief`, kind: "unjudged", reason: "states the dispute a reopened check task's brief carries" },
+  { source: `${DELIVERY}/domain/stale-checks.ts#reviewBrief`, kind: "unjudged", reason: "states the review problems a reopened check task's brief carries" },
+  { source: `${QUALITY}/task-checks.ts#formatChecksForBrief`, kind: "unjudged", reason: "states the stored checks in a brief's context, past the task section checkBriefs judges" },
+  { source: `${QUALITY}/task-checks.ts#checkFilesForBrief`, kind: "unjudged", reason: "part of formatChecksForBrief" },
+  { source: `${QUALITY}/task-checks.ts#formatProjectChecksForCheckAuthor`, kind: "unjudged", reason: "states the project's stored checks in a check author's brief context" },
+  { source: `${QUALITY}/task-checks.ts#formatFoundationForCheckAuthor`, kind: "unjudged", reason: "names the plan's foundation task in a check author's brief context" },
+  { source: `${QUALITY}/merge.ts#formatConflictForBrief`, kind: "unjudged", reason: "states a conflict with main in a brief's context" },
+  { source: `${QUALITY}/check-verdict.ts#formatCheckRunReport`, kind: "unjudged", reason: "run_checks' result as the agent reads it" },
+  { source: `${QUALITY}/environment-verdict.ts#commandSection`, kind: "unjudged", reason: "an environment command's run as the model and the gate's failure record read it" },
+  { source: `${QUALITY}/environment-verdict.ts#logSection`, kind: "unjudged", reason: "part of commandSection" },
+  { source: `${WORKPLACE}/error-envelope.ts#renderChainForBrief`, kind: "unjudged", reason: "states a prior attempt's error chain in a brief" },
+  { source: `${WORKPLACE}/prompt.ts#staticPrompt`, kind: "unjudged", reason: "states the charter's identity and the workspace's rules in the system prompt" },
+  { source: `${WORKPLACE}/prompt.ts#protectedPathsSection`, kind: "unjudged", reason: "states the brief's protected paths in the system prompt" },
+  { source: `${WORKPLACE}/prompt.ts#environmentSection`, kind: "unjudged", reason: "states the brief's environment version and statement in the system prompt" },
+];
+
+/** @testseam text-coverage.test.ts holds it to the source: every client_messages writer, with the composers whose text it posts */
+export const CLIENT_MESSAGE_WRITERS: readonly ClientMessageWriter[] = [
+  { source: `${DELIVERY}/repositories/plan-report.ts#postPlanReport`, posts: [`${ENGAGEMENT}/plan-report.ts#firstPlanReport`, `${ENGAGEMENT}/plan-report.ts#planningStoppedReport`], clientWords: false },
+  { source: `${DELIVERY}/repositories/replan.ts#postPlanRevisionReport`, posts: [`${ENGAGEMENT}/plan-report.ts#planRevisionReport`], clientWords: false },
+  {
+    source: `${ENGAGEMENT}/repositories/block-report.ts#insertReport`,
+    posts: [
+      `${ENGAGEMENT}/block-report.ts#projectBlockedReport`,
+      `${ENGAGEMENT}/block-report.ts#planRepairBoundReport`,
+      `${ENGAGEMENT}/block-report.ts#disputeBoundReport`,
+      `${ENGAGEMENT}/block-report.ts#suiteReviewBoundReport`,
+      `${ENGAGEMENT}/block-report.ts#projectResumedReport`,
+    ],
+    clientWords: false,
+  },
+  { source: `${ENGAGEMENT}/repositories/client-answer.ts#writeClientAnswer`, posts: [`${ENGAGEMENT}/answers.ts#replanReport`], clientWords: false },
+  {
+    source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insert`,
+    posts: [`${ENGAGEMENT}/intake.ts#assumptionsReport`, `${ENGAGEMENT}/intake.ts#failureReport`, `${ENGAGEMENT}/client-change.ts#CHANGE_NOT_APPLIED_REPLY`],
+    clientWords: true,
+  },
+  { source: `${ENGAGEMENT}/repositories/client-message.ts#ClientMessageRepository.insertQuestions`, posts: [`${ENGAGEMENT}/intake.ts#questionBody`], clientWords: false },
+  { source: `${ENGAGEMENT}/repositories/client-stop.ts#recordClientStop`, posts: [`${ENGAGEMENT}/client-stop.ts#stopReport`], clientWords: false },
+  {
+    source: `${ENGAGEMENT}/repositories/delivered-report.ts#postDeliveredReport`,
+    posts: [`${ENGAGEMENT}/delivered-report.ts#deliveredReport`, `${ENGAGEMENT}/delivered-report.ts#unreadNotice`],
+    clientWords: false,
+  },
+  { source: `${ENGAGEMENT}/repositories/stack-choice.ts#recordStackChoice`, posts: [`${ENGAGEMENT}/stack-choice.ts#stackChoiceReport`], clientWords: false },
+];

@@ -186,4 +186,5 @@ exempt.server-secret-hints = { file = "packages/server/src/secrets.ts", tokens =
 exempt.server-access-code-hint = { file = "packages/server/src/web-client.ts", tokens = ["npx", "tsx"], reason = "the operator's command for Ashara's own scripts/client.ts" }
 exempt.server-web-client-script = { file = "packages/server/src/web-client.ts", tokens = ["javascript"], reason = "the media type of Ashara's own web client script" }
 exempt.integration-leak-guard = { file = "packages/integration/src/cell-leak-guard.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose runs the leak guard tracks" }
+exempt.integration-text-facts = { file = "packages/integration/src/simulator/text-facts.ts", tokens = ["composer"], reason = "the English word for a text composer that I9's coverage lists name, not PHP's Composer" }
 exempt.integration-test-cells = { file = "packages/integration/src/test-cells.ts", tokens = ["vitest"], reason = "Ashara's own test runner, whose run supplies the test cell" }
