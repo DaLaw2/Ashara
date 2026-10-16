@@ -186,6 +186,7 @@ async function harness(name: string): Promise<Harness> {
 
   const loop = new CoreLoop({
     config: { ...DEFAULT_CONFIG, workdirBase },
+    cycleLog: { emit: () => {} },
     workItemRepo: adaptWorkItemRepo(workItems),
     eventStore: new EventStoreRepository(db),
     failedApproachRepo: new FailedApproachRepository(db),

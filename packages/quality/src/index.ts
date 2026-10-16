@@ -2,6 +2,7 @@ export { TaskVerification, observeAcceptanceSweeps } from "./verification.js";
 export type { AcceptanceSweep } from "./verification.js";
 export {
   EXECUTION_STATUSES,
+  ExecutionEventNameSchema,
   NO_AGENT,
   NO_CHANGE_REASON,
   agentWorkOf,

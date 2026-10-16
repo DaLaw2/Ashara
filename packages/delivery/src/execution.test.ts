@@ -95,6 +95,7 @@ function coreLoopDeps(
   return {
     // Every target here is made under the temporary directory.
     config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
+    cycleLog: { emit: () => {} },
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
     projectRepo: {

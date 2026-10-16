@@ -95,6 +95,7 @@ import { createBlockReportStore } from "./block-report-store.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
 import { createRosterStore } from "./roster-store.js";
+import { createEventLog } from "./event-log.js";
 
 // Policy defaults for the web client's sessions (ADR-076). A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -202,13 +203,12 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
 
   const config = loadServerConfig(databaseUrl, apiToken);
 
-  // Ladder attempts and execution events go to the server log. A ladder attempt's capability,
-  // attempt number, validation errors and raw excerpt are in no llm_calls column, and an attempt
-  // the ladder judged invalid can be an ok provider call there.
-  const logEvent = (event: Readonly<Record<string, unknown>> & { readonly event: string }): void => {
-    console.log(`[event] ${JSON.stringify(event)}`);
-  };
-  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => logEvent({ event: "ladder_attempt", ...attempt });
+  // Ladder attempts, execution events and completed cycles go to the server log, timestamped by
+  // the injected clock. A ladder attempt's capability, attempt number, validation errors and raw
+  // excerpt are in no llm_calls column, and an attempt the ladder judged invalid can be an ok
+  // provider call there.
+  const eventLog = createEventLog(ports.clock, (line) => console.log(line));
+  const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
 
   // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
   // every provider request Finance's guarded port refuses an unpriced model and a call whose
@@ -310,7 +310,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   };
 
   const devEventSink: ExecutionEventSink = {
-    emit: logEvent,
+    emit: (event) => eventLog.emit(event),
   };
 
   // A task's project is the project_id on its own row (migration 014): the
@@ -380,6 +380,7 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   const blockReports = new BlockReports(createBlockReportStore(db));
   const coreLoopDeps: CoreLoopDeps = {
     config: config.coreLoop,
+    cycleLog: eventLog,
     workItemRepo,
     eventStore,
     failedApproachRepo,

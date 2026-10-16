@@ -7,7 +7,22 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./*": "./src/*.ts"
+    "./acceptance-store": "./src/acceptance-store.ts",
+    "./answer-store": "./src/answer-store.ts",
+    "./app": "./src/app.ts",
+    "./block-report-store": "./src/block-report-store.ts",
+    "./client-change-store": "./src/client-change-store.ts",
+    "./client-stop-store": "./src/client-stop-store.ts",
+    "./compose": "./src/compose.ts",
+    "./intake-store": "./src/intake-store.ts",
+    "./middleware": "./src/middleware.ts",
+    "./plan-report-store": "./src/plan-report-store.ts",
+    "./roster-store": "./src/roster-store.ts",
+    "./routes": "./src/routes.ts",
+    "./secrets": "./src/secrets.ts",
+    "./stack-choice-store": "./src/stack-choice-store.ts",
+    "./task-check-store": "./src/task-check-store.ts",
+    "./web-client": "./src/web-client.ts"
   },
   "dependencies": {
     "@ashara/db": "*",

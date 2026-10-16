@@ -108,6 +108,7 @@ function buildDeps(
   // runtime TypeError the runner retries forever.
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: "/tmp/test-parallel", maxBatchSize: 4 },
+    cycleLog: { emit: (tally) => cycleTallies.push(tally) },
     workItemRepo,
     eventStore: { publish: async () => {} },
     failedApproachRepo: { record: async () => {} },
@@ -148,7 +149,10 @@ function buildDeps(
 // Tests
 // ---------------------------------------------------------------------------
 
+const cycleTallies: Array<Parameters<CoreLoopDeps["cycleLog"]["emit"]>[0]> = [];
+
 beforeEach(() => {
+  cycleTallies.length = 0;
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -217,6 +221,9 @@ describe("CoreLoop batch dispatch parallelism", () => {
     expect(cycleResult.results).toHaveLength(2);
     const statuses = cycleResult.results.map((r) => r.status).sort();
     expect(statuses).toEqual(["completed", "failed"]);
+    expect(cycleTallies).toEqual([
+      { event: "cycle_complete", tasksProcessed: 2, completed: 1, failed: 1, refused: 0, interrupted: 0 },
+    ]);
   });
 });
 

@@ -77,6 +77,7 @@ function gatewayOn(spendCap: SpendCap, calls: LlmCallRepository): GuardedModelAc
 function loopDeps(parts: Partial<CoreLoopDeps> & Pick<CoreLoopDeps, "spendCap">): CoreLoopDeps {
   return {
     config: { ...DEFAULT_CONFIG, workdirBase: join(root, "unused") },
+    cycleLog: { emit: () => {} },
     workItemRepo: {
       create: notExercised("create"),
       findById: notExercised("findById"),

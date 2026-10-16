@@ -114,8 +114,20 @@ interface SpendCapHalts {
   blockAllActive(cause: ProjectBlockCause): Promise<ProjectId[]>;
 }
 
+/** A cycle's tally of its batch's outcomes, as the server log records it. */
+interface CycleComplete {
+  readonly event: "cycle_complete";
+  readonly tasksProcessed: number;
+  readonly completed: number;
+  readonly failed: number;
+  readonly refused: number;
+  readonly interrupted: number;
+}
+
 export interface CoreLoopDeps {
   readonly config: CoreLoopConfig;
+  /** Where each cycle's tally is written: the server log's event writer. */
+  readonly cycleLog: { emit(event: CycleComplete): void };
   readonly workItemRepo: WorkItemRepository;
   readonly eventStore: Pick<EventStoreRepository, "publish">;
   readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;

@@ -140,6 +140,7 @@ describe("a project whose workspace path is refused", () => {
     const workItems = new WorkItemRowRepository(db);
     const loop = new CoreLoop({
       config: { ...DEFAULT_CONFIG, workdirBase },
+      cycleLog: { emit: () => {} },
       workItemRepo: adaptWorkItemRepo(workItems),
       eventStore: new EventStoreRepository(db),
       failedApproachRepo: new FailedApproachRepository(db),

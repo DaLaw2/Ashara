@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Cell, CellSpec, CurrentEnvironment, PartialCommitOutcome, SubstrateInfo, WorkdirInfo } from "@ashara/execution-infra";
 import { WorktreeCommitFailed, cleanupWorkdir } from "@ashara/execution-infra";
 import type { PreCallRefusal } from "@ashara/finance";
@@ -376,9 +377,51 @@ export function sessionEnvironmentVersion(environment: DispatchEnvironment): str
   return environment.kind === "environment" ? environment.version : null;
 }
 
+/** Every execution event a dispatch emits: a name outside this set is a compile error at the emit site and a refused line at the writer. */
+export const ExecutionEventNameSchema = z.enum([
+  "acceptance_sweep",
+  "agent_completed",
+  "agent_launched",
+  "branch_work_found",
+  "cell_created",
+  "cell_teardown_failed",
+  "check_defined",
+  "check_disputed",
+  "check_files_discarded",
+  "check_red_run",
+  "check_run_product_changed",
+  "checks_revalidated",
+  "delivered_on_main_verify",
+  "delivered_sweep",
+  "environment_change_requested",
+  "environment_rebuilt",
+  "environment_resolved",
+  "error",
+  "foundation_build",
+  "foundation_probed",
+  "gate_failed",
+  "merge_conflict_presented",
+  "merge_conflict_resolution",
+  "ownership_gate",
+  "post_merge_verify",
+  "substrate_gate_result",
+  "substrate_gate_started",
+  "suite_review_problems",
+  "suites_reviewed",
+  "task_blocked",
+  "task_checks_recorded",
+  "task_checks_run",
+  "task_completed",
+  "task_failed",
+  "task_interrupted",
+  "task_refused",
+  "task_started",
+]);
+
 export interface ExecutionEventSink {
-  // open-by-design: log events carry caller-defined fields alongside the required `event` tag
-  emit(event: Record<string, unknown> & { readonly event: string }): void;
+  // The name is closed; the fields beside it are each event's own, and the writer requires only
+  // that the event names its task or project and that every value serializes as JSON.
+  emit(event: Readonly<Record<string, unknown>> & { readonly event: z.infer<typeof ExecutionEventNameSchema> }): void;
 }
 
 /** What execution needs of the container substrate; execution-infra's PodmanSubstrate satisfies it. */

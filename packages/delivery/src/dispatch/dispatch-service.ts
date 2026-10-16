@@ -605,7 +605,7 @@ export class DispatchService {
       await cleanupWorkdirBeforeReturn(task.id, workDir, targetProjectPath, "the task cell could not be created");
       return thrownBlocked(task, sessionId, "createCell", e, { step: "create the task cell", cell: "task cell" }, NO_AGENT, eventSink);
     }
-    eventSink?.emit({ event: "cell_created", taskId: task.id, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
+    eventSink?.emit({ event: "cell_created", taskId: task.id, attempt: task.attempt, cellId: cell.id, roleId: staff.role.id, role: staff.role.name, image: cellImageOf(environment), cellImage: attemptCellImage(environment) });
 
     const dispatch: Dispatch = {
       task,
