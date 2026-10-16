@@ -415,7 +415,9 @@ export class DispatchService {
       event: "task_started",
       taskId: task.id,
       attempt: task.attempt,
-      goal: task.taskSpec?.goal ?? task.title,
+      title: task.title,
+      // The stored goal or none: a task without one is never given its title as a goal.
+      goal: task.taskSpec?.goal,
       // The stored grade as it is (ADR-074 addendum 2 d70), never a default: staffing refuses a task
       // without one, and the model it is staffed with is emitted when its attempt starts.
       capability: task.taskSpec?.capability,

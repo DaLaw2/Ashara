@@ -91,7 +91,7 @@ describe("checkReports, a delivered report", () => {
   const delivered = (line: string, extra: Partial<ReportRecords> = {}, tail = ""): ReportRecords => ({
     ...noRecords,
     reports: [{ id: "r1", body: `Your project is delivered.\n\nWhat was delivered:\n${line}${tail}`, reportsOn: null, inReplyTo: null }],
-    sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1" }],
+    sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures: 0 }],
     ...extra,
   });
   const unrecordedTail = "\n\nWhich parts of what you asked for the checks cover is not on record for this plan, so none of it is stated as checked.";
@@ -112,6 +112,17 @@ describe("checkReports, a delivered report", () => {
     expect(keysOf(delivered(close, {}, givenUp(["Hard"])), "accepted", [merged, gaveUp, setAside])).toEqual([]);
     expect(keysOf(delivered(close, {}, givenUp(["Hard", "Old"])), "accepted", [merged, gaveUp, setAside])).toEqual(["delivered-given-up"]);
     expect(keysOf(delivered(close, {}, givenUp(["Hard"])), "accepted", [merged, gaveUp, abandoned("Odd", { source: "no-such-source" })])).toEqual(["delivered-given-up-corrupt"]);
+  });
+
+  // A report whose records could not be read is replaced by an acceptance notice past its bound of attempts.
+  it("holds an acceptance notice to the failed attempts recorded on the sweep", () => {
+    const notice = (reportFailures: number): ReportRecords => ({
+      ...noRecords,
+      reports: [{ id: "r1", body: "Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s1.", reportsOn: null, inReplyTo: null }],
+      sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures }],
+    });
+    expect(keysOf(notice(4), "accepted", [goal])).toEqual([]);
+    expect(keysOf(notice(1), "accepted", [goal])).toEqual(["delivered-notice-unfounded"]);
   });
 
   it("refuses the unrecorded-kind line for a close recorded as already delivered", () => {

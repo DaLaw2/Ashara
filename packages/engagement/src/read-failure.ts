@@ -9,10 +9,11 @@ import {
 /**
  * Whose failure a failed model read of client input is (task t-intake-failure-classes, ADR-080 d5).
  * - "reading": the read itself failed: the model's output never validated, or the provider failed
- *   a request it accepted. It is counted against the input read, up to its attempt cap.
+ *   the request (ProviderError.failure "provider"). It is counted against the input read, up to its attempt cap.
  * - "ashara-fault": Ashara's own machinery refused or broke around the read: a spend-cap or price
  *   refusal, a ledger read or write that failed, a provider rejecting Ashara's own configuration
- *   (credentials, account, endpoint, model id), or a gateway that cannot route the call. The
+ *   (credentials, account, endpoint, model id), a fault in Ashara's handling of the request
+ *   (ProviderError.failure "ashara"), or a gateway that cannot route the call. The
  *   client's input is not at fault, so it is never counted against it; the error throws through
  *   with its class.
  */
@@ -24,7 +25,8 @@ function chainHasAsharaFault(err: unknown): boolean {
       current instanceof PreCallRefusal ||
       current instanceof LlmCallNotAdmitted ||
       current instanceof LlmCallNotRecorded ||
-      current instanceof ProviderConfigurationRejected
+      current instanceof ProviderConfigurationRejected ||
+      (current instanceof ProviderError && current.failure === "ashara")
     ) {
       return true;
     }

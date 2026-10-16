@@ -2,8 +2,8 @@ import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzl
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
+import type { SpendAtCap } from "@ashara/finance";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
-import type { SpendAtCap } from "@ashara/delivery/project-halt";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
 // The Liaison's reports on project halts (migrations 040, 048): one when a project is halted, one

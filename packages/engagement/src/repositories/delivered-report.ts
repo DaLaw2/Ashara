@@ -1,10 +1,11 @@
-import { and, asc, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { acceptanceSweeps, clientMessages, completedGoalTasks, insertedRow, noOpenStop, projects, taskChecks, visionDocuments, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { parseStoredTaskSpec } from "@ashara/delivery/work-item";
 import type { AcceptedAssumptionStanding } from "../vision-language/vision-assumption.js";
+import type { DeliveredReportFailureRecord } from "../delivered-report.js";
 import type { VisionSource } from "../vision-language/vision-source.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { StoredVision, VisionAssumption, VisionVersion } from "../vision.js";
@@ -48,6 +49,11 @@ type VisionCoverage =
   | { readonly kind: "unrecorded" };
 
 interface DueDeliveredReportRow {
+  readonly kind: "due";
+  /** Failed attempts at the report so far (migration 062). */
+  readonly failures: number;
+  /** Failed reads of the public interface file so far (migration 062). */
+  readonly interfaceReadFailures: number;
   readonly sweepId: string;
   readonly projectId: ProjectId;
   readonly mainCommit: string;
@@ -61,6 +67,15 @@ interface DueDeliveredReportRow {
   /** The titles of goal tasks given up (Abandoned), which the plan was repaired around. */
   readonly givenUp: readonly string[];
   readonly vision: VisionCoverage;
+}
+
+/** A due report whose records could not be read; the rest of the due reports are still listed. */
+interface UnreadDeliveredReportRow {
+  readonly kind: "unread";
+  readonly failures: number;
+  readonly sweepId: string;
+  readonly projectId: ProjectId;
+  readonly error: unknown;
 }
 
 const SweepTaskIdsSchema = z.array(z.guid());
@@ -374,12 +389,49 @@ class AcceptedProjectWithoutWorkspace extends Error {
   }
 }
 
+/** One passed sweep's row, as listDueDeliveredReports reads it. */
+interface DueSweep {
+  readonly id: string;
+  readonly projectId: ProjectId;
+  readonly mainCommit: string | null;
+  readonly checkedTasks: unknown;
+  readonly uncheckedTasks: unknown;
+  readonly acceptedAt: Date;
+  readonly workspacePath: string | null;
+  readonly failures: number;
+  readonly interfaceReadFailures: number;
+}
+
+async function dueReportOf(db: DbHandle, row: DueSweep): Promise<DueDeliveredReportRow> {
+  const goals = await goalCloses(db, row.projectId);
+  const goalIds = (await completedGoalTasks(db, row.projectId)).map((goal) => goal.id);
+  // A passed sweep always ran on main (acceptance_sweeps_pass_has_main).
+  if (row.mainCommit === null) throw new AcceptedSweepWithoutMain(row.id);
+  if (row.workspacePath === null) throw new AcceptedProjectWithoutWorkspace(row.id, row.projectId);
+  return {
+    kind: "due",
+    failures: row.failures,
+    interfaceReadFailures: row.interfaceReadFailures,
+    sweepId: row.id,
+    projectId: row.projectId,
+    mainCommit: row.mainCommit,
+    targetProjectPath: row.workspacePath,
+    goals,
+    checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
+    unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
+    givenUp: await givenUpGoalTitles(db, row.projectId),
+    vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
+  };
+}
+
 /**
- * Every passed sweep whose delivered report is not yet posted, oldest first, with what the report
- * is rendered from. A project the client stopped, or has a stop awaiting the Liaison, is not
- * reported on: its stop report is what it is told.
+ * Every passed sweep whose delivered report is not yet posted and is not waiting out the backoff of
+ * a failed attempt (migration 062), oldest first, with what the report is rendered from. A sweep
+ * whose records cannot be read is listed with why, so one project's records never stop another's
+ * report. A project the client stopped, or has a stop awaiting the Liaison, is not reported on: its
+ * stop report is what it is told.
  */
-export async function listDueDeliveredReports(db: DbHandle): Promise<DueDeliveredReportRow[]> {
+export async function listDueDeliveredReports(db: DbHandle): Promise<Array<DueDeliveredReportRow | UnreadDeliveredReportRow>> {
   const rows = await db
     .select({
       id: acceptanceSweeps.id,
@@ -389,31 +441,59 @@ export async function listDueDeliveredReports(db: DbHandle): Promise<DueDelivere
       uncheckedTasks: acceptanceSweeps.uncheckedTasks,
       acceptedAt: acceptanceSweeps.createdAt,
       workspacePath: projects.workspacePath,
+      failures: acceptanceSweeps.reportFailures,
+      interfaceReadFailures: acceptanceSweeps.reportInterfaceReadFailures,
     })
     .from(acceptanceSweeps)
     .innerJoin(projects, eq(projects.id, acceptanceSweeps.projectId))
-    .where(and(eq(acceptanceSweeps.passed, true), isNull(acceptanceSweeps.reportId), eq(projects.lifecycle, "accepted"), noOpenStop(projects.id)))
+    .where(
+      and(
+        eq(acceptanceSweeps.passed, true),
+        isNull(acceptanceSweeps.reportId),
+        eq(projects.lifecycle, "accepted"),
+        noOpenStop(projects.id),
+        or(isNull(acceptanceSweeps.reportRetryAt), lte(acceptanceSweeps.reportRetryAt, sql`now()`)),
+      ),
+    )
     .orderBy(asc(acceptanceSweeps.createdAt), asc(acceptanceSweeps.id));
-  const due: DueDeliveredReportRow[] = [];
+  const due: Array<DueDeliveredReportRow | UnreadDeliveredReportRow> = [];
   for (const row of rows) {
-    const goals = await goalCloses(db, row.projectId);
-    const goalIds = (await completedGoalTasks(db, row.projectId)).map((goal) => goal.id);
-    // A passed sweep always ran on main (acceptance_sweeps_pass_has_main).
-    if (row.mainCommit === null) throw new AcceptedSweepWithoutMain(row.id);
-    if (row.workspacePath === null) throw new AcceptedProjectWithoutWorkspace(row.id, row.projectId);
-    due.push({
-      sweepId: row.id,
-      projectId: parseProjectId(row.projectId, "acceptance_sweeps.project_id"),
-      mainCommit: row.mainCommit,
-      targetProjectPath: row.workspacePath,
-      goals,
-      checked: await sweepTaskTitles(db, row.id, "checked_tasks", row.checkedTasks),
-      unchecked: await sweepTaskTitles(db, row.id, "unchecked_tasks", row.uncheckedTasks),
-      givenUp: await givenUpGoalTitles(db, row.projectId),
-      vision: await visionCoverage(db, { id: row.id, projectId: row.projectId, acceptedAt: row.acceptedAt }, goalIds),
-    });
+    const projectId = parseProjectId(row.projectId, "acceptance_sweeps.project_id");
+    try {
+      due.push(await dueReportOf(db, { ...row, projectId }));
+    } catch (error) {
+      due.push({ kind: "unread", failures: row.failures, sweepId: row.id, projectId, error });
+    }
   }
   return due;
+}
+
+/** A failed attempt was to be recorded on a sweep that does not exist or did not pass. */
+class DeliveredReportFailureUnrecorded extends Error {
+  constructor(readonly sweepId: string) {
+    super(`cannot record a failed delivered report on acceptance sweep ${sweepId}: no passed acceptance_sweeps row has that id`);
+    this.name = "DeliveredReportFailureUnrecorded";
+  }
+}
+
+/**
+ * Records a failure at a sweep's delivered report: its error; a failed read of the public interface
+ * file counted apart; and, for an attempt that failed, one more failure and when to try again.
+ */
+export async function recordDeliveredReportFailure(db: DbHandle, sweepId: string, failure: DeliveredReportFailureRecord): Promise<void> {
+  const { retryAfterSeconds } = failure;
+  const updated = await db
+    .update(acceptanceSweeps)
+    .set({
+      reportLastError: failure.error,
+      ...(failure.interfaceRead ? { reportInterfaceReadFailures: sql`${acceptanceSweeps.reportInterfaceReadFailures} + 1` } : {}),
+      ...(retryAfterSeconds === null
+        ? {}
+        : { reportFailures: sql`${acceptanceSweeps.reportFailures} + 1`, reportRetryAt: sql`now() + make_interval(secs => ${retryAfterSeconds})` }),
+    })
+    .where(and(eq(acceptanceSweeps.id, sweepId), eq(acceptanceSweeps.passed, true)))
+    .returning({ id: acceptanceSweeps.id });
+  if (updated.length === 0) throw new DeliveredReportFailureUnrecorded(sweepId);
 }
 
 /** A delivered report was asked to be posted for a sweep that does not exist or did not pass. */

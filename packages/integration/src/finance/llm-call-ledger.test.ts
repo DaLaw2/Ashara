@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, DEFAULT_DATABASE_URL, LlmCallRepository, ProjectRepository } from "@ashara/db";
-import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, SpendCap, UnpricedModel } from "@ashara/finance";
+import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, measureCost, ProviderError, SpendCap, UnpricedModel } from "@ashara/finance";
 import { buildGateway, withStructuredLadder, sdkLanguageModels } from "@ashara/model-access";
 import type { LadderAttemptEvent, ModelConfig } from "@ashara/model-access";
 
@@ -362,6 +363,29 @@ describe("one llm_calls row per provider call", () => {
     expect(rows[0]?.finishReason).toBe("no-response");
     expect(rows[0]?.inputTokens).toBeNull();
     expect(rows[0]?.costUsd).toBeNull();
+  });
+
+  test("a failed request with no fallback says whose failure it was: the provider's HTTP error or no answer, else Ashara's", async () => {
+    const failureOf = async (thrown: unknown): Promise<string> => {
+      stubModel({
+        doGenerate: async () => {
+          throw thrown;
+        },
+      });
+      const err: unknown = await gateway("anthropic", model({}))
+        .forCall({ projectId, taskId: null, callSite: "liaison-intake" })
+        .generateStructured({ capability: "Strong", prompt: "greet", schema: GreetingSchema, maxTokens: 512 })
+        .then(() => null, (e: unknown) => e);
+      if (!(err instanceof ProviderError)) return expect.unreachable(`not a ProviderError: ${String(err)}`);
+      return err.failure;
+    };
+    const apiError = (statusCode: number | undefined) =>
+      new APICallError({ message: "stub", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode, isRetryable: true });
+
+    expect(await failureOf(apiError(503))).toBe("provider");
+    expect(await failureOf(apiError(undefined))).toBe("provider");
+    expect(await failureOf(apiError(401))).toBe("ashara");
+    expect(await failureOf(new TypeError("a fault in Ashara's own code"))).toBe("ashara");
   });
 
   test("unreported usage is written as NULL tokens and NULL cost, never 0", async () => {

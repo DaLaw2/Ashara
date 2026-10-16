@@ -1,7 +1,7 @@
 import type { createDb } from "@ashara/db";
 import { WorkItemRowRepository, adaptWorkItemRepo } from "@ashara/delivery";
 import type { AcceptanceStore } from "@ashara/delivery";
-import { DeliveredReports, acceptProject, listDueDeliveredReports, postDeliveredReport } from "@ashara/engagement";
+import { DeliveredReports, acceptProject, listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "@ashara/engagement";
 import type { DeliveredReportStore } from "@ashara/engagement";
 import { PUBLIC_INTERFACE_FILE, gitPublicInterface, listProjectsReadyForAcceptance, recordAcceptance, recordAcceptanceDefect, recordAcceptanceSweepFault } from "@ashara/quality";
 
@@ -23,6 +23,7 @@ export function createDeliveredReportStore(db: Db): DeliveredReportStore {
   return {
     dueReports: () => listDueDeliveredReports(db),
     postReport: (sweepId, body) => postDeliveredReport(db, sweepId, body),
+    recordReportFailure: (sweepId, failure) => recordDeliveredReportFailure(db, sweepId, failure),
   };
 }
 

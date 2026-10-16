@@ -47,10 +47,12 @@ export function createDb(databaseUrl: string, createPool: PoolFactory = createPg
     );
   });
   const db = drizzle(pool, { schema });
-  // Every top-level transaction of this Database runs through the one wrapper below: drizzle's own
-  // pool transaction sends BEGIN before the try/finally that releases its client, so a failed BEGIN
-  // would keep the connection checked out for good. Nested `tx.transaction` calls are savepoints on
-  // the already checked-out client and need no wrapper.
+  // Every top-level transaction of this Database runs through the one wrapper below. It exists
+  // because drizzle-orm 0.45.2 (the pinned version; node-postgres/session.js NodePgSession.transaction)
+  // sends BEGIN on a client checked out of the pool before the try/finally that releases it, so a
+  // failed BEGIN would keep that connection checked out for good. Re-read that method before
+  // changing the pinned version. Nested `tx.transaction` calls are savepoints on the already
+  // checked-out client and need no wrapper.
   db.transaction = transactionOnOwnCheckout(pool);
   return db;
 }

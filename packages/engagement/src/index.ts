@@ -32,7 +32,7 @@ export { listDueBlockReports, postProjectBlockReport } from "./repositories/bloc
 export { listDueStackChoices, recordStackChoice } from "./repositories/stack-choice.js";
 export { listUnconsumedStops, recordClientStop } from "./repositories/client-stop.js";
 export { listUnconsumedChanges, recordClientChangeDeferred } from "./repositories/client-change.js";
-export { listDueDeliveredReports, postDeliveredReport } from "./repositories/delivered-report.js";
+export { listDueDeliveredReports, postDeliveredReport, recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";
 export type { VisionSource } from "./vision-language/index.js";

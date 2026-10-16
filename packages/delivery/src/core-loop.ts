@@ -247,9 +247,10 @@ export class CoreLoop {
     return null;
   }
 
+  /** A project whose report failed is logged at warn by the Liaison, recorded on its sweep and retried; the cycle goes on. */
   private async postDeliveredReports(): Promise<void> {
     for (const report of await this.deps.deliveredReports.runPending()) {
-      console.log(`[liaison-delivered-report] project ${report.projectId}: delivered report ${report.kind}`);
+      if (report.kind !== "failed") console.log(`[liaison-delivered-report] project ${report.projectId}: delivered report ${report.kind}`);
     }
   }
 

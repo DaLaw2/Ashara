@@ -8,7 +8,10 @@ const run = promisify(execFile);
 
 interface Soak {
   readonly exitCode: number;
-  /** stdout without what is not a function of the seeds: each run's `ms` and the stale-database notice. */
+  /**
+   * stdout without what is not a function of the seeds: each run's `ms`, the stale-database notice,
+   * and the migration notices of a template build, which only the run that finds no template prints.
+   */
   readonly lines: readonly string[];
 }
 
@@ -21,7 +24,7 @@ function failedSoak(err: unknown): Soak | null {
 function canonical(stdout: string): string[] {
   return stdout
     .split("\n")
-    .filter((line) => !line.startsWith("dropped "))
+    .filter((line) => !line.startsWith("dropped ") && !line.trimStart().startsWith("[migrate] "))
     .map((line) => line.replace(/, \d+ ms$/, ""));
 }
 

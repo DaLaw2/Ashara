@@ -93,6 +93,7 @@ export const PROJECT_BLOCK_KINDS = [
   "plan_repair",
   "infrastructure",
   "replan_stopped",
+  "replan_provider_failed",
 ] as const;
 
 export const projectBlocks = pgTable("project_blocks", {

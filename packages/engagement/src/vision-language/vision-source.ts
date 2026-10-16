@@ -20,8 +20,8 @@ export const VisionSourceSchema = z.discriminatedUnion("type", [
     id: z.string().min(1),
     text: z.string().min(1),
     status: z.string().min(1),
-    // "not-shown" is how a plan written before "unrecorded" stored the same reading: a record that
-    // said neither asked nor reported.
+    // A stored "not-shown" means what "unrecorded" means, a record that says neither asked nor
+    // reported, so it is read as that.
     standing: z.union([z.enum(["stated", "asked", "reported", "unrecorded"]), z.literal("not-shown").transform(() => "unrecorded" as const)]),
     kind: z.enum(["client-visible", "internal-design", "unclassified"]),
   }),

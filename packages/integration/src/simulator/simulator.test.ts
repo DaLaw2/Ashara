@@ -219,6 +219,12 @@ describe("lifecycle simulator, directed", () => {
     it(`carries ${pair} on the first call that can carry it`, async () => {
       const result = await directed([direction]);
       expect(result.faults.map((f) => `${f.seam}:${f.fault}`)).toEqual([pair]);
+      if (pair === "model:provider-error") {
+        // A transport failure is the provider's, as production's adapter reports it: the read that
+        // made the request counts it, and it never escapes the cycle as an Ashara fault.
+        expect(result.trace.filter((line) => /^cycle \d+: error/.test(line))).toEqual([]);
+        expect(result.log.some((line) => line.includes("(the provider failed the request)"))).toBe(true);
+      }
       expect(keys(result), statements(result)).toEqual([]);
     }, 90_000);
   }

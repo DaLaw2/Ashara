@@ -4,6 +4,7 @@ export type { ContextualLlm, ContextualTurnLlm, CostedTurnResult } from "./guard
 export type { LlmCallRecorder, LlmProviderCall } from "./guarded-model-access.js";
 export { LlmCallLedger } from "./llm-call-ledger.js";
 export { SPEND_CAP_ERROR_CLASS, SpendCap } from "./spend-cap.js";
+export type { SpendAtCap } from "./spend-cap.js";
 export type { CostMeasurement } from "./cost.js";
 export { LlmCallNotAdmitted, LlmCallNotRecorded, PreCallRefusal } from "./errors.js";
 /** @testseam the integration model-catalog.test.ts prices catalog models directly; LlmCallLedger.record is its production caller */

@@ -151,7 +151,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
 // The report says how to run the product from the interface file the scaffold wrote on main.
 describe("checkTextFacts, the delivered report's quote of the public interface", () => {
   const commit = "d".repeat(40);
-  const lead = `How to run it: the product's public interface, quoted as PUBLIC_INTERFACE.md reads on main at commit ${commit}.`;
+  const lead = `Public interface (from PUBLIC_INTERFACE.md on main at commit ${commit}), quoted as the file reads.`;
   const none = `How to run the product is not on record: its public interface file is missing. PUBLIC_INTERFACE.md is not on main at commit ${commit}.`;
   const report = (section: string) => ({ sweepId: "s1", mainCommit: commit, visionAtAcceptance: 1, body: `Your project is delivered.\n\n${section}\n\nNothing more is built.` });
   const onMain = (text: string | null): TextFactRecords["interfaceOnMain"] => ({

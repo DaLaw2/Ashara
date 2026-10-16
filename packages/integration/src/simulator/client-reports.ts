@@ -40,7 +40,7 @@ const episodeRecord = z.object({
   ended: z.boolean(),
 });
 const repairRow = z.object({ episodeId: z.string(), workItemId: z.string(), title: z.string(), attempts: z.number(), blockedReason: z.unknown() });
-const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable() });
+const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks: z.array(z.string()), reportId: z.string().nullable(), reportFailures: z.number() });
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 
@@ -84,7 +84,7 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     sweeps: await rows(
       sweepRow,
-      sql`SELECT id, passed, unchecked_tasks AS "uncheckedTasks", report_id AS "reportId"
+      sql`SELECT id, passed, unchecked_tasks AS "uncheckedTasks", report_id AS "reportId", report_failures AS "reportFailures"
           FROM acceptance_sweeps WHERE project_id = ${projectId} ORDER BY created_at, id`,
     ),
     revisionReports: (
@@ -141,6 +141,7 @@ const KIND_JUDGEMENT = {
   replan_bound: "stated",
   infrastructure: "stated",
   replan_stopped: "stated",
+  replan_provider_failed: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -148,7 +149,7 @@ const KIND_JUDGEMENT = {
 type Judged = typeof KIND_JUDGEMENT;
 type StatedKind = { [K in keyof Judged]: Judged[K] extends "stated" ? K : never }[keyof Judged];
 const JUDGEMENT_OF: ReadonlyMap<string, Judged[keyof Judged]> = new Map(Object.entries(KIND_JUDGEMENT));
-const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped"];
+const STATED_KINDS: ReadonlyArray<StatedKind> = ["budget_cap", "configuration", "fault", "planning_stopped", "replan_bound", "infrastructure", "replan_stopped", "replan_provider_failed"];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
   return JUDGEMENT_OF.get(kind) ?? "unknown";
@@ -248,6 +249,8 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       return "the machines Ashara runs the work on kept failing while they ran this project's work";
     case "replan_stopped":
       return "every attempt to revise the plan failed, the last because the model planning it gave no usable answer";
+    case "replan_provider_failed":
+      return "every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read";
   }
 }
 
@@ -434,7 +437,15 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     const sweep = passed.at(-1);
     if (sweep === undefined) add("accepted-unswept", "the project is accepted with no passed acceptance sweep on record");
     const report = sweep?.reportId === null || sweep === undefined ? undefined : byId.get(sweep.reportId);
-    if (report !== undefined) {
+    const notice = report === undefined ? null : /^Your project is accepted: .* could not be written from Ashara's records in (\d+) attempts\./.exec(report.body);
+    if (notice !== null && sweep !== undefined) {
+      // The acceptance notice sent in place of a report whose records could not be read: every
+      // attempt it names but the posting one is a failure recorded on the sweep.
+      const attempts = Number(notice[1]);
+      if (sweep.reportFailures < attempts - 1) {
+        add("delivered-notice-unfounded", `the acceptance notice says the report could not be written in ${attempts} attempts; the sweep records ${sweep.reportFailures} failed attempt(s)`);
+      }
+    } else if (report !== undefined) {
       const goals = items.filter((item) => item.level === "Task" && item.status === "Completed" && item.origin === "decomposition");
       const closes = namedLines(paragraph(report.body, "What was delivered:"));
       for (const goal of goals) {

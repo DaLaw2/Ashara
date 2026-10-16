@@ -2,13 +2,15 @@ import { describe, expect, test } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import type { AcceptedAssumptionStanding } from "./vision-language/vision-assumption.js";
 import { DeliveredReports } from "./delivered-report.js";
-import type { DeliveredReportStore } from "./delivered-report.js";
+import type { DeliveredReportFailureRecord, DeliveredReportStore } from "./delivered-report.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000021", "test");
 const MAIN = "c".repeat(40);
 const MERGE_A = "a".repeat(40);
 
-type Due = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
+type Listed = Awaited<ReturnType<DeliveredReportStore["dueReports"]>>[number];
+type Due = Extract<Listed, { readonly kind: "due" }>;
+type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures">;
 type Item = Extract<Due["vision"], { readonly kind: "recorded" }>["items"][number]["source"];
 
 function scope(id: string, text: string, side: "in" | "out" | "unclassified" = "in"): Item {
@@ -23,8 +25,8 @@ const WORKSPACE = "/work/target";
 const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 type InterfaceRead = Awaited<ReturnType<ConstructorParameters<typeof DeliveredReports>[1]["at"]>>;
 
-async function render(fields: Omit<Due, "targetProjectPath">, read: InterfaceRead = { kind: "absent" }): Promise<string> {
-  const due: Due = { ...fields, targetProjectPath: WORKSPACE };
+async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
+  const due: Due = { ...fields, kind: "due", failures: 0, interfaceReadFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
   const reports = new DeliveredReports(
@@ -35,6 +37,7 @@ async function render(fields: Omit<Due, "targetProjectPath">, read: InterfaceRea
         posted.push(body);
         return "posted";
       },
+      recordReportFailure: async () => expect.unreachable("no report failed"),
     },
     {
       file: INTERFACE_FILE,
@@ -50,7 +53,7 @@ async function render(fields: Omit<Due, "targetProjectPath">, read: InterfaceRea
   return posted[0];
 }
 
-const BASE: Omit<Due, "targetProjectPath"> = {
+const BASE: Fields = {
   sweepId: "s9",
   projectId,
   mainCommit: MAIN,
@@ -61,9 +64,10 @@ const BASE: Omit<Due, "targetProjectPath"> = {
   vision: { kind: "unrecorded" },
 };
 
-/** The paragraph that tells the client how to run the product, up to the next section. */
+/** The section that quotes the product's public interface file, or says why not, up to the next section. */
 function howToRun(body: string): string {
-  const start = body.indexOf("How to run");
+  const quoted = body.indexOf("Public interface (from ");
+  const start = quoted >= 0 ? quoted : body.indexOf("How to run");
   const end = body.indexOf("\n\nWhich parts of what you asked for");
   expect(start).toBeGreaterThan(0);
   return body.slice(start, end);
@@ -71,11 +75,12 @@ function howToRun(body: string): string {
 
 // The report says how to run the product as main holds it, whatever file name the plan used.
 describe("how to run the product", () => {
-  test("quotes the public interface file from main as is, after what was delivered", async () => {
+  test("quotes the public interface file from main as is, titled by the file it is, after what was delivered", async () => {
     const text = "Run: python wc.py <file>...\n\nPrints lines, words and bytes, then a total.\n";
     const body = await render(BASE, { kind: "present", text });
-    expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("How to run"));
-    expect(howToRun(body)).toBe(`How to run it: the product's public interface, quoted as ${INTERFACE_FILE} reads on main at commit ${MAIN}.\n\`\`\`\n${text}\`\`\``);
+    expect(body.indexOf("What was delivered:")).toBeLessThan(body.indexOf("Public interface"));
+    expect(howToRun(body)).toBe(`Public interface (from ${INTERFACE_FILE} on main at commit ${MAIN}), quoted as the file reads.\n\`\`\`\n${text}\`\`\``);
+    expect(body).not.toContain("How to run it");
   });
 
   test("a file holding a fence is quoted in a longer one, so nothing in it closes the quote", async () => {
@@ -305,5 +310,118 @@ describe("the delivered report", () => {
     });
     expect(body).toContain(`the environment's test passed on main, commit ${MAIN}; no stored check of any task ran with it.`);
     expect(body).not.toContain("passed together");
+  });
+});
+
+// One project's report failing never stops another's, and is recorded, retried with a backoff and,
+// past its bound of interface reads, posted saying the file could not be read.
+describe("a delivered report that fails is its own project's", () => {
+  const otherId = parseProjectId("00000000-0000-4000-8000-000000000022", "test");
+  const BROKEN = "/work/broken";
+
+  function store(listed: readonly Listed[], post: "posts" | "fails" = "posts") {
+    const posted: Array<{ sweepId: string; body: string }> = [];
+    const failures: Array<{ sweepId: string } & DeliveredReportFailureRecord> = [];
+    const reportStore: DeliveredReportStore = {
+      dueReports: async () => listed,
+      postReport: async (sweepId, body) => {
+        if (post === "fails") throw new Error("client_messages insert failed: connection reset");
+        posted.push({ sweepId, body });
+        return "posted";
+      },
+      recordReportFailure: async (sweepId, failure) => {
+        failures.push({ sweepId, ...failure });
+      },
+    };
+    const reports = new DeliveredReports(reportStore, {
+      file: INTERFACE_FILE,
+      at: async (targetProjectPath) => {
+        if (targetProjectPath === BROKEN) throw new Error("git ls-tree: fatal: not a git repository");
+        return { kind: "absent" };
+      },
+    });
+    return { reports, posted, failures };
+  }
+
+  const due = (sweepId: string, id: typeof projectId, targetProjectPath: string, failures: number, interfaceReadFailures = failures): Due => ({
+    ...BASE,
+    kind: "due",
+    failures,
+    interfaceReadFailures,
+    sweepId,
+    projectId: id,
+    targetProjectPath,
+  });
+
+  test("two projects, one whose interface file git cannot read: the other is posted, the failure recorded with a backoff", async () => {
+    const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 0), due("s-ok", projectId, WORKSPACE, 0)]);
+
+    const outcomes = await reports.runPending();
+
+    expect(outcomes.map((o) => [o.kind, o.projectId])).toEqual([
+      ["failed", otherId],
+      ["posted", projectId],
+    ]);
+    expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: 60 }]);
+    const [failed] = outcomes;
+    if (failed?.kind !== "failed") return expect.unreachable("the broken project's report did not fail");
+    expect(failed.failure.message).toContain(`project ${otherId} (acceptance sweep s-broken) failed, attempt 1; tried again in 60s`);
+  });
+
+  test("a report whose records cannot be read is recorded and retried, the backoff doubling with each failure", async () => {
+    const unread: Listed = { kind: "unread", failures: 2, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
+    const { reports, posted, failures } = store([unread, due("s-ok", projectId, WORKSPACE, 0)]);
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed", "posted"]);
+    expect(posted.map((p) => p.sweepId)).toEqual(["s-ok"]);
+    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, retryAfterSeconds: 240 }]);
+  });
+
+  test("past its bound of unread attempts, the client is told the project was accepted and where the error is kept", async () => {
+    const unread: Listed = { kind: "unread", failures: 4, sweepId: "s-unread", projectId: otherId, error: new Error("project records no workspace_path") };
+    const { reports, posted, failures } = store([unread]);
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect(failures).toEqual([{ sweepId: "s-unread", error: expect.stringContaining("workspace_path"), interfaceRead: false, retryAfterSeconds: null }]);
+    expect(posted[0]?.body).toBe(
+      `Your project is accepted: its acceptance sweep passed on main. Its delivered report could not be written from Ashara's ` +
+        `records in 5 attempts. Ashara keeps the error in its record of this delivery, acceptance sweep s-unread.\n\n` +
+        `Nothing more is built on this project; it waits until you stop it.`,
+    );
+  });
+
+  test("past its bound of failed reads, the report is posted saying the file could not be read and where the error is kept", async () => {
+    const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 2)]);
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["posted"]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: null }]);
+    expect(howToRun(posted[0]?.body ?? "")).toBe(
+      `How to run the product is not quoted: ${INTERFACE_FILE} on main at commit ${MAIN} could not be read in 3 attempts. ` +
+        `Ashara keeps the error in its record of this delivery, acceptance sweep s-broken.`,
+    );
+    expect(posted[0]?.body).not.toContain("not a git repository");
+  });
+
+  test("failures of other kinds do not count against the interface file's reads: one failed read is retried, never posted without the quote", async () => {
+    const { reports, posted, failures } = store([due("s-broken", otherId, BROKEN, 4, 0)]);
+
+    expect((await reports.runPending()).map((o) => o.kind)).toEqual(["failed"]);
+    expect(posted).toEqual([]);
+    expect(failures).toEqual([{ sweepId: "s-broken", error: expect.stringContaining("not a git repository"), interfaceRead: true, retryAfterSeconds: 960 }]);
+  });
+
+  test("a post that fails after the reads ran out counts one failed attempt, the attempt the log names", async () => {
+    const { reports, failures } = store([due("s-broken", otherId, BROKEN, 2)], "fails");
+
+    const [outcome] = await reports.runPending();
+
+    if (outcome?.kind !== "failed") return expect.unreachable("the post did not fail");
+    expect(failures.map((f) => [f.interfaceRead, f.retryAfterSeconds])).toEqual([
+      [true, null],
+      [false, 240],
+    ]);
+    expect(failures.filter((f) => f.retryAfterSeconds !== null)).toHaveLength(1);
+    expect(outcome.failure.message).toContain("failed, attempt 3; tried again in 240s");
   });
 });

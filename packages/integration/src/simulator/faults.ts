@@ -1,4 +1,4 @@
-import type { LanguageModelV4CallOptions } from "@ai-sdk/provider";
+import { APICallError, type LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import pg from "pg";
 import { z } from "zod";
 import type { PoolFactory } from "@ashara/db";
@@ -492,6 +492,22 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
   };
 }
 
+/**
+ * A connection reset as a real provider adapter throws it: provider-utils `handleFetchError` wraps a
+ * network failure in an APICallError before it leaves the adapter, so the gateway reads it as the
+ * provider's failure. A bare Error here would reach the gateway as an Ashara fault instead.
+ */
+function connectionReset(provider: string, modelId: string): APICallError {
+  const cause = Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
+  return new APICallError({
+    message: `Cannot connect to API: ${cause.message}`,
+    cause,
+    url: `simulated://${provider}/${modelId}`,
+    requestBodyValues: {},
+    isRetryable: true,
+  });
+}
+
 /** The model transport of one instance (S2): a provider error throws before the stand-in answers. */
 export function faultingModels(context: SeamContext, inner: LanguageModelFactory): LanguageModelFactory {
   return (provider, model) => {
@@ -501,7 +517,7 @@ export function faultingModels(context: SeamContext, inner: LanguageModelFactory
       ...resolved,
       doGenerate: async (options: LanguageModelV4CallOptions) => {
         const fate = await context.scheduler.enter(context.instance, "model", model.id, ["provider-error", "clock-jump"]);
-        if (fate.fault === "provider-error") throw Object.assign(new Error("socket hang up (simulated)"), { code: "ECONNRESET" });
+        if (fate.fault === "provider-error") throw connectionReset(provider.name, model.id);
         if (fate.fault === "clock-jump") context.clock.jump(20 * 60 * 1000);
         const value = await resolved.doGenerate(options);
         context.scheduler.leave(context.instance, fate, "model", model.id);

@@ -166,6 +166,9 @@ function clientAnswers(): ClientAnswers {
 const interfaceReads: string[] = [];
 const INTERFACE_TEXT = "Run: kv put <key> <value>\n";
 
+/** A workspace whose git fails every read, as a checkout that is not a repository does. */
+const BROKEN_WORKSPACE = `/tmp/${NAME_PREFIX}-not-a-repository`;
+
 function deliveredReports(): DeliveredReports {
   const store = createDeliveredReportStore(db);
   const ours: DeliveredReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => ourProjects.has(due.projectId)) };
@@ -173,6 +176,7 @@ function deliveredReports(): DeliveredReports {
     file: "PUBLIC_INTERFACE.md",
     at: async (targetProjectPath, commit) => {
       interfaceReads.push(`${targetProjectPath}@${commit}`);
+      if (targetProjectPath === BROKEN_WORKSPACE) throw new Error(`git ls-tree: fatal: not a git repository: ${BROKEN_WORKSPACE}`);
       return { kind: "present", text: INTERFACE_TEXT };
     },
   });
@@ -202,6 +206,24 @@ function sweepDeps(passed: boolean, details: string, ran: { readonly checked: re
 async function statusOf(projectId: ProjectId): Promise<string> {
   const result = await db.execute(sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status ?? "(none)";
+}
+
+/** The failed attempts recorded on the project's passed sweep, and whether it is waiting out a backoff. */
+async function reportAttempts(projectId: ProjectId): Promise<{ failures: number; interfaceReadFailures: number; lastError: string | null; waiting: boolean }> {
+  const result = await db.execute(sql`
+    SELECT report_failures AS failures, report_interface_read_failures AS "interfaceReadFailures", report_last_error AS "lastError",
+      COALESCE(report_retry_at > now(), false) AS waiting
+    FROM acceptance_sweeps WHERE project_id = ${projectId} AND passed`);
+  const [row] = z
+    .array(z.object({ failures: z.number(), interfaceReadFailures: z.number(), lastError: z.string().nullable(), waiting: z.boolean() }))
+    .parse(result.rows);
+  if (row === undefined) throw new Error(`project ${projectId} has no passed sweep`);
+  return row;
+}
+
+/** Stands in for the backoff passing: the sweep's retry time is now. */
+async function endBackoff(projectId: ProjectId): Promise<void> {
+  await db.execute(sql`UPDATE acceptance_sweeps SET report_retry_at = now() WHERE project_id = ${projectId} AND passed`);
 }
 
 async function reportsOf(projectId: ProjectId): Promise<string[]> {
@@ -257,7 +279,7 @@ describe("acceptance on main", () => {
     const reports = await reportsOf(projectId);
     expect(reports).toHaveLength(1);
     const [body] = reports;
-    expect(body).toContain(`quoted as PUBLIC_INTERFACE.md reads on main at commit ${MAIN}.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
+    expect(body).toContain(`Public interface (from PUBLIC_INTERFACE.md on main at commit ${MAIN}), quoted as the file reads.\n\`\`\`\n${INTERFACE_TEXT}\`\`\``);
     expect(body.split("\n\n")[0]).toContain(`the environment's test and the stored checks of 2 completed tasks passed together on main, commit ${MAIN}`);
     // The scaffold, checked only by the substrate, is done but listed apart from what passed.
     expect(body).toContain(`not checked by a stored check: none was written for them, so nothing in the run above confirms them:\n- "Set up the module root"`);
@@ -287,7 +309,7 @@ describe("acceptance on main", () => {
     await abandoned("List keys", { source: "failure_given_up", reason: "exhausted 2 replan attempt(s) without success", attempts: 2 });
     await abandoned("Watch keys", { source: "superseded", planRevision: 2, requestedBy: null, repairOf: ["x"], reason: "replaced by the repaired plan" });
     const due = (await createDeliveredReportStore(db).dueReports()).find((row) => row.projectId === projectId);
-    expect(due?.givenUp).toEqual(["List keys"]);
+    expect(due?.kind === "due" ? due.givenUp : due).toEqual(["List keys"]);
     expect(await deliveredReports().runPending()).toEqual([{ kind: "posted", projectId }]);
     const [body] = await reportsOf(projectId);
     expect(body).toContain(`These tasks were given up, and the plan was revised around them:\n- "List keys"`);
@@ -309,19 +331,22 @@ describe("acceptance on main", () => {
     const drifted = await accepted();
     await setSpec(drifted.checksOfStore, "sources", [VISION.stored, { ...VISION.missing, text: "A missing key exits 1" }]);
     const driftedRow = await due(drifted.projectId);
-    expect(driftedRow?.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id)).toEqual([
-      "S1",
-      "S2",
-    ]);
+    expect(
+      driftedRow?.kind === "due" && driftedRow.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
+    ).toEqual(["S1", "S2"]);
 
-    // A line citing an id its own task does not hold is a broken record, refused by name.
+    // A line citing an id its own task does not hold is a broken record, refused by name, for that report alone.
     const broken = await accepted();
     await setSpec(broken.checksOfStore, "acceptance", [{ line: "get works", sources: ["A9"] }]);
-    await expect(due(broken.projectId)).rejects.toThrow(/acceptance line "get works" cites A9, which its task_spec.sources does not hold/);
+    expect(await due(broken.projectId)).toMatchObject({
+      kind: "unread",
+      error: expect.objectContaining({ message: expect.stringMatching(/acceptance line "get works" cites A9, which its task_spec.sources does not hold/) }),
+    });
+    expect((await due(drifted.projectId))?.kind).toBe("due");
     await removeSpec(broken.checksOfStore, "acceptance");
 
     // A check task written before acceptance lines were traced: coverage is not on record.
-    expect((await due(broken.projectId))?.vision).toEqual({ kind: "unrecorded" });
+    expect(await due(broken.projectId)).toMatchObject({ kind: "due", vision: { kind: "unrecorded" } });
     const posted = await deliveredReports().runPending();
     expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, broken.projectId].sort());
     expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
@@ -342,13 +367,66 @@ describe("acceptance on main", () => {
     const saved = await db.execute(sql`SELECT inferences FROM vision_documents WHERE project_id = ${projectId} AND version = 2`);
     const inferences = z.array(z.object({ inferences: z.unknown() })).parse(saved.rows)[0]?.inferences;
     await db.execute(sql`UPDATE vision_documents SET inferences = inferences #- '{2,clientAnswer}' WHERE project_id = ${projectId} AND version = 2`);
-    await expect(deliveredReports().runPending()).rejects.toThrow(/a Stated assumption carries the client answer that stated it/);
+    expect(await deliveredReports().runPending()).toEqual([
+      { kind: "failed", projectId, failure: expect.objectContaining({ message: expect.stringMatching(/a Stated assumption carries the client answer that stated it/) }) },
+    ]);
+    expect(await reportAttempts(projectId)).toEqual({ failures: 1, interfaceReadFailures: 0, lastError: expect.stringMatching(/a Stated assumption carries/), waiting: true });
+    // Not listed again until its backoff has passed.
+    expect(await deliveredReports().runPending()).toEqual([]);
     await db.execute(sql`UPDATE vision_documents SET inferences = ${JSON.stringify(inferences)}::jsonb WHERE project_id = ${projectId} AND version = 2`);
+    await endBackoff(projectId);
 
     expect(await deliveredReports().runPending()).toContainEqual({ kind: "posted", projectId });
     const [body] = await reportsOf(projectId);
     expect(body).toContain("- An empty prefix lists every key (you confirmed this when asked)\n");
     expect(body).not.toContain("have not answered");
+  });
+
+  test("one project's report failing (no workspace on record, git unable to read main) never stops another's: each failure is recorded and retried", async () => {
+    const accepted = async (): Promise<ProjectId> => {
+      const { projectId, goals, scaffold } = await deliveredProject();
+      expect(await runAcceptanceSweeps(sweepDeps(true, "all suites passed", { checked: goals, unchecked: [scaffold] }))).toBe(1);
+      return projectId;
+    };
+    const healthy = await accepted();
+    const noWorkspace = await accepted();
+    const unreadable = await accepted();
+    await db.execute(sql`UPDATE projects SET workspace_path = NULL WHERE id = ${noWorkspace}`);
+    await db.execute(sql`UPDATE projects SET workspace_path = ${BROKEN_WORKSPACE} WHERE id = ${unreadable}`);
+
+    const outcomes = await deliveredReports().runPending();
+    expect(new Map(outcomes.map((outcome) => [outcome.projectId, outcome.kind]))).toEqual(
+      new Map([
+        [healthy, "posted"],
+        [noWorkspace, "failed"],
+        [unreadable, "failed"],
+      ]),
+    );
+    expect(await reportsOf(healthy)).toHaveLength(1);
+    expect(await reportAttempts(noWorkspace)).toEqual({ failures: 1, interfaceReadFailures: 0, lastError: expect.stringMatching(/records no workspace_path/), waiting: true });
+    expect(await reportAttempts(unreadable)).toEqual({ failures: 1, interfaceReadFailures: 1, lastError: expect.stringMatching(/not a git repository/), waiting: true });
+    expect(await deliveredReports().runPending()).toEqual([]);
+
+    // Past its bound of reads, the report is posted saying the file could not be read; the record keeps
+    // why. The posting attempt is no failed attempt. Past its bound of unread attempts, the project
+    // whose records cannot be read is sent an acceptance notice saying so.
+    for (const attempt of [2, 3, 4, 5]) {
+      await endBackoff(unreadable);
+      await endBackoff(noWorkspace);
+      const kinds = new Map((await deliveredReports().runPending()).map((outcome) => [outcome.projectId, outcome.kind]));
+      expect(kinds.get(unreadable)).toBe(attempt === 2 ? "failed" : attempt === 3 ? "posted" : undefined);
+      expect(kinds.get(noWorkspace)).toBe(attempt === 5 ? "posted" : "failed");
+      if (attempt === 4) expect((await reportAttempts(noWorkspace)).failures).toBe(4);
+    }
+    const [body] = await reportsOf(unreadable);
+    expect(body).toContain(`PUBLIC_INTERFACE.md on main at commit ${MAIN} could not be read in 3 attempts.`);
+    expect(body).not.toContain("not a git repository");
+    expect(await reportAttempts(unreadable)).toMatchObject({ failures: 2, interfaceReadFailures: 3, lastError: expect.stringMatching(/not a git repository/) });
+    const [notice] = await reportsOf(noWorkspace);
+    expect(notice).toContain("Your project is accepted: its acceptance sweep passed on main.");
+    expect(notice).toContain("could not be written from Ashara's records in 5 attempts.");
+    expect(notice).not.toContain("workspace_path");
+    expect(await reportAttempts(noWorkspace)).toMatchObject({ failures: 4, interfaceReadFailures: 0, lastError: expect.stringMatching(/records no workspace_path/) });
   });
 
   test("only a passed sweep makes a project accepted, and only the client's stop ends it, with the merges named", async () => {

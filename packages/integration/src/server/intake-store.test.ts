@@ -289,7 +289,7 @@ describe("Liaison tender intake", () => {
   test("three provider failures post one report, consume the tender and write no vision", async () => {
     stubModel({
       doGenerate: async () => {
-        throw new Error("stub provider unavailable");
+        throw new APICallError({ message: "stub provider unavailable", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: true });
       },
     });
     const { projectId, tenderId } = await tender("Timesheet app for a cleaning company.");
@@ -408,6 +408,22 @@ describe("Liaison tender intake", () => {
     expect(tenderRow?.consumedAt).toBeNull();
     expect(tenderRow?.intakeAttempts).toBe(0);
     expect(tenderRow?.intakeLastError).toBeNull();
+  });
+
+  test("a fault in Ashara's own handling of the request throws through: no attempt is counted and the tender stays open", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    stubModel({
+      doGenerate: async () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'content')");
+      },
+    });
+    const { projectId, tenderId } = await tender("Price list for a bike shop.");
+
+    await expect(intake().runPending()).rejects.toMatchObject({ name: "ProviderError", failure: "ashara" });
+
+    const tenderRow = (await messagesOf(projectId)).find((m) => m.id === tenderId);
+    expect(tenderRow?.consumedAt).toBeNull();
+    expect(tenderRow?.intakeAttempts).toBe(0);
   });
 
   test("intake on a project that already has a vision writes nothing new", async () => {

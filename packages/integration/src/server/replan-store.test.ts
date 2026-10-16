@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
@@ -641,6 +642,39 @@ describe("a late client change is planned", () => {
     );
     expect(body).not.toContain("a step of Ashara's own work");
     expect(body).not.toContain("ReplanAttemptsExhausted");
+  });
+
+  // The gateway wraps every failure with no fallback left in ProviderError: one the provider's HTTP
+  // error or silence caused is not the model's, and one Ashara's own code threw is Ashara's.
+  test("a revision whose provider fails every request halts as replan_provider_failed; one Ashara's code fails halts as fault", async () => {
+    const failing = async (thrown: Error): Promise<ProjectId> => {
+      const { projectId, questionId } = await plannedProject();
+      await contradict(projectId, questionId);
+      stub.model = new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw thrown;
+        },
+      });
+      const kinds: string[] = [];
+      for (let attempt = 0; attempt < 3; attempt += 1) kinds.push(...(await replanner().runPending()).map((outcome) => outcome.kind));
+      expect(kinds).toEqual(["failed", "failed", "project-blocked"]);
+      return projectId;
+    };
+
+    const unanswered = await failing(
+      new APICallError({ message: "Service Unavailable", url: "https://stub.invalid/v1", requestBodyValues: {}, statusCode: 503, isRetryable: true }),
+    );
+    expect(await projectRow(unanswered)).toMatchObject({ status: "blocked", category: "replan_provider_failed" });
+    const broken = await failing(new TypeError("Cannot read properties of undefined"));
+    expect(await projectRow(broken)).toMatchObject({ status: "blocked", category: "fault" });
+
+    expect((await blockReports().runPending()).map((o) => o.kind)).toEqual(["posted", "posted"]);
+    const body = (await reportsOf(unanswered)).at(-1)?.body ?? "";
+    expect(body).toContain(
+      "Ashara recorded the cause as this: every attempt to revise the plan failed, the last because the service that runs the model planning it returned an error or did not answer, so no answer was read.",
+    );
+    expect(body).not.toContain("gave no usable answer");
+    expect((await reportsOf(broken)).at(-1)?.body).toContain("a step of Ashara's own work on this project failed");
   });
 });
 

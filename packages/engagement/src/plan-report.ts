@@ -136,7 +136,7 @@ class PlanReportUnfounded extends Error {
 const revisionWorkFields = {
   newTasks: z.array(z.string().min(1)).min(1),
   newCheckTasks: z.number().int().min(0),
-  // Absent on a revision recorded before its review tasks were counted.
+  // Absent where a stored summary does not count its review tasks; never read as 0.
   newReviewTasks: z.number().int().min(0).max(1).optional(),
   newEnvironmentTask: z.boolean(),
   supersededTasks: z.array(z.string().min(1)),

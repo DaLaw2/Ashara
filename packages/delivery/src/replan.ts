@@ -235,20 +235,42 @@ class PlanRepairBoundReached extends Error {
 }
 
 /**
- * Whether a failed revision attempt failed because the planning model gave no usable answer: its
- * structured output never validated, or its provider failed the request, with none of Ashara's own
- * refusals or faults in the chain (engagement read-failure.ts draws the same line for a read of
- * client input). Only then is an exhausted revision the model's failure rather than Ashara's.
+ * Whose failure a failed revision attempt was, from its cause chain:
+ * - "model": the planning model answered and its structured output never validated.
+ * - "provider": the model's provider failed the request (an HTTP error, or no answer), so no answer
+ *   was read (ProviderError.failure).
+ * - "ashara": one of Ashara's own refusals or faults is in the chain, or nothing in it says
+ *   otherwise: an error not recognised as the model's or the provider's is Ashara's to look into.
  */
-function modelGaveNoUsableAnswer(err: unknown): boolean {
-  let modelFailed = false;
+type RevisionFailure = "model" | "provider" | "ashara";
+
+function revisionFailureOf(err: unknown): RevisionFailure {
+  let failure: RevisionFailure = "ashara";
   for (let current: unknown = err; current instanceof Error; current = current.cause) {
     if (current instanceof PreCallRefusal || current instanceof LlmCallNotAdmitted || current instanceof LlmCallNotRecorded || current instanceof ProviderConfigurationRejected) {
-      return false;
+      return "ashara";
     }
-    if (current instanceof StructuredOutputExhausted || current instanceof ProviderError) modelFailed = true;
+    if (failure !== "ashara") continue;
+    if (current instanceof StructuredOutputExhausted) failure = "model";
+    else if (current instanceof ProviderError) {
+      if (current.failure !== "provider") return "ashara";
+      failure = "provider";
+    }
   }
-  return modelFailed;
+  return failure;
+}
+
+/** The halt an exhausted revision records, by whose failure its last attempt was. */
+function exhaustedRevisionCause(exhausted: ReplanAttemptsExhausted, failure: RevisionFailure): ProjectBlockCause {
+  const cause = projectBlockCause(exhausted);
+  switch (failure) {
+    case "model":
+      return { ...cause, category: "replan_stopped" };
+    case "provider":
+      return { ...cause, category: "replan_provider_failed" };
+    case "ashara":
+      return cause;
+  }
 }
 
 /** Revising the plan failed on every attempt: the change is not planned, and the old plan is not dispatched past it. */
@@ -803,7 +825,6 @@ export class Replanner implements Replanning {
       project.changesAwaited.length > 0 ? `answer(s) ${project.changesAwaited.join(", ")}` : `repair of ${project.repairsAwaited.join(", ")}`;
     console.warn(`[replan] project ${projectId} (vision v${project.vision.version}, ${asked}): attempt ${attempt}/${MAX_REPLAN_ATTEMPTS} failed: ${error}`);
     if (attempt < MAX_REPLAN_ATTEMPTS) return { kind: "failed", projectId, attempt, error };
-    const exhausted = projectBlockCause(new ReplanAttemptsExhausted(projectId, attempt, error));
-    return this.block(projectId, modelGaveNoUsableAnswer(err) ? { ...exhausted, category: "replan_stopped" } : exhausted);
+    return this.block(projectId, exhaustedRevisionCause(new ReplanAttemptsExhausted(projectId, attempt, error), revisionFailureOf(err)));
   }
 }

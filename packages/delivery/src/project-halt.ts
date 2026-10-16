@@ -1,12 +1,13 @@
 import { describeErrorChain } from "@ashara/shared";
 import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
+import type { SpendAtCap } from "./acl/finance-acl.js";
 
 // Delivery's published language for a project halt (O3 c, ADR-080 d3): Delivery owns the halt
 // (an open episode in project_blocks, migration 059); Engagement owns the engagement lifecycle
 // (projects.lifecycle: active, stopped, accepted). Every context that asks for a halt, and Engagement's
 // reports of one, read the cause in these words. This module imports nothing but the kernel and
-// Finance's spend-cap class names, neither of which reads Delivery, so a context Delivery itself
-// reads can read it back without a cycle at load time.
+// Finance's spend-cap class names and amounts, neither of which reads Delivery, so a context
+// Delivery itself reads can read it back without a cycle at load time.
 
 /**
  * What kind of cause blocked a project (migration 040): the closed vocabulary the Liaison's plain
@@ -23,9 +24,10 @@ import { SPEND_CAP_ERROR_CLASS } from "./acl/finance-acl.js";
  * 045): the project halts as undeliverable. `infrastructure`: the machines a task runs on kept
  * failing past its fault budget (migration 048); the project resumes by itself once the substrate
  * probe passes. `replan_stopped`: every attempt to revise the plan failed, the last because the
- * planning model gave no usable answer (its structured output never validated, or its provider
- * failed the request) (migration 060): the model's failure, not Ashara's machinery, which a
- * revision exhausted by any other error is (`fault`).
+ * planning model's structured output never validated (migrations 060, 062): the model's failure.
+ * `replan_provider_failed`: every attempt failed, the last because the planning model's provider
+ * failed the request, an HTTP error or no answer, so no answer was read (migration 062). A revision
+ * exhausted by any other error is Ashara's own (`fault`).
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -36,19 +38,8 @@ type ProjectBlockCategory =
   | "suite_review"
   | "plan_repair"
   | "infrastructure"
-  | "replan_stopped";
-
-/**
- * The amounts a spend cap was judged on when it stopped work, as Finance read them from its ledger
- * (migration 060): the cap, the spend recorded, the worst case set aside for calls in flight, and the
- * worst case of the call it refused, null when no call was refused (spend had already reached the cap).
- */
-export interface SpendAtCap {
-  readonly capUsd: number;
-  readonly spentUsd: number;
-  readonly inFlightUsd: number;
-  readonly nextCallUsd: number | null;
-}
+  | "replan_stopped"
+  | "replan_provider_failed";
 
 /**
  * Why a project was blocked (migration 025): the cause's category, the error's class and its full

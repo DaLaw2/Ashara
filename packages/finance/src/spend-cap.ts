@@ -25,7 +25,7 @@ interface SpendCaps {
  * recorded, the worst case set aside for calls in flight, and the worst case of the call it refused
  * (null when no call was refused: recorded and in-flight spend had already reached the cap).
  */
-interface SpendAtCap {
+export interface SpendAtCap {
   readonly capUsd: number;
   readonly spentUsd: number;
   readonly inFlightUsd: number;

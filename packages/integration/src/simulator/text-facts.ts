@@ -596,7 +596,7 @@ function checkDeliveredStandings(records: TextFactRecords, versions: ReadonlyMap
 
 /** How the delivered report introduces the quoted public interface, as the oracle words it. */
 function quotedLead(commit: string): string {
-  return `How to run it: the product's public interface, quoted as ${PUBLIC_INTERFACE_PATH} reads on main at commit ${commit}.`;
+  return `Public interface (from ${PUBLIC_INTERFACE_PATH} on main at commit ${commit}), quoted as the file reads.`;
 }
 
 /** How the delivered report says the product has no public interface file, as the oracle words it. */

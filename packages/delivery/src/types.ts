@@ -22,7 +22,7 @@ import type {
 import type { AcceptanceStore } from "./acceptance.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
-import type { SpendAtCap } from "./project-halt.js";
+import type { SpendAtCap } from "./acl/finance-acl.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;

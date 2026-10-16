@@ -105,4 +105,12 @@ export const acceptanceSweeps = pgTable("acceptance_sweeps", {
   defectItemId: uuid("defect_item_id").references(() => workItems.id, { onDelete: "cascade" }),
   reportId: uuid("report_id").references(() => clientMessages.id, { onDelete: "set null" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
+  /**
+   * Migration 062: failed attempts at the delivered report, the failed reads of its public interface
+   * file among them, the last error, and when it is tried again.
+   */
+  reportFailures: integer("report_failures").notNull().default(0),
+  reportInterfaceReadFailures: integer("report_interface_read_failures").notNull().default(0),
+  reportLastError: text("report_last_error"),
+  reportRetryAt: timestamptz("report_retry_at"),
 });

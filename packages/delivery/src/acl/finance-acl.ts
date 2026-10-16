@@ -11,6 +11,7 @@ export { BudgetExceeded, PreCallRefusal } from "@ashara/finance";
 // call, or the model's answer that never validated, or its provider's failure (replan.ts).
 export { LlmCallNotAdmitted, LlmCallNotRecorded, ProviderConfigurationRejected, ProviderError, StructuredOutputExhausted } from "@ashara/finance";
 export { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
+export type { SpendAtCap } from "@ashara/finance";
 
 // The model language Delivery's planning calls speak, published by Finance in front of Model Access.
 export { CapabilityLevelSchema, withStructuredLadder } from "@ashara/finance";

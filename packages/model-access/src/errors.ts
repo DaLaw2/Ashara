@@ -8,13 +8,26 @@ export class GatewayError extends Error {
   }
 }
 
+/**
+ * Whose failure a provider request that failed with no fallback left was, read from what it threw:
+ * - "provider": the provider failed the request: an HTTP error status that is not a rejection of
+ *   Ashara's configuration, no answer at all (connection refused or reset, name resolution), or a
+ *   response body that was empty or not in the API's shape. Not the model's answer: none was read.
+ * - "ashara": anything else, Ashara's own code and a rejection of Ashara's configuration included.
+ *   An error the gateway does not recognise as the provider's is Ashara's to look into.
+ */
+export type ProviderFailure = "provider" | "ashara";
+
+/** A structured request failed on its provider and on any fallback; `failure` says whose failure it was. */
 export class ProviderError extends GatewayError {
   readonly provider: string;
+  readonly failure: ProviderFailure;
 
-  constructor(provider: string, message: string, options?: ErrorOptions) {
-    super(`Provider "${provider}": ${message}`, options);
+  constructor(provider: string, message: string, failure: ProviderFailure, options?: ErrorOptions) {
+    super(`Provider "${provider}": ${message} (${failure === "provider" ? "the provider failed the request" : "a fault on Ashara's side"})`, options);
     this.name = "ProviderError";
     this.provider = provider;
+    this.failure = failure;
   }
 }
 

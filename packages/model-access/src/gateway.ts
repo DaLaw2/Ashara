@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { APICallError, NoObjectGeneratedError, generateObject, generateText, isStepCount } from "ai";
+import {
+  APICallError,
+  EmptyResponseBodyError,
+  InvalidResponseDataError,
+  NoObjectGeneratedError,
+  generateObject,
+  generateText,
+  isStepCount,
+} from "ai";
 import type { GenerateObjectResult, LanguageModel } from "ai";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
@@ -12,6 +20,7 @@ import {
   StructuredOutputTruncated,
   TurnResponseInvalid,
 } from "./errors.js";
+import type { ProviderFailure } from "./errors.js";
 import type { ResolvedProvider } from "./provider-registry.js";
 import { ProviderRegistry } from "./provider-registry.js";
 import type { LanguageModelFactory } from "./provider-registry.js";
@@ -108,6 +117,22 @@ function errorOutcome(error: unknown): LlmCallOutcome {
   return { kind: "error", errorKind: error instanceof Error ? error.name : typeof error };
 }
 
+/**
+ * Whose failure a failed provider request was (ProviderFailure), from its cause chain. A rejection
+ * of Ashara's configuration is checked first: it carries the provider's own HTTP error as its cause.
+ */
+function providerFailureOf(error: unknown): ProviderFailure {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (current instanceof ProviderConfigurationRejected) return "ashara";
+  }
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (APICallError.isInstance(current) || EmptyResponseBodyError.isInstance(current) || InvalidResponseDataError.isInstance(current)) {
+      return "provider";
+    }
+  }
+  return "ashara";
+}
+
 /** The error kind of a structured call that stopped at `maxTokens` without a valid result. */
 const TRUNCATED: LlmCallOutcome = { kind: "error", errorKind: "truncated" };
 
@@ -145,8 +170,9 @@ export class LLMGateway {
   /**
    * Shared "resolve → try → catch → fallback → retry once" shape for
    * structured calls: run `execute` against `resolved`; on failure, resolve
-   * one fallback provider and retry once, or throw a typed ProviderError if
-   * none is available. `shouldRethrow` lets a caller opt an error class out of
+   * one fallback provider and retry once. A failure with no fallback left
+   * (none available, or the fallback failed too) throws a ProviderError whose
+   * `failure` says whose it was. `shouldRethrow` lets a caller opt an error class out of
    * the fallback retry and propagate it immediately instead —
    * SchemaValidationError and whatever the gate throws.
    */
@@ -178,6 +204,7 @@ export class LLMGateway {
         throw new ProviderError(
           resolved.providerName,
           `${label} failed (${rootMsg}) and no fallback available`,
+          providerFailureOf(error),
           { cause: error },
         );
       }
@@ -188,7 +215,18 @@ export class LLMGateway {
           `one failover request to provider=${fallback.providerName} model=${fallback.modelConfig.id} ` +
           `for site=${request.site ?? "none"}`,
       );
-      return await execute(request, fallback);
+      try {
+        return await execute(request, fallback);
+      } catch (fallbackError) {
+        if (shouldRethrow?.(fallbackError)) throw fallbackError;
+        throw new ProviderError(
+          fallback.providerName,
+          `${label} failed on provider=${resolved.providerName} (${describeErrorChain(error)}) and on its fallback ` +
+            `(${describeErrorChain(fallbackError)})`,
+          providerFailureOf(fallbackError),
+          { cause: fallbackError },
+        );
+      }
     }
   }
 
