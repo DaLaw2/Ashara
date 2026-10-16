@@ -99,8 +99,8 @@ export function citable(item: VisionItem): boolean {
 
 /**
  * The items a plan must check (d89 E, ADR-083): every in-scope line and every assumption a check
- * decides, whether the planner chose to cite it or not. Each is named by an acceptance line of the
- * plan, or of a completed task that cited it as the vision states it now.
+ * decides, whether the planner chose to cite it or not. Each is cited by a task of the plan, or by a
+ * completed task that cited it as the vision states it now, and is decided by that task's stored checks.
  */
 export function itemsToCheck(items: readonly VisionItem[]): VisionItem[] {
     return items.filter(checkDecides);
@@ -148,9 +148,9 @@ export interface DecompositionInput {
     /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
     readonly visionItems: readonly VisionItem[];
     /**
-     * The vision items an acceptance line of a completed task already names, each as that task cited
-     * it: an assumption here whose text is the vision's now needs no new line (ADR-083). Empty for a
-     * first plan.
+     * The vision items a completed task cites, each as that task cited it: its check set was kept only
+     * when its checks decided every one, so an item here whose text is the vision's now needs no new
+     * task to cite it (ADR-083). Empty for a first plan.
      */
     readonly checkedItems: readonly VisionItem[];
 }
@@ -296,23 +296,25 @@ export class UntraceableTaskError extends Error {
 }
 
 /**
- * A plan leaves an item a check must decide (d89 E, ADR-083) named by no acceptance line: neither
- * of a task it plans nor of a completed task that cited it as the vision states it now. It is
- * something the client asked for or could observe, so accepting without a check on it would
- * deliver it unverified. Checked mechanically, with no model call: inside the ladder its message is
- * a re-ask; past it the plan is rejected, never written.
+ * A plan leaves an item a check must decide (d89 E, ADR-083) cited by no task: neither one it plans
+ * nor a completed task that cited it as the vision states it now. Only a task that cites an item
+ * has a check task whose checks must decide it (Z0 keeps a check set only when every item its task
+ * cites is decided by one of its checks), so an item no task cites would be accepted with no check
+ * on it. Whether it is checked is the stored checks' to say; this rule only gives each such item a
+ * task. Checked mechanically, with no model call: inside the ladder its message is a re-ask; past
+ * it the plan is rejected, never written.
  */
-export class UncheckedVisionItemsError extends Error {
+export class UncitedVisionItemsError extends Error {
     constructor(
         readonly parentId: string,
-        readonly unchecked: ReadonlyArray<{ readonly id: string; readonly text: string }>,
+        readonly uncited: ReadonlyArray<{ readonly id: string; readonly text: string }>,
     ) {
         super(
-            `No acceptance line names ${unchecked.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every in-scope line ` +
-                `and every assumption not marked "not citable" must be named in "sources" by at least one acceptance line of a ` +
-                `task, so a check decides it (decomposition of ${parentId})`,
+            `No task cites ${uncited.map((item) => `${item.id} ("${item.text}")`).join(", ")}: every in-scope line and every ` +
+                `assumption not marked "not citable" must be named in "sources" by a deliverable or an acceptance line of a ` +
+                `task whose work it is, so that task's checks decide it (decomposition of ${parentId})`,
         );
-        this.name = "UncheckedVisionItemsError";
+        this.name = "UncitedVisionItemsError";
     }
 }
 

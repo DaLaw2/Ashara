@@ -23,7 +23,7 @@ import {
     itemsToCheck,
     TaskCapExceededError,
     TaskOutputSchema,
-    UncheckedVisionItemsError,
+    UncitedVisionItemsError,
     UnresolvableDependencyError,
     UntraceableTaskError,
     VisionItemsMissing,
@@ -201,8 +201,8 @@ export class DecompositionEngine {
                 return traced.kind === "untraceable" ? [traced.error.message] : [];
             }),
         ];
-        const unchecked = uncheckedItems(rawTasks, visionItems, checkedItems, parentId);
-        if (unchecked !== null) errors.push(unchecked.message);
+        const uncited = uncitedItems(rawTasks, visionItems, checkedItems, parentId);
+        if (uncited !== null) errors.push(uncited.message);
         return errors.length === 0 ? { ok: true } : { ok: false, errors };
     }
 
@@ -226,8 +226,8 @@ export class DecompositionEngine {
         if (rawTasks.length > cap) {
             throw new TaskCapExceededError({ emitted: rawTasks.length, cap, parentId });
         }
-        const unchecked = uncheckedItems(rawTasks, visionItems, checkedItems, parentId);
-        if (unchecked !== null) throw unchecked;
+        const uncited = uncitedItems(rawTasks, visionItems, checkedItems, parentId);
+        if (uncited !== null) throw uncited;
 
         const refToId = new Map<string, string>();
         const titleToId = new Map<string, string>();
@@ -396,7 +396,7 @@ export class DecompositionEngine {
         if (toCheck.length > 0) {
             lines.push(
                 ``,
-                `Every one of these items must be named in "sources" by at least one acceptance line, so a check decides it; a plan that leaves one unnamed is rejected: ${toCheck.map((item) => item.id).join(", ")}.`,
+                `Every one of these items must be cited in "sources" by a line of the task whose work it is, whose checks then decide it; a plan that leaves one uncited is rejected: ${toCheck.map((item) => item.id).join(", ")}.`,
             );
         }
 
@@ -602,7 +602,8 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
     const description = [
         `${goal}.`,
         `Vision items "${task.title}" cites (its checks may test only what these ask for, and the inputs they say to ` +
-            `reject; where each assumption stands with the client is under the assumptions work proceeds on):\n` +
+            `reject; each needs at least one check that decides it, named in that check's "decides"; where each ` +
+            `assumption stands with the client is under the assumptions work proceeds on):\n` +
             bulleted(task.taskSpec.sources.map(visionSourceCitation)),
         `Acceptance of "${task.title}", each line with the items it serves:\n` +
             bulleted(task.taskSpec.acceptance.map((line) => `[${line.sources.join(", ")}] ${line.line}`)),
@@ -615,7 +616,8 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
             "finish summary.",
     ].join("\n\n");
     const successCriteria = [
-        "every check is defined with define_check",
+        "every check is defined with define_check, naming the cited vision items it decides",
+        `every vision item "${task.title}" cites is decided by at least one check`,
         `at least one check fails on the plan's foundation, because "${task.title}" is not done there`,
     ];
     return {
@@ -631,7 +633,8 @@ function checkTaskFor(epicId: string, foundationId: string, task: DecomposedTask
             endState: successCriteria.join("; "),
             scope: `the checks of "${task.title}"`,
             deliverables: [
-                `checks of "${task.title}", each defined with define_check as a command the project environment can run`,
+                `checks of "${task.title}", each defined with define_check as a command the project environment can run, ` +
+                    "together deciding every vision item it cites",
                 "the files those checks need",
             ],
             capability: checkLevelFor(task.taskSpec.capability),
@@ -660,12 +663,13 @@ function reviewTaskFor(
     const description = [
         `Read every check this plan's check tasks wrote, all together and with the vision, before any of the plan's ` +
             `work starts. Name every set of checks that no product could pass together, and every check that tests ` +
-            `behaviour none of the vision items its own task cites asks for.`,
+            `behaviour none of the vision items its own task cites asks for, and every item a task cites that none of ` +
+            `its checks decides.`,
         `Vision items:\n${bulleted(visionItems.map(visionSourceCitation))}`,
     ].join("\n\n");
     const successCriteria = [
         "every stored check of the plan was read with the vision",
-        "every contradiction and every check outside the vision is named with the check task that wrote it",
+        "every contradiction, every check outside the vision and every cited item no check decides is named with the check task that wrote it",
     ];
     return {
         id: generateId("task"),
@@ -724,29 +728,33 @@ type VisionTrace =
     | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
 
 /**
- * Whether a completed task's acceptance line already names the item as the vision states it now:
- * one that cited an earlier statement of it checked that statement, not this one.
+ * Whether a completed task cites the item as the vision states it now: one that cited an earlier
+ * statement of it had its checks decide that statement, not this one.
  */
 function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): boolean {
     return checkedItems.some((checked) => checked.type === item.type && checked.id === item.id && checked.text === item.text);
 }
 
 /**
- * The items a check must decide (d89 E, ADR-083) that no acceptance line of the plan names and no
- * completed task already checks, as the error that re-asks or rejects the plan; null when none.
- * A line names an item by its id or its exact text, as traceToVision reads it.
+ * The items a check must decide (d89 E, ADR-083) that no task of the plan cites and no completed
+ * task already cites, as the error that re-asks or rejects the plan; null when none. A task cites an
+ * item by naming its id or its exact text in a deliverable's or an acceptance line's sources, as
+ * traceToVision reads them. Citing gives an item a check task; whether a check decides it is the
+ * stored checks' to say, which Z0 requires of every item the check task cites.
  */
-function uncheckedItems(
+function uncitedItems(
     rawTasks: readonly RawTask[],
     visionItems: readonly VisionItem[],
     checkedItems: readonly VisionItem[],
     parentId: string,
-): UncheckedVisionItemsError | null {
-    const named = new Set(rawTasks.flatMap((raw) => raw.acceptance.flatMap((line) => line.sources.map((entry) => entry.trim()))));
-    const unchecked = itemsToCheck(visionItems).filter(
+): UncitedVisionItemsError | null {
+    const named = new Set(
+        rawTasks.flatMap((raw) => [...raw.deliverables, ...raw.acceptance].flatMap((line) => line.sources.map((entry) => entry.trim()))),
+    );
+    const uncited = itemsToCheck(visionItems).filter(
         (item) => !named.has(item.id) && !named.has(item.text) && !alreadyChecked(item, checkedItems),
     );
-    return unchecked.length === 0 ? null : new UncheckedVisionItemsError(parentId, unchecked.map(({ id, text }) => ({ id, text })));
+    return uncited.length === 0 ? null : new UncitedVisionItemsError(parentId, uncited.map(({ id, text }) => ({ id, text })));
 }
 
 /**

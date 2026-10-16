@@ -561,7 +561,7 @@ function acceptedLine(assumption: Assumption, standing: AcceptedStanding): strin
   return `- Ashara's assumption, ${ACCEPTED_INFERRED[standing] ?? standing}: ${assumption.statement}${unclassified}`;
 }
 
-const UNCOVERED_HEAD = "These items of what you asked for are named by no acceptance criterion";
+const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 
 function checkDeliveredStandings(records: TextFactRecords, versions: ReadonlyMap<number, VisionReading>, add: Add): void {
   if (records.delivered.length === 0) return;

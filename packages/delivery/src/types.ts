@@ -248,7 +248,7 @@ interface SuiteReviewFindingsEntry {
   readonly reviewTaskId: string;
   readonly problems: ReadonlyArray<{
     readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision";
+    readonly kind: "contradiction" | "outside-vision" | "undecided-item";
     readonly problem: string;
     readonly evidence: string;
   }>;
@@ -264,7 +264,7 @@ interface SuiteReviewFindingRecord {
     readonly timesNamed: ReadonlyMap<string, number>;
     readonly earlierFindings: ReadonlyMap<
       string,
-      ReadonlyArray<{ readonly kind: "contradiction" | "outside-vision"; readonly problem: string; readonly evidence: string }>
+      ReadonlyArray<{ readonly kind: "contradiction" | "outside-vision" | "undecided-item"; readonly problem: string; readonly evidence: string }>
     >;
   }>;
 }

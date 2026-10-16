@@ -1354,6 +1354,7 @@ export class TaskVerification {
           attempt: d.task.attempt,
           name: check.name,
           command: check.command,
+          decides: check.decides,
           replaced: recording.replaced,
           defined: recording.defined,
           ...(redRun.kind === "ran"
@@ -1363,7 +1364,7 @@ export class TaskVerification {
               : { productChanged: redRun.detail }),
           ...(discarded.length > 0 ? { discarded } : {}),
         });
-        return { ...recording, redRun, discarded };
+        return { ...recording, redRun, discarded, undecided: work.recorder.undecided() };
       },
     };
   }
@@ -1557,7 +1558,8 @@ export class TaskVerification {
    * image (ADR-074 addendum 2 d74 A), whatever authoring this is: the first, or one after a dispute,
    * a review or staleness. A check that times out or whose command cannot run rejects the whole
    * set; a check that passes there is kept as a guard of behaviour that already holds; the set is
-   * kept only when at least one of its checks fails there decisively. The kept revision is appended
+   * kept only when at least one of its checks fails there decisively, and only when every vision item
+   * the check task cites is decided by at least one of its checks (ADR-083). The kept revision is appended
    * to Quality's task_checks for the implementation task with the foundation as its baseline; the
    * throwaway branch is discarded either way.
    */
@@ -1568,6 +1570,17 @@ export class TaskVerification {
     try {
       const defined = work.recorder.checks();
       if (defined.length === 0) return this.checksRejected(d, outcome, "no check was defined with define_check", {});
+      // ADR-083: which items are checked is what the stored checks decide, never what a line cites.
+      const undecided = work.recorder.undecided();
+      if (undecided.length > 0) {
+        return this.checksRejected(
+          d,
+          outcome,
+          `the task cites ${undecided.join(", ")}, which no check decides: every item the task cites needs a check ` +
+            `that decides it, named in that check's "decides"`,
+          { undecided },
+        );
+      }
       const harvest = await harvestCheckFiles(
         d.repo,
         task.id,

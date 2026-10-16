@@ -35,8 +35,8 @@ type AcceptedVisionItem =
     };
 
 /**
- * Every item of the vision the plan was reviewed against, each with whether an acceptance line of a
- * check task whose stored checks the sweep ran cites it; or none recorded.
+ * Every item of the vision the plan was reviewed against, each with whether a stored check the sweep
+ * ran records that it decides it (ADR-083); or none recorded.
  */
 type VisionCoverage =
   | { readonly kind: "recorded"; readonly items: ReadonlyArray<{ readonly source: AcceptedVisionItem; readonly checked: boolean }> }
@@ -328,10 +328,10 @@ function coverageSection(vision: VisionCoverage): string {
   if (asked.length === 0) return "The plan's record holds no item of what you asked for, so none of it is stated as checked.";
   const uncovered = asked.filter((item) => !item.checked);
   if (uncovered.length === 0) {
-    return "Every item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.";
+    return "Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.";
   }
   return [
-    `These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on ` +
+    `These items of what you asked for are decided by no stored check of a task whose stored checks passed on ` +
       `main, so nothing confirms them either way:`,
     ...uncovered.map((item) => coverageLine(item.source)),
   ].join("\n");

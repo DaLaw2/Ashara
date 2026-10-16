@@ -100,7 +100,7 @@ async function checkedTask(title: string, check: { readonly name: string; readon
     checkTaskId,
     environmentVersion: "e".repeat(64),
     baselineCommit: foundation,
-    checks: [check],
+    checks: [{ ...check, decides: ["S1"] }],
     files: [],
   });
   return { id, projectId, title, taskSpec: { goal: title, endState: `${title} is done`, scope: title, deliverables: [], capability: "Strong" }, epicId: null, dispatchCount: 1, attempt: 1, workKind: "implementation", successCriteria: [] };

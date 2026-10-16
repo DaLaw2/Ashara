@@ -33,6 +33,8 @@ export const taskChecks = pgTable(
     environmentVersion: text("environment_version").notNull(),
     /** The commit the revision was red-run on, its plan revision's foundation (migration 045); null before 045. */
     baselineCommit: text("baseline_commit"),
+    /** The ids of the vision items the check decides, a non-empty jsonb array (migration 063); null before 063. */
+    decides: jsonb(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (t) => ({

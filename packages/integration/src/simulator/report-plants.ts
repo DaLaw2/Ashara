@@ -88,9 +88,9 @@ export const deliveredReportMisstatesUnchecked = rewriteReport(
   },
 );
 
-const UNCOVERED_HEAD = "These items of what you asked for are named by no acceptance criterion";
+const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 
-/** A delivered report that leaves out the first asked-for item no acceptance line cites. */
+/** A delivered report that leaves out the first asked-for item no stored check decides. */
 const deliveredReportOmitsUncovered = rewriteReport(
   (body) => body.startsWith("Your project is delivered."),
   (body) => dropFirstNamed(body, UNCOVERED_HEAD, "- "),
@@ -139,35 +139,63 @@ export const deliveredReportMisquotesInterface = rewriteReport(
       : body.replace("its public interface file is missing.", "its public interface file is empty."),
 );
 
-/**
- * A plan stored with fewer checks than it was validated with (d89 E, ADR-083): every acceptance line
- * a task's stored task_spec records keeps only the first item it names, after the planner's
- * validation passed, so the checks written from it decide none of the others. The honest planner
- * names every item to check on each task's first line, so an in-scope line and an assumption the
- * client could observe are left with no check citing them.
- */
-export const planDropsChecks = rewriteInsert("work_items", (param) =>
-  param.replace(/("line":"(?:[^"\\]|\\.)*","sources":\["(?:[^"\\]|\\.)*")(?:,"(?:[^"\\]|\\.)*")+\]/g, "$1]"),
-);
+/** A parameter as JSON, or undefined when it is no JSON text. */
+function jsonOf(param: string): unknown {
+  try {
+    return JSON.parse(param);
+  } catch {
+    return undefined;
+  }
+}
 
-/** `plant` on a run whose plan is stored with fewer checks (planDropsChecks): the items it leaves uncited are what the report then states. */
-function onPlanDroppingChecks(plant: QueryPlant): QueryPlant {
-  return (args) => planDropsChecks(args) ?? plant(args);
+const decidesParam = z.array(z.string().min(1)).min(1);
+
+/** A parameter that is a stored check's `decides` (a JSON array of ids), or null. */
+function decidesOf(param: unknown): string[] | null {
+  if (typeof param !== "string") return null;
+  const parsed = decidesParam.safeParse(jsonOf(param));
+  return parsed.success ? parsed.data : null;
 }
 
 /**
- * A delivered report that leaves out the first asked-for item no acceptance line of a swept check
- * task cites. Such an item exists only when a plan was stored with fewer checks than the planner's
- * rule asks for, so the plant stores one so (I6 names that too).
+ * A check set stored with one cited item decided by none of its checks (ADR-083): the check author
+ * wrote no check for it, and the set reached the store past Z0's rule. Each stored check of the
+ * revision that names the set's last decided item names the set's first instead, so the revision's
+ * rows decide every item but that one. A set deciding one item only is left as it is.
  */
-export const deliveredReportOmitsUncoveredOfDroppedChecks = onPlanDroppingChecks(deliveredReportOmitsUncovered);
+export const checkSetSkipsItem: QueryPlant = (args) => {
+  const text = textOf(args);
+  const params = args[1];
+  if (text === null || !text.startsWith(`insert into "task_checks"`) || !Array.isArray(params)) return null;
+  const decided = [...new Set(params.flatMap((param: unknown) => decidesOf(param) ?? []))];
+  const [first] = decided;
+  const skipped = decided.at(-1);
+  if (first === undefined || skipped === undefined || decided.length < 2) return null;
+  const rewritten = params.map((param: unknown) => {
+    const ids = decidesOf(param);
+    return ids === null ? param : JSON.stringify([...new Set(ids.map((id) => (id === skipped ? first : id)))]);
+  });
+  return [args[0], rewritten, ...args.slice(2)];
+};
+
+/** `plant` on a run whose check set is stored with one cited item undecided (checkSetSkipsItem): that item is what the report then states. */
+function onCheckSetSkippingItem(plant: QueryPlant): QueryPlant {
+  return (args) => checkSetSkipsItem(args) ?? plant(args);
+}
+
+/**
+ * A delivered report that leaves out the first asked-for item no stored check decides. The honest
+ * check author decides every cited item, so the plant stores one check set with an item undecided
+ * (I6 names that too).
+ */
+export const deliveredReportOmitsUncoveredOfSkippedItem = onCheckSetSkippingItem(deliveredReportOmitsUncovered);
 
 /**
  * A delivered report that says an assumption the client was asked about was reported to them. The
- * report states the standing of an asked-for item no check cites, so the plant stores the plan with
- * fewer checks (I6 names that too).
+ * report states the standing of an asked-for item no stored check decides, so the plant stores one
+ * check set with an item undecided (I6 names that too).
  */
-export const deliveredReportMisstatesStanding = onPlanDroppingChecks(
+export const deliveredReportMisstatesStanding = onCheckSetSkippingItem(
   rewriteReport(
     (body) => body.startsWith("Your project is delivered."),
     (body) => body.replaceAll("Ashara's assumption, which you were asked about and have not answered:", "Ashara's assumption, which was reported to you:"),

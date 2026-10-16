@@ -129,7 +129,7 @@ describe("checkTextFacts, the delivered report's standings", () => {
     sweepId: "s1",
     mainCommit: "c".repeat(40),
     visionAtAcceptance,
-    body: `Your project is delivered.\n\nThese items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:\n${line}`,
+    body: `Your project is delivered.\n\nThese items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:\n${line}`,
   });
 
   // An assumption the client confirmed is never reported as unanswered.

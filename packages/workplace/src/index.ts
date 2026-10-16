@@ -8,7 +8,7 @@ export { DevSessionRepository } from "./dev-session-repository.js";
 export { readRunEvidence } from "./run-evidence.js";
 export { CHECK_MISSING_EXIT, CHECK_RUNNER, CHECK_VERDICT } from "./check-definition.js";
 export { environmentDefinitionRules } from "./environment-rules.js";
-export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, FoundationProbe } from "./check-definition.js";
+export type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, DefinedCheck, FoundationProbe } from "./check-definition.js";
 export type { CheckRun, TaskCheckRunPort } from "./check-run.js";
 export type { EnvironmentCheckPort } from "./environment-check.js";
 export type { EnvironmentDefinitionField } from "./environment-rules.js";

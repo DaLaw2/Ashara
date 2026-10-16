@@ -7,6 +7,15 @@ export interface CheckDefinition {
 }
 
 /**
+ * A check as its author defines it (ADR-083): with the ids of the vision items its verdict decides,
+ * never none. A check task's set is kept only when every item its task cites is decided by at least
+ * one of its checks, so which items are checked is a stored fact, never read off an acceptance line.
+ */
+export interface DefinedCheck extends CheckDefinition {
+  readonly decides: readonly [string, ...string[]];
+}
+
+/**
  * How Z0 runs every check (development's runSuitesOnCheckout), stated once for each brief and tool
  * that names it: a check author who guesses the shell writes checks that can never pass.
  */
@@ -71,6 +80,8 @@ export type CheckDefinitionResult =
        * foundation. Empty when there are none.
        */
       readonly discarded: readonly string[];
+      /** The items the task cites that no check defined so far decides; the set is kept only when none is left. */
+      readonly undecided: readonly string[];
     }
   /** The model can fix it: the reason is told to it as the tool's error. */
   | { readonly kind: "refused"; readonly reason: string };
@@ -92,7 +103,7 @@ export interface CheckDefinitionPort {
    * a file a command it ran left in the workspace.
    */
   fileWritten(path: string): void;
-  define(check: CheckDefinition, timeoutSeconds: number): Promise<CheckDefinitionResult>;
+  define(check: DefinedCheck, timeoutSeconds: number): Promise<CheckDefinitionResult>;
   /**
    * Runs one command on the foundation the way define_check red-runs a check, and records nothing:
    * the author's way to look at the foundation, so no command it runs only to look around is ever

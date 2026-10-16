@@ -6,8 +6,8 @@ import { z } from "zod";
 /**
  * What an assumption is about (d89 E), as the vision records it: behaviour the client could observe
  * (an output, an error, an exit status, the data the client stores), or a choice of how the team
- * builds it whose breach no client could observe. Only a client-visible one may be the source of an
- * acceptance line, and every one is (ADR-083).
+ * builds it whose breach no client could observe. Only a client-visible one may be cited by a task,
+ * and every one is, and is decided by a stored check (ADR-083).
  */
 export const AssumptionKindSchema = z.enum(["client-visible", "internal-design"]);
 

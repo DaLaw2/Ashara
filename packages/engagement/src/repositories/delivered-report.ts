@@ -171,15 +171,15 @@ async function givenUpGoalTitles(db: DbHandle, projectId: string): Promise<strin
   return rows.map((row) => row.title);
 }
 
-/** A check task's acceptance line cites an item id its own task_spec.sources does not hold. */
-class AcceptanceTraceBroken extends ReportRecordUnreadable {
+/** A stored check says it decides an item id its check task's task_spec.sources does not hold, or its decides does not parse. */
+class CheckDecisionUnreadable extends ReportRecordUnreadable {
   constructor(
     readonly checkTaskId: string,
-    readonly line: string,
-    readonly sourceId: string,
+    readonly check: string,
+    readonly detail: string,
   ) {
-    super(`check task ${checkTaskId}: acceptance line "${line}" cites ${sourceId}, which its task_spec.sources does not hold`);
-    this.name = "AcceptanceTraceBroken";
+    super(`check task ${checkTaskId}: stored check "${check}" ${detail}`);
+    this.name = "CheckDecisionUnreadable";
   }
 }
 
@@ -188,23 +188,26 @@ function sourceIdentity(source: VisionSource): string {
   return JSON.stringify([source.type, source.id, source.text]);
 }
 
+/** task_checks.decides (migration 063): the ids of the vision items one stored check decides; null on a row written before it. */
+const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
+
 /**
- * The items a check task's acceptance lines cite, by identity; null when the task records no traced
- * lines (written before d89), so what it covers is not on record.
+ * The items one stored check decides, by identity, each read as its check task cites it; null when
+ * the check records no items it decides (written before migration 063) or its check task records no
+ * cited items, so what it covers is not on record.
  */
-function citedBy(checkTaskId: string, rawSpec: unknown): Set<string> | null {
-  const spec = storedSpecOf(checkTaskId, rawSpec);
-  if (spec?.acceptance === undefined || spec.sources === undefined) return null;
-  const sources = new Map(spec.sources.map((source) => [source.id, source]));
-  const cited = new Set<string>();
-  for (const line of spec.acceptance) {
-    for (const id of line.sources) {
-      const source = sources.get(id);
-      if (source === undefined) throw new AcceptanceTraceBroken(checkTaskId, line.line, id);
-      cited.add(sourceIdentity(source));
-    }
+function decidedBy(check: { readonly checkTaskId: string; readonly name: string; readonly decides: unknown; readonly taskSpec: unknown }): Set<string> | null {
+  const decides = StoredDecidesSchema.safeParse(check.decides);
+  if (!decides.success) throw new CheckDecisionUnreadable(check.checkTaskId, check.name, `records decides that do not parse: ${z.prettifyError(decides.error)}`);
+  const sources = storedSpecOf(check.checkTaskId, check.taskSpec)?.sources;
+  if (decides.data === null || sources === undefined) return null;
+  const decided = new Set<string>();
+  for (const id of decides.data) {
+    const source = sources.find((each) => each.id === id);
+    if (source === undefined) throw new CheckDecisionUnreadable(check.checkTaskId, check.name, `decides ${id}, which its check task's task_spec.sources does not hold`);
+    decided.add(sourceIdentity(source));
   }
-  return cited;
+  return decided;
 }
 
 async function goalCloses(db: DbHandle, projectId: string): Promise<DueDeliveredReportRow["goals"]> {
@@ -225,25 +228,22 @@ async function goalCloses(db: DbHandle, projectId: string): Promise<DueDelivered
   });
 }
 
-/** The check tasks that wrote each goal task's latest stored checks, with their task specs. */
-async function checkAuthors(db: DbHandle, goalIds: readonly string[]): Promise<Array<{ readonly id: string; readonly taskSpec: unknown }>> {
+/** Every check of each goal task's latest stored revision (the sets the sweep ran), with its check task's task spec. */
+async function storedChecksOf(
+  db: DbHandle,
+  goalIds: readonly string[],
+): Promise<Array<{ readonly checkTaskId: string; readonly name: string; readonly decides: unknown; readonly taskSpec: unknown }>> {
   return db
-    .select({ id: workItems.id, taskSpec: workItems.taskSpec })
-    .from(workItems)
+    .select({ checkTaskId: taskChecks.checkTaskId, name: taskChecks.name, decides: taskChecks.decides, taskSpec: workItems.taskSpec })
+    .from(taskChecks)
+    .innerJoin(workItems, eq(workItems.id, taskChecks.checkTaskId))
     .where(
-      inArray(
-        workItems.id,
-        db
-          .select({ id: taskChecks.checkTaskId })
-          .from(taskChecks)
-          .where(
-            and(
-              inArray(taskChecks.taskId, [...goalIds]),
-              sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
-            ),
-          ),
+      and(
+        inArray(taskChecks.taskId, [...goalIds]),
+        sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
       ),
-    );
+    )
+    .orderBy(asc(taskChecks.checkTaskId), asc(taskChecks.name));
 }
 
 /** Where an assumption stood with the client at acceptance cannot be read: the report never falls back to the plan's copy. */
@@ -345,11 +345,10 @@ async function assumptionsAtAcceptance(
 
 /**
  * Every item of the vision as the plan's latest completed review recorded it (every item of the
- * vision its revision was decomposed from), each checked exactly when an acceptance line of the
- * check task of a goal task's latest stored checks (the sets the sweep ran) cites it. A
- * stored check is not recorded against one line, so the trace reaches the check task's lines, not
- * one check. Unrecorded when the review, or one of those check tasks, holds no traced items. Which
- * items are checked comes from the trace; where each assumption stands with the client comes from
+ * vision its revision was decomposed from), each checked exactly when a check of a goal task's
+ * latest stored revision (the sets the sweep ran) records that it decides it (ADR-083): a line
+ * citing an item is no check of it. Unrecorded when the review holds no traced items, or one of
+ * those checks records no items it decides. Where each assumption stands with the client comes from
  * the vision at acceptance (d95 a), and an assumption whose text there is not the one reviewed is
  * refused, never reported on the plan's copy.
  */
@@ -373,17 +372,17 @@ async function visionCoverage(
     .limit(1);
   const items = review ? storedSpecOf(review.id, review.taskSpec)?.sources : undefined;
   if (items === undefined) return { kind: "unrecorded" };
-  const cited = new Set<string>();
-  for (const author of goalIds.length === 0 ? [] : await checkAuthors(db, goalIds)) {
-    const lines = citedBy(author.id, author.taskSpec);
-    if (lines === null) return { kind: "unrecorded" };
-    for (const identity of lines) cited.add(identity);
+  const decided = new Set<string>();
+  for (const check of goalIds.length === 0 ? [] : await storedChecksOf(db, goalIds)) {
+    const items = decidedBy(check);
+    if (items === null) return { kind: "unrecorded" };
+    for (const identity of items) decided.add(identity);
   }
   const current = items.some((source) => source.type === "assumption") ? await assumptionsAtAcceptance(db, sweep) : new Map<string, AcceptedAssumption>();
   return {
     kind: "recorded",
     items: items.map((source) => {
-      const checked = cited.has(sourceIdentity(source));
+      const checked = decided.has(sourceIdentity(source));
       if (source.type === "scope") return { source, checked };
       const now = current.get(source.id);
       if (now === undefined) {

@@ -92,12 +92,34 @@ async function git(...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+interface CitedScope {
+  readonly type: "scope";
+  readonly id: string;
+  readonly text: string;
+  readonly side: "in";
+}
+
+/** The vision item every planned pair cites unless a test names more: its checks must decide each one (ADR-083). */
+const CITED: CitedScope = { type: "scope", id: "S1", text: "The product writes the files its users ask for.", side: "in" };
+
 /** An implementation task and its check task on record, as a first plan writes them after Sprint 0. */
-async function plannedPair(title: string): Promise<{ readonly implementation: TaskDescriptor; readonly check: TaskDescriptor }> {
+async function plannedPair(
+  title: string,
+  cited: readonly CitedScope[] = [CITED],
+): Promise<{ readonly implementation: TaskDescriptor; readonly check: TaskDescriptor }> {
   const implementationId = createWorkItemId();
   const checkId = createWorkItemId();
   const checkTitle = `Write the checks for "${title}"`;
-  const checkSpec = { goal: checkTitle, endState: "every check is defined", scope: `the checks of "${title}"`, deliverables: [] as string[], origin: "check", checksFor: implementationId } as const;
+  const checkSpec = {
+    goal: checkTitle,
+    endState: "every check is defined",
+    scope: `the checks of "${title}"`,
+    deliverables: [] as string[],
+    origin: "check" as const,
+    checksFor: implementationId,
+    visionItems: cited.map((item) => item.text),
+    sources: cited.map((item) => ({ ...item })),
+  };
   await db.execute(sql`
     INSERT INTO work_items (id, level, status, title, project_id, work_kind, owner_role_id, task_spec)
     VALUES (${implementationId}, 'Task', 'Pending', ${title}, ${projectId}, 'implementation', ${randomUUID()}, NULL),
@@ -201,12 +223,13 @@ const CheckRowSchema = z.object({
   environmentVersion: z.string(),
   baselineCommit: z.string().nullable(),
   checkTaskId: z.string(),
+  decides: z.array(z.string()).nullable(),
 });
 
 async function checkRowsOf(taskId: WorkItemId) {
   const result = await db.execute(sql`
     SELECT revision, name, command, files, environment_version AS "environmentVersion", baseline_commit AS "baselineCommit",
-           check_task_id AS "checkTaskId"
+           check_task_id AS "checkTaskId", decides
     FROM task_checks WHERE task_id = ${taskId} ORDER BY revision, name`);
   return z.array(CheckRowSchema).parse(result.rows);
 }
@@ -286,7 +309,7 @@ describe("independent verification", () => {
     const { result, mock, events } = await runTask(hello.check, [
       toolCallTurn("write_file", { path: helloSh, content: HELLO_CHECK }),
       toolCallTurn("write_file", { path: "hello.txt", content: "hello\n" }),
-      toolCallTurn("define_check", { name: "says hello", command: `sh ${helloSh}` }),
+      toolCallTurn("define_check", { name: "says hello", command: `sh ${helloSh}`, decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check: hello.txt says hello." }),
     ]);
 
@@ -310,6 +333,7 @@ describe("independent verification", () => {
         environmentVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
         baselineCommit: foundation,
         checkTaskId: hello.check.id,
+        decides: ["S1"],
       },
     ]);
     // Discarded: main is where it was, the throwaway branch and its worktree are gone.
@@ -327,9 +351,9 @@ describe("independent verification", () => {
     const helloSh = `checks/${hello.implementation.id}/hello.sh`;
 
     const { result, mock, events } = await runTask(greeting.check, [
-      toolCallTurn("define_check", { name: "says hi", command: "words=(hi); grep -q hi hi.txt && cat hi.txt" }),
+      toolCallTurn("define_check", { name: "says hi", command: "words=(hi); grep -q hi hi.txt && cat hi.txt", decides: ["S1"] }),
       toolCallTurn("write_file", { path: hiSh, content: "grep hi hi.txt || exit 99\n" }),
-      toolCallTurn("define_check", { name: "says hi", command: `sh ${hiSh}` }),
+      toolCallTurn("define_check", { name: "says hi", command: `sh ${hiSh}`, decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check: hi.txt says hi." }),
     ]);
 
@@ -363,7 +387,7 @@ describe("independent verification", () => {
 
     const { result, mock, events } = await runTask(greeting.check, [
       toolCallTurn("probe_foundation", { command: "ls environment" }),
-      toolCallTurn("define_check", { name: "says hey", command: "grep hey hey.txt || exit 99" }),
+      toolCallTurn("define_check", { name: "says hey", command: "grep hey hey.txt || exit 99", decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check: hey.txt says hey." }),
     ]);
 
@@ -381,7 +405,7 @@ describe("independent verification", () => {
     const vacuous = await plannedPair("Write a page");
 
     const { result, events } = await runTask(vacuous.check, [
-      toolCallTurn("define_check", { name: "always", command: "echo fine" }),
+      toolCallTurn("define_check", { name: "always", command: "echo fine", decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check." }),
     ]);
 
@@ -416,11 +440,29 @@ describe("independent verification", () => {
     expect(withoutVersion.match(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/g)).toBeNull();
   }, 300_000);
 
+  // ADR-083: a cited item no stored check decides would be accepted unchecked, whatever line cites it.
+  it("a set that leaves one cited item decided by no check is rejected before its red run, and nothing is stored", async () => {
+    const pair = await plannedPair("Write two notes", [CITED, { type: "scope", id: "S2", text: "The product keeps every note it is given.", side: "in" }]);
+
+    const { result, mock, events } = await runTask(pair.check, [
+      toolCallTurn("define_check", { name: "first note", command: "grep one one.txt || exit 99", decides: ["S1"] }),
+      toolCallTurn("define_check", { name: "uncited", command: "grep two two.txt || exit 99", decides: ["S9"] }),
+      toolCallTurn("finish", { status: "done", summary: "One check." }),
+    ]);
+
+    expect(result.status).toBe("failed");
+    expect(result.detail).toContain("the task cites S2, which no check decides");
+    expect(JSON.stringify(mock.doGenerateCalls[1]?.prompt ?? null)).toContain("Cited items no check defined so far decides (the checks are not kept until each has one): S2");
+    expect(JSON.stringify(mock.doGenerateCalls[2]?.prompt ?? null)).toContain("decides names [S9], which the task does not cite");
+    expect(events.find((e) => e.event === "check_red_run")).toBeUndefined();
+    expect(await checkRowsOf(pair.implementation.id)).toEqual([]);
+  }, 300_000);
+
   it("a check whose command the environment cannot run is rejected, though it fails on main", async () => {
     const unrunnable = await plannedPair("Write a form");
 
     const { result } = await runTask(unrunnable.check, [
-      toolCallTurn("define_check", { name: "form", command: "no-such-tool-in-this-environment --check" }),
+      toolCallTurn("define_check", { name: "form", command: "no-such-tool-in-this-environment --check", decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check." }),
     ]);
 
@@ -435,8 +477,8 @@ describe("independent verification", () => {
     const pair = await plannedPair("Write bye.txt");
 
     const { result, mock, events } = await runTask(pair.check, [
-      toolCallTurn("define_check", { name: "already there", command: "test -f environment/environment.toml" }),
-      toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt || exit 99" }),
+      toolCallTurn("define_check", { name: "already there", command: "test -f environment/environment.toml", decides: ["S1"] }),
+      toolCallTurn("define_check", { name: "says bye", command: "grep bye bye.txt || exit 99", decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "Two checks." }),
     ]);
 
@@ -477,7 +519,7 @@ describe("independent verification", () => {
       checkTaskId: goodbye.check.id,
       environmentVersion: "e".repeat(64),
       baselineCommit: foundation,
-      checks: [{ name: "says goodbye", command: "sh checks/bye.sh" }],
+      checks: [{ name: "says goodbye", command: "sh checks/bye.sh", decides: ["S1"] }],
       files: [{ path: "checks/bye.sh", content: original }],
     });
     const mainBefore = await git("rev-parse", "main");
@@ -534,7 +576,7 @@ describe("post-merge regression suite", () => {
       checkTaskId: pair.check.id,
       environmentVersion: helloRow.environmentVersion,
       baselineCommit: foundation,
-      checks: [check],
+      checks: [{ ...check, decides: ["S1"] }],
       files: [],
     });
     return pair;
@@ -733,14 +775,14 @@ describe("post-merge regression suite", () => {
       checkTaskId: later.check.id,
       environmentVersion: "f".repeat(64),
       baselineCommit: foundation,
-      checks: [{ name: "old", command: "false" }],
+      checks: [{ name: "old", command: "false", decides: ["S1"] }],
       files: [],
     });
     const mainBefore = await git("rev-parse", "main");
     expect(await git("show", `${mainBefore}:hello.txt`)).toBe("hello");
 
     const authored = await runTask({ ...later.check, attempt: 2, dispatchCount: 1 }, [
-      toolCallTurn("define_check", { name: "says hello", command: "grep hello hello.txt || exit 99" }),
+      toolCallTurn("define_check", { name: "says hello", command: "grep hello hello.txt || exit 99", decides: ["S1"] }),
       toolCallTurn("finish", { status: "done", summary: "One check: hello.txt says hello." }),
     ]);
 

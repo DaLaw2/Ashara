@@ -129,7 +129,7 @@ describe("a task runs on cells end to end", () => {
         revision: 1,
         environmentVersion: "e".repeat(64),
         baselineCommit: (await run("git", ["rev-parse", "main"], { cwd: target })).stdout.trim(),
-        checks: [{ name: "hello", command: check }],
+        checks: [{ name: "hello", command: check, decides: ["S1"] }],
         files: [],
       }),
     };

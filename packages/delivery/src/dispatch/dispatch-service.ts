@@ -581,7 +581,7 @@ export class DispatchService {
         await dropCheckBranch(targetProjectPath, branch);
         workdir = await createWorkdir(base, targetProjectPath, branch);
         try {
-          work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: new CheckRecorder() };
+          work = { ...plan, branch, startCommit: await headCommit(workdir.repo, task.id), recorder: new CheckRecorder(plan.citedItems) };
         } catch (e) {
           await discardCheckWorkdir(workdir.workDir, targetProjectPath, branch);
           throw e;
@@ -707,6 +707,16 @@ export class DispatchService {
       if (foundation.kind === "none") {
         return { kind: "unplannable", operation: "resolveCheckFoundation", reason: `no foundation to red-run the checks on: ${foundation.reason}` };
       }
+      // ADR-083: its checks are kept only when they decide every item it cites, so a check task that
+      // records none has nothing its checks could be judged complete against.
+      const [firstCited, ...restCited] = (task.taskSpec?.sources ?? []).map((source) => source.id);
+      if (firstCited === undefined) {
+        return {
+          kind: "unplannable",
+          operation: "resolveCitedItems",
+          reason: `check task ${task.id} records no vision item it cites (task_spec.sources), so no check set of it can be judged to decide them`,
+        };
+      }
       const prior = await this.deps.checks.latest(parseWorkItemId(only, "TaskCheckStore.checkedTasksOf"));
       return {
         kind: "check-authoring",
@@ -714,6 +724,7 @@ export class DispatchService {
         environment,
         prior,
         foundation: { taskId: foundation.taskId, commit: foundation.commit },
+        citedItems: [firstCited, ...restCited],
       };
     }
     const stored = await this.deps.checks.latest(task.id);

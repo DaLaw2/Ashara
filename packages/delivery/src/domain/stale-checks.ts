@@ -254,8 +254,8 @@ const SUITE_REVIEW_BOUND = 2;
 /** One problem the review found: the check tasks whose checks it involves, what is wrong, and the evidence. */
 interface SuiteReviewProblem {
   readonly checkTaskIds: readonly string[];
-  /** Checks no product can pass together, or a check of behaviour no vision item asks for. */
-  readonly kind: "contradiction" | "outside-vision";
+  /** Checks no product can pass together, a check of behaviour no vision item asks for, or a cited item no check decides. */
+  readonly kind: "contradiction" | "outside-vision" | "undecided-item";
   readonly problem: string;
   readonly evidence: string;
 }

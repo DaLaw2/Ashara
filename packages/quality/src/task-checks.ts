@@ -14,7 +14,7 @@ import {
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER } from "@ashara/workplace";
-import type { CheckDefinition, CheckRedRunPreview, CheckRun, FoundationProbe } from "@ashara/workplace";
+import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, FoundationProbe } from "@ashara/workplace";
 import { describeProductChange } from "./check-verdict.js";
 import type { CheckRunReport, ProductChangedReport } from "./check-verdict.js";
 
@@ -51,8 +51,16 @@ export interface TaskChecks {
    * stored before baselines were recorded (migration 045), which cannot be red-run again.
    */
   readonly baselineCommit: string | null;
-  readonly checks: readonly CheckDefinition[];
+  readonly checks: readonly StoredCheck[];
   readonly files: readonly CheckFile[];
+}
+
+/**
+ * One stored check with the ids of the vision items it decides (migration 063); null for a check
+ * stored before they were recorded, which is not evidence that it decides any item.
+ */
+interface StoredCheck extends CheckDefinition {
+  readonly decides: DefinedCheck["decides"] | null;
 }
 
 /** A check task's foundation: the merged task whose commit its checks are red-run on, or why there is none. */
@@ -116,7 +124,7 @@ export interface TaskCheckStore {
     readonly checkTaskId: WorkItemId;
     readonly environmentVersion: string;
     readonly baselineCommit: string;
-    readonly checks: readonly CheckDefinition[];
+    readonly checks: readonly DefinedCheck[];
     readonly files: readonly CheckFile[];
   }): Promise<number>;
   /** The task's latest revision, or null when no check was ever stored for it. */
@@ -132,11 +140,14 @@ type CheckRecording =
  * define_check's record: keeps each definition of one attempt for Z0 to harvest. A definition
  * with the name of an earlier one replaces it in place (the last definition of a name wins). It
  * also keeps the paths the author wrote with its file tools: only those are its submission, never
- * a file a command it ran left behind.
+ * a file a command it ran left behind. A definition may decide only items its task cites (`cited`,
+ * their ids), and the set is complete only when every cited item is decided by one of its checks.
  */
 export class CheckRecorder {
-  private readonly defined: CheckDefinition[] = [];
+  private readonly defined: DefinedCheck[] = [];
   private readonly written = new Set<string>();
+
+  constructor(private readonly cited: CitedItemIds) {}
 
   /** `path` as the file tool was given it; kept as the repository-relative path git reports. */
   fileWritten(path: string): void {
@@ -147,7 +158,16 @@ export class CheckRecorder {
     return new Set(this.written);
   }
 
-  record(check: CheckDefinition): CheckRecording {
+  record(defined: DefinedCheck): CheckRecording {
+    const uncited = defined.decides.filter((id) => !this.cited.includes(id));
+    if (uncited.length > 0) {
+      return {
+        kind: "refused",
+        reason: `decides names [${uncited.join(", ")}], which the task does not cite; it cites [${this.cited.join(", ")}]`,
+      };
+    }
+    const [first, ...rest] = defined.decides;
+    const check: DefinedCheck = { ...defined, decides: [first, ...rest.filter((id, i) => id !== first && rest.indexOf(id) === i)] };
     const earlier = this.defined.findIndex((d) => d.name === check.name);
     if (earlier !== -1) {
       this.defined[earlier] = check;
@@ -158,9 +178,26 @@ export class CheckRecorder {
     return { kind: "recorded", defined: this.defined.length, replaced: false };
   }
 
-  checks(): readonly CheckDefinition[] {
+  checks(): readonly DefinedCheck[] {
     return [...this.defined];
   }
+
+  /** The cited items no check defined so far decides, in the order the task cites them. */
+  undecided(): readonly string[] {
+    return undecidedItems(this.cited, this.defined);
+  }
+}
+
+/** The ids of the vision items a check task cites (task_spec.sources), never none. */
+export type CitedItemIds = readonly [string, ...string[]];
+
+/**
+ * The cited items no check of `checks` decides (ADR-083): a check stored with no record of what it
+ * decides decides nothing. Empty only when every cited item has a check whose stored verdict is on it.
+ */
+function undecidedItems(cited: readonly string[], checks: ReadonlyArray<{ readonly decides: readonly string[] | null }>): string[] {
+  const decided = new Set(checks.flatMap((check) => check.decides ?? []));
+  return cited.filter((id) => !decided.has(id));
 }
 
 /**

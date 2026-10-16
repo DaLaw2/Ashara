@@ -47,8 +47,8 @@ function seeded(seed: number, scenario: Pick<RunOptions, "projects" | "capUsd"> 
   });
 }
 
-/** What I6 names when the stand-ins' plan is stored with only each acceptance line's first item (plan-drops-checks). */
-const DROPPED_CHECKS = ["I6:unchecked-item:A1", "I6:unchecked-item:S3"];
+/** What I6 names when a check set of the stand-ins is stored with its last decided item undecided (check-set-skips-item). */
+const SKIPPED_ITEM = ["I6:unchecked-item:A1"];
 
 function keys(result: RunResult): string[] {
   return result.violations.map((v) => v.key).sort();
@@ -307,11 +307,12 @@ describe("lifecycle simulator, directed", () => {
     expect([...clean.coverage.sweeps]).toEqual(["ran:passed"]);
     expect(keys(await directed([], { mutation: "delivered-report-omits-goal" }))).toEqual(["I4:delivered-close"]);
     expect(keys(await directed([], { mutation: "delivered-report-misstates-unchecked" }))).toEqual(["I4:delivered-unchecked"]);
-    // The planner must name every in-scope line and the asked assumption (classed undecided, so client-visible) in an
-    // acceptance line. A plan stored with only each line's first item leaves the last scope line and A1 with no check
-    // citing them: each is named (d89 E, ADR-083), and the delivered report must list both as not covered.
-    expect(keys(await directed([], { mutation: "plan-drops-checks" }))).toEqual(DROPPED_CHECKS);
-    expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage", ...DROPPED_CHECKS]);
+    // Every in-scope line and the asked assumption (classed undecided, so client-visible) must be decided by a stored
+    // check (d89 E, ADR-083). A check set stored with one cited item decided by none of its checks leaves it unchecked,
+    // though an acceptance line still cites it: I6 names it.
+    expect(keys(await directed([], { mutation: "check-set-skips-item" }))).toEqual(SKIPPED_ITEM);
+    // The delivered report must list that item as decided by no stored check.
+    expect(keys(await directed([], { mutation: "delivered-report-omits-uncovered" }))).toEqual(["I4:delivered-coverage", ...SKIPPED_ITEM]);
     // The stand-ins' internal-design assumption is named as not verified by Ashara; dropped, it is named (ADR-083).
     expect(keys(await directed([], { mutation: "delivered-report-omits-unverified" }))).toEqual(["I4:delivered-coverage"]);
     expect(keys(await directed([], { mutation: "delivered-report-unrecorded" }))).toContain("I4:unrecorded-report");
@@ -319,13 +320,13 @@ describe("lifecycle simulator, directed", () => {
 
   // I9 (text against fact): what a composer states is what the store held when it composed it. Every
   // brief carries the stand-ins' asked assumption with its standing, and the question states it. The
-  // delivered report states the standing of an asked-for item no check cites, so its plant stores the
-  // plan with fewer checks, which I6 names too.
+  // delivered report states the standing of an asked-for item no stored check decides, so its plant
+  // stores a check set with that item undecided, which I6 names too.
   it("catches a brief, a question and a delivered report that state what their records do not hold", async () => {
     const briefs = keys(await directed([], { mutation: "brief-misstates-standing" }));
     expect(briefs).toContain("I9:brief-assumptions:Define and commit the project environment");
     expect(briefs.every((key) => key.startsWith("I9:brief-assumptions:"))).toBe(true);
-    expect(keys(await directed([], { mutation: "delivered-report-misstates-standing" }))).toEqual([...DROPPED_CHECKS, "I9:delivered-standing:A1"]);
+    expect(keys(await directed([], { mutation: "delivered-report-misstates-standing" }))).toEqual([...SKIPPED_ITEM, "I9:delivered-standing:A1"]);
     expect(keys(await directed([], { mutation: "question-misstates-assumption" }))).toEqual(["I9:question:A1"]);
   }, 120_000);
 

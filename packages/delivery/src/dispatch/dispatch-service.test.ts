@@ -343,7 +343,7 @@ const STORED_CHECKS: TaskChecks = {
   revision: 1,
   environmentVersion: "e".repeat(64),
   baselineCommit: "b".repeat(40),
-  checks: [{ name: "greets", command: "cat greet.txt" }],
+  checks: [{ name: "greets", command: "cat greet.txt", decides: ["S1"] }],
   files: [],
 };
 
@@ -472,6 +472,9 @@ async function commitEnvironment(target: string, inputs: Readonly<Record<string,
   await git(target, "add", "environment", ...Object.keys(inputs));
   await git(target, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "environment");
 }
+
+/** The one vision item a check task of these tests cites. */
+const CITED_SCOPE = { type: "scope" as const, id: "S1", text: "t works", side: "in" as const };
 
 const someTask = () => ({
   id: createWorkItemId(),
@@ -692,6 +695,20 @@ describe("a task nothing could decide ends before the agent", () => {
     expect(result.detail).toContain("must decide exactly one implementation task");
     expect(probe.modelCalls).toBe(0);
   });
+
+  // ADR-083: a check set is kept only when it decides every item its task cites; none on record is no set to judge.
+  test("a check task that records no vision item it cites: failed before the agent", async () => {
+    const store: TaskCheckStore = {
+      ...checkStore(null, [createWorkItemId()]),
+      foundationOf: async () => ({ kind: "found", taskId: createWorkItemId(), commit: "c".repeat(40) }),
+    };
+    const { result, probe } = await dispatchWith(store, "check", { ...someTask().taskSpec, origin: "check", sources: [] });
+
+    expect(result.status).toBe("failed");
+    expect(result.errorEnvelope?.chain.operation).toBe("resolveCitedItems");
+    expect(result.detail).toContain("records no vision item it cites");
+    expect(probe.modelCalls).toBe(0);
+  });
 });
 
 // A cell the substrate refuses is an infrastructure fault, never a tree regression that abandons
@@ -876,6 +893,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
       attempt: faults.attempt ?? 1,
       workKind: checkWork ? ("check" as const) : ("implementation" as const),
       ...(faults.scaffold === true ? { taskSpec: { ...someTask().taskSpec, origin: "product-scaffold" as const, checkedBy: "substrate" as const } } : {}),
+      ...(checkWork ? { taskSpec: { ...someTask().taskSpec, origin: "check" as const, sources: [CITED_SCOPE] } } : {}),
     };
     const workDir = join(workdirBase, (checkWork ? checkBranchName(task.id) : taskBranchName(task.id)).replace(/\//g, "-"));
     const shutdown = faults.shutdownDuringSecondTurn;

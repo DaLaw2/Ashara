@@ -30,7 +30,11 @@ const buildEnvironmentArgs = z.object({}).strict();
 const runChecksArgs = z.object({}).strict();
 const probeFoundationArgs = z.object({ command: nonBlank }).strict();
 const defineCheckArgs = z
-  .object({ name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"), command: nonBlank })
+  .object({
+    name: z.string().max(MAX_CHECK_NAME).refine((text) => text.trim() !== "", "must not be blank"),
+    command: nonBlank,
+    decides: z.tuple([z.string().trim().min(1)], z.string().trim().min(1)),
+  })
   .strict();
 const MAX_DISPUTE_REASON_CHARS = 4000;
 const disputeCheckArgs = z
@@ -195,14 +199,23 @@ const DEFINE_CHECK_SCHEMA: TurnToolSchema = {
     "that changes a file the project tracks is rejected. The check is red-run at once on the foundation, with your " +
     "check files so far written over it; the result shows its exit code and output and whether it would be " +
     "rejected. Defining a check with the name of one already defined replaces it. Every check defined is kept as " +
-    "an acceptance check of the task: never define one to look around; use probe_foundation for that.",
+    "an acceptance check of the task: never define one to look around; use probe_foundation for that. In " +
+    "\"decides\" name the ids of the vision items the task cites that this check's verdict decides: a check that " +
+    "fails when the product breaks what the item asks for. The checks are kept only when every item the task cites " +
+    "is decided by at least one of them.",
   inputSchema: {
     type: "object",
     properties: {
       name: { type: "string", maxLength: MAX_CHECK_NAME, description: "A short name, unique among this task's checks." },
       command: { type: "string", description: "The shell command." },
+      decides: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        description: "The ids of the vision items the task cites that this check decides, exactly as the task lists them.",
+      },
     },
-    required: ["name", "command"],
+    required: ["name", "command", "decides"],
     additionalProperties: false,
   },
 };
@@ -364,7 +377,11 @@ function formatDefinedCheck(name: string, defined: Extract<CheckDefinitionResult
       : [
           `Discarded, outside your checks directory (not kept, not placed on the foundation): ${defined.discarded.join(", ")}.`,
         ];
-  const recorded = [`${defined.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${defined.defined} defined so far).`, ...discarded].join("\n");
+  const undecided =
+    defined.undecided.length === 0
+      ? `Every item the task cites is decided by a check defined so far.`
+      : `Cited items no check defined so far decides (the checks are not kept until each has one): ${defined.undecided.join(", ")}.`;
+  const recorded = [`${defined.replaced ? "Replaced" : "Defined"} check ${JSON.stringify(name)} (${defined.defined} defined so far).`, undecided, ...discarded].join("\n");
   const { redRun } = defined;
   if (redRun.kind === "files_refused" || redRun.kind === "product_changed") {
     return toolError(`${recorded}\nIt could not be red-run: ${redRun.detail}\nAt finish this rejects every check of the task.`);
@@ -486,7 +503,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (!args.success) return argsError(toolName, args.error);
       if (context.checks === null) return toolError(`define_check is not available in this attempt.`);
       const name = args.data.name.trim();
-      const result = await context.checks.define({ name, command: args.data.command }, context.commandTimeoutSeconds);
+      const result = await context.checks.define({ name, command: args.data.command, decides: args.data.decides },context.commandTimeoutSeconds);
       if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
       return formatDefinedCheck(name, result);
     }

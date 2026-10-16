@@ -356,7 +356,7 @@ describe("a turn refused at the project's spend cap", () => {
         checkedTasksOf: notExercised("checkedTasksOf"),
         storedOfProject: notExercised("storedOfProject"),
         append: notExercised("append"),
-        latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), baselineCommit, checks: [{ name: "noop", command: "true" }], files: [] }),
+        latest: async () => ({ checkTaskId: createWorkItemId(), revision: 1, environmentVersion: "e".repeat(64), baselineCommit, checks: [{ name: "noop", command: "true", decides: ["S1"] }], files: [] }),
       },
       suiteReview: { review: async () => { throw new Error("no suite review runs in this test"); } },
       shutdownSignal: new AbortController().signal,

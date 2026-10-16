@@ -44,7 +44,7 @@ const PROJECT_PATH = "/srv/projects/expenses";
 const INTERFACE_TEXT = "Run: totals <file.csv>\nExit 3: a malformed row, with its line number on stderr.";
 
 function stored(checkTaskId: string, name: string, command: string): TaskChecks {
-  return { checkTaskId, revision: 1, environmentVersion: "v1", baselineCommit: BASELINE, checks: [{ name, command }], files: [{ path: "checks/t.sh", content: "exit 1" }] };
+  return { checkTaskId, revision: 1, environmentVersion: "v1", baselineCommit: BASELINE, checks: [{ name, command, decides: ["S1"] }], files: [{ path: "checks/t.sh", content: "exit 1" }] };
 }
 
 /** PUBLIC_INTERFACE.md at the baseline only; every read is recorded. */
@@ -127,6 +127,22 @@ describe("SuiteReviewer (ADR-074 addendum 2 d71 c)", () => {
       released: [],
       problems: [{ checkTaskIds: [CHECK_A, CHECK_B], kind: "contradiction", problem: problem.problem, evidence: problem.evidence }],
     });
+  });
+
+  // ADR-083: a check's stored decides is its author's claim; the reviewer judges whether any check really decides the item.
+  test("a cited item the reviewer finds no check deciding is routed to its check task; one its task does not cite is re-asked", async () => {
+    const prompts: string[] = [];
+    const undecided = { checkTasks: [CHECK_A], kind: "undecided-item", item: SCOPE.id, problem: "prints-count never reads a month's total", evidence: "sh checks/count.sh" };
+    const uncited = { ...undecided, item: REFUSAL.id };
+    const reviewer = new SuiteReviewer({ llm: scripted([{ problems: [uncited] }, { problems: [undecided] }], prompts), source: source(), publicInterface: INTERFACE });
+
+    expect(await reviewer.review(TASK, PROJECT_PATH)).toMatchObject({
+      kind: "problems",
+      problems: [{ checkTaskIds: [CHECK_A], kind: "undecided-item", problem: `Cited item ${SCOPE.id} is decided by none of the checks: ${undecided.problem}`, evidence: undecided.evidence }],
+    });
+    expect(prompts[0]).toContain(`- "prints-count" (its author says it decides S1): sh checks/count.sh`);
+    expect(prompts[0]).toContain(`"undecided-item": an item a check task's own task cites that none of its checks decides`);
+    expect(prompts[1]).toContain(`names item ${JSON.stringify(REFUSAL.id)} as decided by no check, but check task ${CHECK_A} does not cite it`);
   });
 
   test("a verdict naming a check task it did not read is re-asked, and one that never validates gives no verdict", async () => {

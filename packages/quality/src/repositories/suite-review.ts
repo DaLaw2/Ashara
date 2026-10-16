@@ -8,7 +8,7 @@ import type { SuiteReviewJudgementStore } from "../suite-review.js";
 // that found problems is one row per check task it named.
 
 const ReviewProblemSchema = z.strictObject({
-  kind: z.enum(["contradiction", "outside-vision"]),
+  kind: z.enum(["contradiction", "outside-vision", "undecided-item"]),
   problem: z.string().min(1),
   evidence: z.string().min(1),
 });

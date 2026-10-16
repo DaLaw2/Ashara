@@ -12,7 +12,7 @@ import type { EnvironmentDefinition } from "./environment-definition.js";
 import { DispatchFault, environmentErrorOf, thrownFaultOf, unavailableOf } from "./fault-class.js";
 import type { EnvironmentError, FaultClass } from "./fault-class.js";
 import { VerificationInfrastructureFault } from "./gates/finalize.js";
-import type { CheckRecorder, CompletedTaskChecks, TaskChecks } from "./task-checks.js";
+import type { CheckRecorder, CitedItemIds, CompletedTaskChecks, TaskChecks } from "./task-checks.js";
 import { WORK_FAILED } from "./task-verdict.js";
 import type { FailureVerdict } from "./task-verdict.js";
 
@@ -342,6 +342,8 @@ export type WorkPlan =
       readonly prior: TaskChecks | null;
       /** The commit every authoring of these checks is red-run on (ADR-074 addendum 2 d74 A). */
       readonly foundation: CheckFoundation;
+      /** The ids of the vision items the check task cites: each must be decided by one of its checks (ADR-083). */
+      readonly citedItems: CitedItemIds;
     };
 
 /** The plan revision's foundation a check task red-runs on: the merged task and its recorded merge commit. */
@@ -357,6 +359,7 @@ export interface CheckAuthoring {
   readonly environment: CurrentEnvironment<EnvironmentDefinition>;
   readonly prior: TaskChecks | null;
   readonly foundation: CheckFoundation;
+  readonly citedItems: CitedItemIds;
   readonly branch: string;
   /** The main commit the worktree started from: the attempt's files are its diff against it. */
   readonly startCommit: string;
@@ -635,7 +638,7 @@ interface SuiteReviewProblemsResult {
   readonly status: "suite_review_problems";
   readonly problems: ReadonlyArray<{
     readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision";
+    readonly kind: "contradiction" | "outside-vision" | "undecided-item";
     readonly problem: string;
     readonly evidence: string;
   }>;

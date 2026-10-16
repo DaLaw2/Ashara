@@ -277,7 +277,7 @@ async function implementationTask(h: Harness, title: string, check: string, vers
     checkTaskId,
     environmentVersion: version,
     baselineCommit: baseline,
-    checks: [{ name: "file", command: check }],
+    checks: [{ name: "file", command: check, decides: ["S1"] }],
     files: [],
   });
   return id;

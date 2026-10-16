@@ -29,7 +29,10 @@ import type { TaskChecks } from "./task-checks.js";
 // catalog has one; otherwise it is a re-sample of the first review's model, and every text that
 // names it says which it was. When the second does not reject that check, the check is released as
 // passing review. Either way both judgements are recorded whole (suite_review_judgements), and a
-// routed rejection carries both reviews' clauses side by side.
+// routed rejection carries both reviews' clauses side by side. Z0 keeps a suite only when every
+// item its task cites is one some check says it decides (ADR-083); whether that check's verdict
+// really decides the item is the reviewer's to judge, and a cited item it finds no check deciding
+// sends the check task back.
 
 /** A check task the review reads, as stored; nulls are what its row does not record. */
 interface CheckTaskUnderReview {
@@ -86,7 +89,7 @@ export const gitPublicInterface: PublicInterfaceReader = {
 /** One problem the review routes, with the check tasks whose checks it involves. */
 interface SuiteReviewProblem {
   readonly checkTaskIds: readonly string[];
-  readonly kind: "contradiction" | "outside-vision";
+  readonly kind: "contradiction" | "outside-vision" | "undecided-item";
   readonly problem: string;
   readonly evidence: string;
 }
@@ -237,6 +240,13 @@ const ReviewResponseSchema = z.strictObject({
         problem: NonEmpty,
         evidence: NonEmpty,
       }),
+      z.strictObject({
+        kind: z.literal("undecided-item"),
+        checkTasks: z.array(NonEmpty).length(1),
+        item: NonEmpty,
+        problem: NonEmpty,
+        evidence: NonEmpty,
+      }),
     ]),
   ),
 });
@@ -291,7 +301,10 @@ function suiteSection(suite: ReviewedSuite): string {
     `It wrote the checks of the task ${JSON.stringify(suite.taskTitle)}, which cites these vision items:`,
     ...suite.cited.map((item) => `- ${item.line}`),
     `Checks (revision ${suite.checks.revision}${suite.checks.baselineCommit === null ? "" : `, written against commit ${suite.checks.baselineCommit}`}):`,
-    ...suite.checks.checks.map((check) => `- ${JSON.stringify(check.name)}: ${check.command}`),
+    ...suite.checks.checks.map(
+      (check) =>
+        `- ${JSON.stringify(check.name)} (its author says it decides ${check.decides === null ? "nothing on record" : check.decides.join(", ")}): ${check.command}`,
+    ),
     ...(files.length === 0 ? [`Files: none`] : [`Files:`, ...files]),
   ].join("\n");
 }
@@ -332,7 +345,7 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     ...suites.map(suiteSection),
     ``,
     `# What to return`,
-    `Name every problem of these two kinds, and nothing else:`,
+    `Name every problem of these three kinds, and nothing else:`,
     `- "contradiction": checks, of one check task or of several, that no single product could all pass (one requires`,
     `  an output, a format, a file or an exit status that another forbids). Name every check task whose checks are involved.`,
     `- "outside-vision": a check that requires behaviour none of the vision items its own task cites asks for. Judge`,
@@ -341,17 +354,22 @@ function reviewPrompt(vision: readonly string[], interfaces: readonly InterfaceR
     `  form the public interface names (a command, an argument, a file, an exit status) is never outside. Name the one`,
     `  check task that wrote it. Read each cited item's whole text, every clause of it, before you say it does not ask`,
     `  for something: a finding whose clause a cited item states is discarded and you are asked again.`,
+    `- "undecided-item": an item a check task's own task cites that none of its checks decides: no check of it would`,
+    `  fail on a product that breaks what the item asks for, whatever items its checks say they decide. Name the one`,
+    `  check task.`,
     `For each: "checkTasks" lists those check task ids exactly as written above; "problem" says which checks and what`,
     `cannot hold, in one or two sentences; "evidence" quotes the commands or file lines that show it. An "outside-vision"`,
     `finding is about one check: it also gives "check", that check's name exactly as written above, "judgedItems", the`,
     `ids of the cited items you judged the check against, exactly as written above, and "missingClause", the behaviour`,
-    `the check requires, in a few words, that you say none of them states.`,
-    `Do not report style, missing coverage, or checks you would have written differently. When there is no problem,`,
-    `return {"problems": []}.`,
+    `the check requires, in a few words, that you say none of them states. An "undecided-item" finding also gives "item",`,
+    `the id of the cited item exactly as written above.`,
+    `Do not report style, behaviour no cited item asks for that no check tests, or checks you would have written`,
+    `differently. When there is no problem, return {"problems": []}.`,
     ``,
     `IMPORTANT: Respond with ONLY valid JSON, no markdown, no explanation, no code fences.`,
     `Use exactly this format: {"problems": [{"kind": "contradiction", "checkTasks": ["<check task id>", "<check task id>"], "problem": "...", "evidence": "..."}, ` +
-      `{"kind": "outside-vision", "checkTasks": ["<check task id>"], "check": "<check name>", "judgedItems": ["<cited item id>"], "missingClause": "...", "problem": "...", "evidence": "..."}]}`,
+      `{"kind": "outside-vision", "checkTasks": ["<check task id>"], "check": "<check name>", "judgedItems": ["<cited item id>"], "missingClause": "...", "problem": "...", "evidence": "..."}, ` +
+      `{"kind": "undecided-item", "checkTasks": ["<check task id>"], "item": "<cited item id>", "problem": "...", "evidence": "..."}]}`,
   ].join("\n");
 }
 
@@ -384,11 +402,16 @@ function verdictErrors(response: ReviewResponse, suites: ReadonlyMap<string, Rev
     const checkTaskId = problem.checkTasks[0];
     const suite = checkTaskId === undefined ? undefined : suites.get(checkTaskId);
     if (checkTaskId === undefined || suite === undefined) return [unreadError(i, checkTaskId ?? "(none)")];
+    const citedIds = suite.cited.map((item) => item.id);
+    if (problem.kind === "undecided-item") {
+      return citedIds.includes(problem.item)
+        ? []
+        : [`problem ${i + 1} names item ${JSON.stringify(problem.item)} as decided by no check, but check task ${checkTaskId} does not cite it (it cites [${citedIds.join(", ")}])`];
+    }
     const checkNames = suite.checks.checks.map((check) => check.name);
     const unwritten = checkNames.includes(problem.check)
       ? []
       : [`problem ${i + 1} judged check ${JSON.stringify(problem.check)}, which check task ${checkTaskId} did not write (it wrote [${checkNames.join(", ")}])`];
-    const citedIds = suite.cited.map((item) => item.id);
     const uncited = problem.judgedItems
       .filter((id) => !citedIds.includes(id))
       .map((id) => `problem ${i + 1} judged item ${JSON.stringify(id)}, which check task ${checkTaskId} does not cite (it cites [${citedIds.join(", ")}])`);
@@ -421,6 +444,7 @@ function isOutsideVision(finding: ReviewFinding): finding is OutsideVisionFindin
 
 function findingLine(finding: ReviewFinding): string {
   if (finding.kind === "contradiction") return `contradiction in ${finding.checkTasks.join(", ")}: ${finding.problem}`;
+  if (finding.kind === "undecided-item") return `cited item ${finding.item} is decided by no check: ${finding.problem}`;
   return `check ${JSON.stringify(finding.check)} is outside the vision, requiring ${JSON.stringify(finding.missingClause)}: ${finding.problem}`;
 }
 
@@ -479,14 +503,21 @@ export class SuiteReviewer implements SuiteReviewing {
       });
     const reviewedIds = [...bySuite.keys()];
     const first = await this.verdict(task.id, () => ask(), bySuite);
-    const contradictions = first.data.problems.filter((finding) => finding.kind === "contradiction");
     const rejections = first.data.problems.filter(isOutsideVision);
-    const routed: SuiteReviewProblem[] = contradictions.map((finding) => ({
-      checkTaskIds: [...new Set(finding.checkTasks)],
-      kind: finding.kind,
-      problem: finding.problem,
-      evidence: finding.evidence,
-    }));
+    // A contradiction or an undecided item reopens its check tasks for more or other checks, never
+    // fewer: it is acted on as the first review states it.
+    const routed: SuiteReviewProblem[] = first.data.problems.flatMap((finding) =>
+      isOutsideVision(finding)
+        ? []
+        : [
+            {
+              checkTaskIds: [...new Set(finding.checkTasks)],
+              kind: finding.kind,
+              problem: finding.kind === "undecided-item" ? `Cited item ${finding.item} is decided by none of the checks: ${finding.problem}` : finding.problem,
+              evidence: finding.evidence,
+            },
+          ],
+    );
     if (rejections.length === 0) {
       if (routed.length === 0) return { kind: "clean", reviewed: reviewedIds, setAside, released: [] };
       return { kind: "problems", reviewed: reviewedIds, setAside, released: [], problems: routed };

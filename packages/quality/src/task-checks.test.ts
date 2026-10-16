@@ -63,14 +63,30 @@ describe("the red-run rule", () => {
 // syntax is found when it is defined, not at finish, and can be replaced.
 describe("define_check's record", () => {
   test("a check defined again under its name replaces the earlier one in place", () => {
-    const recorder = new CheckRecorder();
-    expect(recorder.record({ name: "a", command: "names=(x y); test -f out" })).toEqual({ kind: "recorded", defined: 1, replaced: false });
-    expect(recorder.record({ name: "b", command: "test -f other" })).toEqual({ kind: "recorded", defined: 2, replaced: false });
-    expect(recorder.record({ name: "a", command: "test -f out" })).toEqual({ kind: "recorded", defined: 2, replaced: true });
+    const recorder = new CheckRecorder(["S1", "A2"]);
+    expect(recorder.record({ name: "a", command: "names=(x y); test -f out", decides: ["S1"] })).toEqual({ kind: "recorded", defined: 1, replaced: false });
+    expect(recorder.record({ name: "b", command: "test -f other", decides: ["A2", "A2"] })).toEqual({ kind: "recorded", defined: 2, replaced: false });
+    expect(recorder.record({ name: "a", command: "test -f out", decides: ["S1"] })).toEqual({ kind: "recorded", defined: 2, replaced: true });
     expect(recorder.checks()).toEqual([
-      { name: "a", command: "test -f out" },
-      { name: "b", command: "test -f other" },
+      { name: "a", command: "test -f out", decides: ["S1"] },
+      { name: "b", command: "test -f other", decides: ["A2"] },
     ]);
+  });
+
+  // ADR-083: which items are checked is what the stored checks decide, never what a line cites.
+  test("a check set that leaves one cited item decided by no check is incomplete, and no check may decide an uncited item", () => {
+    const recorder = new CheckRecorder(["S1", "S3", "A1"]);
+    recorder.record({ name: "a", command: "test -f out", decides: ["S1", "A1"] });
+    expect(recorder.undecided()).toEqual(["S3"]);
+    expect(recorder.record({ name: "b", command: "test -f other", decides: ["S9"] })).toEqual({
+      kind: "refused",
+      reason: expect.stringContaining("decides names [S9], which the task does not cite"),
+    });
+    // Replacing the only check of an item leaves it undecided again.
+    recorder.record({ name: "b", command: "test -f other", decides: ["S3"] });
+    expect(recorder.undecided()).toEqual([]);
+    recorder.record({ name: "b", command: "test -f other", decides: ["S1"] });
+    expect(recorder.undecided()).toEqual(["S3"]);
   });
 
   test("the red run's preview carries the run and the red-run rule's verdict on it", () => {
@@ -121,7 +137,7 @@ describe("the harvest of a check attempt's files", () => {
     await mkdir(join(dir, AREA, "__pycache__"), { recursive: true });
     await writeFile(join(dir, AREA, "run.py"), "print('hi')\n");
     await writeFile(join(dir, AREA, "__pycache__", "run.cpython-311.pyc"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
-    const recorder = new CheckRecorder();
+    const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`./${AREA}run.py`);
 
     const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
@@ -138,7 +154,7 @@ describe("the harvest of a check attempt's files", () => {
     await writeFile(join(dir, "README"), "the author's own product\n");
     await writeFile(join(dir, "src", "main.src"), "an implementation\n");
     await writeFile(join(dir, "checks", "impl-2", "other.sh"), "another task's area\n");
-    const recorder = new CheckRecorder();
+    const recorder = new CheckRecorder(["S1"]);
     for (const path of [`${AREA}run.sh`, "README", "src/main.src", "checks/impl-2/other.sh"]) recorder.fileWritten(path);
 
     const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA);
@@ -152,7 +168,7 @@ describe("the harvest of a check attempt's files", () => {
   test("a product file of the environment's build context written outside the area is discarded, not kept", async () => {
     const { dir, start } = await repoWithStart();
     await writeFile(join(dir, "manifest.txt"), "dependencies: none\n");
-    const recorder = new CheckRecorder();
+    const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten("manifest.txt");
 
     const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles(), AREA);
@@ -163,7 +179,7 @@ describe("the harvest of a check attempt's files", () => {
     const { dir, start } = await repoWithStart();
     await mkdir(join(dir, AREA), { recursive: true });
     await writeFile(join(dir, AREA, "input.txt"), "read by the image build\n");
-    const recorder = new CheckRecorder();
+    const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`${AREA}input.txt`);
 
     const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", `${AREA}input.txt`], recorder.writtenFiles(), AREA);
@@ -268,7 +284,7 @@ describe("the implementer's brief of its checks", () => {
     revision: 1,
     environmentVersion: "v",
     baselineCommit: "b".repeat(40),
-    checks: [{ name: "greets", command: "sh checks/greet.sh" }],
+    checks: [{ name: "greets", command: "sh checks/greet.sh", decides: ["S1"] }],
     files,
   });
 
@@ -305,7 +321,7 @@ describe("the check author's brief of the project's stored checks", () => {
     revision: 1,
     environmentVersion: "v",
     baselineCommit: "b".repeat(40),
-    checks: [{ name: `${taskId}-check`, command: `sh checks/${taskId}.sh` }],
+    checks: [{ name: `${taskId}-check`, command: `sh checks/${taskId}.sh`, decides: ["S1"] as const }],
     files,
   });
 

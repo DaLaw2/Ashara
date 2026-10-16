@@ -12,7 +12,7 @@ import type { Database } from "./database.js";
  * report states its episode's recorded kind and names the episode's record, a stop report names
  * exactly the merges recorded, and a delivered report names each goal's recorded close, exactly the
  * completed tasks no stored check covers, the goals given up, and exactly the items of what the
- * client asked for that no acceptance line of a swept check task cites. Every expectation is read
+ * client asked for that no stored check the sweep ran decides. Every expectation is read
  * from the rows; the report's text is only what is judged. The oracle states its own expected wording
  * and classification and imports none of Engagement's composers or the acceptance repository's
  * predicates (ADR-081; boundary-rules.toml [integration] `named-only` admits into src/simulator/ only
@@ -44,7 +44,11 @@ const sweepRow = z.object({ id: z.string(), passed: z.boolean(), uncheckedTasks:
 const revisionRow = z.object({ reportId: z.string() });
 const specRow = z.object({ id: z.string(), taskSpec: z.unknown() });
 const passedSweepRow = z.object({ id: z.string(), version: z.number().nullable(), inferences: z.unknown(), scopeBoundaries: z.unknown() });
-const sweptAuthorRow = specRow.extend({ sweepId: z.string() });
+/** One stored check, with the check task that wrote it and what it says it decides (migration 063). */
+const storedCheckRow = z.object({ checkTaskId: z.string(), taskSpec: z.unknown(), name: z.string(), decides: z.unknown() });
+type SweptCheck = z.infer<typeof storedCheckRow>;
+/** One stored check a passed sweep ran. */
+const sweptCheckRow = storedCheckRow.extend({ sweepId: z.string() });
 
 export interface ReportRecords {
   /** Every outbound report of the project, in posting order. */
@@ -57,14 +61,14 @@ export interface ReportRecords {
   readonly revisionReports: readonly string[];
   /** The task_spec of the project's latest Completed review task (every item of the vision), or null when none. */
   readonly reviewSpec: unknown;
-  /** The check tasks that wrote each Completed goal task's latest stored checks (the sets a sweep runs), with their task_spec. */
-  readonly checkAuthors: ReadonlyArray<z.infer<typeof specRow>>;
+  /** Every check of each Completed goal task's latest stored revision (the sets a sweep runs), with its check task's task_spec. */
+  readonly goalChecks: readonly SweptCheck[];
   /**
    * Every passed acceptance sweep, in order, with the vision version current when it passed (its
-   * fields unparsed; version null when none was) and the check tasks that wrote the checks it ran:
-   * each goal task it checked, at its latest checks revision written before the sweep.
+   * fields unparsed; version null when none was) and every stored check it ran, with the check task
+   * that wrote it: each goal task it checked, at its latest checks revision written before the sweep.
    */
-  readonly passedSweeps: ReadonlyArray<z.infer<typeof passedSweepRow> & { readonly checkAuthors: ReadonlyArray<z.infer<typeof specRow>> }>;
+  readonly passedSweeps: ReadonlyArray<z.infer<typeof passedSweepRow> & { readonly storedChecks: readonly SweptCheck[] }>;
 }
 
 export async function readReportRecords(db: Database, projectId: string): Promise<ReportRecords> {
@@ -107,14 +111,14 @@ export async function readReportRecords(db: Database, projectId: string): Promis
               ORDER BY created_at DESC, id DESC LIMIT 1`,
         )
       )[0]?.taskSpec ?? null,
-    checkAuthors: await rows(
-      specRow,
-      sql`SELECT DISTINCT a.id, a.task_spec AS "taskSpec"
+    goalChecks: await rows(
+      storedCheckRow,
+      sql`SELECT a.id AS "checkTaskId", a.task_spec AS "taskSpec", c.name, c.decides
           FROM work_items g
           JOIN task_checks c ON c.task_id = g.id AND c.revision = (SELECT max(l.revision) FROM task_checks l WHERE l.task_id = g.id)
           JOIN work_items a ON a.id = c.check_task_id
           WHERE g.project_id = ${projectId} AND g.level = 'Task' AND g.status = 'Completed' AND g.task_spec->>'origin' = 'decomposition'
-          ORDER BY a.id`,
+          ORDER BY a.id, c.name`,
     ),
     passedSweeps: await passedSweepsOf(projectId, rows),
   };
@@ -131,20 +135,20 @@ async function passedSweepsOf(
                            WHERE d.project_id = s.project_id AND d.created_at <= s.created_at ORDER BY d.version DESC LIMIT 1) v ON true
         WHERE s.project_id = ${projectId} AND s.passed ORDER BY s.created_at, s.id`,
   );
-  const authors = await rows(
-    sweptAuthorRow,
-    sql`SELECT DISTINCT s.id AS "sweepId", a.id, a.task_spec AS "taskSpec"
+  const checks = await rows(
+    sweptCheckRow,
+    sql`SELECT s.id AS "sweepId", a.id AS "checkTaskId", a.task_spec AS "taskSpec", c.name, c.decides
         FROM acceptance_sweeps s
         CROSS JOIN LATERAL jsonb_array_elements_text(s.checked_tasks) AS t(task_id)
         JOIN task_checks c ON c.task_id::text = t.task_id
           AND c.revision = (SELECT max(l.revision) FROM task_checks l WHERE l.task_id = c.task_id AND l.created_at <= s.created_at)
         JOIN work_items a ON a.id = c.check_task_id
         WHERE s.project_id = ${projectId} AND s.passed
-        ORDER BY s.id, a.id`,
+        ORDER BY s.id, a.id, c.name`,
   );
   return sweeps.map((sweep) => ({
     ...sweep,
-    checkAuthors: authors.filter((author) => author.sweepId === sweep.id).map(({ id, taskSpec }) => ({ id, taskSpec })),
+    storedChecks: checks.filter((check) => check.sweepId === sweep.id).map(({ checkTaskId, taskSpec, name, decides }) => ({ checkTaskId, taskSpec, name, decides })),
   }));
 }
 
@@ -485,7 +489,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
   }
 
   // The delivered report: each goal's recorded close, exactly the completed tasks no stored check
-  // covers, the goals given up, and exactly the asked-for items no swept acceptance line cites.
+  // covers, the goals given up, and exactly the asked-for items no stored check the sweep ran decides.
   if (project.status === "accepted") {
     const passed = records.sweeps.filter((sweep) => sweep.passed);
     const sweep = passed.at(-1);
@@ -539,7 +543,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
   return found;
 }
 
-/** Which items of what the client asked for the records say no swept check task's acceptance line cites. */
+/** Which items of what the client asked for the records say no stored check the sweep ran decides. */
 type CoverageOnRecord =
   | { readonly kind: "unrecorded" }
   /** A record the coverage is computed from cannot be read: production's report cannot be rendered either. */
@@ -552,26 +556,28 @@ function identityOf(source: Pick<VisionSource, "type" | "id" | "text">): string 
 }
 
 /**
- * The identities every acceptance line of the check tasks a sweep runs cites, or why they cannot be
- * read: unrecorded when one such check task holds no traced lines.
+ * The identities the stored checks decide (ADR-083): each id a check names in `decides`, read as its
+ * check task cites it. Unrecorded when a check names none (a row from before migration 063) or its
+ * check task records no cited items; unreadable when a check names an id its check task does not
+ * cite or its `decides` is no list of ids. Either way no stored fact says which items were checked.
  */
-function citedBySweptChecks(
-  checkAuthors: ReportRecords["checkAuthors"],
-): { readonly kind: "cited"; readonly cited: ReadonlySet<string> } | Exclude<CoverageOnRecord, { readonly kind: "recorded" }> {
-  const cited = new Set<string>();
-  for (const author of checkAuthors) {
-    const spec = parseStoredTaskSpec(author.taskSpec);
-    if (spec?.acceptance === undefined || spec.sources === undefined) return { kind: "unrecorded" };
-    const own = new Map(spec.sources.map((source) => [source.id, source]));
-    for (const line of spec.acceptance) {
-      for (const id of line.sources) {
-        const source = own.get(id);
-        if (source === undefined) return { kind: "unreadable", detail: `check task ${author.id}'s line "${line.line}" cites ${id}, which its sources do not hold` };
-        cited.add(identityOf(source));
-      }
+function decidedByStoredChecks(
+  checks: readonly SweptCheck[],
+): { readonly kind: "decided"; readonly decided: ReadonlySet<string> } | { readonly kind: "unrecorded" | "unreadable"; readonly detail: string } {
+  const decided = new Set<string>();
+  for (const check of checks) {
+    const decides = z.array(z.string().min(1)).min(1).nullable().safeParse(check.decides);
+    if (!decides.success) return { kind: "unreadable", detail: `check "${check.name}" of check task ${check.checkTaskId} records decides that are no list of ids` };
+    if (decides.data === null) return { kind: "unrecorded", detail: `check "${check.name}" of check task ${check.checkTaskId} records no items it decides` };
+    const sources = parseStoredTaskSpec(check.taskSpec)?.sources;
+    if (sources === undefined) return { kind: "unrecorded", detail: `check task ${check.checkTaskId} records no items it cites` };
+    for (const id of decides.data) {
+      const source = sources.find((each) => each.id === id);
+      if (source === undefined) return { kind: "unreadable", detail: `check "${check.name}" of check task ${check.checkTaskId} decides ${id}, which its check task does not cite` };
+      decided.add(identityOf(source));
     }
   }
-  return { kind: "cited", cited };
+  return { kind: "decided", decided };
 }
 
 const sweptAssumption = z.looseObject({ key: z.string().min(1).optional(), statement: z.string().min(1), kind: z.enum(["client-visible", "internal-design"]).optional() });
@@ -588,9 +594,10 @@ interface UncheckedFinding {
  * The guard of d89 E and ADR-083, judged on every passed acceptance sweep, whatever the project did
  * after it: every item of the vision current when the sweep passed that a check must decide (an
  * in-scope line or one of no recorded side, an assumption not recorded as internal design) is
- * cited, as that vision states it, by an acceptance line of a check task whose checks the sweep
- * ran. It is something the client asked for or could observe, so accepting with no check on it
- * delivers it unverified. One finding per item, keyed by its id, at the first sweep that misses it.
+ * decided, as that vision states it, by a stored check the sweep ran: one whose recorded `decides`
+ * names it. A line citing it is no check of it. It is something the client asked for or could
+ * observe, so accepting with no check on it delivers it unverified. One finding per item, keyed by
+ * its id, at the first sweep that misses it.
  */
 export function uncheckedAtPassedSweeps(records: Pick<ReportRecords, "passedSweeps">): UncheckedFinding[] {
   const found = new Map<string, string>();
@@ -610,45 +617,43 @@ function uncheckedAtSweep(sweep: ReportRecords["passedSweeps"][number], at: stri
     const error = inferences.error ?? scope.error;
     return [{ key: "vision-unreadable", statement: `vision v${sweep.version} at ${at} cannot be read as keyed assumptions and scope lines: ${error === undefined ? "" : z.prettifyError(error).slice(0, 200)}` }];
   }
-  const swept = citedBySweptChecks(sweep.checkAuthors);
-  if (swept.kind !== "cited") {
-    return [{ key: "coverage-unreadable", statement: `which items the checks ${at} ran cite is not on record: ${swept.kind === "unreadable" ? swept.detail : "a check task holds no traced lines"}` }];
-  }
-  const missed = (type: "scope" | "assumption", id: string, text: string): boolean => !swept.cited.has(identityOf({ type, id, text }));
+  const swept = decidedByStoredChecks(sweep.storedChecks);
+  if (swept.kind !== "decided") return [{ key: "coverage-unreadable", statement: `which items the checks ${at} ran decide is not on record: ${swept.detail}` }];
+  const missed = (type: "scope" | "assumption", id: string, text: string): boolean => !swept.decided.has(identityOf({ type, id, text }));
   const scopeFindings = scope.data.flatMap((line, i) => {
     const id = `S${i + 1}`;
     const { text, side } = typeof line === "string" ? { text: line, side: "of no recorded side" } : line;
     if (side === "out" || !missed("scope", id, text)) return [];
-    return [{ key: id, statement: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, is cited by no acceptance line of a check ${at} ran` }];
+    return [{ key: id, statement: `scope line ${id} ("${text.slice(0, 120)}"), ${side === "in" ? "in scope" : side}, is decided by no stored check ${at} ran` }];
   });
   const assumptionFindings = inferences.data.flatMap((record, i) => {
     const key = record.key ?? `A${i + 1}`;
     if (record.kind === "internal-design" || !missed("assumption", key, record.statement)) return [];
-    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is cited by no acceptance line of a check ${at} ran` }];
+    return [{ key, statement: `assumption ${key} ("${record.statement.slice(0, 120)}"), ${record.kind ?? "of no recorded kind"}, is decided by no stored check ${at} ran` }];
   });
   return [...scopeFindings, ...assumptionFindings];
 }
 
 /**
  * The coverage the delivered report must state, from the records alone: the review task's
- * sources are every item of the vision; an item is checked when an acceptance line of a check task
- * that wrote a goal task's latest stored checks cites it; an out-of-scope line, or an assumption
+ * sources are every item of the vision; an item is checked when a check of a goal task's latest
+ * stored revision records that it decides it (ADR-083); an out-of-scope line, or an assumption
  * recorded as the team's own design choice, is not part of what the client asked for and is never
- * listed. Unrecorded when the review, or one such check task, holds no traced lines.
+ * listed. Unrecorded when the review holds no traced items or one such check records none it decides.
  */
-function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "checkAuthors">): CoverageOnRecord {
+function coverageOnRecord(records: Pick<ReportRecords, "reviewSpec" | "goalChecks">): CoverageOnRecord {
   // A corrupt task_spec throws TaskSpecCorrupt through the snapshot check: the run fails, never passes unjudged.
   const items = parseStoredTaskSpec(records.reviewSpec)?.sources;
   if (items === undefined) return { kind: "unrecorded" };
-  const swept = citedBySweptChecks(records.checkAuthors);
-  if (swept.kind !== "cited") return swept;
-  const { cited } = swept;
+  const swept = decidedByStoredChecks(records.goalChecks);
+  if (swept.kind !== "decided") return swept.kind === "unrecorded" ? { kind: "unrecorded" } : { kind: "unreadable", detail: swept.detail };
+  const decided = swept.decided;
   const isAsked = (source: VisionSource): boolean => (source.type === "scope" ? source.side !== "out" : source.kind !== "internal-design");
   const asked = items.filter(isAsked);
-  return { kind: "recorded", asked, uncovered: asked.filter((source) => !cited.has(identityOf(source))), notAsked: items.filter((source) => !isAsked(source)) };
+  return { kind: "recorded", asked, uncovered: asked.filter((source) => !decided.has(identityOf(source))), notAsked: items.filter((source) => !isAsked(source)) };
 }
 
-const UNCOVERED_HEAD = "These items of what you asked for are named by no acceptance criterion";
+const UNCOVERED_HEAD = "These items of what you asked for are decided by no stored check";
 const UNVERIFIED_HEAD = "These assumptions were recorded as how the team builds the product";
 
 /** Where the delivered report's coverage section departs from the records. */
@@ -660,12 +665,12 @@ function coverageProblems(body: string, coverage: CoverageOnRecord): string[] {
       ...(body.includes(sentence) ? [] : [`the records hold ${what}, but the delivered report does not say "${sentence}"`]),
       ...(listed.length === 0 ? [] : [`the records hold ${what}, but the delivered report lists ${listed.length} item(s) as not covered`]),
     ];
-  if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no traced acceptance lines");
+  if (coverage.kind === "unrecorded") return expectSentence("is not on record for this plan", "no record of what the checks decide");
   const problems = unverifiedProblems(body, coverage.notAsked);
   if (coverage.asked.length === 0) return [...problems, ...expectSentence("holds no item of what you asked for", "no item the client asked for")];
-  if (coverage.uncovered.length === 0) return [...problems, ...expectSentence("Every item of what you asked for is named", "every asked-for item cited")];
+  if (coverage.uncovered.length === 0) return [...problems, ...expectSentence("Every item of what you asked for is decided", "every asked-for item decided")];
   for (const source of coverage.uncovered) {
-    if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as named by no acceptance criterion`);
+    if (!listed.some((line) => line.includes(source.text))) problems.push(`the delivered report does not list "${source.text}" (${source.id}) as decided by no stored check`);
   }
   for (const source of coverage.notAsked) {
     if (listed.some((line) => line.includes(source.text))) problems.push(`the delivered report lists "${source.text}" (${source.id}), which the client did not ask for, as not covered`);

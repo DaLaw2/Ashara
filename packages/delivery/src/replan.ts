@@ -534,15 +534,14 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
 }
 
 /**
- * The vision items an acceptance line of a completed decomposed task names, each as that task cited
- * it: its stored checks decided them, so a revision need not plan a check of them again (ADR-083).
+ * The vision items a completed decomposed task cites, each as that task cited it: Z0 kept its check
+ * set only when its checks decided every item its check task cites, the same items, so a revision
+ * need not give them a task again (ADR-083).
  */
 function checkedByDone(completed: readonly PlannedItem[]): VisionItem[] {
   return completed.flatMap(({ item }) => {
     const spec = item.taskSpec;
-    if (spec?.origin !== "decomposition" || spec.sources === undefined || spec.acceptance === undefined) return [];
-    const named = new Set(spec.acceptance.flatMap((line) => line.sources));
-    return spec.sources.filter((source) => named.has(source.id));
+    return spec?.origin === "decomposition" && spec.sources !== undefined ? spec.sources : [];
   });
 }
 

@@ -45,6 +45,8 @@ interface Delivered {
   readonly goals: readonly string[];
   /** The product scaffold, Completed and checked only by the substrate: no stored check. */
   readonly scaffold: string;
+  /** "Store keys", whose check task is checksOfStore. */
+  readonly store: string;
   readonly checksOfStore: string;
 }
 
@@ -100,8 +102,8 @@ async function writeVision(projectId: ProjectId, tenderId: string, prefixAsked: 
 /**
  * A planned project whose every task is Completed: "Store keys" merged as MERGE_A, "Delete keys"
  * already delivered on MERGE_A, each with a check set whose acceptance lines cite S1 and A1, and S2,
- * and a review recording the whole vision: S3 and A3 no line cites, S4 is out of scope and A2 is the
- * team's design choice. With `prefixAsked`, A3 was asked about when the plan was made, and the
+ * and whose stored check decides them, and a review recording the whole vision: S3 and A3 no check
+ * decides, S4 is out of scope and A2 is the team's design choice. With `prefixAsked`, A3 was asked about when the plan was made, and the
  * review recorded it so.
  */
 async function deliveredProject(
@@ -134,22 +136,24 @@ async function deliveredProject(
   await workItems.recordMergeCommit(store, MERGE_A, "merged");
   await workItems.recordMergeCommit(remove, MERGE_A, "already_delivered");
   if (options.scaffoldMerged !== false) await workItems.recordMergeCommit(scaffold, SCAFFOLD_MERGE, "merged");
-  for (const [taskId, checkTaskId] of [[store, checksOfStore], [remove, checksOfRemove]] as const) {
-    await db.execute(sql`
-      INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version)
-      VALUES (${project.id}, ${taskId}, ${checkTaskId}, 1, 'works', 'sh checks/run.sh', '[]'::jsonb, ${"e".repeat(64)})`);
+  for (const [taskId, checkTaskId, decides] of [[store, checksOfStore, ["S1", "A1"]], [remove, checksOfRemove, ["S2"]]] as const) {
+    await storeCheck(project.id, taskId, checkTaskId, decides);
   }
-  return { projectId: project.id, goals: [store, remove], scaffold, checksOfStore, question };
+  return { projectId: project.id, goals: [store, remove], scaffold, store, checksOfStore, question };
+}
+
+/** One stored check of a task's first revision, deciding `decides` (null: a row written before migration 063). */
+async function storeCheck(projectId: string, taskId: string, checkTaskId: string, decides: readonly string[] | null): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+    VALUES (${projectId}, ${taskId}, ${checkTaskId}, 1, 'works', 'sh checks/run.sh', '[]'::jsonb, ${"e".repeat(64)},
+            ${decides === null ? null : JSON.stringify(decides)}::jsonb)`);
 }
 
 /** Rewrites one stored task_spec field of a work item, as a record written otherwise would hold it. */
 async function setSpec(workItemId: string, field: string, value: unknown): Promise<void> {
   await db.execute(sql`
     UPDATE work_items SET task_spec = jsonb_set(task_spec, ${`{${field}}`}::text[], ${JSON.stringify(value)}::jsonb) WHERE id = ${workItemId}`);
-}
-
-async function removeSpec(workItemId: string, field: string): Promise<void> {
-  await db.execute(sql`UPDATE work_items SET task_spec = task_spec - ${field} WHERE id = ${workItemId}`);
 }
 
 function acceptanceStore(): AcceptanceStore {
@@ -290,11 +294,11 @@ describe("acceptance on main", () => {
     expect(body).toContain(`"Store keys": built and merged, commit ${MERGE_A}.`);
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store keys".`);
-    // The items of what the client asked for that no acceptance line of a passing check task
-    // cites, and only those; the exclusion is never listed, and the team's design choice is named
+    // The items of what the client asked for that no stored check of a passing task decides, and
+    // only those; the exclusion is never listed, and the team's design choice is named
     // apart as not verified by Ashara (ADR-083).
     expect(body).toContain(
-      "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, " +
+      "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, " +
         "so nothing confirms them either way:\n- Two writers never corrupt the store\n" +
         "- Ashara's assumption, which was reported to you: An empty prefix lists every key\n\n",
     );
@@ -322,7 +326,7 @@ describe("acceptance on main", () => {
     expect(body).not.toContain("Watch keys");
   });
 
-  test("coverage follows the trace: an item is checked only by a cited source of the same text, and a broken or missing trace is never read as covered", async () => {
+  test("coverage follows the stored checks: an item is checked only by a check deciding it as its text reads, and a broken or missing record is never read as covered", async () => {
     const due = async (projectId: ProjectId) => {
       const store = createDeliveredReportStore(db);
       return (await store.dueReports()).find((row) => row.projectId === projectId);
@@ -341,21 +345,31 @@ describe("acceptance on main", () => {
       driftedRow?.kind === "due" && driftedRow.vision.kind === "recorded" && driftedRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
     ).toEqual(["S1", "S2"]);
 
-    // A line citing an id its own task does not hold is a broken record, refused by name, for that report alone.
+    // A line citing an item is no check of it (ADR-083): A1 cited, its check deciding S1 alone, is not checked.
+    const lineOnly = await accepted();
+    await db.execute(sql`DELETE FROM task_checks WHERE task_id = ${lineOnly.store}`);
+    await storeCheck(lineOnly.projectId, lineOnly.store, lineOnly.checksOfStore, ["S1"]);
+    const lineOnlyRow = await due(lineOnly.projectId);
+    expect(
+      lineOnlyRow?.kind === "due" && lineOnlyRow.vision.kind === "recorded" && lineOnlyRow.vision.items.filter((item) => item.checked).map((item) => item.source.id),
+    ).toEqual(["S1", "S2"]);
+
+    // A check deciding an id its own check task does not cite is a broken record, refused by name, for that report alone.
     const broken = await accepted();
-    await setSpec(broken.checksOfStore, "acceptance", [{ line: "get works", sources: ["A9"] }]);
+    await setSpec(broken.checksOfStore, "sources", [VISION.stored]);
     expect(await due(broken.projectId)).toMatchObject({
       kind: "unread",
       cause: "record",
-      error: expect.objectContaining({ message: expect.stringMatching(/acceptance line "get works" cites A9, which its task_spec.sources does not hold/) }),
+      error: expect.objectContaining({ message: expect.stringMatching(/stored check "works" decides A1, which its check task's task_spec.sources does not hold/) }),
     });
     expect((await due(drifted.projectId))?.kind).toBe("due");
-    await removeSpec(broken.checksOfStore, "acceptance");
 
-    // A check task written before acceptance lines were traced: coverage is not on record.
+    // A check stored before what it decides was recorded: coverage is not on record.
+    await db.execute(sql`DELETE FROM task_checks WHERE task_id = ${broken.store}`);
+    await storeCheck(broken.projectId, broken.store, broken.checksOfStore, null);
     expect(await due(broken.projectId)).toMatchObject({ kind: "due", vision: { kind: "unrecorded" } });
     const posted = await deliveredReports().runPending();
-    expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, broken.projectId].sort());
+    expect(posted.map((outcome) => outcome.projectId).sort()).toEqual([drifted.projectId, lineOnly.projectId, broken.projectId].sort());
     expect((await reportsOf(broken.projectId))[0]).toContain("is not on record for this plan, so none of it is stated as checked");
   });
 

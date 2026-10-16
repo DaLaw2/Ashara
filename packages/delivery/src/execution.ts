@@ -97,7 +97,7 @@ interface DisputedCheckResult {
 interface SuiteReviewProblemsResult {
   readonly problems: ReadonlyArray<{
     readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision";
+    readonly kind: "contradiction" | "outside-vision" | "undecided-item";
     readonly problem: string;
     readonly evidence: string;
   }>;

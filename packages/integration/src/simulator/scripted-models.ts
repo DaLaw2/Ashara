@@ -174,7 +174,11 @@ const taskRowSchema = z.object({
   infrastructureFaults: z.number(),
 });
 
-const taskSpecShape = z.object({ origin: z.string().optional(), checksFor: z.string().optional() });
+const taskSpecShape = z.object({
+  origin: z.string().optional(),
+  checksFor: z.string().optional(),
+  sources: z.array(z.object({ id: z.string() })).optional(),
+});
 
 const checkRowSchema = z.object({
   checkTaskId: z.string(),
@@ -211,36 +215,38 @@ interface AttemptScript {
 }
 
 /**
- * The vision items the planner's prompt says an acceptance line must name (d89 E, ADR-083), as an
- * honest planner reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
+ * The vision items the planner's prompt says a task must cite (d89 E, ADR-083), as an honest planner
+ * reads them; none when the prompt asks for none. Reads the prompt as text or as its JSON.
  */
 function itemsToCheck(prompt: string): string[] {
-  const listed = /a plan that leaves one unnamed is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
+  const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(prompt)?.[1];
   return listed === undefined ? [] : listed.split(", ");
 }
 
-/** `sources` with every id of `toCheck` it does not already name appended. */
-function naming(sources: readonly string[], toCheck: readonly string[]): string[] {
-  return [...sources, ...toCheck.filter((id) => !sources.includes(id))];
-}
+type ScriptedLine = { readonly text: string; readonly sources: readonly string[] };
 
 interface ScriptedPlan {
-  readonly tasks: ReadonlyArray<Record<string, unknown> & { readonly acceptance: ReadonlyArray<{ readonly text: string; readonly sources: readonly string[] }> }>;
+  readonly tasks: ReadonlyArray<Record<string, unknown> & { readonly acceptance: readonly ScriptedLine[] }>;
 }
 
 /**
- * `plan` as an honest planner answers `prompt`: its first task's first acceptance line also names
- * every item the prompt says a line must name (d89 E, ADR-083).
+ * `tasks` as an honest planner cites what `toCheck` lists: each line cites only the items its own text
+ * tests, so an item no line cites yet gets a line of its own on the first task, stating it.
+ */
+function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] }>(tasks: readonly T[], toCheck: readonly string[]): T[] {
+  const cited = new Set(tasks.flatMap((task) => task.acceptance.flatMap((line) => line.sources)));
+  const lines = toCheck.filter((id) => !cited.has(id)).map((id) => ({ text: `A user sees what ${id} states hold.`, sources: [id] }));
+  return tasks.map((task, i) => (i > 0 || lines.length === 0 ? task : { ...task, acceptance: [...task.acceptance, ...lines] }));
+}
+
+/**
+ * `plan` as an honest planner answers `prompt`: every item the prompt says a task must cite (d89 E,
+ * ADR-083) that no line cites yet gets an acceptance line of its own that cites it alone.
  *
  * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's planner does
  */
 export function citingItemsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
-  const ids = itemsToCheck(prompt);
-  return {
-    tasks: plan.tasks.map((task, i) =>
-      i > 0 ? task : { ...task, acceptance: task.acceptance.map((line, j) => (j > 0 ? line : { ...line, sources: naming(line.sources, ids) })) },
-    ),
-  };
+  return { tasks: citingPerLine(plan.tasks, itemsToCheck(prompt)) };
 }
 
 /** Every text the call's prompt carries, in order: what a model reads. */
@@ -392,7 +398,7 @@ export class StandIns {
             endState: `${PUBLIC_INTERFACE_PATH} is no longer the scaffold's.`,
             scope: `${PUBLIC_INTERFACE_PATH} only.`,
             deliverables: [{ text: `${PUBLIC_INTERFACE_PATH} describes the product.`, sources: ["S1"] }],
-            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: naming(["S1"], toCheck) }],
+            acceptance: [{ text: `A user reads how to run the product in ${PUBLIC_INTERFACE_PATH}.`, sources: ["S1"] }],
             capability: "Medium",
             capabilityReason: "One file.",
           },
@@ -402,7 +408,7 @@ export class StandIns {
     // never have a check fail on its foundation.
     const planned = interfaceTask.length === 0 ? universe.tasks : universe.tasks.filter((task) => !prompt.includes(`\n- ${taskTitle(task)}`));
     return {
-      tasks: [...planned.map((task, i) => ({
+      tasks: citingPerLine([...planned.map((task, i) => ({
         ref: task.ref,
         title: taskTitle(task),
         description: `Delivers ${task.behaviours.join(", ")}.`,
@@ -411,10 +417,10 @@ export class StandIns {
         endState: `${task.behaviours.join(", ")} can be used end to end.`,
         scope: `The ${task.behaviours.join(", ")} part of the product.`,
         deliverables: task.behaviours.map((b) => ({ text: `${b} works.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
-        acceptance: task.behaviours.map((b, j) => ({ text: `A user sees ${b}.`, sources: naming([`S${universe.behaviours.indexOf(b) + 1}`], j === 0 ? toCheck : []) })),
+        acceptance: task.behaviours.map((b) => ({ text: `A user sees ${b}.`, sources: [`S${universe.behaviours.indexOf(b) + 1}`] })),
         capability: "Medium",
         capabilityReason: "One small behaviour.",
-      })), ...interfaceTask],
+      })), ...interfaceTask], toCheck),
     };
   }
 
@@ -568,7 +574,7 @@ export class StandIns {
       steps = this.environmentWork();
     } else if (tools.has("define_check")) {
       work = "checks";
-      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined);
+      steps = await this.checkWork(spec.success ? spec.data.checksFor : undefined, spec.success ? (spec.data.sources ?? []).map((item) => item.id) : []);
     } else if (origin === "product-scaffold") {
       work = "scaffold";
       steps = [["write_file", { path: LAYOUT_FILE, content: "behaviours/\n" }], ...this.publicInterfaceWork(task.projectId), finished("Set up the product layout.")];
@@ -657,27 +663,42 @@ export class StandIns {
     ];
   }
 
-  private async checkWork(checksFor: string | undefined): Promise<ToolStep[]> {
+  /**
+   * A check task's turns. Each check names the cited items it decides (ADR-083): a behaviour's check
+   * decides its scope line, and every cited item no such check decides gets a check of its own, so the
+   * set decides every item its task cites, as an honest author writes it.
+   */
+  private async checkWork(checksFor: string | undefined, cited: readonly string[]): Promise<ToolStep[]> {
     const { tape, rates, universe } = this.context;
     if (checksFor === undefined) throw new StandInUnanswerable("agent-runner", "a check task names no task it checks");
+    const [firstCited] = cited;
+    if (firstCited === undefined) throw new StandInUnanswerable("agent-runner", `the check task for ${checksFor} cites no vision item`);
     const checkedTitle = await this.titleOf(checksFor);
     if (isInterfaceTaskTitle(checkedTitle)) {
       const path = `checks/${checksFor}/interface.json`;
       const spec: CheckSpec = { kind: "interface", requires: [], forbids: [], harness: [] };
       return [
         ["write_file", { path, content: `${JSON.stringify(spec)}\n` }],
-        ["define_check", { name: "interface", command: `sim check ${path}` }],
+        ["define_check", { name: "interface", command: `sim check ${path}`, decides: cited }],
         finished("Defined 1 check(s)."),
       ];
     }
     const checked = taskOfTitle(universe, checkedTitle);
     if (checked === null) throw new StandInUnanswerable("agent-runner", `check task for ${checksFor}: its title carries no simulator marker`);
-    const checks: Array<{ readonly name: string; readonly spec: CheckSpec }> = checked.behaviours.map((b) => ({
+    const decidedBy = (b: string): readonly string[] => {
+      const line = `S${universe.behaviours.indexOf(b) + 1}`;
+      return cited.includes(line) ? [line] : [firstCited];
+    };
+    const checks: Array<{ readonly name: string; readonly spec: CheckSpec; readonly decides: readonly string[] }> = checked.behaviours.map((b) => ({
       name: `has-${b}`,
       spec: { kind: "correct", requires: [b], forbids: [], harness: [] },
+      decides: decidedBy(b),
     }));
+    for (const id of cited.filter((each) => !checks.some((check) => check.decides.includes(each)))) {
+      checks.push({ name: `holds-${id}`, spec: { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [] }, decides: [id] });
+    }
     const other = universe.tasks.find((t) => t.ref !== checked.ref);
-    const extra = (name: string, spec: CheckSpec): void => void checks.push({ name, spec });
+    const extra = (name: string, spec: CheckSpec): void => void checks.push({ name, spec, decides: [firstCited] });
     if (tape.chance("agent.check.wrong", rates.wrongCheck, "checks")) extra("wrong", { kind: "wrong", requires: ["b-never"], forbids: [], harness: [] });
     if (other !== undefined && tape.chance("agent.check.contradictory", rates.contradictoryCheck, "checks")) {
       extra("contradicts", { kind: "contradictory", requires: [], forbids: [...other.behaviours], harness: [] });
@@ -694,13 +715,13 @@ export class StandIns {
       extra("harness", { kind: "correct", requires: [...checked.behaviours], forbids: [], harness: [{ path: `product/harness/${checked.ref}`, content: "harness\n" }] });
     }
     const allGuard = tape.chance("agent.check.all-guard", rates.allGuardSet, "checks");
-    const kept = allGuard ? checks.map((check) => ({ name: check.name, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
+    const kept = allGuard ? checks.map((check) => ({ ...check, spec: { ...check.spec, kind: "vacuous" as const } })) : checks;
     const steps: ToolStep[] = [];
     for (const check of kept) {
       // The checks directory the brief names (checkAreaOf): the checked task's id, not the simulator's ref.
       const path = `checks/${checksFor}/${check.name}.json`;
       steps.push(["write_file", { path, content: `${JSON.stringify(check.spec)}\n` }]);
-      steps.push(["define_check", { name: check.name, command: `sim check ${path}` }]);
+      steps.push(["define_check", { name: check.name, command: `sim check ${path}`, decides: check.decides }]);
     }
     // The author also writes the product it checks, in its own workspace.
     if (tape.chance("agent.check.writes-product", rates.authorWritesProduct, "checks")) {

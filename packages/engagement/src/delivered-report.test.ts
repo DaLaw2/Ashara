@@ -142,7 +142,7 @@ describe("the delivered report", () => {
     expect(body).toContain(`"Delete keys": already delivered when its turn came; nothing of its own was merged.`);
     expect(body).toContain(`the merge of "Store and read keys".`);
     expect(body).toContain(`"List keys": closed on commit ${MERGE_A}; whether it was merged or already delivered there is not on record.`);
-    expect(body).toContain("named by no acceptance criterion of a task whose stored checks passed on main");
+    expect(body).toContain("decided by no stored check of a task whose stored checks passed on main");
     expect(body).toContain("- Concurrent writers never corrupt the store");
     expect(body).not.toContain("- A key can be deleted\n");
   });
@@ -172,7 +172,7 @@ describe("the delivered report", () => {
       givenUp: [],
       vision: { kind: "recorded", items: [{ source: scope("S1", "Keys can be stored"), checked: true }] },
     });
-    expect(body).toContain("Every item of what you asked for is named by an acceptance criterion of a task whose stored checks passed on main.");
+    expect(body).toContain("Every item of what you asked for is decided by a stored check of a task whose stored checks passed on main.");
     expect(body).not.toContain("not checked");
   });
 
@@ -221,10 +221,10 @@ describe("the delivered report", () => {
         ],
       },
     });
-    const coverage = body.split("\n\n").find((section) => section.includes("acceptance criterion"));
+    const coverage = body.split("\n\n").find((section) => section.includes("decided by no stored check"));
     expect(coverage).toBe(
       [
-        "These items of what you asked for are named by no acceptance criterion of a task whose stored checks passed on main, so nothing confirms them either way:",
+        "These items of what you asked for are decided by no stored check of a task whose stored checks passed on main, so nothing confirms them either way:",
         "- Keys and values are UTF-8 text. (your answer)",
         "- Ashara's assumption, which was reported to you: No artificial limit is imposed on key or value size.",
         "- Ashara's assumption, which you were asked about and have not answered: Values print with a trailing newline.",

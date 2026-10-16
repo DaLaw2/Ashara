@@ -10,11 +10,24 @@ import type { VisionSource } from "../acl/engagement-acl.js";
 
 const TaskCheckFilesSchema = z.array(z.object({ path: z.string().min(1), content: z.string() }).strict());
 
+/** task_checks.decides (migration 063): the ids of the vision items a check decides; null on a row written before it. */
+const TaskCheckDecidesSchema = z.tuple([z.string().min(1)], z.string().min(1)).nullable();
+
 type TaskCheckFile = z.infer<typeof TaskCheckFilesSchema>[number];
 
 interface TaskCheckDefinition {
   readonly name: string;
   readonly command: string;
+}
+
+/** A check as its author defined it: with the items it decides, never none. */
+interface DefinedTaskCheck extends TaskCheckDefinition {
+  readonly decides: readonly [string, ...string[]];
+}
+
+/** A stored check: the items it decides, or null when its row records none (written before migration 063). */
+interface StoredTaskCheck extends TaskCheckDefinition {
+  readonly decides: DefinedTaskCheck["decides"] | null;
 }
 
 /** One revision of an implementation task's checks, as the check task harvested it. */
@@ -25,7 +38,7 @@ interface NewTaskChecks {
   readonly environmentVersion: string;
   /** The commit the checks were red-run on: their plan revision's foundation (migration 045). */
   readonly baselineCommit: string;
-  readonly checks: readonly TaskCheckDefinition[];
+  readonly checks: readonly DefinedTaskCheck[];
   readonly files: readonly TaskCheckFile[];
 }
 
@@ -36,7 +49,7 @@ interface TaskChecksRecord {
   readonly environmentVersion: string;
   /** null for a revision written before migration 045, whose red run's commit nothing recorded. */
   readonly baselineCommit: string | null;
-  readonly checks: readonly TaskCheckDefinition[];
+  readonly checks: readonly StoredTaskCheck[];
   readonly files: readonly TaskCheckFile[];
 }
 
@@ -311,6 +324,7 @@ export class TaskCheckRepository {
           revision,
           name: check.name,
           command: check.command,
+          decides: TaskCheckDecidesSchema.unwrap().parse(check.decides),
           files,
           environmentVersion: write.environmentVersion,
           baselineCommit: write.baselineCommit,
@@ -353,7 +367,11 @@ export class TaskCheckRepository {
       revision,
       environmentVersion: first.environmentVersion,
       baselineCommit: first.baselineCommit,
-      checks: rows.map((row) => ({ name: row.name, command: row.command })),
+      checks: rows.map((row) => {
+        const decides = TaskCheckDecidesSchema.safeParse(row.decides);
+        if (!decides.success) throw new TaskChecksCorrupt(taskId, revision, `decides of check ${JSON.stringify(row.name)}: ${z.prettifyError(decides.error)}`);
+        return { name: row.name, command: row.command, decides: decides.data };
+      }),
       files: parsed.data,
     };
   }

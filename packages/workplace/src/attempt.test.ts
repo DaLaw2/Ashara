@@ -10,7 +10,7 @@ import type { ResolvedModel } from "@ashara/finance";
 import { createWorkItemId, parseProjectId, wholeText } from "@ashara/shared";
 import type { Assignment } from "./assignment.js";
 import { runAttempt } from "./attempt.js";
-import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview } from "./check-definition.js";
+import type { CheckDefinition, CheckDefinitionPort, CheckRedRunPreview, DefinedCheck } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
 import type { EnvironmentCheckPort } from "./environment-check.js";
 import { AttemptWallClockExhausted, InvalidAssignment, ProviderErrorFinish, turnFailureOf } from "./errors.js";
@@ -573,7 +573,7 @@ describe("define_check", () => {
     rejection: null,
     holdsAlready: false,
   }), discarded: readonly string[] = []) {
-    const defined: CheckDefinition[] = [];
+    const defined: DefinedCheck[] = [];
     const timeouts: number[] = [];
     const written: string[] = [];
     const probed: string[] = [];
@@ -586,7 +586,8 @@ describe("define_check", () => {
         const earlier = defined.findIndex((d) => d.name === check.name);
         if (earlier !== -1) defined[earlier] = check;
         else defined.push(check);
-        return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check), discarded };
+        const undecided = ["S1", "S2"].filter((id) => !defined.some((d) => d.decides.includes(id)));
+        return { kind: "recorded", defined: defined.length, replaced: earlier !== -1, redRun: redRun(check), discarded, undecided };
       },
       async probe(command, timeoutSeconds) {
         probed.push(command);
@@ -626,7 +627,7 @@ describe("define_check", () => {
   it("is offered to check work only; implementation and environment attempts never see it", async () => {
     for (const toolProfile of ["run-and-dispute-checks", "build-environment", "run-checks"] as const) {
       const { llm, requests } = scriptedLlm([
-        () => turn([{ name: "define_check", input: { name: "x", command: "false" } }]),
+        () => turn([{ name: "define_check", input: { name: "x", command: "false", decides: ["S1"] } }]),
         () => turn([{ name: "finish", input: { status: "blocked", summary: "Done.", blockedReason: "No check tool." } }]),
       ]);
       const environment: EnvironmentCheckPort | null =
@@ -639,8 +640,8 @@ describe("define_check", () => {
 
   it("red-runs each check at once and shows its output; a redefinition replaces the check of that name", async () => {
     const { llm, requests } = scriptedLlm([
-      () => turn([{ name: "define_check", input: { name: "greets", command: "names=(a b); grep -q hello greet.txt" } }]),
-      () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt && cat greet.txt" } }]),
+      () => turn([{ name: "define_check", input: { name: "greets", command: "names=(a b); grep -q hello greet.txt", decides: ["S1"] } }]),
+      () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt && cat greet.txt", decides: ["S1"] } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "One check." } }]),
     ]);
     const { checks, defined, timeouts } = recorder((check) =>
@@ -672,13 +673,26 @@ describe("define_check", () => {
     expect(first).toMatchObject({ value: expect.stringContaining('exit code: 2') });
     expect(first).toMatchObject({ value: expect.stringContaining('Syntax error: "(" unexpected') });
     expect(toolResultsOf(requests[2]?.messages.at(-1))[0]).toMatchObject({ value: expect.stringContaining('Replaced check "greets" (1 defined so far)') });
-    expect(defined).toEqual([{ name: "greets", command: "grep -q hello greet.txt && cat greet.txt" }]);
+    expect(defined).toEqual([{ name: "greets", command: "grep -q hello greet.txt && cat greet.txt", decides: ["S1"] }]);
+    expect(first).toMatchObject({ value: expect.stringContaining("Cited items no check defined so far decides (the checks are not kept until each has one): S2.") });
+  });
+
+  // ADR-083: a check names the items it decides; a definition that names none is no check.
+  it("refuses a definition that names no item it decides", async () => {
+    const { llm, requests } = scriptedLlm([
+      () => turn([{ name: "define_check", input: { name: "greets", command: "grep -q hello greet.txt", decides: [] } }]),
+      () => turn([{ name: "finish", input: { status: "done", summary: "No check." } }]),
+    ]);
+    const { checks, defined } = recorder();
+    await runAttempt({ ...assignment(), toolProfile: "define-checks" }, deps(llm, fakeCell().cell, { checks }).deps);
+    expect(defined).toEqual([]);
+    expect(toolResultsOf(requests[1]?.messages.at(-1))[0]).toMatchObject({ type: "error-text", value: expect.stringContaining("decides") });
   });
 
   it("tells the author when the red run at finish would reject the check, as a tool error", async () => {
     const { llm, requests } = scriptedLlm([
-      () => turn([{ name: "define_check", input: { name: "vacuous", command: "echo fine" } }]),
-      () => turn([{ name: "define_check", input: { name: "placed", command: "sh checks/a.sh" } }]),
+      () => turn([{ name: "define_check", input: { name: "vacuous", command: "echo fine", decides: ["S1"] } }]),
+      () => turn([{ name: "define_check", input: { name: "placed", command: "sh checks/a.sh", decides: ["S1"] } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "Two checks." } }]),
     ]);
     const { checks } = recorder((check) =>
@@ -709,7 +723,7 @@ describe("define_check", () => {
   // check that changes a tracked file reaches no verdict.
   it("names the files it discarded outside the checks directory, and a run that changed the project as unrunnable", async () => {
     const { llm, requests } = scriptedLlm([
-      () => turn([{ name: "define_check", input: { name: "builds", command: "cp checks/t/main.src src/main.src && make" } }]),
+      () => turn([{ name: "define_check", input: { name: "builds", command: "cp checks/t/main.src src/main.src && make", decides: ["S1"] } }]),
       () => turn([{ name: "finish", input: { status: "done", summary: "One check." } }]),
     ]);
     const { checks } = recorder(

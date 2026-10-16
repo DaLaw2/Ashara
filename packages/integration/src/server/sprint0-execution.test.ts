@@ -164,7 +164,7 @@ async function implementationTask(check: string, environmentVersion: string, bas
     checkTaskId,
     environmentVersion,
     baselineCommit,
-    checks: [{ name: "hello", command: check }],
+    checks: [{ name: "hello", command: check, decides: ["S1"] }],
     files: [],
   });
   return {
