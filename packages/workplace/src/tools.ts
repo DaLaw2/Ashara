@@ -503,7 +503,7 @@ async function runTool(toolName: string, input: unknown, context: ToolContext): 
       if (!args.success) return argsError(toolName, args.error);
       if (context.checks === null) return toolError(`define_check is not available in this attempt.`);
       const name = args.data.name.trim();
-      const result = await context.checks.define({ name, command: args.data.command, decides: args.data.decides },context.commandTimeoutSeconds);
+      const result = await context.checks.define({ name, command: args.data.command, decides: args.data.decides }, context.commandTimeoutSeconds);
       if (result.kind === "refused") return toolError(`define_check refused: ${result.reason}`);
       return formatDefinedCheck(name, result);
     }

@@ -62,6 +62,11 @@ interface PlannedItem {
   readonly mergeCommit: string | null;
   /** A Sprint 0 task's statement of the environment it set up (migration 033); null when none is recorded. */
   readonly environmentStatement: string | null;
+  /**
+   * The vision items its latest stored checks decide (task_checks.decides, migration 063), each as
+   * its check task cites it; empty when it has no stored checks or they record no items they decide.
+   */
+  readonly decided: readonly VisionItem[];
 }
 
 /** A task given up whose repair the project awaits (plan_repairs, migrations 045, 048). */
@@ -534,15 +539,13 @@ function layoutOf(completed: readonly PlannedItem[]): LayoutPlanning {
 }
 
 /**
- * The vision items a completed decomposed task cites, each as that task cited it: Z0 kept its check
- * set only when its checks decided every item its check task cites, the same items, so a revision
- * need not give them a task again (ADR-083).
+ * The vision items the stored checks of a completed decomposed task decide (ADR-083), so a revision
+ * need not give them a task again. What the task cites is never read here: an item it cites that no
+ * stored check decides, a check stored before decides was recorded or a task completed with no
+ * stored checks, is planned again.
  */
 function checkedByDone(completed: readonly PlannedItem[]): VisionItem[] {
-  return completed.flatMap(({ item }) => {
-    const spec = item.taskSpec;
-    return spec?.origin === "decomposition" && spec.sources !== undefined ? spec.sources : [];
-  });
+  return completed.flatMap(({ item, decided }) => (item.taskSpec?.origin === "decomposition" ? [...decided] : []));
 }
 
 /** The work already done, kept as the revision's context: titles and what merged them. */

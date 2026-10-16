@@ -4,7 +4,7 @@ import { parseWorkItemId, readEach, type ProjectId } from "@ashara/shared";
 import { createBulkPlan } from "../bulk-plan.js";
 import { PlanningService } from "../domain/index.js";
 import type { ReplanStore } from "../replan.js";
-import { listProjectsAwaitingReplan, recordReplanFailure, withPlanRevisionTransaction } from "../repositories/replan.js";
+import { decidedByLatestChecks, listProjectsAwaitingReplan, recordReplanFailure, withPlanRevisionTransaction } from "../repositories/replan.js";
 import { ProjectHaltRepository } from "../repositories/project-halt.js";
 import { adaptWorkItemRepo, rowToWorkItem } from "../repositories/work-item-adapter.js";
 import { WorkItemRowRepository } from "../repositories/work-item.js";
@@ -21,18 +21,20 @@ class RevisionItemNotPlanned extends Error {
   }
 }
 
-/** Delivery's plan revision store over projects, vision_documents, roster_roles, work_items and plan_revisions. */
+/** Delivery's plan revision store over projects, vision_documents, roster_roles, work_items, task_checks and plan_revisions. */
 export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore {
   const projects = new ProjectHaltRepository(db);
   const workItems = new WorkItemRowRepository(db);
   return {
     async projectsAwaitingReplan() {
-      // Each project's roster and work items are read on its own (readEach): one project's row that
-      // does not parse is that project's UnreadSubject, never the listing's.
+      // Each project's roster, work items and stored checks are read on its own (readEach): one
+      // project's row that does not parse is that project's UnreadSubject, never the listing's.
       return readEach(
         await listProjectsAwaitingReplan(db),
         (row) => ({ id: row.projectId, projectId: row.projectId }),
-        async (row) => ({
+        async (row) => {
+          const decided = await decidedByLatestChecks(db, row.projectId);
+          return {
           projectId: row.projectId,
           projectName: row.projectName,
           changesAwaited: row.changesAwaited,
@@ -48,8 +50,10 @@ export function createReplanStore(db: ReturnType<typeof createDb>): ReplanStore 
             item: rowToWorkItem(item),
             mergeCommit: item.mergeCommit,
             environmentStatement: item.environmentStatement,
+            decided: decided.get(item.id) ?? [],
           })),
-        }),
+          };
+        },
       );
     },
     async writeRevision(write) {

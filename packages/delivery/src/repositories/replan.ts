@@ -2,7 +2,9 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, sql, type AnyColumn } f
 import { z } from "zod";
 import { parseProjectId, readEach, type DomainEvent, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { Database, DbHandle } from "@ashara/db";
-import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
+import { clientMessages, domainEvents, planRepairs, planRevisions, projects, replanRequests, taskChecks, visionDocuments, workItems, noOpenAnswer, noOpenStop, pendingChange, pendingRepair, projectAtWork } from "@ashara/db";
+import type { VisionItem } from "../decomposition-types.js";
+import { parseStoredTaskSpec } from "../work-item-language/task-spec.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
 import { WorkItemRowRepository } from "./work-item.js";
@@ -122,6 +124,56 @@ async function awaitedAnswers(db: DbHandle, projectId: string): Promise<string[]
     .where(and(eq(replanRequests.projectId, projectId), isNull(replanRequests.planRevisionId)))
     .orderBy(asc(clientMessages.createdAt), asc(clientMessages.id));
   return rows.map((row) => row.id);
+}
+
+/** task_checks.decides (migration 063): the ids of the vision items one stored check decides; null on a row written before it. */
+const StoredDecidesSchema = z.array(z.string().min(1)).min(1).nullable();
+
+/** A stored check's decides does not parse, or names an item its check task's task_spec.sources does not hold. */
+class StoredDecisionUnreadable extends Error {
+  constructor(
+    readonly checkTaskId: string,
+    readonly check: string,
+    readonly detail: string,
+  ) {
+    super(`check task ${checkTaskId}: stored check "${check}" ${detail}`);
+    this.name = "StoredDecisionUnreadable";
+  }
+}
+
+/**
+ * The vision items the latest stored check revision of each task of the project decides, keyed by
+ * the task's id, each item as its check task cites it (ADR-083). A check that records no items it
+ * decides (written before migration 063) decides none, and a task with no stored checks is absent:
+ * a citation never stands in for a check.
+ */
+export async function decidedByLatestChecks(db: DbHandle, projectId: string): Promise<Map<string, VisionItem[]>> {
+  const rows = await db
+    .select({ taskId: taskChecks.taskId, checkTaskId: taskChecks.checkTaskId, name: taskChecks.name, decides: taskChecks.decides, taskSpec: workItems.taskSpec })
+    .from(taskChecks)
+    .innerJoin(workItems, eq(workItems.id, taskChecks.checkTaskId))
+    .where(
+      and(
+        eq(taskChecks.projectId, projectId),
+        sql`${taskChecks.revision} = (SELECT max(latest.revision) FROM task_checks latest WHERE latest.task_id = ${taskChecks.taskId})`,
+      ),
+    )
+    .orderBy(asc(taskChecks.taskId), asc(taskChecks.name));
+  const decided = new Map<string, VisionItem[]>();
+  for (const row of rows) {
+    const decides = StoredDecidesSchema.safeParse(row.decides);
+    if (!decides.success) throw new StoredDecisionUnreadable(row.checkTaskId, row.name, `records decides that do not parse: ${z.prettifyError(decides.error)}`);
+    if (decides.data === null) continue;
+    const sources = parseStoredTaskSpec(row.taskSpec)?.sources ?? [];
+    const items = decided.get(row.taskId) ?? [];
+    for (const id of decides.data) {
+      const source = sources.find((each) => each.id === id);
+      if (source === undefined) throw new StoredDecisionUnreadable(row.checkTaskId, row.name, `decides ${id}, which its check task's task_spec.sources does not hold`);
+      if (!items.some((item) => item.type === source.type && item.id === source.id && item.text === source.text)) items.push(source);
+    }
+    decided.set(row.taskId, items);
+  }
+  return decided;
 }
 
 /** How many client answers the revision took in (replan_requests, migration 052), as a selected column. */

@@ -728,8 +728,8 @@ type VisionTrace =
     | { readonly kind: "untraceable"; readonly error: UntraceableTaskError };
 
 /**
- * Whether a completed task cites the item as the vision states it now: one that cited an earlier
- * statement of it had its checks decide that statement, not this one.
+ * Whether a completed task's stored checks decide the item as the vision states it now: a check that
+ * decided an earlier statement of it decided that statement, not this one.
  */
 function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): boolean {
     return checkedItems.some((checked) => checked.type === item.type && checked.id === item.id && checked.text === item.text);
@@ -737,7 +737,7 @@ function alreadyChecked(item: VisionItem, checkedItems: readonly VisionItem[]): 
 
 /**
  * The items a check must decide (d89 E, ADR-083) that no task of the plan cites and no completed
- * task already cites, as the error that re-asks or rejects the plan; null when none. A task cites an
+ * task's stored checks already decide, as the error that re-asks or rejects the plan; null when none. A task cites an
  * item by naming its id or its exact text in a deliverable's or an acceptance line's sources, as
  * traceToVision reads them. Citing gives an item a check task; whether a check decides it is the
  * stored checks' to say, which Z0 requires of every item the check task cites.

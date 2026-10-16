@@ -325,6 +325,7 @@ afterAll(async () => {
   await db.execute(sql`DELETE FROM plan_revisions WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM project_blocks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM llm_calls WHERE project_id IN (${projects})`);
+  await db.execute(sql`DELETE FROM task_checks WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM work_items WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM roster_roles WHERE project_id IN (${projects})`);
   await db.execute(sql`DELETE FROM vision_documents WHERE project_id IN (${projects})`);
@@ -573,6 +574,40 @@ describe("a late client change is planned", () => {
     const before = await checks.foundationOf(newCheck.id);
     expect(before.kind).toBe("none");
     if (before.kind === "none") expect(before.reason).toContain("not after the project's product scaffold");
+  });
+
+  // ADR-083: what a revision need not plan again is what a completed task's stored checks decide, never what it cites.
+  test.each([
+    { stored: "no checks", decides: undefined },
+    { stored: "a check that records no items it decides", decides: null },
+    { stored: "a check deciding every item it cites", decides: "cited" },
+  ] as const)("a completed task with $stored is exempt only for the items its stored checks decide", async ({ decides }) => {
+    const { projectId, questionId } = await plannedProject();
+    const first = await itemsOf(projectId);
+    const check = first.find((i) => i.origin === "check");
+    const harbour = first.find((i) => i.origin === "decomposition");
+    if (check === undefined || harbour === undefined) throw new Error("the first plan has no check task or task");
+    const spec = await db.execute(sql`SELECT task_spec->'sources' AS sources FROM work_items WHERE id = ${check.id}`);
+    const cited = z.array(z.object({ sources: z.array(z.object({ id: z.string(), text: z.string() })) })).parse(spec.rows)[0]?.sources ?? [];
+    expect(cited.length).toBeGreaterThan(0);
+    await startTask(harbour.id);
+    await completeTask(harbour.id);
+    if (decides !== undefined) {
+      const recorded = decides === null ? null : JSON.stringify(cited.map((item) => item.id));
+      await db.execute(sql`
+        INSERT INTO task_checks (project_id, task_id, check_task_id, revision, name, command, files, environment_version, decides)
+        VALUES (${projectId}, ${harbour.id}, ${check.id}, 1, 'holds', 'true', '[]'::jsonb, ${"e".repeat(64)}, ${recorded}::jsonb)`);
+    }
+    await contradict(projectId, questionId);
+    const mock = pipelineModel({ environmentChange: false });
+    expect(await replanner().runPending()).toMatchObject([{ kind: "revised", revision: 2 }]);
+
+    const revision = mock.doGenerateCalls.map((call) => JSON.stringify(call.prompt)).find((p) => p.includes("changed what is built after work began"));
+    if (revision === undefined) throw new Error("no revision prompt was sent");
+    const listed = /a plan that leaves one uncited is rejected: ([A-Za-z0-9_-]+(?:, [A-Za-z0-9_-]+)*)\./.exec(revision)?.[1]?.split(", ") ?? [];
+    // S1, the scope line the answer leaves as it was: a revision plans it again unless a stored check decides it.
+    expect(cited.map((item) => item.id)).toContain("S1");
+    expect(listed.includes("S1")).toBe(decides !== "cited");
   });
 
   test("an environment change plans a new environment task, and the old one stays Completed", async () => {

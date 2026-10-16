@@ -351,7 +351,7 @@ export class StandIns {
     const { universe } = this.context;
     return {
       summary: `A product with ${universe.behaviours.length} behaviours.`,
-      // The last line is one no planned task cites, so the delivered report lists it as unchecked.
+      // The last line names no behaviour, so only the honest planner's line of its own (citingPerLine) cites it and only that line's check decides it.
       inScope: [...universe.behaviours.map((b) => `The product does ${b}.`), "Every message reads the same on every run."],
       outOfScope: ["Any network service."],
       questions: [

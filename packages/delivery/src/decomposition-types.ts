@@ -148,9 +148,9 @@ export interface DecompositionInput {
     /** Every item of the vision; each planned task names those it delivers. Empty is refused, never planned on. */
     readonly visionItems: readonly VisionItem[];
     /**
-     * The vision items a completed task cites, each as that task cited it: its check set was kept only
-     * when its checks decided every one, so an item here whose text is the vision's now needs no new
-     * task to cite it (ADR-083). Empty for a first plan.
+     * The vision items the stored checks of a completed task decide (task_checks.decides), each as
+     * its check task cites it, so an item here whose text is the vision's now needs no new task to
+     * cite it (ADR-083). Never read from what a task cites. Empty for a first plan.
      */
     readonly checkedItems: readonly VisionItem[];
 }
