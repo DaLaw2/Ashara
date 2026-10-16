@@ -16,3 +16,16 @@ describe("scripts/project.ts unblock", () => {
     expect(result.stderr).toContain('Invalid ProjectId in unblock <project-id> argument: expected a UUID, got "not-a-uuid"');
   });
 });
+
+describe("scripts/project.ts grant", () => {
+  test("a grant of no whole positive number of requests is refused before any database is reached", () => {
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    const result = spawnSync("npx", ["tsx", "scripts/project.ts", "grant", projectId, "--requests", "0", "--reason", "more work"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, DATABASE_URL: "postgresql://nobody@127.0.0.1:1/none" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--requests must be a positive whole number of model requests, got "0"');
+  });
+});

@@ -218,19 +218,22 @@ export async function composeAshara(ports: AsharaPorts): Promise<AsharaInstance>
   );
   const ladderAttemptSink = (attempt: LadderAttemptEvent): void => eventLog.emit({ event: "ladder_attempt", ...attempt });
 
-  // Finance's cost ledger (K10) and its one spend cap, both on llm_calls: before
-  // every provider request Finance's guarded port refuses an unpriced model and a call whose
-  // worst case would cross the project's or the deployment's cap and writes the
-  // admitted call's llm_calls row as pending; after it, the call's record completes
-  // that row. The loop reads the same cap to stop at the deployment's.
+  // Finance's cost ledger (K10), its one spend cap and its one work ledger, all on llm_calls: before
+  // every provider request Finance's guarded port refuses an unpriced model, a call whose
+  // worst case would cross the project's or the deployment's cap, and a call whose project or task
+  // has drawn its budget of model requests (ADR-084 decision 1), and writes the admitted call's
+  // llm_calls row as pending; after it, the call's record completes that row. The loop reads the
+  // same cap to stop at the deployment's.
   const llmCallRepo = new LlmCallRepository(db);
   const spendCap = new SpendCap({
     ledger: llmCallRepo,
     caps: config.spendCaps,
+    workBudgets: config.workBudgets,
     admissionTurn: (ahead) => contendedWait("spend-admission", ahead),
   });
   console.log(
-    `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls)`,
+    `Spend caps: deployment $${config.spendCaps.deploymentUsd}, per project $${config.spendCaps.perProjectUsd} (llm_calls); ` +
+      `work budgets: ${config.workBudgets.perTaskRequests} model requests per task, ${config.workBudgets.perProjectRequests} per project`,
   );
   const llmCallLedger = new LlmCallLedger(llmCallRepo, spendCap);
   // Model catalog is DB-authoritative (seeded by migration 002_seed_models.sql).

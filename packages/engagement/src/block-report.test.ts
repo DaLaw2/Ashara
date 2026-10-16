@@ -24,7 +24,7 @@ describe("project block reports", () => {
   test.each(["budget_cap", "configuration", "fault", "planning_stopped"] as const)(
     "%s: one report saying work is paused, the recorded cause, and that the operator is awaited",
     async (kind) => {
-      const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded`, spend: null };
+      const cause = { errorClass: "SomethingFailed", reason: `the ${kind} cause as recorded`, spend: null, work: null };
       const { reports, posted } = reportsFor([{ subject: "project-blocked", episodeId: "e1", projectId, kind, cause }]);
 
       expect(await reports.runPending()).toEqual([{ kind: "posted", projectId, subject: "project-blocked" }]);
@@ -56,7 +56,7 @@ describe("project block reports", () => {
     // The message names the other cap: the report is chosen by the recorded class, never by the message's words.
     const reason = "budget_cap: the spend cap of project p is $1; Raise ASHARA_PROJECT_BUDGET_LIMIT_USD (the deployment cap)";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass, reason, spend: null } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass, reason, spend: null, work: null } },
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain(`Ashara recorded the cause as this: ${cause}`);
@@ -71,7 +71,7 @@ describe("project block reports", () => {
   test("a budget_cap halt states the spent, set-aside and limit amounts its record holds, never a limit reached", async () => {
     const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass: SPEND_CAP_ERROR_CLASS.deployment, reason: "r", spend } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "budget_cap", cause: { errorClass: SPEND_CAP_ERROR_CLASS.deployment, reason: "r", spend, work: null } },
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain(
@@ -81,9 +81,32 @@ describe("project block reports", () => {
     expect(posted[0].body).not.toContain("was reached");
   });
 
+  // ADR-084 decision 1: the report names the budget, what was drawn against it and which call sites drew it.
+  test("a work_budget halt names the request budget, what was drawn and the call sites that drew it, and that a grant is awaited", async () => {
+    const work = {
+      scope: "project" as const,
+      budgetRequests: 650,
+      grantedRequests: 50,
+      spentRequests: 649,
+      inFlightRequests: 1,
+      bySite: [{ callSite: "agent", requests: 600 }, { callSite: "suite-review", requests: 50 }],
+    };
+    const { reports, posted } = reportsFor([
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "work_budget", cause: { errorClass: "WorkBudgetSpent", reason: "r", spend: null, work } },
+    ]);
+    await reports.runPending();
+    expect(posted[0].body).toContain("Ashara recorded the cause as this: the budget of model requests set for this project was used up");
+    expect(posted[0].body).toContain(
+      "When it stopped the work, 649 model requests had been sent and 1 more were under way, against a budget of 650 model " +
+        'requests, 50 model requests of it granted by the operator. The requests drawn, by the step of the work that drew them: "agent" 600, "suite-review" 50.',
+    );
+    expect(posted[0].body).toContain("More model requests have to be granted to this project before more work is done.");
+    expect(posted[0].body).not.toContain("WorkBudgetSpent");
+  });
+
   test("a halt with no cause recorded says so, and claims none", async () => {
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "fault", cause: { errorClass: null, reason: null, spend: null } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "fault", cause: { errorClass: null, reason: null, spend: null, work: null } },
     ]);
     await reports.runPending();
     expect(posted[0].body).toContain("No cause was recorded for this pause.");
@@ -95,7 +118,7 @@ describe("project block reports", () => {
       "PlanReportUnfounded: project 00000000-0000-4000-8000-000000000020 is recorded as planned with 2 epic(s), 13 decomposed task(s); " +
       "no report is posted\n    at PlanReports.compose (packages/engagement/src/plan-report.ts:289:13)";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "ep-7", projectId, kind: "fault", cause: { errorClass: "PlanReportUnfounded", reason, spend: null } },
+      { subject: "project-blocked", episodeId: "ep-7", projectId, kind: "fault", cause: { errorClass: "PlanReportUnfounded", reason, spend: null, work: null } },
     ]);
     await reports.runPending();
     const body = posted[0].body;
@@ -122,7 +145,7 @@ describe("halt reports state the observed cause", () => {
       "task t1 met 4 infrastructure fault(s), past the budget of 3 uncharged requeues; the project halts until the " +
       "substrate probe passes. The last fault: task cell unavailable: exec wrapper killed by the command's own kill -9";
     const { reports, posted } = reportsFor([
-      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", cause: { errorClass: "InfrastructureFaultBudgetSpent", reason, spend: null } },
+      { subject: "project-blocked", episodeId: "e1", projectId, kind: "infrastructure", cause: { errorClass: "InfrastructureFaultBudgetSpent", reason, spend: null, work: null } },
     ]);
     await reports.runPending();
     expect(posted).toHaveLength(1);

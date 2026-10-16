@@ -1,7 +1,10 @@
 import type { LlmCallRepository } from "@ashara/db";
 import type { ModelConfig } from "@ashara/model-access";
-import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid } from "./errors.js";
+import { BudgetExceeded, SpendCapsInvalid, SpendEstimateInvalid, WorkBudgetSpent } from "./errors.js";
+import type { WorkAtBudget } from "./errors.js";
 import type { PendingLlmCall } from "./guarded-model-access.js";
+import { DEFAULT_WORK_BUDGETS, WorkLedger } from "./work-ledger.js";
+import type { WorkBudgets } from "./work-ledger.js";
 
 /**
  * Every token of a byte-level BPE tokenizer (the Claude, GPT, DeepSeek and
@@ -38,19 +41,26 @@ interface DeploymentStop {
   readonly spend: SpendAtCap;
 }
 
-/** A spend cap refusing a call, as the loop routes it. */
+/**
+ * An admission refusing a call, as the loop routes it: a spend cap's (`project`, `deployment`), or
+ * the work ledger's, a task's budget spent (`task_work`) or its project's (`project_work`).
+ */
 type SpendRefusal =
   | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
-  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap };
+  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap }
+  | { readonly kind: "task_work"; readonly projectId: string; readonly taskId: string; readonly reason: string; readonly work: WorkAtBudget }
+  | { readonly kind: "project_work"; readonly projectId: string; readonly reason: string; readonly work: WorkAtBudget };
 
 function spendOf(refused: BudgetExceeded): SpendAtCap {
   return { capUsd: refused.capUsd, spentUsd: refused.spentUsd, inFlightUsd: refused.inFlightUsd, nextCallUsd: refused.estimatedCostUsd };
 }
 
 interface SpendCapDeps {
-  /** llm_calls: the spend a cap reads, and the row an admitted call is written to before it is sent. */
-  readonly ledger: Pick<LlmCallRepository, "spend" | "admit">;
+  /** llm_calls: the spend a cap reads, the requests the work ledger reads, and the row an admitted call is written to before it is sent. */
+  readonly ledger: Pick<LlmCallRepository, "spend" | "admit" | "work" | "workBySite">;
   readonly caps: SpendCaps;
+  /** The work ledger's budgets in model requests (policy default: DEFAULT_WORK_BUDGETS, ADR-084 decision 1). */
+  readonly workBudgets?: WorkBudgets;
   /**
    * What an admission awaits the admissions ahead of it through (policy default: as is). The
    * composition root passes Ashara's contended-wait seam, so a driver that runs one task at a
@@ -99,9 +109,12 @@ export function worstCaseCostUsd(model: ModelConfig, requestBytes: number, maxOu
 export class SpendCap {
   private admissions: Promise<unknown> = Promise.resolve();
   private deploymentRefusal: BudgetExceeded | null = null;
+  private readonly work: WorkLedger;
 
   constructor(private readonly deps: SpendCapDeps) {
     const { caps } = deps;
+    // Policy default: ADR-084 decision 1 names these budgets; the composition root passes the deployment's.
+    this.work = new WorkLedger({ ledger: deps.ledger, budgets: deps.workBudgets ?? DEFAULT_WORK_BUDGETS });
     const valid =
       isPositiveAmount(caps.deploymentUsd) && isPositiveAmount(caps.perProjectUsd) && caps.perProjectUsd <= caps.deploymentUsd;
     if (!valid) {
@@ -110,8 +123,8 @@ export class SpendCap {
   }
 
   /**
-   * Admits a call whose worst case fits under both caps, or throws `BudgetExceeded`, Finance's
-   * typed refusal. Finance never halts a project itself: the project's halt is Delivery's (O3 c,
+   * Admits a call whose worst case fits under both caps and whose project and task have a model
+   * request left, or throws `BudgetExceeded` or `WorkBudgetSpent`, Finance's typed refusals. Finance never halts a project itself: the project's halt is Delivery's (O3 c,
    * ADR-080 d3), which blocks a project its refusal names wherever the refusal surfaces.
    */
   admit(call: PendingLlmCall): Promise<void> {
@@ -156,13 +169,18 @@ export class SpendCap {
           ? { kind: "project", projectId: current.scope.projectId, reason: current.message, spend: spendOf(current) }
           : { kind: "deployment", reason: current.message, spend: spendOf(current) };
       }
+      if (current instanceof WorkBudgetSpent) {
+        return current.scope.kind === "task"
+          ? { kind: "task_work", projectId: current.scope.projectId, taskId: current.scope.taskId, reason: current.message, work: current.work }
+          : { kind: "project_work", projectId: current.scope.projectId, reason: current.message, work: current.work };
+      }
     }
     return null;
   }
 
   /**
-   * One admission: both caps checked, then the call's pending row written, all inside this
-   * admission's turn. Recorded spend and in-flight estimates come from one statement on llm_calls,
+   * One admission: both caps checked, then the work ledger's draw, which checks the request budgets
+   * and writes the call's pending row, all inside this admission's turn. Recorded spend and in-flight estimates come from one statement on llm_calls,
    * so no call can be between them, as it could between an in-memory in-flight set and a read. A call recorded
    * while the read runs moves from its estimate to its cost, never above it, so a stale read only
    * overcounts.
@@ -197,15 +215,7 @@ export class SpendCap {
       throw refused;
     }
 
-    await ledger.admit({
-      id: call.callId,
-      projectId,
-      taskId: call.context.taskId,
-      callSite: call.context.callSite,
-      provider: call.provider,
-      model: call.model.id,
-      estimatedCostUsd,
-    });
+    await this.work.draw(call, estimatedCostUsd);
   }
 }
 
@@ -218,3 +228,6 @@ export const SPEND_CAP_ERROR_CLASS = {
   deployment: "DeploymentSpendCapReached",
   project: "BudgetExceeded",
 } as const;
+
+/** The error class a `work_budget` block records: the work ledger's refusal at project scope. */
+export const WORK_BUDGET_ERROR_CLASS = "WorkBudgetSpent";

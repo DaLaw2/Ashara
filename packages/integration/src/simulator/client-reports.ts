@@ -28,6 +28,15 @@ const spendRecord = z.strictObject({
   inFlightUsd: z.number(),
   nextCallUsd: z.number().nullable(),
 });
+/** The work ledger a work_budget halt recorded, as project_blocks.work holds it (migration 067). */
+const workRecord = z.strictObject({
+  scope: z.enum(["task", "project"]),
+  budgetRequests: z.number(),
+  grantedRequests: z.number(),
+  spentRequests: z.number(),
+  inFlightRequests: z.number(),
+  bySite: z.array(z.strictObject({ callSite: z.string(), requests: z.number() })),
+});
 const episodeRecord = z.object({
   id: z.string(),
   kind: z.string(),
@@ -35,6 +44,8 @@ const episodeRecord = z.object({
   reason: z.string().nullable(),
   /** As stored; a value that does not parse as spendRecord is its own verdict (halt-spend-corrupt). */
   spend: z.unknown(),
+  /** As stored; a value that does not parse as workRecord is its own verdict (halt-spend-corrupt). */
+  work: z.unknown(),
   reportId: z.string().nullable(),
   resumedReportId: z.string().nullable(),
   ended: z.boolean(),
@@ -81,7 +92,7 @@ export async function readReportRecords(db: Database, projectId: string): Promis
     ),
     episodes: await rows(
       episodeRecord,
-      sql`SELECT id, kind, error_class AS "errorClass", reason, spend, report_id AS "reportId", resumed_report_id AS "resumedReportId",
+      sql`SELECT id, kind, error_class AS "errorClass", reason, spend, work, report_id AS "reportId", resumed_report_id AS "resumedReportId",
                  ended_at IS NOT NULL AS ended
           FROM project_blocks WHERE project_id = ${projectId} ORDER BY blocked_at, id`,
     ),
@@ -185,6 +196,7 @@ const KIND_JUDGEMENT = {
   replan_provider_failed: "stated",
   model_failed: "stated",
   provider_failed: "stated",
+  work_budget: "stated",
   plan_repair: "repair",
   check_dispute: "retired",
   suite_review: "retired",
@@ -203,6 +215,7 @@ const STATED_KINDS: ReadonlyArray<StatedKind> = [
   "replan_provider_failed",
   "model_failed",
   "provider_failed",
+  "work_budget",
 ];
 
 function judgementOf(kind: string): Judged[keyof Judged] | "unknown" {
@@ -245,6 +258,8 @@ function categoryWords(reason: StoredBlockedReason): string {
       return "its developer found that a check written for it cannot be passed by correct work, and that could not be settled";
     case "suite_review_unresolved":
       return "the review of the plan's checks found problems that could not be settled";
+    case "work_budget_spent":
+      return "it used every model request the budget of one task allows";
     case "owner_unresolved":
       return "no member of the team is assigned to do it";
     case "dependency_unsatisfiable":
@@ -310,7 +325,24 @@ function expectedKindWords(kind: StatedKind, errorClass: string | null): string 
       return "a step of the work kept failing because the model doing it gave no usable answer";
     case "provider_failed":
       return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
+    case "work_budget":
+      return "the budget of model requests set for this project was used up, so the next step of the work was not sent";
   }
+}
+
+function requestCount(count: number): string {
+  return `${count} model request${count === 1 ? "" : "s"}`;
+}
+
+/** The figures a work_budget halt's report must state, from its episode's work ledger, or that they are not on record. */
+function expectedWorkWords(work: z.infer<typeof workRecord> | null): string {
+  if (work === null) return "How many model requests had been drawn against that budget, and by which steps of the work, is not on record.";
+  const granted = work.grantedRequests > 0 ? `, ${requestCount(work.grantedRequests)} of it granted by the operator` : "";
+  const sites = work.bySite.length === 0 ? "none is on record" : work.bySite.map((site) => `"${site.callSite}" ${site.requests}`).join(", ");
+  return (
+    `When it stopped the work, ${requestCount(work.spentRequests)} had been sent and ${work.inFlightRequests} more were under way, ` +
+    `against a budget of ${requestCount(work.budgetRequests)}${granted}. The requests drawn, by the step of the work that drew them: ${sites}.`
+  );
 }
 
 function usd(amount: number): string {
@@ -334,7 +366,7 @@ function expectedSpendWords(spend: z.infer<typeof spendRecord> | null): string {
  * Null when the episode's spend does not parse: no sentence can be expected of it.
  */
 function statedCause(
-  episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null; readonly spend: unknown },
+  episode: { readonly id: string; readonly errorClass: string | null; readonly reason: string | null; readonly spend: unknown; readonly work: unknown },
   kind: StatedKind,
 ): string | null {
   if (episode.reason === null && episode.errorClass === null) return "No cause was recorded for this pause.";
@@ -343,6 +375,11 @@ function statedCause(
     const spend = z.union([z.null(), spendRecord]).safeParse(episode.spend ?? null);
     if (!spend.success) return null;
     amounts = `${expectedSpendWords(spend.data)} `;
+  }
+  if (kind === "work_budget") {
+    const work = z.union([z.null(), workRecord]).safeParse(episode.work ?? null);
+    if (!work.success) return null;
+    amounts = `${expectedWorkWords(work.data)} `;
   }
   return (
     `Ashara recorded the cause as this: ${expectedKindWords(kind, episode.errorClass)}. ` +
@@ -444,7 +481,7 @@ export function checkReports(records: ReportRecords, project: { readonly status:
     } else if (stating !== null) {
       const stated = statedCause(episode, stating);
       if (stated === null) {
-        add(`halt-spend-corrupt:${kind}`, `the ${kind} halt records a spend that does not parse, so no report can be judged against it`);
+        add(`halt-spend-corrupt:${kind}`, `the ${kind} halt records a spend or work ledger that does not parse, so no report can be judged against it`);
       } else if (!report.body.includes(stated)) {
         add(`halt-cause:${kind}`, `the ${kind} halt report does not state the recorded cause as "${stated.slice(0, 200)}"; it reads "${report.body.slice(0, 200)}"`);
       }

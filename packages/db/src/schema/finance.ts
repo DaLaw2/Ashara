@@ -42,5 +42,30 @@ export const llmCalls = pgTable(
   },
   (t) => ({
     projectCreatedIdx: index("idx_llm_calls_project_created").on(t.projectId, t.createdAt),
+    // Migration 067: a task's drawn requests are counted on every request it sends.
+    taskIdx: index("idx_llm_calls_task").on(t.taskId).where(sql`task_id IS NOT NULL`),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// work_grants (migration 067, ADR-084 decision 1, Finance context)
+// ---------------------------------------------------------------------------
+// The owner's explicit grant of more model requests to one project: the only way its work budget
+// grows past the policy default. Append-only.
+
+export const workGrants = pgTable(
+  "work_grants",
+  {
+    id: uuid().primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    requests: integer().notNull(),
+    grantedBy: text("granted_by").notNull(),
+    reason: text().notNull(),
+    grantedAt: timestamptz("granted_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    projectIdx: index("idx_work_grants_project").on(t.projectId),
   }),
 );

@@ -4,6 +4,7 @@ import type { CoreLoopConfig } from "@ashara/delivery";
 import { DEFAULT_CONFIG } from "@ashara/delivery";
 import { DEFAULT_DATABASE_URL } from "@ashara/db";
 import { readCellLimits, type CellResourceLimits } from "@ashara/execution-infra";
+import { DEFAULT_WORK_BUDGETS, type WorkBudgets } from "@ashara/finance";
 
 interface ServerConfig {
   readonly databaseUrl: string;
@@ -15,6 +16,8 @@ interface ServerConfig {
     readonly deploymentUsd: number;
     readonly perProjectUsd: number;
   };
+  /** Finance's work ledger budgets in model requests, counted from llm_calls (ADR-084 decision 1, see WorkLedger). */
+  readonly workBudgets: WorkBudgets;
   /** The podman executable every cell runs through (ASHARA_PODMAN_BINARY). */
   readonly podmanBinary: string;
   /**
@@ -97,6 +100,21 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
   const perProjectUsd =
     rawProjectLimit === undefined ? deploymentUsd : parseBudgetLimit("ASHARA_PROJECT_BUDGET_LIMIT_USD", rawProjectLimit);
 
+  // Policy defaults: unset, ADR-084 decision 1's budgets (DEFAULT_WORK_BUDGETS). A set but unusable
+  // one is refused, never replaced.
+  const rawTaskWork = nonEmptyEnv("ASHARA_TASK_WORK_BUDGET_REQUESTS");
+  const rawProjectWork = nonEmptyEnv("ASHARA_PROJECT_WORK_BUDGET_REQUESTS");
+  const workBudgets: WorkBudgets = {
+    perTaskRequests:
+      rawTaskWork === undefined
+        ? DEFAULT_WORK_BUDGETS.perTaskRequests
+        : parseIntegerSetting("ASHARA_TASK_WORK_BUDGET_REQUESTS", rawTaskWork, 1, Number.MAX_SAFE_INTEGER),
+    perProjectRequests:
+      rawProjectWork === undefined
+        ? DEFAULT_WORK_BUDGETS.perProjectRequests
+        : parseIntegerSetting("ASHARA_PROJECT_WORK_BUDGET_REQUESTS", rawProjectWork, 1, Number.MAX_SAFE_INTEGER),
+  };
+
   const coreLoop: CoreLoopConfig = {
     ...DEFAULT_CONFIG,
     workdirBase,
@@ -115,6 +133,7 @@ export function loadServerConfig(databaseUrl: string, apiToken: string): ServerC
     port,
     coreLoop,
     spendCaps: { deploymentUsd, perProjectUsd },
+    workBudgets,
     podmanBinary,
     cellLimits,
   };

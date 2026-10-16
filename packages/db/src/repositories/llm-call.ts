@@ -108,6 +108,43 @@ const SpendRowSchema = z.object({
 
 const CallId = z.uuid();
 
+/** The model requests a scope has drawn, as the work ledger counts them: one llm_calls row each. */
+interface DrawnRequests {
+  /** Rows no longer pending: requests recorded, or lost to a crash and still counted. */
+  readonly spent: number;
+  /** Rows admitted and not yet recorded (state 'pending'). */
+  readonly inFlight: number;
+}
+
+/** What the work ledger reads before one request: the project's drawn requests and grants, and the task's when one is served. */
+interface WorkDrawn {
+  readonly project: DrawnRequests & {
+    /** Requests the owner granted the project (work_grants, migration 067). */
+    readonly granted: number;
+  };
+  /** null when the request serves no task. */
+  readonly task: DrawnRequests | null;
+}
+
+/** The requests one call site drew in a scope. */
+interface RequestsAtSite {
+  readonly callSite: string;
+  readonly requests: number;
+}
+
+/** Whose drawn requests are read: one project's, or one task's of it. */
+type WorkScope = { readonly projectId: ProjectId; readonly taskId: string | null };
+
+const WorkRowSchema = z.object({
+  projectDrawn: z.coerce.number().int().nonnegative(),
+  projectInFlight: z.coerce.number().int().nonnegative(),
+  taskDrawn: z.coerce.number().int().nonnegative(),
+  taskInFlight: z.coerce.number().int().nonnegative(),
+  granted: z.coerce.number().int().nonnegative(),
+});
+
+const SiteRowSchema = z.object({ callSite: z.string().min(1), requests: z.coerce.number().int().positive() });
+
 /** The Finance cost ledger's per-call rows (architecture K10, migrations 015, 030, 035 and 053). */
 export class LlmCallRepository {
   constructor(private readonly db: DbHandle) {}
@@ -186,5 +223,36 @@ export class LlmCallRepository {
     const row = SpendRowSchema.parse(result.rows[0]);
     if (row.unknownRows > 0) throw new LlmCallSpendUnknown(scope, row.unknownRows);
     return { recordedUsd: row.recordedUsd, inFlightUsd: row.inFlightUsd };
+  }
+
+  /**
+   * The model requests drawn in `scope` (migration 067, ADR-084 decision 1): every llm_calls row of
+   * the project, and of the task when one is named, in any state, so a request is drawn from the
+   * moment it is admitted and stays drawn through a refund, an unblock or a restart; with the
+   * requests the owner granted the project, read in the same statement.
+   */
+  async work(scope: WorkScope): Promise<WorkDrawn> {
+    const result = await this.db.execute(sql`
+      SELECT COUNT(*)::int AS "projectDrawn",
+             COALESCE(SUM(CASE WHEN state = 'pending' THEN 1 ELSE 0 END), 0)::int AS "projectInFlight",
+             COALESCE(SUM(CASE WHEN task_id = ${scope.taskId}::uuid THEN 1 ELSE 0 END), 0)::int AS "taskDrawn",
+             COALESCE(SUM(CASE WHEN task_id = ${scope.taskId}::uuid AND state = 'pending' THEN 1 ELSE 0 END), 0)::int AS "taskInFlight",
+             (SELECT COALESCE(SUM(requests), 0) FROM work_grants WHERE project_id = ${scope.projectId})::int AS "granted"
+      FROM llm_calls WHERE project_id = ${scope.projectId}`);
+    const row = WorkRowSchema.parse(result.rows[0]);
+    return {
+      project: { spent: row.projectDrawn - row.projectInFlight, inFlight: row.projectInFlight, granted: row.granted },
+      task: scope.taskId === null ? null : { spent: row.taskDrawn - row.taskInFlight, inFlight: row.taskInFlight },
+    };
+  }
+
+  /** The requests drawn in `scope`, by the call site that drew them, most first. */
+  async workBySite(scope: WorkScope): Promise<RequestsAtSite[]> {
+    const task = scope.taskId === null ? sql`` : sql`AND task_id = ${scope.taskId}::uuid`;
+    const result = await this.db.execute(sql`
+      SELECT call_site AS "callSite", COUNT(*)::int AS requests
+      FROM llm_calls WHERE project_id = ${scope.projectId} ${task}
+      GROUP BY call_site ORDER BY requests DESC, call_site`);
+    return z.array(SiteRowSchema).parse(result.rows);
   }
 }

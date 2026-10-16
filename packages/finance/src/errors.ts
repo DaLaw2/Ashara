@@ -222,6 +222,83 @@ export class BudgetExceeded extends PreCallRefusal {
   }
 }
 
+/** Whose work budget a refused request would have overdrawn: one task's, or its project's. */
+type WorkBudgetScope =
+  | { readonly kind: "task"; readonly projectId: string; readonly taskId: string }
+  | { readonly kind: "project"; readonly projectId: string };
+
+/**
+ * The work ledger as it stood when it refused a request (ADR-084 decision 1), in model requests:
+ * the budget in force (its policy default plus the owner's grants), the requests drawn against it,
+ * recorded and in flight, and which call sites drew them, most first.
+ */
+export interface WorkAtBudget {
+  readonly scope: "task" | "project";
+  readonly budgetRequests: number;
+  /** Requests the owner granted; always 0 at task scope, whose budget no grant raises. */
+  readonly grantedRequests: number;
+  readonly spentRequests: number;
+  readonly inFlightRequests: number;
+  readonly bySite: ReadonlyArray<{ readonly callSite: string; readonly requests: number }>;
+}
+
+function describeSites(bySite: WorkAtBudget["bySite"]): string {
+  return bySite.length === 0 ? "none" : bySite.map((site) => `${site.callSite} ${site.requests}`).join(", ");
+}
+
+/**
+ * A model request was refused before it was sent: its scope's work budget has no request left
+ * (ADR-084 decision 1). At task scope Delivery gives the task up (source work_budget_spent) and its
+ * plan is repaired; at project scope Delivery halts the project (block kind work_budget) until the
+ * owner grants more requests and the operator returns it to work.
+ */
+export class WorkBudgetSpent extends PreCallRefusal {
+  readonly scope: WorkBudgetScope;
+  readonly callSite: string;
+  readonly work: WorkAtBudget;
+  readonly howToFix: string;
+
+  constructor(context: { readonly scope: WorkBudgetScope; readonly callSite: string; readonly work: WorkAtBudget }) {
+    const { scope, work } = context;
+    const subject = scope.kind === "task" ? `task ${scope.taskId} (project ${scope.projectId})` : `project ${scope.projectId}`;
+    const budget =
+      scope.kind === "project" && work.grantedRequests > 0
+        ? `${work.budgetRequests} model requests (${work.grantedRequests} of them granted)`
+        : `${work.budgetRequests} model requests`;
+    const howToFix =
+      scope.kind === "task"
+        ? `The task is given up and its plan repaired; no grant raises a task's budget.`
+        : `Grant the project more requests (npx tsx scripts/project.ts grant ${scope.projectId} --requests <n> --reason <why>), ` +
+          `then return it to work (npx tsx scripts/project.ts unblock ${scope.projectId} --reason <why>).`;
+    super(
+      `work_budget: the work budget of ${subject} is ${budget}, and none is left: ${work.spentRequests} sent ` +
+        `(llm_calls) + ${work.inFlightRequests} in flight. Requests drawn by call site: ${describeSites(work.bySite)}. ` +
+        `The request (call site "${context.callSite}") was not sent. ${howToFix}`,
+    );
+    this.name = "WorkBudgetSpent";
+    this.scope = scope;
+    this.callSite = context.callSite;
+    this.work = work;
+    this.howToFix = howToFix;
+  }
+}
+
+/** The configured work budgets are not positive integers. */
+export class WorkBudgetsInvalid extends Error {
+  readonly perTaskRequests: number;
+  readonly perProjectRequests: number;
+
+  constructor(budgets: { readonly perTaskRequests: number; readonly perProjectRequests: number }) {
+    super(
+      `work budgets are invalid: perTask=${budgets.perTaskRequests}, perProject=${budgets.perProjectRequests} model requests; ` +
+        `both must be positive integers (ASHARA_TASK_WORK_BUDGET_REQUESTS, ASHARA_PROJECT_WORK_BUDGET_REQUESTS)`,
+    );
+    this.name = "WorkBudgetsInvalid";
+    this.perTaskRequests = budgets.perTaskRequests;
+    this.perProjectRequests = budgets.perProjectRequests;
+  }
+}
+
 /** A call's worst-case cost could not be computed, so no cap can admit it. */
 export class SpendEstimateInvalid extends PreCallRefusal {
   readonly model: string;

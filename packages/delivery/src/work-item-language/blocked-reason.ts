@@ -184,6 +184,21 @@ const ownerUnresolvedSchema = z.object({
 });
 
 /**
+ * The task drew every model request its work budget holds (the work ledger, ADR-084 decision 1):
+ * Finance refused its next request before it was sent. No grant raises a task's budget, so the
+ * task is given up (Abandoned), never requeued, and its plan repaired. `budgetRequests` is the
+ * task's budget and `drawnRequests` the requests drawn against it when the request was refused;
+ * `reason` carries the refusal, with the requests by call site.
+ */
+const workBudgetSpentSchema = z.object({
+  source: z.literal("work_budget_spent"),
+  budgetRequests: z.number().int().min(1),
+  drawnRequests: z.number().int().min(0),
+  reason: z.string().min(1),
+  ...augmentationFields,
+});
+
+/**
  * A Pending task depends, directly or transitively, on work that can never complete: an
  * Abandoned item, or a dependency cycle. The gate gives it up (Abandoned) instead of leaving it
  * Pending with nothing that would ever admit it, and its plan is repaired. `blockedBy` names the
@@ -290,6 +305,7 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
   checksRewriteBoundSchema,
   checkDisputedSchema,
   suiteReviewUnresolvedSchema,
+  workBudgetSpentSchema,
   dependencyUnsatisfiableSchema,
   mergeUnrecordedSchema,
   orphanUnreconciledSchema,
@@ -324,6 +340,7 @@ export const BLOCKED_REASON_SOURCES = [
   "checks_rewrite_bound",
   "check_disputed",
   "suite_review_unresolved",
+  "work_budget_spent",
   "dependency_unsatisfiable",
   "merge_unrecorded",
   "orphan_unreconciled",
@@ -366,6 +383,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
     case "checks_rewrite_bound":
     case "check_disputed":
     case "suite_review_unresolved":
+    case "work_budget_spent":
     case "dependency_unsatisfiable":
     case "merge_unrecorded":
     case "orphan_unreconciled":
@@ -418,6 +436,7 @@ export function blockedExitOf(reason: StoredBlockedReason | undefined): BlockedE
     case "checks_rewrite_bound":
     case "check_disputed":
     case "suite_review_unresolved":
+    case "work_budget_spent":
     case "dependency_unsatisfiable":
     case "api":
     case "task_failed":

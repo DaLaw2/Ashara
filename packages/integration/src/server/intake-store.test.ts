@@ -403,6 +403,8 @@ describe("Liaison tender intake", () => {
           throw new Error("scripted ledger read failure");
         },
         admit: (row) => repository.admit(row),
+        work: (scope) => repository.work(scope),
+        workBySite: (scope) => repository.workBySite(scope),
       },
       caps: TEST_SPEND_CAPS,
     });

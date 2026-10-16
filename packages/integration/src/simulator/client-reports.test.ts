@@ -8,7 +8,7 @@ function haltWith(kind: string, errorClass: string | null, reason: string | null
   return {
     ...noRecords,
     reports: [{ id: "r1", body, reportsOn: null, inReplyTo: null }],
-    episodes: [{ id: "e1", kind, errorClass, reason, spend: null, reportId: "r1", resumedReportId: null, ended: false }],
+    episodes: [{ id: "e1", kind, errorClass, reason, spend: null, work: null, reportId: "r1", resumedReportId: null, ended: false }],
   };
 }
 
@@ -53,6 +53,22 @@ describe("checkReports, a halt's cause", () => {
     const projectWords = "the spending limit set for this project left no room for the next step of the work, so that step was not paid for";
     expect(keysOf(withSpend(`${projectWords}. ${amounts}`), "blocked")).toEqual([]);
     expect(keysOf(withSpend(`${projectWords}. ${unrecorded.slice(0, -1)}`), "blocked")).toEqual(["halt-cause:budget_cap"]);
+  });
+
+  it("holds a work_budget halt's report to the budget, the requests drawn and the call sites its ledger recorded", () => {
+    const work = { scope: "project", budgetRequests: 600, grantedRequests: 0, spentRequests: 599, inFlightRequests: 1, bySite: [{ callSite: "agent", requests: 600 }] };
+    const words = "the budget of model requests set for this project was used up, so the next step of the work was not sent";
+    const figures =
+      'When it stopped the work, 599 model requests had been sent and 1 more were under way, against a budget of 600 model requests. ' +
+      'The requests drawn, by the step of the work that drew them: "agent" 600';
+    const withWork = (sentence: string, recorded: unknown): ReportRecords => {
+      const records = haltWith("work_budget", "WorkBudgetSpent", "spent", stated(sentence, "e1"));
+      return { ...records, episodes: records.episodes.map((episode) => ({ ...episode, work: recorded })) };
+    };
+    expect(keysOf(withWork(`${words}. ${figures}`, work), "blocked")).toEqual([]);
+    // Another call site's count is not the ledger on record.
+    expect(keysOf(withWork(`${words}. ${figures.replace('"agent" 600', '"agent" 599')}`, work), "blocked")).toEqual(["halt-cause:work_budget"]);
+    expect(keysOf(withWork(`${words}. ${figures}`, { scope: "project" }), "blocked")).toEqual(["halt-spend-corrupt:work_budget"]);
   });
 
   it("holds a halt with no cause recorded to saying so, and one with a cause to not saying so", () => {

@@ -16,6 +16,8 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     "ASHARA_BUDGET_LIMIT_USD",
     "ASHARA_BUDGET_TOTAL",
     "ASHARA_PROJECT_BUDGET_LIMIT_USD",
+    "ASHARA_TASK_WORK_BUDGET_REQUESTS",
+    "ASHARA_PROJECT_WORK_BUDGET_REQUESTS",
     "WORKDIR_BASE",
     "ASHARA_PORT",
     "MAX_BATCH_SIZE",
@@ -26,6 +28,8 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     delete process.env["ASHARA_BUDGET_LIMIT_USD"];
     delete process.env["ASHARA_BUDGET_TOTAL"];
     delete process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"];
+    delete process.env["ASHARA_TASK_WORK_BUDGET_REQUESTS"];
+    delete process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"];
     delete process.env["ASHARA_PORT"];
     delete process.env["MAX_BATCH_SIZE"];
     process.env["WORKDIR_BASE"] = "/srv/ashara-work";
@@ -78,6 +82,16 @@ describe("loadServerConfig — budget cap plumbing and settings that fail closed
     expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).spendCaps.perProjectUsd).toBe(0.5);
     process.env["ASHARA_PROJECT_BUDGET_LIMIT_USD"] = "none";
     expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_BUDGET_LIMIT_USD="none"/);
+  });
+
+  test("unset work budgets are ADR-084's 60 and 600 model requests; set ones are read, and an unusable one is refused", () => {
+    process.env["ASHARA_BUDGET_TOTAL"] = "1";
+    expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).workBudgets).toEqual({ perTaskRequests: 60, perProjectRequests: 600 });
+    process.env["ASHARA_TASK_WORK_BUDGET_REQUESTS"] = "5";
+    process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"] = "50";
+    expect(loadServerConfig(TEST_DB_URL, TEST_TOKEN).workBudgets).toEqual({ perTaskRequests: 5, perProjectRequests: 50 });
+    process.env["ASHARA_PROJECT_WORK_BUDGET_REQUESTS"] = "0";
+    expect(() => loadServerConfig(TEST_DB_URL, TEST_TOKEN)).toThrow(/ASHARA_PROJECT_WORK_BUDGET_REQUESTS="0"/);
   });
 
   test("unset ASHARA_PORT and MAX_BATCH_SIZE take their policy defaults; set ones are read", () => {

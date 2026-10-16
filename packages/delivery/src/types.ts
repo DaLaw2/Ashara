@@ -23,7 +23,7 @@ import type {
 import type { AcceptanceStore } from "./acceptance.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
-import type { SpendAtCap } from "./acl/finance-acl.js";
+import type { SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
@@ -54,10 +54,16 @@ export interface CycleResult {
   readonly stop: LoopStop | null;
 }
 
-/** A spend cap refusing an LLM call, as the loop routes it. */
+/**
+ * Finance's admission refusing an LLM call, as the loop routes it: a spend cap's (`project`,
+ * `deployment`), or the work ledger's (ADR-084 decision 1), a task's model requests spent
+ * (`task_work`: the task is given up) or its project's (`project_work`: the project halts).
+ */
 type SpendRefusal =
   | { readonly kind: "project"; readonly projectId: string; readonly reason: string; readonly spend: SpendAtCap }
-  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap };
+  | { readonly kind: "deployment"; readonly reason: string; readonly spend: SpendAtCap }
+  | { readonly kind: "task_work"; readonly projectId: string; readonly taskId: string; readonly reason: string; readonly work: WorkAtBudget }
+  | { readonly kind: "project_work"; readonly projectId: string; readonly reason: string; readonly work: WorkAtBudget };
 
 /**
  * Finance's spend cap, as the loop reads it. Finance only refuses: the loop halts a project its

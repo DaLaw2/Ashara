@@ -64,13 +64,17 @@ async function openEpisode(tx: DbHandle, id: ProjectId): Promise<{ readonly kind
   return open ?? null;
 }
 
-/** The episode a halt opens: its kind, class and chain, and on a budget_cap halt the amounts its cap was judged on. */
+/**
+ * The episode a halt opens: its kind, class and chain, on a budget_cap halt the amounts its cap was
+ * judged on, and on a work_budget halt the work ledger as it stood.
+ */
 function episodeOf(cause: ProjectBlockCause) {
   return {
     kind: cause.category,
     errorClass: cause.errorClass,
     reason: cause.reason,
     spend: cause.category === "budget_cap" ? cause.spend : null,
+    work: cause.category === "work_budget" ? cause.work : null,
   };
 }
 

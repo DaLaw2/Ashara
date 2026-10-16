@@ -1,6 +1,6 @@
 import { describeErrorChain } from "@ashara/shared";
-import { SPEND_CAP_ERROR_CLASS, modelCallFailureOf } from "./acl/finance-acl.js";
-import type { ModelCallFailure, SpendAtCap } from "./acl/finance-acl.js";
+import { SPEND_CAP_ERROR_CLASS, WORK_BUDGET_ERROR_CLASS, modelCallFailureOf } from "./acl/finance-acl.js";
+import type { ModelCallFailure, SpendAtCap, WorkAtBudget } from "./acl/finance-acl.js";
 
 // Delivery's published language for a project halt (O3 c, ADR-080 d3): Delivery owns the halt
 // (an open episode in project_blocks, migration 059); Engagement owns the engagement lifecycle
@@ -31,7 +31,8 @@ import type { ModelCallFailure, SpendAtCap } from "./acl/finance-acl.js";
  * exhausted by any other error is Ashara's own (`fault`). `model_failed`: any other step stopped on
  * the model's failure, its structured answer never validated or unfit to act on (migration 063).
  * `provider_failed`: any other step stopped on its model provider failing the request, so no answer
- * was read (migration 063).
+ * was read (migration 063). `work_budget`: the project's model requests are spent (the work
+ * ledger, ADR-084 decision 1, migration 067); the owner's grant and then the operator's unblock end it.
  */
 type ProjectBlockCategory =
   | "budget_cap"
@@ -45,17 +46,27 @@ type ProjectBlockCategory =
   | "replan_stopped"
   | "replan_provider_failed"
   | "model_failed"
-  | "provider_failed";
+  | "provider_failed"
+  | "work_budget";
 
 /**
  * Why a project was blocked (migration 025): the cause's category, the error's class and its full
  * chain; a budget_cap halt also carries the amounts its cap was judged on, so a report states them
- * rather than a limit "reached" that the recorded spend had not reached.
+ * rather than a limit "reached" that the recorded spend had not reached; a work_budget halt carries
+ * the work ledger as it stood, so a report names the budget, what was drawn and which call sites drew it.
  */
-export type ProjectBlockCause = UnpricedBlockCause | { readonly category: "budget_cap"; readonly errorClass: string; readonly reason: string; readonly spend: SpendAtCap };
+export type ProjectBlockCause =
+  | UnpricedBlockCause
+  | { readonly category: "budget_cap"; readonly errorClass: string; readonly reason: string; readonly spend: SpendAtCap }
+  | { readonly category: "work_budget"; readonly errorClass: string; readonly reason: string; readonly work: WorkAtBudget };
 
-/** A halt whose cause carries no spend: every category but budget_cap. */
-type UnpricedBlockCause = { readonly category: Exclude<ProjectBlockCategory, "budget_cap">; readonly errorClass: string; readonly reason: string };
+/** A halt whose cause carries no amounts: every category but budget_cap and work_budget. */
+type UnpricedBlockCause = { readonly category: Exclude<ProjectBlockCategory, "budget_cap" | "work_budget">; readonly errorClass: string; readonly reason: string };
+
+/** A project's model requests are spent (the work ledger's refusal): it halts until the owner grants more. */
+export function projectWorkCause(refusal: { readonly reason: string; readonly work: WorkAtBudget }): ProjectBlockCause {
+  return { category: "work_budget", errorClass: WORK_BUDGET_ERROR_CLASS, reason: refusal.reason, work: refusal.work };
+}
 
 /** A project's own spend cap refused one of its calls: the project halts at its cap until the owner raises it. */
 export function projectCapCause(refusal: { readonly reason: string; readonly spend: SpendAtCap }): ProjectBlockCause {

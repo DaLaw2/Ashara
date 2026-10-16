@@ -66,6 +66,7 @@ const CYCLE_CALLS: Readonly<Record<string, CycleCall>> = {
   "deps.cycleLog.emit": { kind: "not-per-project", reason: "the cycle's own log line" },
   parseProjectId: { kind: "not-per-project", reason: "a pure parse" },
   projectCapCause: { kind: "not-per-project", reason: "a pure constructor" },
+  projectWorkCause: { kind: "not-per-project", reason: "a pure constructor" },
   projectBlockCause: { kind: "not-per-project", reason: "a pure constructor" },
   deploymentCapCause: { kind: "not-per-project", reason: "a pure constructor" },
 };

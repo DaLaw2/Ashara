@@ -44,6 +44,7 @@ export { ConfigRepository } from "./repositories/config.js";
 export { SecretRepository } from "./repositories/secret.js";
 export { LlmCallRepository } from "./repositories/llm-call.js";
 export type { LlmCallMeasurement } from "./repositories/llm-call.js";
+export { WorkGrantRepository } from "./repositories/work-grant.js";
 export { EnvironmentBuildRepository } from "./repositories/environment-build.js";
 export {
   MIGRATIONS_DIR,

@@ -377,6 +377,8 @@ function givenUpEvidence(reason: GivenUpReason): string {
       );
     case "orphan_unreconciled":
       return `Ashara's own machinery could not settle it after a restart (${reason.step}): ${reason.reason}`;
+    case "work_budget_spent":
+      return `It drew every model request its work budget holds (${reason.drawnRequests} of ${reason.budgetRequests}): ${reason.reason}`;
     case "task_failed":
     case "orchestrator_error":
     case "merge_unrecorded":

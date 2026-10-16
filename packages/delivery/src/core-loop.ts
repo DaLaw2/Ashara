@@ -10,7 +10,7 @@ import type { CoreLoopDeps, CycleResult, LoopStop, TaskLanes, TaskResult } from 
 import { processTask, handleProcessingError } from "./execution.js";
 import { runAcceptanceSweeps } from "./acceptance.js";
 import { resumeInfrastructureHalts } from "./infrastructure-halts.js";
-import { deploymentCapCause, projectBlockCause, projectCapCause } from "./project-halt.js";
+import { deploymentCapCause, projectBlockCause, projectCapCause, projectWorkCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
@@ -363,9 +363,17 @@ export class CoreLoop {
       return { kind: "ran", value: await run() };
     } catch (err) {
       const refusal = this.deps.spendCap.refusalOf(err);
-      if (refusal === null) throw err;
+      // A step's calls serve no task (only a dispatch's do), so a task's spent budget reaching a
+      // step is no refusal a step can route: it throws out of the cycle like any other error.
+      if (refusal === null || refusal.kind === "task_work") throw err;
       if (refusal.kind === "deployment") return { kind: "stop", stop: { reason: refusal.reason, spend: refusal.spend } };
-      await this.halt(parseProjectId(refusal.projectId, "spend refusal projectId"), projectCapCause(refusal), `budget_cap ${name}`);
+      const projectId = parseProjectId(refusal.projectId, "spend refusal projectId");
+      if (refusal.kind === "project_work") {
+        await this.halt(projectId, projectWorkCause(refusal), `work_budget ${name}`);
+        console.warn(`[work_budget] ${name}: the step's other projects run next cycle`);
+        return { kind: "refused" };
+      }
+      await this.halt(projectId, projectCapCause(refusal), `budget_cap ${name}`);
       console.warn(`[budget_cap] ${name}: the step's other projects run next cycle`);
       return { kind: "refused" };
     }

@@ -182,6 +182,7 @@ describe("no Blocked item is left with an exit only a person takes", () => {
     checks_rewrite_bound: { source: "checks_rewrite_bound", checkTaskId: "c", revision: 3, bound: 2, reason: "stale again" },
     check_disputed: { source: "check_disputed", checkTaskId: "c", checkName: "n", reason: "disputed" },
     suite_review_unresolved: { source: "suite_review_unresolved", checkTaskIds: ["c"], reason: "problems" },
+    work_budget_spent: { source: "work_budget_spent", budgetRequests: 60, drawnRequests: 60, reason: "spent" },
     dependency_unsatisfiable: { source: "dependency_unsatisfiable", blockedBy: ["x"], reason: "abandoned" },
     merge_unrecorded: { source: "merge_unrecorded", mergeCommit: MERGE, reason: "connection lost" },
     orphan_unreconciled: { source: "orphan_unreconciled", faultClass: "ashara", step: "requeue the task", reason: "connection lost" },

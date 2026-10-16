@@ -3,8 +3,13 @@ export type { ContextualLlm, ContextualTurnLlm, CostedTurnResult } from "./guard
 /** @testseam the integration attempt.podman.test.ts records a turn through its own recorder; LlmCallLedger is the production one */
 export type { LlmCallRecorder, LlmProviderCall } from "./guarded-model-access.js";
 export { LlmCallLedger } from "./llm-call-ledger.js";
-export { SPEND_CAP_ERROR_CLASS, SpendCap } from "./spend-cap.js";
+export { SPEND_CAP_ERROR_CLASS, SpendCap, WORK_BUDGET_ERROR_CLASS } from "./spend-cap.js";
 export type { SpendAtCap } from "./spend-cap.js";
+export { DEFAULT_WORK_BUDGETS } from "./work-ledger.js";
+export type { WorkBudgets } from "./work-ledger.js";
+export type { WorkAtBudget } from "./errors.js";
+/** @testseam the integration work-ledger.test.ts asserts the refusal's scope and figures; WorkLedger.draw throws it */
+export { WorkBudgetSpent } from "./errors.js";
 export type { CostMeasurement } from "./cost.js";
 export { ModelAnswerUnfit, PreCallRefusal } from "./errors.js";
 export { modelCallFailureOf } from "./model-call-failure.js";

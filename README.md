@@ -106,6 +106,8 @@ Open http://localhost:3000, sign in with your access code, and send your request
 |---|---|
 | `ASHARA_BUDGET_LIMIT_USD` | Required. The most Ashara may spend on model calls. |
 | `ASHARA_PROJECT_BUDGET_LIMIT_USD` | Optional. A smaller limit for each project. |
+| `ASHARA_TASK_WORK_BUDGET_REQUESTS` | Optional. The most model requests one task may make (default 60); past it the task is given up. |
+| `ASHARA_PROJECT_WORK_BUDGET_REQUESTS` | Optional. The most model requests one project may make (default 600); past it the project pauses until you grant more with `npx tsx scripts/project.ts grant`. |
 | `ASHARA_PORT` | The web client's port (default 3000). A value that is not a port stops Ashara from starting. |
 | `WORKDIR_BASE` | Required. Where projects are kept. Ashara will not start without it. |
 

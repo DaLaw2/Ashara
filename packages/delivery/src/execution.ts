@@ -4,7 +4,7 @@ import { describeErrorChain, InvalidId, parseWorkItemId } from "@ashara/shared";
 import type { MergeKind, StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { ErrorEnvelope } from "./acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "./work-item-language/transitions.js";
-import { modelCallBlockCategory, projectBlockCause, projectCapCause } from "./project-halt.js";
+import { modelCallBlockCategory, projectBlockCause, projectCapCause, projectWorkCause } from "./project-halt.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { RawFailureContext } from "./failure-router.js";
 import { PlanningService, salvagedReason, failWorkItem, blockWorkItem, giveUpWorkItem, requeueWorkItem, takeEvents, startWorkItem, exitStaleChecks, exitDisputedCheck, exitSuiteReview, requestEnvironmentChange } from "./domain/index.js";
@@ -33,7 +33,8 @@ type GiveUpCause = Extract<
       | "suite_review_unresolved"
       | "environment_unavailable"
       | "environment_undefined"
-      | "owner_unresolved";
+      | "owner_unresolved"
+      | "work_budget_spent";
   }
 >;
 
@@ -293,6 +294,19 @@ async function executeTask(
     // refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
     // fault a re-dispatch would meet again, so the project is blocked until the owner fixes it.
     const refusal: TaskRefusal = deps.spendCap.refusalOf(execResult.refusal) ?? configurationRefusal(task, execResult.refusal);
+    if (refusal.kind === "task_work") {
+      // The task's model requests are spent (the work ledger, ADR-084 decision 1): no grant raises a
+      // task's budget, so a re-dispatch meets the same refusal. Given up, never requeued, and its
+      // plan repaired; the dispatch is given back, since its attempt was not found wanting.
+      await refundBestEffort(deps, task.id, "its work budget spent");
+      await routeAsGivenUp(deps, task.id, workBudgetGiveUp(refusal));
+      return {
+        result: blockedResult(task.id, execResult.detail),
+        outcome: execResult.outcome,
+        errorEnvelope: execResult.errorEnvelope,
+        routedHere: true,
+      };
+    }
     if (refusal.kind === "configuration") {
       const blocked = await deps.projects.block(task.projectId, {
         category: "configuration",
@@ -304,13 +318,19 @@ async function executeTask(
       // Finance refuses the call; the project's halt at its cap is Delivery's (O3 c).
       const blocked = await deps.projects.block(task.projectId, projectCapCause(refusal));
       console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
+    } else if (refusal.kind === "project_work") {
+      // The work ledger refuses the request; the project's halt on its spent budget is Delivery's.
+      const blocked = await deps.projects.block(task.projectId, projectWorkCause(refusal));
+      console.warn(`[${task.id}] project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`);
     }
     const cap =
       refusal.kind === "project"
         ? `project ${refusal.projectId}'s spend cap`
         : refusal.kind === "deployment"
           ? "the deployment's spend cap"
-          : `a configuration fault (${refusal.errorClass})`;
+          : refusal.kind === "project_work"
+            ? `project ${refusal.projectId}'s work budget`
+            : `a configuration fault (${refusal.errorClass})`;
     await requeueAndRefund(deps, task.id, `a refusal at ${cap}: ${refusal.reason}`, "execution.routeAsRefused");
     return {
       result: { taskId: task.id, status: "refused", detail: execResult.detail, refusal },
@@ -386,6 +406,16 @@ async function executeTask(
     errorEnvelope: execResult.errorEnvelope,
     verdict: execResult.verdict,
     routedHere: false,
+  };
+}
+
+/** The give-up cause of a task whose work budget the ledger found spent. */
+function workBudgetGiveUp(refusal: Extract<TaskRefusal, { kind: "task_work" }>): GiveUpCause {
+  return {
+    source: "work_budget_spent",
+    budgetRequests: refusal.work.budgetRequests,
+    drawnRequests: refusal.work.spentRequests + refusal.work.inFlightRequests,
+    reason: refusal.reason,
   };
 }
 
@@ -636,14 +666,19 @@ async function settledOnMain(deps: ExecutionRoutingDeps, task: WorkItem): Promis
 }
 
 /**
- * A project's spend-cap refusal that surfaced as a throw, not as a refused result, still halts the
- * project at its cap: Finance refuses, and the halt is Delivery's (O3 c), wherever the refusal surfaces.
+ * A project's refusal that surfaced as a throw, not as a refused result, still halts the project:
+ * at its spend cap, or on its spent work budget. Finance refuses, and the halt is Delivery's (O3 c),
+ * wherever the refusal surfaces.
  */
 async function haltOnProjectRefusal(deps: Pick<CoreLoopDeps, "spendCap" | "projectRepo">, task: WorkItem, error: unknown): Promise<void> {
   const refusal = deps.spendCap.refusalOf(error);
-  if (refusal?.kind !== "project") return;
-  const blocked = await deps.projectRepo.block(task.projectId, projectCapCause(refusal));
-  console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
+  if (refusal?.kind === "project") {
+    const blocked = await deps.projectRepo.block(task.projectId, projectCapCause(refusal));
+    console.warn(`[${task.id}] project ${task.projectId} ${blocked} at its spend cap: ${refusal.reason}`);
+  } else if (refusal?.kind === "project_work") {
+    const blocked = await deps.projectRepo.block(task.projectId, projectWorkCause(refusal));
+    console.warn(`[${task.id}] project ${task.projectId} ${blocked} on its spent work budget: ${refusal.reason}`);
+  }
 }
 
 /** A failed or blocked attempt reached the FailureRouter without Quality's verdict on it: no route is picked by default. */
@@ -1206,6 +1241,14 @@ export async function processTask(
   try {
     executed = await executeTask(routingDeps, deps.dispatchService, task, targetProjectPath, attempt);
   } catch (e) {
+    const refusal = deps.spendCap.refusalOf(e);
+    if (refusal?.kind === "task_work") {
+      // The task's spent work budget surfaced as a throw: given up as on a refused result, never
+      // requeued, since every re-dispatch meets the same refusal.
+      await refundBestEffort(routingDeps, task.id, "its work budget spent");
+      await routeAsGivenUp(routingDeps, task.id, workBudgetGiveUp(refusal));
+      return blockedResult(task.id, refusal.reason);
+    }
     // A throw out of the dispatch or its routing (a store, a roster that cannot be read, Z0's own
     // code): never the task's work, so its counted dispatch is refunded and no lesson is written.
     const fault = asharaFaultOf(e, "run or route the dispatch");

@@ -1,5 +1,5 @@
 import { SPEND_CAP_ERROR_CLASS } from "@ashara/finance";
-import type { SpendAtCap } from "@ashara/finance";
+import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import type { StoredBlockedReason } from "@ashara/delivery/work-item";
@@ -27,16 +27,19 @@ type ProjectBlockKind =
   | "replan_stopped"
   | "replan_provider_failed"
   | "model_failed"
-  | "provider_failed";
+  | "provider_failed"
+  | "work_budget";
 
 /**
  * The cause recorded on a block episode: the error's class and its described chain, each null when
- * none was written, and on a budget_cap halt the amounts its cap was judged on, null when not recorded.
+ * none was written, on a budget_cap halt the amounts its cap was judged on, null when not recorded,
+ * and on a work_budget halt the work ledger as it stood, null on every other kind.
  */
 interface RecordedCause {
   readonly errorClass: string | null;
   readonly reason: string | null;
   readonly spend: SpendAtCap | null;
+  readonly work: WorkAtBudget | null;
 }
 
 /** The dispute that passed its bound, as recorded when the project was blocked on it (before migration 048). */
@@ -143,11 +146,33 @@ function spendLimitOf(cause: RecordedCause): SpendLimit {
 
 /** The halt as the report tells it: its recorded kind, and for a budget_cap halt whose limit stopped the work and the amounts it was judged on. */
 type ToldHalt =
-  | { readonly kind: Exclude<ProjectBlockKind, "budget_cap"> }
-  | { readonly kind: "budget_cap"; readonly limit: SpendLimit; readonly spend: SpendAtCap | null };
+  | { readonly kind: Exclude<ProjectBlockKind, "budget_cap" | "work_budget"> }
+  | { readonly kind: "budget_cap"; readonly limit: SpendLimit; readonly spend: SpendAtCap | null }
+  | { readonly kind: "work_budget"; readonly work: WorkAtBudget | null };
 
 function toldHalt(kind: ProjectBlockKind, cause: RecordedCause): ToldHalt {
-  return kind === "budget_cap" ? { kind, limit: spendLimitOf(cause), spend: cause.spend } : { kind };
+  if (kind === "budget_cap") return { kind, limit: spendLimitOf(cause), spend: cause.spend };
+  if (kind === "work_budget") return { kind, work: cause.work };
+  return { kind };
+}
+
+function requests(count: number): string {
+  return `${count} model request${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What the work ledger recorded when it stopped the work: the budget, the requests drawn against it,
+ * and which steps of the work drew them, by the call site Ashara records each request under; or that
+ * the figures are not on record.
+ */
+function workFigures(work: WorkAtBudget | null): string {
+  if (work === null) return "How many model requests had been drawn against that budget, and by which steps of the work, is not on record.";
+  const granted = work.grantedRequests > 0 ? `, ${requests(work.grantedRequests)} of it granted by the operator` : "";
+  const sites = work.bySite.length === 0 ? "none is on record" : work.bySite.map((site) => `"${site.callSite}" ${site.requests}`).join(", ");
+  return (
+    `When it stopped the work, ${requests(work.spentRequests)} had been sent and ${work.inFlightRequests} more were under way, ` +
+    `against a budget of ${requests(work.budgetRequests)}${granted}. The requests drawn, by the step of the work that drew them: ${sites}.`
+  );
 }
 
 /**
@@ -210,6 +235,8 @@ function recordedKind(halt: ToldHalt): string {
       return "a step of the work kept failing because the model doing it gave no usable answer";
     case "provider_failed":
       return "a step of the work kept failing because the service that runs the model doing it returned an error or did not answer, so no answer was read";
+    case "work_budget":
+      return "the budget of model requests set for this project was used up, so the next step of the work was not sent";
   }
 }
 
@@ -223,6 +250,7 @@ function recordedCause(episodeId: string, halt: ToldHalt, cause: RecordedCause):
   return (
     `Ashara recorded the cause as this: ${recordedKind(halt)}. ` +
     (halt.kind === "budget_cap" ? `${spendFigures(halt.spend)} ` : "") +
+    (halt.kind === "work_budget" ? `${workFigures(halt.work)} ` : "") +
     `Ashara keeps the technical detail in its own record of this pause, record ${episodeId}.`
   );
 }
@@ -260,6 +288,8 @@ function nextStep(halt: ToldHalt): string {
       return `The team has to look into it before that step is tried again. ${WAITS_ON_OPERATOR}`;
     case "replan_bound":
       return `Your latest change is recorded, and the plan is revised for it once the operator has looked the project over. ${WAITS_ON_OPERATOR}`;
+    case "work_budget":
+      return `More model requests have to be granted to this project before more work is done. ${WAITS_ON_OPERATOR}`;
     case "infrastructure":
       // Not a claim about the cause, which is the record's own text above: only what ends this
       // halt (infrastructure-halts.ts, the substrate probe each cycle) and that it is not charged.
@@ -330,6 +360,8 @@ function givenUpCategory(cause: StoredBlockedReason): string {
       return "its developer found that a check written for it cannot be passed by correct work, and that could not be settled";
     case "suite_review_unresolved":
       return "the review of the plan's checks found problems that could not be settled";
+    case "work_budget_spent":
+      return "it used every model request the budget of one task allows";
     case "owner_unresolved":
       return "no member of the team is assigned to do it";
     case "dependency_unsatisfiable":

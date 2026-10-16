@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, inArray, isNull, lte, ne, sql } from "drizzl
 import { z } from "zod";
 import { PROJECT_BLOCK_KINDS, checkDisputes, clientMessages, insertedRow, noOpenStop, planRepairs, projectBlocks, projects, workItems } from "@ashara/db";
 import type { Database, DbHandle } from "@ashara/db";
-import type { SpendAtCap } from "@ashara/finance";
+import type { SpendAtCap, WorkAtBudget } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, type StoredBlockedReason } from "@ashara/delivery/work-item";
 
@@ -71,12 +71,45 @@ async function blockingAbandonments(db: DbHandle, episodeId: string, projectId: 
   return rows.map((row) => ({ workItemId: row.id, title: row.title, attempts: row.attempts, cause: givenUpCause(episodeId, row.id, row.reason) }));
 }
 
-/** The cause recorded on a block episode (migration 040): the error's class, its described chain, and on a budget_cap halt the amounts its cap was judged on (migration 060). */
+/**
+ * The cause recorded on a block episode (migration 040): the error's class, its described chain, on
+ * a budget_cap halt the amounts its cap was judged on (migration 060), and on a work_budget halt the
+ * work ledger as it stood (migration 067).
+ */
 interface RecordedCauseRow {
   readonly errorClass: string | null;
   readonly reason: string | null;
   /** null on every kind but budget_cap, and on a budget_cap halt recorded before the amounts were. */
   readonly spend: SpendAtCap | null;
+  /** null on every kind but work_budget. */
+  readonly work: WorkAtBudget | null;
+}
+
+const WorkAtBudgetSchema = z.strictObject({
+  scope: z.enum(["task", "project"]),
+  budgetRequests: z.number().int().positive(),
+  grantedRequests: z.number().int().nonnegative(),
+  spentRequests: z.number().int().nonnegative(),
+  inFlightRequests: z.number().int().nonnegative(),
+  bySite: z.array(z.strictObject({ callSite: z.string().min(1), requests: z.number().int().positive() })),
+});
+
+/** A block episode's recorded work ledger does not parse: its figures cannot be told, and are never told as absent. */
+class BlockWorkUnreadable extends Error {
+  constructor(
+    readonly episodeId: string,
+    readonly detail: string,
+  ) {
+    super(`project_blocks row ${episodeId}: work does not parse: ${detail}`);
+    this.name = "BlockWorkUnreadable";
+  }
+}
+
+function recordedWork(episodeId: string, raw: unknown): WorkAtBudget | null {
+  if (raw === null) return null;
+  const parsed = WorkAtBudgetSchema.safeParse(raw);
+  if (!parsed.success) throw new BlockWorkUnreadable(episodeId, z.prettifyError(parsed.error));
+  return parsed.data;
 }
 
 const SpendAtCapSchema = z.strictObject({
@@ -269,6 +302,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
       errorClass: projectBlocks.errorClass,
       reason: projectBlocks.reason,
       spend: projectBlocks.spend,
+      work: projectBlocks.work,
     })
     .from(projectBlocks)
     .innerJoin(projects, eq(projects.id, projectBlocks.projectId))
@@ -301,7 +335,7 @@ export async function listDueBlockReports(db: DbHandle, blockingReview: Blocking
         const abandoned = await blockingAbandonments(db, row.id, row.projectId, row.blockedAt);
         return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, abandoned };
       }
-      const cause = { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend) };
+      const cause = { errorClass: row.errorClass, reason: row.reason, spend: recordedSpend(row.id, row.spend), work: recordedWork(row.id, row.work) };
       return { subject: "project-blocked", episodeId: row.id, projectId, kind: kind.data, cause };
     },
   );

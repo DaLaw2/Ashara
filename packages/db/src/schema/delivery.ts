@@ -96,6 +96,7 @@ export const PROJECT_BLOCK_KINDS = [
   "replan_provider_failed",
   "model_failed",
   "provider_failed",
+  "work_budget",
 ] as const;
 
 export const projectBlocks = pgTable("project_blocks", {
@@ -120,6 +121,11 @@ export const projectBlocks = pgTable("project_blocks", {
    * inFlightUsd, nextCallUsd); NULL on every other kind and on a budget_cap halt recorded before it.
    */
   spend: jsonb("spend"),
+  /**
+   * Migration 067: on a work_budget halt, the work ledger as Finance read it when it refused the
+   * request (budget, granted, spent, in flight, requests by call site); NULL on every other kind.
+   */
+  work: jsonb("work"),
 });
 
 // ---------------------------------------------------------------------------

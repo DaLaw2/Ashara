@@ -281,7 +281,7 @@ export function sourceOf(raw: unknown): (typeof BLOCKED_REASON_SOURCES)[number] 
 }
 
 /** `unrecognized`: a block kind outside the code's list, whose cause the simulator cannot name. */
-type HaltCause = "spend_cap" | "infrastructure" | "undeliverable" | "unrecognized";
+type HaltCause = "spend_cap" | "work_budget" | "infrastructure" | "undeliverable" | "unrecognized";
 
 /** What a run ended in, in design §2.2's terms mapped onto today's project states. */
 export type Outcome =
@@ -295,7 +295,9 @@ export type Outcome =
  * fails the type check here until it is given one). `infrastructure` is W6's halt on the machines,
  * which the substrate probe ends; `fault` is Ashara's own record or step failing, which W7 calls
  * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
- * spend cap) is Ashara's setup, kept with infrastructure as before.
+ * spend cap) is Ashara's setup, kept with infrastructure as before. `work_budget` is the work
+ * ledger's halt on a project's spent model requests (ADR-084 decision 1), which the owner's grant
+ * and the operator's unblock end.
  */
 const HALT_CAUSES = {
   budget_cap: "spend_cap",
@@ -311,6 +313,7 @@ const HALT_CAUSES = {
   replan_provider_failed: "undeliverable",
   model_failed: "undeliverable",
   provider_failed: "undeliverable",
+  work_budget: "work_budget",
 } as const satisfies Record<(typeof PROJECT_BLOCK_KINDS)[number], HaltCause>;
 const HALT_CAUSE_OF: ReadonlyMap<string, HaltCause> = new Map(Object.entries(HALT_CAUSES));
 
